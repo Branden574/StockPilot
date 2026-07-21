@@ -3,6 +3,7 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Image,
   Pressable,
   ScrollView,
@@ -26,8 +27,10 @@ interface Sample {
 }
 
 /**
- * Review captured training photos: a thumbnail grid (per-size filter) with a
- * tap-to-delete so bad captures can be pruned. Manager-only delete server-side.
+ * Review captured training photos: a VIRTUALIZED thumbnail grid (only on-screen
+ * cells mount — the old plain-ScrollView version mounted every image at once,
+ * which blanked thumbnails and crashed the Fabric renderer on large sets).
+ * Per-size filter + tap-to-delete a bad capture.
  */
 export default function TrainingReviewScreen() {
   const router = useRouter();
@@ -52,22 +55,20 @@ export default function TrainingReviewScreen() {
     void load(filter);
   }, [filter, load]);
 
-  function confirmDelete(s: Sample) {
+  const confirmDelete = React.useCallback((s: Sample) => {
     Alert.alert(
       'Delete this photo?',
-      `Remove this ${s.isNegative ? '"not a sticker"' : s.sizeLabel} capture from the training set. This can't be undone.`,
+      `Remove this ${s.isNegative ? '"not a sticker"' : s.sizeLabel} capture. This can't be undone.`,
       [
         { text: 'Keep', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            // Optimistic removal.
             setSamples((prev) => prev.filter((x) => x.id !== s.id));
             try {
               await api(`/api/v1/size-counts/training/samples/${s.id}`, { method: 'DELETE' });
             } catch (e) {
-              // Put it back on failure.
               setSamples((prev) => [s, ...prev]);
               Alert.alert(
                 'Could not delete',
@@ -78,7 +79,25 @@ export default function TrainingReviewScreen() {
         },
       ],
     );
-  }
+  }, []);
+
+  const renderItem = React.useCallback(
+    ({ item }: { item: Sample }) => (
+      <Pressable style={styles.cell} onPress={() => confirmDelete(item)}>
+        {item.url ? (
+          <Image source={{ uri: item.url }} style={styles.thumb} resizeMode="cover" />
+        ) : (
+          <View style={[styles.thumb, styles.thumbMissing]}>
+            <Text style={styles.thumbMissingText}>no image</Text>
+          </View>
+        )}
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{item.isNegative ? '∅' : item.sizeLabel}</Text>
+        </View>
+      </Pressable>
+    ),
+    [confirmDelete],
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -88,7 +107,9 @@ export default function TrainingReviewScreen() {
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <Text style={styles.title}>Review captures</Text>
-        <Text style={styles.subtitle}>{samples.length} shown · tap a photo to delete a bad one</Text>
+        <Text style={styles.subtitle}>
+          {samples.length} {filter === 'ALL' ? 'total' : filter} · tap a photo to delete a bad one
+        </Text>
       </View>
 
       <ScrollView
@@ -100,11 +121,7 @@ export default function TrainingReviewScreen() {
         {FILTERS.map((f) => {
           const active = filter === f;
           return (
-            <Pressable
-              key={f}
-              onPress={() => setFilter(f)}
-              style={[styles.chip, active && styles.chipActive]}
-            >
+            <Pressable key={f} onPress={() => setFilter(f)} style={[styles.chip, active && styles.chipActive]}>
               <Text style={[styles.chipText, active && styles.chipTextActive]}>
                 {f === 'NONE' ? 'Not sticker' : f}
               </Text>
@@ -120,22 +137,20 @@ export default function TrainingReviewScreen() {
           <Text style={styles.empty}>No captures{filter !== 'ALL' ? ` for ${filter}` : ''} yet.</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.grid}>
-          {samples.map((s) => (
-            <Pressable key={s.id} style={styles.cell} onPress={() => confirmDelete(s)}>
-              {s.url ? (
-                <Image source={{ uri: s.url }} style={styles.thumb} resizeMode="cover" />
-              ) : (
-                <View style={[styles.thumb, styles.thumbMissing]}>
-                  <Text style={styles.thumbMissingText}>no image</Text>
-                </View>
-              )}
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{s.isNegative ? '∅' : s.sizeLabel}</Text>
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
+        <FlatList
+          data={samples}
+          keyExtractor={(s) => s.id}
+          numColumns={3}
+          renderItem={renderItem}
+          columnWrapperStyle={styles.rowWrap}
+          contentContainerStyle={styles.gridContent}
+          // Virtualization tuning — keep the number of mounted images small so
+          // the Fabric renderer isn't asked to commit hundreds of views at once.
+          initialNumToRender={12}
+          maxToRenderPerBatch={9}
+          windowSize={5}
+          removeClippedSubviews
+        />
       )}
     </SafeAreaView>
   );
@@ -146,10 +161,8 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl },
   empty: { color: theme.textMuted, fontSize: 14 },
   header: {
-    paddingHorizontal: space.md,
-    paddingBottom: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
+    paddingHorizontal: space.md, paddingBottom: space.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
   },
   backBtn: { paddingVertical: space.xs },
   backText: { color: theme.primary, fontSize: 14 },
@@ -164,8 +177,9 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
   chipText: { color: theme.text, fontSize: 13, fontWeight: '600' },
   chipTextActive: { color: '#fff' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', padding: space.xs, gap: space.xs },
-  cell: { width: '31.9%', aspectRatio: 1 },
+  gridContent: { padding: space.xs },
+  rowWrap: { gap: space.xs, marginBottom: space.xs },
+  cell: { flex: 1 / 3, aspectRatio: 1, maxWidth: '32%' },
   thumb: { width: '100%', height: '100%', borderRadius: radius.md, backgroundColor: theme.card },
   thumbMissing: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.border },
   thumbMissingText: { color: theme.textMuted, fontSize: 11 },

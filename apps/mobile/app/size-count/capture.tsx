@@ -65,11 +65,12 @@ export default function TrainingCaptureScreen() {
     };
   }, []);
 
-  // Compress + upload one image, tracking in-flight + success/fail. Not awaited
-  // by the shutter, so capture stays snappy.
+  // Compress + upload one image. Concurrency is bounded by the queue below, so
+  // rapid capture doesn't spawn dozens of simultaneous native image ops +
+  // re-renders (that overloaded the Fabric renderer and crashed — EXC_BAD_ACCESS
+  // in uiManagerDidFinishTransaction).
   const uploadSample = React.useCallback(
     async (uri: string, label: string, isNegative: boolean) => {
-      setInFlight((n) => n + 1);
       try {
         const compressed = await ImageManipulator.manipulateAsync(
           uri,
@@ -99,11 +100,34 @@ export default function TrainingCaptureScreen() {
         setCounts((c) => ({ ...c, [key]: (c[key] ?? 0) + 1 }));
       } catch {
         setFailed((f) => f + 1);
-      } finally {
-        setInFlight((n) => n - 1);
       }
     },
     [],
+  );
+
+  // Bounded upload queue: at most MAX_CONCURRENT uploads run at once. inFlight
+  // shows queued + active so the header reflects real remaining work.
+  const MAX_CONCURRENT = 2;
+  const queueRef = React.useRef<Array<{ uri: string; label: string; neg: boolean }>>([]);
+  const activeRef = React.useRef(0);
+  const runQueue = React.useCallback(() => {
+    while (activeRef.current < MAX_CONCURRENT && queueRef.current.length > 0) {
+      const job = queueRef.current.shift()!;
+      activeRef.current += 1;
+      void uploadSample(job.uri, job.label, job.neg).finally(() => {
+        activeRef.current -= 1;
+        setInFlight((n) => Math.max(0, n - 1));
+        runQueue();
+      });
+    }
+  }, [uploadSample]);
+  const enqueueUpload = React.useCallback(
+    (uri: string, label: string, neg: boolean) => {
+      queueRef.current.push({ uri, label, neg });
+      setInFlight((n) => n + 1);
+      runQueue();
+    },
+    [runQueue],
   );
 
   // Take one (or a burst of) fast shots; uploads fire in the background.
@@ -118,7 +142,7 @@ export default function TrainingCaptureScreen() {
             quality: 0.7,
             skipProcessing: true, // faster shutter; fine for training frames
           });
-          if (shot?.uri) void uploadSample(shot.uri, label, isNegative);
+          if (shot?.uri) enqueueUpload(shot.uri, label, isNegative);
         }
       } catch {
         setFailed((f) => f + 1);
@@ -126,7 +150,7 @@ export default function TrainingCaptureScreen() {
         setBusy(false);
       }
     },
-    [busy, burst, uploadSample],
+    [busy, burst, enqueueUpload],
   );
 
   // Import: pick many photos from the library, then label them all at once.
@@ -145,9 +169,9 @@ export default function TrainingCaptureScreen() {
     (label: string, isNegative: boolean) => {
       const uris = importUris;
       setImportUris([]);
-      for (const uri of uris) void uploadSample(uri, label, isNegative);
+      for (const uri of uris) enqueueUpload(uri, label, isNegative);
     },
-    [importUris, uploadSample],
+    [importUris, enqueueUpload],
   );
 
   if (!permission) {

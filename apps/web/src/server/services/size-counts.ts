@@ -299,7 +299,7 @@ export class SizeCountsService {
       .select('id, size_label, is_negative, image_storage_path, captured_at')
       .eq('organization_id', this.ctx.organizationId)
       .order('captured_at', { ascending: false })
-      .limit(Math.min(opts?.limit ?? 80, 200));
+      .limit(Math.min(opts?.limit ?? 500, 1000));
     if (opts?.size) q = q.eq('size_label', opts.size);
     const { data, error } = await q;
     if (error) throw new ServiceError('internal_error', error.message);
