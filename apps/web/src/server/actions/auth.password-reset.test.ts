@@ -60,14 +60,22 @@ describe('requestPasswordResetAction', () => {
       expect.objectContaining({ type: 'recovery', email: 'user@example.com' }),
     );
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    const msg = sendEmail.mock.calls[0]![0] as { to: string; html: string; text: string };
+    const msg = sendEmail.mock.calls[0]![0] as {
+      to: string;
+      html: string;
+      text: string;
+      from?: string;
+    };
     expect(msg.to).toBe('user@example.com');
     // MUST be our server-verified confirm route (token_hash + verifyOtp) —
     // the raw action_link returns the session in a URL fragment the server
-    // callback can't read, bouncing users to /signin.
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    // callback can't read, bouncing users to /signin. (HTML entity-escapes
+    // the query &; text carries it raw.)
+    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&amp;type=recovery');
     expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
     expect(msg.html).not.toContain('https://sb/verify');
+    // es registry sender for the security family.
+    expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
     // the capped Supabase mailer must never be used
     expect(resetPasswordForEmail).not.toHaveBeenCalled();
   });

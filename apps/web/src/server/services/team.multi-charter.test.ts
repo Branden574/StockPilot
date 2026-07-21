@@ -17,6 +17,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
+import { sendEmail } from '@/lib/email/resend';
+
 import { TeamService } from './team';
 
 // First positional arg of the first recorded call for a (table, op) chain.
@@ -33,10 +35,9 @@ function firstInsertPayload<T = Record<string, unknown>>(
 vi.mock('@/lib/email/resend', () => ({
   sendEmail: vi.fn(async () => ({ ok: true, id: 'test' })),
 }));
-vi.mock('@/lib/email/templates', () => ({
-  inviteEmailHtml: vi.fn(() => '<p>html</p>'),
-  inviteEmailText: vi.fn(() => 'text'),
-}));
+// The invite email now renders through the pure es invites family
+// (@/lib/email/es/families/invites) — no mock needed; sendEmail above
+// keeps the send itself offline.
 
 describe('TeamService.invite — multi-charter', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -71,6 +72,18 @@ describe('TeamService.invite — multi-charter', () => {
     expect(row.charter_ids).toEqual([charterA, charterB]);
     expect(row.charter_id).toBe(charterA);
     expect(row.email).toBe('new.user@example.com');
+
+    // Wire-level: the invite email rides the es invitations family —
+    // registry hello@ sender, registry subject.
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    const emailArg = vi.mocked(sendEmail).mock.calls[0]![0] as {
+      to: string | string[];
+      subject: string;
+      from?: string;
+    };
+    expect(emailArg.to).toBe('new.user@example.com');
+    expect(emailArg.from).toBe('StockPilot <hello@stockpilotusa.com>');
+    expect(emailArg.subject).toBe('You’re invited to join Acme on StockPilot');
   });
 
   it('falls back to single charterId when charterIds is absent', async () => {

@@ -68,6 +68,7 @@ export async function inviteMemberAction(
       role: parsed.data.role as Exclude<Role, 'owner'>,
       organizationName: orgName,
       inviterName: inviter,
+      inviterEmail: session.email,
       charterId: parsed.data.charterId ?? null,
       charterIds: parsed.data.charterIds,
       warehouseId: parsed.data.warehouseId ?? null,

@@ -1,7 +1,7 @@
 import 'server-only';
 
+import { renderPasswordResetEmail } from '@/lib/email/es/families/security';
 import { sendEmail } from '@/lib/email/resend';
-import { passwordResetEmailHtml, passwordResetEmailText } from '@/lib/email/templates';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -49,11 +49,35 @@ export async function sendPasswordResetEmail(email: string): Promise<boolean> {
       : (data?.properties?.action_link ?? null);
     if (linkError || !resetUrl) return false;
 
+    // Render via the es security family (redesign, 2026-07). Only the
+    // message (html/text/subject/from) changed — the minting above is
+    // untouched. First name rides along from the auth user generateLink
+    // already returned (no extra query); absent → the design's "Hi —".
+    const meta = (data?.user?.user_metadata ?? {}) as Record<string, unknown>;
+    const fullName =
+      typeof meta.full_name === 'string' && meta.full_name.trim()
+        ? meta.full_name
+        : typeof meta.name === 'string' && meta.name.trim()
+          ? meta.name
+          : null;
+    const message = renderPasswordResetEmail({
+      email,
+      resetUrl,
+      firstName: fullName ? fullName.trim().split(/\s+/)[0] : null,
+      requestedAt:
+        new Date().toLocaleString('en-US', {
+          timeZone: 'UTC',
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }) + ' UTC',
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+    });
     const sent = await sendEmail({
       to: email,
-      subject: 'Reset your StockPilot password',
-      html: passwordResetEmailHtml({ resetUrl }),
-      text: passwordResetEmailText({ resetUrl }),
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      from: message.from,
     });
     return sent.ok;
   } catch (e) {
