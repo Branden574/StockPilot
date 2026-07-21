@@ -686,8 +686,11 @@ export function PoImportDetail({
                             value={effectiveItemId ?? null}
                             onChange={(id) => setLineItem(l.id, id)}
                             className="min-w-[200px]"
+                            // Once the import is approved/canceled the mapping is
+                            // final (the PO already exists) — show it read-only.
+                            disabled={!canApprove}
                           />
-                          {isUnmappedInventory && (
+                          {isUnmappedInventory && canApprove && (
                             <Button
                               type="button"
                               variant="outline"
@@ -705,7 +708,7 @@ export function PoImportDetail({
                             </Button>
                           )}
                         </div>
-                        {hasSuggestion && (
+                        {hasSuggestion && canApprove && (
                           // Advisory only — never pre-selects the combobox above
                           // (value stays derived from item_id/override, never
                           // suggested_item_id). Default stays create-new; this
@@ -742,6 +745,7 @@ export function PoImportDetail({
                       type="checkbox"
                       checked={o.skip === true}
                       onChange={(e) => setLineSkip(l.id, e.target.checked)}
+                      disabled={!canApprove}
                     />
                   </TableCell>
                 </TableRow>
