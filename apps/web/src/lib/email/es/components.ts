@@ -103,6 +103,13 @@ export const MOBILE_KPI_RULES = [
   '.kpi .cell{margin-bottom:10px!important}',
 ];
 
+/**
+ * Mobile rule for the compact internal headline (support-ticket): the
+ * es-support mockup sizes the triage h1 at 23px desktop / 19px mobile —
+ * class `h1c` so the archetype `.h1` 24px rule never applies to it.
+ */
+export const MOBILE_COMPACT_H1_RULES = ['.h1c{font-size:19px!important}'];
+
 export interface EmailShellStyles {
   /**
    * Extra mobile rules inserted between the `.h1` and `.btn` lines —
@@ -116,6 +123,12 @@ export interface EmailShellStyles {
    * (security) or `.card,.cell` (digest). Omit for none (order-status).
    */
   darkCards?: string;
+  /**
+   * Emit the dark repaint for the `raise` token (`.raise` class) — the
+   * verbatim-message background in the support family. Off by default so
+   * the archetype dark blocks stay byte-equal (no archetype uses raise).
+   */
+  darkRaise?: boolean;
 }
 
 function mobileBlock(extras: string[] = []): string {
@@ -134,6 +147,7 @@ function darkLines(styles: EmailShellStyles): string[] {
     `body,.desk{background:${D.desk}!important}`,
     `.paper{background:${D.paper}!important}`,
     `.sunk{background:${D.sunk}!important}`,
+    ...(styles.darkRaise ? [`.raise{background:${D.raise}!important}`] : []),
     `.ink{color:${D.ink}!important}.ink2{color:${D.ink2}!important}.ink3{color:${D.ink3}!important}.ink4{color:${D.ink4}!important}`,
     ...(styles.darkPills ?? []).map((v) => DARK_PILL_OVERRIDES[v]),
     `.btn td{background:${D.btnBg}!important}.btn a{background:${D.btnBg}!important;color:${D.btnFg}!important}`,
@@ -315,6 +329,25 @@ export function bodyText(copyHtml: string): string {
 /** Standalone mono eyebrow label (digest "Needs action" heading). */
 export function eyebrow(label: string): string {
   return `<div class="ink4" style="font-family:${ES_MONO_INLINE};font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:${L.ink4}">${label}</div>`;
+}
+
+export interface CompactHeadlineOptions {
+  /** Headline text (family escapes user-derived values). */
+  lead: string;
+  /** Supporting line under the headline (es-support "{org} · via {source}"). */
+  subHtml?: string;
+}
+
+/**
+ * Compact internal headline — the support-ticket triage h1 from
+ * es-support.jsx (23px/600, mobile 19px via MOBILE_COMPACT_H1_RULES).
+ * Denser than the 32px hero headline on purpose: triage speed.
+ */
+export function compactHeadline({ lead, subHtml }: CompactHeadlineOptions): string {
+  const sub = subHtml
+    ? `\n      <div class="ink3" style="font-size:12.5px;color:${L.ink3}">${subHtml}</div>`
+    : '';
+  return `<h1 class="h1c ink" style="margin:14px 0 6px;font-size:23px;line-height:1.25;letter-spacing:-0.02em;font-weight:600;color:${L.ink}">${lead}</h1>${sub}`;
 }
 
 // ── hero-slot ───────────────────────────────────────────────────────
@@ -515,6 +548,17 @@ export function detailRows(rows: DetailRowOptions[], { pad = '8px 20px' }: { pad
         </table>`,
     { pad },
   );
+}
+
+/**
+ * Verbatim-message card (es-support "Message — verbatim"): raised panel
+ * on the `raise` token behind a customer's exact words. Pair with the
+ * shell's `darkRaise` style flag so dark clients repaint the panel.
+ */
+export function verbatimMessage(bodyHtml: string): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card raise" style="border:1px solid ${L.hair};border-radius:6px;background:${L.raise}"><tr><td class="ink2" style="padding:14px 16px;font-size:13px;line-height:1.6;color:${L.ink2}">
+        ${bodyHtml}
+      </td></tr></table>`;
 }
 
 // ── item-table (with per-line status column) ────────────────────────
@@ -798,6 +842,39 @@ export function actionList(items: ActionListItem[]): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="border:1px solid ${L.hair};border-radius:6px">
         ${rows}
       </table>`;
+}
+
+// ── schedule-rows ───────────────────────────────────────────────────
+
+export interface ScheduleRowItem {
+  /** Left cell — event/work title (12.5px medium ink). */
+  titleHtml: string;
+  /** Right cell — when/where detail (11.5px ink-3, right-aligned). */
+  detailHtml: string;
+}
+
+/**
+ * The digest "This week" rows card from es-digest.jsx: hairline card of
+ * title/detail rows (title carries the weight, detail sits right). The
+ * digest archetype omits this section; the mockup is its only source —
+ * markup follows the archetype card/row conventions.
+ */
+export function scheduleRows(items: ScheduleRowItem[]): string {
+  const rows = items
+    .map((s, i) => {
+      const border =
+        i === items.length - 1 ? '' : `border-bottom:1px solid ${L.hair};`;
+      return `<tr>
+          <td class="ink" style="padding:11px 0;${border}font-size:12.5px;font-weight:500;color:${L.ink}">${s.titleHtml}</td>
+          <td class="ink3" align="right" style="padding:11px 0;${border}font-size:11.5px;color:${L.ink3};white-space:nowrap">${s.detailHtml}</td>
+        </tr>`;
+    })
+    .join('\n          ');
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="border:1px solid ${L.hair};border-radius:6px"><tr><td style="padding:4px 18px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          ${rows}
+        </table>
+      </td></tr></table>`;
 }
 
 // ── workspace-card ──────────────────────────────────────────────────
