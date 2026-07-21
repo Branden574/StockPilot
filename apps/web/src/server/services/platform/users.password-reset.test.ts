@@ -70,10 +70,19 @@ describe('sendPasswordResetForUser', () => {
       expect.objectContaining({ type: 'recovery', email: 'user@example.com' }),
     );
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    const msg = sendEmail.mock.calls[0]![0] as { to: string; html: string; text: string };
+    const msg = sendEmail.mock.calls[0]![0] as {
+      to: string;
+      html: string;
+      text: string;
+      from?: string;
+    };
     expect(msg.to).toBe('user@example.com');
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    // The es template HTML entity-escapes the query &; text carries it raw.
+    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&amp;type=recovery');
+    expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
     expect(msg.html).not.toContain('https://sb/verify');
+    // es registry sender for the security family.
+    expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
     expect(recordPlatformAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'password_reset_sent',

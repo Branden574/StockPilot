@@ -95,6 +95,34 @@ describe('maybeSendReturnPrompt', () => {
     expect(isArgs).toEqual([['return_prompt_sent_at', null]]);
   });
 
+  it('renders through the es return-prompt template (Unit E5 — rendering swap only)', async () => {
+    const stub = makeStub();
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: true });
+
+    const args = sendEmailMock.mock.calls[0]![0] as {
+      subject: string;
+      html: string;
+      text: string;
+      from: string;
+      headers: Record<string, string>;
+    };
+    // Registry-verbatim subject and sender (the `rec:` refined subject is
+    // deliberately NOT implemented — comment only).
+    expect(args.subject).toBe('Need to return anything from your order?');
+    expect(args.from).toBe('StockPilot <orders@stockpilotusa.com>');
+    // Preference-controlled: unsubscribe header + pref footer links.
+    expect(args.headers['List-Unsubscribe']).toBeDefined();
+    expect(args.html).toContain('>Manage email preferences</a>');
+    expect(args.html).toContain('>Unsubscribe</a>');
+    // Reverse-route motion + the es headline + CTA.
+    expect(args.html).toContain('https://stockpilotusa.com/email/motion/reverse@2x.gif');
+    expect(args.html).toContain('Need to return anything?');
+    expect(args.html).toContain('Start a return');
+    // Display handle: no order_number on the row → #<id-prefix> fallback.
+    expect(args.html).toContain('#11111111');
+  });
+
   it('dedupes: a second call (marker already stamped) no-ops', async () => {
     const stub = makeStub({
       'order_requests.select': {

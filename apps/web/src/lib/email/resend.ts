@@ -16,6 +16,20 @@ interface SendEmailInput {
   text?: string;
   attachments?: EmailAttachment[];
   /**
+   * RFC-5322 sender ("Name <addr>"). Defaults to RESEND_FROM_EMAIL.
+   * The es registry senders (security@/orders@/rentals@/... on
+   * stockpilotusa.com) ride the same domain-verified Resend config —
+   * Resend accepts any sender on the verified domain.
+   */
+  from?: string;
+  /**
+   * Explicit Reply-To, forwarded as Resend's `reply_to` field. When
+   * set, it REPLACES the default Reply-To header this module would
+   * otherwise inject (e.g. support-ticket notifications set it to the
+   * customer's address so a direct reply starts the thread).
+   */
+  replyTo?: string | string[];
+  /**
    * Extra RFC-822 headers to attach to the message. Resend forwards
    * these to the recipient verbatim. Common uses:
    *   - `List-Unsubscribe`: `<https://app.example/api/unsubscribe?...>`
@@ -59,6 +73,8 @@ export async function sendEmail({
   html,
   text,
   attachments,
+  from,
+  replyTo,
   headers,
 }: SendEmailInput): Promise<SendResult> {
   if (!env.RESEND_API_KEY) {
@@ -76,16 +92,22 @@ export async function sendEmail({
   }
 
   try {
+    const effectiveFrom = from ?? env.RESEND_FROM_EMAIL;
+
     // Reply-To is a small but real deliverability signal — Microsoft 365
     // and Google Workspace both score messages slightly higher when
     // Reply-To is set to a deliverable address on the sending domain.
-    // We extract the address out of "Name <email>" if present, else
-    // use the from value as-is. Tests / dev envs without a real FROM
-    // just skip the header.
-    const fromAddress = extractAddress(env.RESEND_FROM_EMAIL);
+    // Precedence: an explicit `replyTo` option wins (sent as Resend's
+    // reply_to field, no header injected); otherwise a caller-supplied
+    // Reply-To header wins; otherwise we default the header to the
+    // effective from address, extracted out of "Name <email>" if
+    // present. Tests / dev envs without a real FROM just skip it.
     const finalHeaders: Record<string, string> = { ...(headers ?? {}) };
-    if (fromAddress && !finalHeaders['Reply-To'] && !finalHeaders['reply-to']) {
-      finalHeaders['Reply-To'] = fromAddress;
+    if (!replyTo) {
+      const fromAddress = extractAddress(effectiveFrom);
+      if (fromAddress && !finalHeaders['Reply-To'] && !finalHeaders['reply-to']) {
+        finalHeaders['Reply-To'] = fromAddress;
+      }
     }
 
     const res = await fetch('https://api.resend.com/emails', {
@@ -95,11 +117,12 @@ export async function sendEmail({
         Authorization: `Bearer ${env.RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: env.RESEND_FROM_EMAIL,
+        from: effectiveFrom,
         to,
         subject,
         html,
         text,
+        ...(replyTo ? { reply_to: replyTo } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(Object.keys(finalHeaders).length > 0 ? { headers: finalHeaders } : {}),
       }),

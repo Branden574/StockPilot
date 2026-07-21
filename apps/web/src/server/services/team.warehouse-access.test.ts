@@ -43,10 +43,9 @@ vi.mock('@/lib/supabase/admin', () => ({
 vi.mock('@/lib/email/resend', () => ({
   sendEmail: vi.fn(async () => ({ ok: true, id: 'test' })),
 }));
-vi.mock('@/lib/email/templates', () => ({
-  inviteEmailHtml: vi.fn(() => '<p>html</p>'),
-  inviteEmailText: vi.fn(() => 'text'),
-}));
+// The invite email now renders through the pure es invites family
+// (@/lib/email/es/families/invites) — no mock needed; sendEmail above
+// keeps the send itself offline.
 
 const wh1 = '11111111-1111-1111-1111-111111111111';
 const wh2 = '22222222-2222-2222-2222-222222222222';

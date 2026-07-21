@@ -1,8 +1,13 @@
 import 'server-only';
 
+import {
+  SUPPORT_TICKET_FROM,
+  renderSupportTicketEmailHtml,
+  supportTicketSubject,
+} from '@/lib/email/es/families/support';
 import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
-import { COMPANY_NAME, SITE_URL, SUPPORT_EMAIL } from '@/lib/site';
+import { SITE_URL, SUPPORT_EMAIL } from '@/lib/site';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
@@ -113,6 +118,8 @@ export async function createSupportTicket(input: CreateSupportTicketInput): Prom
 }
 
 async function notifySupport(t: CreateSupportTicketInput & { id: string }): Promise<void> {
+  // Text part unchanged from the classic notification; the HTML moved to
+  // the redesigned email system (lib/email/es/families/support.ts).
   const text = [
     `New support ticket — ${t.priority ?? 'normal'} priority · ${t.category}`,
     '',
@@ -126,16 +133,27 @@ async function notifySupport(t: CreateSupportTicketInput & { id: string }): Prom
   ]
     .filter(Boolean)
     .join('\n');
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.6;color:#0e0f0d">
-    <p style="margin:0 0 12px"><strong>New support ticket</strong> — ${esc(t.priority ?? 'normal')} priority · ${esc(t.category)}</p>
-    <p style="margin:0 0 4px"><strong>From:</strong> ${esc(t.name ?? '(no name)')} &lt;${esc(t.email)}&gt;</p>
-    <p style="margin:0 0 4px"><strong>Subject:</strong> ${esc(t.subject)}</p>
-    ${t.pageUrl ? `<p style="margin:0 0 12px"><strong>Reported from:</strong> ${esc(t.pageUrl)}</p>` : ''}
-    <pre style="white-space:pre-wrap;background:#f6f6f4;border-radius:8px;padding:12px;margin:12px 0">${esc(t.message)}</pre>
-    <p style="margin:12px 0 0"><a href="${SITE_URL}/dashboard/admin/support">Open triage →</a></p>
-  </div>`;
-  await sendEmail({ to: SUPPORT_EMAIL, subject: `[${COMPANY_NAME} support] ${t.subject}`, text, html });
+  const html = renderSupportTicketEmailHtml({
+    name: t.name ?? null,
+    email: t.email,
+    category: t.category,
+    priority: t.priority ?? 'normal',
+    subject: t.subject,
+    message: t.message,
+    pageUrl: t.pageUrl ?? null,
+    triageUrl: `${SITE_URL}/dashboard/admin/support`,
+  });
+  // Registry routing: sender is tickets@stockpilotusa.com and the
+  // Reply-To is the CUSTOMER — a direct reply from the support inbox
+  // starts the thread with the submitter.
+  await sendEmail({
+    to: SUPPORT_EMAIL,
+    subject: supportTicketSubject(t.subject),
+    text,
+    html,
+    from: SUPPORT_TICKET_FROM,
+    replyTo: t.email,
+  });
 }
 
 export async function listSupportTickets(opts?: {

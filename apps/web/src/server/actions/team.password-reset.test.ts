@@ -149,13 +149,21 @@ describe('sendMemberPasswordResetAction', () => {
       expect.objectContaining({ type: 'recovery', email: 'Member@Example.com' }),
     );
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    const msg = sendEmail.mock.calls[0]![0] as { to: string; html: string; text: string };
+    const msg = sendEmail.mock.calls[0]![0] as {
+      to: string;
+      html: string;
+      text: string;
+      from?: string;
+    };
     expect(msg.to).toBe('Member@Example.com');
     // MUST be our server-verified confirm route — the raw action_link hands
     // the session back in a URL fragment and bounces users to /signin.
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    // (HTML entity-escapes the query &; text carries it raw.)
+    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&amp;type=recovery');
     expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
     expect(msg.html).not.toContain('https://sb/verify');
+    // es registry sender for the security family.
+    expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
 
     // Same key family + budget as the self-serve form so an admin can't
     // blast a member past the public rate limit.

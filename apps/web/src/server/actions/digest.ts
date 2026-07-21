@@ -2,12 +2,13 @@
 
 import { requireOrgContext } from '@/lib/auth/session';
 import { env } from '@/lib/env';
-import { sendEmail } from '@/lib/email/resend';
 import {
-  weeklyDigestHtml,
-  weeklyDigestSubject,
+  DIGEST_FROM,
+  renderWeeklyDigestHtml,
+  weeklyDigestPreviewSubject,
   weeklyDigestText,
-} from '@/lib/email/templates';
+} from '@/lib/email/es/families/digest';
+import { sendEmail } from '@/lib/email/resend';
 import { createClient } from '@/lib/supabase/server';
 import { applySectionOptIns, getDigestData } from '@/server/services/digest';
 
@@ -101,8 +102,15 @@ export async function sendDigestPreviewAction() {
     appUrl,
     settingsUrl,
   };
-  const subject = `[Preview] ${weeklyDigestSubject()}`;
-  const html = weeklyDigestHtml(payload, opts);
+  // Registry subject: "[Preview] StockPilot weekly digest — {date}".
+  const subject = weeklyDigestPreviewSubject();
+  // Preview variant: purple preview strip, no motion, all-clear state
+  // renders as an intentional "All clear." banner (never looks broken).
+  const html = renderWeeklyDigestHtml(payload, {
+    ...opts,
+    recipientName: ctx.fullName,
+    preview: true,
+  });
   const text = weeklyDigestText(payload, opts);
   // Match the production cron's List-Unsubscribe header so preview
   // emails behave the same way in the recipient's inbox.
@@ -111,6 +119,7 @@ export async function sendDigestPreviewAction() {
     subject,
     html,
     text,
+    from: DIGEST_FROM,
     headers: {
       'List-Unsubscribe': `<${settingsUrl}>`,
     },

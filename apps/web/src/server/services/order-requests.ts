@@ -1534,6 +1534,8 @@ export class OrderRequestsService {
             requesterName: row.requester_name ?? null,
             appUrl,
             emailOptedOut,
+            // Display-only: how many units the remainder batch carried.
+            unitsShipped: Math.max(0, totalFulfilled - priorFulfilled),
           });
         }
         // Completion receipt to the requester (notifyEmail honors prefs +

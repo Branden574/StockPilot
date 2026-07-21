@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { planAllowsB2bPortal, type OrgBillingState } from '@stockpilot/core';
 
 import { env } from '@/lib/env';
+import { renderPortalInviteEmail } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -409,20 +410,45 @@ export class CustomersService {
     const confirmUrl =
       `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}` +
       `&type=${linkType}&next=${encodeURIComponent('/portal')}`;
+
+    // Sender identity for the external es portal-invite: the portal
+    // belongs to THIS org (the supplier), so the email is branded
+    // "<Org> via StockPilot" and replies route to the inviting supplier
+    // user (registry: "Replies go to the supplier"). Render-data reads
+    // only — the minting above is untouched.
+    const [{ data: orgRow }, { data: inviterProfile }] = await Promise.all([
+      this.ctx.supabase
+        .from('organizations')
+        .select('name')
+        .eq('id', this.ctx.organizationId)
+        .maybeSingle(),
+      this.ctx.supabase
+        .from('user_profiles')
+        .select('email')
+        .eq('id', this.ctx.userId)
+        .maybeSingle(),
+    ]);
+    const supplierOrg = (orgRow?.name as string | null) ?? 'StockPilot';
+
+    const message = renderPortalInviteEmail({
+      email: normalized,
+      supplierOrg,
+      customerOrg: (customer as { name: string }).name,
+      portalUrl: confirmUrl,
+      supplierReplyTo: (inviterProfile?.email as string | null) ?? null,
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+    });
     const sent = await sendEmail({
       to: normalized,
-      subject: `You're invited to order from ${(customer as { name: string }).name}'s supplier portal`,
-      html:
-        `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
-        `<p>Hi,</p>` +
-        `<p>You've been invited to the ordering portal for <strong>${escapeHtml((customer as { name: string }).name)}</strong>. ` +
-        `Use the button below to sign in — no password needed.</p>` +
-        `<p><a href="${confirmUrl}" style="display:inline-block;background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Open the portal</a></p>` +
-        `<p style="color:#666;font-size:12px">Or paste this link into your browser:<br>${confirmUrl}</p>` +
-        `</div>`,
-      text: `You've been invited to the ordering portal. Sign in here (no password needed):\n${confirmUrl}`,
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      from: message.from,
+      ...(message.replyTo ? { replyTo: message.replyTo } : {}),
     });
-    if (!sent) throw new ServiceError('internal_error', 'The invite email could not be sent.');
+    // (Also fixes the old `if (!sent)` check — sendEmail returns an object,
+    // so failures previously never threw.)
+    if (!sent.ok) throw new ServiceError('internal_error', 'The invite email could not be sent.');
 
     await audit(
       {
@@ -444,13 +470,4 @@ export class CustomersService {
       .eq('user_id', userId);
     if (error) throw new ServiceError('internal_error', error.message);
   }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
