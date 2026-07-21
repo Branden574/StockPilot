@@ -6,10 +6,11 @@
  * pipeline CLI (scripts/email-motion/validate.ts).
  *
  * Derived from the MOTION registry in docs/design/email-system/es-tokens.js
- * (13 board rows -> 14 GIFs; the clock row ships clock + clock-arc) and the
- * loop mapping pinned in docs/superpowers/plans/2026-07-20-email-system-
- * implementation.md decision 4: play once -> Netscape loop 1; "Loop xN, then
- * hold" -> N; "Infinite (subtle)" -> 0.
+ * (13 board rows -> 15 GIFs; the clock row ships clock + clock-arc, plus the
+ * in-house tick). Loop mapping: OWNER DECISION 2026-07-20 — every asset
+ * "breathes" (Netscape loop 0 = infinite, with a ~3.5s composed-rest hold
+ * baked into each cycle), superseding the plan's play-once/loop-N encoding
+ * because clients leave a finished GIF frozen until the email is reopened.
  */
 
 export interface MotionAssetSpec {
@@ -27,22 +28,22 @@ export interface MotionAssetSpec {
 export const MOTION_DIMS = { width: 1200, height: 440 } as const;
 
 export const MOTION_ASSET_SPECS: MotionAssetSpec[] = [
-  { id: 'lock', file: 'lock@2x.gif', maxKB: 250, loop: 1 },
-  { id: 'pulse', file: 'pulse@2x.gif', maxKB: 250, loop: 3 },
-  { id: 'tiles', file: 'tiles@2x.gif', maxKB: 400, loop: 1 },
+  { id: 'lock', file: 'lock@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'pulse', file: 'pulse@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'tiles', file: 'tiles@2x.gif', maxKB: 400, loop: 0 },
   { id: 'route', file: 'route@2x.gif', maxKB: 300, loop: 0 },
   { id: 'reverse', file: 'reverse@2x.gif', maxKB: 300, loop: 0 },
-  { id: 'scanner', file: 'scanner@2x.gif', maxKB: 300, loop: 4 },
-  { id: 'settle', file: 'settle@2x.gif', maxKB: 300, loop: 1 },
-  { id: 'check', file: 'check@2x.gif', maxKB: 250, loop: 1 },
-  { id: 'pin', file: 'pin@2x.gif', maxKB: 250, loop: 1 },
-  { id: 'tag', file: 'tag@2x.gif', maxKB: 250, loop: 2 },
-  { id: 'clock', file: 'clock@2x.gif', maxKB: 250, loop: 2 },
-  { id: 'clock-arc', file: 'clock-arc@2x.gif', maxKB: 250, loop: 2 },
-  { id: 'calendar', file: 'calendar@2x.gif', maxKB: 250, loop: 1 },
-  { id: 'bars', file: 'bars@2x.gif', maxKB: 300, loop: 1 },
+  { id: 'scanner', file: 'scanner@2x.gif', maxKB: 300, loop: 0 },
+  { id: 'settle', file: 'settle@2x.gif', maxKB: 300, loop: 0 },
+  { id: 'check', file: 'check@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'pin', file: 'pin@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'tag', file: 'tag@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'clock', file: 'clock@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'clock-arc', file: 'clock-arc@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'calendar', file: 'calendar@2x.gif', maxKB: 250, loop: 0 },
+  { id: 'bars', file: 'bars@2x.gif', maxKB: 300, loop: 0 },
   // Timeline tick (received email) — 11x11-display inline dot, not a hero.
-  { id: 'tick', file: 'tick@2x.gif', maxKB: 20, loop: 1, width: 22, height: 22 },
+  { id: 'tick', file: 'tick@2x.gif', maxKB: 20, loop: 0, width: 22, height: 22 },
 ];
 
 /** Logo marks exported alongside the motion assets (22x22 display @2x). */

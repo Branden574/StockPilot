@@ -55,7 +55,7 @@ async function captureAsset(page, asset) {
   const omitBackground = !!asset.transparent;
   const restPath = path.join(dir, 'rest.png');
 
-  if (asset.prependRest || asset.netscapeLoop > 1) {
+  if (asset.prependRest || asset.endHold === 'restFrame') {
     await page.evaluate(() => document.documentElement.classList.add('es-rest'));
     await page.screenshot({ path: restPath, clip, omitBackground });
     await page.evaluate(() => document.documentElement.classList.remove('es-rest'));
@@ -82,13 +82,15 @@ function assembleAsset(asset, framePaths, restPath) {
   const seq = [];
   if (asset.prependRest) seq.push({ png: restPath, delay: asset.restDelayCs });
   for (const p of framePaths) seq.push({ png: p, delay: delayCs });
-  if (asset.netscapeLoop === 1 || asset.holdOnLastCapture) {
-    // Play-once ends on the settled state; clock holds its swept hand.
+  // The breathing pause: where each infinite cycle holds composed.
+  if (asset.endHold === 'lastFrame') {
+    // The final capture IS the settled state (play-once boards, swept clock).
     seq[seq.length - 1].delay = asset.endDelayCs;
-  } else if (asset.netscapeLoop > 1) {
-    // "Loop xN, then hold": every cycle (and the stop frame) rests composed.
+  } else if (asset.endHold === 'restFrame') {
+    // Periodic cycles (pulse/scanner/tag) end mid-motion — append the
+    // composed rest frame to carry the pause.
     seq.push({ png: restPath, delay: asset.endDelayCs });
-  } // netscapeLoop === 0: seamless infinite cycle, uniform delays.
+  } // endHold 'none': seamless continuous cycle, uniform delays.
 
   const rawGif = path.join(WORK_DIR, asset.id, 'raw.gif');
   const outGif = path.join(OUT_DIR, asset.file);
@@ -185,7 +187,7 @@ async function main() {
     const fit = assembleAsset(asset, framePaths, restPath);
     extractPreview(asset);
     const frames = nFrames + (asset.prependRest ? 1 : 0)
-      + (asset.netscapeLoop > 1 && !asset.holdOnLastCapture ? 1 : 0);
+      + (asset.endHold === 'restFrame' ? 1 : 0);
     console.log(`${(fit.size / 1024).toFixed(0)} KB, ${frames} frames, ${delayCs}cs/frame, loop=${asset.netscapeLoop}, colors=${fit.colors}${fit.lossy ? `, lossy=${fit.lossy}` : ''}`);
     rows.push({ file: asset.file, kb: +(fit.size / 1024).toFixed(1), frames, delayCs, loop: asset.netscapeLoop, colors: fit.colors, lossy: fit.lossy });
   }
