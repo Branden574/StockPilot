@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
@@ -41,7 +41,21 @@ interface SheetState {
  * de-duped; in burst mode subsequent scans of the same item just
  * increment counted by 1.
  */
+// This route is presented as a `fullScreenModal` (see app/_layout.tsx), which
+// on iOS renders in a container OUTSIDE the root SafeAreaProvider — so the
+// inner SafeAreaView insets resolve to 0 and the top bar collides with the
+// status bar. Give the modal its own SafeAreaProvider so `edges={['top']}`
+// resolves correctly. The AI Shelf Scan route (presentation: 'card') stays
+// inside the root provider and does not need this.
 export default function CycleCountScanScreen() {
+  return (
+    <SafeAreaProvider>
+      <CycleCountScanScreenInner />
+    </SafeAreaProvider>
+  );
+}
+
+function CycleCountScanScreenInner() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();

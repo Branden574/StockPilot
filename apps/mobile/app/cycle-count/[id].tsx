@@ -525,10 +525,19 @@ const styles = StyleSheet.create({
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   badgeRow: { marginTop: space.sm, flexDirection: 'row', alignItems: 'center' },
   scanBtn: {
+    // Accessible 44pt touch target (Apple HIG / Android min) with a shared
+    // minWidth so "Scan" and "AI Scan" render the same size instead of the
+    // label-width mismatch. minWidth (not a fixed width) keeps long localized
+    // labels from clipping. Centered so the label sits mid-button now that
+    // minHeight exceeds the intrinsic content height.
+    minHeight: 44,
+    minWidth: 76,
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: radius.md,
     backgroundColor: theme.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   aiScanBtn: {
     // Slight purple tint so the AI button is visually distinct from
