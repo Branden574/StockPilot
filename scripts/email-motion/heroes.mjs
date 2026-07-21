@@ -171,6 +171,18 @@ export function heroPin() {
   </g>`);
 }
 
+// Timeline tick — the "received" email's motion (MOTION note "L2 · Timeline
+// tick"). Not a hero-box asset: a 22x22 @2x transparent dot that replaces the
+// active timeline glyph (display 11x11). The dot pops in, one ring pulses,
+// rest = solid dot (frame 1). Info-blue per the received badge/timeline tone.
+export function heroTick() {
+  const info = T.status.info.fg;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+    <circle cx="11" cy="11" r="6.5" fill="${info}" style="animation:es-tick-dot .6s ease-out both;transform-origin:11px 11px"></circle>
+    <circle cx="11" cy="11" r="6.5" fill="none" stroke="${info}" stroke-width="1.8" style="opacity:0;animation:es-tick-ring .9s ease-out .25s 1 forwards;transform-origin:11px 11px"></circle>
+  </svg>`;
+}
+
 // es-heroes.jsx HeroTag — verbatim (swing loops; captured over one full 3.2s
 // period; the appended hold frame eases the tag back to rest).
 export function heroTag() {

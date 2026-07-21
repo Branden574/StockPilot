@@ -18,6 +18,11 @@ export const LIGHT = {
 //   es-click     lock row: "Shackle clicks shut once" (no shackle animation in JSX)
 //   es-march-p   route rows: 1.6s -> 1.8s so the dash period divides the 3.6s
 //                travel cycle and the infinite GIF loops seamlessly
+//   es-tick-dot / es-tick-ring
+//                received row "Timeline tick": at 22px the shared es-pop
+//                starts invisible (blank GIF frame) and es-ring dies before
+//                clearing the dot — the tick needs a heartbeat bump + a ring
+//                that expands past the dot edge before fading
 export const KEYFRAMES_CSS = `
 @keyframes es-ring{0%{transform:scale(0.55);opacity:0.9}80%{transform:scale(1.5);opacity:0}100%{transform:scale(1.5);opacity:0}}
 @keyframes es-drop{0%{transform:translateY(-14px);opacity:0}60%{transform:translateY(2px);opacity:1}100%{transform:translateY(0);opacity:1}}
@@ -33,4 +38,6 @@ export const KEYFRAMES_CSS = `
 @keyframes es-blinkonce{0%,40%{opacity:0}60%,100%{opacity:1}}
 @keyframes es-click{0%{transform:translateY(-6px)}60%{transform:translateY(1.5px)}100%{transform:translateY(0)}}
 @keyframes es-march-p{to{stroke-dashoffset:-24px}}
+@keyframes es-tick-dot{0%{transform:scale(1)}30%{transform:scale(1.3)}100%{transform:scale(1)}}
+@keyframes es-tick-ring{0%{transform:scale(1);opacity:0.85}100%{transform:scale(1.6);opacity:0}}
 `;

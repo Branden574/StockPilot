@@ -668,18 +668,28 @@ export interface OrderTimelineOptions {
   steps: TimelineStep[];
   /** Accent for done/current dots (ok/info/warn/neutral per status family). */
   tone?: Exclude<EsStatusVariant, 'sec'>;
+  /**
+   * Animated GIF replacing the CURRENT step's dot glyph ("L2 · Timeline
+   * tick" — the received email's registry motion). 11x11 display, 22x22
+   * @2x, transparent background so it sits on the paper in both modes.
+   * Only pass where the registry gives the email this motion.
+   */
+  currentDotImgSrc?: string;
 }
 
 /** Mono dot timeline (order-status archetype). Terminal steps always use the err accent. */
-export function orderTimeline({ steps, tone = 'ok' }: OrderTimelineOptions): string {
+export function orderTimeline({ steps, tone = 'ok', currentDotImgSrc }: OrderTimelineOptions): string {
   const toneFg = L.status[tone].fg;
+  const currentDot = currentDotImgSrc
+    ? `<img src="${currentDotImgSrc}" width="11" height="11" alt="" style="display:inline-block;border:0;vertical-align:-1px">`
+    : '&#9679;';
   const cells = steps
     .map(({ label, state }) => {
       switch (state) {
         case 'done':
           return `<td align="center" class="ink3" style="color:${L.ink3}">&#9679;<br>${label}</td>`;
         case 'current':
-          return `<td align="center" style="color:${toneFg};font-weight:700">&#9679;<br>${label}</td>`;
+          return `<td align="center" style="color:${toneFg};font-weight:700">${currentDot}<br>${label}</td>`;
         case 'terminal':
           return `<td align="center" style="color:${L.status.err.fg};font-weight:700">&#9679;<br>${label}</td>`;
         case 'upcoming':

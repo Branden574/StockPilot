@@ -24,9 +24,12 @@ describe('email motion assets', () => {
       expect(fs.existsSync(file), `${spec.file} missing — run node scripts/email-motion/generate.mjs`).toBe(true);
     });
 
-    it(`is exactly ${MOTION_DIMS.width}x${MOTION_DIMS.height}`, () => {
+    it(`is exactly ${spec.width ?? MOTION_DIMS.width}x${spec.height ?? MOTION_DIMS.height}`, () => {
       const info = parseGif(fs.readFileSync(file));
-      expect({ width: info.width, height: info.height }).toEqual(MOTION_DIMS);
+      expect({ width: info.width, height: info.height }).toEqual({
+        width: spec.width ?? MOTION_DIMS.width,
+        height: spec.height ?? MOTION_DIMS.height,
+      });
     });
 
     it(`is under its ${spec.maxKB} KB MOTION cap`, () => {

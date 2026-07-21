@@ -520,6 +520,15 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
     expect(noName.text).toContain('Hi — ');
   });
 
+  it('received: the timeline tick is the email\'s one motion (registry "L2 · Timeline tick")', async () => {
+    wireFullAdmin();
+    const args = await send('submitted');
+    expect(args.html).toContain('motion/tick@2x.gif');
+    // The tick dot, not a hero slot — and only ONE motion asset.
+    expect(args.html).not.toContain('width="528" height="194"');
+    expect(args.html.match(/motion\//g)).toHaveLength(1);
+  });
+
   it('stays comfortably under the Gmail clip budget with maximal content', async () => {
     vi.stubEnv('ES_LATENT_ORDER_EMAILS', '1');
     const kinds: OrderRequestEmailKind[] = [...LIVE_KINDS, ...LATENT_KINDS];

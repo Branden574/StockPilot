@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>StockPilot email motion — check</title>
+<title>StockPilot email motion — tick</title>
 <style>
   html, body { margin: 0; padding: 0; }
   html { background: transparent; }
   body {
-    width: 1200px; height: 440px; overflow: hidden;
-    background: #eeece5;
+    width: 22px; height: 22px; overflow: hidden;
+    background: transparent;
     display: flex; align-items: center; justify-content: center;
   }
   
@@ -36,12 +36,9 @@
 </style>
 </head>
 <body>
-<svg class="es-anim" viewBox="0 0 220 120" width="691" height="377" style="display:block;overflow:visible"><g fill="none">
-    <circle class="draw" cx="110" cy="60" r="32" stroke="#2f6a4a" stroke-width="2.5" stroke-dasharray="202" stroke-dashoffset="202"
-      style="animation:es-draw .9s ease forwards;transform:rotate(-90deg);transform-origin:110px 60px"></circle>
-    <path class="draw" d="M 96 61 l 10 10 l 20 -22" stroke="#2f6a4a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
-      stroke-dasharray="46" stroke-dashoffset="46" style="animation:es-draw .5s ease .7s forwards"></path>
-    <line x1="110" y1="14" x2="110" y2="8" stroke="#2f6a4a" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round" style="animation:es-fadein .35s ease 1.05s both"></line><line x1="156" y1="60" x2="162" y2="60" stroke="#2f6a4a" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round" style="animation:es-fadein .35s ease 1.05s both"></line><line x1="110" y1="106" x2="110" y2="112" stroke="#2f6a4a" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round" style="animation:es-fadein .35s ease 1.05s both"></line><line x1="64" y1="60" x2="58" y2="60" stroke="#2f6a4a" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round" style="animation:es-fadein .35s ease 1.05s both"></line>
-  </g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+    <circle cx="11" cy="11" r="6.5" fill="#3f5f78" style="animation:es-tick-dot .6s ease-out both;transform-origin:11px 11px"></circle>
+    <circle cx="11" cy="11" r="6.5" fill="none" stroke="#3f5f78" stroke-width="1.8" style="opacity:0;animation:es-tick-ring .9s ease-out .25s 1 forwards;transform-origin:11px 11px"></circle>
+  </svg>
 </body>
 </html>

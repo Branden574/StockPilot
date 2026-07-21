@@ -6,6 +6,7 @@ import { KEYFRAMES_CSS, LIGHT } from './theme.mjs';
 import { CANVAS } from './assets.mjs';
 
 export function buildPage(asset) {
+  const canvas = asset.canvas ?? CANVAS;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -13,9 +14,10 @@ export function buildPage(asset) {
 <title>StockPilot email motion — ${asset.id}</title>
 <style>
   html, body { margin: 0; padding: 0; }
+  html { background: transparent; }
   body {
-    width: ${CANVAS.width}px; height: ${CANVAS.height}px; overflow: hidden;
-    background: ${LIGHT.sunk};
+    width: ${canvas.width}px; height: ${canvas.height}px; overflow: hidden;
+    background: ${asset.transparent ? 'transparent' : LIGHT.sunk};
     display: flex; align-items: center; justify-content: center;
   }
   ${KEYFRAMES_CSS}

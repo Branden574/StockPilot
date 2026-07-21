@@ -40,7 +40,11 @@ export type EsEmailCategory = 'ess' | 'pref' | 'ext' | 'int';
 /** Footer variant — mirrors the registry's `foot` field (equals `cat` on every row). */
 export type EsFooterKind = EsEmailCategory;
 
-/** Production motion asset ids (MOTION registry + the clock-arc overdue variant E2 renders). */
+/**
+ * Production motion asset ids (MOTION registry + the clock-arc overdue
+ * variant E2 renders + `tick`, produced 2026-07-20 for the received email's
+ * "L2 · Timeline tick" — an 11px inline timeline dot, not a hero).
+ */
 export type EsMotionAssetId =
   | 'lock'
   | 'pulse'
@@ -55,7 +59,8 @@ export type EsMotionAssetId =
   | 'clock'
   | 'clock-arc'
   | 'calendar'
-  | 'bars';
+  | 'bars'
+  | 'tick';
 
 export interface EsEmailDefinition {
   id: string;
@@ -293,10 +298,12 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
       `Submitted ${p.submittedAt} to ${p.warehouse}. Approval is the next step.`,
     badge: { variant: 'info', label: () => 'Received' },
     cta: 'View request',
-    // FLAG: registry motion "L2 · Timeline tick" has NO corresponding row
-    // in the MOTION asset registry — no producible asset for this email.
+    // The MOTION board has no timeline-tick row, so this asset was produced
+    // in-house (2026-07-20): `tick` — an 11px animated dot that replaces
+    // the active timeline glyph (orderTimeline currentDotImgSrc), not a
+    // hero-slot asset.
     motionNote: 'L2 · Timeline tick',
-    motionAsset: null,
+    motionAsset: 'tick',
     footer: 'pref',
   }),
   d({

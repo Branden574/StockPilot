@@ -5,6 +5,7 @@
 <title>StockPilot email motion — route</title>
 <style>
   html, body { margin: 0; padding: 0; }
+  html { background: transparent; }
   body {
     width: 1200px; height: 440px; overflow: hidden;
     background: #eeece5;
@@ -25,6 +26,8 @@
 @keyframes es-blinkonce{0%,40%{opacity:0}60%,100%{opacity:1}}
 @keyframes es-click{0%{transform:translateY(-6px)}60%{transform:translateY(1.5px)}100%{transform:translateY(0)}}
 @keyframes es-march-p{to{stroke-dashoffset:-24px}}
+@keyframes es-tick-dot{0%{transform:scale(1)}30%{transform:scale(1.3)}100%{transform:scale(1)}}
+@keyframes es-tick-ring{0%{transform:scale(1);opacity:0.85}100%{transform:scale(1.6);opacity:0}}
 
   /* Rest state = the design's reduced-motion fallback (es-core.jsx applies
      animation:none under prefers-reduced-motion) + finished dash draws. */

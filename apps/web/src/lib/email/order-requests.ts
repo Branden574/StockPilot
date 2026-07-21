@@ -707,15 +707,22 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'submitted': {
-      // FLAG: the registry lists motion "L2 · Timeline tick" for this
-      // email, but the MOTION asset registry has no timeline-tick row —
-      // no producible asset exists, so this template ships static (see
-      // registry.ts `received` entry).
+      // Registry motion "L2 · Timeline tick": the MOTION board never had a
+      // timeline-tick asset, so one was produced in-house (motion/tick) —
+      // an animated dot on the RECEIVED timeline step, not a hero slot.
+      // This stays the email's ONLY motion (one asset per email).
       const prose = `${hi(v.firstName, true)}your request landed at ${strongHtml(escapeHtml(v.wh))} on ${escapeHtml(v.submittedOn)}. Next step: a quick approval, usually within one business day.`;
       return {
         rows: [
           introSection(v, `${escapeHtml(v.displayId)} received.`, 'We’re on it.', prose),
-          section(PAD_TIMELINE, orderTimeline({ steps: stagePath(0), tone: 'info' })),
+          section(
+            PAD_TIMELINE,
+            orderTimeline({
+              steps: stagePath(0),
+              tone: 'info',
+              currentDotImgSrc: esAssetUrl('motion/tick@2x.gif'),
+            }),
+          ),
           ...(showGrid ? [section(PAD_BLOCK, orderGrid(a, v))] : []),
           ctaSection(v.def.cta, a.trackUrl, {
             noteHtml:

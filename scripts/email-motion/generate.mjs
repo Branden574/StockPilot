@@ -50,12 +50,14 @@ async function captureAsset(page, asset) {
   const pageFile = path.join(PAGES_DIR, `${asset.id}.html`);
   await page.goto(`file://${pageFile}`);
 
-  const clip = { x: 0, y: 0, width: CANVAS.width, height: CANVAS.height };
+  const canvas = asset.canvas ?? CANVAS;
+  const clip = { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  const omitBackground = !!asset.transparent;
   const restPath = path.join(dir, 'rest.png');
 
   if (asset.prependRest || asset.netscapeLoop > 1) {
     await page.evaluate(() => document.documentElement.classList.add('es-rest'));
-    await page.screenshot({ path: restPath, clip });
+    await page.screenshot({ path: restPath, clip, omitBackground });
     await page.evaluate(() => document.documentElement.classList.remove('es-rest'));
   }
 
@@ -68,7 +70,7 @@ async function captureAsset(page, asset) {
       document.getAnimations().forEach((a) => { a.currentTime = ms; });
     }, t);
     const p = path.join(dir, `f-${String(i).padStart(3, '0')}.png`);
-    await page.screenshot({ path: p, clip });
+    await page.screenshot({ path: p, clip, omitBackground });
     framePaths.push(p);
   }
   return { framePaths, restPath, dir };
@@ -91,6 +93,10 @@ function assembleAsset(asset, framePaths, restPath) {
   const rawGif = path.join(WORK_DIR, asset.id, 'raw.gif');
   const outGif = path.join(OUT_DIR, asset.file);
   const imArgs = [];
+  // Transparent frames must clear to background between frames or the ring
+  // pulse smears (previous frame shows through the transparency). -dispose
+  // is a SETTING: it must precede the frames it applies to.
+  if (asset.transparent) imArgs.push('-dispose', 'Background');
   for (const f of seq) imArgs.push('-delay', String(f.delay), f.png);
   imArgs.push('-loop', String(asset.netscapeLoop), rawGif);
   run('magick', imArgs);

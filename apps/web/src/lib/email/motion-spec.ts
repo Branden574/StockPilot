@@ -19,6 +19,9 @@ export interface MotionAssetSpec {
   maxKB: number;
   /** Expected Netscape loop-extension value. */
   loop: number;
+  /** Pixel dims when not the standard 1200x440 hero (e.g. the tick dot). */
+  width?: number;
+  height?: number;
 }
 
 export const MOTION_DIMS = { width: 1200, height: 440 } as const;
@@ -38,6 +41,8 @@ export const MOTION_ASSET_SPECS: MotionAssetSpec[] = [
   { id: 'clock-arc', file: 'clock-arc@2x.gif', maxKB: 250, loop: 2 },
   { id: 'calendar', file: 'calendar@2x.gif', maxKB: 250, loop: 1 },
   { id: 'bars', file: 'bars@2x.gif', maxKB: 300, loop: 1 },
+  // Timeline tick (received email) — 11x11-display inline dot, not a hero.
+  { id: 'tick', file: 'tick@2x.gif', maxKB: 20, loop: 1, width: 22, height: 22 },
 ];
 
 /** Logo marks exported alongside the motion assets (22x22 display @2x). */
@@ -138,8 +143,10 @@ export function validateMotionGif(spec: MotionAssetSpec, buf: Uint8Array): strin
   } catch (err) {
     return [`${spec.file}: ${err instanceof Error ? err.message : String(err)}`];
   }
-  if (info.width !== MOTION_DIMS.width || info.height !== MOTION_DIMS.height) {
-    errors.push(`${spec.file}: dimensions ${info.width}x${info.height}, expected ${MOTION_DIMS.width}x${MOTION_DIMS.height}`);
+  const wantW = spec.width ?? MOTION_DIMS.width;
+  const wantH = spec.height ?? MOTION_DIMS.height;
+  if (info.width !== wantW || info.height !== wantH) {
+    errors.push(`${spec.file}: dimensions ${info.width}x${info.height}, expected ${wantW}x${wantH}`);
   }
   if (buf.byteLength > spec.maxKB * 1024) {
     errors.push(`${spec.file}: ${(buf.byteLength / 1024).toFixed(1)} KB exceeds cap ${spec.maxKB} KB`);

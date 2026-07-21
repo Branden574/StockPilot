@@ -374,16 +374,17 @@ describe('es registry — shape', () => {
     expect(asset('sched-hour')).toBe('clock');
     expect(asset('sched-tmrw')).toBe('calendar');
     expect(asset('digest')).toBe('bars');
+    // received "Timeline tick": produced in-house (11px inline dot).
+    expect(asset('received')).toBe('tick');
     // No motion on denied / cancelled / receipts / support ticket
     // (prompt rule), and none where the MOTION board has no asset
-    // (portal-invite "Catalog tiles", received "Timeline tick",
-    // partial "Split progress" — flagged in registry.ts).
+    // (portal-invite "Catalog tiles", partial "Split progress" —
+    // flagged in registry.ts).
     for (const id of [
       'team-invite',
       'invite-reminder',
       'portal-invite',
       'confirm',
-      'received',
       'denied',
       'cancelled',
       'partial',

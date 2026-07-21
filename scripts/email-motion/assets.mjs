@@ -21,7 +21,7 @@
 // centiseconds, >= 6cs so no client rounds delays up).
 import {
   heroLock, heroDevice, heroTiles, heroRoute, heroScanner, heroSettle,
-  heroCheck, heroPin, heroTag, heroClock, heroCalendar, heroBars,
+  heroCheck, heroPin, heroTag, heroClock, heroCalendar, heroBars, heroTick,
 } from './heroes.mjs';
 
 export const CANVAS = { width: 1200, height: 440 }; // 1200x440 @2x -> 600x220
@@ -121,6 +121,17 @@ export const ASSETS = [
     cycleMs: 1800, captureFromMs: 0, netscapeLoop: 1, prependRest: true,
     restDelayCs: 50, endDelayCs: 250, maxBytes: 300 * KB,
     note: 'Play once; frame 1 = risen bars incl. amber exception bar',
+  },
+  {
+    // Not a hero-box asset: the "received" email's "L2 · Timeline tick" —
+    // an 11x11-display transparent dot that replaces the active timeline
+    // glyph (orderTimeline currentDotImgSrc). Transparent so it sits on the
+    // paper background in BOTH light and dark mode.
+    id: 'tick', file: 'tick@2x.gif', hero: heroTick,
+    canvas: { width: 22, height: 22 }, transparent: true,
+    cycleMs: 1400, captureFromMs: 0, netscapeLoop: 1, prependRest: true,
+    restDelayCs: 50, endDelayCs: 250, maxBytes: 20 * KB,
+    note: 'Play once; dot pops + one ring pulse; frame 1 = solid dot',
   },
 ];
 

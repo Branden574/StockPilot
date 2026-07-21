@@ -109,6 +109,28 @@ describe('orderTimeline', () => {
     expect(html).toContain(`color:${ES_LIGHT.status.err.fg};font-weight:700">&#9679;<br>Cancelled`);
   });
 
+  it('currentDotImgSrc swaps ONLY the current dot for the animated tick', () => {
+    const html = orderTimeline({
+      tone: 'info',
+      currentDotImgSrc: esAssetUrl('motion/tick@2x.gif'),
+      steps: [
+        { label: 'Received', state: 'current' },
+        { label: 'Approved', state: 'upcoming' },
+      ],
+    });
+    expect(html).toContain(
+      '<img src="https://stockpilotusa.com/email/motion/tick@2x.gif" width="11" height="11"',
+    );
+    // Upcoming keeps its glyph; without the option nothing changes.
+    expect(html).toContain('&#9675;<br>Approved');
+    const plain = orderTimeline({
+      tone: 'info',
+      steps: [{ label: 'Received', state: 'current' }],
+    });
+    expect(plain).toContain('&#9679;<br>Received');
+    expect(plain).not.toContain('<img');
+  });
+
   it('distinguishes done / current / upcoming glyphs and colors', () => {
     const html = orderTimeline({
       tone: 'ok',
