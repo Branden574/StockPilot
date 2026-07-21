@@ -384,6 +384,15 @@ export function ctaRow({ primary, secondary, noteHtml }: CtaRowOptions): string 
   return `${row}${note}`;
 }
 
+/**
+ * The 11.5px supporting note line ctaRow renders under its buttons,
+ * standalone — for templates whose CTA is conditional (e.g. the signer
+ * receipt keeps its note even when no receipt URL exists to link).
+ */
+export function ctaNote(noteHtml: string): string {
+  return `<div class="ink3" style="font-size:11.5px;color:${L.ink3};line-height:1.55">${noteHtml}</div>`;
+}
+
 export interface LinkFallbackOptions {
   /**
    * Archetypes disagree: security uses margin-top:12px, order-status
@@ -719,14 +728,28 @@ export interface KpiCardOptions {
   label: string;
   valueHtml: string;
   noteHtml: string;
+  /**
+   * Tonal stat-card variant (es-fulfillment split delivered/backordered
+   * cards): status background, `fg+33` hairline, status-colored eyebrow,
+   * 11.5px note — exactly the mockup's `ESCard tone` treatment. Like the
+   * banner partial, tonal fills stay light-token-static in dark mode
+   * (the archetypes carry no dark overrides for tonal surfaces).
+   */
+  tone?: Exclude<EsStatusVariant, 'sec'>;
 }
 
 /** One KPI cell (`div.cell` hooks the digest dark/mobile overrides). */
-export function kpiCard({ label, valueHtml, noteHtml }: KpiCardOptions): string {
-  return `<div class="cell" style="border:1px solid ${L.hair};border-radius:6px;padding:14px 16px">
-            <div class="ink4" style="font-family:${ES_MONO_INLINE};font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:${L.ink4};margin-bottom:5px">${label}</div>
+export function kpiCard({ label, valueHtml, noteHtml, tone }: KpiCardOptions): string {
+  const c = tone ? L.status[tone] : null;
+  const border = c ? `${c.fg}33` : L.hair;
+  const bg = c ? `background:${c.bg};` : '';
+  const eyebrowColor = c ? c.fg : L.ink4;
+  const eyebrowClass = c ? '' : ' class="ink4"';
+  const noteSize = c ? 11.5 : 11;
+  return `<div class="cell" style="border:1px solid ${border};${bg}border-radius:6px;padding:14px 16px">
+            <div${eyebrowClass} style="font-family:${ES_MONO_INLINE};font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:${eyebrowColor};margin-bottom:5px">${label}</div>
             <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:${L.ink};line-height:1">${valueHtml}</div>
-            <div class="ink3" style="font-size:11px;color:${L.ink3};margin-top:4px">${noteHtml}</div>
+            <div class="ink3" style="font-size:${noteSize}px;color:${L.ink3};margin-top:4px">${noteHtml}</div>
           </div>`;
 }
 

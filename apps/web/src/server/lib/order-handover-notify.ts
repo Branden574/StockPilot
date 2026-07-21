@@ -1,8 +1,20 @@
 import 'server-only';
 
+import { assertEmailWeight } from '@/lib/email/es/components';
+import {
+  FULFILLMENT_ORDERS_FROM,
+  buildPrefEmailDelivery,
+  buildViaStockPilotFrom,
+  renderBackorderShippedEmail,
+  renderPartialFulfilledEmail,
+  renderPartialReceiptEmail,
+} from '@/lib/email/es/families/fulfillment';
 import { sendEmail } from '@/lib/email/resend';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { createNotification } from '@/server/services/notifications';
+
+import type { FulfillmentLineItem } from '@/lib/email/es/families/fulfillment';
 
 /**
  * Requester notifications for the two backorder hand-over outcomes. Shared by
@@ -11,7 +23,65 @@ import { createNotification } from '@/server/services/notifications';
  * hand-over notifies identically no matter how the signature was captured.
  * Everything here is best-effort: a notification failure must never fail the
  * fulfillment, so every function swallows its own errors.
+ *
+ * Emails render through the es fulfillment family (Unit E5). The trigger,
+ * suppression, and preference semantics are UNCHANGED: the
+ * `email_order_completed` opt-out computed by the callers is honored via the
+ * same `requesterEmail && !emailOptedOut` gate as before.
  */
+
+/** Short "Apr 29"-style date for stat cards / delivery lines. */
+function shortDate(d: Date = new Date()): string {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Per-line items for the partial/receipt tables — best-effort admin read
+ * (the templates render without the table when this comes back empty).
+ */
+export async function fetchOrderLineItems(orderId: string): Promise<FulfillmentLineItem[]> {
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from('order_request_lines')
+      .select('quantity_requested, quantity_fulfilled, inventory_items(name, sku)')
+      .eq('order_request_id', orderId);
+    type Row = {
+      quantity_requested: number | null;
+      quantity_fulfilled: number | null;
+      inventory_items:
+        | { name: string | null; sku: string | null }
+        | { name: string | null; sku: string | null }[]
+        | null;
+    };
+    return ((data ?? []) as Row[]).map((r) => {
+      const item = Array.isArray(r.inventory_items) ? r.inventory_items[0] : r.inventory_items;
+      return {
+        name: item?.name ?? 'Item',
+        sku: item?.sku ?? null,
+        qtyRequested: Number(r.quantity_requested) || 0,
+        qtyFulfilled: Number(r.quantity_fulfilled) || 0,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Org display name for the signer receipt's via-StockPilot sender (best-effort). */
+async function fetchOrgName(organizationId: string): Promise<string | null> {
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from('organizations')
+      .select('name')
+      .eq('id', organizationId)
+      .maybeSingle();
+    return (data as { name?: string | null } | null)?.name ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Partial hand-over (order → backordered): in-app+push, plus email unless opted out. */
 export async function notifyRequesterBackordered(args: {
@@ -48,13 +118,32 @@ export async function notifyRequesterBackordered(args: {
       });
     }
     if (args.requesterEmail && !args.emailOptedOut) {
-      await sendBackorderEmail({
+      const delivery = buildPrefEmailDelivery({
+        appUrl: args.appUrl,
+        recipientEmail: args.requesterEmail,
+        isAccountHolder: Boolean(args.requesterUserId),
+      });
+      const items = await fetchOrderLineItems(args.orderId);
+      const rendered = renderPartialFulfilledEmail({
+        orderNumber: `#${orderNo}`,
+        recipientFirstName: args.requesterName,
+        recipientEmail: args.requesterEmail,
+        delivered: args.provided,
+        requested: args.requested,
+        backordered: args.owed,
+        deliveredOn: shortDate(),
+        items,
+        orderUrl: link,
+        urls: delivery.urls,
+      });
+      assertEmailWeight(rendered.html);
+      await sendEmail({
         to: args.requesterEmail,
-        recipientName: args.requesterName,
-        subject: title,
-        message:
-          `${args.provided} of ${args.requested} items from your order have been fulfilled. ` +
-          `The remaining ${args.owed} are backordered and will ship as soon as they're back in stock.`,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        from: FULFILLMENT_ORDERS_FROM,
+        headers: delivery.headers,
       });
     }
   } catch {
@@ -71,6 +160,11 @@ export async function notifyRequesterBackorderShipped(args: {
   requesterName: string | null;
   appUrl: string;
   emailOptedOut: boolean;
+  /**
+   * How many units the remainder batch carried (callers already know
+   * totalFulfilled − priorFulfilled). Optional/additive — display only.
+   */
+  unitsShipped?: number | null;
 }): Promise<void> {
   const orderNo = args.orderId.slice(0, 8).toUpperCase();
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
@@ -89,13 +183,27 @@ export async function notifyRequesterBackorderShipped(args: {
       });
     }
     if (args.requesterEmail && !args.emailOptedOut) {
-      await sendBackorderEmail({
+      const delivery = buildPrefEmailDelivery({
+        appUrl: args.appUrl,
+        recipientEmail: args.requesterEmail,
+        isAccountHolder: Boolean(args.requesterUserId),
+      });
+      const rendered = renderBackorderShippedEmail({
+        orderNumber: `#${orderNo}`,
+        recipientFirstName: args.requesterName,
+        recipientEmail: args.requesterEmail,
+        unitsShipped: args.unitsShipped ?? null,
+        trackUrl: link,
+        urls: delivery.urls,
+      });
+      assertEmailWeight(rendered.html);
+      await sendEmail({
         to: args.requesterEmail,
-        recipientName: args.requesterName,
-        subject: title,
-        message:
-          'Good news — the backordered items on your order have now shipped, ' +
-          'so your order is complete.',
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        from: FULFILLMENT_ORDERS_FROM,
+        headers: delivery.headers,
       });
     }
   } catch {
@@ -103,35 +211,53 @@ export async function notifyRequesterBackorderShipped(args: {
   }
 }
 
-/** Bare transactional email for the backorder notices (no template coupling). */
-export async function sendBackorderEmail(args: {
+/**
+ * Transactional receipt for the SIGNER of a partial delivery (may be
+ * neither the requester nor a StockPilot user). External-recipient
+ * treatment: receipt language, zero jargon, explainer footer, NO
+ * unsubscribe (one-time transactional record), display-from
+ * "<supplier> via StockPilot". Best-effort like everything here.
+ */
+export async function sendPartialReceiptEmail(args: {
+  organizationId: string;
+  orderId: string;
   to: string;
-  recipientName: string | null;
-  subject: string;
-  message: string;
+  signerName: string;
+  unitsReceived: number;
+  unitsTotal: number;
+  unitsPending: number;
+  appUrl: string;
 }): Promise<void> {
-  const firstName = args.recipientName?.split(' ')[0] ?? 'there';
-  const safeName = escapeHtml(firstName);
-  const safeMsg = escapeHtml(args.message);
+  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const signedAt = new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  });
+  const [orgName, items] = await Promise.all([
+    fetchOrgName(args.organizationId),
+    fetchOrderLineItems(args.orderId),
+  ]);
+  const rendered = renderPartialReceiptEmail({
+    orderNumber: `#${orderNo}`,
+    supplierName: orgName,
+    signerName: args.signerName,
+    signedAt,
+    unitsReceived: args.unitsReceived,
+    unitsTotal: args.unitsTotal,
+    unitsPending: args.unitsPending,
+    items,
+    appUrl: args.appUrl,
+  });
+  assertEmailWeight(rendered.html);
   await sendEmail({
     to: args.to,
-    subject: args.subject,
-    html:
-      `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
-      `<p>Hi ${safeName},</p>` +
-      `<p>${safeMsg}</p>` +
-      `<p style="color:#666;font-size:12px">You're receiving this because you placed an order with us.</p>` +
-      `</div>`,
-    text: `Hi ${firstName},\n\n${args.message}`,
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    from: buildViaStockPilotFrom(orgName),
   });
-}
-
-/** Minimal HTML escaping for the few interpolated values above. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
