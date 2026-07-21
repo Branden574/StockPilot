@@ -301,6 +301,114 @@ export class CycleCountsService {
     return data as unknown as CycleCountRow;
   }
 
+  /**
+   * Release the assignment: the assigned employee (self-release) or a
+   * manager+. Authorization + reason enforcement live in the 0282
+   * `release_cycle_count` RPC (race-safe, version-bumped). Counted lines are
+   * preserved (owner decision) — only the assignment clears. A non-blank
+   * reason is required and recorded in the audit trail.
+   */
+  async release(id: string, reason: string): Promise<CycleCountRow> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
+    assertPermission(this.ctx, 'stock:adjust');
+    if (!reason || reason.trim() === '') {
+      throw new ServiceError(
+        'validation_error',
+        'A release reason is required.',
+        { reason: 'release_reason_required' },
+      );
+    }
+    const { data, error } = await this.ctx.supabase.rpc('release_cycle_count', {
+      p_count_id: id,
+      p_reason: reason,
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('release_reason_required'))
+        throw new ServiceError('validation_error', 'A release reason is required.', {
+          reason: 'release_reason_required',
+        });
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('conflict', 'This cycle count is closed — it can\'t be released.');
+      if (msg.includes('cycle_count_not_found'))
+        throw new ServiceError('not_found', 'Cycle count not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError(
+          'forbidden',
+          'Only the assigned employee or a manager can release this count.',
+        );
+      throw new ServiceError('internal_error', 'Could not release the cycle count.');
+    }
+    await audit(
+      {
+        event: 'cycle_count.released',
+        entityType: 'cycle_count',
+        entityId: id,
+        reason,
+      },
+      this.ctx,
+    );
+    return data as unknown as CycleCountRow;
+  }
+
+  /**
+   * Manager+ force-reassign of an ACTIVE (assigned) count to another member,
+   * with a required reason (owner decision). Authorization + reason live in
+   * the 0282 `force_reassign_cycle_count` RPC. Notifies the new assignee;
+   * the previous-assignee notification is a Phase-3 follow-up.
+   */
+  async forceReassign(
+    id: string,
+    userId: string,
+    reason: string,
+  ): Promise<CycleCountRow> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
+    // Authorization (manager+) is enforced inside the RPC; the module gate is
+    // kept here. A blanket permission assert would wrongly block a manager who
+    // is manager-by-role but lacks a specific granular grant.
+    if (!reason || reason.trim() === '') {
+      throw new ServiceError(
+        'validation_error',
+        'A reassignment reason is required.',
+        { reason: 'reassign_reason_required' },
+      );
+    }
+    const { data, error } = await this.ctx.supabase.rpc(
+      'force_reassign_cycle_count',
+      { p_count_id: id, p_user_id: userId, p_reason: reason },
+    );
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('reassign_reason_required'))
+        throw new ServiceError('validation_error', 'A reassignment reason is required.', {
+          reason: 'reassign_reason_required',
+        });
+      if (msg.includes('invalid_assignee'))
+        throw new ServiceError(
+          'validation_error',
+          'That user is not an active member of this organization.',
+        );
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('conflict', 'This cycle count is closed — it can\'t be reassigned.');
+      if (msg.includes('cycle_count_not_found'))
+        throw new ServiceError('not_found', 'Cycle count not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only a manager can force-reassign an active count.');
+      throw new ServiceError('internal_error', 'Could not reassign the cycle count.');
+    }
+    await audit(
+      {
+        event: 'cycle_count.force_reassigned',
+        entityType: 'cycle_count',
+        entityId: id,
+        reason,
+        extra: { assigned_to: userId },
+      },
+      this.ctx,
+    );
+    return data as unknown as CycleCountRow;
+  }
+
   async get(
     id: string,
   ): Promise<{ header: CycleCountRow; lines: CycleCountLineWithItem[] }> {

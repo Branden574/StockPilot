@@ -87,6 +87,8 @@ export type AuditEvent =
   | 'cycle_count.canceled'
   | 'cycle_count.posted'
   | 'cycle_count.assigned'
+  | 'cycle_count.released'
+  | 'cycle_count.force_reassigned'
   | 'bundle.created'
   | 'bundle.updated'
   | 'bundle.archived'
