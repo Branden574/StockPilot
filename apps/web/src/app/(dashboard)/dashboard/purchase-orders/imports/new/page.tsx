@@ -26,7 +26,7 @@ export default function NewPoImportPage() {
           <CardHeader>
             <CardTitle className="text-base">Scan with AI</CardTitle>
             <CardDescription>
-              Photo of a printed PO or a PDF — Gemini Flash extracts vendor,
+              Photo of a printed PO or a PDF — AI vision extracts vendor,
               line items, qty, and totals. Confidence is shown per line; you
               review and approve.
             </CardDescription>

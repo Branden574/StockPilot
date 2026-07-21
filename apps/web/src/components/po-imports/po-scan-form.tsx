@@ -217,11 +217,11 @@ export function PoScanForm() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Scanned POs run through Gemini 2.0 Flash (free tier on Google AI
-        Studio). Your data stays in your Supabase project; the scan
-        endpoint only sends the image bytes for extraction. After review,
-        the existing approve flow learns vendor-SKU mappings so repeat
-        POs from the same supplier need almost no edits.
+        Scanned POs run through AI vision extraction. Your data stays in
+        your Supabase project; the scan endpoint only sends the image bytes
+        for extraction. After review, the existing approve flow learns
+        vendor-SKU mappings so repeat POs from the same supplier need almost
+        no edits.
       </p>
     </div>
   );

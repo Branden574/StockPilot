@@ -4,6 +4,7 @@ import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
+import { dropDuplicateNewIsbnLines } from '@/lib/po-scan/dedupe';
 import { env } from '@/lib/env';
 
 /**
@@ -293,6 +294,10 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
       "This doesn't look like a purchase order — try a clearer photo of the full document.",
     );
   }
+
+  // Collapse the "priced title row + (NEW)/ISBN $0 row" duplicates some vendor
+  // PDFs print for each product (see dropDuplicateNewIsbnLines).
+  parsed.lines = dropDuplicateNewIsbnLines(parsed.lines);
 
   return parsed;
 }
