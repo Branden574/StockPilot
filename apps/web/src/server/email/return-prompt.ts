@@ -1,7 +1,14 @@
+import { formatOrderNumber } from '@stockpilot/core';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { assertEmailWeight } from '@/lib/email/es/components';
+import {
+  FULFILLMENT_ORDERS_FROM,
+  buildPrefEmailDelivery,
+  renderReturnPromptEmail,
+} from '@/lib/email/es/families/fulfillment';
 import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 
@@ -68,10 +75,14 @@ export async function maybeSendReturnPrompt(
   opts: { appUrl: string },
 ): Promise<ReturnPromptResult> {
   try {
+    // NOTE (Unit E5): `order_number` + `requester_user_id` are read-only
+    // additions for the es template render (display handle + the correct
+    // unsubscribe-link flavor). The guards, guarded updates, and their
+    // ordering below are UNCHANGED.
     const { data: row } = await admin
       .from('order_requests')
       .select(
-        'id, organization_id, status, requester_email, requester_name, return_token, return_prompt_sent_at',
+        'id, organization_id, status, requester_email, requester_name, requester_user_id, order_number, return_token, return_prompt_sent_at',
       )
       .eq('id', orderId)
       .maybeSingle();
@@ -82,6 +93,8 @@ export async function maybeSendReturnPrompt(
       status: string;
       requester_email: string | null;
       requester_name: string | null;
+      requester_user_id: string | null;
+      order_number: number | null;
       return_token: string | null;
       return_prompt_sent_at: string | null;
     };
@@ -165,6 +178,9 @@ export async function maybeSendReturnPrompt(
         recipientName: order.requester_name,
         appUrl: opts.appUrl,
         token,
+        orderNumber:
+          formatOrderNumber(order.order_number) ?? `#${order.id.slice(0, 8).toUpperCase()}`,
+        isAccountHolder: Boolean(order.requester_user_id),
       });
     } catch (e) {
       // Marker stays set (at-most-once). Report so a systemic send failure
@@ -187,44 +203,47 @@ export async function maybeSendReturnPrompt(
 }
 
 /**
- * Lightweight return-link email (Returns Phase B, B4 — moved here from the
- * sign route). Deliberately uses the bare `sendEmail` (not the heavier
- * order-request templates) so the return portal stays decoupled from
- * template work.
+ * The es `return-prompt` email (fulfillment family, Unit E5): reverse-route
+ * motion, preference footer + List-Unsubscribe headers, registry-verbatim
+ * subject ('Need to return anything from your order?' — the registry's
+ * `rec:` refined subject stays a comment awaiting product sign-off). Only
+ * the RENDERING changed here; the mint/marker flow above is untouched.
  */
 async function sendReturnPromptEmail(args: {
   to: string;
   recipientName: string | null;
   appUrl: string;
   token: string;
+  orderNumber: string;
+  isAccountHolder: boolean;
 }): Promise<void> {
-  const firstName = args.recipientName?.split(' ')[0] ?? 'there';
   const base = args.appUrl.replace(/\/+$/, '');
   const url = `${base}/returns/request/${args.token}`;
-  const safeName = escapeHtml(firstName);
-  const safeUrl = escapeHtml(url);
+  const delivery = buildPrefEmailDelivery({
+    appUrl: base,
+    recipientEmail: args.to,
+    isAccountHolder: args.isAccountHolder,
+  });
+  // The prompt fires at completion, so "delivered" is now.
+  const deliveredOn = new Date().toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+  const rendered = renderReturnPromptEmail({
+    orderNumber: args.orderNumber,
+    recipientFirstName: args.recipientName,
+    recipientEmail: args.to,
+    deliveredOn,
+    startUrl: url,
+    urls: delivery.urls,
+  });
+  assertEmailWeight(rendered.html);
   await sendEmail({
     to: args.to,
-    subject: 'Need to return anything from your order?',
-    html:
-      `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
-      `<p>Hi ${safeName},</p>` +
-      `<p>Your order is complete. If you need to send anything back, you can start a return request below — the warehouse team will review it.</p>` +
-      `<p><a href="${safeUrl}" style="display:inline-block;background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Request a return</a></p>` +
-      `<p style="color:#666;font-size:12px">Or paste this link into your browser:<br>${safeUrl}</p>` +
-      `</div>`,
-    text:
-      `Hi ${firstName},\n\nYour order is complete. If you need to send anything back, ` +
-      `start a return request here:\n${url}\n\nThe warehouse team will review it.`,
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    from: FULFILLMENT_ORDERS_FROM,
+    headers: delivery.headers,
   });
-}
-
-/** Minimal HTML escaping for the few interpolated values above. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }

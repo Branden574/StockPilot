@@ -11,7 +11,7 @@ import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
-  sendBackorderEmail,
+  sendPartialReceiptEmail,
 } from '@/server/lib/order-handover-notify';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { syncOrderScheduleEvent } from '@/server/services/order-requests';
@@ -275,14 +275,19 @@ export async function POST(req: NextRequest) {
       (order.requester_email ?? '').toLowerCase();
     if (!signerIsRequester || requesterEmailOptedOut) {
       try {
-        await sendBackorderEmail({
+        // es `partial-receipt` template: external-recipient receipt from
+        // "<supplier> via StockPilot" — the signer may not be a StockPilot
+        // user, so it carries receipt language and an explainer footer
+        // (no unsubscribe: one-time transactional record).
+        await sendPartialReceiptEmail({
+          organizationId: order.organization_id,
+          orderId: order.id,
           to: parsed.data.signerEmail,
-          recipientName: parsed.data.signerName,
-          subject: `Order #${order.id.slice(0, 8).toUpperCase()}: partial delivery receipt`,
-          message:
-            `This confirms your signature for a partial delivery — ${totalFulfilled} of ` +
-            `${totalRequested} items were provided. The remaining ${owed} are backordered ` +
-            `and will ship separately.`,
+          signerName: parsed.data.signerName,
+          unitsReceived: totalFulfilled,
+          unitsTotal: totalRequested,
+          unitsPending: owed,
+          appUrl: env.NEXT_PUBLIC_APP_URL,
         });
       } catch {
         /* best-effort — receipt failure never fails the fulfillment */
@@ -310,6 +315,8 @@ export async function POST(req: NextRequest) {
         requesterName: order.requester_name,
         appUrl: env.NEXT_PUBLIC_APP_URL,
         emailOptedOut: requesterEmailOptedOut,
+        // Display-only: how many units the remainder batch carried.
+        unitsShipped: Math.max(0, totalFulfilled - priorFulfilled),
       });
     }
     try {
