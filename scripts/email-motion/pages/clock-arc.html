@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StockPilot email motion — clock-arc</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1200px; height: 440px; overflow: hidden;
+    background: #eeece5;
+    display: flex; align-items: center; justify-content: center;
+  }
+  
+@keyframes es-ring{0%{transform:scale(0.55);opacity:0.9}80%{transform:scale(1.5);opacity:0}100%{transform:scale(1.5);opacity:0}}
+@keyframes es-drop{0%{transform:translateY(-14px);opacity:0}60%{transform:translateY(2px);opacity:1}100%{transform:translateY(0);opacity:1}}
+@keyframes es-fadein{from{opacity:0}to{opacity:1}}
+@keyframes es-draw{to{stroke-dashoffset:0}}
+@keyframes es-travel{0%{transform:translateX(0)}45%,55%{transform:translateX(var(--es-tx,240px))}100%{transform:translateX(var(--es-tx2,480px))}}
+@keyframes es-march{to{stroke-dashoffset:-24px}}
+@keyframes es-scan{0%,100%{transform:translateX(-46px)}50%{transform:translateX(46px)}}
+@keyframes es-swing{0%,100%{transform:rotate(5deg)}50%{transform:rotate(-5deg)}}
+@keyframes es-rise{from{transform:scaleY(0.06)}to{transform:scaleY(1)}}
+@keyframes es-hand{0%{transform:rotate(0deg)}45%,100%{transform:rotate(80deg)}}
+@keyframes es-pop{0%{transform:scale(0.6);opacity:0}70%{transform:scale(1.06);opacity:1}100%{transform:scale(1)}}
+@keyframes es-blinkonce{0%,40%{opacity:0}60%,100%{opacity:1}}
+@keyframes es-click{0%{transform:translateY(-6px)}60%{transform:translateY(1.5px)}100%{transform:translateY(0)}}
+@keyframes es-march-p{to{stroke-dashoffset:-24px}}
+
+  /* Rest state = the design's reduced-motion fallback (es-core.jsx applies
+     animation:none under prefers-reduced-motion) + finished dash draws. */
+  .es-rest * { animation: none !important; }
+  .es-rest .draw { stroke-dashoffset: 0 !important; }
+</style>
+</head>
+<body>
+<svg class="es-anim" viewBox="0 0 220 120" width="691" height="377" style="display:block;overflow:visible"><g fill="none">
+    <circle cx="110" cy="60" r="36" stroke="#0c0c0e" stroke-opacity="0.8" stroke-width="2" fill="#eeece5"></circle>
+    <line x1="110" y1="27" x2="110" y2="32" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="2"
+        transform="rotate(0 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(30 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(60 110 60)"></line><line x1="110" y1="27" x2="110" y2="32" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="2"
+        transform="rotate(90 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(120 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(150 110 60)"></line><line x1="110" y1="27" x2="110" y2="32" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="2"
+        transform="rotate(180 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(210 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(240 110 60)"></line><line x1="110" y1="27" x2="110" y2="32" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="2"
+        transform="rotate(270 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(300 110 60)"></line><line x1="110" y1="27" x2="110" y2="30" stroke="#0c0c0e" stroke-opacity="0.5" stroke-width="1"
+        transform="rotate(330 110 60)"></line>
+    <path d="M 110 24 A 36 36 0 0 1 141 78" stroke="#8a3d33" stroke-width="3.5" stroke-opacity="0.85" stroke-linecap="round" style="animation:es-fadein .8s ease .8s both"></path>
+    <line x1="110" y1="60" x2="110" y2="34" stroke="#8a3d33" stroke-width="3" stroke-linecap="round"
+      style="animation:es-hand 2.6s cubic-bezier(.6,0,.3,1) forwards;transform-origin:110px 60px"></line>
+    <line x1="110" y1="60" x2="94" y2="68" stroke="#0c0c0e" stroke-opacity="0.7" stroke-width="2.5" stroke-linecap="round"></line>
+    <circle cx="110" cy="60" r="3.5" fill="#0c0c0e"></circle>
+  </g></svg>
+</body>
+</html>
