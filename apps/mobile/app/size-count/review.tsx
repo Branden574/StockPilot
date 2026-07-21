@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -32,8 +33,20 @@ interface Sample {
  * which blanked thumbnails and crashed the Fabric renderer on large sets).
  * Per-size filter + tap-to-delete a bad capture.
  */
+// Fixed-pixel 3-column grid. `flex: 1/3 + aspectRatio + maxWidth` collapsed the
+// cells to a sliver under the New Architecture renderer — computing an explicit
+// square size from the screen width is the reliable way to lay out a FlatList
+// grid.
+const GRID_COLUMNS = 3;
+const GRID_PAD = 8;
+const GRID_GAP = 6;
+
 export default function TrainingReviewScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const cellSize = Math.floor(
+    (width - GRID_PAD * 2 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS,
+  );
   const [filter, setFilter] = React.useState<(typeof FILTERS)[number]>('ALL');
   const [samples, setSamples] = React.useState<Sample[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -83,7 +96,10 @@ export default function TrainingReviewScreen() {
 
   const renderItem = React.useCallback(
     ({ item }: { item: Sample }) => (
-      <Pressable style={styles.cell} onPress={() => confirmDelete(item)}>
+      <Pressable
+        style={[styles.cell, { width: cellSize, height: cellSize }]}
+        onPress={() => confirmDelete(item)}
+      >
         {item.url ? (
           <Image source={{ uri: item.url }} style={styles.thumb} resizeMode="cover" />
         ) : (
@@ -96,7 +112,7 @@ export default function TrainingReviewScreen() {
         </View>
       </Pressable>
     ),
-    [confirmDelete],
+    [confirmDelete, cellSize],
   );
 
   return (
@@ -140,7 +156,7 @@ export default function TrainingReviewScreen() {
         <FlatList
           data={samples}
           keyExtractor={(s) => s.id}
-          numColumns={3}
+          numColumns={GRID_COLUMNS}
           renderItem={renderItem}
           columnWrapperStyle={styles.rowWrap}
           contentContainerStyle={styles.gridContent}
@@ -177,9 +193,9 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
   chipText: { color: theme.text, fontSize: 13, fontWeight: '600' },
   chipTextActive: { color: '#fff' },
-  gridContent: { padding: space.xs },
-  rowWrap: { gap: space.xs, marginBottom: space.xs },
-  cell: { flex: 1 / 3, aspectRatio: 1, maxWidth: '32%' },
+  gridContent: { padding: GRID_PAD },
+  rowWrap: { gap: GRID_GAP, marginBottom: GRID_GAP },
+  cell: { borderRadius: radius.md, overflow: 'hidden' },
   thumb: { width: '100%', height: '100%', borderRadius: radius.md, backgroundColor: theme.card },
   thumbMissing: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.border },
   thumbMissingText: { color: theme.textMuted, fontSize: 11 },
