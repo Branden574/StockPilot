@@ -18,6 +18,7 @@ export interface SizeCountSessionRow {
   organization_id: string;
   warehouse_id: string | null;
   purchase_order_id: string | null;
+  supplier_id: string | null;
   style_key: string | null;
   box_id: string | null;
   mode: SizeCountMode;
@@ -62,6 +63,7 @@ export class SizeCountsService {
     mode?: SizeCountMode;
     warehouseId?: string | null;
     purchaseOrderId?: string | null;
+    supplierId?: string | null;
     styleKey?: string | null;
     boxId?: string | null;
     expectedQuantity?: number | null;
@@ -80,6 +82,7 @@ export class SizeCountsService {
         organization_id: this.ctx.organizationId,
         warehouse_id: input.warehouseId ?? null,
         purchase_order_id: input.purchaseOrderId ?? null,
+        supplier_id: input.supplierId ?? null,
         style_key: input.styleKey ?? null,
         box_id: input.boxId ?? null,
         mode: input.mode ?? 'rapid_pass',
@@ -160,6 +163,42 @@ export class SizeCountsService {
       .select('id');
     if (error) throw new ServiceError('internal_error', error.message);
     return { inserted: (data as unknown[] | null)?.length ?? 0 };
+  }
+
+  /**
+   * Complete a session: LOCK the review list (status -> completed). This
+   * feature does NOT write inventory (owner decision) — completing just
+   * finalizes the per-size tally for review. No adjust_stock, no size->item
+   * resolution. Idempotent-ish: re-completing a completed session is a no-op
+   * conflict surfaced by the status guard.
+   */
+  async completeSession(sessionId: string): Promise<SizeCountSessionRow> {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    assertPermission(this.ctx, 'stock:adjust');
+    const { data, error } = await this.ctx.supabase
+      .from('size_count_sessions')
+      .update({
+        status: 'completed',
+        completed_by: this.ctx.userId,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', sessionId)
+      .eq('status', 'active') // only an active session can be completed (guard)
+      .select('*')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'Size count not found, or it is already completed or canceled.',
+      );
+    }
+    await audit(
+      { event: 'size_count.completed', entityType: 'size_count_session', entityId: sessionId },
+      this.ctx,
+    );
+    return data as unknown as SizeCountSessionRow;
   }
 
   /** Session header + the per-size tally (SUM of quantity_delta by size). */

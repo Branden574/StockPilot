@@ -13,6 +13,7 @@ const bodySchema = z.object({
   mode: z.enum(['rapid_pass', 'box_overview']).optional(),
   warehouseId: z.string().uuid().nullable().optional(),
   purchaseOrderId: z.string().uuid().nullable().optional(),
+  supplierId: z.string().uuid().nullable().optional(),
   styleKey: z.string().max(200).nullable().optional(),
   boxId: z.string().max(200).nullable().optional(),
   expectedQuantity: z.coerce.number().int().min(0).max(1_000_000).nullable().optional(),

@@ -2,7 +2,9 @@
 
 **Status:** Phase 0 complete (repo audit wf_da04dbf7-f95). Go/no-go below. Read-only audit; no product code changed by the audit itself.
 
-**Feature:** A native, continuous-camera computer-vision feature in the Expo app that detects small circular clothing **size stickers** (XS, S, M, L, XL, XXL, XXXL, XXXXL, XXXXXL) in a live video feed, counts garments per size with duplicate prevention, works offline, and syncs to inventory with a full audit trail.
+**Feature:** A native, continuous-camera computer-vision feature in the Expo app that detects small circular clothing **size stickers** (XS, S, M, L, XL, XXL, XXXL, XXXXL, XXXXXL) in a live video feed, counts garments per size with duplicate prevention, and works offline.
+
+**SCOPE DECISION (owner, 2026-07-21):** v1 is a **review-only per-vendor size tally** — an employee counts the sizes in a vendor shipment and a human reads the resulting list. It does **NOT write inventory**: no `finalize → adjust_stock`, no add-vs-set, no size→SKU resolution. "Completing" a session just **locks** the review list. Each session carries an optional `supplier_id` so lists file under the vendor. (An inventory-write mode can be added later as a separate, deliberate step.) This de-scopes sections 6/8 below where they describe an inventory transaction — the idempotent-transaction machinery is not built for v1.
 
 ---
 

@@ -6,10 +6,13 @@
 -- (session_id, idempotency_key) so an offline outbox can safely replay.
 --
 -- Modeled on the cycle-count + AI-shelf-scan tables (0023, 0124): org-scoped
--- RLS, staff-write, immutable ledger. Inventory application (finalize →
--- adjust_stock) is a SEPARATE migration once the add-vs-set semantic +
--- size→item resolution are decided (see the Phase 0 spec). This migration is
--- the data foundation only. See docs/superpowers/specs/2026-07-21-instant-
+-- RLS, staff-write, immutable ledger.
+--
+-- OWNER DECISION 2026-07-21: this feature does NOT write inventory. It is a
+-- review-only per-vendor size tally — an employee counts the sizes in a vendor
+-- shipment and a human reads the resulting list. "Completing" a session just
+-- LOCKS it (status='completed'); there is no finalize → adjust_stock step and
+-- no size→item resolution. See docs/superpowers/specs/2026-07-21-instant-
 -- size-count-phase0.md.
 
 -- ── 1) Sessions ─────────────────────────────────────────────────────────────
@@ -19,6 +22,10 @@ create table public.size_count_sessions (
   warehouse_id      uuid references public.warehouses(id) on delete set null,
   -- Optional receiving context (a size count is usually counting an incoming box).
   purchase_order_id uuid references public.purchase_orders(id) on delete set null,
+  -- The vendor the shipment came from. This feature is a review-only per-vendor
+  -- size tally (it does NOT write inventory) — supplier_id files each count list
+  -- under the vendor it was counted from.
+  supplier_id       uuid references public.suppliers(id) on delete set null,
   -- The base style/SKU group the counted sizes resolve within (size-run.ts key).
   style_key         text,
   box_id            text,

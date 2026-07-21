@@ -97,6 +97,25 @@ describe('SizeCountsService.appendEvents', () => {
   });
 });
 
+describe('SizeCountsService.completeSession', () => {
+  it('locks an active session (status -> completed)', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.update': { data: { id: 'sess-1', status: 'completed' }, error: null },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const session = await svc.completeSession('sess-1');
+    expect(session).toMatchObject({ status: 'completed' });
+  });
+
+  it('conflicts when the session is already completed/canceled (guard returns no row)', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.update': { data: null, error: null },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await expect(svc.completeSession('sess-1')).rejects.toMatchObject({ code: 'conflict' });
+  });
+});
+
 describe('SizeCountsService.getSession', () => {
   it('returns the session + per-size tally (SUM of quantity_delta)', async () => {
     const stub = makeSupabaseStub({
