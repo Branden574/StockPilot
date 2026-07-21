@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { API_BASE } from '@/lib/api';
+import { api, API_BASE } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -41,6 +41,26 @@ export default function TrainingCaptureScreen() {
     () => Object.values(counts).reduce((a, b) => a + b, 0),
     [counts],
   );
+
+  // Seed from the persistent server totals so leaving + returning shows real
+  // running progress per size (not a per-visit reset). Each capture also
+  // increments live below.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api<{ counts: Record<string, number> }>(
+          '/api/v1/size-counts/training',
+        );
+        if (!cancelled && res.counts) setCounts(res.counts);
+      } catch {
+        // Offline / transient — start from what this visit captures.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function capture(label: string, isNegative: boolean) {
     if (busy || !cameraRef.current) return;

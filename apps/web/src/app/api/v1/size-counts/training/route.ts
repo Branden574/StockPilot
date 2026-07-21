@@ -8,6 +8,20 @@ import { sizeCountError } from '../route';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Persistent per-size training-sample counts for the capture screen's
+ *  progress (survives leaving + returning to the screen). */
+export async function GET(req: NextRequest) {
+  const ctx = await withApiContext(req);
+  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  try {
+    const svc = new SizeCountsService(ctx);
+    const stats = await svc.getTrainingStats();
+    return NextResponse.json({ ok: true, ...stats });
+  } catch (e) {
+    return sizeCountError(e);
+  }
+}
+
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 const VALID_LABELS = new Set([
   'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL', 'NONE',

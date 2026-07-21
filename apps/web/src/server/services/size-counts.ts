@@ -256,6 +256,26 @@ export class SizeCountsService {
     return { id: (data as { id: string }).id };
   }
 
+  /**
+   * Per-size counts of TRAINING samples captured so far for this org (drives
+   * the capture screen's persistent progress, so leaving + returning shows the
+   * real running totals — not a per-visit reset). Reads only the label column.
+   */
+  async getTrainingStats(): Promise<{ counts: Record<string, number>; total: number }> {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    const { data, error } = await this.ctx.supabase
+      .from('size_count_training_samples')
+      .select('size_label')
+      .eq('organization_id', this.ctx.organizationId);
+    if (error) throw new ServiceError('internal_error', error.message);
+    const counts: Record<string, number> = {};
+    for (const r of (data ?? []) as Array<{ size_label: string }>) {
+      counts[r.size_label] = (counts[r.size_label] ?? 0) + 1;
+    }
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    return { counts, total };
+  }
+
   /** Session header + the per-size tally (SUM of quantity_delta by size). */
   async getSession(sessionId: string): Promise<{
     session: SizeCountSessionRow;
