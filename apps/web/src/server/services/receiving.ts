@@ -213,6 +213,47 @@ export class ReceivingService {
       if (error.message.includes('po_not_found') || error.message.includes('po_line_not_found')) {
         throw new ServiceError('not_found', 'PO or line not found.');
       }
+      // Map the RPC's remaining raise_exception codes to clear, actionable
+      // messages. Without these they fell through to the masked generic
+      // "An internal error occurred", which is exactly what hid the
+      // over-receipt block from warehouse staff (2026-07-21). Over-receipt
+      // itself is now ALLOWED (migration 0285) so `over_receive_blocked` no
+      // longer fires, but the rest still guard real data-integrity mistakes.
+      if (error.message.includes('over_receive_blocked')) {
+        // Defensive only — the DB guard was removed in 0285. If an older
+        // function version is somehow live, surface a clear message.
+        throw new ServiceError(
+          'validation_error',
+          'That receipt exceeds the ordered quantity. Over-receipts are allowed — reload the page and try again; if it persists, the server may still be updating.',
+        );
+      }
+      if (error.message.includes('negative_quantity')) {
+        throw new ServiceError(
+          'validation_error',
+          'Received, accepted, and rejected quantities must each be zero or more.',
+        );
+      }
+      if (error.message.includes('lot_required')) {
+        throw new ServiceError(
+          'validation_error',
+          'This item is lot-tracked — enter at least one lot covering the accepted quantity.',
+        );
+      }
+      if (error.message.includes('lot_qty_mismatch')) {
+        throw new ServiceError(
+          'validation_error',
+          'The lot quantities must add up to the accepted quantity for this line.',
+        );
+      }
+      if (
+        error.message.includes('serials_required') ||
+        error.message.includes('serial_count_mismatch')
+      ) {
+        throw new ServiceError(
+          'validation_error',
+          'This item is serial-tracked — enter exactly one serial number per accepted unit.',
+        );
+      }
       throw new ServiceError('internal_error', error.message);
     }
 
