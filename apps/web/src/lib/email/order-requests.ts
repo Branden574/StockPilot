@@ -6,6 +6,7 @@ import {
   banner,
   bodyText,
   brandStrip,
+  ctaNote,
   ctaRow,
   detailGrid,
   emailShell,
@@ -413,8 +414,13 @@ function buildView(a: TemplateArgs): OrderEmailView {
     row.signed_at ?? row.completed_at ?? row.delivered_at ?? nowIso,
   );
   const cancelledOn = fmtDate(row.cancelled_at ?? nowIso);
+  // "the requester" only when we can actually attribute the cancel to them:
+  // a null cancelled_by (public self-cancel via tracking link) or an id that
+  // matches requester_user_id. Any other authenticated canceller is staff —
+  // public-link orders have requester_user_id null, so a team cancel there
+  // must NOT read "by the requester".
   const cancelledBy =
-    row.cancelled_by && row.requester_user_id && row.cancelled_by !== row.requester_user_id
+    row.cancelled_by && row.cancelled_by !== row.requester_user_id
       ? 'the team'
       : 'the requester';
   const shipDate = a.summary.shipDate ?? 'soon';
@@ -578,15 +584,28 @@ function orderGrid(
   return detailGrid({ rows, span });
 }
 
+/**
+ * Keep very long orders inside the Gmail clip budget (assertEmailWeight
+ * THROWS over 102KB, and every dispatch path swallows that throw — an
+ * uncapped table would make big orders silently un-sendable). Mirrors the
+ * fulfillment family's MAX_TABLE_LINES.
+ */
+const MAX_TABLE_LINES = 30;
+
 function itemsTable(a: TemplateArgs, totalLabel: string): string {
-  return itemTable({
-    items: a.summary.items.map((it) => ({
+  const items = a.summary.items;
+  const overflow =
+    items.length > MAX_TABLE_LINES
+      ? `\n      ${ctaNote(`+ ${items.length - MAX_TABLE_LINES} more lines — the full order is available online.`)}`
+      : '';
+  return `${itemTable({
+    items: items.slice(0, MAX_TABLE_LINES).map((it) => ({
       nameHtml: escapeHtml(it.name),
       sku: escapeHtml(it.sku),
       qty: it.qty,
     })),
     total: { label: totalLabel, valueHtml: String(a.summary.unitCount) },
-  });
+  })}${overflow}`;
 }
 
 function introSection(
@@ -799,7 +818,7 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
       return {
         rows: [
           introSection(v, `${escapeHtml(v.displayId)} is on the way.`, `Estimated ${escapeHtml(v.eta)}.`, prose),
-          motionSection('route', `Route progress: package en route to ${v.destCell}`),
+          motionSection('route', `Route progress: package en route to ${escapeHtml(v.destCell)}`),
           section(PAD_TIMELINE, orderTimeline({ steps: stagePath(4), tone: 'info' })),
           section(PAD_BLOCK, grid),
           ctaSection(v.def.cta, a.trackUrl, { withLinkFallback: true }),

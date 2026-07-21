@@ -19,6 +19,7 @@ import {
   infoCard,
   kpiGrid,
   linkFallback,
+  LOGO_SWAP_BLOCK,
   ogscBlock,
   orderTimeline,
   section,
@@ -59,9 +60,15 @@ function normalize(html: string): string {
     .trim();
 }
 
-/** Remove the additive Outlook.com dark block before diffing against the archetype. */
+/**
+ * Remove the additive blocks before diffing against the archetype: the
+ * Outlook.com [data-ogsc] duplicates and the light/dark logo swap rules
+ * (both prompt-mandated on top of the archetype markup).
+ */
 function stripOgsc(html: string, styles: EmailShellStyles): string {
-  return html.replace(`${ogscBlock(styles)}\n`, '');
+  return html
+    .replace(`${ogscBlock(styles)}\n`, '')
+    .replace(`${LOGO_SWAP_BLOCK}\n`, '');
 }
 
 function extractBlock(html: string, startMarker: string): string {

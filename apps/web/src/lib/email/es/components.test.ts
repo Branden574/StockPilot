@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   assertEmailWeight,
   banner,
+  brandStrip,
   detailRows,
+  emailShell,
   escapeHtml,
   eventCard,
   footer,
@@ -274,6 +276,48 @@ describe('remaining partials render sane email-safe markup', () => {
     expect(html).toContain('Your role &middot;');
     expect(html).toContain('>Operator</strong>');
     expect(html).toContain(esAssetUrl('logo-mark-light.png'));
+  });
+
+  it('dark mode: default logo renders the light/dark pair with swap classes', () => {
+    const html = brandStrip({ tag: 'Security' });
+    expect(html).toContain(esAssetUrl('logo-mark-light.png'));
+    expect(html).toContain(esAssetUrl('logo-mark-dark.png'));
+    expect(html).toContain('class="logo-dark"');
+    expect(html).toContain('class="logo-light"');
+    // Outlook desktop must never parse the dark copy (it ignores the CSS swap).
+    expect(html).toContain('<!--[if !mso]><!-->');
+    // The archetype-fidelity escape hatch keeps single-img output.
+    const explicit = brandStrip({ tag: 'Security', logoSrc: '{{asset_base}}/logo-mark-light.png' });
+    expect(explicit).not.toContain('logo-mark-dark.png');
+    // The card variants carry the pair too.
+    expect(
+      workspaceCard({
+        initials: 'BW',
+        orgHtml: 'Org',
+        metaHtml: 'm',
+        roleName: 'Operator',
+        roleBlurbHtml: 'b',
+      }),
+    ).toContain('class="logo-dark"');
+    // And the shell's dark blocks flip it (prefers-color-scheme + data-ogsc).
+    const shell = emailShell({ title: 't', preheader: 'p', rows: brandStrip({ tag: 'X' }) });
+    expect(shell).toContain('.logo-dark{display:inline-block!important}.logo-light{display:none!important}');
+    expect(shell).toContain('[data-ogsc] .logo-dark{display:inline-block!important}');
+  });
+
+  it('dark mode: text on tonal fills is never repainted by the ink classes', () => {
+    // Tonal fills deliberately stay light in dark mode, so their text must
+    // keep static dark ink — an .ink/.ink2/.ink3 class here would be
+    // repainted light-on-light (illegible denial reasons, KPI stats).
+    const b = banner({ tone: 'err', titleHtml: 'Not approved', bodyHtml: 'Reason verbatim.' });
+    expect(b).not.toContain('class="ink2"');
+    const tonal = kpiGrid([{ label: 'Delivered', valueHtml: '44', noteHtml: 'of 52', tone: 'ok' }]);
+    expect(tonal).not.toContain('class="ink"');
+    expect(tonal).not.toContain('class="ink3"');
+    // Default (paper-backed) KPI cards keep the dark-mode classes.
+    const plain = kpiGrid([{ label: 'Orders', valueHtml: '12', noteHtml: 'this week' }]);
+    expect(plain).toContain('class="ink"');
+    expect(plain).toContain('class="ink3"');
   });
 
   it('helpRow / previewBanner / internalStrip / banner / detailRows', () => {

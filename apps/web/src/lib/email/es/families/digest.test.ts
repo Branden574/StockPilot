@@ -171,7 +171,7 @@ describe('weekly digest — full payload', () => {
   });
 
   it('embeds the bars motion hero with reserved dimensions', () => {
-    expect(html).toContain('https://stockpilotusa.com/email/bars@2x.gif');
+    expect(html).toContain('https://stockpilotusa.com/email/motion/bars@2x.gif');
     expect(html).toContain('width="528" height="194"');
     expect(html).toContain('Five weekly bars rise');
   });
@@ -193,6 +193,8 @@ describe('weekly digest — full payload', () => {
       recipientName: '<b>Dana</b>',
     });
     expect(spicy).toContain('Meridian &amp; Sons &lt;Test&gt;');
+    // The hero alt is attribute context — orgName must be escaped there too.
+    expect(spicy).toContain('activity across Meridian &amp; Sons &lt;Test&gt; last week');
     expect(spicy).not.toContain('<b>Dana</b>');
   });
 });

@@ -226,6 +226,30 @@ describe('back-shipped (Backordered Items Shipped)', () => {
     expect(r.html).toContain('Route progress: package en route to CVW — Manchester');
   });
 
+  it('odd cell count: the trailing "To" destination cell renders (not dropped)', () => {
+    // shipDate + warehouse + destination = 3 cells; the pairing loop used
+    // to emit only complete pairs, silently discarding the destination.
+    const r = full();
+    expect(r.html).toContain('>To</div>');
+    const gridIdx = r.html.indexOf('>To</div>');
+    expect(gridIdx).toBeGreaterThan(-1);
+    expect(r.html.slice(gridIdx, gridIdx + 400)).toContain('CVW — Manchester');
+  });
+
+  it('hero alt escapes the destination (attribute context)', () => {
+    const r = renderBackorderShippedEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: 'Dana',
+      recipientEmail: 'dana@example.com',
+      unitsShipped: 8,
+      destination: 'Bay "Dock 2" & Co',
+      trackUrl: 'https://app.example.com/dashboard/orders/abc',
+      urls: URLS,
+    });
+    expect(r.html).toContain('en route to Bay &quot;Dock 2&quot; &amp; Co');
+    expect(r.html).not.toContain('to Bay "Dock 2"');
+  });
+
   it('degrades when only the unit count is known (production wiring today)', () => {
     const r = renderBackorderShippedEmail({
       orderNumber: '#A1B2C3D4',

@@ -539,4 +539,57 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
       expect(Buffer.byteLength(args.html, 'utf8')).toBeLessThan(102 * 1024);
     }
   });
+
+  it('caps the item table at 30 rows so huge orders still send', async () => {
+    // Uncapped, a ~150-line order pushed the render past the 102KB budget:
+    // assertEmailWeight threw inside sendOrderRequestEmail and every
+    // dispatch path swallows that throw — the recipient silently got
+    // nothing. The cap + overflow note keeps the send alive.
+    wireFullAdmin({
+      items: Array.from({ length: 150 }, (_, i) => ({
+        quantity_picked: 5,
+        quantity_requested: 5,
+        item: { name: LONG_ITEM_NAME, sku: `LONG-SKU-${i}-WITH-SUFFIX` },
+      })),
+    });
+    const args = await send('completed', { status: 'completed' });
+    expect(args.html).toContain('+ 120 more lines');
+    expect(args.html).toContain('LONG-SKU-29-');
+    expect(args.html).not.toContain('LONG-SKU-30-');
+    expect(Buffer.byteLength(args.html, 'utf8')).toBeLessThan(102 * 1024);
+  });
+
+  it('staff cancel of a public-link order reads "by the team", self-cancel keeps "the requester"', async () => {
+    // makeRow is a public order (requester_user_id null): an authenticated
+    // canceller can only be staff, and the old guard wrongly blamed the
+    // requester whenever requester_user_id was null.
+    wireFullAdmin();
+    const staffCancel = await send('cancelled', {
+      status: 'cancelled',
+      cancelled_at: '2026-07-03T00:00:00Z',
+      cancelled_by: 'aaaaaaaa-1111-2222-3333-444444444444',
+    });
+    expect(staffCancel.html).toContain('by the team');
+    expect(staffCancel.html).not.toContain('by the requester');
+
+    vi.clearAllMocks();
+    wireFullAdmin();
+    const selfCancel = await send('cancelled', {
+      status: 'cancelled',
+      cancelled_at: '2026-07-03T00:00:00Z',
+      cancelled_by: null,
+    });
+    expect(selfCancel.html).toContain('by the requester');
+  });
+
+  it('in_transit hero alt escapes the public requester name (attribute context)', async () => {
+    // shipTo for a pickup order is requester_name — anonymous public-form
+    // input. Unescaped, a double quote terminates the alt attribute.
+    wireFullAdmin();
+    const args = await send('in_transit', {
+      requester_name: 'Dana "Dee" Reyes & Co',
+    });
+    expect(args.html).toContain('en route to Dana &quot;Dee&quot; Reyes &amp; Co');
+    expect(args.html).not.toContain('to Dana "Dee"');
+  });
 });

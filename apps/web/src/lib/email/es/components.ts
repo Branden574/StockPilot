@@ -194,6 +194,22 @@ export function ogscBlock(styles: EmailShellStyles): string {
   return lines.join('\n');
 }
 
+/**
+ * FLAG: additive to the archetypes, like the [data-ogsc] block. The design
+ * package ships light + dark logo PNGs (IMPLEMENTATION_PROMPT dark-mode
+ * constraint) but the archetype <style> carries no swap rules — without
+ * them the near-black mark vanishes on the dark paper. Appended AFTER the
+ * archetype-faithful dark block so that block stays byte-equal; the
+ * archetype fidelity test strips this block the same way it strips ogsc.
+ */
+export const LOGO_SWAP_BLOCK = [
+  '  @media (prefers-color-scheme: dark){',
+  '    .logo-dark{display:inline-block!important}.logo-light{display:none!important}',
+  '  }',
+  '  [data-ogsc] .logo-dark{display:inline-block!important}',
+  '  [data-ogsc] .logo-light{display:none!important}',
+].join('\n');
+
 // ── email-shell ─────────────────────────────────────────────────────
 
 export interface EmailShellOptions {
@@ -236,6 +252,7 @@ export function emailShell({
 <style>
 ${mobileBlock(styles.mobileExtras)}
 ${darkBlock(styles)}
+${LOGO_SWAP_BLOCK}
 ${ogscBlock(styles)}
 </style>
 </head>
@@ -263,16 +280,31 @@ export function section(padding: string, innerHtml: string): string {
 export interface BrandStripOptions {
   /** Header mono tag, e.g. "Security", "Order Update" (registry `tag`). */
   tag: string;
+  /** Explicit src renders the archetype's single-img markup (fidelity tests). */
   logoSrc?: string;
 }
 
-export function brandStrip({
-  tag,
-  logoSrc = esAssetUrl('logo-mark-light.png'),
-}: BrandStripOptions): string {
+/**
+ * Light/dark logo pair. The light-mode mark is near-black and vanishes on
+ * the dark paper, so dark-capable clients swap to logo-mark-dark.png: the
+ * dark copy ships display:none and the dark/ogsc blocks flip the pair.
+ * Outlook desktop (Word engine) never parses the dark copy (mso
+ * conditional), so it can't render both marks side by side.
+ */
+export function logoMarkImg(size: number): string {
+  return (
+    `<!--[if !mso]><!--><img src="${esAssetUrl('logo-mark-dark.png')}" width="${size}" height="${size}" alt="" class="logo-dark" style="display:none;vertical-align:middle;border:0"><!--<![endif]-->` +
+    `<img src="${esAssetUrl('logo-mark-light.png')}" width="${size}" height="${size}" alt="StockPilot" class="logo-light" style="display:inline-block;vertical-align:middle;border:0">`
+  );
+}
+
+export function brandStrip({ tag, logoSrc }: BrandStripOptions): string {
+  const logo = logoSrc
+    ? `<img src="${logoSrc}" width="22" height="22" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0">`
+    : logoMarkImg(22);
   return `<tr><td class="px" style="padding:20px 36px;border-bottom:1px solid ${L.hair}">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="vertical-align:middle"><img src="${logoSrc}" width="22" height="22" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"> <span class="ink" style="font-size:15px;font-weight:600;letter-spacing:-0.025em;color:${L.ink}">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span></td>
+        <td style="vertical-align:middle">${logo} <span class="ink" style="font-size:15px;font-weight:600;letter-spacing:-0.025em;color:${L.ink}">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span></td>
         <td align="right" class="ink4" style="vertical-align:middle;font-family:${ES_MONO_INLINE};font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${L.ink4}">${tag}</td>
       </tr></table>
     </td></tr>`;
@@ -674,8 +706,12 @@ export function banner({ tone, titleHtml, bodyHtml }: BannerOptions): string {
   const title = titleHtml
     ? `<div style="font-size:12.5px;font-weight:600;color:${c.fg};margin-bottom:${bodyHtml ? 4 : 0}px">${titleHtml}</div>`
     : '';
+  // No ink2 class here on purpose: tonal fills stay light-token-static in
+  // dark mode (kpiCard doc comment), so the body text must too — the dark
+  // repaint's .ink2 !important would paint light-gray text on the light
+  // fill and make the banner body (e.g. a denial reason) illegible.
   const body = bodyHtml
-    ? `${title ? '\n        ' : ''}<div class="ink2" style="font-size:12px;line-height:1.55;color:${L.ink2}">${bodyHtml}</div>`
+    ? `${title ? '\n        ' : ''}<div style="font-size:12px;line-height:1.55;color:${L.ink2}">${bodyHtml}</div>`
     : '';
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${c.bg};border:1px solid ${c.fg}2e;border-radius:6px"><tr><td style="padding:14px 16px">
         ${title}${body}
@@ -790,10 +826,15 @@ export function kpiCard({ label, valueHtml, noteHtml, tone }: KpiCardOptions): s
   const eyebrowColor = c ? c.fg : L.ink4;
   const eyebrowClass = c ? '' : ' class="ink4"';
   const noteSize = c ? 11.5 : 11;
+  // Tonal cards drop the ink/ink3 classes: their fills stay light-token-
+  // static in dark mode (doc comment above), so the value/note must keep
+  // static dark ink or the dark repaint renders light text on light fill.
+  const valueClass = c ? '' : ' class="ink"';
+  const noteClass = c ? '' : ' class="ink3"';
   return `<div class="cell" style="border:1px solid ${border};${bg}border-radius:6px;padding:14px 16px">
             <div${eyebrowClass} style="font-family:${ES_MONO_INLINE};font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:${eyebrowColor};margin-bottom:5px">${label}</div>
-            <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:${L.ink};line-height:1">${valueHtml}</div>
-            <div class="ink3" style="font-size:${noteSize}px;color:${L.ink3};margin-top:4px">${noteHtml}</div>
+            <div${valueClass} style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:${L.ink};line-height:1">${valueHtml}</div>
+            <div${noteClass} style="font-size:${noteSize}px;color:${L.ink3};margin-top:4px">${noteHtml}</div>
           </div>`;
 }
 
@@ -898,13 +939,16 @@ export function workspaceCard({
   metaHtml,
   roleName,
   roleBlurbHtml,
-  logoSrc = esAssetUrl('logo-mark-light.png'),
+  logoSrc,
 }: WorkspaceCardOptions): string {
+  const logo = logoSrc
+    ? `<img src="${logoSrc}" width="26" height="26" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0">`
+    : logoMarkImg(26);
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="border:1px solid ${L.hair};border-radius:6px"><tr><td style="padding:18px 20px">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
           <td width="44" style="vertical-align:middle"><div style="width:44px;height:44px;border-radius:50%;background:#c9b184;background-image:linear-gradient(140deg,#d8c9a8 0%,#b89b6a 100%);color:${L.ink};font-family:${ES_F1_INLINE};font-weight:600;font-size:16px;line-height:44px;text-align:center">${initials}</div></td>
           <td width="30" align="center" class="ink4" style="vertical-align:middle;font-family:${ES_MONO_INLINE};font-size:12px;color:${L.ink4}">&rarr;</td>
-          <td width="44" style="vertical-align:middle"><div class="sunk" style="width:44px;height:44px;border-radius:10px;background:${L.sunk};border:1px solid ${L.hair};text-align:center;line-height:44px"><img src="${logoSrc}" width="26" height="26" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"></div></td>
+          <td width="44" style="vertical-align:middle"><div class="sunk" style="width:44px;height:44px;border-radius:10px;background:${L.sunk};border:1px solid ${L.hair};text-align:center;line-height:44px">${logo}</div></td>
           <td style="vertical-align:middle;padding-left:14px">
             <div class="ink" style="font-size:14.5px;font-weight:600;color:${L.ink};line-height:1.3">${orgHtml}</div>
             <div class="ink3" style="font-size:11.5px;color:${L.ink3};margin-top:2px">${metaHtml}</div>

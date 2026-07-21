@@ -34,6 +34,7 @@ import {
   helpRow,
   heroSlot,
   linkFallback,
+  logoMarkImg,
   section,
   statusPill,
   workspaceCard,
@@ -448,7 +449,7 @@ function portalCard(opts: { supplierOrg: string; customerOrg: string; email: str
     .join('\n          ');
   return card(
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-          <td width="52" style="vertical-align:middle"><div class="sunk" style="width:40px;height:40px;border-radius:10px;background:${L.sunk};border:1px solid ${L.hair};text-align:center;line-height:40px"><img src="${esAssetUrl('logo-mark-light.png')}" width="24" height="24" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"></div></td>
+          <td width="52" style="vertical-align:middle"><div class="sunk" style="width:40px;height:40px;border-radius:10px;background:${L.sunk};border:1px solid ${L.hair};text-align:center;line-height:40px">${logoMarkImg(24)}</div></td>
           <td style="vertical-align:middle">
             <div class="ink" style="font-size:14px;font-weight:600;color:${L.ink}">${escapeHtml(opts.supplierOrg)} — supplier portal</div>
             <div class="ink3" style="font-size:11.5px;color:${L.ink3};margin-top:2px">Access for ${escapeHtml(opts.customerOrg)} &middot; ${escapeHtml(opts.email)}</div>

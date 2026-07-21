@@ -289,8 +289,8 @@ export function renderWeeklyDigestHtml(
       section(
         '0 36px 24px',
         heroSlot({
-          src: esAssetUrl('bars@2x.gif'),
-          alt: `Five weekly bars rise — activity across ${orgName} last week`,
+          src: esAssetUrl('motion/bars@2x.gif'),
+          alt: `Five weekly bars rise — activity across ${escapeHtml(orgName)} last week`,
           note: 'motion asset: bars.gif · L2 · plays once · frame 1 = resting composition',
         }),
       ),

@@ -392,7 +392,7 @@ export function renderBackorderShippedEmail(p: BackorderShippedParams): Rendered
       : 'The rest of your order is moving.';
 
   const heroAlt = p.destination
-    ? `Route progress: package en route to ${p.destination}`
+    ? `Route progress: package en route to ${escapeHtml(p.destination)}`
     : 'Route progress: the remaining units are on the way';
 
   const gridCells = [
@@ -403,8 +403,14 @@ export function renderBackorderShippedEmail(p: BackorderShippedParams): Rendered
     ...(p.destination ? [{ label: 'To', valueHtml: escapeHtml(p.destination), strong: true }] : []),
   ];
   const gridRows: [typeof gridCells[number], typeof gridCells[number]][] = [];
-  for (let i = 0; i + 1 < gridCells.length; i += 2) {
-    gridRows.push([gridCells[i]!, gridCells[i + 1]!]);
+  for (let i = 0; i < gridCells.length; i += 2) {
+    // An odd trailing cell pairs with a blank half instead of being dropped:
+    // shipDate + warehouse + destination is three cells, and "To" must not
+    // silently vanish from the shipment grid.
+    gridRows.push([
+      gridCells[i]!,
+      gridCells[i + 1] ?? { label: '', valueHtml: '', strong: false },
+    ]);
   }
   const gridSection =
     gridRows.length > 0 ? section('0 36px 28px', detailGrid({ rows: gridRows })) : '';
