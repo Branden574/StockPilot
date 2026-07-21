@@ -70,7 +70,7 @@ export async function onRequestError(
   try {
     // Only capture the routes under investigation to keep noise low.
     const path = request?.path ?? '';
-    if (!path.includes('/purchase-orders/imports')) return;
+    if (!path.includes('/purchase-orders')) return;
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) return;

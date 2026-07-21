@@ -178,9 +178,6 @@ export async function createItemsFromPoLinesAction(input: {
   }
 }
 
-/** Re-export for the create-items modal (type-only, erased at runtime). */
-export type { DuplicateCandidate };
-
 /**
  * Looks up existing inventory items that may already represent each PO
  * line — by exact barcode match against vendor_item_number (highest

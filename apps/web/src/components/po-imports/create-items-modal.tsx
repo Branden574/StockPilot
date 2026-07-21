@@ -17,8 +17,12 @@ import { formatCurrency, formatNumber } from '@/lib/utils';
 import {
   createItemsFromPoLinesAction,
   findDuplicatesForPoLinesAction,
-  type DuplicateCandidate,
 } from '@/server/actions/po-imports';
+// Import the TYPE from the service (not re-exported through the 'use server'
+// actions file): Turbopack miscompiles a `export type { X }` re-export in a
+// 'use server' module into a runtime value reference, which crashes the whole
+// module on evaluation (ReferenceError: DuplicateCandidate is not defined).
+import type { DuplicateCandidate } from '@/server/services/po-imports-lines';
 
 import type { PoImportLineRow } from '@/server/services/po-imports';
 
