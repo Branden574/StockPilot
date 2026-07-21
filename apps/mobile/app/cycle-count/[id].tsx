@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
@@ -73,6 +74,7 @@ export default function CycleCountDetail() {
   // wrongly frozen; the write itself is still server-enforced.
   const isAssignee = !header?.assignedTo || header.assignedTo === user?.id;
   const canAdjust = canWrite && (isAssignee || canManage);
+  const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [pendingForThis, setPendingForThis] = React.useState(0);
   const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached'>('none');
@@ -401,6 +403,15 @@ export default function CycleCountDetail() {
         </View>
         <View style={styles.badgeRow}>
           <SyncStatusBadge />
+          {isOpen && !!header?.assignedTo && (header.assignedTo === user?.id || canManage) ? (
+            <Pressable
+              onPress={() => setReleaseOpen(true)}
+              style={styles.releaseBtn}
+              hitSlop={8}
+            >
+              <Text style={styles.releaseBtnLabel}>Release</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
 
@@ -522,6 +533,18 @@ export default function CycleCountDetail() {
           </Pressable>
         </View>
       )}
+
+      <CycleCountReleaseSheet
+        visible={releaseOpen}
+        cycleCountId={id}
+        onClose={() => setReleaseOpen(false)}
+        onReleased={() => {
+          setReleaseOpen(false);
+          // The count is no longer assigned to us — return to the list, which
+          // reloads with the updated assignment.
+          router.back();
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -540,7 +563,22 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700' },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  badgeRow: { marginTop: space.sm, flexDirection: 'row', alignItems: 'center' },
+  badgeRow: {
+    marginTop: space.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  releaseBtn: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+    justifyContent: 'center',
+  },
+  releaseBtnLabel: { color: theme.text, fontSize: 13, fontWeight: '600' },
   scanBtn: {
     // Accessible 44pt touch target (Apple HIG / Android min) with a shared
     // minWidth so "Scan" and "AI Scan" render the same size instead of the
