@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
@@ -24,12 +25,20 @@ interface AuditRow {
 export default function AuditLogAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
+  // The drawer item gates on effective activity_logs:read (managers hold it
+  // by default; Auditor-preset viewers gain it), so the screen must accept
+  // the same audience — an isAdmin-only gate here dead-ends everyone the nav
+  // now routes in. While permissions are still loading (undefined) we let the
+  // query run: audit_logs SELECT RLS (mig 0279) is the real enforcement and
+  // simply returns no rows for the unauthorized.
+  const perms = useEffectivePermissions();
+  const canView = isAdmin || perms === undefined || perms.has('activity_logs:read');
   const [rows, setRows] = React.useState<AuditRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(async () => {
-    if (!orgId || !isAdmin) {
+    if (!orgId || !canView) {
       setLoading(false);
       return;
     }
@@ -58,7 +67,7 @@ export default function AuditLogAdmin() {
       }),
     );
     setLoading(false);
-  }, [orgId, isAdmin]);
+  }, [orgId, canView]);
 
   React.useEffect(() => {
     if (!roleLoading) void load();
@@ -70,15 +79,15 @@ export default function AuditLogAdmin() {
     setRefreshing(false);
   }
 
-  if (!roleLoading && !isAdmin) {
+  if (!roleLoading && !canView) {
     return (
       <DataListScreen
         eyebrow="ADMIN · AUDIT LOG"
         title="Restricted"
         italic="access."
         emptyIcon={FileLock}
-        emptyTitle="Admin only."
-        emptyBody=""
+        emptyTitle="Requires audit log access."
+        emptyBody="Ask an admin to grant the Activity logs permission."
         data={[]}
         loading={false}
         keyExtractor={() => ''}

@@ -8,6 +8,8 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Mono } from '@/components/ui/text';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -36,6 +38,10 @@ interface RentalRow {
  */
 export default function RentalsScreen() {
   const router = useRouter();
+  // New-rental is a WRITE — hidden for rentals:read-only viewers (cosmetic;
+  // the server enforces). Loading fallback shows, matching other screens.
+  const perms = useEffectivePermissions();
+  const canCreate = showWriteCta(perms, 'rentals:create');
   const { orgId } = useOrg();
   const [rows, setRows] = React.useState<RentalRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -100,7 +106,7 @@ export default function RentalsScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={refresh}
-      trailing={<IconChip icon={Plus} onPress={() => router.push('/rentals/new')} />}
+      trailing={canCreate ? <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} /> : undefined}
       keyExtractor={(r) => r.id}
       renderItem={(r) => <RentalCard rental={r} />}
     />

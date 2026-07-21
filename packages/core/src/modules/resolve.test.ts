@@ -166,3 +166,38 @@ describe('nav order is frozen to the original static nav', () => {
     ]);
   });
 });
+
+describe('requiresAnyOf (read-or-write nav fallback)', () => {
+  it('shows a surface when the caller holds ONLY the paired write permission', () => {
+    // An org can grant a role e.g. schedule:manage via the matrix without the
+    // schedule:read default (viewer). The nav must not hide the surface from
+    // someone who can WRITE to it.
+    const sections = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['schedule:manage']),
+    });
+    const hrefs = sections.flatMap((s) => s.items.map((i) => i.href));
+    expect(hrefs).toContain('/dashboard/schedule');
+  });
+
+  it('shows a surface for a read-only grantee and hides it with neither perm', () => {
+    const withRead = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['cycle_counts:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(withRead).toContain('/dashboard/cycle-counts');
+
+    const withNeither = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set([]),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(withNeither).not.toContain('/dashboard/cycle-counts');
+    expect(withNeither).not.toContain('/dashboard/bundles');
+    expect(withNeither).not.toContain('/dashboard/rentals');
+    expect(withNeither).not.toContain('/dashboard/returns');
+    expect(withNeither).not.toContain('/dashboard/schedule');
+  });
+});

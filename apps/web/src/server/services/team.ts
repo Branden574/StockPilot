@@ -746,12 +746,22 @@ export class TeamService {
     // the current flag for the audit diff.
     const { data: member } = await this.ctx.supabase
       .from('organization_members')
-      .select('id, user_id, all_warehouses')
+      .select('id, user_id, role, all_warehouses')
       .eq('organization_id', this.ctx.organizationId)
       .eq('user_id', params.userId)
       .maybeSingle();
     if (!member) {
       throw new ServiceError('not_found', 'User is not a member of this organization.');
+    }
+    // Warehouse access is only meaningful for warehouse-SCOPED roles. The UI
+    // hides the editor for manager+ rows, but the server must refuse too —
+    // otherwise an admin could delete an owner's/manager's assignment +
+    // charter rows through this reconcile path.
+    if (member.role !== 'staff' && member.role !== 'viewer') {
+      throw new ServiceError(
+        'validation_error',
+        'Warehouse access applies only to Warehouse User and Read-Only Auditor roles.',
+      );
     }
     const before = { allWarehouses: Boolean(member.all_warehouses) };
 
@@ -1034,12 +1044,18 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       }
     }
 
-    await audit({
-      event: 'user.warehouse.changed',
-      entityType: 'user',
-      entityId: userId,
-      after: { allWarehouses: true, warehouseIds },
-    });
+    // Explicit ctx: the acceptor may already belong to OTHER orgs, and a
+    // ctx-less audit() resolves their default org — stamping this grant into
+    // the wrong tenant's audit log. The invite's org is the only correct one.
+    await audit(
+      {
+        event: 'user.warehouse.changed',
+        entityType: 'user',
+        entityId: userId,
+        after: { allWarehouses: true, warehouseIds },
+      },
+      { organizationId: orgId, userId } as Parameters<typeof audit>[1],
+    );
   } else if (warehouseId) {
     // One assignment row per charter. is_primary is set true only on the
     // FIRST row we actually create (rest false). Best-effort per charter:
@@ -1077,13 +1093,18 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       }
     }
 
-    await audit({
-      event: 'user.warehouse.changed',
-      entityType: 'user',
-      entityId: userId,
-      warehouseId,
-      after: { warehouseId, charterIds: charters },
-    });
+    // Explicit ctx for the same wrong-default-org reason as the
+    // all-warehouses branch above.
+    await audit(
+      {
+        event: 'user.warehouse.changed',
+        entityType: 'user',
+        entityId: userId,
+        warehouseId,
+        after: { warehouseId, charterIds: charters },
+      },
+      { organizationId: orgId, userId } as Parameters<typeof audit>[1],
+    );
   }
 
   // Mark invite accepted.

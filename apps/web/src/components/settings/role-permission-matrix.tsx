@@ -200,7 +200,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     // Matches the repo's confirm pattern for one-click bulk/destructive
     // settings actions (webhooks/api-keys panels use window.confirm too).
     const confirmed = window.confirm(
-      'Apply the Auditor preset? This grants the Read-Only Auditor (Viewer) role read access to every reporting and operations surface. Individual toggles can still be changed afterward.',
+      'Apply the Auditor preset? This grants the Read-Only Auditor (Viewer) role read access to every reporting and operations surface, plus item and report CSV exports. Individual toggles can still be changed afterward.',
     );
     if (!confirmed) return;
     setPresetBusy(true);
@@ -267,7 +267,8 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           Apply Auditor preset: grants the Read-Only Auditor role read access to every reporting
-          and operations surface. Individual toggles can still be changed afterward.
+          and operations surface, plus item and report CSV exports. Individual toggles can still
+          be changed afterward.
         </p>
         <Legend />
 

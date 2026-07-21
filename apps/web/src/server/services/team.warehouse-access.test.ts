@@ -219,7 +219,7 @@ describe('TeamService.setMemberWarehouseAccess — reconcile', () => {
   it('All: flips the flag on and inserts rows only for uncovered warehouses', async () => {
     const stub = makeSupabaseStub({
       'organization_members.select': {
-        data: [{ id: 'm1', user_id: userId, all_warehouses: false }],
+        data: [{ id: 'm1', user_id: userId, role: 'staff', all_warehouses: false }],
         error: null,
       },
       'organization_members.update': { data: [{ id: 'm1' }], error: null },
@@ -258,7 +258,7 @@ describe('TeamService.setMemberWarehouseAccess — reconcile', () => {
   it('One: flips the flag off, deletes other warehouses, ensures the target row', async () => {
     const stub = makeSupabaseStub({
       'organization_members.select': {
-        data: [{ id: 'm1', user_id: userId, all_warehouses: true }],
+        data: [{ id: 'm1', user_id: userId, role: 'viewer', all_warehouses: true }],
         error: null,
       },
       'organization_members.update': { data: [{ id: 'm1' }], error: null },

@@ -42,6 +42,15 @@ export interface NavPlacement {
   defaultSortOrder: number;
   /** Permission required to show this placement. Omitted = everyone. */
   requires?: Permission;
+  /**
+   * Show when the caller holds ANY of these permissions. Used by surfaces
+   * whose nav gates on a grantable :read perm while the paired write perm
+   * must keep revealing the surface too — an org that grants a role the
+   * write perm via the matrix (without the read default) must not lose the
+   * nav entry. Evaluated in addition to `requires` (both must pass if both
+   * are set; in practice a placement uses one or the other).
+   */
+  requiresAnyOf?: Permission[];
   /** Stronger admin/owner gate; takes precedence over `requires`. */
   requiresAdmin?: boolean;
   /** True iff this placement should also surface as a mobile bottom tab. */
@@ -321,8 +330,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // rentals:create/manage at the page level. Staff/manager/admin hold
     // rentals:read by default (mirrored from rentals:create) — zero change.
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
     ],
   },
   bundles: {
@@ -336,8 +345,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['bundles', 'bundle_lines', 'bundle_distributions'],
     defaultOnFor: ['charter_school', 'distribution'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
     ],
   },
   orders: {
@@ -366,8 +375,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['cycle_counts', 'cycle_count_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'retail_backroom', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'cycle_counts:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'cycle_counts:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
     ],
   },
   procedures: {
@@ -464,8 +473,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['schedule_events'],
     defaultOnFor: ['charter_school'],
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'Schedule', href: '/dashboard/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:read' },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:read' },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Schedule', href: '/dashboard/schedule', iconName: 'Calendar', defaultSortOrder: 10, requiresAnyOf: ['schedule:read', 'schedule:manage'] },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10, requiresAnyOf: ['schedule:read', 'schedule:manage'] },
     ],
   },
   ai: {
@@ -552,7 +561,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // deliberately add ONLY a web_sidebar placement (a mobile_drawer placement
     // would surface a dead nav link in the app).
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requires: 'returns:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
     ],
   },
 
