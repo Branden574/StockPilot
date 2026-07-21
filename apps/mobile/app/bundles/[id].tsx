@@ -13,6 +13,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api } from '@/lib/api';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   getBundleComponents,
   getItemById,
@@ -50,6 +52,11 @@ interface Preview {
 
 export default function BundleDetail() {
   const router = useRouter();
+  // Distribute is a WRITE — hidden for read-only visitors (bundles:read
+  // grantees). Cosmetic: the API enforces server-side; while permissions are
+  // loading the CTA shows (matches cycle-counts/schedule gating fallback).
+  const perms = useEffectivePermissions();
+  const canDistribute = showWriteCta(perms, 'bundles:distribute');
   const { id } = useLocalSearchParams<{ id: string }>();
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   const [components, setComponents] = React.useState<CachedBundleComponent[]>([]);
@@ -226,6 +233,8 @@ export default function BundleDetail() {
           );
         })}
 
+        {canDistribute ? (
+        <>
         <Text style={styles.section}>Distribute</Text>
         <View style={styles.distBox}>
           <Text style={styles.label}>Quantity</Text>
@@ -301,6 +310,8 @@ export default function BundleDetail() {
             )}
           </Pressable>
         </View>
+        </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

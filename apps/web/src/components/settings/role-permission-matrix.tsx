@@ -5,9 +5,13 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import {
+  applyAuditorPresetAction,
   setRolePermissionOverrideAction,
   setUserPermissionOverrideAction,
 } from '@/server/actions/permissions';
+
+import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
+import { Button } from '@/components/ui/button';
 
 import {
   FULLY_GRANTABLE_PERMISSIONS,
@@ -190,6 +194,37 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     });
   }
 
+  // ── Auditor preset (bulk viewer grants) ──────────────────────────────────
+  const [presetBusy, setPresetBusy] = React.useState(false);
+  function applyAuditorPreset() {
+    // Matches the repo's confirm pattern for one-click bulk/destructive
+    // settings actions (webhooks/api-keys panels use window.confirm too).
+    const confirmed = window.confirm(
+      'Apply the Auditor preset? This grants the Read-Only Auditor (Viewer) role read access to every reporting and operations surface, plus item and report CSV exports. Individual toggles can still be changed afterward.',
+    );
+    if (!confirmed) return;
+    setPresetBusy(true);
+    toast.loading('Applying Auditor preset…', { id: SAVE_TOAST });
+    startTransition(async () => {
+      const res = await applyAuditorPresetAction();
+      setPresetBusy(false);
+      if (!res.ok) {
+        toast.error(res.error.message, { id: SAVE_TOAST });
+      } else {
+        // Reflect the persisted grants locally so the viewer column's boxes
+        // check immediately — same optimistic-map shape the single toggles
+        // maintain (granted=true rows now exist for each preset permission).
+        setRoleMap((prev) => {
+          const next = new Map(prev);
+          for (const perm of AUDITOR_PRESET_PERMISSIONS) next.set(rk('viewer', perm), true);
+          return next;
+        });
+        flashSaved();
+        toast.success('Auditor preset applied', { id: SAVE_TOAST, duration: 1500 });
+      }
+    });
+  }
+
   // Compute a role's effective set from defaults + the current role override map.
   function roleEffectiveSet(role: Role, map: Map<string, boolean>): Set<Permission> {
     if (role === 'owner') return new Set<Permission>(PERMISSIONS);
@@ -206,12 +241,34 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       <section>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Permissions by role</h2>
-          <SaveStatus isSaving={isSaving} justSaved={justSaved} />
+          <div className="flex shrink-0 items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={applyAuditorPreset}
+              disabled={presetBusy}
+            >
+              {presetBusy ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" /> Applying…
+                </>
+              ) : (
+                'Apply Auditor preset'
+              )}
+            </Button>
+            <SaveStatus isSaving={isSaving} justSaved={justSaved} />
+          </div>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           Toggle a box to grant or revoke a permission for an entire role. Changes save instantly.
           A dot marks a permission you&apos;ve changed from its default. Owner always has every
           permission and can&apos;t be edited.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Apply Auditor preset: grants the Read-Only Auditor role read access to every reporting
+          and operations surface, plus item and report CSV exports. Individual toggles can still
+          be changed afterward.
         </p>
         <Legend />
 

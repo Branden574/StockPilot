@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
@@ -45,8 +46,14 @@ export default async function RentalsPage({
     return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
   }
   const ctx = await requireOrgContext();
-  // Viewers without rentals:create can still read (RLS allows any org member
-  // with warehouse access); we just hide create/action buttons.
+  // Visibility gates on rentals:read (staff+ by default, grantable to
+  // viewers) — consistent with the sidebar placement, which requires the
+  // same permission. rentals:create holders keep access even if an org
+  // revokes the read perm from a role that can still rent out. Create /
+  // return / cancel actions stay gated on rentals:create / rentals:manage.
+  if (!can(ctx, 'rentals:read') && !can(ctx, 'rentals:create')) {
+    redirect('/dashboard');
+  }
   const params = await searchParams;
   const status = parseStatus(params.status);
   const canCreate = can(ctx, 'rentals:create');

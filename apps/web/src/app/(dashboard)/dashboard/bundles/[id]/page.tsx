@@ -1,6 +1,6 @@
 import { Edit, Package } from 'lucide-react';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 import { ArchiveBundleButton } from '@/components/bundles/archive-bundle-button';
 import { AssembleBundleModal } from '@/components/bundles/assemble-bundle-modal';
@@ -31,6 +31,12 @@ export default async function BundleDetailPage({
   const ctx = await requireOrgContext();
   const canManage = can(ctx, 'bundles:manage');
   const canDistribute = can(ctx, 'bundles:distribute');
+  // Same visibility gate as the bundles list page — without it, an UNgranted
+  // viewer could still open any bundle's recipe + distribution history by
+  // direct URL (bundles RLS is org-member-wide).
+  if (!can(ctx, 'bundles:read') && !canDistribute && !canManage) {
+    redirect('/dashboard');
+  }
 
   const svc = await BundlesService.forCurrentUser();
   let detail;

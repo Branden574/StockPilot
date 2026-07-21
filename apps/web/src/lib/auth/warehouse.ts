@@ -19,6 +19,19 @@ type WarehouseCtxLike = {
   organizationId: string;
   userId: string;
   role: Role;
+  /**
+   * The caller's OWN authed client, when it has one (ServiceContext does).
+   * CRITICAL for Bearer API routes: the fallback `createClient()` is
+   * cookie-bound and resolves to anon on a cookie-less request, which
+   * silently returns ZERO assignment rows — a warehouse-scoped user would
+   * look unassigned. Callers with a ctx.supabase always get it used.
+   */
+  supabase?: SupabaseClientLike;
+};
+
+/** Minimal structural client type — avoids coupling to generated DB generics. */
+type SupabaseClientLike = {
+  from: (table: string) => any;
 };
 
 export interface WarehouseAccess {
@@ -44,15 +57,31 @@ export interface WarehouseAccess {
  */
 export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<WarehouseAccess> => {
   const c = ctx ?? (await requireOrgContext());
-  const supabase = await createClient();
+  // Prefer the caller's own authed client (Bearer API routes) — the cookie
+  // client is anon on cookie-less requests and would return zero rows. Only
+  // an explicitly PASSED ctx can carry one (the requireOrgContext fallback
+  // never does).
+  const callerClient = ctx?.supabase;
+  const supabase = callerClient ?? (await createClient());
 
   if (isManagerOrAbove(c.role as Role)) {
     // Rank 8 (query hygiene): shares the dashboard layout's request-cached
     // `warehouses` fetch instead of issuing a second, narrower (`id` only)
-    // copy of the same query in the same render. Identical filters + order
-    // (org, status<>archived, name ASC) through the same RLS-scoped client.
-    const warehouses = await getWarehousesForRequest(c.organizationId);
-    const readableIds = warehouses.map((w) => w.id);
+    // copy of the same query in the same render — but ONLY when we're on the
+    // cookie client the request cache uses. A ctx-supplied client (Bearer)
+    // queries directly so the ids reflect the caller's real auth.
+    const readableIds = callerClient
+      ? (
+          (
+            await supabase
+              .from('warehouses')
+              .select('id')
+              .eq('organization_id', c.organizationId)
+              .neq('status', 'archived')
+              .order('name', { ascending: true })
+          ).data ?? []
+        ).map((w: { id: string }) => w.id)
+      : (await getWarehousesForRequest(c.organizationId)).map((w) => w.id);
     return {
       readableIds,
       writableIds: readableIds,
@@ -61,21 +90,34 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
     };
   }
 
-  // staff / viewer: assignments only
-  const { data: assignments } = await supabase
-    .from('user_warehouse_assignments')
-    .select('warehouse_id, is_primary')
-    .eq('organization_id', c.organizationId)
-    .eq('user_id', c.userId)
-    .order('is_primary', { ascending: false });
+  // staff / viewer: assignments (plus the 0280 all-warehouses membership flag,
+  // which means "every warehouse incl. future ones" — surfaced as
+  // hasAllAccess so scoped-view banners don't misdescribe these users; their
+  // assignment ROWS still exist and still drive RLS).
+  const [{ data: assignments }, { data: membership }] = await Promise.all([
+    supabase
+      .from('user_warehouse_assignments')
+      .select('warehouse_id, is_primary')
+      .eq('organization_id', c.organizationId)
+      .eq('user_id', c.userId)
+      .order('is_primary', { ascending: false }),
+    supabase
+      .from('organization_members')
+      .select('all_warehouses')
+      .eq('organization_id', c.organizationId)
+      .eq('user_id', c.userId)
+      .maybeSingle(),
+  ]);
 
-  const readableIds = (assignments ?? []).map((a) => a.warehouse_id as string);
+  const readableIds = (assignments ?? []).map((a: { warehouse_id: string }) => a.warehouse_id);
   const writableIds = c.role === 'viewer' ? [] : readableIds;
-  const primaryAssignment = (assignments ?? []).find((a) => a.is_primary);
+  const primaryAssignment = (assignments ?? []).find(
+    (a: { is_primary: boolean }) => a.is_primary,
+  );
   return {
     readableIds,
     writableIds,
-    hasAllAccess: false,
+    hasAllAccess: membership?.all_warehouses === true,
     primaryWarehouseId:
       (primaryAssignment?.warehouse_id as string | undefined) ?? readableIds[0] ?? null,
   };
@@ -120,6 +162,9 @@ export async function forcedWarehouseId(ctx?: WarehouseCtxLike): Promise<string 
   const c = ctx ?? (await requireOrgContext());
   if (!isWarehouseScoped(c.role as Role)) return null;
   const access = await getWarehouseAccess(c);
+  // An all-warehouses member (0280 flag) is scoped-by-role but not to ONE
+  // warehouse — forcing primary would wrongly narrow their queries.
+  if (access.hasAllAccess) return null;
   if (!access.primaryWarehouseId) {
     throw new ForbiddenError('User has no warehouse assignment.');
   }

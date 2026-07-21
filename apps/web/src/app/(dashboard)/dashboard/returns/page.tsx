@@ -52,11 +52,13 @@ export default async function ReturnsPage({
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="returns" canManage={moduleAccess.canManage} />;
   }
-  // Returns move inventory (restock/scrap) on close — gated on returns:manage
-  // (manager+). The service enforces the same gate; this is the page-level
-  // bounce so a viewer never sees the list shell.
+  // Visibility gates on returns:read (manager+ by default, grantable to
+  // read-only members). returns:manage holders keep access even if an org
+  // revokes the read perm from a managing role. The lifecycle actions
+  // (approve/receive/close/deny/cancel) stay returns:manage — the detail
+  // page hides its action panel and the service enforces the write gate.
   const ctx = await requireOrgContext();
-  if (!can(ctx, 'returns:manage')) {
+  if (!can(ctx, 'returns:read') && !can(ctx, 'returns:manage')) {
     redirect('/dashboard');
   }
 

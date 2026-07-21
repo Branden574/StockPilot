@@ -17,6 +17,7 @@ export type AuditEvent =
   | 'user.category_access.updated'
   | 'permissions.role_override'
   | 'permissions.user_override'
+  | 'permissions.auditor_preset'
   | 'rental.created'
   | 'rental.returned'
   | 'rental.cancelled'

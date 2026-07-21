@@ -53,7 +53,7 @@ describe('breadcrumb derivation from the (overridden) nav', () => {
       '/dashboard/settings/billing',
       '/dashboard/team',
       '/dashboard/admin',
-      '/dashboard/admin/audit',
+      '/dashboard/audit',
     ]) {
       expect(applyNavLabelsToCrumbs(crumbsForPathname(path), map)).toEqual(
         crumbsForPathname(path),

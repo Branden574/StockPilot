@@ -67,11 +67,11 @@ export default async function RecoveryPage() {
   if (!can(ctx, 'items:delete')) {
     notFound();
   }
-  // "View history" links route to /dashboard/settings/audit, which is
-  // gated on `activity_logs:read`. Migration 0100 widened the audit_logs
-  // SELECT RLS to manager+, matching the matrix — so checking the
-  // permission instead of `isAdminRole` lets managers (who already have
-  // activity_logs:read) follow the link cleanly. See C11.
+  // "View history" links route to /dashboard/audit, which is gated on
+  // `activity_logs:read`. The audit_logs SELECT RLS is permission-driven
+  // (mig 0279) matching the matrix — so checking the permission instead
+  // of `isAdminRole` lets managers (who already have activity_logs:read)
+  // follow the link cleanly. See C11.
   const canSeeAudit = can(ctx, 'activity_logs:read');
   const svc = await RecoveryService.forCurrentUser();
   const buckets = await Promise.all(
@@ -130,7 +130,7 @@ export default async function RecoveryPage() {
                 <CardContent>
                   <ul className="divide-border divide-y">
                     {b.rows.map((r) => {
-                      const auditHref = `/dashboard/settings/audit?entityType=${RECOVERY_AUDIT_ENTITY_TYPE[b.entity]}&entityId=${r.id}`;
+                      const auditHref = `/dashboard/audit?entityType=${RECOVERY_AUDIT_ENTITY_TYPE[b.entity]}&entityId=${r.id}`;
                       return (
                         <li
                           key={r.id}

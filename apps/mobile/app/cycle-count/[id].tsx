@@ -15,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
   getCycleCount,
@@ -43,6 +45,12 @@ const SAVE_DEBOUNCE_MS = 300;
 
 export default function CycleCountDetail() {
   const router = useRouter();
+  // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
+  // viewer gets a read-only view: inputs frozen, no post footer — mirroring
+  // the web detail's canAdjust=false mode. Cosmetic (the API enforces
+  // server-side); while permissions load, entry stays enabled.
+  const perms = useEffectivePermissions();
+  const canAdjust = showWriteCta(perms, 'stock:adjust');
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const syncSnapshot = useSyncStatus();
@@ -454,7 +462,7 @@ export default function CycleCountDetail() {
                     style={styles.countInput}
                     value={display}
                     onChangeText={(v) => setDraftValue(l.id, v)}
-                    editable={isOpen}
+                    editable={isOpen && canAdjust}
                     keyboardType="numeric"
                     placeholder="—"
                     placeholderTextColor={theme.textMuted}
@@ -472,7 +480,7 @@ export default function CycleCountDetail() {
         </ScrollView>
       )}
 
-      {!loading && lines.length > 0 && isOpen && (
+      {!loading && lines.length > 0 && isOpen && canAdjust && (
         <View style={styles.footer}>
           <Pressable
             onPress={postCount}

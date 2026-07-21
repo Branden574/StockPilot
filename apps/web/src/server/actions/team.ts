@@ -23,12 +23,14 @@ import {
   inviteMemberSchema,
   ok,
   setMemberChartersSchema,
+  setMemberWarehouseAccessSchema,
   updateMemberRoleSchema,
   type AcceptInviteInput,
   type ActionResult,
   type InviteMemberInput,
   type Role,
   type SetMemberChartersInput,
+  type SetMemberWarehouseAccessInput,
   type UpdateMemberRoleInput,
 } from '@stockpilot/core';
 import { z } from 'zod';
@@ -69,6 +71,7 @@ export async function inviteMemberAction(
       charterId: parsed.data.charterId ?? null,
       charterIds: parsed.data.charterIds,
       warehouseId: parsed.data.warehouseId ?? null,
+      allWarehouses: parsed.data.allWarehouses ?? false,
       message: parsed.data.message,
     });
     revalidatePath('/dashboard/team');
@@ -254,6 +257,34 @@ export async function setMemberChartersAction(
       userId: parsed.data.userId,
       warehouseId: parsed.data.warehouseId,
       charterIds: parsed.data.charterIds,
+    });
+    revalidatePath('/dashboard/team');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Sets an existing member's warehouse access: all warehouses (flag + one
+ * assignment row per current warehouse; the 0280 trigger covers future
+ * ones) or exactly one warehouse (rows reconciled to it — assignments at
+ * other warehouses, including charter scoping there, are removed by
+ * design). Gated inside the service on `members:invite` (admin+).
+ */
+export async function setMemberWarehouseAccessAction(
+  input: SetMemberWarehouseAccessInput,
+): Promise<ActionResult<void>> {
+  const parsed = setMemberWarehouseAccessSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await TeamService.forCurrentUser();
+    await svc.setMemberWarehouseAccess({
+      userId: parsed.data.userId,
+      allWarehouses: parsed.data.allWarehouses,
+      warehouseId: parsed.data.warehouseId ?? null,
     });
     revalidatePath('/dashboard/team');
     return ok(undefined);

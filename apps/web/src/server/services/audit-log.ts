@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -22,6 +22,12 @@ export interface AuditLogRow {
 
 export interface AuditLogFilters {
   event?: string;
+  /**
+   * Filter by event-name prefix (e.g. 'stock.' → every stock event). Drives
+   * the category quick-chips on /dashboard/audit. Ignored when `event` is
+   * set (an exact match is always narrower).
+   */
+  eventPrefix?: string;
   userId?: string;
   entityType?: string;
   /**
@@ -91,16 +97,17 @@ export class AuditLogService {
   }
 
   /**
-   * Global audit feed for admins. RLS already restricts SELECT on
-   * audit_logs to admins, but we throw a clear "forbidden" up-front so
-   * the UI doesn't have to interpret an empty list as "denied".
+   * Global audit feed. RLS (mig 0279) restricts SELECT on audit_logs to
+   * holders of `activity_logs:read`, but we throw a clear "forbidden"
+   * up-front so the UI doesn't have to interpret an empty list as "denied".
    *
-   * Gates on `activity_logs:read` so the service matches the matrix and
-   * the page-level check at /dashboard/settings/audit. Manager and
-   * above carry this permission; staff and viewer don't.
+   * Gates on the EFFECTIVE `activity_logs:read` (via can(), so matrix
+   * grants apply — a viewer granted the permission, e.g. via the Auditor
+   * preset, passes) matching the page-level check at /dashboard/audit.
+   * Manager and above carry this permission by default.
    */
   async list(filters: AuditLogFilters = {}): Promise<{ rows: AuditLogRow[]; total: number }> {
-    if (!hasPermission(this.ctx.role, 'activity_logs:read')) {
+    if (!can(this.ctx, 'activity_logs:read')) {
       throw new ServiceError('forbidden', 'Audit log access requires the activity_logs:read permission.');
     }
 
@@ -115,6 +122,7 @@ export class AuditLogService {
       .range(offset, offset + limit - 1);
 
     if (filters.event) query = query.eq('event', filters.event);
+    else if (filters.eventPrefix) query = query.like('event', `${filters.eventPrefix}%`);
     if (filters.userId) query = query.eq('user_id', filters.userId);
     if (filters.entityType) {
       query = query.filter('metadata->>entity_type', 'eq', filters.entityType);

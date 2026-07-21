@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchAllRows } from '@/server/services/lib/paginate';
@@ -95,6 +96,7 @@ export const GET = handler;
  * Response shape:
  *   {
  *     serverTime: iso,                         // mobile sets next `since` to this
+ *     warehouseScope: { hasAllAccess, warehouseNames },  // scoped-view banner
  *     warehouses: [{ id, name }],
  *     items: [{ id, sku, name, barcode, qty, unit_cost, warehouse_id, item_type }],
  *     openPOs: [{ id, po_number, status, expected_at, warehouse_id, lines: [...] }],
@@ -347,6 +349,16 @@ async function snapshotGET(req: NextRequest) {
     // its link — mirrors the web sidebar's ctx.permissions gating. string[]
     // over the wire; mobile re-hydrates into a Set<Permission>.
     permissions: Array.from(ctx.permissions ?? []),
+    // Warehouse scoping for the caller — drives the mobile Items screen's
+    // scoped-view banner (web parity with ScopedWarehouseNotice). Reuses the
+    // access decision computed above; the pure builder narrows the (possibly
+    // unfiltered — see whQ's zero-assignment edge) warehouse rows to the
+    // caller's readable set, so a scoped user with no assignments reports []
+    // rather than the org's full list.
+    warehouseScope: buildWarehouseScope(
+      access,
+      (warehouses ?? []).map((w) => ({ id: w.id as string, name: w.name as string })),
+    ),
     warehouses: (warehouses ?? []).map((w) => ({
       id: w.id,
       name: w.name,

@@ -651,6 +651,75 @@ describe('RMAService module + permission gating', () => {
     );
     await expect(svc.list()).rejects.toMatchObject({ code: 'module_disabled' });
   });
+
+  // ── Grantable read gate (auditor visibility) ─────────────────────────
+  // list/get accept returns:read so a read-only member can view returns;
+  // everything else (including returnableLinesForOrder) stays manage-only.
+
+  it('list allows a viewer whose EFFECTIVE set grants returns:read (no manage)', async () => {
+    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, {
+        role: 'viewer',
+        enabledModules: RETURNS_MODULES,
+        permissions: new Set(['returns:read']),
+      }),
+    );
+    await expect(svc.list()).resolves.toEqual([]);
+  });
+
+  it('list stays forbidden for a DEFAULT viewer (no grant)', async () => {
+    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'viewer', enabledModules: RETURNS_MODULES }),
+    );
+    await expect(svc.list()).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('get allows the returns:read grantee too', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [{ id: 'ret-1', organization_id: 'org-test', status: 'closed' }],
+        error: null,
+      },
+      'return_lines.select': { data: [], error: null },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, {
+        role: 'viewer',
+        enabledModules: RETURNS_MODULES,
+        permissions: new Set(['returns:read']),
+      }),
+    );
+    await expect(svc.get('ret-1')).resolves.toMatchObject({ id: 'ret-1' });
+  });
+
+  it('returns:read does NOT unlock writes or the create-flow read', async () => {
+    const stub = makeCreateStub();
+    const svc = new RMAService(
+      makeServiceContext(stub.client, {
+        role: 'viewer',
+        enabledModules: RETURNS_MODULES,
+        permissions: new Set(['returns:read']),
+      }),
+    );
+    await expect(svc.approve('ret-1')).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(svc.returnableLinesForOrder(ORDER_ID)).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('a manage holder with the read perm REVOKED still reads (manage implies read)', async () => {
+    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        enabledModules: RETURNS_MODULES,
+        permissions: new Set(['returns:manage']),
+      }),
+    );
+    await expect(svc.list()).resolves.toEqual([]);
+  });
 });
 
 describe('RMAService.returnableLinesForOrder (durable budget)', () => {

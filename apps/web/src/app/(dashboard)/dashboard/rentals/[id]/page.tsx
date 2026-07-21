@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
 import { RentalDetailHeader } from '@/components/rentals/rental-detail-header';
@@ -17,6 +17,12 @@ export default async function RentalDetailPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
+  // Same visibility gate as the rentals list page (rentals RLS additionally
+  // warehouse-scopes rows; this keeps list/detail consistent for ungranted
+  // viewers reaching a rental by direct URL).
+  if (!can(ctx, 'rentals:read') && !can(ctx, 'rentals:create') && !can(ctx, 'rentals:manage')) {
+    redirect('/dashboard');
+  }
 
   const [rentalsSvc, inventorySvc, warehousesSvc] = await Promise.all([
     RentalsService.forCurrentUser(),

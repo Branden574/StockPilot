@@ -36,10 +36,11 @@ export default async function BundlesListPage({
   const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
-  // Bundles list is staff-or-better (bundles:distribute). Viewers don't
-  // have it and shouldn't see the list either. Sidebar already hides
-  // this; redirect here covers direct URL access.
-  if (!can(ctx, 'bundles:distribute')) {
+  // Visibility gates on bundles:read (staff+ by default, grantable to
+  // viewers for read-only audit access). bundles:distribute holders keep
+  // access even if an org revokes the read perm from a role that can still
+  // distribute. Create/edit CTAs below stay gated on bundles:manage.
+  if (!can(ctx, 'bundles:read') && !can(ctx, 'bundles:distribute')) {
     redirect('/dashboard');
   }
   const canManage = can(ctx, 'bundles:manage');

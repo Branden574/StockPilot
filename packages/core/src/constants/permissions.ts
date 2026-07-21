@@ -9,6 +9,10 @@ export const PERMISSIONS = [
   'members:remove',
   'members:update_role',
   'members:assign_categories',
+  // Rentals: read is the auditor-grantable surface gate (list + detail pages).
+  // Staff+ hold it by default (they already hold rentals:create); a viewer can
+  // be granted it to see check-outs without being able to create or edit them.
+  'rentals:read',
   'rentals:create',
   'rentals:manage',
   'items:read',
@@ -39,11 +43,16 @@ export const PERMISSIONS = [
   'activity_logs:read',
   // Cycle counts: most actions (start, record, post) gate on stock:adjust
   // because they emit stock_movements. ASSIGN is a manager+-only call so
-  // a staff/viewer can't reroute work to someone else.
+  // a staff/viewer can't reroute work to someone else. READ opens the list
+  // and detail pages without any write ability — grantable to a viewer so
+  // an auditor can inspect count history.
+  'cycle_counts:read',
   'cycle_counts:assign',
   // Bundles: managers+ define and pre-assemble kit templates; staff+ run
   // distributions. Splitting the perms lets ops staff ship kits at events
-  // without giving them write access to the kit recipe itself.
+  // without giving them write access to the kit recipe itself. READ opens
+  // the bundles surface without recipe or distribution rights.
+  'bundles:read',
   'bundles:manage',
   'bundles:distribute',
   // Order requests: viewer+ can SUBMIT a request (the explicit fix that
@@ -67,6 +76,9 @@ export const PERMISSIONS = [
   // Viewers can still read the calendar (RLS allows org members) but
   // can't mutate it. Without this gate, a viewer could call the
   // server actions directly and silently change anyone's events.
+  // READ is the page/nav gate for the calendar itself — admin/manager by
+  // default, grantable to staff/viewer for read-only calendar access.
+  'schedule:read',
   'schedule:manage',
   // AI assistant configuration (embeddings backfill, model selection,
   // anything that burns external API quota). Admin-only so a manager
@@ -92,7 +104,9 @@ export const PERMISSIONS = [
   // scrap), and close it. Granted to owner + admin (via ALL_PERMISSIONS) AND
   // MANAGER — warehouse managers physically handle returned goods and run the
   // disposition — but NOT staff/viewer. Gated by the off-by-default `returns`
-  // module.
+  // module. READ opens the returns list/detail read-only — admin/manager by
+  // default (mirrors who could see it before), grantable to an auditor.
+  'returns:read',
   'returns:manage',
 ] as const;
 
@@ -125,7 +139,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reports:read',
     'reports:export',
     'activity_logs:read',
+    'cycle_counts:read',
     'cycle_counts:assign',
+    'bundles:read',
     'bundles:manage',
     'bundles:distribute',
     'orders:request',
@@ -133,12 +149,15 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:assign_delivery',
     // Managers run the B2B relationships whose orders they approve.
     'customers:manage',
+    'schedule:read',
     'schedule:manage',
+    'rentals:read',
     'rentals:create',
     'rentals:manage',
     // Warehouse managers physically receive returned goods and run the
     // restock/scrap disposition, so they get full returns control. Staff and
     // viewers do not.
+    'returns:read',
     'returns:manage',
   ],
   staff: [
@@ -154,8 +173,15 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'suppliers:read',
     'purchase_orders:read',
     'reports:read',
+    // Staff hold the read perms for the surfaces they can already write to
+    // (stock:adjust ⇒ cycle counts, bundles:distribute ⇒ bundles,
+    // rentals:create ⇒ rentals) — zero behavior change, the pages simply gate
+    // on :read now. NOT schedule:read / returns:read (those were manager+).
+    'cycle_counts:read',
+    'bundles:read',
     'bundles:distribute',
     'orders:request',
+    'rentals:read',
     'rentals:create',
   ],
   viewer: [
@@ -270,6 +296,16 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'reports:read',
   'activity_logs:read',
   'billing:read',
+  // Auditor read surfaces (mig 0279) — RLS read floors verified per table:
+  // cycle_counts / bundles / returns SELECT policies allow any active org
+  // member; schedule allows org members (with a warehouse condition);
+  // rentals reads are warehouse-scoped exactly like items:read. The app-layer
+  // gate is therefore the sole restriction, so a grant is fully effective.
+  'cycle_counts:read',
+  'schedule:read',
+  'bundles:read',
+  'rentals:read',
+  'returns:read',
   // Exports — no row write; app gate is the sole enforcer.
   'items:export',
   'reports:export',
@@ -457,12 +493,22 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description: 'Download reports as CSV or PDF.',
   },
 
+  'cycle_counts:read': {
+    group: 'Cycle counts',
+    label: 'View cycle counts',
+    description: 'Open the cycle counts list and see count details and history.',
+  },
   'cycle_counts:assign': {
     group: 'Cycle counts',
     label: 'Assign cycle counts',
     description: 'Route a cycle count to another team member.',
   },
 
+  'bundles:read': {
+    group: 'Bundles',
+    label: 'View bundles',
+    description: 'See bundle (kit) recipes and past distributions.',
+  },
   'bundles:manage': {
     group: 'Bundles',
     label: 'Manage bundles',
@@ -503,6 +549,11 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
       'Create customer accounts, invite portal users, and set their price lists and catalogs.',
   },
 
+  'schedule:read': {
+    group: 'Schedule',
+    label: 'View schedule',
+    description: 'Open the calendar and see scheduled events.',
+  },
   'schedule:manage': {
     group: 'Schedule',
     label: 'Manage schedule',
@@ -527,6 +578,11 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description: 'Connect a carrier (EasyPost), buy shipping labels, and view tracking.',
   },
 
+  'returns:read': {
+    group: 'Returns',
+    label: 'View returns',
+    description: 'See return (RMA) requests, their line items, and status.',
+  },
   'returns:manage': {
     group: 'Returns',
     label: 'Manage returns',
@@ -534,6 +590,11 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
       'Create a return from a fulfilled order, approve/deny it, receive it (restock or scrap), and close it.',
   },
 
+  'rentals:read': {
+    group: 'Rentals',
+    label: 'View rentals',
+    description: 'See active and past check-outs of circulating assets.',
+  },
   'rentals:create': {
     group: 'Rentals',
     label: 'Check items out and back in',
@@ -548,6 +609,10 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   },
 };
 
+// Every group used in PERMISSION_META must appear here. The two consumers
+// (settings/roles page + role-permission-matrix) append any unlisted group
+// alphabetically at the END, so an omission doesn't hide a group — it just
+// renders out of place. Keep this list exhaustive so ordering is intentional.
 export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
   'Items',
   'Stock',
@@ -556,7 +621,9 @@ export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
   'Suppliers',
   'Purchase orders',
   'Order requests',
+  'Customers',
   'Returns',
+  'Rentals',
   'Cycle counts',
   'Bundles',
   'Schedule',

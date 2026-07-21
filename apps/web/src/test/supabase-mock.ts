@@ -23,7 +23,7 @@
 
 import { vi } from 'vitest';
 
-import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
+import { DEFAULT_MODULE_IDS, type ModuleId, type Permission } from '@stockpilot/core';
 
 export interface QueryResult<T = unknown> {
   data: T;
@@ -243,12 +243,21 @@ export function makeServiceContext(
     mfaRequired: boolean;
     mfaSatisfied: boolean;
     enabledModules: Set<ModuleId>;
+    /** EFFECTIVE permission set (matrix overrides applied). When provided,
+     *  can(ctx, …) reads it INSTEAD of the static role defaults — pass it to
+     *  model a granted/revoked permission (e.g. a viewer granted a read perm).
+     *  Omit to keep the static-role fallback most tests rely on. */
+    permissions: ReadonlySet<string>;
   }> = {},
 ) {
   return {
     organizationId: overrides.organizationId ?? 'org-test',
     userId: overrides.userId ?? 'user-test',
     role: overrides.role ?? 'admin',
+    // Tests hand plain string sets; ServiceContext types this Set<Permission>.
+    ...(overrides.permissions
+      ? { permissions: overrides.permissions as Set<Permission> }
+      : {}),
     // Default to MFA-not-required so existing tests don't have to opt
     // out. Tests covering the MFA gate explicitly set the flags.
     mfaRequired: overrides.mfaRequired ?? false,

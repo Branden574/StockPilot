@@ -40,8 +40,12 @@ import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
+import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
@@ -180,6 +184,10 @@ export default async function InventoryPage({
                 ? 'Showing every item type — products, books, assets, consumables.'
                 : 'Items, SKUs, stock levels — searchable and sortable.'}
           </p>
+          {/* Warehouse-scoped users (staff/viewer): name the scope so an
+              empty-looking list reads as "you're narrowed", not "broken".
+              Renders null for all-access roles. */}
+          <ScopedWarehouseNotice />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Inventory pages use ?status=active|archived|discontinued|all
@@ -305,6 +313,20 @@ async function InventoryTableSection({
     getActiveWarehouseFilter(),
     SavedViewsService.forCurrentUser(),
   ]);
+  // Warehouse-scoped users get the scoping explanation appended to any
+  // zero-result empty state (mirrors the header's ScopedWarehouseNotice).
+  // Both helpers are request-cached from the layout render, so this is
+  // memo reads for everyone and null short-circuits for managers+.
+  const warehouseAccess = await getWarehouseAccess();
+  const scopedNote = warehouseAccess.hasAllAccess
+    ? null
+    : scopedWarehouseMessage(
+        buildWarehouseScope(
+          warehouseAccess,
+          await getWarehousesForRequest(sessionCtx.organizationId),
+        ),
+      );
+
   // Saved views are strictly per-user — they never enter the shared
   // cache. Kick the query off now so it overlaps either data path.
   const savedViewsPromise = savedViewsSvc.list('inventory');
@@ -444,6 +466,7 @@ async function InventoryTableSection({
       params,
       lifecycleStatus,
       canCreate,
+      scopedNote,
     });
     if (emptyState) return emptyState;
     return (
@@ -736,6 +759,7 @@ async function InventoryTableSection({
     params,
     lifecycleStatus,
     canCreate,
+    scopedNote,
   });
   if (emptyState) return emptyState;
 
@@ -797,13 +821,22 @@ function inventoryEmptyState({
   params,
   lifecycleStatus,
   canCreate,
+  scopedNote,
 }: {
   total: number;
   params: InventorySearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   canCreate: boolean;
+  /** Warehouse-scoping explanation for staff/viewer (null for all-access
+   *  roles) — appended to every zero-result description so a scoped user
+   *  never mistakes "narrowed to your warehouse" for "the org is empty". */
+  scopedNote?: string | null;
 }) {
   if (total !== 0) return null;
+  // Append the warehouse-scoping explanation (when present) to whichever
+  // branch fires — one place, so no branch can forget it.
+  const withScope = (description: string): string =>
+    scopedNote ? `${description} ${scopedNote}` : description;
   // Expected chip view (mig 0277) with zero rows: everything that was
   // awaiting a first receipt has arrived (or none ever existed). Its own
   // branch so the generic "No items yet" CTA never fires here.
@@ -812,7 +845,9 @@ function inventoryEmptyState({
       <EmptyState
         icon={Boxes}
         title="No expected items"
-        description="Items created from purchase orders appear here until their first stock is received."
+        description={withScope(
+          'Items created from purchase orders appear here until their first stock is received.',
+        )}
         cta={{ label: 'Back to all items', href: '/dashboard/inventory' }}
       />
     );
@@ -827,7 +862,7 @@ function inventoryEmptyState({
       <EmptyState
         icon={Boxes}
         title="No archived items"
-        description="Nothing here yet. Items you archive will show up in this view."
+        description={withScope('Nothing here yet. Items you archive will show up in this view.')}
         cta={{ label: 'Back to active items', href: '/dashboard/inventory' }}
       />
     );
@@ -841,11 +876,11 @@ function inventoryEmptyState({
         <EmptyState
           icon={Boxes}
           title="No items yet"
-          description={
+          description={withScope(
             canCreate
               ? 'Add your first item to start tracking stock, locations, and movements.'
-              : 'No items have been added to this workspace yet.'
-          }
+              : 'No items have been added to this workspace yet.',
+          )}
           cta={
             canCreate
               ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
@@ -860,7 +895,7 @@ function inventoryEmptyState({
       <EmptyState
         icon={Boxes}
         title="No low-stock items"
-        description="Nothing is at or below its reorder point right now. Nice."
+        description={withScope('Nothing is at or below its reorder point right now. Nice.')}
         cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
       />
     );
@@ -870,7 +905,9 @@ function inventoryEmptyState({
       <EmptyState
         icon={Boxes}
         title="Nothing is out of stock"
-        description="No active items have a quantity of zero. Clear the filter to see all items."
+        description={withScope(
+          'No active items have a quantity of zero. Clear the filter to see all items.',
+        )}
         cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
       />
     );
@@ -884,7 +921,9 @@ function inventoryEmptyState({
       <EmptyState
         icon={Boxes}
         title="No items match your search"
-        description={`Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`}
+        description={withScope(
+          `Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`,
+        )}
         cta={{ label: 'Clear search', href: '/dashboard/inventory' }}
       />
     );

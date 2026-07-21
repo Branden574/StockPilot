@@ -1,6 +1,6 @@
 import { Download } from 'lucide-react';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,16 @@ export default async function CycleCountDetailPage({
     requireOrgContext(),
     createClient(),
   ]);
+
+  // Same visibility gate as the list page: cycle_counts:read (or the write
+  // perm as a fallback for override edge cases). Without this the detail page
+  // was reachable by ANY member via direct URL.
+  if (!can(ctx, 'cycle_counts:read') && !can(ctx, 'stock:adjust')) {
+    redirect('/dashboard');
+  }
+  // Entering counts, clearing lines, cancelling, and posting adjustments all
+  // require stock:adjust — read-only visitors get a genuinely read-only view.
+  const canAdjust = can(ctx, 'stock:adjust');
 
   let header, lines, summary, total, pageSize, page;
   try {
@@ -169,6 +179,7 @@ export default async function CycleCountDetailPage({
         search={search}
         filter={filter}
         canAssign={canAssign}
+        canAdjust={canAdjust}
         members={members}
         assigneeName={assigneeName}
         itemsInScopeCount={itemsInScopeCount}

@@ -61,10 +61,13 @@ export default async function ScheduleEventDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  // Schedule is manager+ only — viewers/staff who land here directly via URL
-  // get a 404 rather than a permission error. Mirrors /dashboard/schedule.
+  // Mirrors /dashboard/schedule: schedule:read (or manage) can VIEW — the
+  // calendar's event chips link here, so a read-only grantee must not dead-end
+  // on a 404. Status changes + editing stay schedule:manage (the write UI
+  // below is hidden and /[id]/edit keeps its own manage gate).
   const ctx = await requireOrgContext();
-  if (!can(ctx, 'schedule:manage')) notFound();
+  if (!can(ctx, 'schedule:read') && !can(ctx, 'schedule:manage')) notFound();
+  const canManage = can(ctx, 'schedule:manage');
 
   const svc = await ScheduleService.forCurrentUser();
   let event;
@@ -144,10 +147,14 @@ export default async function ScheduleEventDetailPage({
           <span className="border-border text-muted-foreground inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]">
             {STATUS_LABEL[event.status] ?? event.status}
           </span>
-          <ScheduleStatusActions eventId={id} currentStatus={event.status} />
-          <Button asChild variant="outline" size="sm">
-            <Link href={`/dashboard/schedule/${id}/edit`}>Edit</Link>
-          </Button>
+          {canManage && (
+            <>
+              <ScheduleStatusActions eventId={id} currentStatus={event.status} />
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/dashboard/schedule/${id}/edit`}>Edit</Link>
+              </Button>
+            </>
+          )}
         </div>
       </div>
 

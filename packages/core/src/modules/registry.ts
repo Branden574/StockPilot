@@ -42,6 +42,15 @@ export interface NavPlacement {
   defaultSortOrder: number;
   /** Permission required to show this placement. Omitted = everyone. */
   requires?: Permission;
+  /**
+   * Show when the caller holds ANY of these permissions. Used by surfaces
+   * whose nav gates on a grantable :read perm while the paired write perm
+   * must keep revealing the surface too — an org that grants a role the
+   * write perm via the matrix (without the read default) must not lose the
+   * nav entry. Evaluated in addition to `requires` (both must pass if both
+   * are set; in practice a placement uses one or the other).
+   */
+  requiresAnyOf?: Permission[];
   /** Stronger admin/owner gate; takes precedence over `requires`. */
   requiresAdmin?: boolean;
   /** True iff this placement should also surface as a mobile bottom tab. */
@@ -217,7 +226,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'core',
     title: 'Admin tools',
     dependsOn: [],
-    permissions: [],
+    permissions: ['activity_logs:read'],
     surfaces: ['web', 'mobile'],
     apiPrefixes: [],
     ownsTables: ['vendor_mappings', 'uom_conversions', 'audit_logs'],
@@ -227,12 +236,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       { surface: 'web_sidebar', section: 'admin', label: 'Vendor mappings', href: '/dashboard/admin/vendor-mappings', iconName: 'BookOpen', defaultSortOrder: 50, requiresAdmin: true },
       { surface: 'web_sidebar', section: 'admin', label: 'UoM conversions', href: '/dashboard/admin/uom-conversions', iconName: 'ArrowLeftRight', defaultSortOrder: 60, requiresAdmin: true },
       { surface: 'web_sidebar', section: 'admin', label: 'Reconciliation', href: '/dashboard/admin/reconciliation', iconName: 'BarChart3', defaultSortOrder: 70, requiresAdmin: true },
-      { surface: 'web_sidebar', section: 'admin', label: 'Audit log', href: '/dashboard/admin/audit', iconName: 'FileLock', defaultSortOrder: 80, requiresAdmin: true },
+      // Audit log is the ONE grantable audit surface: gated on
+      // activity_logs:read (NOT requiresAdmin) so admins/managers keep it by
+      // default and a granted read-only member (Auditor viewer) gains it.
+      // Web route lives OUTSIDE /dashboard/admin (that layout hard-gates
+      // organization:update); the old /dashboard/admin/audit URL redirects.
+      { surface: 'web_sidebar', section: 'admin', label: 'Audit log', href: '/dashboard/audit', iconName: 'FileLock', defaultSortOrder: 80, requires: 'activity_logs:read' },
       { surface: 'mobile_drawer', section: 'admin', label: 'Admin overview', href: '/admin', iconName: 'Network', defaultSortOrder: 0, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'Vendor mappings', href: '/admin/vendor-mappings', iconName: 'Layers', defaultSortOrder: 50, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'UoM conversions', href: '/admin/uom-conversions', iconName: 'ArrowLeftRight', defaultSortOrder: 60, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'Reconciliation', href: '/admin/reconciliation', iconName: 'BarChart3', defaultSortOrder: 70, requiresAdmin: true },
-      { surface: 'mobile_drawer', section: 'admin', label: 'Audit log', href: '/admin/audit', iconName: 'FileLock', defaultSortOrder: 80, requiresAdmin: true },
+      // Mobile keeps its existing /admin/audit screen (screens carry no page
+      // gates by design — nav filtering + audit_logs RLS enforce access).
+      { surface: 'mobile_drawer', section: 'admin', label: 'Audit log', href: '/admin/audit', iconName: 'FileLock', defaultSortOrder: 80, requires: 'activity_logs:read' },
     ],
   },
   charters: {
@@ -304,14 +320,18 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Rentals',
     dependsOn: ['inventory'],
-    permissions: ['rentals:create'],
+    permissions: ['rentals:read', 'rentals:create'],
     surfaces: ['web', 'mobile'],
     apiPrefixes: [],
     ownsTables: ['rentals', 'rental_lines'],
     defaultOnFor: ['charter_school'],
+    // Nav gates on the READ permission so a granted read-only member (e.g. an
+    // auditor viewer) sees the surface; write CTAs stay gated on
+    // rentals:create/manage at the page level. Staff/manager/admin hold
+    // rentals:read by default (mirrored from rentals:create) — zero change.
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:create' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:create' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
     ],
   },
   bundles: {
@@ -319,14 +339,14 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Bundles',
     dependsOn: ['inventory'],
-    permissions: ['bundles:distribute'],
+    permissions: ['bundles:read', 'bundles:distribute'],
     surfaces: ['web', 'mobile', 'api'],
     apiPrefixes: ['/api/v1/bundles', '/api/bundles'],
     ownsTables: ['bundles', 'bundle_lines', 'bundle_distributions'],
     defaultOnFor: ['charter_school', 'distribution'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:distribute' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:distribute' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
     ],
   },
   orders: {
@@ -349,14 +369,14 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Cycle counts',
     dependsOn: ['inventory'],
-    permissions: ['stock:adjust'],
+    permissions: ['cycle_counts:read', 'stock:adjust'],
     surfaces: ['web', 'mobile', 'api'],
     apiPrefixes: ['/api/v1/cycle-counts'],
     ownsTables: ['cycle_counts', 'cycle_count_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'retail_backroom', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'stock:adjust' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'stock:adjust' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
     ],
   },
   procedures: {
@@ -447,14 +467,14 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Schedule',
     dependsOn: ['inventory'],
-    permissions: ['schedule:manage'],
+    permissions: ['schedule:read', 'schedule:manage'],
     surfaces: ['web', 'mobile'],
     apiPrefixes: [],
     ownsTables: ['schedule_events'],
     defaultOnFor: ['charter_school'],
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'Schedule', href: '/dashboard/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:manage' },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:manage' },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Schedule', href: '/dashboard/schedule', iconName: 'Calendar', defaultSortOrder: 10, requiresAnyOf: ['schedule:read', 'schedule:manage'] },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10, requiresAnyOf: ['schedule:read', 'schedule:manage'] },
     ],
   },
   ai: {
@@ -525,7 +545,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Returns',
     dependsOn: [],
-    permissions: ['returns:manage'],
+    permissions: ['returns:read', 'returns:manage'],
     surfaces: ['api'],
     apiPrefixes: ['/api/returns'],
     ownsTables: ['returns', 'return_lines'],
@@ -541,7 +561,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // deliberately add ONLY a web_sidebar placement (a mobile_drawer placement
     // would surface a dead nav link in the app).
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requires: 'returns:manage' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
     ],
   },
 

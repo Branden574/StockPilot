@@ -30,8 +30,10 @@ import {
   listCachedCycleCounts,
   type CachedCycleCountHeader,
 } from '@/lib/cycle-count-cache';
+import { showWriteCta } from '@/lib/cta-gating';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -65,6 +67,11 @@ export default function CycleCounts() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [offline, setOffline] = React.useState(false);
+  // Write-CTA gate: starting a count posts stock adjustments, so the "+"
+  // follows stock:adjust. Cosmetic (the API enforces server-side); while the
+  // effective set is loading (undefined) the CTA shows — today's behavior.
+  const perms = useEffectivePermissions();
+  const canStartCount = showWriteCta(perms, 'stock:adjust');
 
 
   const load = React.useCallback(async () => {
@@ -213,16 +220,18 @@ export default function CycleCounts() {
             />
             <IconChip icon={Menu} onPress={openDrawer} />
           </View>
-          <IconChip
-            icon={Plus}
-            onPress={() =>
-              Alert.alert('Start a cycle count', 'Pick what you want to count, then tap Select.', [
-                { text: 'Pick items', onPress: () => router.push('/inventory') },
-                { text: 'Pick books', onPress: () => router.push('/books') },
-                { text: 'Cancel', style: 'cancel' },
-              ])
-            }
-          />
+          {canStartCount ? (
+            <IconChip
+              icon={Plus}
+              onPress={() =>
+                Alert.alert('Start a cycle count', 'Pick what you want to count, then tap Select.', [
+                  { text: 'Pick items', onPress: () => router.push('/inventory') },
+                  { text: 'Pick books', onPress: () => router.push('/books') },
+                  { text: 'Cancel', style: 'cancel' },
+                ])
+              }
+            />
+          ) : null}
         </View>
         <View style={styles.head}>
           <Eyebrow>{`${inProgress} IN PROGRESS${offlineCount > 0 ? ` · ${offlineCount} OFFLINE` : ''}`}</Eyebrow>
@@ -267,13 +276,17 @@ export default function CycleCounts() {
           ListEmptyComponent={
             history.length > 0 ? (
               <View style={{ paddingVertical: 12 }}>
-                <Body muted>No active counts. Tap ＋ to start one.</Body>
+                <Body muted>
+                  {canStartCount ? 'No active counts. Tap ＋ to start one.' : 'No active counts.'}
+                </Body>
               </View>
             ) : (
               <View style={styles.empty}>
                 <Display size={18}>No counts <Em>yet.</Em></Display>
                 <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
-                  Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.
+                  {canStartCount
+                    ? 'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.'
+                    : 'Counts started from the web appear here for review.'}
                 </Body>
               </View>
             )

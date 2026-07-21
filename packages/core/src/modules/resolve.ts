@@ -71,13 +71,10 @@ export function resolveSurface(surface: NavSurface, input: ResolveInput): Resolv
     for (const p of def.placements) {
       if (p.surface !== surface) continue;
       if (p.requiresAdmin && !admin) continue;
-      if (
-        p.requires &&
-        !(input.permissions
-          ? input.permissions.has(p.requires)
-          : hasPermission(input.role, p.requires))
-      )
-        continue;
+      const holds = (perm: Permission): boolean =>
+        input.permissions ? input.permissions.has(perm) : hasPermission(input.role, perm);
+      if (p.requires && !holds(p.requires)) continue;
+      if (p.requiresAnyOf && !p.requiresAnyOf.some(holds)) continue;
       items.push({
         moduleId: def.id,
         label: p.label,

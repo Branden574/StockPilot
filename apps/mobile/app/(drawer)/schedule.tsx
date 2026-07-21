@@ -8,6 +8,8 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Mono } from '@/components/ui/text';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -30,6 +32,11 @@ export default function ScheduleScreen() {
   const [rows, setRows] = React.useState<ScheduleRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // Write-CTA gate: adding an event requires schedule:manage. Cosmetic (the
+  // API enforces server-side); while the effective set is loading (undefined)
+  // the CTA shows — today's behavior.
+  const perms = useEffectivePermissions();
+  const canManageSchedule = showWriteCta(perms, 'schedule:manage');
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
@@ -88,7 +95,11 @@ export default function ScheduleScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={refresh}
-      trailing={<IconChip icon={Plus} onPress={() => router.push('/schedule/new')} />}
+      trailing={
+        canManageSchedule ? (
+          <IconChip icon={Plus} onPress={() => router.push('/schedule/new')} />
+        ) : undefined
+      }
       keyExtractor={(e) => e.id}
       renderItem={(e) => <EventCard event={e} />}
     />

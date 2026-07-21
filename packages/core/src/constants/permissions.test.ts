@@ -4,6 +4,8 @@ import {
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
+  PERMISSION_GROUP_ORDER,
+  PERMISSION_META,
   PERMISSIONS,
   ROLE_PERMISSIONS,
   type Permission,
@@ -89,6 +91,59 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
 
   it('includes movements:edit_notes (RPC gate is has_permission) so a grant is end-to-end', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('movements:edit_notes')).toBe(true);
+  });
+});
+
+describe('auditor read permissions (0279) defaults', () => {
+  const ALL_FIVE = [
+    'cycle_counts:read',
+    'schedule:read',
+    'bundles:read',
+    'rentals:read',
+    'returns:read',
+  ] as const;
+
+  it('admin and manager have all five by default', () => {
+    for (const p of ALL_FIVE) {
+      expect(hasPermission('admin', p)).toBe(true);
+      expect(hasPermission('manager', p)).toBe(true);
+    }
+  });
+
+  it('staff mirrors its write-perm surfaces: cycle counts, bundles, rentals — not schedule/returns', () => {
+    expect(hasPermission('staff', 'cycle_counts:read')).toBe(true);
+    expect(hasPermission('staff', 'bundles:read')).toBe(true);
+    expect(hasPermission('staff', 'rentals:read')).toBe(true);
+    expect(hasPermission('staff', 'schedule:read')).toBe(false);
+    expect(hasPermission('staff', 'returns:read')).toBe(false);
+  });
+
+  it('viewer has none by default (grant-only via matrix / Auditor preset)', () => {
+    for (const p of ALL_FIVE) {
+      expect(hasPermission('viewer', p)).toBe(false);
+    }
+  });
+
+  it('all five are fully grantable (RLS read floors verified)', () => {
+    for (const p of ALL_FIVE) {
+      expect(FULLY_GRANTABLE_PERMISSIONS.has(p)).toBe(true);
+    }
+  });
+});
+
+describe('PERMISSION_GROUP_ORDER', () => {
+  it('lists every group used in PERMISSION_META (unlisted groups render appended out of order)', () => {
+    const usedGroups = new Set(Object.values(PERMISSION_META).map((m) => m.group));
+    for (const g of usedGroups) {
+      expect(PERMISSION_GROUP_ORDER).toContain(g);
+    }
+  });
+
+  it('has no stale entries for groups no permission uses', () => {
+    const usedGroups = new Set(Object.values(PERMISSION_META).map((m) => m.group));
+    for (const g of PERMISSION_GROUP_ORDER) {
+      expect(usedGroups.has(g)).toBe(true);
+    }
   });
 });
 
