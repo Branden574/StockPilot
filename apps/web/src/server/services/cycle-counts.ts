@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isManagerOrAbove } from '@stockpilot/core';
+
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
@@ -801,6 +803,35 @@ export class CycleCountsService {
     }
   }
 
+  /**
+   * Assignee lock (defense-in-depth over the 0282 line-write RLS): a count
+   * assigned to a specific staffer may only be counted by that staffer or a
+   * manager+. An UNASSIGNED count stays open — parity with the RLS predicate
+   * (`assigned_to IS NULL`), closed later by the assign-before-count flow.
+   * Surfaces a clean `forbidden` (reason `assigned_to_another_user`) BEFORE
+   * the DB round-trip instead of the RLS-blocked update's misleading
+   * "line no longer editable" 404.
+   */
+  private async assertAssignee(cycleCountId: string): Promise<void> {
+    if (isManagerOrAbove(this.ctx.role)) return;
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('assigned_to')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', cycleCountId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Cycle count not found.');
+    const assignedTo = (data as { assigned_to: string | null }).assigned_to;
+    if (assignedTo && assignedTo !== this.ctx.userId) {
+      throw new ServiceError(
+        'forbidden',
+        'This cycle count is assigned to another employee. A manager must release or reassign it before you can count.',
+        { reason: 'assigned_to_another_user' },
+      );
+    }
+  }
+
   /** Records a counted quantity for a single line. When `aiScanId` is
    *  set, the line's `ai_scan_id` FK is also written so the audit
    *  trail traces the count back to the AI Shelf Scan that proposed
@@ -816,6 +847,7 @@ export class CycleCountsService {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
+    await this.assertAssignee(input.cycleCountId);
     // Use .select() so an RLS-blocked or already-missing row surfaces
     // as a real not_found error instead of a silent no-op. v1 silently
     // returned ok=true when RLS denied a staff record, which made the
@@ -1008,6 +1040,7 @@ export class CycleCountsService {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
+    await this.assertAssignee(input.cycleCountId);
     const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update({
