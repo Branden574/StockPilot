@@ -28,6 +28,15 @@ import {
   shouldShowStalePickSlip,
   type AddLinesResult,
 } from '@/components/add-order-items';
+import { EditOrderLineSheet } from '@/components/edit-order-line-sheet';
+import {
+  canEditOrderLines,
+  lineQuantitySummary,
+  lineRemovedSummary,
+  type EditableOrderLine,
+  type LineQuantityResult,
+  type LineRemovedResult,
+} from '@/components/edit-order-line';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
@@ -153,6 +162,11 @@ interface OrderHeader {
   isShortStock: boolean;
   /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
   hasFulfillableStock: boolean;
+  /** Items on THIS order that still hold an un-released stock_reservations row.
+   *  Reservations are keyed by (order_request_id, item_id) — not by line — so
+   *  removeLine refuses while one is open, or the hold would be left dangling
+   *  against an order that no longer asks for the item. */
+  reservedItemIds: string[];
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -166,6 +180,11 @@ interface OrderHeader {
     sku: string | null;
     requested: number;
     fulfilled: number;
+    /** order_request_lines.quantity_picked — units STAGED by a picker but not
+     *  yet handed over. NULL until a picker saves anything, normalised to 0.
+     *  Both line-edit floors (lower-bound on a quantity change, and the removal
+     *  refusal) are stated in terms of it. */
+    picked: number;
     /** Units already applied against prior returns (durable budget, 0153). */
     returned: number;
     /** Item-ownership charter — which site this stock is earmarked for. */
@@ -218,6 +237,10 @@ export default function OrderDetail() {
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
+  // Line-edit sheet state. The id, not the line object, is what's held: a
+  // reload rebuilds `order.lines` wholesale, and a captured object would leave
+  // the open sheet showing (and validating against) pre-reload numbers.
+  const [editLineId, setEditLineId] = React.useState<string | null>(null);
   // Bumped after a successful add so DigitalPick re-fetches its lines: it loads
   // them once on mount, so a line added mid-pick would otherwise stay invisible
   // to the picker until they left and came back. Passed as `reloadToken`, not
@@ -288,14 +311,20 @@ export default function OrderDetail() {
   // shipped or died, and the viewer is its requester or holds orders:approve.
   // `orders:request` alone is deliberately NOT enough to grow someone else's
   // order. The route re-asserts all of it, so this only decides what to show.
-  const canAddItems = canAddOrderItems({
+  const lineGate = {
     status: order?.status ?? null,
     requesterUserId: order?.requesterUserId ?? null,
     viewerUserId: user?.id ?? null,
     viewerRole: (role as Role | null) ?? null,
     permissions,
     ordersModuleEnabled: enabledModules.has('orders'),
-  });
+  };
+  const canAddItems = canAddOrderItems(lineGate);
+  // Correcting a line rides the SAME gate — on the server all three line
+  // mutations load the order through one helper (loadEditableOrderHeader), and
+  // an order you can add to but cannot correct is exactly the bug the owner
+  // reported.
+  const canEditItems = canEditOrderLines(lineGate);
   const existingItemIds = React.useMemo(
     () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
     [order],
@@ -313,6 +342,59 @@ export default function OrderDetail() {
     if (res.pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
     Alert.alert('Items added', addedSummary(res));
     await load();
+  }
+
+  // The line the edit sheet is working on, resolved from the CURRENT order on
+  // every render. Re-resolving (rather than storing the row) means a reload
+  // that lands while the sheet is open re-seeds it with the server's numbers,
+  // so the floors it enforces are never stale. A line that disappeared — some
+  // one else removed it — resolves to null and the sheet closes itself.
+  const editLine: EditableOrderLine | null = React.useMemo(() => {
+    if (editLineId === null || !order) return null;
+    const l = order.lines.find((x) => x.orderRequestLineId === editLineId);
+    if (!l) return null;
+    return {
+      orderRequestLineId: l.orderRequestLineId,
+      itemId: l.itemId,
+      name: l.name,
+      requested: l.requested,
+      fulfilled: l.fulfilled,
+      picked: l.picked,
+      returned: l.returned,
+    };
+  }, [editLineId, order]);
+
+  // Whether stock is still committed to this line's item on this order. Keyed
+  // by ITEM because stock_reservations is — two lines for the same item share
+  // one hold, so neither can be removed until it is released.
+  const editLineReserved =
+    editLine?.itemId != null && (order?.reservedItemIds ?? []).includes(editLine.itemId);
+
+  /** Shared post-edit refresh for both line mutations. */
+  async function afterLineEdit(pickSlipStale: boolean, title: string, message: string) {
+    setEditLineId(null);
+    // Tell DigitalPick to re-fetch. reloadToken, NOT a remount: the picker's
+    // typed-but-unsaved quantities live in its local state until Save/Complete,
+    // and mergePickQuantities (lib/pick-quantities.ts) keeps every value they
+    // have already entered while re-seeding only the lines that changed. A
+    // remount would wipe them, and the following "Complete picking" would then
+    // see no dirty lines and ship them at zero.
+    setLinesVersion((v) => v + 1);
+    // A quantity change moves no line's created_at and a removal moves none
+    // either, so derivePickSlipStale cannot see them on the next load — the
+    // route's own verdict is the only signal. Pin it to the slip it was about
+    // so the banner clears when THAT slip is reprinted, not one second later.
+    if (pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
+    Alert.alert(title, message);
+    await load();
+  }
+
+  function handleLineChanged(line: EditableOrderLine, res: LineQuantityResult) {
+    void afterLineEdit(res.pickSlipStale, 'Quantity updated', lineQuantitySummary(line, res));
+  }
+
+  function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
+    void afterLineEdit(res.pickSlipStale, 'Item removed', lineRemovedSummary(line, res));
   }
 
   function openReturnSheet() {
@@ -433,7 +515,10 @@ export default function OrderDetail() {
     const { data: lineRows } = await supabase
       .from('order_request_lines')
       .select(
-        'id, item_id, created_at, quantity_requested, quantity_fulfilled, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
+        // quantity_picked is read for the line-edit floors: it is what a picker
+        // has STAGED but not yet handed over, and lowering a request beneath it
+        // (or removing the line) would strand that physical stock.
+        'id, item_id, created_at, quantity_requested, quantity_fulfilled, quantity_picked, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
       .eq('order_request_id', id);
     type LineItemEmbed = {
@@ -448,11 +533,28 @@ export default function OrderDetail() {
       created_at: string | null;
       quantity_requested: number | null;
       quantity_fulfilled: number | null;
+      quantity_picked: number | null;
       returned_quantity: number | null;
       item: LineItemEmbed | LineItemEmbed[] | null;
     }[];
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
+
+    // Which of THIS order's items still hold stock. removeLine refuses while an
+    // un-released reservation points at the item (they are keyed by
+    // (order_request_id, item_id), not by line), so the sheet needs the same
+    // picture to disable Remove with the same reason instead of a 409.
+    const reservedItemIds: string[] = [];
+    if (rows.length > 0) {
+      const { data: openResv } = await supabase
+        .from('stock_reservations')
+        .select('item_id')
+        .eq('order_request_id', id)
+        .is('released_at', null);
+      for (const r of (openResv ?? []) as { item_id: string | null }[]) {
+        if (r.item_id && !reservedItemIds.includes(r.item_id)) reservedItemIds.push(r.item_id);
+      }
+    }
 
     // Stock-awareness, mirroring the web page loader:
     //  - pending_approval → isShortStock (drives "Approve partial"), judged on
@@ -547,6 +649,7 @@ export default function OrderDetail() {
         totalFulfilled,
         isShortStock,
         hasFulfillableStock,
+        reservedItemIds,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -560,6 +663,7 @@ export default function OrderDetail() {
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
             fulfilled: Number(l.quantity_fulfilled) || 0,
+            picked: Number(l.quantity_picked) || 0,
             returned: Number(l.returned_quantity) || 0,
             charterName: charterObj?.name ?? null,
             charterCode: charterObj?.code ?? null,
@@ -1018,81 +1122,106 @@ export default function OrderDetail() {
                 </Mono>
               ) : (
                 <Card padding={0}>
-                  {order.lines.map((l, i) => (
-                    <View
-                      key={`${l.sku ?? l.name}-${i}`}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 12,
-                        paddingHorizontal: 14,
-                        paddingVertical: 12,
-                        borderTopWidth: i === 0 ? 0 : 1,
-                        borderTopColor: c.hair,
-                      }}
-                    >
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Body size={14} color={c.ink} numberOfLines={2}>
-                          {l.name}
-                        </Body>
-                        {l.sku ? (
-                          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
-                            {l.sku}
-                          </Mono>
-                        ) : null}
-                        {l.charterName ? (
-                          <View
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              alignSelf: 'flex-start',
-                              // maxWidth + flexShrink below are BOTH required for
-                              // numberOfLines to actually ellipsize in RN (default
-                              // flexShrink is 0, and a flex-start chip is otherwise
-                              // measured at max-content and overflows the column).
-                              maxWidth: '100%',
-                              gap: 3,
-                              marginTop: 4,
-                              paddingHorizontal: 6,
-                              paddingVertical: 1,
-                              borderRadius: 999,
-                              backgroundColor: ACCENT.mintSoft,
-                            }}
-                          >
-                            <Landmark
-                              size={10}
-                              color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                            />
-                            <Mono
-                              size={10}
-                              tracking={0.02}
-                              color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                              numberOfLines={1}
-                              style={{ flexShrink: 1 }}
-                            >
-                              {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                  {order.lines.map((l, i) => {
+                    // A line is tappable when the viewer may edit lines at all
+                    // and the row actually carries its id — the PATCH/DELETE
+                    // twins address the line by id, so a row without one has
+                    // nothing to send.
+                    const editable = canEditItems && l.orderRequestLineId !== null;
+                    return (
+                      <Pressable
+                        key={`${l.sku ?? l.name}-${i}`}
+                        onPress={
+                          editable ? () => setEditLineId(l.orderRequestLineId) : undefined
+                        }
+                        accessibilityRole={editable ? 'button' : undefined}
+                        accessibilityLabel={
+                          editable ? `Edit ${l.name}, quantity ${l.requested}` : undefined
+                        }
+                        style={({ pressed }) => ({
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                          borderTopWidth: i === 0 ? 0 : 1,
+                          borderTopColor: c.hair,
+                          opacity: editable && pressed ? 0.6 : 1,
+                        })}
+                      >
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Body size={14} color={c.ink} numberOfLines={2}>
+                            {l.name}
+                          </Body>
+                          {l.sku ? (
+                            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                              {l.sku}
                             </Mono>
-                          </View>
-                        ) : null}
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Mono size={13} color={c.ink}>
-                          ×{l.requested}
-                        </Mono>
-                        {l.fulfilled > 0 && l.fulfilled < l.requested ? (
-                          <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
-                            {l.fulfilled} provided · {l.requested - l.fulfilled} owed
+                          ) : null}
+                          {l.charterName ? (
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                alignSelf: 'flex-start',
+                                // maxWidth + flexShrink below are BOTH required for
+                                // numberOfLines to actually ellipsize in RN (default
+                                // flexShrink is 0, and a flex-start chip is otherwise
+                                // measured at max-content and overflows the column).
+                                maxWidth: '100%',
+                                gap: 3,
+                                marginTop: 4,
+                                paddingHorizontal: 6,
+                                paddingVertical: 1,
+                                borderRadius: 999,
+                                backgroundColor: ACCENT.mintSoft,
+                              }}
+                            >
+                              <Landmark
+                                size={10}
+                                color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                              />
+                              <Mono
+                                size={10}
+                                tracking={0.02}
+                                color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                                numberOfLines={1}
+                                style={{ flexShrink: 1 }}
+                              >
+                                {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                              </Mono>
+                            </View>
+                          ) : null}
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Mono size={13} color={c.ink}>
+                            ×{l.requested}
                           </Mono>
-                        ) : l.fulfilled >= l.requested && l.requested > 0 ? (
-                          <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
-                            fulfilled
-                          </Mono>
-                        ) : null}
-                      </View>
-                    </View>
-                  ))}
+                          {l.fulfilled > 0 && l.fulfilled < l.requested ? (
+                            <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
+                              {l.fulfilled} provided · {l.requested - l.fulfilled} owed
+                            </Mono>
+                          ) : l.fulfilled >= l.requested && l.requested > 0 ? (
+                            <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                              fulfilled
+                            </Mono>
+                          ) : null}
+                          {editable ? (
+                            <Mono size={10} tracking={0.08} upper color={c.ink4} style={{ marginTop: 3 }}>
+                              Edit
+                            </Mono>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
                 </Card>
               )}
+              {canEditItems && order.lines.length > 0 ? (
+                <Mono size={10.5} color={c.ink4}>
+                  Tap a line to change its quantity or take it off the order.
+                </Mono>
+              ) : null}
               {canAddItems ? (
                 <>
                   {actionBtn('Add items', 'add-items', () => setAddOpen(true), 'default')}
@@ -1829,6 +1958,26 @@ export default function OrderDetail() {
           warehouseId={order.warehouseId}
           existingItemIds={existingItemIds}
           onAdded={(res) => void handleItemsAdded(res)}
+          onRequestReload={() => void load()}
+        />
+      ) : null}
+
+      {/* Line-edit sheet — the other half of adding: change a line's quantity
+          or take it off the order entirely. Submits to the PATCH / DELETE
+          twins on the same route, which re-assert every gate and every floor.
+          `visible` is driven by whether the line still RESOLVES, so a line
+          removed underneath us (or an order that reloaded without it) closes
+          the sheet instead of leaving it addressing a row that is gone. */}
+      {order ? (
+        <EditOrderLineSheet
+          visible={editLine !== null}
+          onClose={() => setEditLineId(null)}
+          orderId={order.id}
+          line={editLine}
+          totalLines={order.lines.length}
+          itemHasOpenReservation={editLineReserved}
+          onChanged={handleLineChanged}
+          onRemoved={handleLineRemoved}
           onRequestReload={() => void load()}
         />
       ) : null}

@@ -9,6 +9,15 @@ import { OrderRequestsService } from './order-requests';
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn() }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
+// Line UPDATE/DELETE are RLS-forbidden for end users by design (mig 0049), so
+// the service performs them through the service role. The stub is a fake DB —
+// routing both handles to the same one keeps every chain assertion below
+// meaningful while exercising the real code path.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => adminHandle.client,
+}));
+const adminHandle: { client: unknown } = { client: null };
+
 // Adding items to an EXISTING order (owner request 2026-07-22). The rules that
 // matter: allowed any time BEFORE the order ships, only for the requester or an
 // approver, never for an unreceived (expected) item, and topping up an item
@@ -27,11 +36,12 @@ function svc(
   opts: { role?: Role; userId?: string } = {},
 ) {
   return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+    (adminHandle.client = stub.client,
     makeServiceContext(stub.client, {
       role: opts.role ?? 'admin',
       userId: opts.userId ?? 'approver-1',
       enabledModules: new Set<ModuleId>(['orders']),
-    }),
+    })),
   );
 }
 
@@ -138,5 +148,56 @@ describe('OrderRequestsService.addLines', () => {
     await expect(svc(stub).addLines('order-1', [])).rejects.toMatchObject({
       code: 'validation_error',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REGRESSION (shipped and caught the same day, 2026-07-22).
+//
+// Topping up an item already on the order UPDATEs its quantity_requested. RLS
+// policy order_request_lines_no_update (mig 0049, USING false) forbids that
+// through the end-user client, and PostgREST reports zero affected rows with
+// NO error — so the service counted the line as `merged` and told the user the
+// add succeeded while the order was unchanged. The write now goes through the
+// service role and is verified.
+// ---------------------------------------------------------------------------
+describe('addLines top-up fails CLOSED when the write affects no row', () => {
+  it('never reports a merge that did not happen', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select': {
+        data: {
+          id: 'order-1',
+          status: 'approved',
+          warehouse_id: 'wh-1',
+          requester_user_id: 'requester-1',
+          pick_slip_generated_at: null,
+          order_number: 12,
+        },
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [
+          {
+            id: 'item-1',
+            name: 'Widget',
+            warehouse_id: 'wh-1',
+            unit_cost: 2,
+            awaiting_first_receipt: false,
+          },
+        ],
+        error: null,
+      },
+      // The item is ALREADY on the order, so this takes the merge branch.
+      'order_request_lines.select': {
+        data: [{ id: 'line-1', item_id: 'item-1', quantity_requested: 4 }],
+        error: null,
+      },
+      // Zero rows affected, no error — exactly what RLS produced in production.
+      'order_request_lines.update': { data: null, error: null },
+    });
+
+    await expect(
+      svc(stub).addLines('order-1', [{ itemId: 'item-1', quantity: 3 }]),
+    ).rejects.toMatchObject({ code: 'internal_error' });
   });
 });

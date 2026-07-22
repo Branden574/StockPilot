@@ -7,6 +7,7 @@ import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { OrderLineActions } from '@/components/orders/order-line-actions';
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
@@ -113,6 +114,18 @@ export default async function OrderDetailPage({
   ];
   const canAddLines =
     (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status);
+  // Correcting a line is the same act as adding one — addLines,
+  // updateLineQuantity and removeLine all run the SAME
+  // loadEditableOrderHeader gate (ship gate + requester-or-approver +
+  // warehouse access), so the row controls appear exactly when the Add items
+  // button does. Re-deriving a second condition here is how add and edit
+  // would drift apart, which is the bug the owner already hit once.
+  const canEditLines = canAddLines;
+  // Reservations on the detail are already the UN-RELEASED ones for this order
+  // (get() filters released_at IS NULL) and are keyed by ITEM, not by line —
+  // exactly what removeLine's R4 check reads. Set-ify once rather than scanning
+  // the array per row.
+  const reservedItemIds = new Set(reservations.map((r) => r.item_id));
   // Phase 4 — the assigned delivery driver may be a staff user who lacks
   // orders:approve. They still need the actions panel on the statuses
   // where their permitted actions live (mark-in-transit, collect
@@ -597,12 +610,30 @@ export default async function OrderDetailPage({
                   </TableHead>
                   <TableHead className="text-right">Owed</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
+                  {/* A trailing actions column rather than a click-the-number
+                      affordance on Requested. The complaint that produced this
+                      was "theres no way to" — a hover-to-reveal editor gives no
+                      standing signal that editing exists at all, and removal
+                      has no inline home on any of the four numeric columns.
+                      One predictable column per row carries both verbs, keeps
+                      the right-aligned numbers undisturbed, and gives a refused
+                      removal somewhere to render as a disabled control with a
+                      reason instead of vanishing. Header is sr-only because an
+                      icon column needs no visible label. */}
+                  {canEditLines && (
+                    <TableHead className="w-px">
+                      <span className="sr-only">Line actions</span>
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {lines.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground py-6 text-center text-sm">
+                    <TableCell
+                      colSpan={canEditLines ? 6 : 5}
+                      className="text-muted-foreground py-6 text-center text-sm"
+                    >
                       No lines on this request.
                     </TableCell>
                   </TableRow>
@@ -654,6 +685,23 @@ export default async function OrderDetailPage({
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
                       </TableCell>
+                      {canEditLines && (
+                        <TableCell className="py-1 pr-2 text-right align-middle">
+                          {/* itemName falls back to the same label the Item
+                              cell shows when the item row is gone, so the
+                              confirmation names what the viewer is looking at. */}
+                          <OrderLineActions
+                            orderId={id}
+                            lineId={l.id}
+                            itemName={l.item?.name ?? 'Deleted item'}
+                            quantityRequested={Number(l.quantity_requested) || 0}
+                            quantityFulfilled={Number(l.quantity_fulfilled) || 0}
+                            quantityPicked={l.quantity_picked}
+                            hasActiveReservation={reservedItemIds.has(l.item_id)}
+                            isOnlyLine={lines.length === 1}
+                          />
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}

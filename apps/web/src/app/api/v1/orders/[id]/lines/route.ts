@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -15,7 +16,7 @@ const bodySchema = z.object({
     .array(
       z.object({
         itemId: z.string().uuid(),
-        quantity: z.coerce.number().positive().max(100_000),
+        quantity: z.coerce.number().int().positive().max(100_000),
       }),
     )
     .min(1)
@@ -42,7 +43,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       { error: 'rate_limited', message: 'Too many requests — slow down.' },
       {
         status: 429,
-        headers: { 'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) },
+        headers: {
+          'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        },
       },
     );
   }
@@ -66,7 +69,131 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         { status: serviceErrorStatus(e.code) },
       );
     }
+    // assertWarehouseAccess throws ForbiddenError, a separate class from
+    // ServiceError — without this it fell through to a generic 500 and the
+    // mobile sheet showed a retryable error for a permanent refusal.
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
     void reportError(e, { tag: 'api.v1.orders.add_lines' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+}
+
+const patchSchema = z.object({
+  lineId: z.string().uuid(),
+  quantity: z.coerce.number().int().positive().max(100_000),
+});
+
+/**
+ * Change the quantity on an existing line — Bearer/mobile twin of
+ * updateOrderRequestLineQuantityAction. Same service method, so the fulfilled
+ * and staged floors are enforced identically on both platforms.
+ *
+ * Body: { lineId: uuid, quantity: number > 0 }
+ * → 200 { ok: true, quantity, pickSlipStale }
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const ctx = await withApiContext(req);
+  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  const rl = await checkRateLimit(`order-edit-lines:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many requests — slow down.' },
+      {
+        status: 429,
+        headers: {
+          'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        },
+      },
+    );
+  }
+
+  const { id } = await params;
+  const parsed = patchSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: 'validation_error', message: parsed.error.issues[0]?.message ?? 'Invalid request' },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await new OrderRequestsService(ctx).updateLineQuantity(
+      id,
+      parsed.data.lineId,
+      parsed.data.quantity,
+    );
+    return NextResponse.json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof ServiceError) {
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
+    }
+    // assertWarehouseAccess throws ForbiddenError, a separate class from
+    // ServiceError — without this it fell through to a generic 500 and the
+    // mobile sheet showed a retryable error for a permanent refusal.
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
+    void reportError(e, { tag: 'api.v1.orders.update_line' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+}
+
+/**
+ * Remove a line from an order — Bearer/mobile twin of
+ * removeOrderRequestLineAction. The line id travels as a query parameter
+ * (?lineId=…) because DELETE bodies are unreliable across the RN fetch stack.
+ *
+ * → 200 { ok: true, removedItemId, pickSlipStale }
+ */
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const ctx = await withApiContext(req);
+  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  const rl = await checkRateLimit(`order-edit-lines:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many requests — slow down.' },
+      {
+        status: 429,
+        headers: {
+          'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        },
+      },
+    );
+  }
+
+  const { id } = await params;
+  const lineId = z.string().uuid().safeParse(req.nextUrl.searchParams.get('lineId'));
+  if (!lineId.success) {
+    return NextResponse.json(
+      { error: 'validation_error', message: 'lineId query parameter is required.' },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await new OrderRequestsService(ctx).removeLine(id, lineId.data);
+    return NextResponse.json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof ServiceError) {
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
+    }
+    // assertWarehouseAccess throws ForbiddenError, a separate class from
+    // ServiceError — without this it fell through to a generic 500 and the
+    // mobile sheet showed a retryable error for a permanent refusal.
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
+    void reportError(e, { tag: 'api.v1.orders.remove_line' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

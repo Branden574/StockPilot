@@ -75,13 +75,10 @@ const createSchema = z
       .min(1)
       .max(100),
   })
-  .refine(
-    (v) => v.lines.reduce((s, l) => s + l.quantity, 0) <= MAX_TOTAL_QTY,
-    {
-      message: `Total quantity across all lines cannot exceed ${MAX_TOTAL_QTY.toLocaleString()}.`,
-      path: ['lines'],
-    },
-  );
+  .refine((v) => v.lines.reduce((s, l) => s + l.quantity, 0) <= MAX_TOTAL_QTY, {
+    message: `Total quantity across all lines cannot exceed ${MAX_TOTAL_QTY.toLocaleString()}.`,
+    path: ['lines'],
+  });
 
 export async function createOrderRequestAction(
   input: z.input<typeof createSchema>,
@@ -101,10 +98,7 @@ export async function createOrderRequestAction(
     if (parsed.data.onBehalfOf) {
       const ctx = await withContext();
       if (!isManagerOrAbove(ctx.role)) {
-        return err(
-          'forbidden',
-          'Only managers can create orders on behalf of others.',
-        );
+        return err('forbidden', 'Only managers can create orders on behalf of others.');
       }
     }
     const svc = await OrderRequestsService.forCurrentUser();
@@ -130,7 +124,6 @@ export async function createOrderRequestAction(
     return toResult(e);
   }
 }
-
 
 const setNeededBySchema = z.object({
   id: z.string().uuid(),
@@ -255,7 +248,7 @@ const addLinesSchema = z.object({
     .array(
       z.object({
         itemId: z.string().uuid(),
-        quantity: z.coerce.number().positive().max(100_000),
+        quantity: z.coerce.number().int().positive().max(100_000),
       }),
     )
     .min(1)
@@ -277,6 +270,69 @@ export async function addOrderRequestLinesAction(
   try {
     const svc = await OrderRequestsService.forCurrentUser();
     const result = await svc.addLines(parsed.data.id, parsed.data.lines);
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const updateLineSchema = z.object({
+  id: z.string().uuid(),
+  lineId: z.string().uuid(),
+  quantity: z.coerce.number().int().positive().max(100_000),
+});
+
+/**
+ * Correct the quantity on a line already on the order. Same window and same
+ * people as adding — the service refuses to drop below what has been handed
+ * over or staged. See OrderRequestsService.updateLineQuantity.
+ */
+export async function updateOrderRequestLineQuantityAction(
+  input: z.input<typeof updateLineSchema>,
+): Promise<ActionResult<{ pickSlipStale: boolean; quantity: number }>> {
+  const parsed = updateLineSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const result = await svc.updateLineQuantity(
+      parsed.data.id,
+      parsed.data.lineId,
+      parsed.data.quantity,
+    );
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const removeLineSchema = z.object({
+  id: z.string().uuid(),
+  lineId: z.string().uuid(),
+});
+
+/**
+ * Take a wrongly-added item back off the order. Refused once the line has any
+ * physical history (handed over, staged, returned) or while stock is still
+ * reserved for it. See OrderRequestsService.removeLine.
+ */
+export async function removeOrderRequestLineAction(
+  input: z.input<typeof removeLineSchema>,
+): Promise<ActionResult<{ pickSlipStale: boolean; removedItemId: string }>> {
+  const parsed = removeLineSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const result = await svc.removeLine(parsed.data.id, parsed.data.lineId);
     revalidatePath('/dashboard/orders');
     revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
@@ -363,11 +419,7 @@ export async function recordPickedLineAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.recordPickedLine(
-      parsed.data.orderId,
-      parsed.data.lineId,
-      parsed.data.quantity,
-    );
+    await svc.recordPickedLine(parsed.data.orderId, parsed.data.lineId, parsed.data.quantity);
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}`);
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}/pick`);
     await revalidateInventoryListForCurrentOrg();
@@ -499,9 +551,7 @@ export async function setOrderInternalNotesAction(
   }
 }
 
-export async function rotatePublicRequestTokenAction(): Promise<
-  ActionResult<{ token: string }>
-> {
+export async function rotatePublicRequestTokenAction(): Promise<ActionResult<{ token: string }>> {
   try {
     const svc = await OrderRequestsService.forCurrentUser();
     const out = await svc.rotatePublicToken();
@@ -543,10 +593,7 @@ export async function setWarehousePublicOrderableAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.setWarehousePublicOrderable(
-      parsed.data.warehouseId,
-      parsed.data.isPublicOrderable,
-    );
+    await svc.setWarehousePublicOrderable(parsed.data.warehouseId, parsed.data.isPublicOrderable);
     revalidatePath('/dashboard/settings/public-requests');
     return ok(undefined);
   } catch (e) {

@@ -99,6 +99,11 @@ export type AuditEvent =
   | 'bundle.distributed'
   | 'order_request.created'
   | 'order_request.lines_added'
+  // Line-level corrections are their OWN events: "we added the wrong thing" and
+  // "we asked for the wrong amount" are different stories from "we added more",
+  // and folding them into lines_added would make an order's history unreadable.
+  | 'order_request.line_quantity_changed'
+  | 'order_request.line_removed'
   | 'order_request.approved'
   | 'order_request.denied'
   | 'order_request.status_changed'
@@ -287,10 +292,7 @@ interface AuditPayload {
  * Best-effort — never throws to the caller. Audit failures are logged to
  * stderr only; we never want a logging error to break a user action.
  */
-export async function audit(
-  payload: AuditPayload,
-  ctx?: ServiceContext,
-): Promise<void> {
+export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
   try {
     const c = ctx ?? (await withContext());
     const h = await headers();

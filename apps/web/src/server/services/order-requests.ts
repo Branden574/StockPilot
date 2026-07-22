@@ -282,7 +282,6 @@ export interface CreateOrderRequestInput {
   }>;
 }
 
-
 /**
  * Orders → Schedule cleanup: when a linked order reaches a terminal state,
  * close its auto-created calendar event so the Schedule tidies itself
@@ -321,18 +320,20 @@ export class OrderRequestsService {
 
   // ── Read ────────────────────────────────────────────────────────
 
-  async list(filters: {
-    status?: OrderRequestStatus | OrderRequestStatus[];
-    requesterUserId?: string;
-    requesterEmail?: string;
-    warehouseId?: string;
-    limit?: number;
-    offset?: number;
-    /** ISO timestamps. Filter on `created_at`. Used by AI tools for
+  async list(
+    filters: {
+      status?: OrderRequestStatus | OrderRequestStatus[];
+      requesterUserId?: string;
+      requesterEmail?: string;
+      warehouseId?: string;
+      limit?: number;
+      offset?: number;
+      /** ISO timestamps. Filter on `created_at`. Used by AI tools for
         "orders submitted yesterday / this week / between X and Y". */
-    since?: string;
-    until?: string;
-  } = {}): Promise<OrderRequestSummary[]> {
+      since?: string;
+      until?: string;
+    } = {},
+  ): Promise<OrderRequestSummary[]> {
     assertModuleEnabled(this.ctx, 'orders');
     let q = this.ctx.supabase
       .from('order_requests')
@@ -433,9 +434,7 @@ export class OrderRequestsService {
         full_name?: string | null;
         email?: string | null;
       };
-      const flattenProfile = (
-        field: unknown,
-      ): ProfileShape | null => {
+      const flattenProfile = (field: unknown): ProfileShape | null => {
         if (!field) return null;
         return Array.isArray(field)
           ? ((field[0] as ProfileShape | undefined) ?? null)
@@ -444,14 +443,12 @@ export class OrderRequestsService {
       const reqProfile = flattenProfile(r.requester);
       const pickerId = (r.assigned_picker_id as string | null) ?? null;
       const driverId = (r.assigned_delivery_user_id as string | null) ?? null;
-      const pickerProfile = pickerId ? profilesById.get(pickerId) ?? null : null;
-      const driverProfile = driverId ? profilesById.get(driverId) ?? null : null;
+      const pickerProfile = pickerId ? (profilesById.get(pickerId) ?? null) : null;
+      const driverProfile = driverId ? (profilesById.get(driverId) ?? null) : null;
       const requesterName =
-        ((r.requester_name as string | null) ?? null) ||
-        (reqProfile?.full_name?.trim() || null);
+        ((r.requester_name as string | null) ?? null) || reqProfile?.full_name?.trim() || null;
       const requesterEmail =
-        ((r.requester_email as string | null) ?? null) ||
-        (reqProfile?.email?.trim() || null);
+        ((r.requester_email as string | null) ?? null) || reqProfile?.email?.trim() || null;
       const displayProfile = (p: ProfileShape | null): string | null => {
         if (!p) return null;
         return p.full_name?.trim() || p.email?.trim() || null;
@@ -469,21 +466,16 @@ export class OrderRequestsService {
         requesterOrgLabel: (r.requester_org_label as string | null) ?? null,
         source: r.source as OrderRequestSource,
         lineCount: lines.length,
-        totalQuantity: lines.reduce(
-          (s, l) => s + (Number(l.quantity_requested) || 0),
-          0,
-        ),
+        totalQuantity: lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0),
         notes: (r.notes as string | null) ?? null,
         createdAt: r.created_at as string,
         updatedAt: r.updated_at as string,
         approvedAt: (r.approved_at as string | null) ?? null,
         deliveredAt: (r.delivered_at as string | null) ?? null,
-        fulfillmentType:
-          (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
+        fulfillmentType: (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         assignedPickerName: displayProfile(pickerProfile),
-        assignedDeliveryUserId:
-          (r.assigned_delivery_user_id as string | null) ?? null,
+        assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
         assignedDeliveryUserName: displayProfile(driverProfile),
       } satisfies OrderRequestSummary;
     });
@@ -508,16 +500,18 @@ export class OrderRequestsService {
    * quantity_requested × unit_cost_at_request across the order's lines)
    * so the CSV can carry order-level totals without a second round trip.
    */
-  async exportRows(filters: {
-    status?: OrderRequestStatus | OrderRequestStatus[];
-    requesterUserId?: string;
-    warehouseId?: string;
-    deliveryCharterId?: string;
-    fulfillmentType?: 'pickup' | 'delivery';
-    since?: string;
-    until?: string;
-    cap?: number;
-  } = {}): Promise<{ rows: OrderExportRow[]; total: number }> {
+  async exportRows(
+    filters: {
+      status?: OrderRequestStatus | OrderRequestStatus[];
+      requesterUserId?: string;
+      warehouseId?: string;
+      deliveryCharterId?: string;
+      fulfillmentType?: 'pickup' | 'delivery';
+      since?: string;
+      until?: string;
+      cap?: number;
+    } = {},
+  ): Promise<{ rows: OrderExportRow[]; total: number }> {
     assertModuleEnabled(this.ctx, 'orders');
 
     const cap = Math.min(Math.max(1, filters.cap ?? 10_000), 50_000);
@@ -597,19 +591,15 @@ export class OrderRequestsService {
         Array.isArray(field) ? ((field[0] as T | undefined) ?? null) : ((field as T) ?? null);
       const wh = flatten<{ name?: string | null }>(r.warehouse);
       const ch = flatten<{ name?: string | null; code?: string | null }>(r.charter);
-      const reqProfile = flatten<{ full_name?: string | null; email?: string | null }>(
-        r.requester,
-      );
+      const reqProfile = flatten<{ full_name?: string | null; email?: string | null }>(r.requester);
       const lines =
         (r.lines as Array<{ quantity_requested: number; unit_cost_at_request: number }> | null) ??
         [];
 
       const requesterName =
-        ((r.requester_name as string | null) ?? null) ||
-        (reqProfile?.full_name?.trim() || null);
+        ((r.requester_name as string | null) ?? null) || reqProfile?.full_name?.trim() || null;
       const requesterEmail =
-        ((r.requester_email as string | null) ?? null) ||
-        (reqProfile?.email?.trim() || null);
+        ((r.requester_email as string | null) ?? null) || reqProfile?.email?.trim() || null;
       // Charter/destination: real charter when set, otherwise the warehouse
       // (pickup orders have no charter — they're collected at the warehouse).
       const charterName = ch?.name ?? null;
@@ -632,8 +622,7 @@ export class OrderRequestsService {
         lineCount: lines.length,
         totalQuantity: lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0),
         totalCost: lines.reduce(
-          (s, l) =>
-            s + (Number(l.quantity_requested) || 0) * (Number(l.unit_cost_at_request) || 0),
+          (s, l) => s + (Number(l.quantity_requested) || 0) * (Number(l.unit_cost_at_request) || 0),
           0,
         ),
         notes: (r.notes as string | null) ?? null,
@@ -759,8 +748,7 @@ export class OrderRequestsService {
         item_id: r.item_id as string,
         quantity_requested: Number(r.quantity_requested) || 0,
         quantity_fulfilled: Number(r.quantity_fulfilled) || 0,
-        quantity_picked:
-          rawPicked === null || rawPicked === undefined ? null : Number(rawPicked),
+        quantity_picked: rawPicked === null || rawPicked === undefined ? null : Number(rawPicked),
         unit_cost_at_request: Number(r.unit_cost_at_request) || 0,
         notes: (r.notes as string | null) ?? null,
         item,
@@ -779,25 +767,19 @@ export class OrderRequestsService {
     // Resolved in PARALLEL with the picker below so adding the picker name
     // costs no extra round-trip on the detail path.
     const [profile, pickerProfile] = await Promise.all([
-      h.requester_user_id
-        ? this.lookupUserProfile(h.requester_user_id)
-        : Promise.resolve(null),
+      h.requester_user_id ? this.lookupUserProfile(h.requester_user_id) : Promise.resolve(null),
       // Picker who CLAIMED this order — pre-printed on the pick slip's
       // PICKER NAME line. Null when unclaimed (see OrderRequestDetail doc).
-      h.assigned_picker_id
-        ? this.lookupUserProfile(h.assigned_picker_id)
-        : Promise.resolve(null),
+      h.assigned_picker_id ? this.lookupUserProfile(h.assigned_picker_id) : Promise.resolve(null),
     ]);
 
     // Resolved name/email safe for a name cell — SAME fallback the list()
     // path uses: free-text column wins, else the joined profile, else null.
     // `||` (not `??`) so an empty-string column also falls through.
     const requesterName =
-      ((h.requester_name as string | null) ?? null) ||
-      (profile?.fullName?.trim() || null);
+      ((h.requester_name as string | null) ?? null) || profile?.fullName?.trim() || null;
     const requesterEmail =
-      ((h.requester_email as string | null) ?? null) ||
-      (profile?.email?.trim() || null);
+      ((h.requester_email as string | null) ?? null) || profile?.email?.trim() || null;
 
     // requesterDisplay is the on-screen label WITH the " · org_label"
     // suffix for external requesters — unchanged behavior, just now
@@ -806,7 +788,7 @@ export class OrderRequestsService {
       ? profile.fullName?.trim() || profile.email?.trim() || null
       : null;
     const requesterDisplay = h.requester_user_id
-      ? profileDisplay ?? '(team member)'
+      ? (profileDisplay ?? '(team member)')
       : `${h.requester_name ?? 'External requester'}${h.requester_org_label ? ' · ' + h.requester_org_label : ''}`;
 
     return {
@@ -890,10 +872,7 @@ export class OrderRequestsService {
       const it = itemMap.get(line.itemId);
       if (!it) throw new ServiceError('validation_error', `Item ${line.itemId} not found`);
       if (it.warehouse_id !== input.warehouseId) {
-        throw new ServiceError(
-          'validation_error',
-          'Every line must be at the chosen warehouse',
-        );
+        throw new ServiceError('validation_error', 'Every line must be at the chosen warehouse');
       }
       // Expected-items guard (mig 0277): an item auto-created from an
       // inbound PO that has never received stock is NOT orderable. The
@@ -962,9 +941,7 @@ export class OrderRequestsService {
       unit_cost_at_request: itemMap.get(l.itemId)?.unit_cost ?? 0,
       notes: l.notes ?? null,
     }));
-    const { error: lErr } = await this.ctx.supabase
-      .from('order_request_lines')
-      .insert(linePayload);
+    const { error: lErr } = await this.ctx.supabase.from('order_request_lines').insert(linePayload);
     if (lErr) {
       // Roll back the header by hand — we don't have a transaction wrapper here.
       await this.ctx.supabase
@@ -994,6 +971,75 @@ export class OrderRequestsService {
       lineCount: linePayload.length,
     });
     return row;
+  }
+
+  /**
+   * The gate every LINE-LEVEL edit shares: add, change quantity, remove.
+   *
+   * It lives in one place on purpose. Add and edit diverging — e.g. an order you
+   * can still add to but can't correct — is itself the bug the owner hit, so
+   * all three callers load the header the same way, refuse on the same
+   * shipped/closed statuses, and answer "who may touch this order?" identically.
+   * Only the two user-facing sentences differ, because "add" and "remove" want
+   * different next steps.
+   *
+   * Scoping the header read by organization_id is also what makes a foreign
+   * line id a clean not_found instead of a cross-org read: callers look the
+   * line up by (id, order_request_id) against THIS header.
+   */
+  private async loadEditableOrderHeader(
+    id: string,
+    copy: { inTransit: string; forbidden: string },
+  ): Promise<{
+    id: string;
+    status: OrderRequestStatus;
+    warehouse_id: string;
+    requester_user_id: string | null;
+    pick_slip_generated_at: string | null;
+    order_number: number | null;
+  }> {
+    const { data: header, error: hErr } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id, status, warehouse_id, requester_user_id, pick_slip_generated_at, order_number')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Order not found');
+    const h = header as {
+      id: string;
+      status: OrderRequestStatus;
+      warehouse_id: string;
+      requester_user_id: string | null;
+      pick_slip_generated_at: string | null;
+      order_number: number | null;
+    };
+
+    // Ship gate — once it's out the door (or dead) the contents are final.
+    const SHIPPED_OR_CLOSED: OrderRequestStatus[] = [
+      'in_transit',
+      'completed',
+      'denied',
+      'cancelled',
+    ];
+    if (SHIPPED_OR_CLOSED.includes(h.status)) {
+      throw new ServiceError(
+        'conflict',
+        h.status === 'in_transit'
+          ? copy.inTransit
+          : `This order is ${h.status} and can no longer be changed.`,
+      );
+    }
+
+    // Requester-or-approver. `orders:request` alone is NOT enough to change
+    // someone else's order.
+    const isRequester = h.requester_user_id != null && h.requester_user_id === this.ctx.userId;
+    if (!isRequester && !can(this.ctx, 'orders:approve')) {
+      throw new ServiceError('forbidden', copy.forbidden);
+    }
+    // Same warehouse gate create() applies.
+    await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+    return h;
   }
 
   /**
@@ -1029,50 +1075,10 @@ export class OrderRequestsService {
       }
     }
 
-    const { data: header, error: hErr } = await this.ctx.supabase
-      .from('order_requests')
-      .select('id, status, warehouse_id, requester_user_id, pick_slip_generated_at, order_number')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .maybeSingle();
-    if (hErr) throw new ServiceError('internal_error', hErr.message);
-    if (!header) throw new ServiceError('not_found', 'Order not found');
-    const h = header as {
-      id: string;
-      status: OrderRequestStatus;
-      warehouse_id: string;
-      requester_user_id: string | null;
-      pick_slip_generated_at: string | null;
-      order_number: number | null;
-    };
-
-    // Ship gate — once it's out the door (or dead) the contents are final.
-    const SHIPPED_OR_CLOSED: OrderRequestStatus[] = [
-      'in_transit',
-      'completed',
-      'denied',
-      'cancelled',
-    ];
-    if (SHIPPED_OR_CLOSED.includes(h.status)) {
-      throw new ServiceError(
-        'conflict',
-        h.status === 'in_transit'
-          ? 'This order is already out for delivery — create a new order for the extra items.'
-          : `This order is ${h.status} and can no longer be changed.`,
-      );
-    }
-
-    // Requester-or-approver. `orders:request` alone is NOT enough to grow
-    // someone else's order.
-    const isRequester = h.requester_user_id != null && h.requester_user_id === this.ctx.userId;
-    if (!isRequester && !can(this.ctx, 'orders:approve')) {
-      throw new ServiceError(
-        'forbidden',
-        'Only the requester or someone who can approve orders may add items to it.',
-      );
-    }
-    // Same warehouse gate create() applies.
-    await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+    const h = await this.loadEditableOrderHeader(id, {
+      inTransit: 'This order is already out for delivery — create a new order for the extra items.',
+      forbidden: 'Only the requester or someone who can approve orders may add items to it.',
+    });
 
     // Validate items exactly like create(): must exist in-org, sit in THIS
     // order's warehouse, and not be an unreceived (expected) phantom.
@@ -1084,13 +1090,15 @@ export class OrderRequestsService {
       .in('id', itemIds);
     if (iErr) throw new ServiceError('internal_error', iErr.message);
     const itemMap = new Map(
-      ((items ?? []) as Array<{
-        id: string;
-        name: string;
-        warehouse_id: string | null;
-        unit_cost: number;
-        awaiting_first_receipt: boolean;
-      }>).map((r) => [r.id, r]),
+      (
+        (items ?? []) as Array<{
+          id: string;
+          name: string;
+          warehouse_id: string | null;
+          unit_cost: number;
+          awaiting_first_receipt: boolean;
+        }>
+      ).map((r) => [r.id, r]),
     );
     for (const l of lines) {
       const it = itemMap.get(l.itemId);
@@ -1127,17 +1135,41 @@ export class OrderRequestsService {
 
     let merged = 0;
     let added = 0;
+    // Service role: see the note on the merge branch below.
+    const admin = createAdminClient();
     const toInsert: Array<Record<string, unknown>> = [];
     for (const [itemId, qty] of wanted) {
       const prior = existingByItem.get(itemId);
       if (prior) {
-        const { error: uErr } = await this.ctx.supabase
+        // PRIVILEGED write. order_request_lines carries RLS policies
+        // order_request_lines_no_update / _no_delete, both USING false (mig
+        // 0049, deliberate: "once a line is created it shouldn't be mutated
+        // outside the SQL approve/deliver/cancel functions"). Through the
+        // USER client this UPDATE therefore matched ZERO rows and PostgREST
+        // returned no error, so the top-up silently did nothing while the
+        // caller was told it merged. Shipped that way this morning and caught
+        // in review the same day.
+        //
+        // Opening RLS is the WRONG fix: policies are row-level, not
+        // column-level, so an UPDATE policy permissive enough to allow this
+        // would also let any requester write quantity_fulfilled/quantity_picked
+        // straight through PostgREST. The gates live in this method; the write
+        // goes through the service role, scoped to the line AND the order.
+        const { data: mergedRow, error: uErr } = await admin
           .from('order_request_lines')
           .update({ quantity_requested: Number(prior.quantity_requested) + qty })
           .eq('id', prior.id)
+          .eq('order_request_id', h.id)
           .select('id')
           .maybeSingle();
         if (uErr) throw new ServiceError('internal_error', uErr.message);
+        // Fail CLOSED: no row back means nothing changed, so never report success.
+        if (!mergedRow) {
+          throw new ServiceError(
+            'internal_error',
+            'Could not update the existing line. Nothing was changed.',
+          );
+        }
         merged += 1;
       } else {
         toInsert.push({
@@ -1182,6 +1214,277 @@ export class OrderRequestsService {
     return { added, merged, pickSlipStale };
   }
 
+  /**
+   * Load ONE line of an order for editing, having already cleared the shared
+   * order-level gate. The line is fetched by (id, order_request_id) against a
+   * header that was itself scoped to the caller's organization, so a line id
+   * belonging to another order — or another org — comes back empty and is
+   * reported as not_found rather than silently editing nothing.
+   */
+  private async loadOwnLine(
+    orderId: string,
+    lineId: string,
+  ): Promise<{
+    id: string;
+    item_id: string;
+    quantity_requested: number;
+    quantity_fulfilled: number;
+    quantity_picked: number | null;
+    returned_quantity: number;
+  }> {
+    const { data, error } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select(
+        'id, item_id, quantity_requested, quantity_fulfilled, quantity_picked, returned_quantity',
+      )
+      .eq('id', lineId)
+      .eq('order_request_id', orderId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'That line is not on this order.');
+    return data as {
+      id: string;
+      item_id: string;
+      quantity_requested: number;
+      quantity_fulfilled: number;
+      quantity_picked: number | null;
+      returned_quantity: number;
+    };
+  }
+
+  /** Item display name for audit payloads — best-effort, never blocks the edit. */
+  private async lineItemName(itemId: string): Promise<string | null> {
+    const { data } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', itemId)
+      .maybeSingle();
+    return (data as { name?: string | null } | null)?.name ?? null;
+  }
+
+  /**
+   * Correct the quantity on an existing line — the other half of addLines
+   * (owner request 2026-07-22: "theres no way to ... edit the amount").
+   *
+   * Raising is just adding more, so it needs nothing beyond the shared gate.
+   * LOWERING is where the real-world constraints bite, and both are hard floors
+   * rather than warnings:
+   *  • never below quantity_fulfilled — those units were physically handed over
+   *    at pickup/delivery, and the record of what left the building must stand.
+   *  • never below quantity_picked — those units are STAGED on a cart or shelf
+   *    right now. Shrinking the request beneath them would strand physical
+   *    stock nobody is accountable for putting back.
+   */
+  async updateLineQuantity(
+    orderId: string,
+    lineId: string,
+    quantity: number,
+  ): Promise<{ pickSlipStale: boolean; quantity: number }> {
+    assertModuleEnabled(this.ctx, 'orders');
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new ServiceError(
+        'validation_error',
+        'Enter a quantity above zero, or remove the line instead.',
+      );
+    }
+
+    const h = await this.loadEditableOrderHeader(orderId, {
+      inTransit:
+        'This order is already out for delivery — its quantities are final. Record a return instead.',
+      forbidden:
+        'Only the requester or someone who can approve orders may change quantities on it.',
+    });
+    const line = await this.loadOwnLine(h.id, lineId);
+
+    const prior = Number(line.quantity_requested);
+    // A slip printed BEFORE this change no longer matches the order.
+    const pickSlipStale = h.pick_slip_generated_at != null;
+    // No-op: succeed quietly. Writing an audit row saying nothing changed only
+    // makes the order's history harder to read.
+    if (prior === quantity) return { pickSlipStale, quantity: prior };
+
+    if (quantity < prior) {
+      const fulfilled = Number(line.quantity_fulfilled ?? 0);
+      if (quantity < fulfilled) {
+        throw new ServiceError(
+          'conflict',
+          `${fulfilled} of these have already been handed over — the quantity can't go below ${fulfilled}.`,
+        );
+      }
+      const picked = Number(line.quantity_picked ?? 0);
+      if (quantity < picked) {
+        throw new ServiceError(
+          'conflict',
+          `${picked} of these are already picked and staged — unstage them or finish fulfilling this line before lowering the quantity below ${picked}.`,
+        );
+      }
+    }
+
+    const admin = createAdminClient();
+    // PRIVILEGED, and fail CLOSED — see the note in addLines' merge branch.
+    // RLS forbids end-user UPDATE on this table by design, so the user client
+    // would match zero rows and report success.
+    const { data: changed, error: uErr } = await admin
+      .from('order_request_lines')
+      .update({ quantity_requested: quantity })
+      .eq('id', line.id)
+      .eq('order_request_id', h.id)
+      .select('id')
+      .maybeSingle();
+    if (uErr) throw new ServiceError('internal_error', uErr.message);
+    if (!changed) {
+      throw new ServiceError(
+        'conflict',
+        'That line changed while you were editing it. Refresh and try again.',
+      );
+    }
+
+    await audit(
+      {
+        event: 'order_request.line_quantity_changed',
+        entityType: 'order_request',
+        entityId: h.id,
+        before: { lineId: line.id, itemId: line.item_id, quantity: prior },
+        after: {
+          lineId: line.id,
+          itemId: line.item_id,
+          itemName: await this.lineItemName(line.item_id),
+          quantity,
+          statusWhenChanged: h.status,
+          pickSlipStale,
+        },
+      },
+      this.ctx,
+    );
+
+    return { pickSlipStale, quantity };
+  }
+
+  /**
+   * Remove a line added in error. Deliberately narrower than a quantity change:
+   * a line that has ANY history against it — handed over, staged, or returned —
+   * is a record of something that physically happened and is never deleted.
+   *
+   * The reservation check is the subtle one. stock_reservations is keyed by
+   * (order_request_id, item_id), NOT by line id, so deleting the line while an
+   * un-released reservation still points at that item would leave stock
+   * committed to an order that no longer asks for it — invisible shrinkage.
+   * Regenerating the pick slip (or unstaging) releases them first.
+   *
+   * Removing the LAST line is refused too: an order with no lines isn't a
+   * meaningful record, and cancel() is the operation that actually means "this
+   * order is not happening".
+   */
+  async removeLine(
+    orderId: string,
+    lineId: string,
+  ): Promise<{ pickSlipStale: boolean; removedItemId: string }> {
+    assertModuleEnabled(this.ctx, 'orders');
+
+    const h = await this.loadEditableOrderHeader(orderId, {
+      inTransit:
+        'This order is already out for delivery — its contents are final. Record a return instead.',
+      forbidden: 'Only the requester or someone who can approve orders may remove items from it.',
+    });
+    const line = await this.loadOwnLine(h.id, lineId);
+
+    const fulfilled = Number(line.quantity_fulfilled ?? 0);
+    if (fulfilled > 0) {
+      throw new ServiceError(
+        'conflict',
+        `${fulfilled} of these have already been handed over — this line can't be removed. Lower the quantity instead, or record a return.`,
+      );
+    }
+    const picked = Number(line.quantity_picked ?? 0);
+    if (picked > 0) {
+      throw new ServiceError(
+        'conflict',
+        `${picked} of these are already picked and staged — unstage them first, then remove the line.`,
+      );
+    }
+    const returned = Number(line.returned_quantity ?? 0);
+    if (returned > 0) {
+      throw new ServiceError(
+        'conflict',
+        'This line has returns recorded against it and has to stay on the order for the history to make sense.',
+      );
+    }
+
+    // Reservations are per (order, item) — see getDetail. An un-released row
+    // means stock is still committed to this order for that item.
+    const { data: reservations, error: rErr } = await this.ctx.supabase
+      .from('stock_reservations')
+      .select('id')
+      .eq('order_request_id', h.id)
+      .eq('item_id', line.item_id)
+      .is('released_at', null)
+      .limit(1);
+    if (rErr) throw new ServiceError('internal_error', rErr.message);
+    if ((reservations ?? []).length > 0) {
+      throw new ServiceError(
+        'conflict',
+        'Stock is still reserved for this item — unstage the order or regenerate the pick slip to release it, then remove the line.',
+      );
+    }
+
+    // Last line standing: an empty order is not a record anyone can act on.
+    const { data: siblings, error: sErr } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('id')
+      .eq('order_request_id', h.id);
+    if (sErr) throw new ServiceError('internal_error', sErr.message);
+    if ((siblings ?? []).length <= 1) {
+      throw new ServiceError(
+        'conflict',
+        'This is the only item on the order — cancel the order instead of emptying it.',
+      );
+    }
+
+    const admin = createAdminClient();
+    // PRIVILEGED, and fail CLOSED — RLS forbids end-user DELETE here by design
+    // (mig 0049), so the user client would delete nothing and report success.
+    const { data: deleted, error: dErr } = await admin
+      .from('order_request_lines')
+      .delete()
+      .eq('id', line.id)
+      .eq('order_request_id', h.id)
+      .select('id')
+      .maybeSingle();
+    if (dErr) throw new ServiceError('internal_error', dErr.message);
+    if (!deleted) {
+      throw new ServiceError(
+        'conflict',
+        'That line was already removed. Refresh to see the current order.',
+      );
+    }
+
+    const pickSlipStale = h.pick_slip_generated_at != null;
+    await audit(
+      {
+        event: 'order_request.line_removed',
+        entityType: 'order_request',
+        entityId: h.id,
+        before: {
+          lineId: line.id,
+          itemId: line.item_id,
+          itemName: await this.lineItemName(line.item_id),
+          quantity: Number(line.quantity_requested),
+        },
+        after: {
+          lineId: line.id,
+          itemId: line.item_id,
+          quantity: 0,
+          statusWhenRemoved: h.status,
+          pickSlipStale,
+        },
+      },
+      this.ctx,
+    );
+
+    return { pickSlipStale, removedItemId: line.item_id };
+  }
+
   async cancel(id: string, reason?: string | null): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
     // C2: gate on the same permission used to create a request. The
@@ -1196,11 +1499,7 @@ export class OrderRequestsService {
     // cancel could orphan downstream work — managers must take that
     // path explicitly. Managers themselves are unaffected: the RPC's
     // own role check still permits any non-terminal cancel.
-    if (
-      this.ctx.role !== 'owner' &&
-      this.ctx.role !== 'admin' &&
-      this.ctx.role !== 'manager'
-    ) {
+    if (this.ctx.role !== 'owner' && this.ctx.role !== 'admin' && this.ctx.role !== 'manager') {
       const { data: row } = await this.ctx.supabase
         .from('order_requests')
         .select('status, requester_user_id')
@@ -1351,7 +1650,9 @@ export class OrderRequestsService {
         details: `Auto-created from order ${so}. Needed by ${new Date(row.needed_by).toLocaleString('en-US')}.`,
         status: 'scheduled',
         order_request_id: row.id,
-        assigned_user_id: (row as unknown as { assigned_delivery_user_id?: string | null }).assigned_delivery_user_id ?? null,
+        assigned_user_id:
+          (row as unknown as { assigned_delivery_user_id?: string | null })
+            .assigned_delivery_user_id ?? null,
         created_by: this.ctx.userId,
       });
       if (error && error.code !== '23505') {
@@ -1362,11 +1663,12 @@ export class OrderRequestsService {
         });
       }
     } catch (e) {
-      void reportSrvError(e, { tag: 'orders.auto-schedule', organizationId: this.ctx.organizationId });
+      void reportSrvError(e, {
+        tag: 'orders.auto-schedule',
+        organizationId: this.ctx.organizationId,
+      });
     }
   }
-
-
 
   /**
    * Approve a knowingly-short order: reserve what's available now and let the
@@ -1407,9 +1709,6 @@ export class OrderRequestsService {
     void this.autoScheduleFromOrder(row);
     return row;
   }
-
-
-
 
   async generatePickSlip(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
@@ -1509,17 +1808,30 @@ export class OrderRequestsService {
         try {
           const { data: ln } = await this.ctx.supabase
             .from('order_request_lines')
-            .select('quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)')
+            .select(
+              'quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)',
+            )
             .eq('order_request_id', id);
-          items = ((ln ?? []) as { quantity_requested: number; quantity_fulfilled: number; item: { name: string; sku: string } | { name: string; sku: string }[] | null }[])
+          items = (
+            (ln ?? []) as {
+              quantity_requested: number;
+              quantity_fulfilled: number;
+              item: { name: string; sku: string } | { name: string; sku: string }[] | null;
+            }[]
+          )
             .map((l) => {
               const it = Array.isArray(l.item) ? l.item[0] : l.item;
-              const owed = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+              const owed = Math.max(
+                0,
+                (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+              );
               return it ? `${it.name} (${it.sku}) — ${owed} needed` : null;
             })
             .filter(Boolean)
             .join('; ');
-        } catch { /* message still useful without the list */ }
+        } catch {
+          /* message still useful without the list */
+        }
         throw new ServiceError(
           'validation_error',
           `Not enough PUT-AWAY stock to complete this pick. Part of this item's on-hand total is still in Staging (awaiting put-away) or unplaced, and picking can only draw from placed rack/crate stock. Fix: open Inventory → Staging, put away the needed units, then retry.${items ? ` Short line(s): ${items}.` : ''}`,
@@ -1602,7 +1914,10 @@ export class OrderRequestsService {
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Only a manager can close a backordered order.');
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'Only a backordered order can be closed as delivered-partial.');
+        throw new ServiceError(
+          'validation_error',
+          'Only a backordered order can be closed as delivered-partial.',
+        );
       throw new ServiceError('internal_error', 'Could not close the order.');
     }
     const row = data as OrderRequestRow;
@@ -1800,7 +2115,10 @@ export class OrderRequestsService {
       if (msg.includes('already_claimed'))
         throw new ServiceError('conflict', 'This order has already been claimed by someone else.');
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'This order is not in a claimable picking state.');
+        throw new ServiceError(
+          'validation_error',
+          'This order is not in a claimable picking state.',
+        );
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
@@ -1832,9 +2150,15 @@ export class OrderRequestsService {
     if (error) {
       const msg = error.message ?? '';
       if (msg.includes('invalid_picker'))
-        throw new ServiceError('validation_error', 'That user is not an active member of this organization.');
+        throw new ServiceError(
+          'validation_error',
+          'That user is not an active member of this organization.',
+        );
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'A picker can only be assigned while the order is being picked.');
+        throw new ServiceError(
+          'validation_error',
+          'A picker can only be assigned while the order is being picked.',
+        );
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
@@ -1957,7 +2281,9 @@ export class OrderRequestsService {
     // own). Lets a subscriber follow the full order lifecycle via one stream.
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
+      orderNumber:
+        formatOrderNumber((updated as OrderRequestRow).order_number) ??
+        id.slice(0, 8).toUpperCase(),
       status: 'packing_slip_generated',
     });
     // Owner decision 2026-07-20: the formerly-latent "being packaged" email
@@ -1991,10 +2317,7 @@ export class OrderRequestsService {
       );
     }
     if (target === 'staged_for_pickup' && r.fulfillment_type !== 'pickup') {
-      throw new ServiceError(
-        'validation_error',
-        'Only pickup orders can be staged for pickup.',
-      );
+      throw new ServiceError('validation_error', 'Only pickup orders can be staged for pickup.');
     }
     if (target === 'staged_for_delivery' && r.fulfillment_type !== 'delivery') {
       throw new ServiceError(
@@ -2036,9 +2359,7 @@ export class OrderRequestsService {
     await audit(
       {
         event:
-          target === 'staged_for_pickup'
-            ? 'order.staged_for_pickup'
-            : 'order.staged_for_delivery',
+          target === 'staged_for_pickup' ? 'order.staged_for_pickup' : 'order.staged_for_delivery',
         entityType: 'order_request',
         entityId: id,
       },
@@ -2047,7 +2368,9 @@ export class OrderRequestsService {
     // Generic lifecycle webhook (no dedicated topic for staging).
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
+      orderNumber:
+        formatOrderNumber((updated as OrderRequestRow).order_number) ??
+        id.slice(0, 8).toUpperCase(),
       status: target,
     });
     // Owner decision 2026-07-20: the formerly-latent "is ready" email is
@@ -2116,11 +2439,7 @@ export class OrderRequestsService {
       this.ctx,
     );
     // Bell/toast for the assignee (gated by their push pref).
-    void this.notifyAssignment(
-      deliveryUserId,
-      id,
-      (updated as OrderRequestRow).requester_name,
-    );
+    void this.notifyAssignment(deliveryUserId, id, (updated as OrderRequestRow).requester_name);
     // Keep the auto-created schedule event pointed at the current driver so
     // reminder pushes/emails reach the right person. Fire-and-forget; awaited
     // internally (bug-pattern #22: a bare void on a BUILDER is a no-op, so
@@ -2132,7 +2451,10 @@ export class OrderRequestsService {
           .update({ assigned_user_id: deliveryUserId })
           .eq('order_request_id', id);
       } catch (e) {
-        void reportSrvError(e, { tag: 'orders.auto-schedule.assign', organizationId: this.ctx.organizationId });
+        void reportSrvError(e, {
+          tag: 'orders.auto-schedule.assign',
+          organizationId: this.ctx.organizationId,
+        });
       }
     })();
     return updated as OrderRequestRow;
@@ -2162,22 +2484,13 @@ export class OrderRequestsService {
       fulfillment_type: 'pickup' | 'delivery';
     };
     if (r.fulfillment_type !== 'delivery') {
-      throw new ServiceError(
-        'validation_error',
-        'Only delivery orders can be marked in transit.',
-      );
+      throw new ServiceError('validation_error', 'Only delivery orders can be marked in transit.');
     }
     if (r.status !== 'staged_for_delivery') {
-      throw new ServiceError(
-        'validation_error',
-        'Order must be staged for delivery first.',
-      );
+      throw new ServiceError('validation_error', 'Order must be staged for delivery first.');
     }
     if (!r.assigned_delivery_user_id) {
-      throw new ServiceError(
-        'validation_error',
-        'Assign a driver before marking in transit.',
-      );
+      throw new ServiceError('validation_error', 'Assign a driver before marking in transit.');
     }
 
     // The action layer permits assigned-driver OR manager+. Check role
@@ -2204,10 +2517,7 @@ export class OrderRequestsService {
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
     const finalRow = updated as OrderRequestRow;
-    await audit(
-      { event: 'order.in_transit', entityType: 'order_request', entityId: id },
-      this.ctx,
-    );
+    await audit({ event: 'order.in_transit', entityType: 'order_request', entityId: id }, this.ctx);
     // Best-effort: notify requester the order is on the way.
     void this.notifyEmail(finalRow, 'in_transit');
     void dispatchEvent(this.ctx.organizationId, 'order.in_transit', {
@@ -2306,10 +2616,7 @@ export class OrderRequestsService {
    * exist or isn't in the caller's org. Returns the warehouse_id so
    * callers can reuse it (e.g. setStatus → warehouse-status lookup).
    */
-  private async requireWarehouseAccess(
-    requestId: string,
-    op: 'read' | 'write',
-  ): Promise<string> {
+  private async requireWarehouseAccess(requestId: string, op: 'read' | 'write'): Promise<string> {
     const { data, error } = await this.ctx.supabase
       .from('order_requests')
       .select('warehouse_id')
@@ -2348,8 +2655,7 @@ export class OrderRequestsService {
       .maybeSingle();
     if (readErr) throw new ServiceError('internal_error', readErr.message);
     const oldToken =
-      (orgRow as { public_request_token: string | null } | null)
-        ?.public_request_token ?? null;
+      (orgRow as { public_request_token: string | null } | null)?.public_request_token ?? null;
     const { error } = await this.ctx.supabase
       .from('organizations')
       .update({
@@ -2469,10 +2775,7 @@ export class OrderRequestsService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
-  async setWarehousePublicOrderable(
-    warehouseId: string,
-    on: boolean,
-  ): Promise<void> {
+  async setWarehousePublicOrderable(warehouseId: string, on: boolean): Promise<void> {
     assertModuleEnabled(this.ctx, 'public_requests');
     // C1: writes `warehouses.is_public_orderable`; `warehouses_admin_write`
     // RLS requires admin+. Was previously `orders:approve` (manager+) which
@@ -2549,8 +2852,7 @@ export class OrderRequestsService {
           .eq('id', this.ctx.organizationId)
           .maybeSingle();
         publicRequestToken =
-          (orgRow as { public_request_token?: string | null } | null)
-            ?.public_request_token ?? null;
+          (orgRow as { public_request_token?: string | null } | null)?.public_request_token ?? null;
       }
       await sendOrderRequestEmail({
         kind,
