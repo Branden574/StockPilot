@@ -23,6 +23,9 @@ export function PoScanForm() {
   const [files, setFiles] = React.useState<File[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
+  // When 2+ files are attached: true = each file is its OWN PO import (default);
+  // false = combine them as pages of ONE PO. Ignored for a single file.
+  const [separate, setSeparate] = React.useState(true);
   // Optimistic extraction progress. The scan is one request (upload + Gemini
   // vision, ~6-10s) with no server-streamed progress, so we ease a bar to ~92%
   // over ~13s on elapsed time, hold there until the response lands, then snap to
@@ -94,6 +97,8 @@ export function PoScanForm() {
     try {
       const fd = new FormData();
       for (const f of files) fd.append('file', f);
+      // Only meaningful for 2+ files; the server ignores it otherwise.
+      fd.append('mode', files.length > 1 && separate ? 'separate' : 'combined');
       const res = await fetch('/api/po-imports/scan', {
         method: 'POST',
         body: fd,
@@ -105,6 +110,19 @@ export function PoScanForm() {
       }
       stopProgress();
       setPct(100);
+
+      // Separate mode: N imports created — land on the Active list to review
+      // each one-by-one (there's no single detail to open).
+      if (json.mode === 'separate' && Array.isArray(json.imports)) {
+        const made = json.imports.length as number;
+        const failed = Array.isArray(json.failed) ? json.failed.length : 0;
+        toast.success(
+          `${made} import${made === 1 ? '' : 's'} created${failed > 0 ? ` · ${failed} file${failed === 1 ? '' : 's'} couldn't be read` : ''}. Review and approve each below.`,
+        );
+        router.push('/dashboard/purchase-orders/imports?status=active');
+        return;
+      }
+
       if (json.duplicateOf) {
         toast.success('Already scanned earlier. Opening the existing import.');
       } else if (json.lowConfidenceLines > 0) {
@@ -185,6 +203,46 @@ export function PoScanForm() {
             </li>
           ))}
         </ul>
+      )}
+
+      {files.length > 1 && !busy && (
+        <div className="border-border bg-muted/30 space-y-2 rounded-lg border p-3">
+          <p className="text-xs font-medium">
+            You attached {files.length} files — are these…
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setSeparate(true)}
+              className={cn(
+                'rounded-md border px-3 py-2 text-left text-xs transition-colors',
+                separate
+                  ? 'border-foreground/60 bg-card'
+                  : 'border-border hover:bg-muted/40',
+              )}
+            >
+              <span className="block font-medium">Separate POs</span>
+              <span className="text-muted-foreground">
+                Each file becomes its own import to review &amp; approve
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSeparate(false)}
+              className={cn(
+                'rounded-md border px-3 py-2 text-left text-xs transition-colors',
+                !separate
+                  ? 'border-foreground/60 bg-card'
+                  : 'border-border hover:bg-muted/40',
+              )}
+            >
+              <span className="block font-medium">One multi-page PO</span>
+              <span className="text-muted-foreground">
+                Combine all files as pages of a single PO
+              </span>
+            </button>
+          </div>
+        </div>
       )}
 
       {busy ? (

@@ -141,8 +141,64 @@ export async function POST(req: Request) {
     })),
   );
 
+  // Multi-file scans default to "each file is its own PO" (separate) so a batch
+  // of distinct POs isn't merged into one jumbled import. The caller sends
+  // mode='combined' only when the files are really pages of ONE PO. A single
+  // file has nothing to separate.
+  const mode =
+    form.get('mode') === 'combined' || files.length < 2 ? 'combined' : 'separate';
+
+  const svc = new PoImportsService(ctx);
+
+  if (mode === 'separate') {
+    // One import per file, extracted independently. A file that isn't a
+    // readable PO is skipped and reported — it must not sink the whole batch.
+    const imports: Array<{
+      id: string;
+      fileName: string;
+      duplicateOf: string | null;
+      lowConfidenceLines: number;
+    }> = [];
+    const failed: Array<{ fileName: string; message: string }> = [];
+    for (const file of files) {
+      try {
+        const r = await svc.createFromScan({ files: [file], vendorId, warehouseId });
+        imports.push({
+          id: r.id,
+          fileName: file.fileName,
+          duplicateOf: r.duplicateOf,
+          lowConfidenceLines: r.lowConfidenceLines,
+        });
+      } catch (e) {
+        const message =
+          e instanceof ServiceError
+            ? e.message
+            : 'Could not read this file as a purchase order.';
+        if (!(e instanceof ServiceError)) {
+          void reportError(e, {
+            tag: 'po-imports.scan.separate',
+            organizationId: ctx.organizationId,
+            userIdHash: ctx.userId,
+          });
+        }
+        failed.push({ fileName: file.fileName, message });
+      }
+    }
+    if (imports.length === 0) {
+      return NextResponse.json(
+        {
+          error: 'validation_error',
+          message:
+            failed[0]?.message ??
+            'None of the files could be read as a purchase order.',
+        },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json({ ok: true, mode: 'separate', imports, failed });
+  }
+
   try {
-    const svc = new PoImportsService(ctx);
     const result = await svc.createFromScan({ files, vendorId, warehouseId });
     return NextResponse.json({
       ok: true,
