@@ -10,6 +10,9 @@ import { lookupUpc, buildAiDescriptionPrompt } from '@/lib/upc-lookup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// UPC/AI lookup — an external + model round-trip that can exceed the ~15s
+// default. (Not under a vercel.json functions glob.)
+export const maxDuration = 60;
 
 /**
  * UPC enrichment endpoint. Mobile/desktop call this AFTER the local

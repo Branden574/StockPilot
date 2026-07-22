@@ -22,6 +22,9 @@ import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Large-org CSV/Excel/PDF export can take a while. (api/inventory is not under a
+// vercel.json functions glob, so set the budget inline.)
+export const maxDuration = 60;
 
 // Unified inventory export: any scope (selected / filtered / all) × any format
 // (csv / xlsx / pdf). POST (not GET) so a large "export selected" id list isn't

@@ -10,6 +10,9 @@ import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// AI vision call — can take 15-25s on a large photo; without this it inherits
+// Vercel's ~15s default and 504s. (Not under a vercel.json functions glob.)
+export const maxDuration = 60;
 
 const VISION_MAX_BYTES = 6 * 1024 * 1024;
 

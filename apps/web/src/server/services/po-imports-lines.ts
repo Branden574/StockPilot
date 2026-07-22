@@ -262,11 +262,22 @@ export async function createItemsFromPoLines(
   // lines (cross-tenant pollution). This explicit guard fails closed.
   const { data: importHeader } = await supabase
     .from('po_imports')
-    .select('id')
+    .select('id, status')
     .eq('organization_id', organizationId)
     .eq('id', input.poImportId)
     .maybeSingle();
   if (!importHeader) throw new ServiceError('not_found', 'PO import not found');
+  // Terminal-status gate (mirrors approve() / parseImport()): creating items from
+  // a finished import would spawn orphan inventory unrelated to its already-made
+  // PO. The web review UI hides the Create buttons on approved/canceled imports;
+  // this guards the SHARED service + the Bearer /api/v1/po-imports/[id]/create-items
+  // route (mobile) too, so neither path can mutate a closed import.
+  if (importHeader.status === 'approved' || importHeader.status === 'canceled') {
+    throw new ServiceError(
+      'conflict',
+      `This import is ${importHeader.status} and can no longer have items created from it.`,
+    );
+  }
 
   // Pull just the lines we're creating items for. RLS guarantees the
   // import belongs to the caller's org.

@@ -17,6 +17,9 @@ import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Movement history export can be very large. (api/movements is not under a
+// vercel.json functions glob, so set the budget inline.)
+export const maxDuration = 60;
 
 const ROW_CAP = 10_000;
 

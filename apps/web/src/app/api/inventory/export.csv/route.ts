@@ -17,6 +17,9 @@ import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Large-org CSV export can stream many thousands of rows. (api/inventory is not
+// under a vercel.json functions glob, so set the budget inline.)
+export const maxDuration = 60;
 
 const ROW_CAP = 10_000;
 
