@@ -80,9 +80,23 @@ export function PoUploadForm() {
         return;
       }
       if (recorded.data.duplicateOf) {
-        toast.message('Duplicate file — opening existing import.');
+        // Still a genuine duplicate: the file's previous import is either
+        // in-flight or produced a PO that is still live.
+        toast.message('This file is already imported — opening that import.');
         router.push(`/dashboard/purchase-orders/imports/${recorded.data.duplicateOf}`);
         return;
+      }
+      if (recorded.data.reimportOfCancelled) {
+        // The previous import's PO was CANCELLED, so this is a legitimate redo
+        // (e.g. the original was approved against the wrong charter). The
+        // cancelled PO and its import are preserved; this is a new import
+        // linked back to them.
+        const po = recorded.data.reimportOfCancelled.cancelledPoNumber;
+        toast.success(
+          po
+            ? `Re-importing — the previous ${po} was cancelled. That record is kept for history.`
+            : 'Re-importing — the previous purchase order was cancelled. That record is kept for history.',
+        );
       }
 
       const parsed = await parsePoImportAction(recorded.data.id);

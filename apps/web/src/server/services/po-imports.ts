@@ -256,7 +256,18 @@ export class PoImportsService {
     fileMimeType: string;
     fileSize: number;
     sha256: string;
-  }): Promise<{ id: string; duplicateOf: string | null }> {
+  }): Promise<{
+    id: string;
+    duplicateOf: string | null;
+    /** Set when this upload re-uses a file whose previous import produced a
+     *  CANCELLED purchase order — the UI shows the reimport notice instead of
+     *  bouncing the user to the dead predecessor. */
+    reimportOfCancelled: {
+      predecessorImportId: string;
+      cancelledPoId: string | null;
+      cancelledPoNumber: string | null;
+    } | null;
+  }> {
     assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
@@ -273,16 +284,14 @@ export class PoImportsService {
       );
     }
 
-    // Duplicate check: same org + same checksum + status not in failed/canceled/duplicate.
-    const { data: dup } = await this.ctx.supabase
-      .from('po_imports')
-      .select('id, status')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('sha256', input.sha256)
-      .not('status', 'in', '(failed,canceled,duplicate)')
-      .maybeSingle();
-    if (dup) {
-      return { id: dup.id as string, duplicateOf: dup.id as string };
+    // Duplicate decision — see resolveDuplicateBySha256 for the full rule.
+    const decision = await this.resolveDuplicateBySha256(input.sha256);
+    if (decision.kind === 'blocked') {
+      return {
+        id: decision.importId,
+        duplicateOf: decision.importId,
+        reimportOfCancelled: null,
+      };
     }
 
     const { data, error } = await this.ctx.supabase
@@ -297,6 +306,10 @@ export class PoImportsService {
         storage_path: input.storagePath,
         sha256: input.sha256,
         status: 'uploaded',
+        // Lineage (mig 0286): preserve the cancelled predecessor, don't mutate it.
+        reimported_from_id: decision.kind === 'reimport_after_cancelled'
+          ? decision.predecessorImportId
+          : null,
       })
       .select('id')
       .single();
@@ -306,11 +319,122 @@ export class PoImportsService {
         event: 'po_import.uploaded',
         entityType: 'po_import',
         entityId: data.id as string,
-        after: { fileName: input.fileName, sha256: input.sha256 },
+        after: {
+          fileName: input.fileName,
+          sha256: input.sha256,
+          ...(decision.kind === 'reimport_after_cancelled'
+            ? {
+                reimportOfCancelled: true,
+                predecessorImportId: decision.predecessorImportId,
+                cancelledPoId: decision.cancelledPoId,
+                cancelledPoNumber: decision.cancelledPoNumber,
+              }
+            : {}),
+        },
       },
       this.ctx,
     );
-    return { id: data.id as string, duplicateOf: null };
+    return {
+      id: data.id as string,
+      duplicateOf: null,
+      reimportOfCancelled:
+        decision.kind === 'reimport_after_cancelled'
+          ? {
+              predecessorImportId: decision.predecessorImportId,
+              cancelledPoId: decision.cancelledPoId,
+              cancelledPoNumber: decision.cancelledPoNumber,
+            }
+          : null,
+    };
+  }
+
+  /**
+   * THE authoritative same-file duplicate decision, shared by every import
+   * path (CSV/PDF upload AND the AI scan) so they can never drift.
+   *
+   * A file is fingerprinted by sha256 per org. A prior import blocks a re-upload
+   * UNLESS every prior import of that file is dead — i.e. it produced a purchase
+   * order that has since been CANCELLED. That is the real-world case this
+   * exists for: a PO approved against the wrong charter gets cancelled, and the
+   * same document must be importable again to redo it. Cancelling a PO does NOT
+   * touch the po_imports row (it stays 'approved'), which is exactly why the
+   * naive `status not in (failed,canceled,duplicate)` check blocked forever.
+   *
+   * Deliberately NOT relaxed for: an in-flight import that never produced a PO
+   * (re-uploading should resume that one, not spawn a twin), or an import whose
+   * PO is active / partially received / completed — those keep blocking, so
+   * duplicate protection for live purchasing is untouched.
+   *
+   * Returns the NEWEST cancelled predecessor for lineage. Org-scoped throughout,
+   * so another organization's identical file is irrelevant.
+   */
+  private async resolveDuplicateBySha256(sha256: string): Promise<
+    | { kind: 'no_duplicate' }
+    | { kind: 'blocked'; importId: string }
+    | {
+        kind: 'reimport_after_cancelled';
+        predecessorImportId: string;
+        cancelledPoId: string | null;
+        cancelledPoNumber: string | null;
+      }
+  > {
+    // NOT maybeSingle(): once a reimport is allowed, several imports legitimately
+    // share a hash, and maybeSingle() throws on >1 row (PGRST116) — that would
+    // break the SECOND reimport of the same file.
+    const { data: priors, error } = await this.ctx.supabase
+      .from('po_imports')
+      .select('id, status, approved_po_id, created_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('sha256', sha256)
+      .not('status', 'in', '(failed,canceled,duplicate)')
+      .order('created_at', { ascending: false });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    const rows = (priors ?? []) as Array<{
+      id: string;
+      status: string;
+      approved_po_id: string | null;
+      created_at: string;
+    }>;
+    if (rows.length === 0) return { kind: 'no_duplicate' };
+
+    // An import that never produced a PO still blocks — re-uploading should land
+    // the user back on that in-flight import rather than create a twin.
+    const inFlight = rows.find((r) => !r.approved_po_id);
+    if (inFlight) return { kind: 'blocked', importId: inFlight.id };
+
+    const poIds = [...new Set(rows.map((r) => r.approved_po_id).filter((v): v is string => !!v))];
+    const { data: pos, error: poErr } = await this.ctx.supabase
+      .from('purchase_orders')
+      .select('id, status, po_number')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', poIds);
+    if (poErr) throw new ServiceError('internal_error', poErr.message);
+    const poById = new Map(
+      ((pos ?? []) as Array<{ id: string; status: string; po_number: string | null }>).map((p) => [
+        p.id,
+        p,
+      ]),
+    );
+
+    // Any prior whose PO is still alive (active / ordered / partially or fully
+    // received / completed) keeps blocking. Only 'cancelled' frees the file.
+    for (const r of rows) {
+      const po = r.approved_po_id ? poById.get(r.approved_po_id) : undefined;
+      // A missing/foreign PO row is treated as still-blocking (fail closed).
+      if (!po || po.status !== 'cancelled') {
+        return { kind: 'blocked', importId: r.id };
+      }
+    }
+
+    const newest = rows[0]!;
+    const po = newest.approved_po_id ? poById.get(newest.approved_po_id) : undefined;
+    return {
+      kind: 'reimport_after_cancelled',
+      predecessorImportId: newest.id,
+      cancelledPoId: po?.id ?? null,
+      cancelledPoNumber: po?.po_number ?? null,
+    };
   }
 
   /**
@@ -349,21 +473,22 @@ export class PoImportsService {
     }
     const sha256 = hash.digest('hex');
 
-    // Duplicate check on the same scan (re-uploading the same bytes).
-    const { data: dup } = await this.ctx.supabase
-      .from('po_imports')
-      .select('id, status')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('sha256', sha256)
-      .not('status', 'in', '(failed,canceled,duplicate)')
-      .maybeSingle();
-    if (dup) {
+    // Duplicate check on the same scan (re-uploading the same bytes). Uses the
+    // SAME authoritative decision as the CSV/PDF upload path, so a cancelled
+    // PO's source document can be re-scanned to redo it while a live PO's
+    // document still blocks. See resolveDuplicateBySha256.
+    const scanDecision = await this.resolveDuplicateBySha256(sha256);
+    if (scanDecision.kind === 'blocked') {
       return {
-        id: dup.id as string,
-        duplicateOf: dup.id as string,
+        id: scanDecision.importId,
+        duplicateOf: scanDecision.importId,
         lowConfidenceLines: 0,
       };
     }
+    const reimportedFromId =
+      scanDecision.kind === 'reimport_after_cancelled'
+        ? scanDecision.predecessorImportId
+        : null;
 
     // Upload each file to storage. Use the admin client because the
     // standard po-imports bucket policy expects user-uploaded paths;
@@ -415,6 +540,7 @@ export class PoImportsService {
         storage_path: storagePath,
         sha256,
         status,
+        reimported_from_id: reimportedFromId,
         parsed_json: extracted,
         extraction_confidence: extracted.overallConfidence,
         extraction_model: SCAN_MODEL_NAME,

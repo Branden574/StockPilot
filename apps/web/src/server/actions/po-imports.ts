@@ -78,7 +78,20 @@ export async function recordPoUploadAction(input: {
   fileSize: number;
   sha256: string;
   sourceType: 'pdf' | 'csv' | 'xlsx' | 'manual';
-}): Promise<ActionResult<{ id: string; duplicateOf: string | null }>> {
+}): Promise<
+  ActionResult<{
+    id: string;
+    duplicateOf: string | null;
+    /** Set when the file's previous import produced a CANCELLED purchase order
+     *  — a legitimate redo (e.g. the original was approved against the wrong
+     *  charter), not a duplicate. The cancelled PO + its import are preserved. */
+    reimportOfCancelled: {
+      predecessorImportId: string;
+      cancelledPoId: string | null;
+      cancelledPoNumber: string | null;
+    } | null;
+  }>
+> {
   const parsed = recordSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid upload metadata');
   try {
