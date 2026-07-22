@@ -22,7 +22,14 @@ import { radius, space, theme } from '@/lib/theme';
 const LABELS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'] as const;
 const COMPRESS_MAX = 1280;
 const COMPRESS_QUALITY = 0.85;
-const BURST_COUNT = 5;
+/** Burst sizes the shutter cycles through. 1 = burst off (single shot).
+ *  Bigger bursts let one framing produce many training frames — the tool
+ *  button cycles 1 → 5 → 20 → 50 → 1. */
+const BURST_STEPS = [1, 5, 20, 50] as const;
+/** Above this burst size, yield briefly between frames so the JS thread can
+ *  drain the bounded upload queue and repaint the in-flight counter instead of
+ *  blocking on a tight 50-iteration capture loop. */
+const BURST_YIELD_ABOVE = 5;
 
 /**
  * Opt-in training-data capture with three speed paths:
@@ -38,7 +45,7 @@ export default function TrainingCaptureScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = React.useRef<CameraView>(null);
   const [busy, setBusy] = React.useState(false); // capturing (blocks the shutter briefly)
-  const [burst, setBurst] = React.useState(false);
+  const [burstCount, setBurstCount] = React.useState<number>(1);
   const [inFlight, setInFlight] = React.useState(0); // uploads still in progress
   const [failed, setFailed] = React.useState(0);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
@@ -136,13 +143,19 @@ export default function TrainingCaptureScreen() {
       if (busy || !cameraRef.current) return;
       setBusy(true);
       try {
-        const n = burst ? BURST_COUNT : 1;
+        const n = burstCount;
         for (let i = 0; i < n; i++) {
           const shot = await cameraRef.current.takePictureAsync({
             quality: 0.7,
             skipProcessing: true, // faster shutter; fine for training frames
           });
           if (shot?.uri) enqueueUpload(shot.uri, label, isNegative);
+          // Long bursts (20/50): hand the JS thread back between frames so the
+          // upload queue drains and the in-flight counter repaints. Skipped for
+          // small bursts to keep the 5-shot path as fast as it was.
+          if (n > BURST_YIELD_ABOVE && i < n - 1) {
+            await new Promise((r) => setTimeout(r, 40));
+          }
         }
       } catch {
         setFailed((f) => f + 1);
@@ -150,7 +163,7 @@ export default function TrainingCaptureScreen() {
         setBusy(false);
       }
     },
-    [busy, burst, enqueueUpload],
+    [busy, burstCount, enqueueUpload],
   );
 
   // Import: pick many photos from the library, then label them all at once.
@@ -236,11 +249,18 @@ export default function TrainingCaptureScreen() {
         <View style={styles.panel} pointerEvents="auto">
           <View style={styles.toolRow}>
             <Pressable
-              onPress={() => setBurst((b) => !b)}
-              style={[styles.toolBtn, burst && styles.toolBtnOn]}
+              // Cycles 1 → 5 → 20 → 50 → 1 so one tap-and-frame can produce a
+              // whole batch of training frames.
+              onPress={() =>
+                setBurstCount((c) => {
+                  const i = BURST_STEPS.indexOf(c as (typeof BURST_STEPS)[number]);
+                  return BURST_STEPS[(i + 1) % BURST_STEPS.length] ?? 1;
+                })
+              }
+              style={[styles.toolBtn, burstCount > 1 && styles.toolBtnOn]}
             >
-              <Text style={[styles.toolLabel, burst && styles.toolLabelOn]}>
-                {burst ? `Burst ×${BURST_COUNT}` : 'Burst off'}
+              <Text style={[styles.toolLabel, burstCount > 1 && styles.toolLabelOn]}>
+                {burstCount > 1 ? `Burst ×${burstCount}` : 'Burst off'}
               </Text>
             </Pressable>
             <Pressable onPress={pickPhotos} style={styles.toolBtn}>
