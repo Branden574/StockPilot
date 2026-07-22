@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { LocalDateTime } from '@/components/ui/local-datetime';
 import {
   Table,
   TableBody,
@@ -24,8 +25,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { reverseReceiptAction } from '@/server/actions/receiving';
 import { formatRelative } from '@/lib/utils';
+import { reverseReceiptAction } from '@/server/actions/receiving';
 
 import type {
   ReceiptLineRow,
@@ -34,19 +35,6 @@ import type {
 
 interface ItemLookup {
   [id: string]: { name: string; sku: string };
-}
-
-/** Absolute received date+time. Rendered inside a suppressHydrationWarning span. */
-function formatReceiptDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }
 
 const STATUS_COLORS: Record<ReceiptRow['status'], string> = {
@@ -149,8 +137,17 @@ function ReceiptCard({
           <span className={`rounded-full px-2 py-0.5 text-[11px] ${STATUS_COLORS[receipt.status]}`}>
             {receipt.status}
           </span>
-          <span className="text-muted-foreground text-xs" suppressHydrationWarning>
-            {formatReceiptDate(receipt.received_at)} · {formatRelative(receipt.received_at)}
+          {/* Relative for scanability + the viewer's own wall-clock time.
+              LocalDateTime renders CLIENT-side on purpose: this component is
+              SSR'd, and a toLocaleString() computed on the server prints the
+              container's timezone (UTC on Vercel). suppressHydrationWarning
+              used to sit here, which made that worse — it told React to KEEP
+              the server text, so a 9:47 AM receipt read "4:47 PM" forever.
+              Same order and prefix as the activity feed so timestamps read
+              identically across the app. */}
+          <span className="text-muted-foreground text-xs">
+            <time dateTime={receipt.received_at}>{formatRelative(receipt.received_at)}</time>
+            <LocalDateTime iso={receipt.received_at} prefix=" · " />
           </span>
           {receipt.received_by_name && (
             <span className="text-muted-foreground text-xs">

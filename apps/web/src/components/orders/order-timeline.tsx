@@ -1,3 +1,4 @@
+import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { createClient } from '@/lib/supabase/server';
 
@@ -206,8 +207,13 @@ export async function OrderTimeline({ orderId, organizationId }: Props) {
               <span className="font-medium">{label}</span>
               <span className="text-muted-foreground"> — {actor}</span>
             </div>
-            <div className="text-muted-foreground text-xs" suppressHydrationWarning>
-              {new Date(row.created_at).toLocaleString()}
+            {/* This is a SERVER component, so toLocaleString() ran in the
+                deployment's timezone (UTC on Vercel) and there was no
+                hydration pass to correct it — every entry showed a wall-clock
+                time hours off from the viewer's, permanently. LocalDateTime is
+                a client component that fills the text in after mount. */}
+            <div className="text-muted-foreground text-xs">
+              <LocalDateTime iso={row.created_at} />
             </div>
             {details.length > 0 && (
               <div className="text-muted-foreground mt-1 space-y-0.5 text-xs">
