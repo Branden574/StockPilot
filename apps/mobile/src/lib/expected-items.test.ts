@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StockStatus } from '@/components/filter-sheet';
-import { listStatusPredicate, stockPillFor } from './expected-items';
+import { listStatusPredicate, stockPill, stockPillFor } from './expected-items';
 
 describe('listStatusPredicate — expected-items visibility (mig 0277)', () => {
   it('every DEFAULT view excludes awaiting-first-receipt phantoms', () => {
@@ -78,5 +78,65 @@ describe('stockPillFor — EXPECTED replaces OUT for never-received items', () =
     expect(
       stockPillFor({ quantity_on_hand: 4, reorder_point: 0, awaiting_first_receipt: true }),
     ).toEqual({ status: 'warn', label: 'EXPECTED' });
+  });
+});
+
+describe('stockPill — ONE ladder for a collapsed header and the rows beneath it', () => {
+  // The Archived view defect: the collapsed header ran a ladder that handled
+  // lifecycle and the row pill ran one that did not, so a header reading
+  // ARCHIVED sat over placement rows that every one read OUT.
+  it('an archived row reads ARCHIVED, the same as the header over it', () => {
+    const header = stockPill({
+      expected: false,
+      lifecycle: 'archived',
+      quantity: 0,
+      reorderPoint: 0,
+    });
+    const row = stockPillFor({
+      quantity_on_hand: 0,
+      reorder_point: 0,
+      awaiting_first_receipt: false,
+      status: 'archived',
+    });
+    expect(header).toEqual({ status: 'default', label: 'ARCHIVED' });
+    expect(row).toEqual(header);
+  });
+
+  it('a discontinued row reads DISC, the same as the header over it', () => {
+    expect(
+      stockPillFor({
+        quantity_on_hand: 3,
+        reorder_point: 0,
+        awaiting_first_receipt: false,
+        status: 'discontinued',
+      }),
+    ).toEqual(
+      stockPill({ expected: false, lifecycle: 'discontinued', quantity: 3, reorderPoint: 0 }),
+    );
+  });
+
+  it('EXPECTED still outranks lifecycle on both surfaces', () => {
+    expect(
+      stockPillFor({
+        quantity_on_hand: 0,
+        reorder_point: 0,
+        awaiting_first_receipt: true,
+        status: 'archived',
+      }),
+    ).toEqual({ status: 'warn', label: 'EXPECTED' });
+  });
+
+  it('an active row is unaffected (no status supplied, or status active)', () => {
+    expect(
+      stockPillFor({ quantity_on_hand: 0, reorder_point: 0, awaiting_first_receipt: false }),
+    ).toEqual({ status: 'crit', label: 'OUT' });
+    expect(
+      stockPillFor({
+        quantity_on_hand: 0,
+        reorder_point: 0,
+        awaiting_first_receipt: false,
+        status: 'active',
+      }),
+    ).toEqual({ status: 'crit', label: 'OUT' });
   });
 });

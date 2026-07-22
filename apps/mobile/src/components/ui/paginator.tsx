@@ -33,22 +33,42 @@ function pageNumbers(current: number, total: number): Array<number | 'ellipsis'>
   return result;
 }
 
+/**
+ * Numbered pager for the grouped Items / Books lists.
+ *
+ * The caller supplies the page COUNT and the row RANGE this page covers rather
+ * than a page size to derive them from: those lists paginate over display
+ * GROUPS (a SKU family is never split across pages — lib/inventory-paging.ts),
+ * so pages hold a variable number of rows and `page × pageSize` would
+ * over-claim on a short page and under-claim on a page that ran long to keep a
+ * family whole. Everything printed here therefore describes what the page
+ * ACTUALLY renders. Mirrors the web table's footer, which prints the same range
+ * from `pageStartIndex` (apps/web/src/lib/inventory/instant-mode.ts).
+ */
 export function Paginator({
   page,
+  pageCount,
+  rangeStart,
+  rangeEnd,
   total,
-  pageSize,
   onPageChange,
 }: {
   page: number;
+  /** Pages available — derived from GROUPS by the caller, never from a row size. */
+  pageCount: number;
+  /** 1-based index of the first row on this page within the full filtered set. */
+  rangeStart: number;
+  /** 1-based index of the last row on this page. */
+  rangeEnd: number;
+  /** Rows in the full filtered set the pages divide up. */
   total: number;
-  pageSize: number;
   onPageChange: (p: number) => void;
 }) {
   const { c } = useTheme();
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = Math.max(1, pageCount);
   if (totalPages <= 1) return null;
-  const start = (page - 1) * pageSize + 1;
-  const end = Math.min(page * pageSize, total);
+  const start = rangeStart;
+  const end = rangeEnd;
   const nums = pageNumbers(page, totalPages);
 
   return (

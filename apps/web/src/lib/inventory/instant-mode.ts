@@ -439,13 +439,6 @@ export function sortInstantRows<T extends InstantModeRow>(
 
 /* ---- pagination + footer -------------------------------------------------- */
 
-/** Plain fixed-size chunking (Books, and the non-grouped path). */
-function slicePages<T>(sorted: readonly T[], pageSize: number): T[][] {
-  const pages: T[][] = [];
-  for (let i = 0; i < sorted.length; i += pageSize) pages.push(sorted.slice(i, i + pageSize));
-  return pages;
-}
-
 /**
  * RUN-AWARE pagination for the Items view. The list collapses BOTH a size run
  * ("Pink Shirt - L / - XL / - 2XL") AND a Model B SKU family (one item row per
@@ -463,17 +456,27 @@ function slicePages<T>(sorted: readonly T[], pageSize: number): T[][] {
  * pageSize to keep a unit whole. SKU beats size-run when both apply — under
  * Model B the SKU IS the product identity (mig 0234), while a size run spans
  * DIFFERENT skus that merely share a base name. Pure.
+ *
+ * `sizeRuns: false` keeps the SKU-family clustering but drops the size-run
+ * clustering — that is the BOOKS shape. Books are never sized (the table's
+ * size-run grouping is gated off for them), but they DO have Model B SKU
+ * families, so they need the same never-split-a-SKU guarantee without
+ * inheriting a name-based run grouping the list doesn't render.
  */
 export function runAwarePages<T extends { id: string; name: string; sku?: string | null }>(
   sorted: readonly T[],
   pageSize: number,
+  options?: { sizeRuns?: boolean },
 ): T[][] {
+  const withSizeRuns = options?.sizeRuns !== false;
   // Count keys over the whole set so lone members stay singletons.
   const runCounts = new Map<string, number>();
   const skuCounts = new Map<string, number>();
   for (const r of sorted) {
-    const k = sizeRunStyleKey(r.name);
-    if (k) runCounts.set(k, (runCounts.get(k) ?? 0) + 1);
+    if (withSizeRuns) {
+      const k = sizeRunStyleKey(r.name);
+      if (k) runCounts.set(k, (runCounts.get(k) ?? 0) + 1);
+    }
     const s = (r.sku ?? '').trim();
     if (s) skuCounts.set(s, (skuCounts.get(s) ?? 0) + 1);
   }
@@ -481,6 +484,7 @@ export function runAwarePages<T extends { id: string; name: string; sku?: string
   const unitKeyOf = (r: T): string | null => {
     const s = (r.sku ?? '').trim();
     if (s && (skuCounts.get(s) ?? 0) >= 2) return `sku:${s}`;
+    if (!withSizeRuns) return null;
     const k = sizeRunStyleKey(r.name);
     if (k && (runCounts.get(k) ?? 0) >= 2) return `run:${k}`;
     return null;
@@ -517,9 +521,14 @@ export function runAwarePages<T extends { id: string; name: string; sku?: string
 }
 
 export interface InstantViewResult<T> {
-  /** Filtered ITEM count (item-level — placement expansion happens after
-   *  pagination, exactly like the server pages). Backs "Page X of Y" and
-   *  the "{n} SKUs" footer. */
+  /** Filtered ITEM-ROW count (item-level — placement expansion happens
+   *  after pagination, exactly like the server pages). Backs pagination:
+   *  "Page X of Y" and "Showing X–Y of N", which slice item rows.
+   *  NOT a SKU count and NOT a rendered-row count — Model B (mig 0234)
+   *  lets one SKU be several item rows, and the Items list expands each
+   *  item row into one row per holding. The footer's "{n} SKUs" and
+   *  "{n} rows" terms are both derived in inventory-table.tsx (see THE
+   *  THREE COUNTS there); neither is this number. */
   total: number;
   /** Sum of qty×cost over the FULL filtered set with list()'s exact
    *  coercion — the buildSumPage mirror ("$X on hand" footer). */
@@ -530,14 +539,31 @@ export interface InstantViewResult<T> {
   /** The clamped page's item-level rows, filtered + sorted. */
   pageItems: T[];
   /**
+   * 0-based index of `pageItems[0]` within the full filtered+sorted set.
+   * Pagination is GROUP-AWARE (a SKU family is never split across pages),
+   * so pages do NOT all hold exactly `pageSize` rows and the footer's
+   * "Showing X–Y of N" can no longer be derived from page × pageSize —
+   * it would over-claim on a short page and under-claim on a page that
+   * ran long to keep a family whole. The table reads this to print the
+   * range the page ACTUALLY covers.
+   */
+  pageStartIndex: number;
+  /**
    * EVERY row in the FULL filtered set (every active filter applied, NOT
    * clamped to the current page — the same set `total`/`valueOnHand` are
-   * computed over). Model B's SKU-group headers (inventory-table.tsx) sum
-   * `quantity_on_hand` across this to get a group's TRUE total: a SKU's
-   * placements can be MULTIPLE DISTINCT inventory_items rows (one per
-   * charter), and the default last-updated sort can split them across
-   * pages — summing only `pageItems` would silently show a partial total
-   * for a group that straddles a page boundary.
+   * computed over).
+   *
+   * NOTE — this is deliberately NOT the source of a SKU group's on-hand
+   * total any more. A collapsed header must equal the sum of the rows it
+   * expands to, so inventory-table.tsx sums the rows ON THE PAGE; the
+   * never-split guarantee that makes that sum complete comes from
+   * `runAwarePages` below, not from this array. Its two remaining uses
+   * are both whole-set questions the page cannot answer:
+   *   • a per-SKU DISTINCT-ITEM-COUNT split detector — if a group ever
+   *     shows fewer item rows than the full set holds for that SKU, the
+   *     header discloses itself as partial rather than presenting an
+   *     under-count as complete;
+   *   • the footer's distinct-SKU count.
    */
   filteredRows: readonly T[];
 }
@@ -562,16 +588,32 @@ export function deriveInstantView<T extends InstantModeRow>(
     0,
   );
   const sorted = sortInstantRows(filtered, state.sort);
-  // The Items view groups apparel size runs into one expandable row, so it
-  // paginates RUN-AWARE (a page never cuts a run — otherwise the same run would
-  // render as two separate groups on two pages). Books never group → plain
-  // fixed slices. This is client-only; an ACCEPTED divergence from the server's
-  // fixed row-slice pagination (documented in the parity block above).
-  const pages = view === 'items' ? runAwarePages(sorted, pageSize) : slicePages(sorted, pageSize);
+  // BOTH views paginate GROUP-AWARE — a page never cuts a SKU family.
+  // Books used to take plain fixed slices on the premise that they never
+  // group; Model B (mig 0234) made that false — one title is several
+  // inventory_items rows — so a title whose rows straddled the boundary
+  // rendered a SEPARATE header on each page, and (since the header shows
+  // the SKU's full cross-page total) BOTH headers claimed all the stock.
+  // The group is the unit of display, so the group must be the unit of
+  // pagination. Size-run clustering stays Items-only: books are never
+  // sized and the table gates that grouping off for them.
+  // This is client-only; an ACCEPTED divergence from the server's fixed
+  // row-slice pagination (documented in the parity block above).
+  const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
   const page = Math.min(Math.max(1, state.page), pageCount);
   const pageItems = pages[page - 1] ?? [];
-  return { total, valueOnHand, page, pageCount, pageItems, filteredRows: filtered };
+  let pageStartIndex = 0;
+  for (let i = 0; i < page - 1; i++) pageStartIndex += pages[i]?.length ?? 0;
+  return {
+    total,
+    valueOnHand,
+    page,
+    pageCount,
+    pageItems,
+    pageStartIndex,
+    filteredRows: filtered,
+  };
 }
 
 /* ---- placement expansion (Items page's one-line-per-rack) ------------------ */

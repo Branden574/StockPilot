@@ -5,6 +5,7 @@ import {
   BookMarked,
   Check,
   CheckCircle2,
+  ChevronRight,
   Circle,
   ListChecks,
   Menu,
@@ -44,8 +45,25 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
-import { listStatusPredicate, stockPillFor } from '@/lib/expected-items';
+import {
+  listStatusPredicate,
+  stockPill,
+  stockPillFor,
+  type LifecycleStatus,
+} from '@/lib/expected-items';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
+import {
+  buildGroupUnits,
+  buildGroupedRows,
+  firstCoverBySku,
+  type GroupedRow,
+} from '@/lib/inventory-grouping';
+import {
+  GROUPS_PER_PAGE,
+  POSTGREST_MAX_ROWS,
+  paginateGroups,
+  readIsComplete,
+} from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -58,6 +76,11 @@ interface BookRow {
   barcode: string | null;
   quantity_on_hand: number;
   reorder_point: number;
+  /** Lifecycle (active / archived / discontinued). The list FILTERS on status
+   *  but also has to CARRY it: a collapsed SKU-group header rolls lifecycle up
+   *  conservatively (discontinued > archived > active) so a discontinued
+   *  placement can never hide behind a healthy badge. */
+  status: string;
   custom_fields: Record<string, unknown> | null;
   category_id: string | null;
   primary_location_id: string | null;
@@ -77,9 +100,51 @@ interface BookRow {
   awaiting_first_receipt: boolean;
 }
 
-const bookKeyExtractor = (b: BookRow): string => b.id;
+/** One flattened Books-list entry: a collapsed same-SKU header or a book row. */
+type BookGroupedRow = GroupedRow<BookRow>;
 
-const PAGE_SIZE = 50;
+const groupedKeyExtractor = (r: BookGroupedRow): string => r.key;
+
+/** Stable empty set — books never size-run group, but the option is required. */
+const EMPTY_SET: ReadonlySet<string> = new Set<string>();
+
+/** Width reserved at the trailing edge of EVERY list card, so the quantity /
+ *  pill column lands in the same place on a collapsed header (which carries a
+ *  disclosure chevron there) as on the rows it expands to (which carry the
+ *  select-mode checkbox, or nothing). Without the reservation the header's
+ *  numbers sat ~32px left of the numbers they are meant to summarise. */
+const TRAILING_SLOT = 22;
+
+/** Row → BookRow for the list read. */
+function toBookRow(row: unknown): BookRow {
+  const r = row as Record<string, unknown>;
+  const cf = (r.custom_fields as Record<string, unknown> | null) ?? null;
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    sku: r.sku as string,
+    barcode: (r.barcode as string | null) ?? null,
+    quantity_on_hand: Number(r.quantity_on_hand) || 0,
+    reorder_point: Number(r.reorder_point) || 0,
+    status: (r.status as string | null) ?? 'active',
+    custom_fields: cf,
+    category_id: (r.category_id as string | null) ?? null,
+    primary_location_id: (r.primary_location_id as string | null) ?? null,
+    charter_id: (r.charter_id as string | null) ?? null,
+    updated_at: (r.updated_at as string | null) ?? null,
+    imageUrl: null,
+    grade: (cf?.book_grade as string | undefined) ?? null,
+    auto_archived: Boolean(r.auto_archived),
+    awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
+  };
+}
+
+/** Columns the list read selects — deliberately lean: exactly what a card
+ *  renders (plus the fields the collapsed header rolls up), because this read
+ *  now returns the whole filtered set rather than a 50-row window. */
+const BOOK_COLUMNS = `id, name, sku, barcode, quantity_on_hand, reorder_point, status, custom_fields,
+           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           awaiting_first_receipt`;
 
 export default function BooksScreen() {
   const router = useRouter();
@@ -93,10 +158,42 @@ export default function BooksScreen() {
   // the navigator-reported height so the last book row clears the blur.
   const tabBarHeight = useBottomTabBarHeight();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
+  // The WHOLE filtered set, not a page of it (one request, capped at
+  // POSTGREST_MAX_ROWS). Pagination happens below, over GROUPS, so a title's
+  // placements can never land on two pages.
   const [rows, setRows] = React.useState<BookRow[]>([]);
-  const [total, setTotal] = React.useState(0);
+  // Exact server count over the same predicates. Equal to rows.length except
+  // in the truncated case, where it is what the disclosure quotes.
+  const [serverRowCount, setServerRowCount] = React.useState<number | null>(null);
+  // Rows the SERVER returned, before the client-side LOW pass. The truncation
+  // sentence must divide this by serverRowCount — dividing the post-LOW list by
+  // a pre-LOW count states a ratio over two different populations.
+  const [loadedRowCount, setLoadedRowCount] = React.useState(0);
   const [page, setPage] = React.useState(1);
-  const listRef = React.useRef<FlatList<BookRow> | null>(null);
+  // Model B: one book SKU can be MULTIPLE inventory_items rows (one per
+  // charter/rack — migration 0234's (org, sku, charter, bin) uniqueness), so a
+  // title splits into several rows exactly like a Chromebook does on Items.
+  // Collapse those into one header and track which are expanded.
+  const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
+  // True ONLY when the read hit PostgREST's cap, i.e. the rows in hand are a
+  // prefix of the filtered set. At current volumes (111 books on the largest
+  // org, cap 1000) this never fires; when it does it is disclosed above the
+  // list AND on every collapsed header, never silently.
+  const [truncated, setTruncated] = React.useState(false);
+  // Signed thumbnail URLs, resolved for the CURRENT PAGE's rows only and kept
+  // across page flips. Keyed by item id; a null value means "resolved, has no
+  // image", so a coverless book is never re-queried.
+  //
+  // CACHED PER LOAD, NOT PER SESSION. It is dropped by `load()` — pull-to-
+  // refresh and every query/filter/warehouse change — because it caches a read
+  // of item_images, and "resolved, no cover" is exactly the entry a freshly
+  // uploaded cover has to be able to overwrite. Held for the life of the screen
+  // it froze the first answer, so a cover added in the app never appeared again
+  // that session, a regression against the old per-load fetch. Page flips do
+  // NOT clear it: that is the cross-page saving it exists for. Identical to
+  // inventory.tsx.
+  const [images, setImages] = React.useState<ReadonlyMap<string, string | null>>(new Map());
+  const listRef = React.useRef<FlatList<BookGroupedRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
   const [charters, setCharters] = React.useState<FilterOption[]>([]);
@@ -162,7 +259,7 @@ export default function BooksScreen() {
   }, [orgId]);
 
   const load = React.useCallback(
-    async (query: string, f: FilterState, _allBookCatIds: string[], pageParam: number) => {
+    async (query: string, f: FilterState, _allBookCatIds: string[]) => {
       if (!orgId) return;
 
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
@@ -187,94 +284,89 @@ export default function BooksScreen() {
       // book whose category didn't happen to contain the word "book"
       // (47 of 93 records on this org). Web mirrors this filter in
       // InventoryService.list({ itemType: 'book' }).
-      let req = supabase
-        .from('inventory_items')
-        .select(
-          `id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields,
-           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
-           awaiting_first_receipt`,
-          { count: 'exact' },
-        )
-        .eq('organization_id', orgId)
-        .eq('item_type', 'book')
-        .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
-        .is('deleted_at', null)
-        .order(ord.col, { ascending: ord.asc });
-      if (pred.lifecycle) {
-        req = req.eq('status', pred.lifecycle);
-      }
-
-      if (isLow) {
-        // 'low' is a per-row client filter; widen the window and skip
-        // server-side paging.
-        req = req.limit(500);
-      } else {
-        const start = (pageParam - 1) * PAGE_SIZE;
-        const end = start + PAGE_SIZE - 1;
-        req = req.range(start, end);
-      }
-
-      // Honor the drawer workspace's active warehouse so book lookups
-      // scope the same way as Items.
-      if (activeWarehouseId) {
-        req = req.eq('warehouse_id', activeWarehouseId);
-      }
-
-      if (f.categoryIds.length > 0) {
-        req = req.in('category_id', f.categoryIds);
-      }
-
-      if (query.trim()) {
-        // Quote the value so PostgREST-reserved chars (, ( ) .) in a book
-        // title or pasted ISBN stay literal instead of corrupting the
-        // or-expression. See inventory.tsx for the full rationale.
-        const term = query.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        req = req.or(
-          `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
-        );
-      }
-
-      if (f.locationIds.length > 0) {
-        req = req.in('primary_location_id', f.locationIds);
-      }
-      if (f.charterIds.length > 0) {
-        const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
-        const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
-        if (wantsGeneric && real.length > 0) {
-          req = req.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
-        } else if (wantsGeneric) {
-          req = req.is('charter_id', null);
-        } else {
-          req = req.in('charter_id', real);
+      //
+      // Every predicate lives in ONE place. It used to serve two reads (the
+      // visible page and a per-SKU count) that had to see the identical
+      // dataset; there is only one read now, but the builder stays — it is
+      // what guarantees the row read and its exact count can never drift, and
+      // it is the seam any future second read must go through. Generic over
+      // the column list so PostgREST still infers row types from each literal
+      // select.
+      const scoped = <Q extends string>(columns: Q, opts?: { count: 'exact' }) => {
+        let r = supabase
+          .from('inventory_items')
+          .select(columns, opts)
+          .eq('organization_id', orgId)
+          .eq('item_type', 'book')
+          .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
+          .is('deleted_at', null);
+        if (pred.lifecycle) {
+          r = r.eq('status', pred.lifecycle);
         }
-      }
-      if (f.status === 'out') req = req.lte('quantity_on_hand', 0);
+        // Honor the drawer workspace's active warehouse so book lookups
+        // scope the same way as Items.
+        if (activeWarehouseId) {
+          r = r.eq('warehouse_id', activeWarehouseId);
+        }
+        if (f.categoryIds.length > 0) {
+          r = r.in('category_id', f.categoryIds);
+        }
+        if (query.trim()) {
+          // Quote the value so PostgREST-reserved chars (, ( ) .) in a book
+          // title or pasted ISBN stay literal instead of corrupting the
+          // or-expression. See inventory.tsx for the full rationale.
+          const term = query.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          r = r.or(`name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`);
+        }
+        if (f.locationIds.length > 0) {
+          r = r.in('primary_location_id', f.locationIds);
+        }
+        if (f.charterIds.length > 0) {
+          const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
+          const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
+          if (wantsGeneric && real.length > 0) {
+            r = r.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
+          } else if (wantsGeneric) {
+            r = r.is('charter_id', null);
+          } else {
+            r = r.in('charter_id', real);
+          }
+        }
+        if (f.status === 'out') r = r.lte('quantity_on_hand', 0);
+        return r;
+      };
 
-      const { data, count, error } = await req;
+      // `status` is SELECTED as well as filtered on: the collapsed SKU-group
+      // header rolls lifecycle up across placements, so the per-row value has
+      // to actually be fetched.
+      //
+      // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
+      // freely, and ties ordered differently between two fetches can put a row
+      // on two pages or none.
+      // ── ONE request for the WHOLE filtered set ───────────────────────────
+      // Not a 50-row window. Server paging was the ONLY reason a title's
+      // placements could land on two pages, and the datasets it was paging are
+      // tiny: 111 active books on the largest production org, against
+      // PostgREST's 1000-row cap. Holding the set lets the GROUP be the unit
+      // of pagination (below), which is the requirement — a family whole on
+      // exactly one page — and costs one round trip instead of one per page.
+      //
+      // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
+      // freely, and ties ordered differently between two fetches can put a row
+      // in two groups or none.
+      const { data, count, error } = await scoped(BOOK_COLUMNS, { count: 'exact' })
+        .order(ord.col, { ascending: ord.asc })
+        .order('id', { ascending: true })
+        .limit(POSTGREST_MAX_ROWS);
       if (error) console.warn('books list', error);
 
-      let bookRows: BookRow[] = (data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        const cf = (r.custom_fields as Record<string, unknown> | null) ?? null;
-        return {
-          id: r.id as string,
-          name: r.name as string,
-          sku: r.sku as string,
-          barcode: (r.barcode as string | null) ?? null,
-          quantity_on_hand: Number(r.quantity_on_hand) || 0,
-          reorder_point: Number(r.reorder_point) || 0,
-          custom_fields: cf,
-          category_id: (r.category_id as string | null) ?? null,
-          primary_location_id: (r.primary_location_id as string | null) ?? null,
-          charter_id: (r.charter_id as string | null) ?? null,
-          updated_at: (r.updated_at as string | null) ?? null,
-          imageUrl: null,
-          grade: (cf?.book_grade as string | undefined) ?? null,
-          auto_archived: Boolean(r.auto_archived),
-          awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
-        };
-      });
+      let bookRows: BookRow[] = (data ?? []).map(toBookRow);
+      const returned = bookRows.length;
 
+      // 'low' stays a client pass (reorder_point is per-row and cannot be
+      // expressed in a PostgREST filter) — but it now runs over the COMPLETE
+      // set rather than a widened window, so it is an ordinary filter like any
+      // other, not a source of missing siblings.
       if (isLow) {
         bookRows = bookRows.filter(
           (r) =>
@@ -284,33 +376,23 @@ export default function BooksScreen() {
         );
       }
 
-      const ids = bookRows.map((b) => b.id);
-      if (ids.length > 0) {
-        const { data: imgs } = await supabase
-          .from('item_images')
-          .select('item_id, storage_path, is_primary, sort_order')
-          .in('item_id', ids)
-          .order('is_primary', { ascending: false })
-          .order('sort_order', { ascending: true });
-        const byItem = new Map<string, string>();
-        for (const row of (imgs ?? []) as Array<{ item_id: string; storage_path: string }>) {
-          if (!byItem.has(row.item_id)) byItem.set(row.item_id, row.storage_path);
-        }
-        const paths = Array.from(byItem.values());
-        if (paths.length > 0) {
-          // Thumbnail transform, not the full-res original — book covers
-          // (often web/PO-imported, multi-megapixel, no thumb variant) would
-          // otherwise decode huge bitmaps for a 56px row. See inventory.tsx.
-          const urlByPath = await signItemImages(paths, THUMB_TRANSFORM);
-          for (const b of bookRows) {
-            const p = byItem.get(b.id);
-            if (p) b.imageUrl = urlByPath.get(p) ?? null;
-          }
-        }
-      }
-
+      // The ONE way the rows in hand can still be short: an org whose filtered
+      // set exceeds the server's cap. Detected from the RESPONSE against the
+      // exact count over the same predicates — never from a local constant,
+      // which is how a previous round shipped a guard comparing against 2000
+      // while the real cap was 1000, so it could never fire.
+      setTruncated(
+        !readIsComplete({ returned, serverCount: count ?? null, limit: POSTGREST_MAX_ROWS }),
+      );
       setRows(bookRows);
-      setTotal(isLow ? bookRows.length : count ?? bookRows.length);
+      setServerRowCount(count ?? null);
+      setLoadedRowCount(returned);
+      // A load is the one moment the underlying data may have changed, so the
+      // thumbnail cache is invalidated HERE and only here — pull-to-refresh and
+      // every query/filter/warehouse change run through this function, while a
+      // page flip does not. Without this a cover uploaded in the app never
+      // reappeared, because a "resolved, no cover" entry was never re-asked.
+      setImages(new Map());
       setLoading(false);
     },
     [orgId, activeWarehouseId],
@@ -322,28 +404,30 @@ export default function BooksScreen() {
   }, [orgId, loadLookups]);
 
   // Whenever the query / filter / workspace changes, jump back to page 1.
+  // Expanded SKU groups are per-page display state, so drop them too — an
+  // expansion carried over from another result set reads as a glitch.
   React.useEffect(() => {
     setPage(1);
+    setExpandedSkuGroups(new Set());
   }, [q, filter, activeWarehouseId]);
 
+  // NOT keyed on `page` any more: a page flip is a client-side slice of the
+  // set already in memory, so it costs no request and no skeleton.
   React.useEffect(() => {
     if (!orgId) return;
-    const t = setTimeout(() => void load(q, filter, bookCatIds, page), 250);
+    const t = setTimeout(() => void load(q, filter, bookCatIds), 250);
     return () => clearTimeout(t);
-  }, [q, filter, bookCatIds, load, orgId, activeWarehouseId, page]);
+  }, [q, filter, bookCatIds, load, orgId, activeWarehouseId]);
 
   async function refresh() {
     setRefreshing(true);
-    await load(q, filter, bookCatIds, page);
+    await load(q, filter, bookCatIds);
     setRefreshing(false);
   }
 
   const onPageChange = React.useCallback((p: number) => {
-    // Show skeleton during the transition so page changes feel
-    // immediate instead of staring at the prior page until the fetch
-    // lands. load() flips loading back to false when done.
-    setLoading(true);
     setPage(p);
+    setExpandedSkuGroups(new Set());
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
@@ -368,16 +452,178 @@ export default function BooksScreen() {
     countSelection.toggle({ id: b.id, sku: b.sku, name: b.name, itemType: 'book' });
   }, []);
 
+  const toggleSkuGroup = React.useCallback((sku: string) => {
+    setExpandedSkuGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku);
+      else next.add(sku);
+      return next;
+    });
+  }, []);
+
+  // Secondary line for an expanded placement. Books split by charter/rack
+  // (mig 0234), so the rack label is the most concrete differentiator staff
+  // physically walk to; charter and site are the fallbacks. The two flat
+  // custom_fields keys are the same ones web's readBookStorage() reads
+  // (see apps/web/src/lib/book-storage.ts) — mobile reads them directly
+  // rather than importing a web-only module.
+  const placementLabelFor = React.useCallback(
+    (b: BookRow): string | null => {
+      const cf = b.custom_fields ?? {};
+      const n = typeof cf.book_rack_number === 'string' ? cf.book_rack_number.trim() : '';
+      const row = typeof cf.book_rack_row === 'string' ? cf.book_rack_row.trim() : '';
+      const rack = n || row ? [n, row].filter(Boolean).join('-') : null;
+      const charter = b.charter_id ? charterMap.get(b.charter_id) ?? null : null;
+      const loc = b.primary_location_id ? locationMap.get(b.primary_location_id) ?? null : null;
+      return rack ?? charter ?? loc;
+    },
+    [charterMap, locationMap],
+  );
+
+  // ── GROUP FIRST, THEN PAGE ────────────────────────────────────────────────
+  // The whole filtered set is grouped into display UNITS (one collapsed SKU
+  // family, or one standalone title = one card), and the PAGE is a slice of
+  // units. That is the requirement: three placements of one SKU are one header
+  // on ONE page, all three behind the chevron, whatever the sort or page size.
+  // Size runs stay OFF — a book is never sized, which is why the web table
+  // gates that pass behind `showBookFields`.
+  const units = React.useMemo(() => buildGroupUnits(rows, { enableSizeRuns: false }), [rows]);
+  const pageView = React.useMemo(
+    () => paginateGroups(units, { page, groupsPerPage: GROUPS_PER_PAGE }),
+    [units, page],
+  );
+  // Rows in the filtered set. Exact from the rows themselves in the normal
+  // case (we hold all of them); the server's count only when they are a prefix.
+  // Mirrors inventory.tsx: under LOW the server count describes the pre-filter
+  // population, so adopting it would make the eyebrow and the paginator quote
+  // different totals on one screen.
+  const datasetRowCount =
+    truncated && filter.status !== 'low' ? serverRowCount ?? rows.length : rows.length;
+
+  // Thumbnails are resolved for the PAGE's rows only. The set read can return
+  // up to 1000 rows and signing a transformed URL costs one request per path
+  // (image-cache.ts falls back to per-path signing whenever a transform is
+  // asked for), so signing the whole set would trade a saved page fetch for
+  // hundreds of storage calls. Resolved URLs are kept across page flips.
+  const pageItems = pageView.pageItems;
+  const unresolvedIds = React.useMemo(
+    () => pageItems.filter((b) => !images.has(b.id)).map((b) => b.id),
+    [pageItems, images],
+  );
+  React.useEffect(() => {
+    if (unresolvedIds.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const { data: imgs } = await supabase
+        .from('item_images')
+        .select('item_id, storage_path, is_primary, sort_order')
+        .in('item_id', unresolvedIds)
+        .order('is_primary', { ascending: false })
+        .order('sort_order', { ascending: true });
+      const byItem = new Map<string, string>();
+      for (const row of (imgs ?? []) as Array<{ item_id: string; storage_path: string }>) {
+        if (!byItem.has(row.item_id)) byItem.set(row.item_id, row.storage_path);
+      }
+      // Thumbnail transform, not the full-res original — book covers (often
+      // web/PO-imported, multi-megapixel, no thumb variant) would otherwise
+      // decode huge bitmaps for a 56px row. See inventory.tsx.
+      const paths = Array.from(byItem.values());
+      const urlByPath =
+        paths.length > 0 ? await signItemImages(paths, THUMB_TRANSFORM) : new Map<string, string>();
+      if (cancelled) return;
+      setImages((prev) => {
+        const next = new Map(prev);
+        for (const id of unresolvedIds) {
+          const p = byItem.get(id);
+          // null records "resolved, no cover" so a coverless book is asked
+          // about exactly once.
+          next.set(id, (p ? urlByPath.get(p) : null) ?? null);
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unresolvedIds]);
+
+  const pageRows = React.useMemo<BookRow[]>(
+    () =>
+      pageItems.map((b) => {
+        const url = images.get(b.id) ?? null;
+        return url === b.imageUrl ? b : { ...b, imageUrl: url };
+      }),
+    [pageItems, images],
+  );
+
+  // Same-SKU collapse (Model B), the mobile twin of the web Books table. Run
+  // over the PAGE, which by construction holds every placement of every SKU on
+  // it — so the units it rebuilds are exactly the units it was sliced from.
+  // Pure + tested in lib/inventory-grouping.ts. DISPLAY ONLY — totals are
+  // read-time sums of the rows the chevron reveals.
+  const groupedRows = React.useMemo<BookGroupedRow[]>(
+    () =>
+      buildGroupedRows<BookRow>(pageRows, {
+        expandedSizeRuns: EMPTY_SET,
+        expandedSkuGroups,
+        placementLabelFor,
+        enableSizeRuns: false,
+        datasetIsTruncated: truncated,
+      }),
+    [pageRows, expandedSkuGroups, placementLabelFor, truncated],
+  );
+
+  // A collapsed header shows the group's cover. A SKU is one product identity
+  // under 0234, so every placement is the same title — but only one placement
+  // may actually carry the uploaded image, so this takes the first NON-NULL
+  // cover rather than the first placement's. GroupedRow deliberately carries
+  // no image, so resolve it here.
+  const firstImageBySku = React.useMemo(() => firstCoverBySku(pageRows), [pageRows]);
+
   const renderBookItem = React.useCallback(
-    ({ item }: { item: BookRow }) => (
-      <BookCard
-        book={item}
-        onBookPress={onBookPress}
-        selectMode={selectMode}
-        onToggleSelect={onToggleSelect}
-      />
-    ),
-    [onBookPress, selectMode, onToggleSelect],
+    ({ item: row }: { item: BookGroupedRow }) => {
+      if (row.kind === 'sku-header') {
+        return (
+          <BookGroupHeaderCard
+            name={row.name}
+            total={row.total}
+            reorderPoint={row.reorderPoint}
+            placementCount={row.placementCount}
+            partial={row.partial}
+            lifecycle={row.status}
+            imageUrl={firstImageBySku.get(row.sku) ?? null}
+            // Derived from the ROWS (every placement awaiting its first
+            // receipt), not from filter.status: view state changes the instant
+            // the filter is tapped while the rows lag a 250ms debounce plus a
+            // fetch behind it, so a filter-derived pill badges the PREVIOUS
+            // view's rows with something their own children contradict.
+            expected={row.expected}
+            expanded={expandedSkuGroups.has(row.sku)}
+            onToggle={() => toggleSkuGroup(row.sku)}
+          />
+        );
+      }
+      // Size runs are disabled for books, so a 'header' row is unreachable —
+      // handled rather than cast so a future option flip can't crash the list.
+      if (row.kind !== 'row') return null;
+      return (
+        <BookCard
+          book={row.item}
+          placementLabel={row.placementLabel}
+          onBookPress={onBookPress}
+          selectMode={selectMode}
+          onToggleSelect={onToggleSelect}
+        />
+      );
+    },
+    [
+      onBookPress,
+      selectMode,
+      onToggleSelect,
+      expandedSkuGroups,
+      toggleSkuGroup,
+      firstImageBySku,
+    ],
   );
 
   return (
@@ -411,7 +657,15 @@ export default function BooksScreen() {
           </View>
         </View>
         <View style={styles.head}>
-          <Eyebrow>{`INVENTORY · ${total.toLocaleString()} BOOKS`}</Eyebrow>
+          {/* Counts inventory_items ROWS, and under Model B one title is one
+              row PER charter/rack — so calling it "BOOKS" claimed a title
+              count the list itself contradicts the moment a collapse happens
+              (47 rows rendering as 19 cards on the owner org). Same word the
+              collapsed headers use, so the two read as one vocabulary. The
+              list now holds the whole set, so this is an exact count of it —
+              except when truncated, where it quotes the server's count and the
+              line below says the list is showing less than that. */}
+          <Eyebrow>{`INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}</Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Book <Em>catalog.</Em>
           </Display>
@@ -455,6 +709,17 @@ export default function BooksScreen() {
             onClear={() => setFilter(EMPTY_FILTER_STATE)}
             lookups={{ categories: categoryMap, locations: locationMap, charters: charterMap }}
           />
+
+          {/* Growth degrades HONESTLY. Past the server's row cap the set in
+              hand is genuinely a prefix, so the list says so here and marks
+              every collapsed header, instead of quietly showing short totals.
+              Unreachable at today's volumes — it exists so it never becomes
+              reachable silently. */}
+          {truncated ? (
+            <Body muted size={11.5} style={{ marginTop: 8 }}>
+              {`Showing the first ${loadedRowCount.toLocaleString()} of ${(serverRowCount ?? loadedRowCount).toLocaleString()} placements. Search or filter to narrow — grouped totals below cover only the loaded rows.`}
+            </Body>
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -463,8 +728,8 @@ export default function BooksScreen() {
       ) : (
         <FlatList
           ref={listRef}
-          data={rows}
-          keyExtractor={bookKeyExtractor}
+          data={groupedRows}
+          keyExtractor={groupedKeyExtractor}
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
           ListEmptyComponent={
@@ -476,10 +741,16 @@ export default function BooksScreen() {
             </View>
           }
           ListFooterComponent={
+            /* Every number here describes what this page ACTUALLY renders:
+               pages are counted in GROUPS and the row range comes from the
+               slice, because group-whole pages hold a variable number of
+               rows and `page × pageSize` would be a fiction. */
             <Paginator
-              page={page}
-              total={total}
-              pageSize={PAGE_SIZE}
+              page={pageView.page}
+              pageCount={pageView.pageCount}
+              rangeStart={pageView.rangeStart}
+              rangeEnd={pageView.rangeEnd}
+              total={pageView.totalRows}
               onPageChange={onPageChange}
             />
           }
@@ -510,11 +781,16 @@ export default function BooksScreen() {
 
 const BookCard = React.memo(function BookCard({
   book,
+  placementLabel,
   onBookPress,
   selectMode,
   onToggleSelect,
 }: {
   book: BookRow;
+  /** Set only when this row is an expanded placement of a multi-row SKU —
+   *  the rack/charter/site that tells the three "Into Algebra 1" rows apart.
+   *  null for every standalone book, which renders exactly as before. */
+  placementLabel?: string | null;
   onBookPress: (id: string) => void;
   selectMode: boolean;
   onToggleSelect: (book: BookRow) => void;
@@ -526,9 +802,9 @@ const BookCard = React.memo(function BookCard({
     ?? (book.custom_fields?.author as string | undefined)
     ?? null;
   const isbn = book.barcode ?? (book.custom_fields?.isbn as string | undefined) ?? null;
-  // EXPECTED (awaiting first receipt) replaces OUT for PO-created phantoms —
-  // never delivered, so "Out of stock" would be the exact misreading this
-  // feature prevents. Pure + tested in lib/expected-items.ts.
+  // ONE precedence ladder with the collapsed header above it (expected →
+  // lifecycle → stock), so a header reading ARCHIVED can never sit over rows
+  // reading OUT. Pure + tested in lib/expected-items.ts.
   const pill = stockPillFor(book);
   return (
     <Pressable
@@ -558,6 +834,11 @@ const BookCard = React.memo(function BookCard({
                 {book.grade ? ` · Grade ${book.grade}` : ''}
               </Mono>
             ) : null}
+            {placementLabel ? (
+              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                {placementLabel}
+              </Mono>
+            ) : null}
           </View>
           <View style={{ alignItems: 'flex-end', gap: 6 }}>
             <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
@@ -565,15 +846,128 @@ const BookCard = React.memo(function BookCard({
             </Mono>
             <Pill status={pill.status}>{pill.label}</Pill>
           </View>
-          {selectMode ? (
-            <View style={{ marginLeft: 2 }}>
-              {picked ? (
+          {/* Trailing slot, ALWAYS reserved — the collapsed header spends the
+              same width on its chevron, and a column that only exists on one
+              of the two shifts the quantities being compared out of line. */}
+          <View style={{ width: TRAILING_SLOT, alignItems: 'center' }}>
+            {selectMode ? (
+              picked ? (
                 <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
               ) : (
                 <Circle size={22} color={c.ink4} strokeWidth={1.6} />
-              )}
-            </View>
-          ) : null}
+              )
+            ) : null}
+          </View>
+        </View>
+      </Card>
+    </Pressable>
+  );
+});
+
+/**
+ * Collapsible SKU-group header — one per book SKU with MORE than one
+ * placement (Model B: a title legitimately exists once per charter/rack under
+ * migration 0234). Shows the SUMMED on-hand and the rolled-up lifecycle;
+ * tapping expands the individual placement rows, each of which opens its own
+ * item. DISPLAY ONLY — `total` is a read-time sum, never a written record.
+ *
+ * Deliberately shows NO author / ISBN / grade / rack: those are per-placement
+ * and can genuinely differ, so rendering the first placement's value would
+ * assert it for the whole group. The chevron reveals each row instead.
+ *
+ * In select mode this stays expand-only — a header has no item id behind it,
+ * so it can never be added to a cycle count. Placements become selectable the
+ * moment they are expanded, matching the Items list.
+ */
+const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
+  name,
+  total,
+  reorderPoint,
+  placementCount,
+  partial,
+  lifecycle,
+  imageUrl,
+  expected,
+  expanded,
+  onToggle,
+}: {
+  name: string;
+  total: number;
+  reorderPoint: number;
+  /** Placements in the group — i.e. exactly the rows the chevron reveals. */
+  placementCount: number;
+  /** True when the figures cover the loaded rows only — disclosed, never hidden. */
+  partial: boolean;
+  lifecycle: LifecycleStatus;
+  imageUrl: string | null;
+  /** Every placement is an awaiting-first-receipt phantom (derived from rows). */
+  expected: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { c } = useTheme();
+  // Same ladder the rows below run (lib/expected-items.ts) — the header's
+  // inputs are the group's rolled-up lifecycle and summed quantity, so it can
+  // only differ from a child where the NUMBERS differ, never the rules.
+  const badge = stockPill({
+    expected,
+    lifecycle,
+    quantity: total,
+    reorderPoint,
+  });
+  // Two honest shapes: exact ("3 placements"), and page-local, where the
+  // count covers only the rows loaded here.
+  const placements = partial
+    ? `${placementCount} placement${placementCount === 1 ? '' : 's'} shown`
+    : `${placementCount} placement${placementCount === 1 ? '' : 's'}`;
+  return (
+    <Pressable
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${name}, ${placements}${
+        partial ? `, at least ${total} on hand` : ''
+      }`}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      <Card padding={14}>
+        {/* Same padding + gap + 56px thumb as BookCard so the header's thumb
+            and title share the exact left edge with the placement rows it
+            expands to. The disclosure chevron therefore sits at the TRAILING
+            edge: leading it would push the header 28px right of its own
+            children, which read as a broken hierarchy. It lives in the SAME
+            fixed-width slot BookCard reserves, so aligning the left edge does
+            not cost the alignment of the numbers being compared. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <Thumb size={56} icon={BookMarked} imageUrl={imageUrl} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body
+              size={15.5}
+              color={c.ink}
+              style={{ fontFamily: FONT.display }}
+              numberOfLines={2}
+            >
+              {name}
+            </Body>
+            <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+              {placements}
+            </Mono>
+          </View>
+          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+            <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
+              {/* A page-only sum is marked with a leading ≥ rather than
+                  presented as the title's stock. */}
+              {partial ? `≥${total}` : total}
+            </Mono>
+            <Pill status={badge.status}>{badge.label}</Pill>
+          </View>
+          <View style={{ width: TRAILING_SLOT, alignItems: 'center' }}>
+            <ChevronRight
+              size={18}
+              color={c.ink4}
+              strokeWidth={2}
+              style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
+            />
+          </View>
         </View>
       </Card>
     </Pressable>

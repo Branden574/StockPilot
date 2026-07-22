@@ -18,10 +18,20 @@ export interface SkuGroup {
    * the real cross-page total for this SKU could be higher. Set by the
    * caller (inventory-table.tsx), never by `groupPlacementsBySku` itself
    * (which only ever sees the rows it's given and sums them exactly).
-   * Instant mode corrects `total` to the full filtered-set sum instead
-   * of setting this flag; server mode, which only has the current page,
-   * sets it on any multi-placement group when more than one page exists
-   * — see the `skuGroups` derivation in inventory-table.tsx.
+   * `total` is ALWAYS the exact sum of the rows the group expands to —
+   * a header is a summary of its own children and never borrows a figure
+   * from a wider scope. This flag is how the header admits that those
+   * children might not be all of them:
+   *   • instant mode paginates GROUP-AWARE (runAwarePages), so a SKU's
+   *     rows are never split across pages and the flag stays unset; it is
+   *     set only if that guarantee is observed to have BROKEN — the
+   *     group holds fewer distinct ITEM rows than the full filtered set
+   *     has for that SKU;
+   *   • server mode holds one page and cannot check, so it sets the flag
+   *     on any group of more than one ITEM row (not placement row — one
+   *     item split across racks is a single paginated unit and cannot be
+   *     cut) whenever the result set spans more than one page.
+   * See the `skuGroups` derivation in inventory-table.tsx.
    */
   totalIsPartial?: boolean;
 }

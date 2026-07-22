@@ -40,30 +40,67 @@ export function listStatusPredicate(status: StockStatus): ListStatusPredicate {
   };
 }
 
+/** Item lifecycle, worst-last (the collapsed header rolls up to the worst). */
+export type LifecycleStatus = 'active' | 'archived' | 'discontinued';
+
 export interface StockPillInput {
   quantity_on_hand: number;
   reorder_point: number;
   awaiting_first_receipt: boolean;
+  /**
+   * Lifecycle (active / archived / discontinued). OPTIONAL only because a few
+   * call sites predate it; supply it wherever the row can be non-active. A
+   * collapsed SKU-group header shows ARCHIVED / DISC, so a row that omitted
+   * this read OUT under a header reading ARCHIVED — header and children
+   * disagreeing about the same stock.
+   */
+  status?: string | null;
 }
 
 export interface StockPill {
-  status: 'ok' | 'warn' | 'crit';
-  label: 'OK' | 'LOW' | 'OUT' | 'EXPECTED';
+  status: 'ok' | 'warn' | 'crit' | 'default';
+  label: 'OK' | 'LOW' | 'OUT' | 'EXPECTED' | 'ARCHIVED' | 'DISC';
 }
 
 /**
- * Row pill for the Items/Books lists. An awaiting-first-receipt item is NOT
- * out of stock — nothing was ever received — so EXPECTED replaces the OUT
- * pill (the flag wins over stock math; the DB trigger guarantees the flag is
- * false the moment any stock arrives, so the precedence is only ever visible
- * on zero-quantity phantoms). Otherwise identical to the pre-existing
- * OUT / LOW / OK derivation.
+ * THE ONE precedence ladder for a stock pill, shared by a collapsed SKU-group
+ * header and by every row that header expands to. Both surfaces call it with
+ * their own figures — the header with the group's rolled-up lifecycle and
+ * summed quantity, a row with its own — so the two can only ever differ where
+ * the underlying numbers differ, never because they ran different rules.
+ *
+ *   1. EXPECTED (mig 0277): nothing was ever received, so "Out of stock"
+ *      would read as "it got delivered".
+ *   2. Lifecycle: an archived / discontinued record is not a stock level.
+ *   3. Stock math: OUT / LOW / OK.
  */
-export function stockPillFor(item: StockPillInput): StockPill {
-  if (item.awaiting_first_receipt) return { status: 'warn', label: 'EXPECTED' };
-  if (item.quantity_on_hand <= 0) return { status: 'crit', label: 'OUT' };
-  if (item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point) {
+export function stockPill(input: {
+  expected: boolean;
+  lifecycle: LifecycleStatus;
+  quantity: number;
+  reorderPoint: number;
+}): StockPill {
+  if (input.expected) return { status: 'warn', label: 'EXPECTED' };
+  if (input.lifecycle === 'archived') return { status: 'default', label: 'ARCHIVED' };
+  if (input.lifecycle === 'discontinued') return { status: 'crit', label: 'DISC' };
+  if (input.quantity <= 0) return { status: 'crit', label: 'OUT' };
+  if (input.reorderPoint > 0 && input.quantity <= input.reorderPoint) {
     return { status: 'warn', label: 'LOW' };
   }
   return { status: 'ok', label: 'OK' };
+}
+
+/** Coerce a free-form status column to the lifecycle union. */
+export function toLifecycle(status: string | null | undefined): LifecycleStatus {
+  return status === 'archived' || status === 'discontinued' ? status : 'active';
+}
+
+/** Row adapter for the shared ladder — the Items/Books list card pill. */
+export function stockPillFor(item: StockPillInput): StockPill {
+  return stockPill({
+    expected: item.awaiting_first_receipt,
+    lifecycle: toLifecycle(item.status),
+    quantity: item.quantity_on_hand,
+    reorderPoint: item.reorder_point,
+  });
 }

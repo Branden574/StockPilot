@@ -721,6 +721,13 @@ export function InventoryTable({
   // fall back to localMatches"; an empty array means "server says
   // zero matches". Cleared when q goes back to empty.
   const [serverHits, setServerHits] = React.useState<Item[] | null>(null);
+  // How many rows the server says MATCH the current search, which is not
+  // the same as how many it returned (the endpoint is capped at
+  // `pageSize`). The SKU-group partial-total marker needs the size of the
+  // RESULT SET, not the view's unsearched `total` — otherwise an active
+  // search stamps "other pages may hold more" on groups whose every row
+  // is already on screen.
+  const [serverHitsTotal, setServerHitsTotal] = React.useState<number | null>(null);
   const [serverLoading, setServerLoading] = React.useState(false);
 
   // Instant local filter on every keystroke. Substring match against
@@ -955,6 +962,7 @@ export function InventoryTable({
     if (!needle) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setServerHits(null);
+      setServerHitsTotal(null);
       setServerLoading(false);
       // Clear the q param from the URL when the user empties the box.
       // Use router.replace (not history.replaceState) so Next.js
@@ -1014,6 +1022,7 @@ export function InventoryTable({
         if (!res.ok) throw new Error(`search failed: ${res.status}`);
         const data = (await res.json()) as { items: Item[]; total: number };
         setServerHits(data.items);
+        setServerHitsTotal(Number(data.total) || 0);
 
         // URL update LAST. history.replaceState updates the address
         // bar without invoking Next.js's router, so the page-level
@@ -1031,6 +1040,7 @@ export function InventoryTable({
           // already has results on screen; a toast would imply
           // something is broken when it isn't.
           setServerHits(null);
+          setServerHitsTotal(null);
         }
       } finally {
         setServerLoading(false);
@@ -1111,10 +1121,118 @@ export function InventoryTable({
     ? instantView.valueOnHand
     : (valueOnHandProp ?? items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0));
 
+  // ── THE THREE COUNTS (settled once; every label and every marker
+  // below cites which one it means) ──────────────────────────────────
+  // This list has THREE different populations, and they are NOT
+  // interchangeable. Naming one with another's number is the single
+  // recurring defect class in this file:
+  //
+  //   1. ITEM ROWS      — inventory_items rows. Under Model B (mig 0234)
+  //                       one SKU can be several of them (one per
+  //                       charter/bin). `effectiveTotal` (instant:
+  //                       instantView.total; server: the `total` prop)
+  //                       is THIS count, and nothing else.
+  //   2. PLACEMENT ROWS — what the Items list actually renders: each
+  //                       item expanded into one row per holding line
+  //                       (rack/crate/staging/unplaced), or one row when
+  //                       it has no holdings. Always ≥ item rows. Books
+  //                       ship no placement map, so there the two counts
+  //                       coincide.
+  //   3. DISTINCT SKUs  — how many TOP-LEVEL lines the body shows: one
+  //                       per grouped SKU header plus one per blank-SKU
+  //                       row (a blank SKU is never grouped — see
+  //                       group-by-sku.ts). Always ≤ item rows.
+  //
+  // WHO USES WHICH:
+  //   • footer "N SKUs"        → 3 (instant only; server mode holds one
+  //                              page and cannot count SKUs set-wide, so
+  //                              it labels its number "items" — 1).
+  //   • footer "N rows"        → 2, because "rows" must mean the rows on
+  //                              screen. Shown only when it differs from
+  //                              the SKU count (that difference IS the
+  //                              collapsing the list just did).
+  //   • "$X on hand"           → whole filtered set, unaffected.
+  //   • Pagination / "Page X of Y" / "Showing X–Y of N" → 1, matching the
+  //                              derivation, which paginates ITEM rows.
+  //   • the partial-total "*"  → 1. A group is at risk of straddling a
+  //                              page boundary only when it holds more
+  //                              than one ITEM row; a single item split
+  //                              across racks is one paginated unit and
+  //                              can never be cut, so it must never be
+  //                              stamped partial. Comparisons against the
+  //                              full set are DISTINCT-ITEM-ID based for
+  //                              the same reason.
+  //
   // Total + current page: locally derived in instant mode (clamped to
-  // the filtered set), server-provided otherwise.
+  // the filtered set), server-provided otherwise. ITEM ROWS (count 1).
   const effectiveTotal = instantView ? instantView.total : total;
   const effectivePage = instantView ? instantView.page : page;
+  // Instant mode paginates GROUP-AWARE — a SKU family is never split
+  // across pages — so pages hold a VARIABLE number of item rows and
+  // `page × pageSize` is no longer the range this page covers. Hand the
+  // footer the real page count and the real row range so a page showing
+  // 20 groups over 34 rows never claims "Showing 1–50". Server mode has
+  // no such information (and slices at a fixed pageSize), so it keeps
+  // the arithmetic fallback inside Pagination.
+  const instantRange = React.useMemo(() => {
+    if (!instantView) return undefined;
+    const shown = instantView.pageItems.length;
+    return {
+      pageCount: instantView.pageCount,
+      startRow: shown === 0 ? 0 : instantView.pageStartIndex + 1,
+      endRow: instantView.pageStartIndex + shown,
+    };
+  }, [instantView]);
+  // COUNT 3 — DISTINCT SKUs. The footer says "N SKUs", but
+  // `effectiveTotal` is an ITEM-ROW count, and with grouping live that
+  // visibly contradicts the screen: 47 book rows collapse into 19 headers
+  // while the footer claimed "47 SKUs". Count the TOP-LEVEL lines over the
+  // full filtered set instead.
+  // KEYED ON THE RAW SKU, deliberately: groupPlacementsBySku keys on the
+  // raw string, so " ABC" and "ABC" render as TWO lines. Folding them here
+  // (on the trimmed value) would make the footer under-count what the body
+  // shows — the same class of mismatch this count exists to remove. A
+  // blank/whitespace SKU is never grouped, so each blank row is its own
+  // line and counts as one.
+  // Instant mode only: server mode holds a single page and has no way to
+  // count distinct SKUs across the set.
+  const distinctSkuCount = React.useMemo(() => {
+    if (!instantView) return null;
+    const seen = new Set<string>();
+    let ungrouped = 0;
+    for (const r of instantView.filteredRows) {
+      if (r.sku.trim()) seen.add(r.sku);
+      else ungrouped++;
+    }
+    return seen.size + ungrouped;
+  }, [instantView]);
+  // COUNT 2 — PLACEMENT ROWS over the full filtered set: what the footer's
+  // "rows" term means, because "rows" has to mean the rows on screen. The
+  // Items list expands each item into one row per holding line, so its
+  // rendered row count EXCEEDS the item-row count — printing
+  // `effectiveTotal` there understated the very number it claimed to
+  // report. The dataset's `placement` map is full-dataset (not page-slice),
+  // so this is answerable set-wide; Books ship no map, in which case a
+  // placement row IS an item row and this collapses to `total`.
+  const placementRowCount = React.useMemo(() => {
+    if (!instantView) return null;
+    const placement = effectiveInstant?.placement;
+    if (!placement) return instantView.total;
+    let n = 0;
+    for (const r of instantView.filteredRows) {
+      // Mirrors expandInstantPlacementRows: no holdings → exactly one
+      // fallback row.
+      n += placement[r.id]?.length || 1;
+    }
+    return n;
+  }, [instantView, effectiveInstant]);
+  // Show pagination when there is genuinely more than one page. Instant
+  // mode asks the derivation (group-aware page count) rather than
+  // `total > pageSize`, which over-counts pages whenever a family runs a
+  // page long and would offer a Next that lands on an empty page.
+  const showPagination = instantMode
+    ? (instantView?.pageCount ?? 1) > 1
+    : !q.trim() && total > pageSize;
 
   // What the table actually renders. Instant mode: the one complete
   // locally-derived answer. Server mode priority: server-authoritative
@@ -1156,8 +1274,16 @@ export function InventoryTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prewarmKey]);
 
-  // ── Model B: SKU-grouped rows (Items list only — Books never split
-  // rows, so grouping adds nothing there and stays off) ──────────────
+  // ── Model B: SKU-grouped rows (Items AND Books) ────────────────────
+  // Books were gated out of this on the premise that "books never split
+  // rows". That premise was wrong. Books do not split PLACEMENT rows
+  // (books/page.tsx passes unsplit items — no `placement` map — so
+  // line_quantity/placement_label/rowKey are undefined and the fallbacks
+  // below take over), but they absolutely split ITEM rows: mig 0234 made
+  // SKU uniqueness (organization_id, sku, charter_id, bin_location), so
+  // one title legitimately exists as several inventory_items rows, one
+  // per charter/rack. Measured on L4L North Region: 19 book SKUs covering
+  // 47 rows, i.e. the Books list rendered the same title up to 4 times.
   // `displayed` is already one row per (sku, charter, rack) holding
   // (the existing placement split from instant-mode/page.tsx). We feed
   // that flat list through Task 1's groupPlacementsBySku (pure, sums
@@ -1171,31 +1297,48 @@ export function InventoryTable({
   // `__item` (PlacementRow's index signature allows it) so the exact
   // same per-row <tr> markup can be reused unchanged when a group
   // expands.
-  // Model B: full-dataset (not page-slice) per-SKU on-hand totals, keyed
-  // for the SKU-group headers below. A SKU's placements can be MULTIPLE
-  // DISTINCT inventory_items rows (one per charter), and the default
-  // last-updated sort can split them across pages — summing only the
-  // current page's rows (as groupPlacementsBySku does) would silently
-  // show a PARTIAL total for a group that straddles a page boundary.
-  // Instant mode has the complete filtered dataset client-side
-  // (instantView.filteredRows — every filter applied, every page), so
-  // this map always holds the TRUE total. `null` in server mode, where
-  // only the current page is available and there's no cheap way to get
-  // the full sum without a new query (see skuGroups below for the
-  // degraded-but-honest server-mode fallback).
-  const skuTotalsFull = React.useMemo(() => {
+  // Model B: full-dataset (not page-slice) per-SKU ITEM-ROW COUNTS, keyed
+  // for the SKU-group headers below. Used as a SPLIT DETECTOR, not as a
+  // total.
+  //
+  // WHAT CHANGED AND WHY. This map used to hold each SKU's full-dataset
+  // on-hand SUM, and the header displayed that sum instead of the sum of
+  // the rows it expands to. That was wrong in two directions at once:
+  //   1. A SKU whose rows straddled a page boundary still rendered a
+  //      header on EVERY page that held any of them, and each header
+  //      showed the full cross-page total — the same title appearing
+  //      twice, each copy claiming all the stock.
+  //   2. It divorced the header number from the rows beneath it, so the
+  //      "On hand: placed only" toggle made the header disagree with its
+  //      own children.
+  // The real fix for (1) is upstream: instant mode paginates GROUP-AWARE
+  // (deriveInstantView → runAwarePages), so a SKU family is never split
+  // and the page-slice sum IS the full sum. (2) then follows for free —
+  // the header derives its total from the rows (see SkuGroupHeaderRow).
+  // This map survives as the guard that proves invariant (1) holds: if a
+  // group ever shows fewer distinct item rows than the full filtered set
+  // has for that SKU, the header is disclosed as partial rather than
+  // presenting an under-count as complete (bug pattern #18).
+  // `null` in server mode, where only the current page exists.
+  //
+  // KEYED ON THE RAW SKU — the SAME key groupPlacementsBySku uses. Keying
+  // this map on the TRIMMED sku while the groups keyed on the raw one made
+  // whitespace-variant SKUs ("ABC" and " ABC") collapse into one full-set
+  // count of 2 that BOTH one-row groups then compared themselves against,
+  // so each stamped a false "*" and a false "other pages may hold more"
+  // tooltip on a group whose every row was already on screen. A detector
+  // must count the same population it is comparing.
+  const skuItemRowCountsFull = React.useMemo(() => {
     if (!instantView) return null;
     const m = new Map<string, number>();
     for (const r of instantView.filteredRows) {
-      const key = r.sku.trim();
-      if (!key) continue; // blank skus are never grouped — see group-by-sku.ts
-      m.set(key, (m.get(key) ?? 0) + (Number(r.quantity_on_hand) || 0));
+      if (!r.sku.trim()) continue; // blank skus are never grouped — see group-by-sku.ts
+      m.set(r.sku, (m.get(r.sku) ?? 0) + 1);
     }
     return m;
   }, [instantView]);
 
   const skuGroups = React.useMemo<SkuGroup[] | null>(() => {
-    if (showBookFields) return null;
     const rows: SkuGroupInputRow[] = displayed.map((it) => ({
       id: it.rowKey ?? it.id,
       sku: it.sku,
@@ -1206,25 +1349,52 @@ export function InventoryTable({
       __item: it,
     }));
     const groups = groupPlacementsBySku(rows);
-    if (!skuTotalsFull) {
+    // DISTINCT ITEM ROWS in a group (count 1), not its placement rows
+    // (count 2) — the unit pagination slices is the item row.
+    const itemRowsIn = (g: SkuGroup): number =>
+      new Set(g.placements.map((p) => (p as unknown as SkuGroupInputRow).__item.id)).size;
+    if (!skuItemRowCountsFull) {
       // Server mode: no full-dataset sum available. A single page (every
       // row for this view is already on screen) is still exact even
       // here; a multi-placement group on a multi-page result COULD be
       // missing rows sitting on another page, so it's flagged rather
       // than silently shown as if it were complete (recurring bug
       // pattern #18 — disclose silent caps, never hide them).
-      const singlePage = effectiveTotal <= pageSize;
+      // The question is whether the RESULT SET ON SCREEN is complete, not
+      // whether the view's unsearched total fits a page. With a search
+      // active the rows come from /api/items/search, which reports its own
+      // match count and returns at most `pageSize` of them; keying off
+      // `effectiveTotal` (the server `total` prop, which a search never
+      // updates) stamped a false asterisk and an "other pages may hold
+      // more" tooltip on groups that were entirely on screen. When the
+      // search fetch hasn't landed (or failed) the rows are a local filter
+      // over the current page, so completeness falls back to the view's
+      // own single-page test.
+      const resultSetTotal = q.trim() && serverHits ? (serverHitsTotal ?? total) : total;
+      const singlePage = resultSetTotal <= pageSize;
       if (singlePage) return groups;
-      return groups.map((g) => (g.placements.length > 1 ? { ...g, totalIsPartial: true } : g));
+      // A group can only straddle a page boundary if it holds more than
+      // one ITEM ROW — the server slices item rows and expands placements
+      // afterwards. Keying off `placements.length` counted PLACEMENT rows,
+      // so ONE item split across two racks (an everyday Items-list row,
+      // one paginated unit, uncuttable) got a false asterisk and a
+      // "other pages may hold more of this SKU" tooltip.
+      return groups.map((g) => (itemRowsIn(g) > 1 ? { ...g, totalIsPartial: true } : g));
     }
-    // Instant mode: replace the page-slice sum with the FULL filtered-set
-    // total for this SKU — always exact, never partial.
+    // Instant mode: group-aware pagination guarantees every row of a SKU
+    // is on this page, so the group's own sum is already the full one.
+    // Verify rather than assume — compare the group's DISTINCT item ids
+    // against the full filtered set's row count for that SKU (ids, not a
+    // sum: placement expansion means one item can contribute several
+    // rows, so only ids are comparable). A shortfall means the guarantee
+    // broke; disclose it instead of showing a confident under-count.
     return groups.map((g) => {
-      const key = g.sku.trim();
-      const full = key ? skuTotalsFull.get(key) : undefined;
-      return full != null ? { ...g, total: full } : g;
+      if (!g.sku.trim()) return g;
+      const full = skuItemRowCountsFull.get(g.sku);
+      if (full == null) return g;
+      return itemRowsIn(g) < full ? { ...g, totalIsPartial: true } : g;
     });
-  }, [displayed, showBookFields, skuTotalsFull, effectiveTotal, pageSize]);
+  }, [displayed, skuItemRowCountsFull, q, serverHits, serverHitsTotal, total, pageSize]);
 
   const renderItems = React.useMemo<RenderEntry[]>(() => {
     let idx = 0;
@@ -1535,9 +1705,22 @@ export function InventoryTable({
               // or the "(searching…)" phase — every keystroke's answer is
               // complete.
               if (instantMode) {
+                // Label and number must agree (see THE THREE COUNTS
+                // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
+                // counts the PLACEMENT rows actually rendered (count 2) —
+                // NOT `effectiveTotal`, which is item rows (count 1) and
+                // therefore understates the screen on the one surface
+                // where the two differ (the Items list, which expands one
+                // row per rack). The row term is worth showing only when
+                // it differs from the SKU count — that difference IS the
+                // collapsing the list just did.
+                const skus = distinctSkuCount ?? effectiveTotal;
+                const rows = placementRowCount ?? effectiveTotal;
                 return (
                   <>
-                    {formatNumber(effectiveTotal)} SKUs · {formatCurrency(valueOnHand)} on hand
+                    {formatNumber(skus)} SKUs ·{' '}
+                    {skus !== rows ? <>{formatNumber(rows)} rows · </> : null}
+                    {formatCurrency(valueOnHand)} on hand
                   </>
                 );
               }
@@ -1545,7 +1728,12 @@ export function InventoryTable({
               if (!needle) {
                 return (
                   <>
-                    {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
+                    {/* SERVER MODE holds ONE page, so it cannot count
+                        distinct SKUs across the result set — and `total`
+                        is an ITEM-ROW count (count 1), which grouping now
+                        collapses on Books too. Label it what it is rather
+                        than calling item rows "SKUs". */}
+                    {formatNumber(total)} items · {formatCurrency(valueOnHand)} on hand
                   </>
                 );
               }
@@ -1625,12 +1813,13 @@ export function InventoryTable({
           full filtered set up to the limit — pages recompose once `q`
           clears. INSTANT mode keeps it: search results are complete and
           paginate locally like any other filter. */}
-      {(instantMode ? effectiveTotal > pageSize : !q.trim() && total > pageSize) && (
+      {showPagination && (
         <div className="flex items-center justify-end">
           <Pagination
             page={effectivePage}
             pageSize={pageSize}
             total={effectiveTotal}
+            range={instantRange}
             buildHref={hrefForPage}
             onNavigate={instantMode ? shallowPush : undefined}
             pendingInstant={instantPending}
@@ -1752,6 +1941,9 @@ export function InventoryTable({
                     rowLinkPrefix={rowLinkPrefix}
                     currentListUrl={currentListUrl}
                     rowIdx={entry.rowIdx}
+                    showBookFields={showBookFields}
+                    stockView={stockView}
+                    reservedByItem={reservedByItem}
                   />
                 );
               }
@@ -2069,7 +2261,9 @@ export function InventoryTable({
                       const staged = item.staged_quantity ?? 0;
                       const unplaced = item.unplaced_quantity ?? 0;
                       const placed = item.placed_quantity ?? item.quantity_on_hand;
-                      const shown = stockView === 'total' ? item.quantity_on_hand : placed;
+                      // Single source of truth with the SKU-group header,
+                      // which sums this exact function over its rows.
+                      const shown = rowDisplayQuantity(item, stockView);
                       // Received/unassigned stock reads as ONE amber phrase —
                       // "awaiting put-away" (staged + unplaced) — per owner
                       // direction 2026-07-08: on-hand accounting is unchanged,
@@ -2161,11 +2355,12 @@ export function InventoryTable({
             paginated views are bookmarkable + shareable. Server mode also
             hides during an active search; instant mode paginates search
             results locally (see top-pagination comment). */}
-        {(instantMode ? effectiveTotal > pageSize : !q.trim() && total > pageSize) ? (
+        {showPagination ? (
           <Pagination
             page={effectivePage}
             pageSize={pageSize}
             total={effectiveTotal}
+            range={instantRange}
             buildHref={hrefForPage}
             onNavigate={instantMode ? shallowPush : undefined}
             pendingInstant={instantPending}
@@ -2187,6 +2382,7 @@ export function Pagination({
   page,
   pageSize,
   total,
+  range,
   buildHref,
   onNavigate,
   pendingInstant = false,
@@ -2194,6 +2390,12 @@ export function Pagination({
   page: number;
   pageSize: number;
   total: number;
+  /** The REAL page count and row range, when the caller paginates in
+   *  variable-size pages (instant mode packs whole SKU families, so a
+   *  page can run over or under `pageSize`). Absent → the fixed-slice
+   *  arithmetic below, which is exactly what server-mode pagination
+   *  does. */
+  range?: { pageCount: number; startRow: number; endRow: number };
   buildHref: (page: number) => string;
   /** Instant mode: plain left clicks on the page links become
    *  `onNavigate(href)` (a shallow history push — pagination without a
@@ -2208,10 +2410,10 @@ export function Pagination({
    *  resolves null (over-cap org), re-enabling server-mode prefetch. */
   pendingInstant?: boolean;
 }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = Math.max(1, range?.pageCount ?? Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
-  const startRow = (safePage - 1) * pageSize + 1;
-  const endRow = Math.min(safePage * pageSize, total);
+  const startRow = range ? range.startRow : (safePage - 1) * pageSize + 1;
+  const endRow = range ? range.endRow : Math.min(safePage * pageSize, total);
   const prevDisabled = safePage <= 1;
   const nextDisabled = safePage >= totalPages;
   const linkClick = onNavigate
@@ -2318,16 +2520,76 @@ export function Pagination({
 }
 
 /**
+ * The ONE on-hand number a body row shows, given the current stock view.
+ * The SKU-group header sums THIS across the rows it expands to for its
+ * on-hand NUMBER, so a collapsed header's number always equals the sum
+ * of its own children — under both toggle states. It is deliberately NOT
+ * what the header's status badge / coverage bar / sparkline derive from:
+ * the body row's health cells read the ITEM's on-hand regardless of the
+ * toggle, so the header's must too (see SkuGroupHeaderRow's derivation
+ * block). The header used to show a separate full-dataset
+ * on-hand sum, which silently disagreed with the rows whenever the
+ * "On hand: placed only" toggle was on (it persists in localStorage
+ * SHARED with the Items list, so flipping it once on Items left Books in
+ * placed-only).
+ *
+ * A placement-split row (`line_quantity`, the Items list's one-line-per-
+ * rack shape) always shows THAT holding's quantity: the placed/total
+ * distinction is already resolved by which holding line this is.
+ */
+function rowDisplayQuantity(item: Item, stockView: StockView): number {
+  if (item.line_quantity !== undefined) return item.line_quantity;
+  return stockView === 'total'
+    ? item.quantity_on_hand
+    : (item.placed_quantity ?? item.quantity_on_hand);
+}
+
+/**
+ * The rack/crate labels a body row shows in the Items layout's rack cell,
+ * resolved in the SAME priority order that cell uses (this row's holding
+ * label → the item's holdings-derived racks → the custom_fields
+ * fallback). An empty array means the row shows an em dash. The group
+ * header counts DISTINCT labels across its rows with this — the header
+ * must never claim more racks than the rows beneath it actually list.
+ */
+function itemRackLabels(item: Item): string[] {
+  if (item.placement_label !== undefined) {
+    return item.placement_label ? [item.placement_label] : [];
+  }
+  if (item.placed_racks !== undefined) return item.placed_racks;
+  const rack = readItemRack(item.custom_fields);
+  return rack.rackLabel ? [rack.rackLabel] : [];
+}
+
+/**
+ * Roll up a per-placement text field for a SKU-group header. A field that
+ * DIFFERS across placements must never be shown as if it were the group's
+ * value (that is the whole reason rollupStatus exists) — so this reports
+ * 'multiple' instead and lets the caller render a neutral label. Nulls
+ * count as a distinct absence: [null, '38-A'] is 'multiple', not '38-A'.
+ */
+function rollupText(
+  values: ReadonlyArray<string | null>,
+): { kind: 'none' } | { kind: 'same'; value: string } | { kind: 'multiple'; count: number } {
+  if (values.length === 0) return { kind: 'none' };
+  // noUncheckedIndexedAccess: [0] is T|undefined even after the length check.
+  const first = values[0] ?? null;
+  if (values.every((v) => (v ?? null) === first)) {
+    return first == null ? { kind: 'none' } : { kind: 'same', value: first };
+  }
+  return { kind: 'multiple', count: values.length };
+}
+
+/**
  * Model B: the collapsed SKU-group header row. Renders once per SKU that
  * has MORE than one placement (a SKU with exactly one placement renders
  * as a plain row instead — see the `skuGroups`/`renderItems` derivation
  * in InventoryTable). NOT selectable (no checkbox — bulk actions only
  * ever target the individual placement rows beneath it, unchanged).
  *
- * DISPLAY ONLY: `group.total` is a read-time SUM of the already-computed
- * per-placement `lineQuantity` values (see group-by-sku.ts) — it never
- * writes or recomputes any record, mirroring exactly what the expanded
- * rows already show added up.
+ * DISPLAY ONLY: the headline total is a read-time SUM of exactly what the
+ * expanded rows show (rowDisplayQuantity per row) — it never writes or
+ * recomputes any record.
  */
 function SkuGroupHeaderRow({
   group,
@@ -2340,6 +2602,9 @@ function SkuGroupHeaderRow({
   rowLinkPrefix,
   currentListUrl,
   rowIdx,
+  showBookFields,
+  stockView,
+  reservedByItem,
 }: {
   group: SkuGroup;
   items: Item[];
@@ -2351,24 +2616,104 @@ function SkuGroupHeaderRow({
   rowLinkPrefix: string;
   currentListUrl: string;
   rowIdx: number;
+  /** Books layout renders 14 columns (Grade/Rack/Crate) where Items
+   *  renders 12 (one Rack column) — the header must emit the SAME cell
+   *  count as the body rows beneath it or every cell right of Location
+   *  shifts one column. See the Rack/Grade/Crate branch below. */
+  showBookFields: boolean;
+  /** The "On hand: total / placed only" toggle. The header total is
+   *  derived from it so a collapsed header always equals the sum of the
+   *  rows it expands to. */
+  stockView: StockView;
+  /** Rentals-only reserved-quantity map (undefined on Items/Books). The
+   *  header's health cells subtract it exactly like the body rows do, so
+   *  a fully checked-out group cannot badge "In stock" while every row
+   *  beneath it badges "Out of stock". */
+  reservedByItem?: Map<string, number>;
 }) {
-  // Most rollup fields come from the FIRST placement (first-seen order —
-  // see group-by-sku.ts). In the common case (one item split across racks/
-  // charters) every placement shares the same name/category/image, so
-  // this is exact; in the rarer case of genuinely distinct item rows
-  // sharing a SKU it's a reasonable representative, and the charter
-  // column below falls back to "Multiple" rather than showing a wrong
-  // single charter. Status is the ONE exception: it's per-placement and
-  // can legitimately differ, so it's rolled up conservatively below
-  // instead of taken from `first` (see `rolledUpStatus`).
+  // Only IDENTITY fields come from the FIRST placement (first-seen order —
+  // see group-by-sku.ts): a SKU is one product identity (mig 0234 makes
+  // (org, sku, charter_id, bin_location) the uniqueness key), so name and
+  // cover image are shared by construction. Every field that is genuinely
+  // PER-ROW — status, charter, category, primary location, and the books
+  // grade/rack/crate — is rolled up instead, because showing one
+  // placement's value as if it were the group's is exactly the masking
+  // bug rollupStatus exists to prevent.
   const first = items[0]!;
-  const status = deriveStatus(group.total, first.reorder_point);
-  const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
-  const series = seriesForRow(first.id, group.total, sparkMode, trends);
-  const category = first.category_id ? lookups.categories.get(first.category_id) : null;
-  const location = first.primary_location_id
-    ? lookups.locations.get(first.primary_location_id)
-    : null;
+  // ── WHAT A HEADER DERIVES EACH VALUE FROM (settled once, applied to
+  // every cell below) ────────────────────────────────────────────────
+  // A collapsed header is a SUMMARY OF THE ROWS IT EXPANDS TO, so every
+  // cell mirrors the SAME source its body-row counterpart reads:
+  //   • the ON-HAND NUMBER mirrors the body's quantity cell → sum of
+  //     rowDisplayQuantity over the PLACEMENT rows (honours the
+  //     placed-only toggle and the one-line-per-rack split).
+  //   • the HEALTH cells — status badge, coverage bar, sparkline —
+  //     mirror the body's health cells, which read the ITEM's on-hand
+  //     minus reserved (`availableForStatus`), independent of the toggle
+  //     and identical on every rack row of one item. They therefore sum
+  //     over DISTINCT ITEMS: summing placement rows would count one
+  //     item's on-hand once per rack, and following the toggle would let
+  //     a header badge "Out of stock" over rows all badging "In stock".
+  //   • every genuinely per-row TEXT field is rolled up (Multiple / a
+  //     count / an em dash) — never taken from one placement.
+  const distinctItems = Array.from(new Map(items.map((it) => [it.id, it])).values());
+  const availableOf = (it: Item): number =>
+    Math.max(0, it.quantity_on_hand - (reservedByItem?.get(it.id) ?? 0));
+  const displayedTotal = items.reduce((sum, it) => sum + rowDisplayQuantity(it, stockView), 0);
+  const healthQuantity = distinctItems.reduce((sum, it) => sum + availableOf(it), 0);
+  // reorder_point is per-row too, and taking `first`'s let the
+  // quantity-derived badge read HEALTHIER than the group's worst
+  // placement — the exact masking rollupStatus exists to prevent. Roll
+  // it up as the SUM: the group's replenishment need is the sum of its
+  // placements' needs, which puts threshold and quantity on the same
+  // (group) scale. It is also the only rollup that guarantees the
+  // header can never out-rank a UNANIMOUS reading — if every placement
+  // is low then Σqty ≤ Σreorder, and if every placement is out then
+  // Σqty ≤ 0. A MIXED group falls back to the honest aggregate, the
+  // same every()-not-some() rule the lifecycle flags below follow.
+  const groupReorderPoint = distinctItems.reduce(
+    (sum, it) => sum + (Number(it.reorder_point) || 0),
+    0,
+  );
+  const status = deriveStatus(healthQuantity, groupReorderPoint);
+  // The coverage bar's PAR must be built from the same inputs the body
+  // rows use, or the header fills to a different fraction than the rows
+  // it summarises. A body row computes
+  //   par = max(reorder_point × 4, quantity_on_hand × 1.5, 10)
+  // — note the third term is ON-HAND, NOT available (on-hand − reserved),
+  // even though the BAR's fill is available. Substituting `healthQuantity`
+  // here shrank the header's par wherever stock is reserved (the rentals
+  // view), so an identical group read fuller in the header than in its own
+  // rows. Sum on-hand over DISTINCT ITEMS for the same reason
+  // `healthQuantity` does: an item's on-hand is repeated on each of its
+  // placement rows.
+  const parQuantity = distinctItems.reduce(
+    (sum, it) => sum + (Number(it.quantity_on_hand) || 0),
+    0,
+  );
+  const par = Math.max(groupReorderPoint * 4, parQuantity * 1.5, 10);
+  // The sparkline is the group's series, not one placement's. Plotting
+  // `first`'s 14-day trend beside a SUMMED number presented one member's
+  // history as the whole group's; sum the members' series element-wise
+  // instead so the curve and the number describe the same scope.
+  const series = (() => {
+    const members = distinctItems.map((it) =>
+      seriesForRow(it.id, availableOf(it), sparkMode, trends),
+    );
+    const len = members.reduce((n, s) => Math.max(n, s.length), 0) || 14;
+    return Array.from({ length: len }, (_, i) => members.reduce((sum, s) => sum + (s[i] ?? 0), 0));
+  })();
+  // category_id / primary_location_id are per-row and CAN differ across a
+  // SKU's placements (books imported by different POs land in different
+  // book categories; placements can sit at different sites). Roll up
+  // rather than taking `first` — same class of bug as the charter column,
+  // which already had this right.
+  const categoryRollup = rollupText(items.map((it) => it.category_id));
+  const category =
+    categoryRollup.kind === 'same' ? lookups.categories.get(categoryRollup.value) : null;
+  const locationRollup = rollupText(items.map((it) => it.primary_location_id));
+  const location =
+    locationRollup.kind === 'same' ? lookups.locations.get(locationRollup.value) : null;
   const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
   const rowThumbSrc = first.image_thumb_url ?? first.image_url;
   // `status` is a PER-PLACEMENT field — placements of one SKU can
@@ -2376,7 +2721,24 @@ function SkuGroupHeaderRow({
   // active). Never take just the first placement's status here: that can
   // mask a discontinued/archived placement behind a healthy badge for the
   // whole group. Roll up conservatively instead (see group-by-sku.ts).
-  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
+  const rolledUpStatus = rollupStatus(distinctItems.map((it) => it.status));
+  // LIFECYCLE FLAGS (migs 0277 / 0266) are per-placement too, and the
+  // header dropped both — so in the Expected view (?expected=1) a title
+  // whose rows ALL await their first receipt collapsed into one "Out of
+  // stock" badge, inside the very view that exists to show expected
+  // stock; and in the Archived view an auto-archived group read as a
+  // plain "Archived".
+  // ROLLUP RULE — every(), not some(), for both. These are the only two
+  // flags that make a zero-quantity group read as SOFTER than "out of
+  // stock" / "archived by a person". A group where only SOME rows await
+  // a first receipt has real received stock on the others, so an
+  // "Expected" pill would be the more-flattering, less-true reading —
+  // exactly what rollupStatus refuses to do. Requiring every() means the
+  // pill appears only when it is unambiguously the whole truth, and a
+  // mixed group falls back to the ordinary quantity-derived badge —
+  // never anything healthier than its worst placement.
+  const allAwaitingFirstReceipt = distinctItems.every((it) => it.awaiting_first_receipt === true);
+  const allAutoArchived = distinctItems.every((it) => it.auto_archived === true);
 
   return (
     <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
@@ -2416,7 +2778,7 @@ function SkuGroupHeaderRow({
                       : undefined
                   }
                 >
-                  {formatNumber(group.total)}
+                  {formatNumber(displayedTotal)}
                 </span>
                 {group.totalIsPartial && (
                   <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
@@ -2464,7 +2826,14 @@ function SkuGroupHeaderRow({
         {group.sku}
       </td>
       <td className="px-3">
-        {category ? (
+        {categoryRollup.kind === 'multiple' ? (
+          <span
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
+            title="Placements span multiple categories — expand to see each"
+          >
+            Multiple
+          </span>
+        ) : category ? (
           <span
             className="inline-flex items-center gap-1.5 text-[12px]"
             style={category.color ? { color: category.color } : undefined}
@@ -2510,10 +2879,170 @@ function SkuGroupHeaderRow({
           </span>
         )}
       </td>
-      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
       <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-        {items.length} location{items.length === 1 ? '' : 's'}
+        {locationRollup.kind === 'multiple' ? (
+          <span
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
+            title="Placements span multiple sites — expand to see each"
+          >
+            Multiple
+          </span>
+        ) : (
+          // Plain em dash in the same ink-3 token the BODY row's Location
+          // cell uses, so a collapsed group and its expanded placements
+          // read identically.
+          (location?.name ?? '—')
+        )}
       </td>
+      {!showBookFields &&
+        (() => {
+          // Items layout: this is the RACK cell — the body row prints the
+          // rack/crate label(s) that row sits in. The header printed
+          // `items.length`, a count of placement ROWS labelled
+          // "locations", so three rows sharing two racks read "3
+          // locations" while expanding showed two. Count DISTINCT labels
+          // (same fix as the books Rack cell), and give rows with no rack
+          // at all their own explicit tail rather than counting them as a
+          // location that doesn't exist.
+          const labels = Array.from(new Set(items.flatMap(itemRackLabels)));
+          const unset = items.filter((it) => itemRackLabels(it).length === 0).length;
+          if (labels.length === 0) {
+            return (
+              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                <span className="text-[var(--ed-ink-4)]">—</span>
+              </td>
+            );
+          }
+          if (labels.length === 1 && unset === 0) {
+            return (
+              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                <span className="font-mono tabular-nums">{labels[0]}</span>
+              </td>
+            );
+          }
+          return (
+            <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+              <span
+                title={`Placements span: ${labels.join(', ')}${
+                  unset > 0 ? ` (+${unset} with no rack set)` : ''
+                }`}
+              >
+                {labels.length} location{labels.length === 1 ? '' : 's'}
+                {unset > 0 ? ` +${unset} unset` : ''}
+              </span>
+            </td>
+          );
+        })()}
+      {showBookFields &&
+        (() => {
+          // Books layout: the body row emits THREE cells here (grade /
+          // rack / crate — see the `showBookFields &&` block in the row
+          // map), so the header must too or every cell right of Location
+          // shifts one column. Each is rolled up, never taken from
+          // `first`: these live in custom_fields PER inventory_items row
+          // and can genuinely differ across a SKU's placements (one row
+          // graded during a PO import, its sibling graded by hand).
+          const storages = items.map((it) => readBookStorage(it.custom_fields));
+          const grade = rollupText(storages.map((s) => s.grade));
+          const rack = rollupText(storages.map((s) => s.rackLabel));
+          // Colour is only a visual aid attached to a crate NUMBER, so
+          // both must agree before a swatch is drawn — a coloured dot for
+          // a group whose placements sit in different crates sends staff
+          // to the wrong crate.
+          const crate = rollupText(
+            storages.map((s) => (s.crateNumber ? `${s.crateColor ?? ''}|${s.crateNumber}` : null)),
+          );
+          // `crate.value` is only a comparison KEY — read the display
+          // values back off the first placement rather than splitting it,
+          // so a crate number that ever contains the '|' separator can't
+          // render a truncated number. kind==='same' guarantees every
+          // placement carries this exact colour + number.
+          const crateColor = crate.kind === 'same' ? getCrateColor(storages[0]?.crateColor) : null;
+          const crateNumber = crate.kind === 'same' ? (storages[0]?.crateNumber ?? '') : '';
+          // Every DISTINCT rack label present. The count below is a count
+          // of RACKS, not of placements: three placements sharing two
+          // racks is "2 racks", and printing items.length there said "3
+          // racks" while this very tooltip listed only two.
+          const rackLabels = Array.from(
+            new Set(storages.map((s) => s.rackLabel).filter((l): l is string => !!l)),
+          );
+          // Placements with no rack set at all are not a rack — counting
+          // them into "N racks" would send staff looking for a shelf that
+          // doesn't exist, so they get their own explicit "unset" tail.
+          const rackUnset = storages.filter((s) => !s.rackLabel).length;
+          const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
+            rackUnset > 0 ? ` +${rackUnset} unset` : ''
+          }`;
+          return (
+            <>
+              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                {grade.kind === 'same' ? (
+                  <span className="font-mono">
+                    {/^\d{1,2}$/.test(grade.value) ? `Gr ${grade.value}` : grade.value}
+                  </span>
+                ) : grade.kind === 'multiple' ? (
+                  <span
+                    className="text-[11px] italic text-[var(--ed-ink-4)]"
+                    title="Placements span multiple grades — expand to see each"
+                  >
+                    Multiple
+                  </span>
+                ) : (
+                  <span className="text-[var(--ed-ink-4)]">—</span>
+                )}
+              </td>
+              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                {/* Rack is the books layout's analogue of the items
+                    "N locations" cell — and the field the owner
+                    physically walks to. When every placement agrees the
+                    concrete label is strictly more useful than a count;
+                    when they differ a COUNT (never one placement's rack)
+                    is the only honest value, and it preserves the
+                    how-many-placements information the items header
+                    carries. */}
+                {rack.kind === 'same' ? (
+                  <span className="font-mono tabular-nums">{rack.value}</span>
+                ) : rack.kind === 'multiple' ? (
+                  <span
+                    title={
+                      rackLabels.length > 0
+                        ? `Placements span: ${rackLabels.join(', ')}${
+                            rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
+                          }`
+                        : 'Placements span multiple racks — expand to see each'
+                    }
+                  >
+                    {rackCountLabel}
+                  </span>
+                ) : (
+                  <span className="text-[var(--ed-ink-4)]">—</span>
+                )}
+              </td>
+              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                {crate.kind === 'same' ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden
+                      title={crateColor ? crateColor.label : 'No color set'}
+                      className="border-border inline-block h-2.5 w-2.5 rounded-full border"
+                      style={crateColor ? { backgroundColor: crateColor.hex } : undefined}
+                    />
+                    <span className="font-mono tabular-nums">{crateNumber}</span>
+                  </span>
+                ) : crate.kind === 'multiple' ? (
+                  <span
+                    className="text-[11px] italic text-[var(--ed-ink-4)]"
+                    title="Placements sit in different crates — expand to see each"
+                  >
+                    Multiple
+                  </span>
+                ) : (
+                  <span className="text-[var(--ed-ink-4)]">—</span>
+                )}
+              </td>
+            </>
+          );
+        })()}
       <td
         className="px-3 text-right font-mono font-medium tabular-nums"
         title={
@@ -2522,7 +3051,7 @@ function SkuGroupHeaderRow({
             : undefined
         }
       >
-        {formatNumber(group.total)}
+        {formatNumber(displayedTotal)}
         {group.totalIsPartial && (
           <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
             *
@@ -2530,16 +3059,18 @@ function SkuGroupHeaderRow({
         )}
       </td>
       <td className="px-3">
-        <StockBar stock={group.total} par={par} status={status} />
+        <StockBar stock={healthQuantity} par={par} status={status} />
       </td>
       <td className="px-3 text-right">
         <Sparkline data={series} width={56} height={18} />
       </td>
       <td className="px-3">
         <StockStatusBadge
-          quantity={group.total}
-          reorderPoint={first.reorder_point}
+          quantity={healthQuantity}
+          reorderPoint={groupReorderPoint}
           itemStatus={rolledUpStatus}
+          autoArchived={allAutoArchived}
+          awaitingFirstReceipt={allAwaitingFirstReceipt}
         />
       </td>
       <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
