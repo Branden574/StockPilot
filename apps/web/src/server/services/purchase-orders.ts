@@ -699,6 +699,14 @@ export class PurchaseOrdersService {
       throw new ServiceError('forbidden', 'Only draft purchase orders can be edited.');
     }
     const currentPoNumber = (po as { po_number?: string }).po_number ?? '';
+    // Captured BEFORE the write so a bill-to change is auditable as a billing
+    // event (B4). Operational placement is captured alongside it purely to
+    // PROVE it did not move — this edit path writes no stock movement, no
+    // receipt and no item, so a bill-to-only save can never be a placement
+    // change.
+    const beforeCharterId = (po as { charter_id?: string | null }).charter_id ?? null;
+    const beforeDestinationLocationId =
+      (po as { destination_location_id?: string | null }).destination_location_id ?? null;
 
     // Resolve the destination warehouse id for custom-item creation (and reject
     // a warehouse-less destination — same guard as create()).
@@ -869,6 +877,18 @@ export class PurchaseOrdersService {
           po_number: poNumber,
           supplier_id: input.supplierId ?? null,
           line_count: resolvedLines.length,
+          // BILLING (B4): a bill-to charter change is a first-class, auditable
+          // billing event with its own before/after. It is recorded here and
+          // NOT as any kind of placement change.
+          bill_to_charter_id_before: beforeCharterId,
+          bill_to_charter_id_after: billToCharterId,
+          bill_to_changed: beforeCharterId !== billToCharterId,
+          // OPERATIONAL placement, recorded so history can show it held still
+          // across a billing-only edit.
+          destination_location_id_before: beforeDestinationLocationId,
+          destination_location_id_after: input.destinationLocationId ?? null,
+          placement_changed:
+            beforeDestinationLocationId !== (input.destinationLocationId ?? null),
         },
       },
       this.ctx,

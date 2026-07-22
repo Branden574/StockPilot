@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   actionsForStatus,
+  buildApproveCharterFields,
   buildLineOverrides,
   createLineIds,
   extractApiErrorMessage,
   isSiteLocation,
   normalizeExpectedAt,
   normalizeLineMatches,
+  ownershipCharterForCreate,
   unmatchedLineIds,
   validateApprove,
   type LineDecision,
@@ -272,5 +274,54 @@ describe('extractApiErrorMessage', () => {
 
   it('survives a non-JSON brace payload', () => {
     expect(extractApiErrorMessage(new Error('API 500: {oops'), 'f')).toBe('API 500: {oops');
+  });
+});
+
+// ── Bill-to is billing metadata, never placement ───────────────────────────
+
+describe('buildApproveCharterFields / ownershipCharterForCreate', () => {
+  const A = 'chr-operational-A';
+  const B = 'chr-billto-B';
+
+  it('sends the two charters as two independent keys', () => {
+    const body = buildApproveCharterFields({ billToCharterId: B, itemCharterId: A });
+    expect(body.charterId).toBe(B);
+    expect(body.itemCharterId).toBe(A);
+    // Neither is ever the other. On mobile these used to be ONE state variable.
+    expect(body.charterId).not.toBe(body.itemCharterId);
+  });
+
+  it('OMITS itemCharterId when no ownership intent was stated', () => {
+    // The reported defect on mobile: picking only a bill-to charter must not
+    // rewrite any item's ownership. Absent — not null — is what tells the
+    // server "change nothing".
+    const body = buildApproveCharterFields({ billToCharterId: B, itemCharterId: undefined });
+    expect(body.charterId).toBe(B);
+    expect('itemCharterId' in body).toBe(false);
+  });
+
+  it('keeps an explicit Generic ownership choice as a real null', () => {
+    const body = buildApproveCharterFields({ billToCharterId: B, itemCharterId: null });
+    expect('itemCharterId' in body).toBe(true);
+    expect(body.itemCharterId).toBeNull();
+  });
+
+  it('never lets the bill-to charter own newly created items', () => {
+    // "Keep as-is" for a brand-new item means no charter — NOT the bill-to one.
+    expect(ownershipCharterForCreate({ billToCharterId: B, itemCharterId: undefined })).toBeNull();
+    expect(ownershipCharterForCreate({ billToCharterId: B, itemCharterId: null })).toBeNull();
+    expect(ownershipCharterForCreate({ billToCharterId: B, itemCharterId: A })).toBe(A);
+  });
+
+  it('does not treat a bill-to charter as a substitute for the required location', () => {
+    // B3: placement stays blocked on the operational field. A billing-only
+    // document (the AI schema extracts no warehouse/location/charter at all)
+    // must make the user choose.
+    const v = validateApprove(
+      { warehouseId: 'wh-1', vendorId: 'v-1', locationId: null },
+      [],
+      {},
+    );
+    expect(v).toEqual({ ok: false, reason: 'Pick a destination location for this warehouse.' });
   });
 });

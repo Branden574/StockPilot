@@ -124,7 +124,12 @@ export async function approvePoImportAction(input: {
   vendorId: string;
   /** Required — approval must name the exact location the PO receives against. */
   locationId: string;
+  /** BILL-TO charter. Billing metadata: purchase_orders.charter_id → the PO
+   *  PDF's "Bill to" block. Never affects placement or ownership. */
   charterId?: string | null;
+  /** Item-OWNERSHIP charter. OMIT the key to leave every item's ownership
+   *  untouched; null is an explicit "Generic". Never defaulted from charterId. */
+  itemCharterId?: string | null;
   expectedAt?: string | null;
   lineOverrides?: Array<{
     lineId: string;

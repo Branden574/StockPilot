@@ -318,13 +318,13 @@ export function StockImpactPreview({
               <TableHead>From PO</TableHead>
               <TableHead
                 className="text-right"
-                title="Units this line adds to the SKU when received. You choose the charter/rack it lands in at receiving."
+                title="Units this line adds to the SKU when received. Which charter owns them is fixed here at import review (Charter for items); the rack is chosen at put-away."
               >
                 Adding
               </TableHead>
               <TableHead
                 className="text-right"
-                title="Total on-hand for this SKU across every charter/rack it lives in, before → after this PO. Where the units land is decided at receiving, so only the SKU total is projected here."
+                title="Total on-hand for this SKU across every charter/rack it lives in, before → after this PO. The units land on the item instance chosen at import review, and the rack at put-away, so only the SKU total is projected here."
               >
                 SKU total
               </TableHead>

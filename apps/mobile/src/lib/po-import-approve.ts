@@ -6,7 +6,10 @@
  *
  * Server contract these build against (PINNED — 2026-07-18 parity plan):
  *   POST /api/v1/po-imports/[id]/approve       { warehouseId, vendorId,
- *     locationId, charterId?, expectedAt?, lineOverrides? } → { ok, poId }
+ *     locationId, charterId?, itemCharterId?, expectedAt?, lineOverrides? }
+ *     → { ok, poId }
+ *     charterId    = BILL-TO (billing metadata; PO PDF only).
+ *     itemCharterId = item OWNERSHIP; OMIT the key to change no ownership.
  *   POST /api/v1/po-imports/[id]/cancel        → { ok }
  *   POST /api/v1/po-imports/[id]/parse         → { ok }
  *   POST /api/v1/po-imports/[id]/line-matches  { lineIds? } → { ok, matches }
@@ -298,4 +301,53 @@ export function extractApiErrorMessage(e: unknown, fallback: string): string {
     }
   }
   return raw || fallback;
+}
+
+// ── Charter payload split (billing vs ownership) ────────────────────────────
+
+/**
+ * The two charter choices the approve sheet collects. They are deliberately
+ * different shapes because they mean different things:
+ *
+ *   billToCharterId  — BILLING. null = "Generic" (bill the org only). Written
+ *                      to purchase_orders.charter_id, read only by the PO PDF.
+ *   itemCharterId    — OWNERSHIP, tri-state. `undefined` = the user stated no
+ *                      ownership intent, so approve() must leave every item's
+ *                      charter untouched; `null` = explicitly Generic; a uuid =
+ *                      explicitly that charter.
+ */
+export interface CharterDraft {
+  billToCharterId: string | null;
+  itemCharterId: string | null | undefined;
+}
+
+/**
+ * Builds the charter half of the approve body.
+ *
+ * The `itemCharterId` key is OMITTED (not sent as null) when no ownership
+ * intent was stated — the server distinguishes absent from null, and an absent
+ * key is what makes "change nothing" expressible. Sending null instead would
+ * silently re-charter every line to Generic.
+ *
+ * These two values are never derived from one another. Until 2026-07-22 the
+ * mobile sheet held a SINGLE state, labelled "BILL-TO CHARTER", and passed it
+ * to both create-items (ownership) and approve (billing) — so on mobile the
+ * billing field literally was the ownership field.
+ */
+export function buildApproveCharterFields(
+  draft: CharterDraft,
+): { charterId: string | null; itemCharterId?: string | null } {
+  return {
+    charterId: draft.billToCharterId,
+    ...(draft.itemCharterId === undefined ? {} : { itemCharterId: draft.itemCharterId }),
+  };
+}
+
+/**
+ * The ownership charter to stamp on items CREATED from this import.
+ * "Keep as-is" (undefined) collapses to null here — a brand-new item has no
+ * prior ownership to keep — but it must never collapse to the bill-to charter.
+ */
+export function ownershipCharterForCreate(draft: CharterDraft): string | null {
+  return draft.itemCharterId ?? null;
 }

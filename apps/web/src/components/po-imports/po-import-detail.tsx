@@ -73,6 +73,17 @@ interface Props {
   defaultExpectedAt?: string | null;
 }
 
+/**
+ * Sentinel values for the "Charter for items" select. Radix Select forbids an
+ * empty-string item value, so the two non-uuid choices need real sentinels.
+ * They are DISTINCT on purpose: KEEP means "I am not stating an ownership
+ * charter, change nothing", GENERIC means "I am stating one, and it is no
+ * charter". Collapsing them back into one value is how the original defect
+ * turned a blank field into a destructive re-charter.
+ */
+const CHARTER_KEEP = '__keep';
+const CHARTER_GENERIC = '__none';
+
 export function PoImportDetail({
   header,
   lines,
@@ -101,6 +112,11 @@ export function PoImportDetail({
   // Optional charter the imported items belong to (stock ownership), and the
   // REQUIRED destination location within the chosen warehouse (approve is
   // blocked until one is picked — the server no longer auto-resolves one).
+  // Tri-state, encoded in one string so the Select stays a plain controlled
+  // input: '' = KEEP (express no ownership intent — approve() leaves every
+  // item's charter alone), CHARTER_GENERIC = explicitly move ownership to
+  // Generic, any uuid = explicitly move ownership to that charter. KEEP is the
+  // default because the harmful path must be the one you have to choose.
   const [charterId, setCharterId] = React.useState<string>('');
   const [locationId, setLocationId] = React.useState<string>('');
   // Optional bill-to charter for the created PO — distinct from the item
@@ -268,7 +284,14 @@ export function PoImportDetail({
         vendorId,
         // Guaranteed non-empty: openConfirm blocks approve without a location.
         locationId,
+        // BILLING. Goes to purchase_orders.charter_id and nowhere else.
         charterId: billToCharterId || null,
+        // OPERATIONAL. Omitted entirely when the user left the ownership select
+        // on "Keep" — the server then touches no item's charter. Never derived
+        // from billToCharterId (owner rule B3: no silent fallback).
+        ...(charterId === ''
+          ? {}
+          : { itemCharterId: charterId === CHARTER_GENERIC ? null : charterId }),
         expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
         lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
           lineId,
@@ -390,7 +413,17 @@ export function PoImportDetail({
       )}
 
       {canApprove && (
-        <div className="grid gap-3 sm:grid-cols-2">
+        // B5: billing and operational placement live in two visibly separate
+        // sections. Both stay fully visible and editable — the fix for the
+        // bill-to/ownership conflation is separation, never concealment.
+        <div className="space-y-4">
+        <section className="border-border rounded-md border p-3">
+          <h3 className="text-foreground text-sm font-medium">Operational placement</h3>
+          <p className="text-muted-foreground mt-0.5 mb-3 text-xs">
+            Where this PO receives and who owns the stock. Nothing in the Billing
+            section below affects any of it.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="text-muted-foreground text-xs">Vendor</label>
             <Select
@@ -453,52 +486,35 @@ export function PoImportDetail({
           </div>
           <div>
             <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
-              Charter for items (optional)
+              Charter for items (ownership)
               <HelpTip label="Charter for items">
                 <p>
                   Sets who <strong>owns</strong> the stock: items created from these
-                  lines are stamped with this charter. Independent of billing — a PO
+                  lines are stamped with this charter, and at approval every line is
+                  pointed at the instance owned by it. Independent of billing — a PO
                   billed to one charter can stock items owned by another.
                 </p>
-              </HelpTip>
-            </label>
-            <Select
-              value={charterId || '__none'}
-              onValueChange={(v) => setCharterId(v === '__none' ? '' : v)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="No charter" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">No charter</SelectItem>
-                {charters.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
-              Bill to charter (optional)
-              <HelpTip label="Bill to charter">
-                <p>
-                  Sets who is <strong>billed</strong> on the purchase-order document
-                  itself. It does not affect who owns the items — that is the other
-                  dropdown.
+                <p className="mt-1">
+                  Leave it on &ldquo;Keep each item&apos;s current charter&rdquo; to
+                  change no ownership at all.
                 </p>
               </HelpTip>
             </label>
             <Select
-              value={billToCharterId || '__none'}
-              onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}
+              value={charterId || CHARTER_KEEP}
+              onValueChange={(v) => setCharterId(v === CHARTER_KEEP ? '' : v)}
             >
               <SelectTrigger>
-                <SelectValue placeholder="No charter" />
+                <SelectValue placeholder="Keep each item's current charter" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none">No charter</SelectItem>
+                {/* Default = express NO ownership intent. approve() then leaves
+                    every item's charter exactly as it is. "No charter" below is
+                    a DIFFERENT, explicit choice: move ownership to Generic. */}
+                <SelectItem value={CHARTER_KEEP}>
+                  Keep each item&apos;s current charter
+                </SelectItem>
+                <SelectItem value={CHARTER_GENERIC}>No charter (Generic)</SelectItem>
                 {charters.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.name}
@@ -569,6 +585,50 @@ export function PoImportDetail({
               onChange={(e) => setExpectedAt(e.target.value)}
             />
           </div>
+          </div>
+        </section>
+
+        <section className="border-border rounded-md border p-3">
+          <h3 className="text-foreground text-sm font-medium">
+            Billing — does not affect placement
+          </h3>
+          <p className="text-muted-foreground mt-0.5 mb-3 text-xs">
+            Financial metadata only. It is printed on the purchase-order
+            document&apos;s &ldquo;Bill to&rdquo; block and changes nothing else:
+            not the receiving warehouse, not the destination location, not who
+            owns the stock, not which list this PO appears in, not who can see it.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
+              Bill to charter (optional)
+              <HelpTip label="Bill to charter">
+                <p>
+                  Sets who is <strong>billed</strong> on the purchase-order document
+                  itself. It does not affect who owns the items — that is
+                  &ldquo;Charter for items&rdquo; under Operational placement.
+                </p>
+              </HelpTip>
+            </label>
+            <Select
+              value={billToCharterId || '__none'}
+              onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No charter" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No charter</SelectItem>
+                {charters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          </div>
+        </section>
         </div>
       )}
 
@@ -838,7 +898,14 @@ export function PoImportDetail({
         poImportId={header.id}
         vendorId={vendorId}
         warehouseId={warehouseId || null}
-        charterId={charterId || null}
+        // Both KEEP ('') and GENERIC mean "born with no charter" for a BRAND NEW
+        // item — there is no existing ownership to keep. Identical to the
+        // pre-2026-07-22 behaviour of this call.
+        // Tri-state, matching the approve payload above: '' is the "keep each
+        // item's current charter" default and must reach the service as
+        // UNDEFINED (no intent), never null — null is the explicit Generic
+        // instruction and would re-point existing items onto Generic siblings.
+        charterId={charterId === '' ? undefined : charterId === CHARTER_GENERIC ? null : charterId}
         locationId={locationId || null}
         itemType={createItemType}
         lines={createLines}

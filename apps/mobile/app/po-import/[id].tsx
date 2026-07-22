@@ -24,10 +24,12 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import {
   actionsForStatus,
+  buildApproveCharterFields,
   buildLineOverrides,
   createLineIds,
   isSiteLocation,
   normalizeExpectedAt,
+  ownershipCharterForCreate,
   unmatchedLineIds,
   validateApprove,
   type LineDecision,
@@ -825,7 +827,8 @@ interface SiteLocationRow extends PickerOption {
  * Bottom-sheet approve flow (MoveStockModal conventions). Collects the
  * REQUIRED warehouse / vendor / destination location (sites-only, scoped to
  * the chosen warehouse — approve's resolveDestinationLocation rejects any
- * location outside it), the optional bill-to charter + expected date, then a
+ * location outside it), the optional item-OWNERSHIP charter, the optional
+ * BILL-TO charter (billing metadata only) + expected date, then a
  * decision for every UNMATCHED inventory line (use a suggested existing item /
  * create a new one / skip). Submission batches the create decisions through
  * create-items first, then approves with the built lineOverrides.
@@ -863,7 +866,18 @@ function ApproveSheet({
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
   const [vendorId, setVendorId] = React.useState<string | null>(null);
   const [locationId, setLocationId] = React.useState<string | null>(null);
-  const [charterId, setCharterId] = React.useState<string | null>(null);
+  // TWO independent charters. Until 2026-07-22 this screen had ONE state,
+  // labelled "BILL-TO CHARTER", wired into BOTH create-items (ownership) and
+  // approve (billing) — so on mobile the billing field literally WAS the
+  // ownership field. They are now separate and neither defaults from the other.
+  //
+  // itemCharterId is tri-state, matching approvePoImportSchema.itemCharterId:
+  // undefined = keep every item's current charter (the default — approve()
+  // touches no ownership), null = explicitly Generic, uuid = that charter.
+  const [itemCharterId, setItemCharterId] = React.useState<string | null | undefined>(
+    undefined,
+  );
+  const [billToCharterId, setBillToCharterId] = React.useState<string | null>(null);
   const [expectedAtText, setExpectedAtText] = React.useState('');
   const [decisions, setDecisions] = React.useState<Record<string, LineDecision>>({});
 
@@ -882,7 +896,8 @@ function ApproveSheet({
     setWarehouseId(defaultWarehouseId);
     setVendorId(defaultVendorId);
     setLocationId(null);
-    setCharterId(null);
+    setItemCharterId(undefined);
+    setBillToCharterId(null);
     setExpectedAtText('');
     setDecisions({});
     void (async () => {
@@ -987,6 +1002,8 @@ function ApproveSheet({
   const expected = normalizeExpectedAt(expectedAtText);
   const canSubmit = validation.ok && expected.ok && !submitting && !loading;
 
+  const charterDraft = { billToCharterId, itemCharterId };
+
   async function submit() {
     if (!canSubmit || !validation.ok || !expected.ok) return;
     if (submittingRef.current) return;
@@ -1002,7 +1019,8 @@ function ApproveSheet({
           lineIds: toCreate,
           vendorId: vendorId!,
           warehouseId,
-          charterId: charterId ?? null,
+          // OWNERSHIP. Never billToCharterId.
+          charterId: ownershipCharterForCreate(charterDraft),
           locationId: locationId ?? null,
         });
       }
@@ -1011,7 +1029,9 @@ function ApproveSheet({
         warehouseId: warehouseId!,
         vendorId: vendorId!,
         locationId: locationId!,
-        charterId: charterId ?? null,
+        // charterId (BILLING) and itemCharterId (OWNERSHIP) — two independent
+        // values, and itemCharterId is omitted entirely on "Keep as-is".
+        ...buildApproveCharterFields(charterDraft),
         expectedAt: expected.value,
         lineOverrides: buildLineOverrides(decisions),
       });
@@ -1187,7 +1207,47 @@ function ApproveSheet({
                 </View>
 
                 <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>BILL-TO CHARTER (OPTIONAL)</FieldLabel>
+                  <FieldLabel>CHARTER FOR ITEMS (OWNERSHIP)</FieldLabel>
+                  <Mono size={11} color={c.ink4}>
+                    Who owns the stock. &quot;Keep as-is&quot; changes no item&apos;s
+                    charter.
+                  </Mono>
+                  {charters.length === 0 ? (
+                    <Mono size={11} color={c.ink4}>
+                      No charters configured — items stay generic.
+                    </Mono>
+                  ) : (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {/* Default. Distinct from "Generic": this states NO
+                          ownership intent, so approve() re-charters nothing. */}
+                      <Chip
+                        label="Keep as-is"
+                        active={itemCharterId === undefined}
+                        onPress={() => setItemCharterId(undefined)}
+                      />
+                      <Chip
+                        label="Generic"
+                        active={itemCharterId === null}
+                        onPress={() => setItemCharterId(null)}
+                      />
+                      {charters.map((ch) => (
+                        <Chip
+                          key={ch.id}
+                          label={ch.name}
+                          active={ch.id === itemCharterId}
+                          onPress={() => setItemCharterId(ch.id)}
+                        />
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                <View style={{ gap: 6, marginBottom: 16 }}>
+                  <FieldLabel>BILL-TO CHARTER (BILLING ONLY)</FieldLabel>
+                  <Mono size={11} color={c.ink4}>
+                    Printed on the PO document. Does not affect the warehouse,
+                    the destination location, item ownership or access.
+                  </Mono>
                   {charters.length === 0 ? (
                     <Mono size={11} color={c.ink4}>
                       No charters configured — the PO stays generic.
@@ -1196,15 +1256,15 @@ function ApproveSheet({
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                       <Chip
                         label="Generic"
-                        active={charterId === null}
-                        onPress={() => setCharterId(null)}
+                        active={billToCharterId === null}
+                        onPress={() => setBillToCharterId(null)}
                       />
                       {charters.map((ch) => (
                         <Chip
                           key={ch.id}
                           label={ch.name}
-                          active={ch.id === charterId}
-                          onPress={() => setCharterId(ch.id)}
+                          active={ch.id === billToCharterId}
+                          onPress={() => setBillToCharterId(ch.id)}
                         />
                       ))}
                     </View>

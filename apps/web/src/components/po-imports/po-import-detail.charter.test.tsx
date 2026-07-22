@@ -227,11 +227,74 @@ describe('PoImportDetail charter routing (item-charter -> create, bill-to -> app
     await user.click(screen.getByRole('button', { name: /approve & create po/i }));
 
     expect(approvePoImportAction).toHaveBeenCalledTimes(1);
-    const call = approvePoImportAction.mock.calls[0]![0] as { charterId: string | null };
+    const call = approvePoImportAction.mock.calls[0]![0] as {
+      charterId: string | null;
+      itemCharterId?: string | null;
+    };
     // Bill-to charter reaches purchase_orders.charter_id...
     expect(call.charterId).toBe('chr-bill');
     // ...and the item-charter (a distinct value) is never the value sent.
     expect(call.charterId).not.toBe('chr-kva');
+    // The ownership charter now travels to approve() too, on its OWN key.
+    // (This line previously asserted `not.toHaveProperty('itemCharterId')` —
+    // it was pinning the defect: because the ownership choice never reached
+    // approve, the server had nothing to use and fell back to the bill-to
+    // value, silently re-chartering the stock. Two independent keys, carrying
+    // two independent values, is the stronger contract.)
+    expect(call.itemCharterId).toBe('chr-kva');
+  });
+
+  it('omits itemCharterId entirely when the ownership select is left on "Keep" — a bill-to pick alone rewrites no ownership', async () => {
+    // The reported field failure, at the form layer: the user chooses who to
+    // bill and never touches the ownership control. Before the fix, the empty
+    // ownership state was simply absent from the payload and the server fell
+    // back to the bill-to charter, re-chartering every item to it. Doing
+    // nothing must stay the harmless path (B3).
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    approvePoImportAction.mockResolvedValue({ ok: true, data: { poId: 'po-1' } });
+
+    renderDetail([MAPPED_LINE]);
+
+    await pickFromSelect(user, /pick vendor/i, 'Acme');
+    await pickFromSelect(user, /pick warehouse/i, 'Main');
+    await pickFromSelect(user, /pick a location/i, 'Dock A');
+    await pickFromTrigger(user, getSelectTriggerByLabel(/bill to charter/i), 'Bill Co');
+
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+    await screen.findByText(/approve this import\?/i);
+    await user.click(screen.getByRole('button', { name: /approve & create po/i }));
+
+    const call = approvePoImportAction.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.charterId).toBe('chr-bill');
+    // Absent, not null: null would be an explicit "move ownership to Generic".
     expect(call).not.toHaveProperty('itemCharterId');
+    // Operational placement came from the operational field, not the billing one.
+    expect(call.locationId).toBe('loc-1');
+  });
+
+  it('sends itemCharterId: null when the user explicitly picks "No charter (Generic)"', async () => {
+    // Distinct from "Keep": this is a real ownership decision and must reach
+    // the server as one, so approve() moves ownership to Generic on purpose.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    approvePoImportAction.mockResolvedValue({ ok: true, data: { poId: 'po-1' } });
+
+    renderDetail([MAPPED_LINE]);
+
+    await pickFromSelect(user, /pick vendor/i, 'Acme');
+    await pickFromSelect(user, /pick warehouse/i, 'Main');
+    await pickFromSelect(user, /pick a location/i, 'Dock A');
+    await pickFromTrigger(
+      user,
+      getSelectTriggerByLabel(/charter for items/i),
+      /no charter \(generic\)/i,
+    );
+
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+    await screen.findByText(/approve this import\?/i);
+    await user.click(screen.getByRole('button', { name: /approve & create po/i }));
+
+    const call = approvePoImportAction.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call).toHaveProperty('itemCharterId');
+    expect(call.itemCharterId).toBeNull();
   });
 });

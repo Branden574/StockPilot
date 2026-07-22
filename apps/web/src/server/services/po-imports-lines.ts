@@ -243,16 +243,32 @@ export async function createItemsFromPoLines(
     primaryLocationId = (loc?.id as string | undefined) ?? null;
   }
 
-  // Verify the chosen charter belongs to this org before tagging items with it.
+  // Ownership charter is TRI-STATE, and collapsing it to a boolean is
+  // destructive. `undefined` means the caller stated no ownership intent (the
+  // review form's "Keep each item's current charter" default); `null` means an
+  // explicit Generic. Only the second is an instruction. Treating "keep" as
+  // Generic made the DEFAULT choice re-point a use_existing line onto a freshly
+  // spawned Generic sibling — the opposite of what the option promises.
+  const charterIntent = input.charterId !== undefined;
   let charterId: string | null = null;
   if (input.charterId) {
-    const { data: charter } = await supabase
+    const { data: charter, error: chErr } = await supabase
       .from('charters')
       .select('id')
       .eq('organization_id', organizationId)
       .eq('id', input.charterId)
       .maybeSingle();
-    charterId = (charter?.id as string | undefined) ?? null;
+    if (chErr) throw new ServiceError('internal_error', chErr.message);
+    // A STATED charter that does not resolve must not degrade to null — null is
+    // the explicit Generic instruction, so that would silently re-charter every
+    // line to Generic on a typo or a stale id.
+    if (!charter) {
+      throw new ServiceError(
+        'validation_error',
+        'That charter for items is not in this organization. Pick one from the list.',
+      );
+    }
+    charterId = charter.id as string;
   }
 
   // Confirm the import belongs to the ACTIVE org before creating items in it.
@@ -416,7 +432,10 @@ export async function createItemsFromPoLines(
       }
 
       const existingCharter = (existing.charter_id as string | null) ?? null;
-      if (existingCharter === charterId) {
+      // No stated ownership intent: link the item exactly as it is. Without
+      // this, "keep each item's current charter" fell into the branch below and
+      // spawned a Generic sibling instead of keeping anything.
+      if (!charterIntent || existingCharter === charterId) {
         // Same charter (both-generic/null counts as same) → link the item.
         resolvedItemId = existing.id as string;
         linked++;

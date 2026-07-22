@@ -22,7 +22,12 @@ export interface ApprovePoImportBody {
   warehouseId: string;
   vendorId: string;
   locationId: string;
+  /** BILLING ONLY — the bill-to charter written to purchase_orders.charter_id
+   *  (the PO PDF's "Bill to" block). Must never influence placement. */
   charterId?: string | null;
+  /** OPERATIONAL — the item-OWNERSHIP charter. OMIT the key entirely to leave
+   *  every item's ownership untouched; null means an explicit Generic. */
+  itemCharterId?: string | null;
   expectedAt?: string | null;
   lineOverrides?: ApproveLineOverride[];
 }

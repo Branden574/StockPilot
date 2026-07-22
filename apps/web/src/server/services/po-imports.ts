@@ -1108,28 +1108,39 @@ export class PoImportsService {
       );
     }
 
-    // Verify the chosen charter belongs to this org FIRST — it drives both the
-    // PO's bill-to tag and the item-instance re-resolution below.
-    let selectedCharterId: string | null = null;
-    if (input.charterId) {
-      const { data: charter } = await this.ctx.supabase
-        .from('charters')
-        .select('id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', input.charterId)
-        .maybeSingle();
-      selectedCharterId = (charter?.id as string | undefined) ?? null;
-    }
+    // TWO CHARTERS, TWO JOBS — never one value aliased into both.
+    //
+    // billToCharterId is BILLING metadata: it lands on purchase_orders.charter_id
+    // and is read only by the PO PDF's "Bill to" block.
+    // ownershipCharterId is OPERATIONAL: it is the only thing allowed to decide
+    // which inventory_items row (and therefore which charter's stock) a line
+    // receives against.
+    //
+    // Until 2026-07-22 `input.charterId` fed BOTH, so picking a bill-to charter
+    // silently re-chartered inventory — contradicting this schema's own docs and
+    // the web form's own help text. They are now resolved independently and
+    // neither is ever substituted for the other.
+    const billToCharterId = await this.resolveOrgCharterId(input.charterId, 'bill-to');
+    // Tri-state: absent means "the caller expressed no ownership intent", which
+    // is NOT the same as null ("Generic"). Absent must leave ownership alone —
+    // guessing from billing is precisely the defect (owner rule B3).
+    const ownershipIntent = input.itemCharterId !== undefined;
+    const ownershipCharterId = ownershipIntent
+      ? await this.resolveOrgCharterId(input.itemCharterId, 'ownership')
+      : null;
 
-    // SELECTED CHARTER WINS (owner decision 2026-07-09): the charter picked at
-    // approve governs which ITEM INSTANCE each line receives against. A line
-    // can arrive pointing at an item under a DIFFERENT charter via the review
-    // combobox override (its dropdown dedupes options by SKU — oldest wins) or
-    // a stale prior resolution. resolveLines re-resolves its own use_existing
-    // decisions, but approve() is the LAST gate every path funnels through, so
-    // enforce it here too: swap in (or create, qty 0) the same-SKU sibling
-    // under the selected charter. The mismatched item is left untouched.
-    {
+    // SELECTED OWNERSHIP CHARTER WINS (owner decision 2026-07-09, re-sourced
+    // 2026-07-22): when — and only when — the caller states an ownership
+    // charter, it governs which ITEM INSTANCE each line receives against. A
+    // line can arrive pointing at an item under a DIFFERENT charter via the
+    // review combobox override (its dropdown dedupes options by SKU — oldest
+    // wins) or a stale prior resolution. resolveLines re-resolves its own
+    // use_existing decisions, but approve() is the LAST gate every path funnels
+    // through, so enforce it here too: swap in (or create, qty 0) the same-SKU
+    // sibling under the ownership charter. The mismatched item is left
+    // untouched. With no stated intent the whole block is skipped and ownership
+    // stays exactly as createItemsFromPoLines / resolveLines set it.
+    if (ownershipIntent) {
       const linkedIds = [...new Set(inventoryLines.map((l) => l.item_id as string))];
       if (linkedIds.length > 0) {
         const { data: linkedItems, error: liErr } = await this.ctx.supabase
@@ -1175,7 +1186,7 @@ export class PoImportsService {
         const inventorySvc = new InventoryService(this.ctx);
         for (const [id, it] of byId) {
           const itemCharter = it.charter_id ?? null;
-          if (itemCharter === selectedCharterId) continue;
+          if (itemCharter === ownershipCharterId) continue;
           const createdHere = importCreatedItemIds.has(id);
 
           // Is there already a sibling under the selected charter?
@@ -1187,9 +1198,9 @@ export class PoImportsService {
             .is('bin_location', null)
             .is('deleted_at', null);
           sibQuery =
-            selectedCharterId === null
+            ownershipCharterId === null
               ? sibQuery.is('charter_id', null)
-              : sibQuery.eq('charter_id', selectedCharterId);
+              : sibQuery.eq('charter_id', ownershipCharterId);
           const { data: sibling, error: sibErr } = await sibQuery.maybeSingle();
           if (sibErr) throw new ServiceError('internal_error', sibErr.message);
 
@@ -1205,7 +1216,7 @@ export class PoImportsService {
             // uniqueness (0234).
             const { error: rcErr } = await this.ctx.supabase
               .from('inventory_items')
-              .update({ charter_id: selectedCharterId })
+              .update({ charter_id: ownershipCharterId })
               .eq('organization_id', this.ctx.organizationId)
               .eq('id', id)
               .select('id')
@@ -1226,7 +1237,7 @@ export class PoImportsService {
               unitOfMeasure: it.unit_of_measure ?? 'unit',
               supplierId: it.supplier_id ?? input.vendorId,
               warehouseId: it.warehouse_id ?? input.warehouseId,
-              charterId: selectedCharterId,
+              charterId: ownershipCharterId,
               categoryId: it.category_id ?? null,
               primaryLocationId: null,
               trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
@@ -1297,10 +1308,6 @@ export class PoImportsService {
       input.warehouseId,
       input.locationId ?? null,
     );
-
-    // Bill-to = the same org-verified charter computed above (spoofed /
-    // cross-tenant ids were already silently dropped there).
-    const billToCharterId: string | null = selectedCharterId;
 
     const { data: po, error: poErr } = await this.ctx.supabase
       .from('purchase_orders')
@@ -1393,13 +1400,72 @@ export class PoImportsService {
           chargeCount: chargeRows.length,
           chargeTotal,
           total: subtotal + chargeTotal,
+          // OPERATIONAL placement, recorded separately from billing so history
+          // can prove which one an approval actually set.
           warehouseId: input.warehouseId,
+          destinationLocationId,
+          itemCharterId: ownershipIntent ? ownershipCharterId : undefined,
+          ownershipApplied: ownershipIntent,
+          // BILLING metadata. Same shape, different job — never the same value
+          // by construction.
+          billToCharterId,
         },
       },
       this.ctx,
     );
 
     return { poId: po.id as string };
+  }
+
+  /**
+   * Resolves a charter id against THIS org. Returns the id when it is a live
+   * charter of the caller's org, else null — a spoofed / cross-tenant / stale
+   * id is silently dropped rather than written (mirrors
+   * PurchaseOrdersService.resolveCharterId). Dropping is a tenancy defence, not
+   * a fallback: it never substitutes some OTHER charter's id.
+   *
+   * Used for BOTH the bill-to and the item-ownership charter, independently.
+   * Sharing the resolver is safe — sharing a resolved VALUE is what caused the
+   * billing→ownership conflation.
+   */
+  /**
+   * Resolves a charter id against THIS org, or refuses.
+   *
+   * It used to return null for anything it could not resolve, which is safe for
+   * a billing value (no bill-to block on the PDF) but destructive for the
+   * ownership value: null there is not "unknown", it is the explicit "Generic"
+   * choice, so an id that failed to resolve silently became an instruction to
+   * re-charter every line to Generic. It also swallowed the query error, so a
+   * transient failure produced the same destruction. Both are the silent
+   * substitution of an operational value that rule B3 forbids.
+   *
+   * Undefined and null still mean "not stated" and "explicitly Generic"
+   * respectively — those are legitimate inputs. Only a STATED id that does not
+   * belong to this org is an error now, and the message names which of the two
+   * fields was wrong so the user is not left guessing between two charter
+   * pickers.
+   */
+  private async resolveOrgCharterId(
+    charterId: string | null | undefined,
+    field: 'bill-to' | 'ownership',
+  ): Promise<string | null> {
+    if (charterId === undefined || charterId === null || charterId === '') return null;
+    const { data: charter, error } = await this.ctx.supabase
+      .from('charters')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', charterId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!charter) {
+      throw new ServiceError(
+        'validation_error',
+        field === 'ownership'
+          ? 'That charter for items is not in this organization. Pick one from the list.'
+          : 'That bill-to charter is not in this organization. Pick one from the list.',
+      );
+    }
+    return charter.id as string;
   }
 
   /**

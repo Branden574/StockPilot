@@ -96,11 +96,32 @@ export const approvePoImportSchema = z.object({
     .string({ required_error: 'Pick a destination location for this warehouse.' })
     .uuid('Pick a destination location for this warehouse.'),
   /**
-   * Optional bill-to charter for the created PO (rendered on the PO PDF's
-   * "Bill to" block). Distinct from the item-ownership charter chosen when
-   * creating items from the import. Verified against the org server-side.
+   * BILLING ONLY. The bill-to charter for the created PO — written to
+   * purchase_orders.charter_id and read by exactly one consumer, the PO PDF's
+   * "Bill to" block. It must NEVER influence operational placement: not the
+   * receiving warehouse, not the destination location, not which charter owns
+   * the stock, not list placement, not access. Verified against the org
+   * server-side (a cross-tenant id is dropped, never substituted).
    */
   charterId: z.string().uuid().nullable().optional(),
+  /**
+   * OPERATIONAL. The item-OWNERSHIP charter — the same value passed to
+   * createItemsFromPoLines. This is the ONLY input to approve() that may
+   * affect inventory_items.charter_id.
+   *
+   * Tri-state on purpose (owner rule B3 — no silent fallback):
+   *   • absent (undefined) → LEAVE EVERY ITEM'S OWNERSHIP EXACTLY AS IT IS.
+   *     approve() skips re-chartering, sibling lookup, sibling creation and
+   *     line remap entirely. This is also what an older mobile build sends,
+   *     so shipping the server first is non-destructive.
+   *   • null → an explicit choice: Generic (no charter).
+   *   • uuid → an explicit choice of that charter.
+   *
+   * Deliberately has NO default derived from `charterId` — deriving one would
+   * reintroduce exactly the billing→placement conflation this field exists to
+   * end.
+   */
+  itemCharterId: z.string().uuid().nullable().optional(),
   /**
    * Optional expected delivery date for the created PO (ISO datetime). Prefilled
    * from the AI-extracted ship/delivery date when present; user can override.

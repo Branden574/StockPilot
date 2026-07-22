@@ -20,8 +20,9 @@ export const maxDuration = 60;
  * Mobile "Approve import" — Bearer parity for web's approvePoImportAction.
  * Reuses PoImportsService.approve verbatim (module gate,
  * purchase_orders:manage assert, org-scoped get() → not_found for foreign or
- * unknown ids, selected-charter-wins re-resolution, required destination
- * location). Body is the SAME zod contract as the web action minus
+ * unknown ids, item-ownership re-resolution ONLY when itemCharterId is
+ * supplied, required destination location). charterId here is BILL-TO
+ * metadata and never affects placement. Body is the SAME zod contract as the web action minus
  * poImportId, which comes from the path.
  *
  * → 200 { ok: true, poId }

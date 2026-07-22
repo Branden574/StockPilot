@@ -294,9 +294,17 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(lookupArgs).not.toContain('item_type');
   });
 
-  it('drops a charter that does not belong to the org (tenant isolation) — never tags items with it', async () => {
-    // charter verification finds no matching charter in this org; no barcode
-    // match either, so the line falls through to create.
+  // REWRITTEN 2026-07-22, not weakened. This asserted that a foreign charter
+  // was silently DROPPED to null and the create proceeded. Tenant isolation was
+  // preserved, but null on this field is not "unknown" — it is the explicit
+  // "Generic" ownership instruction, so the silent drop quietly re-homed the
+  // items the user was trying to place under a specific charter. That is the
+  // silent substitution of an operational value the bill-to decoupling work
+  // set out to eliminate. Refusing proves tenant isolation MORE strongly: the
+  // foreign id never reaches an item, and the user is told their pick was
+  // invalid instead of discovering Generic stock later.
+  it('REFUSES a charter that does not belong to the org (tenant isolation) — never tags items with it, and never silently downgrades it to Generic', async () => {
+    // charter verification finds no matching charter in this org.
     installStub({ charterRow: null, inventoryItems: [] });
 
     const result = await createItemsFromPoLinesAction({
@@ -307,9 +315,11 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
       charterId: CHARTER_ID, // spoofed / cross-tenant id
     });
 
-    expect(result.ok).toBe(true);
-    const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
-    expect(createArg.charterId).toBeNull();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    // The decisive assertion: no item was created at all, so the foreign
+    // charter cannot have been written and nothing was re-homed to Generic.
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('fails closed (not_found) and creates nothing when the import is not in the active org', async () => {
