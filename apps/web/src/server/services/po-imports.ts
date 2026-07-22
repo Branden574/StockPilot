@@ -848,7 +848,13 @@ export class PoImportsService {
                 (it.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ?? 'product',
               customFields: {},
               status: 'active',
-            });
+              // Born FROM this PO at qty 0 — mark it Expected (awaiting first
+              // receipt) like every other PO-driven creation path
+              // (createItemsFromPoLines, purchase-orders.create). Without this
+              // the charter sibling — the common case for a book that already
+              // exists under a different charter — showed up as a real
+              // "Out of stock" row instead of hiding under the Expected chip.
+            }, { awaitingFirstReceipt: true });
             remap.set(id, created.id as string);
           }
         }
