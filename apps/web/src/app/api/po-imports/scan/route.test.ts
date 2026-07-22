@@ -74,6 +74,16 @@ describe('POST /api/po-imports/scan — separate vs combined', () => {
     expect(createFromScan.mock.calls[0]![0].files).toHaveLength(3);
   });
 
+  it('NO mode field + multiple files → combined (backward-compat: older mobile builds send no mode and expect one PO)', async () => {
+    const res = await POST(scanRequest([pdf('page1.pdf'), pdf('page2.pdf')])); // no mode
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.mode).toBeUndefined();
+    expect(typeof json.id).toBe('string');
+    expect(createFromScan).toHaveBeenCalledTimes(1);
+    expect(createFromScan.mock.calls[0]![0].files).toHaveLength(2);
+  });
+
   it('a single file is always combined (nothing to separate) even if mode=separate', async () => {
     const res = await POST(scanRequest([pdf('solo.pdf')], 'separate'));
     expect(res.status).toBe(200);

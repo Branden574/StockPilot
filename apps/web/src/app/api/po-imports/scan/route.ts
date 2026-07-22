@@ -141,12 +141,13 @@ export async function POST(req: Request) {
     })),
   );
 
-  // Multi-file scans default to "each file is its own PO" (separate) so a batch
-  // of distinct POs isn't merged into one jumbled import. The caller sends
-  // mode='combined' only when the files are really pages of ONE PO. A single
-  // file has nothing to separate.
+  // Separate mode ("each file is its own PO") is OPT-IN: a caller must send
+  // mode='separate' AND attach 2+ files. Any client that doesn't ask (e.g. an
+  // older mobile build that captures multiple frames as pages of ONE PO) keeps
+  // the historical merge behavior — so this stays backward-compatible. The web
+  // scan form sends mode='separate' by default; single files always combine.
   const mode =
-    form.get('mode') === 'combined' || files.length < 2 ? 'combined' : 'separate';
+    form.get('mode') === 'separate' && files.length >= 2 ? 'separate' : 'combined';
 
   const svc = new PoImportsService(ctx);
 
