@@ -64,11 +64,27 @@ export async function GET(req: Request): Promise<Response> {
     return NextResponse.json({ items: [], total: 0 });
   }
 
-  const rawType = params.get('type');
+  // A single `type=` keeps the legacy one-value contract (including 'all').
+  // REPEATING it (`type=product&type=asset&type=consumable`) narrows to that
+  // SET instead — the order add-items picker needs its "Inventory" tab to span
+  // every non-book type the order-creation catalog allows, and splitting the
+  // types client-side would make `total` describe a different set than the one
+  // being rendered, so Load more would lie.
+  const rawTypes = params.getAll('type').filter((t) => VALID_TYPES.has(t));
+  const narrowedTypes = rawTypes.filter((t) => t !== 'all') as Array<
+    'product' | 'book' | 'asset' | 'consumable'
+  >;
+  const itemTypes = narrowedTypes.length > 1 ? narrowedTypes : undefined;
+  const rawType = rawTypes[0];
   const itemType =
-    rawType && VALID_TYPES.has(rawType)
+    itemTypes === undefined && rawType
       ? (rawType as 'product' | 'book' | 'asset' | 'consumable' | 'all')
       : undefined;
+
+  // `bundles=exclude` drops kit/bundle SKUs, matching what the order-creation
+  // catalog (loadCatalogItems) does. Opt-in: the inventory table still shows
+  // bundles, which is the whole point of the flag existing there.
+  const excludeBundles = params.get('bundles') === 'exclude';
 
   const rawStatus = params.get('status');
   const status =
@@ -112,6 +128,8 @@ export async function GET(req: Request): Promise<Response> {
   const result = await inventorySvc.list({
     q: raw,
     itemType,
+    itemTypes,
+    excludeBundles,
     // The Expected view spans lifecycles (mobile's listStatusPredicate
     // lifecycle:null; the Items/Books pages pass status:'all' the same
     // way) — so searching inside the chip view also reaches a flagged

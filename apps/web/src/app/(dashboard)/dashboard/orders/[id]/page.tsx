@@ -1,8 +1,9 @@
-import { Landmark } from 'lucide-react';
+import { Landmark, Printer } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import * as React from 'react';
 
+import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
@@ -94,6 +95,24 @@ export default async function OrderDetailPage({
     (ATTACHABLE_ORDER_STATUSES as readonly string[]).includes(request.status);
   const isOwnRequest =
     request.requester_user_id !== null && request.requester_user_id === ctx.userId;
+  // Add-items entry point. Mirrors OrderRequestsService.addLines one-for-one:
+  // requester-or-approver, and only before the order ships or dies. Gating here
+  // rather than letting the server 409 means nobody opens the picker, stages
+  // five items and only then learns the order already left the building.
+  // Not mirrored: the service's assertWarehouseAccess(warehouse_id,'read').
+  // order_requests are readable org-wide, so a warehouse-scoped member can open
+  // an order for a warehouse they aren't assigned to and would still see the
+  // button; paying getWarehouseAccess on EVERY render (today it is paid only on
+  // picking statuses) to pre-empt that rare case isn't worth it — the action
+  // returns a clean forbidden with the dialog left open.
+  const ADD_LINES_BLOCKED: OrderRequestStatus[] = [
+    'in_transit',
+    'completed',
+    'denied',
+    'cancelled',
+  ];
+  const canAddLines =
+    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status);
   // Phase 4 — the assigned delivery driver may be a staff user who lacks
   // orders:approve. They still need the actions panel on the statuses
   // where their permitted actions live (mark-in-transit, collect
@@ -409,6 +428,33 @@ export default async function OrderDetailPage({
       ? `/returns/request/${request.return_token}`
       : null;
 
+  // Item-level summary for the add-items picker: it labels a pick that would
+  // TOP UP an existing line instead of creating one. Summed PER ITEM because an
+  // order can legitimately carry two lines of the same item (see the grouped
+  // demand calc above) and addLines tops up against the item, not the line.
+  //
+  // The dialog phrases this as the ITEM total for the same reason: addLines
+  // builds its existingByItem Map over the line rows, so with two lines of one
+  // item only the LAST row is topped up. A per-line promise would name a number
+  // that appears on no line; the item total is true whichever row it picks.
+  const existingLineSummary = canAddLines
+    ? [
+        ...lines
+          .reduce((m, l) => {
+            const itemId = l.item?.id;
+            if (!itemId) return m;
+            const prior = m.get(itemId);
+            m.set(itemId, {
+              itemId,
+              name: l.item?.name ?? '',
+              quantity: (prior?.quantity ?? 0) + (Number(l.quantity_requested) || 0),
+            });
+            return m;
+          }, new Map<string, { itemId: string; name: string; quantity: number }>())
+          .values(),
+      ]
+    : [];
+
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <OrderRealtimeRefresh orderId={id} />
@@ -460,10 +506,54 @@ export default async function OrderDetailPage({
           <section className="bg-card rounded-xl border">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <h2 className="text-sm font-medium">Lines ({lines.length})</h2>
-              <p className="text-muted-foreground text-xs tabular-nums">
-                Total qty {formatNumber(totalQty)}
-              </p>
+              <div className="flex items-center gap-3">
+                <p className="text-muted-foreground text-xs tabular-nums">
+                  Total qty {formatNumber(totalQty)}
+                </p>
+                {/* Adding items edits the CONTENTS of this collection, so the
+                    affordance sits with the collection (and the Total qty
+                    readout it changes) rather than in the header row, which
+                    holds whole-order lifecycle actions. */}
+                {canAddLines && (
+                  <AddItemsDialog
+                    orderId={id}
+                    status={request.status}
+                    warehouseId={request.warehouse_id}
+                    warehouseName={warehouseName}
+                    existingLines={existingLineSummary}
+                  />
+                )}
+              </div>
             </div>
+            {/* A pick slip printed BEFORE the last line was added no longer
+                matches the order. Ungated by permission on purpose: the person
+                who needs this is the picker holding the paper, not whoever
+                clicked Add. Derived on the detail, so it self-clears on
+                reprint.
+
+                Gated on status because pickSlipStale never clears on its own:
+                it is line.created_at > pick_slip_generated_at, and only a
+                reprint moves that stamp. On a shipped, completed, denied or
+                cancelled order there is nothing left to pick, so the prompt
+                would sit there forever telling the viewer to do something that
+                is no longer possible. Same status set the add affordance uses —
+                once contents are frozen, a reprint is moot. (Mobile applies the
+                identical gate via isAddLinesBlockedStatus.) */}
+            {detail.pickSlipStale && !ADD_LINES_BLOCKED.includes(request.status) && (
+              <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
+                <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
+                  <Printer className="mt-px size-3.5 shrink-0" />
+                  <span>
+                    Items were added after the pick slip was printed. Generate the
+                    pick slip again so the sheet matches this order
+                    {detail.assignedPickerName
+                      ? `, and give the new copy to ${detail.assignedPickerName}`
+                      : ''}
+                    .
+                  </span>
+                </p>
+              </div>
+            )}
             {totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered') && (
               <div className="border-b border-border bg-amber-50 px-4 py-2.5 text-xs dark:bg-amber-950/30">
                 <div className="flex items-center justify-between">

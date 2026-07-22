@@ -105,6 +105,8 @@ describe('GET /api/items/search', () => {
       rack: '20-A',
       limit: 10,
       offset: 20,
+      // Bundles stay visible unless a caller opts out (?bundles=exclude).
+      excludeBundles: false,
     });
     const body = await res.json();
     expect(body.items).toHaveLength(1);
@@ -120,6 +122,39 @@ describe('GET /api/items/search', () => {
     expect(res.status).toBe(200);
     expect(inventoryListMock).toHaveBeenCalledWith(
       expect.objectContaining({ q: 'lanyard', expected: true }),
+    );
+  });
+
+  it('turns a REPEATED type into an itemTypes set, not a single-type filter', async () => {
+    // The order add-items picker's Inventory tab has to span every non-book
+    // type the order-creation catalog allows. Narrowing server-side (rather
+    // than splitting client-side) is what keeps `total` — and therefore the
+    // picker's Load more — describing the rows actually rendered.
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+
+    await GET(makeReq('browse=1&type=product&type=asset&type=consumable'));
+
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemType: undefined,
+        itemTypes: ['product', 'asset', 'consumable'],
+      }),
+    );
+  });
+
+  it('keeps the single-value type contract, including type=all', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=shir&type=all'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ itemType: 'all', itemTypes: undefined }),
+    );
+  });
+
+  it('?bundles=exclude forwards excludeBundles so a kit SKU cannot reach an order', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('browse=1&type=product&bundles=exclude'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeBundles: true }),
     );
   });
 

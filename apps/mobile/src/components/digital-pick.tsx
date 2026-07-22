@@ -9,6 +9,7 @@ import {
   transitionOrder,
   type OrderDetailLine,
 } from '@/lib/orders-api';
+import { mergePickQuantities, seedSavedQuantities } from '@/lib/pick-quantities';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -28,10 +29,23 @@ export function DigitalPick({
   orderId,
   onCompleted,
   canPick = true,
+  reloadToken = 0,
 }: {
   orderId: string;
   /** Called after a successful complete so the parent screen can reload. */
   onCompleted: () => void;
+  /**
+   * Bump to pull fresh lines in WITHOUT discarding work in progress — the
+   * parent uses it after items are added mid-pick.
+   *
+   * This exists because the parent used to remount the workspace with a
+   * changing `key`. That threw away every typed-but-unsaved quantity: they live
+   * in local `qty` state and only reach the server on Save or Complete, so a
+   * picker who had entered 3 and 5 lost both, and a following "Complete
+   * picking" saw no dirty lines and shipped those lines at zero. A merging
+   * reload keeps the typed values and seeds only the lines that are new.
+   */
+  reloadToken?: number;
   /**
    * Whether the viewer may actually pick this order. The parent screen decides
    * this from the picking claim/lock rules (assigned picker or a manager). When
@@ -50,28 +64,38 @@ export function DigitalPick({
   const [savingLine, setSavingLine] = React.useState<string | null>(null);
   const [completing, setCompleting] = React.useState(false);
 
-  const load = React.useCallback(async () => {
-    setError(null);
-    try {
-      const detail = await getOrderDetail(orderId);
-      setLines(detail.lines);
-      const seededQty: Record<string, string> = {};
-      const seededSaved: Record<string, number> = {};
-      for (const l of detail.lines) {
-        const picked = l.quantity_picked != null ? Number(l.quantity_picked) : 0;
-        seededQty[l.id] = String(picked);
-        seededSaved[l.id] = picked;
+  const load = React.useCallback(
+    async (preserveTyped = false) => {
+      setError(null);
+      try {
+        const detail = await getOrderDetail(orderId);
+        setLines(detail.lines);
+        // `saved` is always re-seeded from the server: it is the persisted
+        // truth and what isDirty() compares against. `qty` is the picker's
+        // in-progress input, so on a merging reload it is kept for every line
+        // already on screen and seeded only for lines that are new. Both rules
+        // live in lib/pick-quantities.ts so they are testable on their own.
+        setQty((prev) => mergePickQuantities(prev, detail.lines, preserveTyped));
+        setSaved(seedSavedQuantities(detail.lines));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not load order lines.');
       }
-      setQty(seededQty);
-      setSaved(seededSaved);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load order lines.');
-    }
-  }, [orderId]);
+    },
+    [orderId],
+  );
 
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  // Refresh on demand (a line was added while the workspace was open). The ref
+  // makes the first render a no-op, so this never double-fetches on mount.
+  const seenToken = React.useRef(reloadToken);
+  React.useEffect(() => {
+    if (seenToken.current === reloadToken) return;
+    seenToken.current = reloadToken;
+    void load(true);
+  }, [reloadToken, load]);
 
   function clampFor(line: OrderDetailLine, raw: string): number {
     const n = Math.floor(Number(raw.replace(/[^0-9]/g, '')) || 0);

@@ -18,6 +18,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DigitalPick } from '@/components/digital-pick';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
+import { AddOrderItemsSheet } from '@/components/add-order-items-sheet';
+import {
+  addedSummary,
+  canAddOrderItems,
+  derivePickSlipStale,
+  // The blocked-status gate now lives inside shouldShowStalePickSlip, which is
+  // the only place this screen needed it.
+  shouldShowStalePickSlip,
+  type AddLinesResult,
+} from '@/components/add-order-items';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
@@ -106,8 +116,22 @@ interface OrderHeader {
   requester: string | null;
   requesterName: string | null;
   requesterEmail: string | null;
+  /** Raw order_requests.requester_user_id. The add-items gate is
+   *  requester-or-approver (OrderRequestsService.addLines), so the screen needs
+   *  the id itself, not just the rendered label. */
+  requesterUserId: string | null;
   orgLabel: string | null;
   warehouseName: string | null;
+  /** The ORDER's warehouse. Added lines must be stocked HERE — not at the
+   *  workspace's active warehouse — so the add-items picker filters on it. */
+  warehouseId: string | null;
+  /** Whether a pick slip printed earlier no longer matches the order (a line
+   *  was added after it). Derived here because GET /api/v1/orders/[id] does not
+   *  forward the service's own pickSlipStale. */
+  pickSlipStale: boolean;
+  /** order_requests.pick_slip_generated_at. Only a reprint moves it, which is
+   *  what lets a merge-only add's staleness warning expire correctly. */
+  pickSlipGeneratedAt: string | null;
   /** Whether a signature exists. The blob itself is fetched on modal-open,
    *  not shipped in the order payload to every viewer. */
   hasSignature: boolean;
@@ -133,6 +157,11 @@ interface OrderHeader {
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
     orderRequestLineId: string | null;
+    /** inventory_items.id — lets the add-items picker mark rows that are
+     *  already on the order (those are topped up, not duplicated). */
+    itemId: string | null;
+    /** order_request_lines.created_at — drives the pick-slip staleness rule. */
+    createdAt: string | null;
     name: string;
     sku: string | null;
     requested: number;
@@ -187,6 +216,22 @@ export default function OrderDetail() {
   const [returnSubmitting, setReturnSubmitting] = React.useState(false);
   const [returnError, setReturnError] = React.useState<string | null>(null);
 
+  // Add-items sheet state (parity with the web add-items dialog).
+  const [addOpen, setAddOpen] = React.useState(false);
+  // Bumped after a successful add so DigitalPick re-fetches its lines: it loads
+  // them once on mount, so a line added mid-pick would otherwise stay invisible
+  // to the picker until they left and came back. Passed as `reloadToken`, not
+  // as a `key` — a remount would discard the picker's typed-but-unsaved
+  // quantities.
+  const [linesVersion, setLinesVersion] = React.useState(0);
+  // The pick_slip_generated_at value that was current when an add reported the
+  // slip stale. A merge-only add moves no line's created_at, so the derived
+  // rule cannot see it; this keeps the banner up until the slip is actually
+  // regenerated (which is the only thing that moves that stamp).
+  const [staleReportedForSlipAt, setStaleReportedForSlipAt] = React.useState<string | null>(
+    null,
+  );
+
   // Pipeline-action state (manager parity with the web ManagerActionsPanel).
   const [acting, setActing] = React.useState<string | null>(null);
   const [denyOpen, setDenyOpen] = React.useState(false);
@@ -237,6 +282,38 @@ export default function OrderDetail() {
   );
   const showCreateReturn =
     canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
+
+  // Add items to an EXISTING order (owner request 2026-07-22) — cosmetic mirror
+  // of OrderRequestsService.addLines: orders module on, the order has not
+  // shipped or died, and the viewer is its requester or holds orders:approve.
+  // `orders:request` alone is deliberately NOT enough to grow someone else's
+  // order. The route re-asserts all of it, so this only decides what to show.
+  const canAddItems = canAddOrderItems({
+    status: order?.status ?? null,
+    requesterUserId: order?.requesterUserId ?? null,
+    viewerUserId: user?.id ?? null,
+    viewerRole: (role as Role | null) ?? null,
+    permissions,
+    ordersModuleEnabled: enabledModules.has('orders'),
+  });
+  const existingItemIds = React.useMemo(
+    () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
+    [order],
+  );
+
+  /** Post-add: refresh the pick workspace, confirm what changed, then reload. */
+  async function handleItemsAdded(res: AddLinesResult) {
+    setAddOpen(false);
+    setLinesVersion((v) => v + 1);
+    // The route's own pickSlipStale is the only signal that survives a
+    // merge-only add (it UPDATEs quantity_requested and inserts nothing, so no
+    // line's created_at moves and derivePickSlipStale reads false on the very
+    // next load). Pin it to the slip it was about so the banner clears when
+    // that slip is reprinted, not one second later.
+    if (res.pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
+    Alert.alert('Items added', addedSummary(res));
+    await load();
+  }
 
   function openReturnSheet() {
     setReturnDraft(initialReturnDraft(orderReturnable));
@@ -342,7 +419,7 @@ export default function OrderDetail() {
         // for the picker chip (assigned_picker_id FK → user_profiles.id, mig
         // 0109). RLS lets org members read each other, same as the requester join.
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
-         signed_by_name, signed_at, created_at,
+         signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
@@ -356,7 +433,7 @@ export default function OrderDetail() {
     const { data: lineRows } = await supabase
       .from('order_request_lines')
       .select(
-        'id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
+        'id, item_id, created_at, quantity_requested, quantity_fulfilled, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
       .eq('order_request_id', id);
     type LineItemEmbed = {
@@ -368,6 +445,7 @@ export default function OrderDetail() {
     const rows = (lineRows ?? []) as {
       id: string | null;
       item_id: string | null;
+      created_at: string | null;
       quantity_requested: number | null;
       quantity_fulfilled: number | null;
       returned_quantity: number | null;
@@ -442,8 +520,20 @@ export default function OrderDetail() {
         }),
         requesterName: (r.requester_name as string | null) ?? null,
         requesterEmail: (r.requester_email as string | null) ?? null,
+        requesterUserId: (r.requester_user_id as string | null) ?? null,
         orgLabel: (r.requester_org_label as string | null) ?? null,
         warehouseName: whObj?.name ?? null,
+        warehouseId: (r.warehouse_id as string | null) ?? null,
+        // Derived with the SAME rule OrderRequestsService.get() applies for the
+        // web page (any line created after the slip was printed), so a reprint
+        // prompt can never drift out of sync with what web shows.
+        pickSlipStale: derivePickSlipStale(
+          (r.pick_slip_generated_at as string | null) ?? null,
+          rows.map((l) => ({ createdAt: l.created_at ?? null })),
+        ),
+        // Kept alongside the derived flag so a merge-only add's warning can be
+        // held until this stamp MOVES (i.e. the slip was actually reprinted).
+        pickSlipGeneratedAt: (r.pick_slip_generated_at as string | null) ?? null,
         hasSignature: (r.signed_at as string | null) != null,
         signedByName: (r.signed_by_name as string | null) ?? null,
         signedAt: (r.signed_at as string | null) ?? null,
@@ -464,6 +554,8 @@ export default function OrderDetail() {
             : itemObj?.charter;
           return {
             orderRequestLineId: l.id ?? null,
+            itemId: l.item_id ?? null,
+            createdAt: l.created_at ?? null,
             name: itemObj?.name ?? 'Unknown item',
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
@@ -895,86 +987,120 @@ export default function OrderDetail() {
             </Card>
           ) : null}
 
-          {order.lines.length > 0 ? (
+          {order.lines.length > 0 || canAddItems ? (
             <View style={{ gap: 10 }}>
               <Eyebrow>
                 {`ITEMS · ${order.lines.length} LINE${order.lines.length === 1 ? '' : 'S'} · ${totalRequested} UNITS`}
               </Eyebrow>
-              <Card padding={0}>
-                {order.lines.map((l, i) => (
-                  <View
-                    key={`${l.sku ?? l.name}-${i}`}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 12,
-                      paddingHorizontal: 14,
-                      paddingVertical: 12,
-                      borderTopWidth: i === 0 ? 0 : 1,
-                      borderTopColor: c.hair,
-                    }}
-                  >
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Body size={14} color={c.ink} numberOfLines={2}>
-                        {l.name}
-                      </Body>
-                      {l.sku ? (
-                        <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
-                          {l.sku}
-                        </Mono>
-                      ) : null}
-                      {l.charterName ? (
-                        <View
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            alignSelf: 'flex-start',
-                            // maxWidth + flexShrink below are BOTH required for
-                            // numberOfLines to actually ellipsize in RN (default
-                            // flexShrink is 0, and a flex-start chip is otherwise
-                            // measured at max-content and overflows the column).
-                            maxWidth: '100%',
-                            gap: 3,
-                            marginTop: 4,
-                            paddingHorizontal: 6,
-                            paddingVertical: 1,
-                            borderRadius: 999,
-                            backgroundColor: ACCENT.mintSoft,
-                          }}
-                        >
-                          <Landmark
-                            size={10}
-                            color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                          />
-                          <Mono
-                            size={10}
-                            tracking={0.02}
-                            color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                            numberOfLines={1}
-                            style={{ flexShrink: 1 }}
-                          >
-                            {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+              {/* Visible to EVERY viewer, not just whoever can add items — the
+                  picker holding a printed slip is the one who needs to know.
+                  Suppressed once the order has shipped or died: a reprint is
+                  then moot. */}
+              {shouldShowStalePickSlip({
+                derived: order.pickSlipStale,
+                pickSlipGeneratedAt: order.pickSlipGeneratedAt,
+                staleReportedForSlipAt,
+                status: order.status,
+              }) ? (
+                <Card padding={14}>
+                  <Body size={13} color={ACCENT.warn}>
+                    Pick slip out of date
+                  </Body>
+                  <Mono size={11} color={ACCENT.warn} style={{ marginTop: 4 }}>
+                    Items were added after it was printed. Generate the pick slip again before
+                    picking.
+                  </Mono>
+                </Card>
+              ) : null}
+              {order.lines.length === 0 ? (
+                <Mono size={11} color={c.ink4}>
+                  This order has no items yet.
+                </Mono>
+              ) : (
+                <Card padding={0}>
+                  {order.lines.map((l, i) => (
+                    <View
+                      key={`${l.sku ?? l.name}-${i}`}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 12,
+                        paddingHorizontal: 14,
+                        paddingVertical: 12,
+                        borderTopWidth: i === 0 ? 0 : 1,
+                        borderTopColor: c.hair,
+                      }}
+                    >
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Body size={14} color={c.ink} numberOfLines={2}>
+                          {l.name}
+                        </Body>
+                        {l.sku ? (
+                          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                            {l.sku}
                           </Mono>
-                        </View>
-                      ) : null}
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Mono size={13} color={c.ink}>
-                        ×{l.requested}
-                      </Mono>
-                      {l.fulfilled > 0 && l.fulfilled < l.requested ? (
-                        <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
-                          {l.fulfilled} provided · {l.requested - l.fulfilled} owed
+                        ) : null}
+                        {l.charterName ? (
+                          <View
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              alignSelf: 'flex-start',
+                              // maxWidth + flexShrink below are BOTH required for
+                              // numberOfLines to actually ellipsize in RN (default
+                              // flexShrink is 0, and a flex-start chip is otherwise
+                              // measured at max-content and overflows the column).
+                              maxWidth: '100%',
+                              gap: 3,
+                              marginTop: 4,
+                              paddingHorizontal: 6,
+                              paddingVertical: 1,
+                              borderRadius: 999,
+                              backgroundColor: ACCENT.mintSoft,
+                            }}
+                          >
+                            <Landmark
+                              size={10}
+                              color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                            />
+                            <Mono
+                              size={10}
+                              tracking={0.02}
+                              color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                              numberOfLines={1}
+                              style={{ flexShrink: 1 }}
+                            >
+                              {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                            </Mono>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Mono size={13} color={c.ink}>
+                          ×{l.requested}
                         </Mono>
-                      ) : l.fulfilled >= l.requested && l.requested > 0 ? (
-                        <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
-                          fulfilled
-                        </Mono>
-                      ) : null}
+                        {l.fulfilled > 0 && l.fulfilled < l.requested ? (
+                          <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
+                            {l.fulfilled} provided · {l.requested - l.fulfilled} owed
+                          </Mono>
+                        ) : l.fulfilled >= l.requested && l.requested > 0 ? (
+                          <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                            fulfilled
+                          </Mono>
+                        ) : null}
+                      </View>
                     </View>
-                  </View>
-                ))}
-              </Card>
+                  ))}
+                </Card>
+              )}
+              {canAddItems ? (
+                <>
+                  {actionBtn('Add items', 'add-items', () => setAddOpen(true), 'default')}
+                  <Mono size={10.5} color={c.ink4}>
+                    Items already on this order are topped up rather than listed twice.
+                  </Mono>
+                </>
+              ) : null}
             </View>
           ) : null}
 
@@ -1018,7 +1144,18 @@ export default function OrderDetail() {
               {/* Assigned picker or a manager → the pick workspace. A non-manager
                   who is NOT the claimant sees a note instead (never the inputs). */}
               {canDigitalPick ? (
-                <DigitalPick orderId={id!} canPick onCompleted={() => void load()} />
+                <DigitalPick
+                  // Merging refresh after an add, NOT a remount. Remounting
+                  // (key={`pick-${linesVersion}`}) discarded every typed-but-
+                  // unsaved quantity, because those live in DigitalPick's local
+                  // state until Save/Complete — and a following "Complete
+                  // picking" would then see no dirty lines and ship them at
+                  // zero. reloadToken re-fetches and keeps the typed values.
+                  reloadToken={linesVersion}
+                  orderId={id!}
+                  canPick
+                  onCompleted={() => void load()}
+                />
               ) : !canClaimPick &&
                 order.assignedPickerId !== null &&
                 order.assignedPickerId !== user?.id ? (
@@ -1679,6 +1816,22 @@ export default function OrderDetail() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Add-items sheet (parity with the web add-items dialog): warehouse-
+          constrained item search with a per-item quantity, submitted to
+          POST /api/v1/orders/[id]/lines. */}
+      {order ? (
+        <AddOrderItemsSheet
+          visible={addOpen}
+          onClose={() => setAddOpen(false)}
+          orderId={order.id}
+          organizationId={orgId}
+          warehouseId={order.warehouseId}
+          existingItemIds={existingItemIds}
+          onAdded={(res) => void handleItemsAdded(res)}
+          onRequestReload={() => void load()}
+        />
+      ) : null}
 
       {order?.signatureToken ? (
         <SignaturePadModal

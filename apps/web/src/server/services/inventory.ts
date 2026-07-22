@@ -154,6 +154,26 @@ export interface ItemListFilters {
    *   - 'all' (no filter — used by reports / dashboard rollups)
    */
   itemType?: 'product' | 'book' | 'asset' | 'consumable' | 'all';
+  /**
+   * Restrict to a SET of item types (`.in('item_type', …)`). Takes precedence
+   * over `itemType` when non-empty.
+   *
+   * Exists because a picker can legitimately span several types on ONE
+   * paginated list: the order add-items dialog's "Inventory" tab has to cover
+   * product + asset + consumable, because the order-creation catalog applies no
+   * item_type filter at all and a consumable ordered at creation must stay
+   * top-uppable afterwards. Splitting the types client-side instead would make
+   * `total` (and therefore the Load-more affordance) describe a different set
+   * than the one being rendered.
+   */
+  itemTypes?: Array<'product' | 'book' | 'asset' | 'consumable'>;
+  /**
+   * Drop bundle (kit) SKUs. Mirrors the order-creation catalog's
+   * `.or('is_bundle.is.null,is_bundle.eq.false')` — a bundle is a container,
+   * not pickable stock, so it must never reach an order. Opt-in so every other
+   * caller keeps its current result set.
+   */
+  excludeBundles?: boolean;
   lowStock?: boolean;
   outOfStock?: boolean;
   /**
@@ -542,11 +562,20 @@ export class InventoryService {
     }
 
     // item_type defaults to 'product' so the legacy /dashboard/inventory tab
-    // doesn't accidentally show books/assets. Pass 'all' to disable.
-    if (filters.itemType === undefined) {
+    // doesn't accidentally show books/assets. Pass 'all' to disable, or
+    // itemTypes for a multi-type set (which wins when present).
+    if (filters.itemTypes && filters.itemTypes.length > 0) {
+      query = query.in('item_type', filters.itemTypes);
+    } else if (filters.itemType === undefined) {
       query = query.eq('item_type', 'product');
     } else if (filters.itemType !== 'all') {
       query = query.eq('item_type', filters.itemType);
+    }
+
+    // Bundles are containers, not pickable stock. Only callers that say so
+    // (the order add-items picker, matching loadCatalogItems) drop them.
+    if (filters.excludeBundles) {
+      query = query.or('is_bundle.is.null,is_bundle.eq.false');
     }
 
     // Rentals (circulating assets like canopies) are a separate
@@ -655,10 +684,15 @@ export class InventoryService {
       if (filters.lowStock) {
         sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
       }
-      if (filters.itemType === undefined) {
+      if (filters.itemTypes && filters.itemTypes.length > 0) {
+        sumQuery = sumQuery.in('item_type', filters.itemTypes);
+      } else if (filters.itemType === undefined) {
         sumQuery = sumQuery.eq('item_type', 'product');
       } else if (filters.itemType !== 'all') {
         sumQuery = sumQuery.eq('item_type', filters.itemType);
+      }
+      if (filters.excludeBundles) {
+        sumQuery = sumQuery.or('is_bundle.is.null,is_bundle.eq.false');
       }
       if (!filters.includeRentals) {
         sumQuery = sumQuery.eq('is_rental', false);
