@@ -8,7 +8,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { toCsv } from '@/lib/csv';
 import { reportError } from '@/lib/error-reporter';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import {
   buildInventoryExportRows,
   type InventoryExportFilters,
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
             categoryIds: parsed.data.filters?.categoryIds,
             locationIds: parsed.data.filters?.locationIds,
             charterIds: parsed.data.filters?.charterIds,
-            warehouseId: await getActiveWarehouseFilter(),
+            warehouseId: await getActiveWarehouseFilterFor(ctx),
           }
         : undefined;
 
