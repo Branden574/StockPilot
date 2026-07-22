@@ -36,7 +36,22 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
  * resolves can assume the schema exists.
  */
 export async function initDb(): Promise<void> {
-  await getDb();
+  const db = await getDb();
+  // Reclaim orphaned in-flight outbox rows. A row is flipped to 'sending' only
+  // transiently inside a live drain, immediately before the network request; if
+  // the JS runtime dies in that window (OS memory-kill of a backgrounded app,
+  // crash, force-quit — routine on flaky warehouse wifi) the row is stranded at
+  // 'sending' forever, because BOTH drain queries only look at 'pending'/'failed'
+  // — so the offline write is silently lost and the unsynced badge sticks. Any
+  // 'sending' row present at startup is definitionally orphaned (no drain is in
+  // flight yet), so reset it to 'pending' to be re-drained.
+  try {
+    await db.runAsync(
+      "update pending_actions set status = 'pending' where status = 'sending'",
+    );
+  } catch {
+    /* best-effort reclaim — never block app startup */
+  }
 }
 
 async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
