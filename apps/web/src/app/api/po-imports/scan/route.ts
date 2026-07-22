@@ -4,7 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { PoImportsService } from '@/server/services/po-imports';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -209,17 +209,13 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      const status =
-        e.code === 'forbidden'
-          ? 403
-          : e.code === 'validation_error'
-            ? 400
-            : e.code === 'not_found'
-              ? 404
-              : 500;
+      // Use the shared mapper rather than a hand-rolled ladder: the local one
+      // had no 'conflict' case, so a legitimate 409 (concurrent re-import of
+      // the same file) reached the browser as a 500 with a red console error,
+      // making an ordinary "someone beat you to it" look like a crash.
       return NextResponse.json(
         { error: e.code, message: e.message },
-        { status },
+        { status: serviceErrorStatus(e.code) },
       );
     }
     void reportError(e, {

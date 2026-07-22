@@ -395,12 +395,23 @@ export class PoImportsService {
     // NOT maybeSingle(): once a reimport is allowed, several imports legitimately
     // share a hash, and maybeSingle() throws on >1 row (PGRST116) — that would
     // break the SECOND reimport of the same file.
+    // Consider only the LIVE import of this file — exactly the row set the
+    // po_imports_org_sha_uniq index covers (live status AND not superseded).
+    //
+    // `superseded_at IS NULL` is NOT optional. A superseded import keeps its
+    // status ('approved'), so without this filter it still looked like a
+    // blocking prior, while supersedePriorImports (which correctly skips
+    // already-superseded rows) matched nothing — the zero-row guard then threw
+    // "Could not re-open this file for import" on a file that had no live
+    // import at all. A superseded row is history: it neither blocks nor needs
+    // re-stamping.
     const { data: priors, error } = await this.ctx.supabase
       .from('po_imports')
       .select('id, status, approved_po_id, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('sha256', sha256)
       .not('status', 'in', '(failed,canceled,duplicate)')
+      .is('superseded_at', null)
       .order('created_at', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
 
@@ -480,9 +491,14 @@ export class PoImportsService {
       .select('id');
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data || data.length === 0) {
+      // resolveDuplicateBySha256 only returns reimport_after_cancelled when a
+      // LIVE, non-superseded prior exists — the exact rows this update targets.
+      // Zero rows therefore means someone else superseded it between the two
+      // statements, i.e. a genuine race, not the "no live import" case that
+      // used to land here.
       throw new ServiceError(
         'conflict',
-        'Could not re-open this file for import. Refresh and try again.',
+        'Someone else just re-imported this file. Refresh to see their import.',
       );
     }
   }

@@ -171,6 +171,37 @@ describe('PoImportsService — cancelled-PO reimport decision', () => {
       expect(args[4]).toEqual(['status', 'in', '(failed,canceled,duplicate)']);
     });
 
+    /**
+     * REGRESSION (prod, 2026-07-22): after two successful reimports the file's
+     * history was [approved+superseded, canceled+superseded, canceled]. The
+     * duplicate lookup ignored superseded_at, so the superseded 'approved' row
+     * still read as a blocking prior and drove a reimport decision — but the
+     * supersede update skips already-superseded rows, matched nothing, and the
+     * zero-row guard threw "Could not re-open this file for import" on a file
+     * that had NO live import at all. A superseded row is history.
+     */
+    it('treats a fully superseded/cancelled history as a clean slate', async () => {
+      const stub = stubFor(
+        [], // the lookup now filters superseded_at IS NULL, so nothing comes back
+        [],
+      );
+      const res = await svc(stub).createFromUpload(UPLOAD);
+      expect(res.id).toBe('new-import');
+      expect(res.duplicateOf).toBeNull();
+      expect(res.reimportOfCancelled).toBeNull();
+      // Nothing live to free, so nothing is stamped.
+      expect(stub.chains.get('po_imports.update')).toBeUndefined();
+    });
+
+    it('asks the database only for LIVE imports (superseded rows are history)', async () => {
+      const stub = stubFor([]);
+      await svc(stub).createFromUpload(UPLOAD);
+      const lookup = stub.chainsAll.get('po_imports.select')?.[0];
+      expect(lookup).toContain('is');
+      const args = stub.chainArgsAll.get('po_imports.select')![0]!;
+      expect(args).toContainEqual(['superseded_at', null]);
+    });
+
     it('does NOT supersede anything when the file is genuinely blocked', async () => {
       const stub = stubFor(
         [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
