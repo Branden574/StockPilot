@@ -526,12 +526,23 @@ export class PoImportsService {
 
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('po_imports')
-      .select('id, source_type, storage_path, vendor_id')
+      .select('id, source_type, storage_path, vendor_id, status')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'PO import not found');
+
+    // Terminal-status guard: re-parsing wipes and rebuilds the line set. On an
+    // already-approved import that would orphan its created PO (approved_po_id
+    // still points at it) and re-open the import so it could be approved AGAIN,
+    // minting a duplicate inbound PO. A canceled import must stay closed too.
+    if (header.status === 'approved' || header.status === 'canceled') {
+      throw new ServiceError(
+        'conflict',
+        `This import is ${header.status} and can no longer be re-parsed.`,
+      );
+    }
 
     await this.ctx.supabase
       .from('po_imports')

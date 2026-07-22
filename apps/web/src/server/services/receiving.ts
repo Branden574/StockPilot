@@ -280,21 +280,27 @@ export class ReceivingService {
 
     // Publish to outbox for downstream consumers (notifications, analytics).
     // Best-effort: a failure here doesn't undo the receipt.
-    void this.ctx.supabase.rpc('publish_outbox', {
-      p_org_id: this.ctx.organizationId,
-      p_topic: 'receipt.posted',
-      p_aggregate_type: 'receipt',
-      p_aggregate_id: receipt.id,
-      p_payload: {
-        purchaseOrderId: input.purchaseOrderId,
-        warehouseId: receipt.warehouse_id,
-        receiptNumber: receipt.receipt_number,
-        lineCount: input.lines.length,
-        totalAccepted,
-        totalRejected,
-      },
-      p_dedupe_key: `receipt.posted:${receipt.id}`,
-    });
+    // Await so the request actually fires — a bare `void`ed PostgREST builder
+    // is a lazy thenable that never sends. Best-effort: swallow failures.
+    try {
+      await this.ctx.supabase.rpc('publish_outbox', {
+        p_org_id: this.ctx.organizationId,
+        p_topic: 'receipt.posted',
+        p_aggregate_type: 'receipt',
+        p_aggregate_id: receipt.id,
+        p_payload: {
+          purchaseOrderId: input.purchaseOrderId,
+          warehouseId: receipt.warehouse_id,
+          receiptNumber: receipt.receipt_number,
+          lineCount: input.lines.length,
+          totalAccepted,
+          totalRejected,
+        },
+        p_dedupe_key: `receipt.posted:${receipt.id}`,
+      });
+    } catch {
+      /* best-effort: a failed outbox publish must not undo the receipt */
+    }
 
     // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
     // the org has no endpoints).

@@ -9,7 +9,7 @@ import {
   buildInventoryExportRows,
   type InventoryExportFilters,
 } from '@/lib/inventory-export';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError } from '@/server/services/context';
 import { type ItemListSort } from '@/server/services/inventory';
 
@@ -84,7 +84,7 @@ export async function GET(request: Request) {
               : 'updated_desc',
             categoryIds: params.getAll('cat').filter(Boolean),
             locationIds: params.getAll('loc').filter(Boolean),
-            warehouseId: await getActiveWarehouseFilter(),
+            warehouseId: await getActiveWarehouseFilterFor(ctx),
           }
         : undefined;
 

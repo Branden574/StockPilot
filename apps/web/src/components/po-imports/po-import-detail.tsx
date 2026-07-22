@@ -346,9 +346,11 @@ export function PoImportDetail({
               <Download className="h-3.5 w-3.5" /> Export CSV
             </a>
           </Button>
-          <Button variant="outline" size="sm" onClick={reparse} disabled={busy}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Re-parse'}
-          </Button>
+          {header.status !== 'approved' && header.status !== 'canceled' && (
+            <Button variant="outline" size="sm" onClick={reparse} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Re-parse'}
+            </Button>
+          )}
           {header.status !== 'approved' && header.status !== 'canceled' && (
             <Button
               variant="ghost"

@@ -616,6 +616,12 @@ export class BundlesService {
           'Not enough stock to assemble this many kits. Lower the quantity or top up the short components.',
         );
       }
+      if (msg.includes('bundle_not_active')) {
+        throw new ServiceError(
+          'validation_error',
+          'This bundle is archived or inactive.',
+        );
+      }
       if (msg.includes('preassembly_disabled')) {
         throw new ServiceError(
           'validation_error',

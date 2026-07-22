@@ -1081,14 +1081,21 @@ export class PurchaseOrdersService {
       // draft↔ordered toggle idempotent). Best-effort: never fails the status
       // change. Only fires when the org has an active QBO connection + the
       // api/integrations module enabled (the drainer gates on that).
-      void this.ctx.supabase.rpc('publish_outbox', {
-        p_org_id: this.ctx.organizationId,
-        p_topic: 'purchase_order.ordered',
-        p_aggregate_type: 'purchase_order',
-        p_aggregate_id: id,
-        p_payload: { poId: id },
-        p_dedupe_key: `purchase_order.ordered:${id}`,
-      });
+      // Await so the request actually fires — a bare `void`ed PostgREST builder
+      // is a lazy thenable that never sends, so the QBO/Intacct outbox event
+      // was silently never published. Swallow failures to keep it best-effort.
+      try {
+        await this.ctx.supabase.rpc('publish_outbox', {
+          p_org_id: this.ctx.organizationId,
+          p_topic: 'purchase_order.ordered',
+          p_aggregate_type: 'purchase_order',
+          p_aggregate_id: id,
+          p_payload: { poId: id },
+          p_dedupe_key: `purchase_order.ordered:${id}`,
+        });
+      } catch {
+        /* best-effort: never fail the status change on an outbox hiccup */
+      }
     }
     if (status === 'cancelled') {
       const poNumber = (po as { po_number?: string | null }).po_number ?? null;
