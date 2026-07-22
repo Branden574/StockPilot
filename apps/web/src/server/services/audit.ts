@@ -98,6 +98,7 @@ export type AuditEvent =
   | 'bundle.assembled'
   | 'bundle.distributed'
   | 'order_request.created'
+  | 'order_request.lines_added'
   | 'order_request.approved'
   | 'order_request.denied'
   | 'order_request.status_changed'

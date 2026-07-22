@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
+import { can, formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
@@ -242,6 +242,13 @@ export interface OrderRequestDetail {
    * is worse than leaving the line blank to fill in.
    */
   assignedPickerName: string | null;
+  /**
+   * True when a pick slip was generated and a line has been added SINCE —
+   * i.e. the printed sheet no longer matches the order and needs a reprint.
+   * Derived (line.created_at > pick_slip_generated_at) rather than stored, so
+   * it can never drift out of sync with reality.
+   */
+  pickSlipStale: boolean;
 }
 
 export interface CreateOrderRequestInput {
@@ -813,6 +820,13 @@ export class OrderRequestsService {
       assignedPickerName: pickerProfile
         ? pickerProfile.fullName?.trim() || pickerProfile.email?.trim() || null
         : null,
+      // Any line created after the slip was printed makes that slip stale.
+      pickSlipStale:
+        h.pick_slip_generated_at != null &&
+        flatLines.some((l) => {
+          const created = (l as { created_at?: string | null }).created_at;
+          return created != null && created > (h.pick_slip_generated_at as string);
+        }),
     };
   }
 
@@ -980,6 +994,192 @@ export class OrderRequestsService {
       lineCount: linePayload.length,
     });
     return row;
+  }
+
+  /**
+   * Add line items to an EXISTING order — the "customer called back and wants
+   * more" case (owner request 2026-07-22). Previously the only option was a
+   * second order, because lines were frozen at create().
+   *
+   * Owner decisions:
+   *  • Allowed ANY TIME BEFORE THE ORDER SHIPS — i.e. every status except
+   *    in_transit / completed / denied / cancelled. Adding during
+   *    picking/packing/staging is deliberately permitted; the already-printed
+   *    pick slip is then stale, which `pickSlipStale` on the detail surfaces
+   *    (derived from line.created_at > pick_slip_generated_at — no column
+   *    needed, and it can never drift out of sync).
+   *  • Allowed for the REQUESTER of the order, or anyone with orders:approve.
+   *
+   * Adding an item already on the order INCREMENTS that line rather than
+   * creating a confusing duplicate row. Stock reservations are minted by the
+   * pick-slip / picking RPCs, so a newly added line is reserved when the slip
+   * is re-generated — which is exactly the reprint the staleness flag prompts.
+   */
+  async addLines(
+    id: string,
+    lines: Array<{ itemId: string; quantity: number }>,
+  ): Promise<{ added: number; merged: number; pickSlipStale: boolean }> {
+    assertModuleEnabled(this.ctx, 'orders');
+    if (lines.length === 0) {
+      throw new ServiceError('validation_error', 'Pick at least one item to add.');
+    }
+    for (const l of lines) {
+      if (!Number.isFinite(l.quantity) || l.quantity <= 0) {
+        throw new ServiceError('validation_error', 'Every added line needs a quantity above zero.');
+      }
+    }
+
+    const { data: header, error: hErr } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id, status, warehouse_id, requester_user_id, pick_slip_generated_at, order_number')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Order not found');
+    const h = header as {
+      id: string;
+      status: OrderRequestStatus;
+      warehouse_id: string;
+      requester_user_id: string | null;
+      pick_slip_generated_at: string | null;
+      order_number: number | null;
+    };
+
+    // Ship gate — once it's out the door (or dead) the contents are final.
+    const SHIPPED_OR_CLOSED: OrderRequestStatus[] = [
+      'in_transit',
+      'completed',
+      'denied',
+      'cancelled',
+    ];
+    if (SHIPPED_OR_CLOSED.includes(h.status)) {
+      throw new ServiceError(
+        'conflict',
+        h.status === 'in_transit'
+          ? 'This order is already out for delivery — create a new order for the extra items.'
+          : `This order is ${h.status} and can no longer be changed.`,
+      );
+    }
+
+    // Requester-or-approver. `orders:request` alone is NOT enough to grow
+    // someone else's order.
+    const isRequester = h.requester_user_id != null && h.requester_user_id === this.ctx.userId;
+    if (!isRequester && !can(this.ctx, 'orders:approve')) {
+      throw new ServiceError(
+        'forbidden',
+        'Only the requester or someone who can approve orders may add items to it.',
+      );
+    }
+    // Same warehouse gate create() applies.
+    await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+
+    // Validate items exactly like create(): must exist in-org, sit in THIS
+    // order's warehouse, and not be an unreceived (expected) phantom.
+    const itemIds = [...new Set(lines.map((l) => l.itemId))];
+    const { data: items, error: iErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', itemIds);
+    if (iErr) throw new ServiceError('internal_error', iErr.message);
+    const itemMap = new Map(
+      ((items ?? []) as Array<{
+        id: string;
+        name: string;
+        warehouse_id: string | null;
+        unit_cost: number;
+        awaiting_first_receipt: boolean;
+      }>).map((r) => [r.id, r]),
+    );
+    for (const l of lines) {
+      const it = itemMap.get(l.itemId);
+      if (!it) throw new ServiceError('validation_error', `Item ${l.itemId} not found`);
+      if (it.warehouse_id !== h.warehouse_id) {
+        throw new ServiceError(
+          'validation_error',
+          `${it.name} isn't stocked at this order's warehouse.`,
+        );
+      }
+      if (it.awaiting_first_receipt === true) {
+        throw new ServiceError(
+          'validation_error',
+          `This item hasn't been received yet: ${it.name}. It can be ordered once its first stock arrives.`,
+        );
+      }
+    }
+
+    // Existing lines — an item already on the order is topped up, not duplicated.
+    const { data: existing, error: eErr } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('id, item_id, quantity_requested')
+      .eq('order_request_id', h.id);
+    if (eErr) throw new ServiceError('internal_error', eErr.message);
+    const existingByItem = new Map(
+      ((existing ?? []) as Array<{ id: string; item_id: string; quantity_requested: number }>).map(
+        (r) => [r.item_id, r],
+      ),
+    );
+
+    // Collapse duplicate itemIds in the caller's payload first.
+    const wanted = new Map<string, number>();
+    for (const l of lines) wanted.set(l.itemId, (wanted.get(l.itemId) ?? 0) + l.quantity);
+
+    let merged = 0;
+    let added = 0;
+    const toInsert: Array<Record<string, unknown>> = [];
+    for (const [itemId, qty] of wanted) {
+      const prior = existingByItem.get(itemId);
+      if (prior) {
+        const { error: uErr } = await this.ctx.supabase
+          .from('order_request_lines')
+          .update({ quantity_requested: Number(prior.quantity_requested) + qty })
+          .eq('id', prior.id)
+          .select('id')
+          .maybeSingle();
+        if (uErr) throw new ServiceError('internal_error', uErr.message);
+        merged += 1;
+      } else {
+        toInsert.push({
+          order_request_id: h.id,
+          item_id: itemId,
+          quantity_requested: qty,
+          unit_cost_at_request: itemMap.get(itemId)?.unit_cost ?? 0,
+        });
+        added += 1;
+      }
+    }
+    if (toInsert.length > 0) {
+      const { error: insErr } = await this.ctx.supabase
+        .from('order_request_lines')
+        .insert(toInsert);
+      if (insErr) throw new ServiceError('internal_error', insErr.message);
+    }
+
+    // A slip printed BEFORE this change no longer matches the order.
+    const pickSlipStale = h.pick_slip_generated_at != null;
+
+    await audit(
+      {
+        event: 'order_request.lines_added',
+        entityType: 'order_request',
+        entityId: h.id,
+        after: {
+          added,
+          merged,
+          items: [...wanted.entries()].map(([itemId, qty]) => ({
+            itemId,
+            name: itemMap.get(itemId)?.name ?? null,
+            quantity: qty,
+          })),
+          statusWhenAdded: h.status,
+          pickSlipStale,
+        },
+      },
+      this.ctx,
+    );
+
+    return { added, merged, pickSlipStale };
   }
 
   async cancel(id: string, reason?: string | null): Promise<OrderRequestRow> {

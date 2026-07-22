@@ -249,6 +249,43 @@ export async function cancelOrderRequestAction(
   }
 }
 
+const addLinesSchema = z.object({
+  id: z.string().uuid(),
+  lines: z
+    .array(
+      z.object({
+        itemId: z.string().uuid(),
+        quantity: z.coerce.number().positive().max(100_000),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+/**
+ * Add items to an EXISTING order (last-minute additions). Permitted any time
+ * before the order ships, for the requester or an approver — the service
+ * enforces both. See OrderRequestsService.addLines.
+ */
+export async function addOrderRequestLinesAction(
+  input: z.input<typeof addLinesSchema>,
+): Promise<ActionResult<{ added: number; merged: number; pickSlipStale: boolean }>> {
+  const parsed = addLinesSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const result = await svc.addLines(parsed.data.id, parsed.data.lines);
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const approveSchema = z.object({
   id: z.string().uuid(),
   internalNotes: z.string().max(2000).nullable().optional(),
