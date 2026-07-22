@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
+import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -18,9 +19,9 @@ export default async function PoImportDetailPage({
   const { id } = await params;
   const svc = await PoImportsService.forCurrentUser();
 
-  let header, lines;
+  let header, lines, lineage;
   try {
-    ({ header, lines } = await svc.get(id));
+    ({ header, lines, lineage } = await svc.get(id));
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
@@ -70,6 +71,18 @@ export default async function PoImportDetailPage({
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">
           {header.file_name}
         </h1>
+        {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
+            it changes how everything below it should be read, so it must not
+            be reachable only after scrolling past the line table. */}
+        <PoImportLineageNotice lineage={lineage} className="mt-4" />
+        {header.superseded_at && lineage.successors.length === 0 && (
+          // superseded_at is stamped, but the successor row is gone (deleted,
+          // or invisible under RLS). Say so plainly rather than offering a
+          // link that would 404.
+          <p className="text-muted-foreground mt-3 text-xs">
+            This file was imported again later, so this is no longer the live import for it.
+          </p>
+        )}
       </div>
       <PoImportDetail
         header={header}

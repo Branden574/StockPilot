@@ -54,8 +54,42 @@ export interface PoImportRow {
   status: PoImportStatus;
   parse_error: string | null;
   approved_po_id: string | null;
+  /** Re-import lineage (mig 0286): the earlier import of this same file whose
+   *  purchase order was cancelled. Null for a first import. */
+  reimported_from_id: string | null;
+  /** Set when a LATER import re-used this file (mig 0287). Means ONLY "no
+   *  longer the live import for this hash" — status, approved_po_id, lines and
+   *  the stored document are all deliberately left intact. */
+  superseded_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** One end of a re-import chain, resolved for display. */
+export interface PoImportLineageRef {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  status: PoImportStatus;
+  /** The purchase order this import produced (imports only gain one at approve). */
+  poId: string | null;
+  poNumber: string | null;
+  /** purchase_orders.status. 'cancelled' is the case the notice exists to explain. */
+  poStatus: string | null;
+}
+
+/**
+ * Re-import lineage for ONE import, both directions (migs 0286/0287).
+ * `predecessor` mirrors reimported_from_id: the earlier import of this same
+ * file whose purchase order was cancelled. `successors` mirrors the reverse
+ * edge — later imports that re-used this file. An import in the middle of a
+ * chain has both, and both notices are correct: it is simultaneously a redo
+ * and itself stale.
+ */
+export interface PoImportLineage {
+  predecessor: PoImportLineageRef | null;
+  /** Oldest first. In practice at most one — the FK is not unique, so this stays a list. */
+  successors: PoImportLineageRef[];
 }
 
 export interface PoImportLineRow {
@@ -99,6 +133,12 @@ export class PoImportsService {
    * purpose-built RPC like the purchase-orders page's — po_imports is a
    * desktop-upload workflow (nowhere near PO-ledger scale), so a plain
    * filtered Supabase query is enough and needs no migration.
+   *
+   * The lineage columns (reimported_from_id, superseded_at) are in the lean
+   * column list on purpose: they are a uuid and a timestamptz already ON the
+   * row being read, and they let the list mark a stale row without a second
+   * query. Leaving them out would force an N+1 (or an aggregate) to answer
+   * "was this superseded?" — exactly what the lean list exists to avoid.
    */
   async list(
     params: {
@@ -117,7 +157,8 @@ export class PoImportsService {
         `id, organization_id, uploaded_by, source_type, vendor_id, warehouse_id,
          file_name, file_mime_type, file_size, storage_path, sha256, status,
          parse_error, approved_po_id, created_at, updated_at,
-         extraction_confidence, extraction_model`,
+         extraction_confidence, extraction_model,
+         reimported_from_id, superseded_at`,
       )
       .eq('organization_id', this.ctx.organizationId);
     if (params.statuses && params.statuses.length > 0) {
@@ -222,7 +263,11 @@ export class PoImportsService {
     return orParts.join(',');
   }
 
-  async get(id: string): Promise<{ header: PoImportRow; lines: PoImportLineRow[] }> {
+  async get(id: string): Promise<{
+    header: PoImportRow;
+    lines: PoImportLineRow[];
+    lineage: PoImportLineage;
+  }> {
     assertModuleEnabled(this.ctx, 'po_imports');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('po_imports')
@@ -238,9 +283,128 @@ export class PoImportsService {
       .eq('po_import_id', id)
       .order('line_number', { ascending: true });
     if (lErr) throw new ServiceError('internal_error', lErr.message);
+    const row = header as unknown as PoImportRow;
     return {
-      header: header as unknown as PoImportRow,
+      header: row,
       lines: (lines ?? []) as unknown as PoImportLineRow[],
+      // Always present so callers never branch on undefined — the COST is
+      // gated inside resolveLineage, not here.
+      lineage: await this.resolveLineage(row),
+    };
+  }
+
+  /** PostgREST .or() takes a raw filter string, so only a value proven to be a
+   *  bare uuid is ever interpolated into one — mirrors the metacharacter
+   *  stripping in resolveSearchOrFilter, which exists because a malformed
+   *  .or() tree is a hard 400. */
+  private static readonly UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Resolves the re-import chain around one import for display (migs 0286/0287).
+   *
+   * Costs NOTHING for a normal import: both columns null means no queries at
+   * all, which is the overwhelming majority of rows. When there IS lineage it
+   * is capped at two queries — one po_imports read covering BOTH directions
+   * (predecessor by id, successors by the reverse FK), then one purchase_orders
+   * read resolving every referenced PO number/status in a single .in(). Both
+   * are org-scoped, so another org's identical file stays invisible.
+   *
+   * Only ONE hop each way is resolved. A longer chain (the production
+   * 4db2d72c → 90f9fc56 → 568a0712) is walked by clicking through, which keeps
+   * this to a fixed query budget.
+   */
+  private async resolveLineage(header: PoImportRow): Promise<PoImportLineage> {
+    const predId = header.reimported_from_id;
+    const isSuperseded = header.superseded_at != null;
+    if (!predId && !isSuperseded) return { predecessor: null, successors: [] };
+
+    let query = this.ctx.supabase
+      .from('po_imports')
+      .select('id, file_name, created_at, status, approved_po_id, reimported_from_id')
+      .eq('organization_id', this.ctx.organizationId);
+
+    // Three shapes, one query. .or() is only reached when BOTH directions are
+    // live, so the far more common single-direction case never exercises
+    // PostgREST's or-tree parsing at all.
+    const predUsable = predId != null && PoImportsService.UUID_RE.test(predId);
+    if (predUsable && isSuperseded) {
+      query = query.or(`id.eq.${predId},reimported_from_id.eq.${header.id}`);
+    } else if (predUsable) {
+      query = query.eq('id', predId);
+    } else {
+      query = query.eq('reimported_from_id', header.id);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: true });
+    // Lineage is CONTEXT, not the record. A failure here must never 500 the
+    // detail page — degrade to "no lineage shown" and log (recurring pattern #1).
+    if (error) {
+      console.error('[po-imports] lineage lookup failed', {
+        importId: header.id,
+        message: error.message,
+      });
+      return { predecessor: null, successors: [] };
+    }
+
+    const rows = (data ?? []) as Array<{
+      id: string;
+      file_name: string;
+      created_at: string;
+      status: PoImportStatus;
+      approved_po_id: string | null;
+      reimported_from_id: string | null;
+    }>;
+    if (rows.length === 0) return { predecessor: null, successors: [] };
+
+    const poIds = [...new Set(rows.map((r) => r.approved_po_id).filter((v): v is string => !!v))];
+    const poById = new Map<string, { id: string; po_number: string | null; status: string }>();
+    if (poIds.length > 0) {
+      const { data: pos, error: poErr } = await this.ctx.supabase
+        .from('purchase_orders')
+        .select('id, po_number, status')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', poIds);
+      // Same reasoning: a missing PO number degrades the copy, it does not
+      // break the page.
+      if (poErr) {
+        console.error('[po-imports] lineage purchase-order lookup failed', {
+          importId: header.id,
+          message: poErr.message,
+        });
+      } else {
+        for (const p of (pos ?? []) as Array<{
+          id: string;
+          po_number: string | null;
+          status: string;
+        }>) {
+          poById.set(p.id, p);
+        }
+      }
+    }
+
+    const toRef = (r: (typeof rows)[number]): PoImportLineageRef => {
+      const po = r.approved_po_id ? poById.get(r.approved_po_id) : undefined;
+      return {
+        id: r.id,
+        fileName: r.file_name,
+        createdAt: r.created_at,
+        status: r.status,
+        poId: r.approved_po_id,
+        poNumber: po?.po_number ?? null,
+        poStatus: po?.status ?? null,
+      };
+    };
+
+    // The predecessor is matched by id; successors by the reverse FK. The
+    // `r.id !== predId` guard keeps a (nonsensical) self-reference from being
+    // counted on both sides.
+    const predRow = predId ? rows.find((r) => r.id === predId) : undefined;
+    return {
+      predecessor: predRow ? toRef(predRow) : null,
+      successors: rows
+        .filter((r) => r.id !== predId && r.reimported_from_id === header.id)
+        .map(toRef),
     };
   }
 

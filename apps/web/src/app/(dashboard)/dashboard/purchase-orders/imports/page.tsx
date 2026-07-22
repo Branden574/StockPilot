@@ -206,7 +206,30 @@ export default async function PoImportsPage({
                       {i.source_type}
                     </TableCell>
                     <TableCell>
-                      <PoImportStatusBadge status={i.status} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <PoImportStatusBadge status={i.status} />
+                        {/* Orthogonal to status (migs 0286/0287): a superseded
+                            import keeps status='approved' and stays in its tab,
+                            so these pills add no tab and change no count — they
+                            only make a stale row (and its redo) recognizable
+                            without opening it. */}
+                        {i.superseded_at && (
+                          <span
+                            className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[11px]"
+                            title="Replaced by a later import of this file"
+                          >
+                            superseded
+                          </span>
+                        )}
+                        {i.reimported_from_id && (
+                          <span
+                            className="border-border text-muted-foreground rounded-full border px-2 py-0.5 text-[11px]"
+                            title="Re-import of an earlier import whose purchase order was cancelled"
+                          >
+                            re-import
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-right text-xs">
                       {formatRelative(i.created_at)}

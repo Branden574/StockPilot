@@ -70,6 +70,10 @@ interface ImportHeader {
   warehouse_id: string | null;
   created_at: string;
   vendor_name: string | null;
+  /** Re-import lineage (mig 0286): the earlier import of this same file whose PO was cancelled. */
+  reimported_from_id: string | null;
+  /** Set when a LATER import re-used this file (mig 0287) — "no longer the live import". */
+  superseded_at: string | null;
   /** Defensive extract of parsed_json's header block (may be entirely null). */
   po_number: string | null;
   po_date: string | null;
@@ -97,6 +101,16 @@ interface ItemRef {
   sku: string;
 }
 
+/** One end of a re-import chain (migs 0286/0287) — parity with the web
+ *  PoImportLineage type. Linked by import id, never by PO number: cancelling a
+ *  purchase order releases its number, so the number is a recognition aid only. */
+interface LineageRef {
+  id: string;
+  fileName: string;
+  poNumber: string | null;
+  poStatus: string | null;
+}
+
 /** parsed_json is untrusted (AI/parser output) — read the header fields defensively. */
 function readParsedHeader(raw: unknown): {
   poNumber: string | null;
@@ -118,6 +132,8 @@ function readParsedHeader(raw: unknown): {
 function money(v: number): string {
   return `$${v.toFixed(2)}`;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Native PO-import detail — parity for the web review page at
@@ -143,12 +159,89 @@ export default function PoImportDetailScreen() {
   const [header, setHeader] = React.useState<ImportHeader | null>(null);
   const [lines, setLines] = React.useState<ImportLine[]>([]);
   const [itemsById, setItemsById] = React.useState<Record<string, ItemRef>>({});
+  const [predecessor, setPredecessor] = React.useState<LineageRef | null>(null);
+  const [replacement, setReplacement] = React.useState<LineageRef | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionBusy, setActionBusy] = React.useState<'parse' | 'cancel' | null>(null);
   const [approveOpen, setApproveOpen] = React.useState(false);
+
+  /**
+   * Re-import lineage (migs 0286/0287) — parity with the web detail page.
+   * Skipped entirely unless one of the two columns is set, so a normal import
+   * pays nothing; capped at two queries, both org-scoped under RLS. Errors
+   * degrade to "no lineage shown": lineage is context, and it must never turn
+   * a readable import into an error screen on a phone.
+   */
+  const loadLineage = React.useCallback(
+    async (predId: string | null, isSuperseded: boolean) => {
+      if (!id || !orgId || (!predId && !isSuperseded)) {
+        setPredecessor(null);
+        setReplacement(null);
+        return;
+      }
+      let q = supabase
+        .from('po_imports')
+        .select('id, file_name, created_at, approved_po_id, reimported_from_id')
+        .eq('organization_id', orgId);
+      // Only a proven-bare uuid is ever interpolated into a raw PostgREST
+      // .or() string — a malformed or-tree is a hard 400.
+      const predUsable = predId != null && UUID_RE.test(predId);
+      if (predUsable && isSuperseded) q = q.or(`id.eq.${predId},reimported_from_id.eq.${id}`);
+      else if (predUsable) q = q.eq('id', predId);
+      else q = q.eq('reimported_from_id', id);
+
+      const { data: sib, error } = await q.order('created_at', { ascending: true });
+      if (error || !sib) {
+        setPredecessor(null);
+        setReplacement(null);
+        return;
+      }
+      const rows = sib as Record<string, unknown>[];
+      const poIds = Array.from(
+        new Set(
+          rows
+            .map((r) => (r.approved_po_id as string | null) ?? null)
+            .filter((v): v is string => Boolean(v)),
+        ),
+      );
+      const poById: Record<string, { po_number: string | null; status: string | null }> = {};
+      if (poIds.length > 0) {
+        const { data: pos } = await supabase
+          .from('purchase_orders')
+          .select('id, po_number, status')
+          .eq('organization_id', orgId)
+          .in('id', poIds);
+        for (const p of (pos ?? []) as Record<string, unknown>[]) {
+          poById[p.id as string] = {
+            po_number: (p.po_number as string | null) ?? null,
+            status: (p.status as string | null) ?? null,
+          };
+        }
+      }
+      const toRef = (r: Record<string, unknown>): LineageRef => {
+        const poId = (r.approved_po_id as string | null) ?? null;
+        const po = poId ? poById[poId] : undefined;
+        return {
+          id: r.id as string,
+          fileName: (r.file_name as string) ?? '',
+          poNumber: po?.po_number ?? null,
+          poStatus: po?.status ?? null,
+        };
+      };
+      const predRow = predId ? rows.find((r) => (r.id as string) === predId) : undefined;
+      // Newest successor is the live import for this file.
+      const successors = rows.filter(
+        (r) => (r.id as string) !== predId && (r.reimported_from_id as string | null) === id,
+      );
+      const newest = successors.length > 0 ? successors[successors.length - 1] : undefined;
+      setPredecessor(predRow ? toRef(predRow) : null);
+      setReplacement(newest ? toRef(newest) : null);
+    },
+    [id, orgId],
+  );
 
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
@@ -159,6 +252,7 @@ export default function PoImportDetailScreen() {
         .select(
           `id, status, source_type, file_name, parse_error, approved_po_id,
            vendor_id, warehouse_id, created_at, parsed_json,
+           reimported_from_id, superseded_at,
            vendor:suppliers!vendor_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -185,6 +279,8 @@ export default function PoImportDetailScreen() {
       // Not found OR not visible under RLS — same message either way.
       setHeader(null);
       setLines([]);
+      setPredecessor(null);
+      setReplacement(null);
       setLoading(false);
       return;
     }
@@ -204,10 +300,17 @@ export default function PoImportDetailScreen() {
       warehouse_id: (r.warehouse_id as string | null) ?? null,
       created_at: (r.created_at as string) ?? '',
       vendor_name: vendor?.name ?? null,
+      reimported_from_id: (r.reimported_from_id as string | null) ?? null,
+      superseded_at: (r.superseded_at as string | null) ?? null,
       po_number: parsed.poNumber,
       po_date: parsed.poDate,
       total_amount: parsed.totalAmount,
     });
+
+    await loadLineage(
+      (r.reimported_from_id as string | null) ?? null,
+      (r.superseded_at as string | null) != null,
+    );
 
     const flat: ImportLine[] = (lineRows ?? []).map((row) => {
       const lr = row as Record<string, unknown>;
@@ -249,7 +352,7 @@ export default function PoImportDetailScreen() {
       setItemsById({});
     }
     setLoading(false);
-  }, [id, orgId]);
+  }, [id, orgId, loadLineage]);
 
   React.useEffect(() => {
     void load();
@@ -442,6 +545,77 @@ export default function PoImportDetailScreen() {
                 </Mono>
               ) : null}
             </Card>
+
+            {/* Re-import lineage — placed directly under the header card so a
+                stale import is flagged before the user starts reading lines.
+                Both can show at once: an import mid-chain is simultaneously a
+                redo and itself superseded. */}
+            {replacement ? (
+              <Card padding={14}>
+                <Mono size={9.5} tracking={0.2} upper color={ACCENT.warn}>
+                  — SUPERSEDED
+                </Mono>
+                <Body size={13} color={c.ink} style={{ marginTop: 6 }}>
+                  Replaced by a later import of this file.
+                </Body>
+                {/* Lineage resolves ONE hop (reimported_from_id = this id), so
+                    on a chain of three or more the import linked below is
+                    itself superseded — it cannot be called "the live one". Web
+                    carries the identical wording. */}
+                <Body muted size={12} style={{ marginTop: 4 }}>
+                  Open the newer import to see where it stands — if it was replaced in turn, it says
+                  so too. This import and the purchase order it created are kept unchanged for the
+                  record.
+                </Body>
+                <Button
+                  block
+                  variant="outline"
+                  style={{ marginTop: 10 }}
+                  onPress={() =>
+                    router.push({ pathname: '/po-import/[id]', params: { id: replacement.id } })
+                  }
+                >
+                  Open the newer import
+                </Button>
+              </Card>
+            ) : header.superseded_at ? (
+              // Stamped, but the successor row is gone or not visible under
+              // RLS. State the fact rather than offer a link that would fail.
+              <Card padding={14}>
+                <Mono size={9.5} tracking={0.2} upper color={ACCENT.warn}>
+                  — SUPERSEDED
+                </Mono>
+                <Body muted size={12} style={{ marginTop: 6 }}>
+                  This file was imported again later, so this is no longer the live import for it.
+                </Body>
+              </Card>
+            ) : null}
+
+            {predecessor ? (
+              <Card padding={14}>
+                <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+                  — RE-IMPORT
+                </Mono>
+                <Body size={13} color={c.ink} style={{ marginTop: 6 }}>
+                  {predecessor.poStatus === 'cancelled' && predecessor.poNumber
+                    ? `Re-import of ${predecessor.poNumber}, which was cancelled.`
+                    : 'This file was imported once before.'}
+                </Body>
+                <Body muted size={12} style={{ marginTop: 4 }}>
+                  The earlier import of {predecessor.fileName} is kept for the record.
+                </Body>
+                <Button
+                  block
+                  variant="outline"
+                  style={{ marginTop: 10 }}
+                  onPress={() =>
+                    router.push({ pathname: '/po-import/[id]', params: { id: predecessor.id } })
+                  }
+                >
+                  View the earlier import
+                </Button>
+              </Card>
+            ) : null}
 
             {header.status === 'approved' && header.approved_po_id ? (
               <Button
