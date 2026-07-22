@@ -1,4 +1,4 @@
-import { Document, Page, Text, View } from '@react-pdf/renderer';
+import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
 import {
@@ -16,10 +16,146 @@ import {
 const DESCRIPTION_MAX = 140;
 const NOTES_MAX = 1200;
 
-function truncate(value: string, max: number): string {
+export function truncate(value: string, max: number): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max - 1).trimEnd()}…`;
 }
+
+/**
+ * Adjacent @react-pdf flex cells share an edge: `tRow` only pads the row's
+ * outer edges and `tCell` has no horizontal padding, so a cell whose content
+ * fills its width paints straight into its neighbour. That is the
+ * owner-reported 2026-07-22 defect on the receipts table —
+ * "R-20260721-223330-e7a08bJul 21, 2026" with no gap at all.
+ *
+ * Padding alone does not fix it. Verified by rendering a real PDF and reading
+ * glyph positions back out of the content stream: a cell whose ENTIRE content
+ * is one unbreakable token — a receipt number, a SKU, an email address — is
+ * laid out on a single line and simply overflows its box. (Multi-word content
+ * is fine; textkit breaks a too-long word at the box edge once it has a line
+ * break to work with, which is why the description column can safely donate
+ * width.) At the pre-fix weights the 24-character receipt number ran from
+ * x=44.0 to x=166.4 while the date started at x=156.64 — a 9.8pt overlap,
+ * which is exactly what the screenshot showed.
+ *
+ * So the real fix is the column arithmetic below: every weight is budgeted
+ * against the widest content that column can ever hold, and single-token
+ * fields with no natural bound are truncated to a character count derived
+ * from that budget. The gutter is what guarantees the whitespace stays
+ * visible; the budget is what guarantees the content stops before the edge.
+ *
+ * 6pt is roughly 2.4 Helvetica-9 word spaces — unambiguous as a column break
+ * without looking like a missing value.
+ */
+export const CELL_GUTTER = 6;
+
+/**
+ * Usable inner width of a table row, in points. LETTER is 612pt wide,
+ * `pdfStyles.page` pads 40pt each side, and `tRow`/`tHeadRow` pad another 4pt
+ * each side, so a row's cells divide 612 − 80 − 8 = 524pt.
+ *
+ * NOTE for anyone recomputing a weight: a cell's gutter is NOT carved out of
+ * its flex share, it is added to it. `flex: N` resolves to flexBasis 0, so
+ * yoga distributes (524 − total padding) in proportion to the weights and then
+ * adds each cell's padding back on. A column's usable CONTENT width is
+ * therefore (weight / 100) * (524 − cellCount * CELL_GUTTER), not
+ * (weight / 100) * 524 − CELL_GUTTER. Verified against a real rendered PDF:
+ * the two models differ by several points per column, enough to ship an
+ * overflow while believing the arithmetic closed. table-fit.test.ts uses the
+ * correct one.
+ */
+export const ROW_INNER_WIDTH = 612 - 2 * 40 - 2 * 4;
+
+/**
+ * Longest receipt number the database can produce, in characters.
+ *
+ * post_receipt builds it as
+ *   'R-' || to_char(now(),'YYYYMMDD-HH24MISS') || '-' || substr(uuid, 1, 6)
+ * (migrations 0013/0015/0069/0190/0231/0285) = a fixed 24 characters, since
+ * the first 6 characters of a uuid text are always hex. reverse_receipt
+ * (migration 0195) appends '-REV' for the reversal row, and guards
+ * `status <> 'posted'` first so a number can never take two '-REV' suffixes.
+ * 24 + 4 = 28, and ReceivingService.listForPurchaseOrder applies no status
+ * filter, so reversal rows really do reach this table.
+ */
+export const RECEIPT_NUMBER_MAX_CHARS = 28;
+
+/**
+ * `received_by_name` is unbounded user data with a single-token worst case: it
+ * falls back to an email address, which has no spaces and so cannot wrap. It is
+ * capped to what its column can actually paint (table-fit.test.ts derives the
+ * number from the column width and fails if it drifts out of step).
+ */
+export const RECEIVED_BY_MAX = 33;
+
+/**
+ * Characters of SKU that fit on ONE line of the SKU column.
+ *
+ * A SKU never contains a space, so @react-pdf lays it out as a single
+ * unbreakable token and simply overflows the cell — the same geometry that put
+ * the receipt number on top of the Date column. Capping it by TRUNCATION (the
+ * first fix here) is worse than the overflow it prevented: a purchase order is
+ * an external commercial document and the supplier orders against this part
+ * number. Generated SKUs put the disambiguating suffix LAST
+ * (books-import.ts `${title}-${5}-${3}`, inventory.ts `${base}-${size}`), so
+ * truncation drops exactly the characters that tell two items apart, and
+ * packages/core allows 64 of them. Every neighbouring document (pick slip,
+ * packing slip, cycle count, inventory snapshot) prints the SKU in full.
+ *
+ * So the cell WRAPS instead: the value is split into successive Courier lines,
+ * costing row height rather than data. The arithmetic:
+ *
+ *   content box = PO_COLS.sku / 100 * (ROW_INNER_WIDTH - 8 * CELL_GUTTER)
+ *               = 19 / 100 * (524 - 48) = 90.44pt
+ *   Courier advance at 8.5pt = 600/1000 * 8.5 = 5.10pt
+ *   floor(90.44 / 5.10) = 17 characters
+ *
+ * table-fit.test.ts re-derives this from PO_COLS and fails if the weight moves.
+ */
+export const SKU_CHARS_PER_LINE = 17;
+
+/**
+ * Last-resort bound on how much SKU is rendered at all.
+ *
+ * packages/core/src/schemas/inventory.ts caps `sku` at 64 characters, so a
+ * longer value is data that never came through the app. 64 wraps to 4 lines,
+ * which is already the tallest a legitimate row can get; leaving it unbounded
+ * would let one malformed row grow past a page. For conforming data this
+ * truncation is unreachable — that is the point of siting it at the schema max
+ * rather than at a width.
+ */
+export const SKU_MAX_CHARS = 64;
+
+/**
+ * Split a SKU into lines that each fit the SKU column. Slicing (not truncating)
+ * is what keeps the identifier complete and copy/searchable in the PDF text
+ * layer. Returns [] for an empty SKU so the caller can render its em dash.
+ */
+export function wrapSku(sku: string, perLine: number = SKU_CHARS_PER_LINE): string[] {
+  const value = truncate(sku, SKU_MAX_CHARS);
+  const lines: string[] = [];
+  for (let i = 0; i < value.length; i += perLine) lines.push(value.slice(i, i + perLine));
+  return lines;
+}
+
+// Gutters live beside the weights they were budgeted with rather than in
+// styles.ts: adding padding to the shared `tCell` would narrow every content
+// box in inventory-snapshot.tsx (whose rows are wrap={false}, so row heights
+// and therefore pagination would shift) and cycle-count.tsx, neither of which
+// has been re-measured against its own column budget.
+const poTable = StyleSheet.create({
+  // Left-aligned cells grow rightward, so their gutter sits on the right.
+  cellGutter: { paddingRight: CELL_GUTTER },
+  // Right-aligned cells grow leftward, so theirs sits on the left.
+  cellGutterRight: { paddingLeft: CELL_GUTTER },
+  // The receipt number is a two-line stack, not a run: concatenating the
+  // status into the mono <Text> made the cell's worst case
+  // "R-…-REV (reversal)" = 39 Courier characters, which no column on a LETTER
+  // page can hold. Keeping the status on its own line keeps the mono line's
+  // width bounded by RECEIPT_NUMBER_MAX_CHARS.
+  receiptNumberCell: { paddingRight: CELL_GUTTER },
+  receiptStatus: { fontSize: 7.5, color: PDF_COLORS.ink3, marginTop: 1 },
+});
 
 export interface PoPdfLine {
   sku: string;
@@ -112,26 +248,60 @@ interface PurchaseOrderPdfProps {
   billToCharter?: PoPdfBillToCharter | null;
 }
 
-// Fixed-width column layout for the PO line table. Sum to ~100 so flex
-// widths translate cleanly to the available row.
-const PO_COLS = {
-  num: 4,
-  sku: 14,
-  name: 26,
-  qty: 9,
+/**
+ * Column layout for the PO line table. Weights sum to 100 and, after the
+ * eight 6pt gutters, divide 476pt of content. Each weight is budgeted as the
+ * widest content that column can ever hold; table-fit.test.ts asserts it.
+ *
+ * Header labels are the binding constraint on half of these columns because
+ * `tHeadCell` sets textTransform: 'uppercase' and @react-pdf applies the
+ * transform BEFORE measuring — "OUTSTANDING" at Helvetica-Bold 8 plus 0.6
+ * letterSpacing is 65.3pt, not the 53.7pt the mixed-case label measures, and
+ * it is a single unbreakable word. `out` grew from 11 (57.6pt of content
+ * under the old no-gutter layout) purely to stop its own header overflowing,
+ * which it was already doing before this change. `name` donates because it is
+ * the only column here that wraps on spaces, so losing width costs it row
+ * height rather than legibility.
+ *
+ * `recv` went 8 -> 9 (paid for by `name` 18 -> 17) because the quantity columns
+ * are budgeted for a seven-digit count: "1,234,567" is 7 * 556 + 2 * 278 =
+ * 4448/1000 * 9pt = 40.03pt, and weight 8 bought only 38.08pt — the layout
+ * engine was clamping the value to the content box's LEFT edge and painting it
+ * into the gutter. `name` is the only column with room to give: at 17 it still
+ * buys 80.92pt against a 61.27pt "DESCRIPTION" header, whereas qty (44.20pt
+ * header), out (65.26pt header), unit ($1,234,567.89 = 57.55pt) and total (the
+ * same with a minus sign, 60.54pt) are each within one weight unit of their own
+ * worst case. `sku` keeps its 19 because the SKU now WRAPS (see
+ * SKU_CHARS_PER_LINE) — narrowing it would only cost extra lines, never data.
+ */
+export const PO_COLS = {
+  num: 5,
+  sku: 19,
+  name: 17,
+  qty: 10,
   recv: 9,
-  out: 11,
+  out: 14,
   unit: 13,
-  total: 14,
+  total: 13,
 } as const;
 
-// Column layout for the receipts (receiving log) table.
-const RECEIPT_COLS = {
-  number: 22,
-  date: 26,
-  by: 24,
-  accepted: 14,
-  rejected: 14,
+/**
+ * Column layout for the receipts (receiving log) table. After the five 6pt
+ * gutters the weights divide 494pt.
+ *
+ * `number` has to hold a 28-character Courier 8.5 receipt number (142.8pt);
+ * at the old weight of 22 with no gutter it had 115.3pt, which is why the
+ * number ran into the Date column. The width comes out of `date`, which was
+ * carrying 26 units (136.2pt) for "May 30, 2026" — the widest date this
+ * document can print — at 54.5pt. Slack is parked in `by` because
+ * received_by_name is the only unbounded value here that breaks on spaces.
+ */
+export const RECEIPT_COLS = {
+  number: 30,
+  date: 13,
+  by: 35,
+  accepted: 11,
+  rejected: 11,
 } as const;
 
 export function PurchaseOrderPdf({
@@ -273,18 +443,34 @@ export function PurchaseOrderPdf({
           <Text style={pdfStyles.sectionTitle}>Line items</Text>
           <View style={pdfStyles.table}>
             <View style={pdfStyles.tHeadRow} fixed>
-              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.num }]}>#</Text>
-              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.sku }]}>SKU</Text>
-              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.name }]}>Description</Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>Ordered</Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>Recv</Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.out }]}>
+              <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: PO_COLS.num }]}>#</Text>
+              <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: PO_COLS.sku }]}>SKU</Text>
+              <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: PO_COLS.name }]}>
+                Description
+              </Text>
+              <Text
+                style={[pdfStyles.tHeadCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.qty }]}
+              >
+                Ordered
+              </Text>
+              <Text
+                style={[pdfStyles.tHeadCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.recv }]}
+              >
+                Recv
+              </Text>
+              <Text
+                style={[pdfStyles.tHeadCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.out }]}
+              >
                 Outstanding
               </Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+              <Text
+                style={[pdfStyles.tHeadCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.unit }]}
+              >
                 Unit cost
               </Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+              <Text
+                style={[pdfStyles.tHeadCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.total }]}
+              >
                 Line total
               </Text>
             </View>
@@ -306,19 +492,41 @@ export function PurchaseOrderPdf({
                   key={`${l.sku}-${i}`}
                   style={pdfStyles.tRow}
                 >
-                  <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
+                  <Text style={[pdfStyles.tCell, pdfStyles.muted, poTable.cellGutter, { flex: PO_COLS.num }]}>
                     {i + 1}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: PO_COLS.sku }]}>
-                    {l.sku || '—'}
-                  </Text>
-                  <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
+                  {/*
+                   * SKUs have no spaces, so an over-long one cannot wrap on its
+                   * own — it would paint over the description. It is split here
+                   * into SKU_CHARS_PER_LINE-character lines instead of being
+                   * truncated: the supplier orders against this identifier, and
+                   * the disambiguating suffix is at the END, so dropping
+                   * characters is worse than the overflow. The stack costs row
+                   * height; the value stays complete and searchable in the
+                   * text layer.
+                   */}
+                  <View style={[poTable.cellGutter, { flex: PO_COLS.sku }]}>
+                    {l.sku ? (
+                      wrapSku(l.sku).map((chunk, ci) => (
+                        <Text key={`sku-${ci}`} style={[pdfStyles.tCell, pdfStyles.tCellMono]}>
+                          {chunk}
+                        </Text>
+                      ))
+                    ) : (
+                      <Text style={[pdfStyles.tCell, pdfStyles.tCellMono]}>—</Text>
+                    )}
+                  </View>
+                  <Text style={[pdfStyles.tCell, poTable.cellGutter, { flex: PO_COLS.name }]}>
                     {truncate(l.name, DESCRIPTION_MAX)}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
+                  <Text
+                    style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.qty }]}
+                  >
                     {formatNumberForPdf(l.quantityOrdered)}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>
+                  <Text
+                    style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.recv }]}
+                  >
                     {formatNumberForPdf(l.quantityReceived)}
                   </Text>
                   {/*
@@ -331,16 +539,21 @@ export function PurchaseOrderPdf({
                     style={[
                       pdfStyles.tCell,
                       pdfStyles.tRight,
+                      poTable.cellGutterRight,
                       Math.max(0, l.quantityOrdered - l.quantityReceived) > 0 ? pdfStyles.bold : pdfStyles.muted,
                       { flex: PO_COLS.out },
                     ]}
                   >
                     {formatNumberForPdf(Math.max(0, l.quantityOrdered - l.quantityReceived))}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                  <Text
+                    style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.unit }]}
+                  >
                     {formatCurrencyForPdf(l.unitCost)}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                  <Text
+                    style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.total }]}
+                  >
                     {formatCurrencyForPdf(l.lineTotal)}
                   </Text>
                 </View>
@@ -362,34 +575,60 @@ export function PurchaseOrderPdf({
                     Math.abs(c.quantity * c.unitCost - c.amount) < 0.005;
                   return (
                     <View key={`charge-${ci}`} style={pdfStyles.tRow}>
-                      <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.muted, poTable.cellGutter, { flex: PO_COLS.num }]}
+                      >
                         {lines.length + ci + 1}
                       </Text>
                       <Text
-                        style={[pdfStyles.tCell, pdfStyles.tCellMono, pdfStyles.muted, { flex: PO_COLS.sku }]}
+                        style={[
+                          pdfStyles.tCell,
+                          pdfStyles.tCellMono,
+                          pdfStyles.muted,
+                          poTable.cellGutter,
+                          { flex: PO_COLS.sku },
+                        ]}
                       >
                         —
                       </Text>
-                      <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
+                      <Text style={[pdfStyles.tCell, poTable.cellGutter, { flex: PO_COLS.name }]}>
                         {truncate(c.label, DESCRIPTION_MAX)}
                       </Text>
-                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.qty }]}
+                      >
                         {foots ? formatNumberForPdf(c.quantity as number) : '—'}
                       </Text>
                       <Text
-                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.recv }]}
+                        style={[
+                          pdfStyles.tCell,
+                          pdfStyles.tRight,
+                          pdfStyles.muted,
+                          poTable.cellGutterRight,
+                          { flex: PO_COLS.recv },
+                        ]}
                       >
                         —
                       </Text>
                       <Text
-                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.out }]}
+                        style={[
+                          pdfStyles.tCell,
+                          pdfStyles.tRight,
+                          pdfStyles.muted,
+                          poTable.cellGutterRight,
+                          { flex: PO_COLS.out },
+                        ]}
                       >
                         —
                       </Text>
-                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.unit }]}
+                      >
                         {foots ? formatCurrencyForPdf(c.unitCost as number) : '—'}
                       </Text>
-                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, poTable.cellGutterRight, { flex: PO_COLS.total }]}
+                      >
                         {formatCurrencyForPdf(c.amount)}
                       </Text>
                     </View>
@@ -455,32 +694,81 @@ export function PurchaseOrderPdf({
             <Text style={pdfStyles.sectionTitle}>Receipts</Text>
             <View style={pdfStyles.table}>
               <View style={pdfStyles.tHeadRow} fixed>
-                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.number }]}>Receipt</Text>
-                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.date }]}>Date</Text>
-                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.by }]}>Received by</Text>
-                <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: RECEIPT_COLS.accepted }]}>
+                <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: RECEIPT_COLS.number }]}>
+                  Receipt
+                </Text>
+                <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: RECEIPT_COLS.date }]}>
+                  Date
+                </Text>
+                <Text style={[pdfStyles.tHeadCell, poTable.cellGutter, { flex: RECEIPT_COLS.by }]}>
+                  Received by
+                </Text>
+                <Text
+                  style={[
+                    pdfStyles.tHeadCell,
+                    pdfStyles.tRight,
+                    poTable.cellGutterRight,
+                    { flex: RECEIPT_COLS.accepted },
+                  ]}
+                >
                   Accepted
                 </Text>
-                <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: RECEIPT_COLS.rejected }]}>
+                <Text
+                  style={[
+                    pdfStyles.tHeadCell,
+                    pdfStyles.tRight,
+                    poTable.cellGutterRight,
+                    { flex: RECEIPT_COLS.rejected },
+                  ]}
+                >
                   Rejected
                 </Text>
               </View>
               {receipts.map((r, i) => (
                 <View key={`${r.receiptNumber}-${i}`} style={pdfStyles.tRow}>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: RECEIPT_COLS.number }]}>
-                    {r.receiptNumber}
-                    {r.status && r.status !== 'posted' ? ` (${r.status})` : ''}
-                  </Text>
-                  <Text style={[pdfStyles.tCell, { flex: RECEIPT_COLS.date }]}>
+                  {/*
+                   * Two-line stack, not a run. The status used to be appended
+                   * into this same mono <Text>, which made the worst case
+                   * "R-…-REV (reversal)" — 39 Courier characters, wider than
+                   * any column a LETTER page can afford. On its own line the
+                   * mono width stays bounded by RECEIPT_NUMBER_MAX_CHARS, and
+                   * only the rare non-posted row gains any height.
+                   */}
+                  <View style={[poTable.receiptNumberCell, { flex: RECEIPT_COLS.number }]}>
+                    <Text style={[pdfStyles.tCell, pdfStyles.tCellMono]}>{r.receiptNumber}</Text>
+                    {r.status && r.status !== 'posted' ? (
+                      <Text style={poTable.receiptStatus}>{r.status}</Text>
+                    ) : null}
+                  </View>
+                  <Text style={[pdfStyles.tCell, poTable.cellGutter, { flex: RECEIPT_COLS.date }]}>
                     {formatDateForPdf(r.receivedAt)}
                   </Text>
-                  <Text style={[pdfStyles.tCell, { flex: RECEIPT_COLS.by }]}>
-                    {r.receivedByName ?? '—'}
+                  {/*
+                   * received_by_name falls back to an email address, which has
+                   * no spaces and therefore cannot wrap. Cap it at what this
+                   * column can paint rather than let it run into Accepted.
+                   */}
+                  <Text style={[pdfStyles.tCell, poTable.cellGutter, { flex: RECEIPT_COLS.by }]}>
+                    {r.receivedByName ? truncate(r.receivedByName, RECEIVED_BY_MAX) : '—'}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: RECEIPT_COLS.accepted }]}>
+                  <Text
+                    style={[
+                      pdfStyles.tCell,
+                      pdfStyles.tRight,
+                      poTable.cellGutterRight,
+                      { flex: RECEIPT_COLS.accepted },
+                    ]}
+                  >
                     {formatNumberForPdf(r.totalAccepted)}
                   </Text>
-                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: RECEIPT_COLS.rejected }]}>
+                  <Text
+                    style={[
+                      pdfStyles.tCell,
+                      pdfStyles.tRight,
+                      poTable.cellGutterRight,
+                      { flex: RECEIPT_COLS.rejected },
+                    ]}
+                  >
                     {formatNumberForPdf(r.totalRejected)}
                   </Text>
                 </View>

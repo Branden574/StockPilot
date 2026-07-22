@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PurchaseOrderPdf,
+  RECEIVED_BY_MAX,
+  SKU_CHARS_PER_LINE,
   type PoPdfBillToCharter,
   type PoPdfCharge,
   type PoPdfHeader,
   type PoPdfLine,
+  type PoPdfReceipt,
 } from './po';
 
 /**
@@ -88,6 +91,7 @@ function render(opts: {
   charges?: PoPdfCharge[];
   header?: Partial<PoPdfHeader>;
   billToCharter?: PoPdfBillToCharter | null;
+  receipts?: PoPdfReceipt[];
 }): TreeNode[] {
   const tree = PurchaseOrderPdf({
     po: { ...baseHeader, status: opts.status ?? baseHeader.status, ...opts.header },
@@ -100,9 +104,21 @@ function render(opts: {
     },
     supplier: null,
     destination: null,
+    receipts: opts.receipts,
     billToCharter: opts.billToCharter ?? null,
   });
   return flatten(tree);
+}
+
+/** Every <Text> in the tree that renders in the Courier (mono) table style. */
+function monoTexts(nodes: TreeNode[]): TreeNode[] {
+  return nodes.filter(
+    (n) =>
+      Array.isArray(n.props.style) &&
+      (n.props.style as Array<{ fontFamily?: string } | undefined>).some(
+        (s) => s != null && s.fontFamily === 'Courier',
+      ),
+  );
 }
 
 describe('PurchaseOrderPdf', () => {
@@ -289,6 +305,120 @@ describe('PurchaseOrderPdf', () => {
     const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
     expect(allText).toContain('Tax & shipping');
     expect(allText).not.toContain('Charges');
+  });
+
+  // Receipts table. The column widths are asserted arithmetically in
+  // table-fit.test.ts; these guard the SHAPE those widths were budgeted for,
+  // so a future edit cannot invalidate the budget without going red.
+  const postedReceipt: PoPdfReceipt = {
+    receiptNumber: 'R-20260721-223330-e7a08b',
+    receivedAt: '2026-07-21T18:00:00Z',
+    receivedByName: 'Andrew Rosas',
+    status: 'posted',
+    totalAccepted: 12,
+    totalRejected: 0,
+  };
+
+  it('omits the receipts table when nothing has been received', () => {
+    const nodes = render({ receipts: [] });
+    const heading = nodes.find((n) => textOf(n.props.children).trim() === 'Receipts');
+    expect(heading).toBeUndefined();
+  });
+
+  it('renders a posted receipt with its number, date, receiver and totals', () => {
+    const nodes = render({ receipts: [postedReceipt] });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('Receipts');
+    expect(allText).toContain('R-20260721-223330-e7a08b');
+    expect(allText).toContain('Jul 21, 2026');
+    expect(allText).toContain('Andrew Rosas');
+  });
+
+  it('never renders the status inline with the receipt number', () => {
+    // The reported collision was made unfixable by ` (${status})` being
+    // concatenated into the mono <Text>: the worst case became 39 Courier
+    // characters, wider than any column a LETTER page can afford. The status
+    // has to stay on its own non-mono line for the width budget to hold.
+    const nodes = render({
+      receipts: [
+        { ...postedReceipt, receiptNumber: 'R-20260721-223330-e7a08b-REV', status: 'reversal' },
+      ],
+    });
+    const mono = monoTexts(nodes).map((n) => textOf(n.props.children));
+    expect(mono).toContain('R-20260721-223330-e7a08b-REV');
+    // No mono cell carries the status, the parentheses, or the two glued together.
+    for (const text of mono) {
+      expect(text).not.toContain('reversal');
+      expect(text).not.toContain('(');
+    }
+    // The status is still shown, just not in the mono run.
+    const status = nodes.find((n) => textOf(n.props.children).trim() === 'reversal');
+    expect(status).toBeDefined();
+  });
+
+  it('omits the status line entirely for a posted receipt', () => {
+    // 'posted' is the norm and adds nothing; only exceptions are called out.
+    const nodes = render({ receipts: [postedReceipt] });
+    const status = nodes.find((n) => textOf(n.props.children).trim() === 'posted');
+    expect(status).toBeUndefined();
+  });
+
+  it('caps an over-long received-by value instead of letting it run into Accepted', () => {
+    const email = 'branden.vincent-walker@subdomain.example.com';
+    const nodes = render({ receipts: [{ ...postedReceipt, receivedByName: email }] });
+    const cell = nodes.find((n) => textOf(n.props.children).startsWith('branden.vincent-walker@'));
+    expect(cell).toBeDefined();
+    const text = textOf(cell?.props.children);
+    expect(text.length).toBeLessThanOrEqual(RECEIVED_BY_MAX);
+    expect(text).not.toBe(email);
+  });
+
+  it('falls back to an em dash when the receiver is unknown', () => {
+    const nodes = render({ receipts: [{ ...postedReceipt, receivedByName: null }] });
+    const dash = nodes.find((n) => textOf(n.props.children).trim() === '—');
+    expect(dash).toBeDefined();
+  });
+
+  it('wraps an over-long SKU across lines instead of dropping characters', () => {
+    // This replaces a test that asserted truncation. Truncating was the
+    // regression: a supplier orders against this part number and the
+    // disambiguating suffix is at the END, so the dropped characters were the
+    // only thing telling two same-title items apart. The cell now stacks
+    // SKU_CHARS_PER_LINE-character Courier lines, so the value stays whole.
+    const sku = 'SP-ACER-CB511-TOUCH-32GB-EDU-BUNDLE';
+    const nodes = render({
+      lines: [
+        { sku, name: 'Acer Chromebook 511 Touch 32GB', quantityOrdered: 1, quantityReceived: 0, unitCost: 1, lineTotal: 1 },
+      ],
+    });
+    const chunks = monoTexts(nodes)
+      .map((n) => textOf(n.props.children))
+      .filter((t) => t !== '—');
+    expect(chunks.join('')).toBe(sku);
+    expect(chunks.length).toBe(Math.ceil(sku.length / SKU_CHARS_PER_LINE));
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(SKU_CHARS_PER_LINE);
+      expect(chunk).not.toContain('…');
+    }
+    // The description is untouched.
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('Acer Chromebook 511 Touch 32GB');
+  });
+
+  it('leaves a normal-length SKU untouched', () => {
+    const nodes = render({});
+    const mono = monoTexts(nodes).map((n) => textOf(n.props.children));
+    expect(mono).toContain('SKU-1');
+  });
+
+  it('still shows an em dash for a line with no SKU', () => {
+    const nodes = render({
+      lines: [
+        { sku: '', name: 'Unlabeled item', quantityOrdered: 1, quantityReceived: 0, unitCost: 1, lineTotal: 1 },
+      ],
+    });
+    const cell = monoTexts(nodes).find((n) => textOf(n.props.children).trim() === '—');
+    expect(cell).toBeDefined();
   });
 
   it('does not blow up when the type guard helper sees plain elements', () => {
