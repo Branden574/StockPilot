@@ -3000,39 +3000,52 @@ export class InventoryService {
     // two rows but only needs one movement/receipt lookup.
     const itemIds = [...new Set(rows.map((r) => r.item_id))];
 
-    // 2. Earliest receive_po-into-staging movement per item (for age + source).
+    // 2. The receive_po movement that actually put THIS stock into staging —
+    //    the MOST RECENT one whose receipt is still posted.
+    //
+    // This used to take the item's EARLIEST receive_po movement ever, with no
+    // regard for the receipt's status, and that produced flatly wrong rows
+    // (owner report 2026-07-22). Science Dimensions Earth & Space Science had
+    // been received on 2026-06-24 against CVW-002202 — a receipt later REVERSED,
+    // on a PO later CANCELLED — and again today against CVW-002201. Its 20
+    // staged units came from today's posted receipt, but the worklist showed the
+    // June receipt: wrong PO, wrong receipt number, "4 weeks ago", and a false
+    // "27d Stale" badge. Once an item had any receive history, every future
+    // staging row inherited that first receipt forever.
+    //
+    // Newest-posted-first is the honest answer to "where did the stock sitting
+    // here now come from": earlier receipts were either put away already or
+    // reversed, and a REVERSED receipt's stock was explicitly taken back out, so
+    // it can never be the source of what is in staging. Stock that genuinely has
+    // sat untouched still resolves to its own old receipt and still reads stale.
+    //
     // Note: post_receipt_v2 (mig 0190) passes receipts.id as `notes` (p_notes arg),
     // not as reference_id — so we read from sm.notes to get the source receipt ID.
-    const sourceByItem = new Map<string, { receivedAt: string; receiptId: string | null }>();
     const { data: moves, error: movesErr } = await this.ctx.supabase
       .from('stock_movements')
       .select('item_id, created_at, notes, movement_type')
       .eq('organization_id', this.ctx.organizationId)
       .eq('movement_type', 'receive_po')
       .in('item_id', itemIds)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false });
     // Graceful degradation: a source-lookup failure still returns the staged items
     // (just without the source/age badge) — log so the silent failure is diagnosable.
     if (movesErr) console.error('staging worklist: source-movement lookup failed', { error: movesErr.message });
-    for (const m of (moves ?? []) as Array<Record<string, any>>) {
-      if (!sourceByItem.has(m.item_id)) {
-        // notes holds receipts.id as text (mig 0190); guard empty/whitespace so it
-        // doesn't become a bogus id in the receipts .in('id', …) list.
-        sourceByItem.set(m.item_id, { receivedAt: m.created_at, receiptId: m.notes?.trim() || null });
-      }
-    }
+    const candidates = (moves ?? []) as Array<Record<string, any>>;
 
-    // 3. Resolve receipt -> PO number / receipt number for the sources we have.
-    const receiptIds = [...new Set(
-      [...sourceByItem.values()].map((s) => s.receiptId).filter(Boolean),
+    // 3. Resolve receipt -> status / PO number / receipt number. Every candidate
+    //    receipt is fetched (not just one per item) because the status decides
+    //    which candidate wins, and that is only knowable after this lookup.
+    const candidateReceiptIds = [...new Set(
+      candidates.map((m) => (m.notes as string | null)?.trim() || null).filter(Boolean),
     )] as string[];
-    const receiptMeta = new Map<string, { poNumber: string | null; receiptNumber: string | null; receivedAt: string | null }>();
-    if (receiptIds.length > 0) {
+    const receiptMeta = new Map<string, { poNumber: string | null; receiptNumber: string | null; receivedAt: string | null; status: string | null }>();
+    if (candidateReceiptIds.length > 0) {
       const { data: receipts, error: receiptsErr } = await this.ctx.supabase
         .from('receipts')
-        .select('id, receipt_number, received_at, purchase_orders(po_number)')
+        .select('id, receipt_number, received_at, status, purchase_orders(po_number)')
         .eq('organization_id', this.ctx.organizationId)
-        .in('id', receiptIds);
+        .in('id', candidateReceiptIds);
       // Graceful degradation: a receipt/PO-lookup failure still returns the staged
       // items (without PO/receipt numbers) — log so it's diagnosable.
       if (receiptsErr) console.error('staging worklist: receipt/PO lookup failed', { error: receiptsErr.message });
@@ -3041,8 +3054,22 @@ export class InventoryService {
           poNumber: r.purchase_orders?.po_number ?? null,
           receiptNumber: r.receipt_number ?? null,
           receivedAt: r.received_at ?? null,
+          status: (r.status as string | null) ?? null,
         });
       }
+    }
+
+    // 4. Walk each item's movements newest-first and keep the first one backed by
+    //    a POSTED receipt. No posted receipt means the staged stock did not come
+    //    from a live receipt (adjustment, or every receipt reversed) — the source
+    //    and age columns then honestly render "—" instead of naming a dead one.
+    const sourceByItem = new Map<string, { receivedAt: string; receiptId: string | null }>();
+    for (const m of candidates) {
+      if (sourceByItem.has(m.item_id)) continue;
+      const receiptId = (m.notes as string | null)?.trim() || null;
+      if (!receiptId) continue;
+      if (receiptMeta.get(receiptId)?.status !== 'posted') continue;
+      sourceByItem.set(m.item_id, { receivedAt: m.created_at, receiptId });
     }
 
     const nowMs = Date.now();

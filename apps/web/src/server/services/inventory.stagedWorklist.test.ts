@@ -86,6 +86,7 @@ describe('InventoryService.stagedWorklist', () => {
             id: 'receipt-1',
             receipt_number: 'R-001',
             received_at: '2026-06-26T00:00:00Z',
+            status: 'posted',
             purchase_orders: { po_number: 'CVSII-001841' },
           },
         ],
@@ -181,6 +182,7 @@ describe('InventoryService.stagedWorklist', () => {
             id: 'receipt-c',
             receipt_number: 'R-COMBO',
             received_at: '2026-06-26T00:00:00Z',
+            status: 'posted',
             purchase_orders: { po_number: 'CVW-COMBINED' },
           },
         ],
@@ -208,5 +210,116 @@ describe('InventoryService.stagedWorklist', () => {
     expect(unplacedRow.sourceReceiptId).toBeNull();
     expect(unplacedRow.receiptNumber).toBeNull();
     expect(unplacedRow.ageDays).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source attribution (owner report 2026-07-22, reproduced from the real rows).
+//
+// "Science Dimensions Earth & Space Science" had been received on 2026-06-24
+// against CVW-002202 — a receipt later REVERSED, on a PO later CANCELLED — and
+// received again on 2026-07-22 against CVW-002201. Its 20 staged units came
+// from the July receipt, but the worklist took the item's EARLIEST receive_po
+// movement with no regard for receipt status, so the Staging screen showed the
+// June receipt: wrong PO, wrong receipt number, "4 weeks ago", and a false
+// "27d Stale" badge on stock that had arrived minutes earlier.
+// ---------------------------------------------------------------------------
+
+const SCIENCE_ITEM = '33333333-3333-3333-3333-333333333333';
+
+function scienceDimensionsStub(receipts: Array<Record<string, unknown>>) {
+  return makeSupabaseStub({
+    'item_stock_levels.select': {
+      data: [
+        {
+          item_id: SCIENCE_ITEM,
+          location_id: 'stg-loc',
+          quantity: 20,
+          locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+          inventory_items: {
+            id: SCIENCE_ITEM,
+            name: 'Science Dimensions Earth & Space Science',
+            sku: 'SP-0WK2L-LY1',
+            item_type: 'book',
+            deleted_at: null,
+          },
+        },
+      ],
+      error: null,
+    },
+    // Newest first — the service orders descending.
+    'stock_movements.select': {
+      data: [
+        {
+          item_id: SCIENCE_ITEM,
+          created_at: '2026-07-22T17:56:00Z',
+          notes: 'receipt-july',
+          movement_type: 'receive_po',
+        },
+        {
+          item_id: SCIENCE_ITEM,
+          created_at: '2026-06-24T21:41:23Z',
+          notes: 'receipt-june',
+          movement_type: 'receive_po',
+        },
+      ],
+      error: null,
+    },
+    'receipts.select': { data: receipts, error: null },
+  });
+}
+
+const JUNE_RECEIPT = {
+  id: 'receipt-june',
+  receipt_number: 'R-20260624-214123-168444',
+  received_at: '2026-06-24T21:41:23Z',
+  status: 'reversed',
+  purchase_orders: { po_number: 'CVW-002202' },
+};
+const JULY_RECEIPT = {
+  id: 'receipt-july',
+  receipt_number: 'R-20260722-175600-e56648',
+  received_at: '2026-07-22T17:56:00Z',
+  status: 'posted',
+  purchase_orders: { po_number: 'CVW-002201' },
+};
+
+describe('InventoryService.stagedWorklist — which receipt staged this stock', () => {
+  it('attributes staged stock to the most recent POSTED receipt, not the first ever', async () => {
+    const svc = new InventoryService(
+      makeServiceContext(scienceDimensionsStub([JUNE_RECEIPT, JULY_RECEIPT]).client),
+    );
+    const [row] = await svc.stagedWorklist();
+
+    expect(row!.sourcePoNumber).toBe('CVW-002201');
+    expect(row!.receiptNumber).toBe('R-20260722-175600-e56648');
+    expect(row!.receivedAt).toBe('2026-07-22T17:56:00Z');
+  });
+
+  it('never attributes staged stock to a REVERSED receipt', async () => {
+    // Reversing took that stock back out, so it cannot be what is sitting here.
+    const svc = new InventoryService(
+      makeServiceContext(scienceDimensionsStub([JUNE_RECEIPT]).client),
+    );
+    const [row] = await svc.stagedWorklist();
+
+    expect(row!.sourcePoNumber).toBeNull();
+    expect(row!.receiptNumber).toBeNull();
+    expect(row!.sourceReceiptId).toBeNull();
+    // No live receipt to date it from, so no age and therefore no Stale badge.
+    expect(row!.ageDays).toBeNull();
+  });
+
+  it('still reads stale when the only posted receipt really is old', async () => {
+    const svc = new InventoryService(
+      makeServiceContext(
+        scienceDimensionsStub([{ ...JUNE_RECEIPT, status: 'posted' }, { ...JULY_RECEIPT, status: 'reversed' }]).client,
+      ),
+    );
+    const [row] = await svc.stagedWorklist();
+
+    expect(row!.sourcePoNumber).toBe('CVW-002202');
+    expect(row!.receivedAt).toBe('2026-06-24T21:41:23Z');
+    expect(row!.ageDays).toBeGreaterThan(14);
   });
 });
