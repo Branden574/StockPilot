@@ -470,6 +470,10 @@ export class PoImportsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('sha256', sha256)
       .is('superseded_at', null)
+      // Same status set the index (and resolveDuplicateBySha256) uses. Already
+      // failed/canceled/duplicate rows are outside the index, so stamping them
+      // would change nothing except muddy what superseded_at means.
+      .not('status', 'in', '(failed,canceled,duplicate)')
       // .select() so a silent no-op can't fail OPEN into a 23505 on the
       // insert (recurring pattern: .update().eq() reports success even when
       // RLS matched zero rows).

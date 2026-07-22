@@ -161,12 +161,14 @@ describe('PoImportsService — cancelled-PO reimport decision', () => {
       const update = stub.chains.get('po_imports.update');
       expect(update).toBeDefined();
       // Scoped to this org + this file, and only rows not already superseded.
-      expect(update).toEqual(['update', 'eq', 'eq', 'is', 'select']);
+      expect(update).toEqual(['update', 'eq', 'eq', 'is', 'not', 'select']);
       const args = stub.chainArgs.get('po_imports.update')!;
       expect(args[0]![0]).toHaveProperty('superseded_at');
       expect(args[1]).toEqual(['organization_id', 'org-1']);
       expect(args[2]).toEqual(['sha256', UPLOAD.sha256]);
       expect(args[3]).toEqual(['superseded_at', null]);
+      // Rows already outside the live-uniqueness index are left alone.
+      expect(args[4]).toEqual(['status', 'in', '(failed,canceled,duplicate)']);
     });
 
     it('does NOT supersede anything when the file is genuinely blocked', async () => {
