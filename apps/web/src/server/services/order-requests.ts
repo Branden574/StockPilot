@@ -230,6 +230,18 @@ export interface OrderRequestDetail {
   /** Resolved requester email — `requester_email` else the joined
    *  user_profiles.email. Same fallback shape as `requesterName`. */
   requesterEmail: string | null;
+  /**
+   * Display name of the picker who CLAIMED this order (`assigned_picker_id`),
+   * resolved from user_profiles (full_name, else email). NULL when nobody has
+   * claimed picking yet.
+   *
+   * Drives the pre-printed PICKER NAME on the printable pick slip + print view
+   * so a picker only signs and dates by hand. Deliberately null-when-unclaimed
+   * (owner decision 2026-07-22): these are SIGNED sheets, so printing a guessed
+   * name (e.g. whoever hit print, who may be a manager printing for the crew)
+   * is worse than leaving the line blank to fill in.
+   */
+  assignedPickerName: string | null;
 }
 
 export interface CreateOrderRequestInput {
@@ -757,9 +769,18 @@ export class OrderRequestsService {
     // internal self-submit orders, which carry a `requester_user_id` and
     // NULL name/email columns). On-behalf-of + public-link orders instead
     // carry the free-text name/email and no `requester_user_id`.
-    const profile = h.requester_user_id
-      ? await this.lookupUserProfile(h.requester_user_id)
-      : null;
+    // Resolved in PARALLEL with the picker below so adding the picker name
+    // costs no extra round-trip on the detail path.
+    const [profile, pickerProfile] = await Promise.all([
+      h.requester_user_id
+        ? this.lookupUserProfile(h.requester_user_id)
+        : Promise.resolve(null),
+      // Picker who CLAIMED this order — pre-printed on the pick slip's
+      // PICKER NAME line. Null when unclaimed (see OrderRequestDetail doc).
+      h.assigned_picker_id
+        ? this.lookupUserProfile(h.assigned_picker_id)
+        : Promise.resolve(null),
+    ]);
 
     // Resolved name/email safe for a name cell — SAME fallback the list()
     // path uses: free-text column wins, else the joined profile, else null.
@@ -789,6 +810,9 @@ export class OrderRequestsService {
       requesterDisplay,
       requesterName,
       requesterEmail,
+      assignedPickerName: pickerProfile
+        ? pickerProfile.fullName?.trim() || pickerProfile.email?.trim() || null
+        : null,
     };
   }
 

@@ -326,8 +326,14 @@ export default async function OrderPrintPage({
         <section className="mt-10 break-inside-avoid">
           <div className="grid grid-cols-2 gap-8">
             <div>
-              <div className="border-b border-black pb-1 text-xs text-neutral-600">
-                Picked by (sign + print)
+              {/* Pre-print the CLAIMED picker's name so they only sign + date.
+                  Blank when nobody has claimed picking — never guess a name on
+                  a signed sheet (mirrors the pick-slip PDF). */}
+              <div className="border-b border-black pb-1 text-sm">
+                {detail.assignedPickerName ?? ' '}
+              </div>
+              <div className="pt-1 text-xs text-neutral-600">
+                {detail.assignedPickerName ? 'Picked by (sign below)' : 'Picked by (sign + print)'}
               </div>
               <div className="mt-1 h-10" />
               <div className="border-b border-black pb-1 text-xs text-neutral-600">

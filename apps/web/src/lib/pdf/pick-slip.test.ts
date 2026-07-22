@@ -97,6 +97,28 @@ describe('renderPickSlipPdf', () => {
     expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF');
   }, 30000);
 
+  // Pre-printed PICKER NAME (owner request 2026-07-22): the claimed picker's
+  // name is printed on the slip so they only sign + date by hand. Blank when
+  // nobody has claimed — never guess a name on a signed sheet.
+  it('pre-prints the claimed picker name (and omits it when unclaimed)', async () => {
+    const claimed = await renderPickSlipPdf({
+      ...baseDetail,
+      assignedPickerName: 'Daniel Hernandez',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const unclaimed = await renderPickSlipPdf({
+      ...baseDetail,
+      assignedPickerName: null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    expect(claimed.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    expect(unclaimed.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    // The name is real embedded content, so the claimed slip carries strictly
+    // more bytes than the identical unclaimed one.
+    expect(claimed.byteLength).toBeGreaterThan(unclaimed.byteLength);
+  }, 30000);
+
   it('renders even when there are no item images', async () => {
     const buf = await renderPickSlipPdf(baseDetail);
     expect(buf.byteLength).toBeGreaterThan(2000);

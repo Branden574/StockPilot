@@ -461,6 +461,15 @@ const styles = StyleSheet.create({
     color: INK_4,
     marginTop: 4,
   },
+  /** Pre-printed picker name, rendered INSIDE the 24pt signature-line box so
+   *  the three signature columns stay vertically aligned (no layout shift when
+   *  the name is absent). Sits low in the box so it reads as written on the
+   *  line. */
+  signaturePrefilled: {
+    fontSize: 11,
+    color: INK,
+    marginTop: 9,
+  },
 
   // ── Footer ────────────────────────────────────────────────────
   footer: {
@@ -613,7 +622,7 @@ export async function renderPickSlipPdf(
   detail: OrderRequestDetail,
   opts: RenderPickSlipOptions = {},
 ): Promise<Buffer> {
-  const { request, lines, warehouseName } = detail;
+  const { request, lines, warehouseName, assignedPickerName } = detail;
   const imageUrlByItemId = opts.imageUrlByItemId ?? new Map<string, string>();
   const rackHoldingsByItemId = opts.rackHoldingsByItemId;
 
@@ -840,7 +849,14 @@ export async function renderPickSlipPdf(
         {/* Signature */}
         <View style={styles.signatureRow}>
           <View style={styles.signatureCol}>
-            <View style={styles.signatureLine} />
+            {/* Pre-print the CLAIMED picker's name so they only sign + date.
+                Blank when nobody has claimed picking — never guess a name on
+                a signed sheet. */}
+            <View style={styles.signatureLine}>
+              {assignedPickerName ? (
+                <Text style={styles.signaturePrefilled}>{assignedPickerName}</Text>
+              ) : null}
+            </View>
             <Text style={styles.signatureCaption}>PICKER NAME</Text>
           </View>
           <View style={styles.signatureCol}>
