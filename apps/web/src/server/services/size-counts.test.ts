@@ -139,3 +139,58 @@ describe('SizeCountsService.getSession', () => {
     expect(bySize).toEqual({ M: 2 }); // L netted to 0 and is filtered out
   });
 });
+
+// ---------------------------------------------------------------------------
+// The capture screen's per-size counter is the only feedback a person gets that
+// their photo work is being kept. It used to be a bare .select() whose rows
+// were counted in JS, so PostgREST's [api] max_rows = 1000 clamp silently
+// truncated it: at 2,171 real samples it reported 1,000 and stopped moving,
+// which reads as "my photos are not saving" (owner report 2026-07-22).
+// ---------------------------------------------------------------------------
+
+describe('SizeCountsService.getTrainingStats', () => {
+  function pagedStub(total: number) {
+    // Emulate the server cap: never return more than 1000 rows per request,
+    // and honour .range() so the pagination loop can actually walk the set.
+    let call = 0;
+    return makeSupabaseStub({
+      'size_count_training_samples.select': () => {
+        const from = call * 1000;
+        call += 1;
+        const remaining = Math.max(0, total - from);
+        const size = Math.min(1000, remaining);
+        return {
+          data: Array.from({ length: size }, (_, i) => ({
+            id: `s-${from + i}`,
+            // Alternate two labels so the per-label split is checkable.
+            size_label: (from + i) % 2 === 0 ? 'XS' : 'XXXL',
+          })),
+          error: null,
+        };
+      },
+    });
+  }
+
+  function svc(stub: ReturnType<typeof makeSupabaseStub>) {
+    return new SizeCountsService(
+      makeServiceContext(stub.client, { organizationId: 'org-test', enabledModules: withIsc }),
+    );
+  }
+
+  it('counts EVERY sample, not just the first server page', async () => {
+    const res = await svc(pagedStub(2171)).getTrainingStats();
+    expect(res.total).toBe(2171);
+    expect(res.counts.XS! + res.counts.XXXL!).toBe(2171);
+  });
+
+  it('is exact on a dataset that fits in one page', async () => {
+    const res = await svc(pagedStub(120)).getTrainingStats();
+    expect(res.total).toBe(120);
+  });
+
+  it('reports zero for an org with no samples', async () => {
+    const res = await svc(pagedStub(0)).getTrainingStats();
+    expect(res.total).toBe(0);
+    expect(res.counts).toEqual({});
+  });
+});

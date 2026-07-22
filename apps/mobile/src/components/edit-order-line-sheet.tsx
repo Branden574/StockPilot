@@ -22,7 +22,11 @@ import { useTheme } from '@/lib/use-theme';
 import {
   canRemoveOrderLine,
   describeLineEditError,
+  describeLineRaiseWarning,
   describeQuantityFloor,
+  LINE_RAISE_CONFIRM_ACTION,
+  LINE_RAISE_CONFIRM_CANCEL,
+  LINE_RAISE_CONFIRM_TITLE,
   LINE_EDIT_INDETERMINATE_COPY,
   LINE_EDIT_INDETERMINATE_TITLE,
   LINE_EDIT_RESERVATION_SYNC_COPY,
@@ -64,6 +68,7 @@ export function EditOrderLineSheet({
   onClose,
   orderId,
   line,
+  orderStatus,
   totalLines,
   onChanged,
   onRemoved,
@@ -74,6 +79,12 @@ export function EditOrderLineSheet({
   orderId: string;
   /** The line being corrected, or null while the sheet is closed. */
   line: EditableOrderLine | null;
+  /**
+   * The ORDER's status. Read only to decide whether a raise lands after picking
+   * is already finished (SO-000061). It never gates the edit — the service
+   * alone decides what is allowed.
+   */
+  orderStatus: string | null;
   /** Lines on the order — removing the last one is refused (R5). */
   totalLines: number;
   onChanged: (line: EditableOrderLine, result: LineQuantityResult) => void;
@@ -105,6 +116,11 @@ export function EditOrderLineSheet({
     ? canRemoveOrderLine({ line, totalLines })
     : ({ ok: false, reason: '' } as const);
   const parsed = parseLineQuantity(qty);
+  // Null for every edit that needs no warning — lowering, and any raise before
+  // picking finished. Derived by the shared helper so the phone and the web
+  // order page say the identical sentence about the identical number.
+  const raiseWarning =
+    line && parsed !== null ? describeLineRaiseWarning(line, parsed, orderStatus) : null;
   // Fixed pixel height off the window — percentage/aspectRatio sizing is what
   // collapsed the size-count grid under Fabric, so no sheet uses it.
   const bodyMaxHeight = Math.round(height * 0.5);
@@ -158,7 +174,7 @@ export function EditOrderLineSheet({
     }
   }
 
-  async function save() {
+  function save() {
     if (!line || !line.orderRequestLineId || busy !== null) return;
     if (parsed === null) {
       setError('Enter a whole number above zero.');
@@ -175,6 +191,25 @@ export function EditOrderLineSheet({
       setError(check.reason);
       return;
     }
+    // SO-000061: a raise made after picking finished manufactures a shortfall
+    // nobody has been told about, and it stayed invisible until a signature
+    // flipped the order to backordered. Stop and say so — the write is still
+    // allowed, it just no longer happens silently. Every other edit (any
+    // reduction, and every raise before picking finished) falls straight
+    // through to the write with no new friction.
+    if (raiseWarning != null) {
+      Alert.alert(LINE_RAISE_CONFIRM_TITLE, raiseWarning, [
+        { text: LINE_RAISE_CONFIRM_CANCEL, style: 'cancel' },
+        { text: LINE_RAISE_CONFIRM_ACTION, onPress: () => void commitSave(line, parsed) },
+      ]);
+      return;
+    }
+    void commitSave(line, parsed);
+  }
+
+  async function commitSave(target: EditableOrderLine, parsed: number) {
+    if (!target.orderRequestLineId) return;
+    const line = target;
     setBusy('save');
     setError(null);
     try {
@@ -342,6 +377,16 @@ export function EditOrderLineSheet({
                     <Mono size={10.5} color={c.ink4}>
                       {floorNote}
                     </Mono>
+                  ) : null}
+                  {/* Shown live under the stepper as well as in the
+                      confirmation, so the consequence is visible while the
+                      number is still being chosen. Amber, matching the
+                      partial-fulfilment card on the order screen: needs
+                      attention, nothing broken. */}
+                  {raiseWarning ? (
+                    <Body size={11.5} color="#b45309">
+                      {raiseWarning}
+                    </Body>
                   ) : null}
                 </View>
 

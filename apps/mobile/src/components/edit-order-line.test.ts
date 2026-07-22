@@ -6,6 +6,7 @@ import {
   canEditOrderLines,
   canRemoveOrderLine,
   describeLineEditError,
+  describeLineRaiseWarning,
   describeQuantityFloor,
   LINE_EDIT_MAX_QUANTITY,
   lineEditErrorIsIndeterminate,
@@ -14,6 +15,7 @@ import {
   lineQuantityFloor,
   lineQuantitySummary,
   lineRemovedSummary,
+  orderShortfallNotice,
   parseLineQuantity,
   removeLineConfirmCopy,
   stepLineQuantity,
@@ -403,5 +405,74 @@ describe('lineEditErrorIsReservationSync — the 409 that arrives AFTER the writ
     // picture is wrong", this means "the change landed, the hold did not".
     expect(lineEditErrorIsStale(RESERVATION_409)).toBe(false);
     expect(lineEditErrorIsIndeterminate(RESERVATION_409)).toBe(false);
+  });
+});
+
+/**
+ * SO-000061 (2026-07-22). A fully picked line was raised from 40 to 42 at
+ * packing_slip_generated and nothing said the extra 2 still had to be pulled;
+ * the shortfall only surfaced when the signature flipped the order to
+ * backordered. The arithmetic and the status set live in @stockpilot/core —
+ * these assert the mobile ADAPTER hands it the right fields, and that the two
+ * copy helpers the sheet and the order screen consume behave.
+ */
+describe('describeLineRaiseWarning', () => {
+  const PICKED: EditableOrderLine = { ...CLEAN, requested: 40, picked: 40 };
+
+  it('warns on a raise once picking is complete, naming the real number', () => {
+    expect(describeLineRaiseWarning(PICKED, 42, 'packing_slip_generated')).toBe(
+      'Picking is already complete. Adding 2 more will leave this order short until they are picked.',
+    );
+  });
+
+  it('reads picked AND fulfilled, not just the requested delta', () => {
+    // Half handed over, half staged: nothing is left to pull, so a raise of 2
+    // is short by exactly 2 — proof the adapter passes all three columns.
+    const half: EditableOrderLine = { ...CLEAN, requested: 40, fulfilled: 20, picked: 20 };
+    expect(describeLineRaiseWarning(half, 42, 'in_transit')).toBe(
+      'Picking is already complete. Adding 2 more will leave this order short until they are picked.',
+    );
+  });
+
+  it('stays silent on a raise made before picking finished', () => {
+    expect(describeLineRaiseWarning(CLEAN, 20, 'approved')).toBeNull();
+    expect(describeLineRaiseWarning(CLEAN, 20, 'picking_in_progress')).toBeNull();
+  });
+
+  it('stays silent when the quantity is lowered or unchanged', () => {
+    expect(describeLineRaiseWarning(PICKED, 30, 'packing_slip_generated')).toBeNull();
+    expect(describeLineRaiseWarning(PICKED, 40, 'packing_slip_generated')).toBeNull();
+  });
+
+  it('stays silent on a closed order and on a missing status', () => {
+    expect(describeLineRaiseWarning(PICKED, 42, 'completed')).toBeNull();
+    expect(describeLineRaiseWarning(PICKED, 42, null)).toBeNull();
+  });
+
+  it('never REFUSES the raise it warns about — the floors alone decide', () => {
+    // The warning and the validator are independent: a warned raise is still
+    // an accepted quantity, because raising after picking stays legitimate.
+    expect(describeLineRaiseWarning(PICKED, 42, 'packing_slip_generated')).not.toBeNull();
+    expect(validateLineQuantity(PICKED, 42)).toEqual({ ok: true });
+  });
+});
+
+describe('orderShortfallNotice', () => {
+  it('names the count and what to do once picking is settled', () => {
+    const lines: EditableOrderLine[] = [
+      { ...CLEAN, requested: 42, picked: 40 },
+      { ...CLEAN, orderRequestLineId: 'line-2', requested: 10, picked: 10 },
+    ];
+    expect(orderShortfallNotice(lines, 'packing_slip_generated')).toBe(
+      '2 units on this order have not been picked, and will be reported as owed when it is handed over.',
+    );
+  });
+
+  it('is null on a healthy, fully picked order', () => {
+    expect(orderShortfallNotice([{ ...CLEAN, requested: 40, picked: 40 }], 'staged_for_pickup')).toBeNull();
+  });
+
+  it('is null before picking finished, however much is outstanding', () => {
+    expect(orderShortfallNotice([{ ...CLEAN, requested: 40, picked: 0 }], 'approved')).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 'use client';
 
+import { describeRaiseAfterPicking, type OrderStatus } from '@stockpilot/core';
 import { Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -24,6 +25,12 @@ interface Props {
   quantityFulfilled: number;
   /** Units staged by a picker but not yet handed over. Null = never touched. */
   quantityPicked: number | null;
+  /**
+   * The ORDER's status. Read only to decide whether a raise happens after
+   * picking is already finished (SO-000061) — it never gates the edit itself,
+   * which the service alone decides.
+   */
+  orderStatus: OrderStatus | string;
   /** This is the last line on the order — removing it would empty the record. */
   isOnlyLine: boolean;
 }
@@ -123,6 +130,7 @@ export function OrderLineActions({
   quantityRequested,
   quantityFulfilled,
   quantityPicked,
+  orderStatus,
   isOnlyLine,
 }: Props) {
   const router = useRouter();
@@ -132,11 +140,29 @@ export function OrderLineActions({
   const [saving, setSaving] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [removing, setRemoving] = React.useState(false);
+  const [raiseConfirmOpen, setRaiseConfirmOpen] = React.useState(false);
 
   const blocked = quantityBlockedReason({
     quantity: draft,
     fulfilled: quantityFulfilled,
     picked: quantityPicked,
+  });
+  /**
+   * SO-000061: raising a line AFTER picking finished silently manufactures a
+   * shortfall that stays invisible until a signature flips the order to
+   * backordered. The permission is correct — a manager may raise it — so this
+   * is a warning, never a block. Derived by the shared helper so the phone says
+   * the identical sentence. Null on every other edit, which is what keeps the
+   * common case (raise before picking, or any reduction) frictionless.
+   */
+  const raiseWarning = describeRaiseAfterPicking({
+    line: {
+      quantityRequested,
+      quantityFulfilled,
+      quantityPicked,
+    },
+    nextRequested: draft,
+    status: orderStatus,
   });
   const unchanged = draft === quantityRequested;
   const removeBlocked = removalBlockedReason({
@@ -148,6 +174,21 @@ export function OrderLineActions({
   function startEditing() {
     setDraft(quantityRequested);
     setEditing(true);
+  }
+
+  /**
+   * The Save click. Everything except a post-picking raise commits straight
+   * away; that one case stops for an explicit confirmation first, because the
+   * consequence (someone has to go back to a shelf, and nobody has been told)
+   * is invisible from the number the user just typed.
+   */
+  function requestSave() {
+    if (blocked != null || unchanged || saving) return;
+    if (raiseWarning != null) {
+      setRaiseConfirmOpen(true);
+      return;
+    }
+    void save();
   }
 
   async function save() {
@@ -168,6 +209,13 @@ export function OrderLineActions({
     }
     toast.success(`${itemName} — quantity changed to ${formatNumber(res.data.quantity)}.`);
     warnIfPickSlipStale(res.data.pickSlipStale);
+    // Repeated as a toast as well as in the confirmation: the confirmation is
+    // gone by now, and the person who has to act on it may not be the person
+    // who clicked. The order's own banner carries it from here.
+    if (raiseWarning != null) {
+      toast.warning(raiseWarning, { duration: 8000 });
+    }
+    setRaiseConfirmOpen(false);
     setEditing(false);
     router.refresh();
   }
@@ -210,7 +258,7 @@ export function OrderLineActions({
             className="h-8 w-8"
             aria-label={`Save quantity for ${itemName}`}
             disabled={saving || unchanged || blocked != null}
-            onClick={save}
+            onClick={requestSave}
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -235,6 +283,27 @@ export function OrderLineActions({
             {blocked}
           </p>
         )}
+        {/* Shown live under the field as well as in the confirmation, so the
+            consequence is visible while the number is still being chosen — the
+            confirmation is the last chance, not the first mention. Amber, the
+            same tone the order's partial-fulfilment and stale-slip banners use
+            for "this needs attention but nothing is broken". */}
+        {blocked == null && raiseWarning != null && (
+          <p className="max-w-[15rem] text-right text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+            {raiseWarning}
+          </p>
+        )}
+        <DestructiveConfirm
+          open={raiseConfirmOpen}
+          onOpenChange={setRaiseConfirmOpen}
+          tone="primary"
+          title="Raise this quantity anyway?"
+          description={raiseWarning ?? ''}
+          confirmLabel="Raise the quantity"
+          cancelLabel="Leave it as it is"
+          pending={saving}
+          onConfirm={save}
+        />
       </div>
     );
   }

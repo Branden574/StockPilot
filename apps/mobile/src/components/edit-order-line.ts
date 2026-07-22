@@ -1,3 +1,5 @@
+import { describeRaiseAfterPicking, describeUnpickedShortfall } from '@stockpilot/core';
+
 import { extractApiErrorMessage } from '../lib/po-import-approve';
 
 import { addLinesErrorStatus, canAddOrderItems, type AddItemsGateInput } from './add-order-items';
@@ -139,6 +141,56 @@ export function validateLineQuantity(line: EditableOrderLine, quantity: number):
     }
   }
   return { ok: true };
+}
+
+// ── Shortfall after picking (SO-000061) ─────────────────────────────────────
+
+/**
+ * Adapts this file's line shape to the shared derivation in @stockpilot/core.
+ * The arithmetic and the status set live THERE, not here — mobile and web must
+ * not be able to disagree about how many units nobody has pulled.
+ */
+function toShortfallLine(line: EditableOrderLine) {
+  return {
+    quantityRequested: line.requested,
+    quantityFulfilled: line.fulfilled,
+    quantityPicked: line.picked,
+  };
+}
+
+/**
+ * The sentence to put in front of the user BEFORE a raise is committed, or
+ * null when the edit needs no warning.
+ *
+ * NOT a refusal. Raising a line after picking is legitimate (the service still
+ * accepts it, and the floors above are the only hard rules); what went wrong on
+ * SO-000061 is that nobody was told the extra units still had to be pulled.
+ */
+export function describeLineRaiseWarning(
+  line: EditableOrderLine,
+  nextQuantity: number,
+  status: string | null | undefined,
+): string | null {
+  return describeRaiseAfterPicking({
+    line: toShortfallLine(line),
+    nextRequested: nextQuantity,
+    status,
+  });
+}
+
+export const LINE_RAISE_CONFIRM_TITLE = 'Raise this quantity anyway?';
+export const LINE_RAISE_CONFIRM_ACTION = 'Raise the quantity';
+export const LINE_RAISE_CONFIRM_CANCEL = 'Leave it as it is';
+
+/**
+ * The standing notice for the order screen: units that are neither handed over
+ * nor staged, once picking is settled. Null on a healthy order.
+ */
+export function orderShortfallNotice(
+  lines: readonly EditableOrderLine[],
+  status: string | null | undefined,
+): string | null {
+  return describeUnpickedShortfall(lines.map(toShortfallLine), status);
 }
 
 // ── Removal (mirror of R1-R3 and R5; R4 is deleted — see below) ─────────────

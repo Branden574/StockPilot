@@ -4,6 +4,7 @@ import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -263,13 +264,30 @@ export class SizeCountsService {
    */
   async getTrainingStats(): Promise<{ counts: Record<string, number>; total: number }> {
     assertModuleEnabled(this.ctx, 'instant_size_count');
-    const { data, error } = await this.ctx.supabase
-      .from('size_count_training_samples')
-      .select('size_label')
-      .eq('organization_id', this.ctx.organizationId);
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Counted by PAGING TO EXHAUSTION, not by one bare .select().
+    //
+    // PostgREST clamps every response to [api] max_rows = 1000
+    // (supabase/config.toml), and a plain select gives no hint it truncated. So
+    // once an org passed 1000 samples this counter silently stopped rising and
+    // under-reported the dataset by more than half: the owner had 2,171 photos
+    // and the capture screen was summing only the first 1,000, which reads as
+    // "my work is not saving" (reported 2026-07-22).
+    //
+    // The label set is open (LABELS on the capture screen already lists nine
+    // sizes and more may be added), so a per-label head-count would need this
+    // service to know that list and would silently drop any label it did not
+    // know about. Paging the label column keeps it label-agnostic and is one
+    // round trip per 1000 samples on a column-only read.
+    const rows = await fetchAllRows<{ size_label: string }>((from, to) =>
+      this.ctx.supabase
+        .from('size_count_training_samples')
+        .select('id, size_label')
+        .eq('organization_id', this.ctx.organizationId)
+        .order('id')
+        .range(from, to),
+    );
     const counts: Record<string, number> = {};
-    for (const r of (data ?? []) as Array<{ size_label: string }>) {
+    for (const r of rows) {
       counts[r.size_label] = (counts[r.size_label] ?? 0) + 1;
     }
     const total = Object.values(counts).reduce((a, b) => a + b, 0);

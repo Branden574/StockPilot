@@ -244,6 +244,14 @@ export default function TrainingCaptureScreen() {
 
         <View style={styles.hintWrap} pointerEvents="none">
           <Text style={styles.hint}>Frame one sticker, then tap its size</Text>
+          {/* The single most confusing thing about this screen: photographing
+              stickers TRAINS the detector, it does not tally a count. The owner
+              shot 2,171 photos and then found their count session reading zero
+              (2026-07-22). Nothing on screen said the two were different, so
+              say it here, next to the action itself. */}
+          <Text style={styles.hintSub}>
+            Photos train the size detector. They do not add to a count.
+          </Text>
         </View>
 
         <View style={styles.panel} pointerEvents="auto">
@@ -346,6 +354,12 @@ const styles = StyleSheet.create({
   hint: {
     color: '#fff', fontSize: 14, fontWeight: '600',
     backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
+  },
+  hintSub: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 4,
   },
   panel: { paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm },
   toolRow: { flexDirection: 'row', gap: space.xs },

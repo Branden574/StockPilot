@@ -44,6 +44,9 @@ function baseProps(over: Partial<Props> = {}): Props {
     quantityRequested: 4,
     quantityFulfilled: 0,
     quantityPicked: null,
+    // Default is BEFORE picking, so every pre-existing case in this file keeps
+    // exercising the frictionless path (no raise confirmation).
+    orderStatus: 'approved',
     isOnlyLine: false,
     ...over,
   };
@@ -287,6 +290,95 @@ describe('OrderLineActions — changing the quantity', () => {
     expect(screen.getByRole('button', { name: /save quantity for blue widget/i })).toBeDisabled();
 
     release({ ok: true, data: { pickSlipStale: false, quantity: 9 } });
+  });
+});
+
+/**
+ * SO-000061. A manager raised a fully picked line from 40 to 42 at
+ * packing_slip_generated; nothing said the extra 2 still had to be pulled, and
+ * the shortfall only surfaced when the signature flipped the order to
+ * backordered. The edit stays ALLOWED — these assert that it stops to say so.
+ */
+describe('OrderLineActions — raising a quantity after picking is complete', () => {
+  const AFTER_PICKING = {
+    quantityRequested: 40,
+    quantityPicked: 40,
+    quantityFulfilled: 0,
+    orderStatus: 'packing_slip_generated',
+  } as const;
+
+  async function raiseTo(user: ReturnType<typeof userEvent.setup>, value: string) {
+    const field = await openEditor(user);
+    await user.clear(field);
+    await user.type(field, value);
+    await user.click(screen.getByRole('button', { name: /save quantity for blue widget/i }));
+  }
+
+  it('holds the write and names the real shortfall before committing', async () => {
+    const user = renderRow(AFTER_PICKING);
+    await raiseTo(user, '42');
+
+    expect(updateLine).not.toHaveBeenCalled();
+    // Twice on purpose: live under the field while the number is chosen, and
+    // again in the confirmation that has to be answered before the write.
+    expect(
+      screen.getAllByText(
+        'Picking is already complete. Adding 2 more will leave this order short until they are picked.',
+      ),
+    ).toHaveLength(2);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('commits once confirmed, and repeats the shortfall as a warning', async () => {
+    const user = renderRow(AFTER_PICKING);
+    await raiseTo(user, '42');
+    await user.click(screen.getByRole('button', { name: /raise the quantity/i }));
+
+    expect(updateLine).toHaveBeenCalledWith({
+      id: '11111111-1111-4111-8111-111111111111',
+      lineId: '22222222-2222-4222-8222-222222222222',
+      quantity: 42,
+    });
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      expect.stringContaining('Adding 2 more'),
+      expect.objectContaining({ duration: 8000 }),
+    );
+  });
+
+  it('writes nothing when the confirmation is declined', async () => {
+    const user = renderRow(AFTER_PICKING);
+    await raiseTo(user, '42');
+    await user.click(screen.getByRole('button', { name: /leave it as it is/i }));
+
+    expect(updateLine).not.toHaveBeenCalled();
+    // The editor is still open on the typed number so the user can change it.
+    expect(screen.getByLabelText(/requested quantity for blue widget/i)).toBeInTheDocument();
+  });
+
+  it('adds no friction to a raise made BEFORE picking finished', async () => {
+    const user = renderRow({
+      quantityRequested: 40,
+      quantityPicked: 0,
+      quantityFulfilled: 0,
+      orderStatus: 'pick_slip_generated',
+    });
+    await raiseTo(user, '42');
+
+    expect(updateLine).toHaveBeenCalledWith(expect.objectContaining({ quantity: 42 }));
+    expect(screen.queryByText(/picking is already complete/i)).not.toBeInTheDocument();
+  });
+
+  it('adds no friction to LOWERING a quantity after picking', async () => {
+    const user = renderRow({
+      quantityRequested: 40,
+      quantityPicked: 10,
+      quantityFulfilled: 0,
+      orderStatus: 'packing_slip_generated',
+    });
+    await raiseTo(user, '20');
+
+    expect(updateLine).toHaveBeenCalledWith(expect.objectContaining({ quantity: 20 }));
+    expect(screen.queryByText(/picking is already complete/i)).not.toBeInTheDocument();
   });
 });
 

@@ -25,7 +25,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { can, formatOrderNumber, isManagerOrAbove, type Role } from '@stockpilot/core';
+import {
+  can,
+  describeUnpickedShortfall,
+  formatOrderNumber,
+  isManagerOrAbove,
+  UNPICKED_SHORTFALL_TITLE,
+  type Role,
+} from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -251,6 +258,18 @@ export default async function OrderDetailPage({
     0,
   );
   const totalOwed = Math.max(0, totalQty - totalFulfilled);
+  // SO-000061: units that are neither handed over NOR staged — nobody has
+  // pulled them. Derived (no column), and only meaningful once picking is
+  // finished; the shared helper owns both the arithmetic and the status set so
+  // web and mobile cannot drift. Wording is a single string from core.
+  const shortfallNotice = describeUnpickedShortfall(
+    lines.map((l) => ({
+      quantityRequested: l.quantity_requested,
+      quantityFulfilled: l.quantity_fulfilled,
+      quantityPicked: l.quantity_picked,
+    })),
+    request.status,
+  );
   const reservedTotal = reservations.reduce(
     (s, r) => s + (Number(r.quantity) || 0),
     0,
@@ -554,21 +573,58 @@ export default async function OrderDetailPage({
                 is no longer possible. Same status set the add affordance uses —
                 once contents are frozen, a reprint is moot. (Mobile applies the
                 identical gate via isAddLinesBlockedStatus.) */}
-            {detail.pickSlipStale && !ADD_LINES_BLOCKED.includes(request.status) && (
-              <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
-                <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
-                  <Printer className="mt-px size-3.5 shrink-0" />
-                  <span>
-                    Items were added after the pick slip was printed. Generate the
-                    pick slip again so the sheet matches this order
-                    {detail.assignedPickerName
-                      ? `, and give the new copy to ${detail.assignedPickerName}`
-                      : ''}
-                    .
-                  </span>
-                </p>
-              </div>
-            )}
+            {/* No longer suppressed by the shortfall notice. The original
+                reason was that both opened with "generate the pick slip
+                again" — but that instruction has been removed from the
+                shortfall copy (it is impossible at five of the six statuses it
+                fires at, since generatePickSlip requires 'approved'), so the
+                two no longer duplicate each other. They answer different
+                questions: this one says lines were ADDED after printing, which
+                is derived from created_at and is the narrow case; the shortfall
+                says how many units nobody has pulled. Both can be true at once,
+                and each carries information the other cannot. */}
+            {detail.pickSlipStale &&
+              !ADD_LINES_BLOCKED.includes(request.status) && (
+                <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
+                  <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
+                    <Printer className="mt-px size-3.5 shrink-0" />
+                    <span>
+                      Items were added after the pick slip was printed. Generate the
+                      pick slip again so the sheet matches this order
+                      {detail.assignedPickerName
+                        ? `, and give the new copy to ${detail.assignedPickerName}`
+                        : ''}
+                      .
+                    </span>
+                  </p>
+                </div>
+              )}
+            {/* Un-picked units, shown the moment they exist rather than at
+                hand-over (SO-000061). Standalone only when the partial-
+                fulfilment banner below is NOT up: when it is, the same units
+                are already being counted there as "owed", and the instruction
+                is appended INSIDE that banner instead (see below) so the card
+                never stacks two amber boxes about one number.
+
+                Same construction and tone as the two banners around it —
+                border-b, amber-50 / amber-950-30, amber-800 / amber-300 text —
+                because it is the same class of message: attention needed,
+                nothing broken. */}
+            {shortfallNotice != null &&
+              !(totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered')) && (
+                <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
+                  <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
+                    <Printer className="mt-px size-3.5 shrink-0" />
+                    <span>
+                      <span className="font-semibold">{UNPICKED_SHORTFALL_TITLE}.</span>{' '}
+                      {shortfallNotice}
+                      {detail.assignedPickerName
+                        ? ` Give the new copy to ${detail.assignedPickerName}.`
+                        : ''}
+                    </span>
+                  </p>
+                </div>
+              )}
             {totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered') && (
               <div className="border-b border-border bg-amber-50 px-4 py-2.5 text-xs dark:bg-amber-950/30">
                 <div className="flex items-center justify-between">
@@ -590,6 +646,15 @@ export default async function OrderDetailPage({
                     }}
                   />
                 </div>
+                {/* The owed count above says what the customer has NOT received.
+                    It does not say whether anyone is pulling those units — on a
+                    backorder they are waiting on stock, but after a raise past
+                    picking they are waiting on a person. This sentence is the
+                    only one that names an action, so it rides inside the same
+                    banner rather than opening a second one. */}
+                {shortfallNotice != null && (
+                  <p className="mt-1.5 text-amber-800 dark:text-amber-300">{shortfallNotice}</p>
+                )}
               </div>
             )}
             <Table>
@@ -699,6 +764,7 @@ export default async function OrderDetailPage({
                             quantityRequested={Number(l.quantity_requested) || 0}
                             quantityFulfilled={Number(l.quantity_fulfilled) || 0}
                             quantityPicked={l.quantity_picked}
+                            orderStatus={request.status}
                             isOnlyLine={lines.length === 1}
                           />
                         </TableCell>

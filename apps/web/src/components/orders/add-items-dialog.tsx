@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { isPickingSettled } from '@stockpilot/core';
 import { cn, formatNumber } from '@/lib/utils';
 import { addOrderRequestLinesAction } from '@/server/actions/order-requests';
 
@@ -147,6 +148,17 @@ export function AddItemsDialog({
               Only items stocked at {warehouseName ?? "this order's warehouse"} can be added. An
               item already on the order tops up its existing line.
             </DialogDescription>
+            {/* Adding to an order whose picking is already finished is the same
+                act as raising a line there: it creates units nobody has been
+                told to pull. The per-line control warns about that; this path
+                reached it silently, which review flagged as the same defect one
+                door over. */}
+            {isPickingSettled(status) && (
+              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                Picking on this order is already complete. Anything added here will need picking
+                before hand-over, or it will be reported as owed.
+              </p>
+            )}
           </DialogHeader>
           {/* Gated on `open` so the browse fetch is paid only when someone
               actually opens the picker — the order detail re-renders on every

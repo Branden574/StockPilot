@@ -33,6 +33,7 @@ import {
   canEditOrderLines,
   lineQuantitySummary,
   lineRemovedSummary,
+  orderShortfallNotice,
   type EditableOrderLine,
   type LineQuantityResult,
   type LineRemovedResult,
@@ -69,6 +70,7 @@ import {
   can,
   formatOrderNumber,
   derivePickingStatus,
+  UNPICKED_SHORTFALL_TITLE,
   type FulfillmentType,
   type OrderStatus,
   type Role,
@@ -780,6 +782,11 @@ export default function OrderDetail() {
   const totalRequested = order?.totalRequested ?? 0;
   const totalFulfilled = order?.totalFulfilled ?? 0;
   const totalOwed = Math.max(0, totalRequested - totalFulfilled);
+  // SO-000061: units neither handed over NOR staged — nobody has pulled them.
+  // Derived, and only meaningful once picking is settled; the shared helper in
+  // @stockpilot/core owns the arithmetic and the status set, so this card and
+  // the web order page can never disagree about the number or the wording.
+  const shortfallNotice = order ? orderShortfallNotice(order.lines, order.status) : null;
 
   // Picking claim/lock (owner decisions, enforced server-side). This section is
   // visible to ANY role in the picking phase — a staff picker must claim before
@@ -1070,6 +1077,30 @@ export default function OrderDetail() {
                   }}
                 />
               </View>
+              {/* The owed count above says what the customer has not received.
+                  It does not say whether anyone is pulling those units. This
+                  sentence is the only one that names an action, so it rides
+                  inside the same card rather than opening a second one. */}
+              {shortfallNotice ? (
+                <Body size={12} color="#b45309" style={{ marginTop: 10 }}>
+                  {shortfallNotice}
+                </Body>
+              ) : null}
+            </Card>
+          ) : null}
+
+          {/* Standalone only when the partial-fulfilment card above is NOT up —
+              when it is, the same units are already counted there as "owed"
+              and the instruction is appended inside it instead. */}
+          {shortfallNotice != null &&
+          !(totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered')) ? (
+            <Card padding={14}>
+              <Body size={13} color={ACCENT.warn}>
+                {UNPICKED_SHORTFALL_TITLE}
+              </Body>
+              <Mono size={11} color={ACCENT.warn} style={{ marginTop: 4 }}>
+                {shortfallNotice}
+              </Mono>
             </Card>
           ) : null}
 
@@ -1082,7 +1113,13 @@ export default function OrderDetail() {
                   picker holding a printed slip is the one who needs to know.
                   Suppressed once the order has shipped or died: a reprint is
                   then moot. */}
-              {shouldShowStalePickSlip({
+              {/* Suppressed while the shortfall card below is up: that card
+                  already says to generate the slip again AND names how many
+                  units are missing, which this one cannot know. Two warn-tone
+                  cards giving the same instruction is the confusion the web
+                  page avoids the same way. */}
+              {shortfallNotice == null &&
+              shouldShowStalePickSlip({
                 derived: order.pickSlipStale,
                 pickSlipGeneratedAt: order.pickSlipGeneratedAt,
                 staleReportedForSlipAt,
@@ -1956,6 +1993,7 @@ export default function OrderDetail() {
           onClose={() => setEditLineId(null)}
           orderId={order.id}
           line={editLine}
+          orderStatus={order.status}
           totalLines={order.lines.length}
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
