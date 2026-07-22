@@ -44,12 +44,16 @@ function svc(stub: ReturnType<typeof makeSupabaseStub>) {
 function stubFor(
   priors: Array<Record<string, unknown>>,
   pos: Array<Record<string, unknown>> = [],
+  overrides: Record<string, { data: unknown; error: { message: string; code?: string } | null }> = {},
 ) {
   let poSelectSeen = false;
   return makeSupabaseStub({
     // First po_imports.select is the dup lookup; the insert returns the new id.
     'po_imports.select': { data: priors, error: null },
     'po_imports.insert': { data: { id: 'new-import' }, error: null },
+    // The supersede stamp (mig 0287) — returns the rows it freed.
+    'po_imports.update': { data: priors.map((p) => ({ id: p.id })), error: null },
+    ...overrides,
     'purchase_orders.select': () => {
       poSelectSeen = true;
       return { data: pos, error: null };
@@ -137,6 +141,79 @@ describe('PoImportsService — cancelled-PO reimport decision', () => {
     // Newest cancelled predecessor wins for lineage.
     expect(res.duplicateOf).toBeNull();
     expect(res.reimportOfCancelled?.predecessorImportId).toBe('import-2');
+  });
+
+  /**
+   * The database has the final say: a partial unique index
+   * (po_imports_org_sha_uniq) forbids two LIVE imports of one file. Deciding
+   * "reimport allowed" in the service is not enough — the predecessor must be
+   * stamped superseded_at first (mig 0287) or the insert raises 23505. That
+   * exact gap 500'd POST /api/po-imports/scan in production.
+   */
+  describe('freeing the hash at the database level', () => {
+    it('stamps the predecessor superseded BEFORE inserting the new import', async () => {
+      const stub = stubFor(
+        [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
+        [{ id: 'po-1', status: 'cancelled', po_number: 'CVW-1' }],
+      );
+      await svc(stub).createFromUpload(UPLOAD);
+
+      const update = stub.chains.get('po_imports.update');
+      expect(update).toBeDefined();
+      // Scoped to this org + this file, and only rows not already superseded.
+      expect(update).toEqual(['update', 'eq', 'eq', 'is', 'select']);
+      const args = stub.chainArgs.get('po_imports.update')!;
+      expect(args[0]![0]).toHaveProperty('superseded_at');
+      expect(args[1]).toEqual(['organization_id', 'org-1']);
+      expect(args[2]).toEqual(['sha256', UPLOAD.sha256]);
+      expect(args[3]).toEqual(['superseded_at', null]);
+    });
+
+    it('does NOT supersede anything when the file is genuinely blocked', async () => {
+      const stub = stubFor(
+        [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
+        [{ id: 'po-1', status: 'ordered', po_number: 'CVW-1' }],
+      );
+      await svc(stub).createFromUpload(UPLOAD);
+      expect(stub.chains.get('po_imports.update')).toBeUndefined();
+    });
+
+    it('never supersedes on a brand-new file', async () => {
+      const stub = stubFor([]);
+      await svc(stub).createFromUpload(UPLOAD);
+      expect(stub.chains.get('po_imports.update')).toBeUndefined();
+    });
+
+    it('reports a clean conflict (not a 500) when two reimports race', async () => {
+      const stub = stubFor(
+        [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
+        [{ id: 'po-1', status: 'cancelled', po_number: 'CVW-1' }],
+        {
+          'po_imports.insert': {
+            data: null,
+            error: {
+              code: '23505',
+              message:
+                'duplicate key value violates unique constraint "po_imports_org_sha_uniq"',
+            },
+          },
+        },
+      );
+      await expect(svc(stub).createFromUpload(UPLOAD)).rejects.toMatchObject({
+        code: 'conflict',
+      });
+    });
+
+    it('reports a conflict rather than failing open when the supersede matches no rows', async () => {
+      const stub = stubFor(
+        [{ id: 'old-import', status: 'approved', approved_po_id: 'po-1', created_at: '2026-07-01' }],
+        [{ id: 'po-1', status: 'cancelled', po_number: 'CVW-1' }],
+        { 'po_imports.update': { data: [], error: null } },
+      );
+      await expect(svc(stub).createFromUpload(UPLOAD)).rejects.toMatchObject({
+        code: 'conflict',
+      });
+    });
   });
 
   it('FAILS CLOSED when the prior import points at a PO row it cannot read', async () => {

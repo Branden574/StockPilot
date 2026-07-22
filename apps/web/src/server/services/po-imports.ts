@@ -294,6 +294,12 @@ export class PoImportsService {
       };
     }
 
+    // Free the hash for exactly one new live import (mig 0287) — without this
+    // the insert below hits po_imports_org_sha_uniq (23505).
+    if (decision.kind === 'reimport_after_cancelled') {
+      await this.supersedePriorImports(input.sha256);
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('po_imports')
       .insert({
@@ -313,7 +319,15 @@ export class PoImportsService {
       })
       .select('id')
       .single();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      if (PoImportsService.isLiveImportCollision(error)) {
+        throw new ServiceError(
+          'conflict',
+          'Someone just imported this same file. Refresh to see their import.',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
     await audit(
       {
         event: 'po_import.uploaded',
@@ -438,6 +452,51 @@ export class PoImportsService {
   }
 
   /**
+   * Frees a file's hash for exactly one new live import by stamping every prior
+   * import of it `superseded_at` (mig 0287). REQUIRED before inserting a
+   * reimport: the partial unique index po_imports_org_sha_uniq covers live,
+   * non-superseded rows, so without this the insert dies with 23505 (that was
+   * the 500 on the scan route).
+   *
+   * Only ever called after resolveDuplicateBySha256 has confirmed EVERY prior
+   * import's purchase order is cancelled. Deliberately does NOT touch status,
+   * approved_po_id, lines, documents or the cancelled PO — the predecessor stays
+   * fully intact for audit; this flag only means "no longer the live import".
+   */
+  private async supersedePriorImports(sha256: string): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('po_imports')
+      .update({ superseded_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('sha256', sha256)
+      .is('superseded_at', null)
+      // .select() so a silent no-op can't fail OPEN into a 23505 on the
+      // insert (recurring pattern: .update().eq() reports success even when
+      // RLS matched zero rows).
+      .select('id');
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data || data.length === 0) {
+      throw new ServiceError(
+        'conflict',
+        'Could not re-open this file for import. Refresh and try again.',
+      );
+    }
+  }
+
+  /**
+   * Maps the live-import uniqueness collision (23505 on
+   * po_imports_org_sha_uniq) to a clean conflict. Two people reimporting the
+   * same cancelled PO at once: one wins, the other gets this instead of a 500.
+   */
+  private static isLiveImportCollision(err: { code?: string; message?: string } | null): boolean {
+    if (!err) return false;
+    return (
+      err.code === '23505' ||
+      (err.message ?? '').includes('po_imports_org_sha_uniq')
+    );
+  }
+
+  /**
    * Phone-scanned PO end-to-end. Accepts raw image/PDF buffers (one or
    * more — multi-page POs supported), uploads them to the po-imports
    * bucket, runs Gemini Flash extraction, persists the header + lines
@@ -526,6 +585,13 @@ export class PoImportsService {
     const status: PoImportStatus =
       lowConfidenceCount > 0 ? 'needs_review' : 'parsed';
 
+    // Free the hash for exactly one new live import (mig 0287) — mirrors the
+    // upload path; without it this insert hits po_imports_org_sha_uniq (23505),
+    // which is what 500'd the scan route.
+    if (scanDecision.kind === 'reimport_after_cancelled') {
+      await this.supersedePriorImports(sha256);
+    }
+
     const { data: imp, error: impErr } = await this.ctx.supabase
       .from('po_imports')
       .insert({
@@ -551,11 +617,21 @@ export class PoImportsService {
       // The DB row insert failed AFTER we already uploaded the scan
       // bytes to the po-imports bucket. Remove the orphaned file
       // best-effort so we don't accumulate storage cost over time.
-      // Re-throw with the original error regardless of cleanup result.
-      try {
-        await admin.storage.from('po-imports').remove([storagePath]);
-      } catch {
-        // swallow — original DB error is the one the user needs to see.
+      // EXCEPT on a reimport: storage_path is keyed by sha256, so the
+      // cancelled predecessor's row points at this exact same object —
+      // deleting it would break that import's document link.
+      if (scanDecision.kind !== 'reimport_after_cancelled') {
+        try {
+          await admin.storage.from('po-imports').remove([storagePath]);
+        } catch {
+          // swallow — original DB error is the one the user needs to see.
+        }
+      }
+      if (PoImportsService.isLiveImportCollision(impErr)) {
+        throw new ServiceError(
+          'conflict',
+          'Someone just imported this same document. Refresh to see their import.',
+        );
       }
       throw new ServiceError(
         'internal_error',
