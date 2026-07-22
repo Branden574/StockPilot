@@ -50,6 +50,9 @@ export default function ScanPo() {
   const [frames, setFrames] = React.useState<CapturedFrame[]>([]);
   const [cameraOpen, setCameraOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // With 2+ captures: true = each file is its OWN PO import (default); false =
+  // combine as pages of ONE PO. Ignored for a single capture.
+  const [separate, setSeparate] = React.useState(true);
   const cameraRef = React.useRef<CameraView | null>(null);
 
   // Extraction progress. The scan is one request (upload + Gemini vision, ~6-10s)
@@ -224,6 +227,8 @@ export default function ScanPo() {
           type,
         } as any);
       }
+      // Only meaningful for 2+ frames; the server treats a single file as combined.
+      fd.append('mode', frames.length > 1 && separate ? 'separate' : 'combined');
       const {
         data: { session: fresh },
       } = await supabase.auth.getSession();
@@ -267,6 +272,25 @@ export default function ScanPo() {
         duration: 250,
         useNativeDriver: false,
       }).start();
+
+      // Separate mode: N imports created — send the user to the imports list to
+      // review/approve each (there's no single detail to open).
+      if (json.mode === 'separate' && Array.isArray(json.imports)) {
+        const made = (json.imports as unknown[]).length;
+        const failedCount = Array.isArray(json.failed) ? (json.failed as unknown[]).length : 0;
+        setFrames([]);
+        Alert.alert(
+          'Imported',
+          `${made} import${made === 1 ? '' : 's'} created${
+            failedCount > 0 ? ` · ${failedCount} file${failedCount === 1 ? '' : 's'} couldn't be read` : ''
+          }. Review and approve each.`,
+          [
+            { text: 'Review', onPress: () => router.replace('/po-imports') },
+            { text: 'Later', style: 'cancel' },
+          ],
+        );
+        return;
+      }
       // Native review screen exists now (app/po-import/[id]) — land there by
       // default; the web review page stays one tap away for desk work.
       const importId = String(json.id);
@@ -399,6 +423,34 @@ export default function ScanPo() {
           </View>
         )}
 
+        {frames.length > 1 && !busy && (
+          <View style={styles.modeCard}>
+            <Text style={styles.modeQuestion}>
+              {frames.length} captures — are these…
+            </Text>
+            <View style={styles.modeRow}>
+              <Pressable
+                onPress={() => setSeparate(true)}
+                style={[styles.modeBtn, separate && styles.modeBtnActive]}
+              >
+                <Text style={[styles.modeBtnTitle, separate && styles.modeBtnTitleActive]}>
+                  Separate POs
+                </Text>
+                <Text style={styles.modeBtnSub}>Each becomes its own import</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSeparate(false)}
+                style={[styles.modeBtn, !separate && styles.modeBtnActive]}
+              >
+                <Text style={[styles.modeBtnTitle, !separate && styles.modeBtnTitleActive]}>
+                  One multi-page PO
+                </Text>
+                <Text style={styles.modeBtnSub}>Combine as pages of one PO</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
         {frames.length > 0 && !busy && (
           <Pressable
             onPress={submit}
@@ -408,7 +460,8 @@ export default function ScanPo() {
             ]}
           >
             <Text style={styles.extractBtnText}>
-              ✨  Extract {frames.length} {frames.length === 1 ? 'page' : 'pages'}
+              ✨  Extract {frames.length}{' '}
+              {frames.length > 1 && separate ? 'POs' : frames.length === 1 ? 'page' : 'pages'}
             </Text>
           </Pressable>
         )}
@@ -552,6 +605,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   thumbnailHint: { color: '#fff', fontSize: 10 },
+  modeCard: {
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: radius.md,
+    padding: space.sm,
+    marginTop: space.sm,
+    gap: space.xs,
+  },
+  modeQuestion: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
+  modeRow: { flexDirection: 'row', gap: space.xs },
+  modeBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: radius.md,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
+    gap: 2,
+  },
+  modeBtnActive: { borderColor: theme.primary, backgroundColor: theme.bg },
+  modeBtnTitle: { color: theme.text, fontSize: 13, fontWeight: '700' },
+  modeBtnTitleActive: { color: theme.primary },
+  modeBtnSub: { color: theme.textMuted, fontSize: 11 },
   extractBtn: {
     backgroundColor: theme.primary,
     paddingVertical: space.md,
