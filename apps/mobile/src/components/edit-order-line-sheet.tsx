@@ -25,7 +25,10 @@ import {
   describeQuantityFloor,
   LINE_EDIT_INDETERMINATE_COPY,
   LINE_EDIT_INDETERMINATE_TITLE,
+  LINE_EDIT_RESERVATION_SYNC_COPY,
+  LINE_EDIT_RESERVATION_SYNC_TITLE,
   lineEditErrorIsIndeterminate,
+  lineEditErrorIsReservationSync,
   lineEditErrorIsStale,
   lineQuantityFloor,
   parseLineQuantity,
@@ -62,7 +65,6 @@ export function EditOrderLineSheet({
   orderId,
   line,
   totalLines,
-  itemHasOpenReservation,
   onChanged,
   onRemoved,
   onRequestReload,
@@ -74,9 +76,6 @@ export function EditOrderLineSheet({
   line: EditableOrderLine | null;
   /** Lines on the order — removing the last one is refused (R5). */
   totalLines: number;
-  /** An un-released stock_reservations row still points at this line's item
-   *  for this order (R4). Reservations are per (order, item), not per line. */
-  itemHasOpenReservation: boolean;
   onChanged: (line: EditableOrderLine, result: LineQuantityResult) => void;
   onRemoved: (line: EditableOrderLine, result: LineRemovedResult) => void;
   /** Called when the failure means the screen's picture of the order is stale
@@ -103,7 +102,7 @@ export function EditOrderLineSheet({
   const floor = line ? lineQuantityFloor(line) : 1;
   const floorNote = line ? describeQuantityFloor(line) : null;
   const removal = line
-    ? canRemoveOrderLine({ line, totalLines, itemHasOpenReservation })
+    ? canRemoveOrderLine({ line, totalLines })
     : ({ ok: false, reason: '' } as const);
   const parsed = parseLineQuantity(qty);
   // Fixed pixel height off the window — percentage/aspectRatio sizing is what
@@ -140,6 +139,17 @@ export function EditOrderLineSheet({
       setError(null);
       onClose();
       Alert.alert(LINE_EDIT_INDETERMINATE_TITLE, LINE_EDIT_INDETERMINATE_COPY);
+      onRequestReload();
+    } else if (lineEditErrorIsReservationSync(e)) {
+      // The line write COMMITTED and only the reservation re-sync failed (the
+      // service writes the line first on purpose — a stray hold self-corrects
+      // when the order closes, a missing one does not). Keeping this in the
+      // sheet would show the old quantity next to a message about stock, and
+      // invite the user to repeat an edit that already landed. Close, say what
+      // did and did not happen, reload.
+      setError(null);
+      onClose();
+      Alert.alert(LINE_EDIT_RESERVATION_SYNC_TITLE, LINE_EDIT_RESERVATION_SYNC_COPY);
       onRequestReload();
     } else {
       // 400/409/429/500 — the service's message names the floor or the state,

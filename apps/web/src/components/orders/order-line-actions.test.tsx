@@ -44,11 +44,19 @@ function baseProps(over: Partial<Props> = {}): Props {
     quantityRequested: 4,
     quantityFulfilled: 0,
     quantityPicked: null,
-    hasActiveReservation: false,
     isOnlyLine: false,
     ...over,
   };
 }
+
+/**
+ * The retired R4 mirror's input shape. Passing the dead field as an EXTRA key
+ * (rather than deleting the case outright) is what makes these regression
+ * tests fail against the old code and keeps them failing if anyone reinstates
+ * a reservation blocker: on the shipped rule the field is ignored, on the old
+ * rule it refuses.
+ */
+const WITH_RESERVATION = { hasActiveReservation: true };
 
 function renderRow(over: Partial<Props> = {}) {
   const user = userEvent.setup();
@@ -109,35 +117,57 @@ describe('removalBlockedReason', () => {
       removalBlockedReason({
         fulfilled: 0,
         picked: null,
-        hasActiveReservation: false,
         isOnlyLine: false,
       }),
     ).toBeNull();
   });
 
+  it('does NOT refuse a line whose item still holds an active reservation', () => {
+    // The production defect: approval mints a hold for every line, so the old
+    // R4 mirror refused every row of every approved order — including the six
+    // lines of SO-000060, which had nothing picked at all.
+    expect(
+      removalBlockedReason({
+        fulfilled: 0,
+        picked: null,
+        isOnlyLine: false,
+        ...WITH_RESERVATION,
+      }),
+    ).toBeNull();
+  });
+
+  it('never mentions reservations in any refusal it can still produce', () => {
+    const reasons = [
+      removalBlockedReason({ fulfilled: 3, picked: null, isOnlyLine: false }),
+      removalBlockedReason({ fulfilled: 0, picked: 2, isOnlyLine: false }),
+      removalBlockedReason({ fulfilled: 0, picked: null, isOnlyLine: true }),
+    ];
+    // The old copy told the user to "unstage the order or regenerate the pick
+    // slip", neither of which releases a reservation — an instruction that
+    // could not be followed. Nothing left may talk about held stock.
+    for (const reason of reasons) {
+      expect(reason).not.toMatch(/reserv/i);
+    }
+  });
+
   it.each([
-    [
-      'handed over',
-      { fulfilled: 3, picked: null, hasActiveReservation: false, isOnlyLine: false },
-      /handed over/i,
-    ],
-    [
-      'staged',
-      { fulfilled: 0, picked: 2, hasActiveReservation: false, isOnlyLine: false },
-      /unstage/i,
-    ],
-    [
-      'reserved',
-      { fulfilled: 0, picked: null, hasActiveReservation: true, isOnlyLine: false },
-      /reserved/i,
-    ],
-    [
-      'last line',
-      { fulfilled: 0, picked: null, hasActiveReservation: false, isOnlyLine: true },
-      /cancel the order/i,
-    ],
+    ['handed over', { fulfilled: 3, picked: null, isOnlyLine: false }, /handed over/i],
+    ['staged', { fulfilled: 0, picked: 2, isOnlyLine: false }, /unstage/i],
+    ['last line', { fulfilled: 0, picked: null, isOnlyLine: true }, /cancel the order/i],
   ])('refuses a %s line', (_label, input, expected) => {
     expect(removalBlockedReason(input)).toMatch(expected);
+  });
+
+  it('still refuses a staged line even when its item also holds a reservation', () => {
+    // Dropping R4 must not soften R2: picked units are real, on a cart.
+    expect(
+      removalBlockedReason({
+        fulfilled: 0,
+        picked: 2,
+        isOnlyLine: false,
+        ...WITH_RESERVATION,
+      }),
+    ).toMatch(/unstage/i);
   });
 });
 
@@ -280,24 +310,48 @@ describe('OrderLineActions — removing a line', () => {
     expect(refreshSpy).toHaveBeenCalled();
   });
 
+  it('offers Remove on an APPROVED line whose item still holds a reservation', async () => {
+    // Row-level version of the production defect (SO-000060: approved, six
+    // lines, nothing picked, 1,650 units held). Every one of those rows must
+    // offer Remove, and confirming it must reach the server. Note this one
+    // cannot fail against the OLD rule — the component no longer forwards a
+    // reservation flag at all, so the extra prop is inert here; the pure
+    // removalBlockedReason test above is the one that fails on the old code.
+    const user = renderRow(WITH_RESERVATION as unknown as Partial<Props>);
+    const button = screen.getByRole('button', { name: /remove blue widget/i });
+    expect(button).not.toBeDisabled();
+
+    await user.click(button);
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /remove item/i }));
+    expect(removeLine).toHaveBeenCalledWith({
+      id: '11111111-1111-4111-8111-111111111111',
+      lineId: '22222222-2222-4222-8222-222222222222',
+    });
+  });
+
   it('renders the server refusal verbatim', async () => {
     removeLine.mockResolvedValue({
       ok: false,
-      error: { code: 'conflict', message: 'Stock is still reserved for this item.' },
+      error: {
+        code: 'conflict',
+        message: '2 of these are already picked and staged — unstage them first.',
+      },
     } as Awaited<ReturnType<typeof removeOrderRequestLineAction>>);
     const user = renderRow();
     await user.click(screen.getByRole('button', { name: /remove blue widget/i }));
     await screen.findByRole('dialog');
     await user.click(screen.getByRole('button', { name: /remove item/i }));
 
-    expect(toastMock.error).toHaveBeenCalledWith('Stock is still reserved for this item.');
+    expect(toastMock.error).toHaveBeenCalledWith(
+      '2 of these are already picked and staged — unstage them first.',
+    );
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it.each([
     ['already handed over', { quantityFulfilled: 3 }, /handed over/i],
     ['staged by a picker', { quantityPicked: 2 }, /unstage/i],
-    ['still holding a reservation', { hasActiveReservation: true }, /reserved/i],
     ['the only line left', { isOnlyLine: true }, /cancel the order/i],
   ])('disables Remove on a line that is %s, with the reason attached', async (
     _label,

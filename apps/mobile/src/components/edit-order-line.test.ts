@@ -9,6 +9,7 @@ import {
   describeQuantityFloor,
   LINE_EDIT_MAX_QUANTITY,
   lineEditErrorIsIndeterminate,
+  lineEditErrorIsReservationSync,
   lineEditErrorIsStale,
   lineQuantityFloor,
   lineQuantitySummary,
@@ -178,8 +179,8 @@ describe('validateLineQuantity — mirror of updateLineQuantity U1-U4', () => {
   });
 });
 
-describe('canRemoveOrderLine — mirror of removeLine R1-R5', () => {
-  const base = { line: CLEAN, totalLines: 3, itemHasOpenReservation: false };
+describe('canRemoveOrderLine — mirror of removeLine R1-R3, R5 (R4 deleted)', () => {
+  const base = { line: CLEAN, totalLines: 3 };
 
   it('allows removing an untouched line from a multi-line order (R6)', () => {
     expect(canRemoveOrderLine(base).ok).toBe(true);
@@ -203,12 +204,50 @@ describe('canRemoveOrderLine — mirror of removeLine R1-R5', () => {
     if (!res.ok) expect(res.reason).toContain('returns recorded');
   });
 
-  it('REFUSES while stock is still reserved for the item (R4)', () => {
-    // Reservations are keyed by (order, item) — deleting the line would leave
-    // the hold dangling, which is invisible shrinkage.
-    const res = canRemoveOrderLine({ ...base, itemHasOpenReservation: true });
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain('reserved');
+  it('ALLOWS removal on an APPROVED order with nothing picked (R4 deleted)', () => {
+    // The production defect (SO-000060, 2026-07-22). Approval mints a soft hold
+    // for every line, so the old R4 refused removal from approval onward — on an
+    // order where quantity_picked was still NULL on every line. Nothing about an
+    // approved-but-unpicked line may block removal now; the service re-syncs the
+    // hold instead. This is the whole point of the change, so it is asserted
+    // directly rather than left implied by the happy path above.
+    const approvedNothingPicked: EditableOrderLine = {
+      ...CLEAN,
+      requested: 550,
+      fulfilled: 0,
+      picked: 0,
+      returned: 0,
+    };
+    expect(canRemoveOrderLine({ line: approvedNothingPicked, totalLines: 6 }).ok).toBe(true);
+
+    // Same line, but with the REMOVED flag still supplied. `itemHasOpenReservation`
+    // is no longer part of RemoveLineInput (a caller passing it fails typecheck),
+    // so this cast is the only way to prove at RUNTIME that the refusal is gone
+    // rather than merely unreachable from the current call sites — which is what
+    // the OTA channel actually ships. With the old rule in place this is false.
+    const legacy = {
+      line: approvedNothingPicked,
+      totalLines: 6,
+      itemHasOpenReservation: true,
+    } as unknown as Parameters<typeof canRemoveOrderLine>[0];
+    expect(canRemoveOrderLine(legacy).ok).toBe(true);
+  });
+
+  it('no longer offers the unfollowable "unstage or regenerate the pick slip" copy', () => {
+    // A reviewer flagged that sentence: no operation in the product releases a
+    // reservation, so the instruction could not be carried out. Nothing this
+    // helper can return may mention it again.
+    const refusals = [
+      canRemoveOrderLine({ ...base, line: { ...CLEAN, fulfilled: 2 } }),
+      canRemoveOrderLine({ ...base, line: { ...CLEAN, picked: 2 } }),
+      canRemoveOrderLine({ ...base, line: { ...CLEAN, returned: 1 } }),
+      canRemoveOrderLine({ ...base, totalLines: 1 }),
+      canRemoveOrderLine({ ...base, line: { ...CLEAN, orderRequestLineId: null } }),
+    ];
+    for (const res of refusals) {
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).not.toContain('regenerate the pick slip');
+    }
   });
 
   it('REFUSES removing the LAST line — cancel the order instead (R5)', () => {
@@ -218,13 +257,9 @@ describe('canRemoveOrderLine — mirror of removeLine R1-R5', () => {
   });
 
   it('refuses in the SERVER ORDER when several rules bite at once', () => {
-    // Staged AND reserved AND last: removeLine reports the staging first,
-    // because that is the one the user can act on directly.
-    const res = canRemoveOrderLine({
-      line: { ...CLEAN, picked: 4 },
-      totalLines: 1,
-      itemHasOpenReservation: true,
-    });
+    // Staged AND last: removeLine reports the staging first, because that is
+    // the one the user can act on directly.
+    const res = canRemoveOrderLine({ line: { ...CLEAN, picked: 4 }, totalLines: 1 });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain('picked and staged');
   });
@@ -241,6 +276,17 @@ describe('removeLineConfirmCopy', () => {
     const copy = removeLineConfirmCopy(CLEAN);
     expect(copy.title).toContain('Blue folders');
     expect(copy.message).toContain('10');
+  });
+
+  it('says the hold on THIS LINE goes back, since removal re-syncs the reservation', () => {
+    // Removal releases the item's soft hold (released_reason 'line_removed'),
+    // or reduces it when a sibling line still asks for the same item. The
+    // confirmation is the last thing the user reads before committing, so it
+    // has to state the stock effect — scoped to the line, because claiming the
+    // item's whole hold comes back would be wrong in the sibling case.
+    const msg = removeLineConfirmCopy(CLEAN).message;
+    expect(msg).toContain('held for this line goes back to available');
+    expect(msg).not.toContain('for this item on this order is released');
   });
 });
 
@@ -305,5 +351,57 @@ describe('lineEditErrorIsStale / lineEditErrorIsIndeterminate', () => {
   it('flags a request that never got an answer', () => {
     expect(lineEditErrorIsIndeterminate(new Error('Request timed out.'))).toBe(true);
     expect(lineEditErrorIsIndeterminate(new Error('API 409: {"error":"conflict"}'))).toBe(false);
+  });
+});
+
+describe('lineEditErrorIsReservationSync — the 409 that arrives AFTER the write', () => {
+  /** The service's own message when the post-write reservation re-sync loses a
+   *  race (syncItemReservation's fail-closed branch). */
+  const RESERVATION_409 = new Error(
+    'API 409: {"error":"conflict","message":"The stock reserved for this item changed while you were editing. Refresh and check the order before trying again."}',
+  );
+
+  it('recognises it, so the sheet closes instead of showing a stale quantity', () => {
+    // The line write lands FIRST and the reservation sync second, on purpose.
+    // When only the second fails the edit HAS happened — keeping the sheet open
+    // would invite the user to repeat it.
+    expect(lineEditErrorIsReservationSync(RESERVATION_409)).toBe(true);
+  });
+
+  it('leaves an ordinary floor 409 in the sheet, where the user can answer it', () => {
+    expect(
+      lineEditErrorIsReservationSync(
+        new Error(
+          'API 409: {"error":"conflict","message":"3 of these are already picked and staged — unstage them or finish fulfilling this line before lowering the quantity below 3."}',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      lineEditErrorIsReservationSync(
+        new Error(
+          'API 409: {"error":"conflict","message":"That line changed while you were editing it. Refresh and try again."}',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not fire on a non-409 that happens to mention reserved stock', () => {
+    // Status is checked first: only the post-write sync raises this as a 409,
+    // and a 500 carrying similar prose is a different (pre-write) failure.
+    expect(
+      lineEditErrorIsReservationSync(
+        new Error(
+          'API 500: {"error":"internal_error","message":"The stock reserved for this item changed."}',
+        ),
+      ),
+    ).toBe(false);
+    expect(lineEditErrorIsReservationSync(new Error('Request timed out.'))).toBe(false);
+  });
+
+  it('is NOT classed as stale — its handling is its own branch', () => {
+    // Both close the sheet, but they say different things: stale means "your
+    // picture is wrong", this means "the change landed, the hold did not".
+    expect(lineEditErrorIsStale(RESERVATION_409)).toBe(false);
+    expect(lineEditErrorIsIndeterminate(RESERVATION_409)).toBe(false);
   });
 });

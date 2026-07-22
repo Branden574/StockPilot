@@ -24,12 +24,6 @@ interface Props {
   quantityFulfilled: number;
   /** Units staged by a picker but not yet handed over. Null = never touched. */
   quantityPicked: number | null;
-  /**
-   * An UN-RELEASED stock_reservations row still holds stock for this line's
-   * ITEM. Reservations are keyed by (order, item) rather than by line, so the
-   * caller derives this from the order's active reservations, not from the line.
-   */
-  hasActiveReservation: boolean;
   /** This is the last line on the order — removing it would empty the record. */
   isOnlyLine: boolean;
 }
@@ -76,11 +70,20 @@ export function quantityBlockedReason(input: {
  * the order detail doesn't carry that column — and it can't fire on its own
  * anyway: units can only be returned after they were handed over, so any line
  * with returns already trips the handed-over check above it.
+ *
+ * NOT a blocker: an active stock_reservations row. This mirror used to refuse
+ * removal whenever the line's item still held one, on the assumption that a
+ * hold implied staged physical stock. It does not — approve_order_request
+ * mints a hold for every line at APPROVAL, so that rule made removal
+ * impossible from approval onward, and its advice ("unstage the order or
+ * regenerate the pick slip") named two steps that release nothing. A
+ * reservation is a soft promise; removeLine now RE-SYNCS it (releases or
+ * reduces) instead of refusing. What protects physical reality is
+ * quantity_picked and quantity_fulfilled, which are the checks that remain.
  */
 export function removalBlockedReason(input: {
   fulfilled: number;
   picked: number | null;
-  hasActiveReservation: boolean;
   isOnlyLine: boolean;
 }): string | null {
   const fulfilled = Number(input.fulfilled) || 0;
@@ -90,9 +93,6 @@ export function removalBlockedReason(input: {
   const picked = Number(input.picked ?? 0) || 0;
   if (picked > 0) {
     return `${picked} of these are already picked and staged — unstage them first, then remove the line.`;
-  }
-  if (input.hasActiveReservation) {
-    return 'Stock is still reserved for this item — unstage the order or regenerate the pick slip to release it, then remove the line.';
   }
   if (input.isOnlyLine) {
     return 'This is the only item on the order — cancel the order instead of emptying it.';
@@ -107,9 +107,9 @@ export function removalBlockedReason(input: {
  * OrderRequestsService.updateLineQuantity / removeLine.
  *
  * Deliberately NOT optimistic. Every refusal in the service is about physical
- * stock — handed over, staged, reserved — and a quantity shown as saved that
- * the server then rejected would send someone to a shelf for units the order
- * never asked for. A brief spinner is the cheaper failure.
+ * stock — handed over or staged — and a quantity shown as saved that the
+ * server then rejected would send someone to a shelf for units the order never
+ * asked for. A brief spinner is the cheaper failure.
  *
  * The caller renders this in a trailing actions cell and is responsible for
  * the gate: it appears only where addLines' gate (requester-or-approver, before
@@ -123,7 +123,6 @@ export function OrderLineActions({
   quantityRequested,
   quantityFulfilled,
   quantityPicked,
-  hasActiveReservation,
   isOnlyLine,
 }: Props) {
   const router = useRouter();
@@ -143,7 +142,6 @@ export function OrderLineActions({
   const removeBlocked = removalBlockedReason({
     fulfilled: quantityFulfilled,
     picked: quantityPicked,
-    hasActiveReservation,
     isOnlyLine,
   });
 
@@ -257,8 +255,10 @@ export function OrderLineActions({
       {removeBlocked ? (
         // Rendered disabled rather than hidden: a control that silently
         // disappears on some rows reads as a bug, and the reason IS the useful
-        // information — it tells the user which real-world step (unstage,
-        // regenerate the slip, cancel the order) unblocks them. The reason
+        // information — it tells the user which real-world step (unstage the
+        // picked units, record a return, cancel the order) unblocks them. Every
+        // remaining reason names an action the user can actually take, which is
+        // exactly what the removed reservation rule could not do. The reason
         // lives on the wrapper because browsers don't fire hover on a disabled
         // button, and is repeated for screen readers via aria-describedby.
         <span title={removeBlocked}>
@@ -298,7 +298,8 @@ export function OrderLineActions({
           <>
             <span className="text-foreground font-medium">{itemName}</span> comes off this
             order, along with the {formatNumber(quantityRequested)} requested. Nothing has
-            been picked or handed over for it, so no stock moves.
+            been picked or handed over for it, so no stock moves — any stock this order
+            was holding for it goes back to available.
           </>
         }
         confirmLabel="Remove item"

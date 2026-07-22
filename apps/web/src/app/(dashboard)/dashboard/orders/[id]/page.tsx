@@ -121,11 +121,13 @@ export default async function OrderDetailPage({
   // button does. Re-deriving a second condition here is how add and edit
   // would drift apart, which is the bug the owner already hit once.
   const canEditLines = canAddLines;
-  // Reservations on the detail are already the UN-RELEASED ones for this order
-  // (get() filters released_at IS NULL) and are keyed by ITEM, not by line —
-  // exactly what removeLine's R4 check reads. Set-ify once rather than scanning
-  // the array per row.
-  const reservedItemIds = new Set(reservations.map((r) => r.item_id));
+  // No per-item reservation lookup here any more. The row controls used to be
+  // handed a hasActiveReservation flag derived from `reservations`, mirroring
+  // removeLine's old R4 refusal — but approval mints a hold for every line, so
+  // that flag was true for every row of every approved order and hid Remove
+  // exactly when people need it. removeLine now re-syncs the hold instead of
+  // refusing, so nothing on a row depends on reservations. `reservations` is
+  // still read below for the Active reservations panel and its total.
   // Phase 4 — the assigned delivery driver may be a staff user who lacks
   // orders:approve. They still need the actions panel on the statuses
   // where their permitted actions live (mark-in-transit, collect
@@ -697,7 +699,6 @@ export default async function OrderDetailPage({
                             quantityRequested={Number(l.quantity_requested) || 0}
                             quantityFulfilled={Number(l.quantity_fulfilled) || 0}
                             quantityPicked={l.quantity_picked}
-                            hasActiveReservation={reservedItemIds.has(l.item_id)}
                             isOnlyLine={lines.length === 1}
                           />
                         </TableCell>
@@ -718,7 +719,9 @@ export default async function OrderDetailPage({
                 </span>
               </div>
               <p className="text-muted-foreground mt-1 text-[11.5px]">
-                Stock is held until this request is delivered or cancelled.
+                Stock is held until this request is delivered or cancelled. Removing a
+                line, or lowering its quantity, releases that line&rsquo;s share straight
+                away.
               </p>
             </section>
           )}

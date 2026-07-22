@@ -162,11 +162,6 @@ interface OrderHeader {
   isShortStock: boolean;
   /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
   hasFulfillableStock: boolean;
-  /** Items on THIS order that still hold an un-released stock_reservations row.
-   *  Reservations are keyed by (order_request_id, item_id) — not by line — so
-   *  removeLine refuses while one is open, or the hold would be left dangling
-   *  against an order that no longer asks for the item. */
-  reservedItemIds: string[];
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -364,12 +359,6 @@ export default function OrderDetail() {
     };
   }, [editLineId, order]);
 
-  // Whether stock is still committed to this line's item on this order. Keyed
-  // by ITEM because stock_reservations is — two lines for the same item share
-  // one hold, so neither can be removed until it is released.
-  const editLineReserved =
-    editLine?.itemId != null && (order?.reservedItemIds ?? []).includes(editLine.itemId);
-
   /** Shared post-edit refresh for both line mutations. */
   async function afterLineEdit(pickSlipStale: boolean, title: string, message: string) {
     setEditLineId(null);
@@ -540,22 +529,16 @@ export default function OrderDetail() {
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
 
-    // Which of THIS order's items still hold stock. removeLine refuses while an
-    // un-released reservation points at the item (they are keyed by
-    // (order_request_id, item_id), not by line), so the sheet needs the same
-    // picture to disable Remove with the same reason instead of a 409.
-    const reservedItemIds: string[] = [];
-    if (rows.length > 0) {
-      const { data: openResv } = await supabase
-        .from('stock_reservations')
-        .select('item_id')
-        .eq('order_request_id', id)
-        .is('released_at', null);
-      for (const r of (openResv ?? []) as { item_id: string | null }[]) {
-        if (r.item_id && !reservedItemIds.includes(r.item_id)) reservedItemIds.push(r.item_id);
-      }
-    }
-
+    // NOTE (2026-07-22): the per-order stock_reservations read that used to sit
+    // here is GONE. It existed only to mirror removeLine's reservation refusal,
+    // and that refusal was the production defect: a reservation is a soft hold
+    // minted for every line at APPROVAL, so it blocked removal on orders where
+    // nothing had been picked. The service now re-syncs the hold instead of
+    // refusing, nothing else on this screen read the result, and the query
+    // silently discarded its own error — so it is deleted rather than kept as a
+    // round trip nobody consumes. The reservation read below is a DIFFERENT one
+    // (availability maths for Approve-partial / Resume-fulfillment) and stays.
+    //
     // Stock-awareness, mirroring the web page loader:
     //  - pending_approval → isShortStock (drives "Approve partial"), judged on
     //    PER-ITEM demand (duplicate-item lines are summed first).
@@ -649,7 +632,6 @@ export default function OrderDetail() {
         totalFulfilled,
         isShortStock,
         hasFulfillableStock,
-        reservedItemIds,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -1975,7 +1957,6 @@ export default function OrderDetail() {
           orderId={order.id}
           line={editLine}
           totalLines={order.lines.length}
-          itemHasOpenReservation={editLineReserved}
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
           onRequestReload={() => void load()}

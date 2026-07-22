@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId, Role } from '@stockpilot/core';
 
@@ -8,6 +8,8 @@ import { OrderRequestsService } from './order-requests';
 
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn() }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+const notifySpy = vi.fn(async (_args: unknown) => 'notif-1' as string | null);
+vi.mock('./notifications', () => ({ createNotification: (a: unknown) => notifySpy(a) }));
 
 // Line UPDATE/DELETE are RLS-forbidden for end users by design (mig 0049), so
 // the service performs them through the service role. The stub is a fake DB —
@@ -67,6 +69,7 @@ function stubFor(
     line?: Record<string, unknown> | null;
     siblings?: Array<Record<string, unknown>>;
     reservations?: Array<Record<string, unknown>>;
+    reservationWrite?: { data: unknown; error: { message: string } | null };
   } = {},
 ) {
   return makeSupabaseStub({
@@ -79,7 +82,10 @@ function stubFor(
       error: null,
     },
     'order_request_lines.select': {
-      data: opts.siblings ?? [{ id: 'line-1' }, { id: 'line-2' }],
+      data: opts.siblings ?? [
+        { id: 'line-1', item_id: 'item-1', quantity_requested: 10 },
+        { id: 'line-2', item_id: 'item-2', quantity_requested: 5 },
+      ],
       error: null,
     },
     // The service now FAILS CLOSED on these: a write that affects no row is
@@ -88,9 +94,24 @@ function stubFor(
     'order_request_lines.update': { data: { id: 'line-1' }, error: null },
     'order_request_lines.delete': { data: { id: 'line-1' }, error: null },
     'stock_reservations.select': { data: opts.reservations ?? [], error: null },
+    // The reservation write fails CLOSED the same way the line writes do, so
+    // the happy path must hand back the affected row.
+    'stock_reservations.update': opts.reservationWrite ?? { data: { id: 'res-1' }, error: null },
     'inventory_items.select': { data: { id: 'item-1', name: 'Widget' }, error: null },
   });
 }
+
+/** The shape approve_order_request mints: one active row per line. */
+const RESERVATION = { id: 'res-1', item_id: 'item-1', quantity: 10, created_at: '2026-07-22T18:42:45Z' };
+
+/** Patch handed to the LAST stock_reservations UPDATE the service issued. */
+function reservationPatch(stub: ReturnType<typeof makeSupabaseStub>) {
+  return stub.chainArgs.get('stock_reservations.update')?.[0]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+}
+
+beforeEach(() => notifySpy.mockClear());
 
 describe('OrderRequestsService.updateLineQuantity', () => {
   it('lowers the quantity on an untouched line', async () => {
@@ -237,21 +258,18 @@ describe('OrderRequestsService.removeLine', () => {
     });
   });
 
-  it('REFUSES while an un-released reservation still holds stock for the item (R4)', async () => {
-    const stub = stubFor({ reservations: [{ id: 'res-1' }] });
-    await expect(svc(stub).removeLine('order-1', 'line-1')).rejects.toMatchObject({
-      code: 'conflict',
-      message: expect.stringContaining('reserved'),
+  // R4 as a REFUSAL is gone. A reservation is a soft hold minted at APPROVAL,
+  // not evidence of staged stock, so refusing on it made every approved order
+  // un-editable — the production defect on SO-000060, where nothing had been
+  // picked and the error told the user to do something that releases nothing.
+  it('REMOVES a line whose item still has an active reservation, and releases it (R4)', async () => {
+    const stub = stubFor({ reservations: [RESERVATION] });
+    await expect(svc(stub).removeLine('order-1', 'line-1')).resolves.toMatchObject({
+      removedItemId: 'item-1',
     });
-    expect(stub.chains.has('order_request_lines.delete')).toBe(false);
-    // Reservations are per (order, item) and only UN-released rows count.
-    expect(stub.chainArgs.get('stock_reservations.select')).toEqual(
-      expect.arrayContaining([
-        ['order_request_id', 'order-1'],
-        ['item_id', 'item-1'],
-        ['released_at', null],
-      ]),
-    );
+    expect(stub.chains.has('order_request_lines.delete')).toBe(true);
+    expect(reservationPatch(stub)).toMatchObject({ released_reason: 'line_removed' });
+    expect(reservationPatch(stub)?.released_at).toEqual(expect.any(String));
   });
 
   it('REFUSES removing the LAST line — cancel the order instead (R5)', async () => {
@@ -362,5 +380,238 @@ describe('line writes fail CLOSED when they affect no row', () => {
     await expect(svc(denied).removeLine('order-1', 'line-1')).rejects.toMatchObject({
       code: 'conflict',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reservation synchronisation (the SO-000060 fix, 2026-07-22).
+//
+// stock_reservations rows are SOFT HOLDS minted for every line at APPROVAL,
+// released by stamping released_at + released_reason. They move no stock. The
+// invariant these lock in: after any line edit, the item's ACTIVE reservation
+// total equals what the order's remaining lines still ask for of that item —
+// released outright when that total reaches zero, because the table has
+// CHECK (quantity > 0) and zero is not representable.
+// ---------------------------------------------------------------------------
+
+describe('reservation synchronisation', () => {
+  it('RELEASES the sole reservation when its only line is removed', async () => {
+    const stub = stubFor({ reservations: [RESERVATION] });
+    await svc(stub).removeLine('order-1', 'line-1');
+    expect(reservationPatch(stub)).toMatchObject({ released_reason: 'line_removed' });
+    // Never a quantity-zero write: CHECK (quantity > 0) forbids it.
+    expect(reservationPatch(stub)).not.toHaveProperty('quantity');
+  });
+
+  it('REDUCES rather than releases when another line still wants the item', async () => {
+    const stub = stubFor({
+      reservations: [{ ...RESERVATION, quantity: 14 }],
+      siblings: [
+        { id: 'line-1', item_id: 'item-1', quantity_requested: 10 },
+        { id: 'line-3', item_id: 'item-1', quantity_requested: 4 },
+      ],
+    });
+    await svc(stub).removeLine('order-1', 'line-1');
+    expect(reservationPatch(stub)).toEqual({ quantity: 4 });
+  });
+
+  // CRITICAL (confirmed twice in review). The invariant is requested-and-
+  // UNFULFILLED. Summing quantity_requested alone leaves a hold covering units
+  // that have ALREADY been handed over, which is the exact over-hold this sync
+  // was built to remove — and it bites hardest on a partially fulfilled or
+  // resumed backordered order, where the gap is largest.
+  it('sizes the hold to what is still OWED, not what was requested', async () => {
+    const stub = stubFor({
+      reservations: [{ ...RESERVATION, quantity: 14 }],
+      siblings: [
+        { id: 'line-1', item_id: 'item-1', quantity_requested: 10, quantity_fulfilled: 0 },
+        // 4 requested, 3 already handed over: only 1 is still owed.
+        { id: 'line-3', item_id: 'item-1', quantity_requested: 4, quantity_fulfilled: 3 },
+      ],
+    });
+    await svc(stub).removeLine('order-1', 'line-1');
+    expect(reservationPatch(stub)).toEqual({ quantity: 1 });
+  });
+
+  it('never lets an over-receipt drive the hold negative', async () => {
+    // quantity_fulfilled above quantity_requested is reachable — over-receipt
+    // is permitted (mig 0285). A negative share would silently eat into a
+    // sibling's legitimate hold, so each line is floored at zero.
+    const stub = stubFor({
+      reservations: [{ ...RESERVATION, quantity: 14 }],
+      siblings: [
+        { id: 'line-1', item_id: 'item-1', quantity_requested: 10, quantity_fulfilled: 0 },
+        { id: 'line-3', item_id: 'item-1', quantity_requested: 4, quantity_fulfilled: 9 },
+        { id: 'line-4', item_id: 'item-1', quantity_requested: 5, quantity_fulfilled: 0 },
+      ],
+    });
+    await svc(stub).removeLine('order-1', 'line-1');
+    // 0 (over-received) + 5 still owed — never 5 - 5 = 0, and never negative.
+    expect(reservationPatch(stub)).toEqual({ quantity: 5 });
+  });
+
+  it('subtracts the EDITED line\'s own fulfilled units when lowering', async () => {
+    const stub = stubFor({
+      line: { ...CLEAN_LINE, quantity_requested: 10, quantity_fulfilled: 3 },
+      reservations: [{ ...RESERVATION, quantity: 10 }],
+    });
+    // Lowering to 6 with 3 already handed over leaves 3 still owed.
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 6);
+    expect(reservationPatch(stub)).toEqual({ quantity: 3 });
+  });
+
+  it('SHRINKS the reservation when the line quantity is lowered', async () => {
+    const stub = stubFor({ reservations: [RESERVATION] });
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 4);
+    expect(reservationPatch(stub)).toEqual({ quantity: 4 });
+  });
+
+  it('RELEASES on a lower that leaves an extra row with no share', async () => {
+    // Two active rows (an item that sat on two lines at approval). Lowering to
+    // 6 fills the first row and leaves the second with nothing.
+    const stub = stubFor({
+      reservations: [
+        { ...RESERVATION, quantity: 6 },
+        { ...RESERVATION, id: 'res-2', quantity: 4, created_at: '2026-07-22T18:42:46Z' },
+      ],
+    });
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 6);
+    expect(reservationPatch(stub)).toMatchObject({ released_reason: 'line_quantity_lowered' });
+  });
+
+  it('leaves the reservation ALONE when the quantity is RAISED', async () => {
+    // Deliberate asymmetry: minting/growing holds belongs to the approval and
+    // pick-slip paths, and addLines has never created one either.
+    const stub = stubFor({ reservations: [RESERVATION] });
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 25);
+    expect(stub.chains.has('stock_reservations.update')).toBe(false);
+  });
+
+  it('removes a line whose item has NO active reservation, writing nothing', async () => {
+    const stub = stubFor({ reservations: [] });
+    await expect(svc(stub).removeLine('order-1', 'line-1')).resolves.toMatchObject({
+      removedItemId: 'item-1',
+    });
+    expect(stub.chains.has('stock_reservations.update')).toBe(false);
+  });
+
+  it('scopes the reservation write by org, order, item and still-active', async () => {
+    const stub = stubFor({ reservations: [RESERVATION] });
+    await svc(stub).removeLine('order-1', 'line-1');
+    expect(stub.chainArgs.get('stock_reservations.update')).toEqual(
+      expect.arrayContaining([
+        ['id', 'res-1'],
+        ['organization_id', 'org-test'],
+        ['order_request_id', 'order-1'],
+        ['item_id', 'item-1'],
+        ['released_at', null],
+      ]),
+    );
+  });
+
+  it('SURFACES a reservation write that affected no row (never a silent success)', async () => {
+    // What an RLS-denied or already-released write looks like: no row, no error.
+    const stub = stubFor({
+      reservations: [RESERVATION],
+      reservationWrite: { data: null, error: null },
+    });
+    await expect(svc(stub).removeLine('order-1', 'line-1')).rejects.toMatchObject({
+      code: 'conflict',
+    });
+  });
+
+  it('writes the LINE first, so a failed sync over-HOLDS rather than over-releases', async () => {
+    // Over-holding self-corrects: cancel/deliver release every active row for
+    // the order. Over-releasing would leave a live line with no hold at all,
+    // and nothing later repairs that.
+    const stub = stubFor({
+      reservations: [RESERVATION],
+      reservationWrite: { data: null, error: null },
+    });
+    await expect(svc(stub).removeLine('order-1', 'line-1')).rejects.toThrow();
+    expect(stub.chains.has('order_request_lines.delete')).toBe(true);
+  });
+
+  it('records the reservation effect on the existing line events, not a new one', async () => {
+    const { audit } = await import('./audit');
+    vi.mocked(audit).mockClear();
+    await svc(stubFor({ reservations: [RESERVATION] })).removeLine('order-1', 'line-1');
+    expect(vi.mocked(audit).mock.calls.length).toBe(1);
+    expect(vi.mocked(audit).mock.calls[0]?.[0]).toMatchObject({
+      event: 'order_request.line_removed',
+      after: { reservation: { synced: true, action: 'released', from: 10, to: 0 } },
+    });
+
+    vi.mocked(audit).mockClear();
+    await svc(stubFor({ reservations: [RESERVATION] })).updateLineQuantity('order-1', 'line-1', 4);
+    expect(vi.mocked(audit).mock.calls[0]?.[0]).toMatchObject({
+      event: 'order_request.line_quantity_changed',
+      after: { reservation: { synced: true, action: 'reduced', from: 10, to: 4 } },
+    });
+  });
+
+  it('records a FAILED sync in the audit trail before surfacing the error', async () => {
+    const { audit } = await import('./audit');
+    vi.mocked(audit).mockClear();
+    const stub = stubFor({
+      reservations: [RESERVATION],
+      reservationWrite: { data: null, error: null },
+    });
+    await expect(svc(stub).removeLine('order-1', 'line-1')).rejects.toThrow();
+    expect(vi.mocked(audit).mock.calls[0]?.[0]).toMatchObject({
+      after: { reservation: { synced: false } },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The requester has to find out (owner decision 2026-07-22: "yes she should be
+// notified"), and their open page has to update.
+//
+// The page live-refreshes via a postgres_changes subscription on the
+// order_requests ROW. Line edits touch only order_request_lines, which has no
+// trigger onto its parent — verified against production — so without an
+// explicit header touch the requester stares at stale quantities.
+// ---------------------------------------------------------------------------
+
+describe('telling the requester', () => {
+  it('touches the order header so the open page live-refreshes', async () => {
+    const stub = stubFor();
+    await svc(stub).removeLine('order-1', 'line-1');
+    const patch = stub.chainArgs.get('order_requests.update')?.[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(patch).toHaveProperty('updated_at');
+  });
+
+  it('notifies the requester when someone ELSE edits their order', async () => {
+    // svc() acts as 'approver-1'; the order was raised by 'requester-1'.
+    const stub = stubFor();
+    await svc(stub).removeLine('order-1', 'line-1');
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'requester-1',
+        type: 'order_request.line_removed',
+        // Resolves on mobile too: web-path-rewrite maps this to /order/<id>.
+        link: '/dashboard/orders/order-1',
+      }),
+    );
+  });
+
+  it('does NOT notify the requester about their own edit', async () => {
+    const stub = stubFor();
+    await svc(stub, { userId: 'requester-1' }).removeLine('order-1', 'line-1');
+    expect(notifySpy).not.toHaveBeenCalled();
+  });
+
+  it('says what actually changed rather than "your order was updated"', async () => {
+    const stub = stubFor();
+    await svc(stub).updateLineQuantity('order-1', 'line-1', 4);
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'order_request.line_quantity_changed',
+        body: expect.stringContaining('4'),
+      }),
+    );
   });
 });

@@ -1253,6 +1253,60 @@ export class OrderRequestsService {
   }
 
   /** Item display name for audit payloads — best-effort, never blocks the edit. */
+  /**
+   * Two things every committed line edit owes the rest of the system.
+   *
+   * 1. TOUCH THE HEADER. The order detail page live-refreshes through
+   *    OrderRealtimeRefresh, which subscribes to postgres_changes on the
+   *    order_requests ROW. Line edits write only to order_request_lines, and
+   *    that table has no trigger touching its parent (verified in prod), so
+   *    without this the requester's open page sits on stale quantities until
+   *    they navigate. Bumping updated_at makes the existing subscription fire.
+   *
+   * 2. TELL THE REQUESTER. Someone else changing what you asked for is worth
+   *    knowing about (owner decision 2026-07-22). Skipped when the actor IS the
+   *    requester — nobody needs a notification about their own action. Insert
+   *    only; the AFTER INSERT trigger (mig 0028) owns push fan-out, so calling
+   *    a push helper here would double-banner.
+   *
+   * Both are best-effort: the line change is already committed and durable, and
+   * failing the request now would tell the user their edit did not happen when
+   * it did.
+   */
+  private async announceLineChange(args: {
+    orderId: string;
+    orderNumber: number | null;
+    requesterUserId: string | null;
+    type: 'order_request.line_removed' | 'order_request.line_quantity_changed';
+    title: string;
+    body: string;
+  }): Promise<void> {
+    try {
+      const admin = createAdminClient();
+      await admin
+        .from('order_requests')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', args.orderId);
+
+      if (args.requesterUserId && args.requesterUserId !== this.ctx.userId) {
+        await createNotification({
+          organizationId: this.ctx.organizationId,
+          userId: args.requesterUserId,
+          type: args.type,
+          title: args.title,
+          body: args.body,
+          // web-path-rewrite.ts maps /dashboard/orders/<uuid> to /order/<uuid>,
+          // so this resolves on the phone as well as the browser.
+          link: `/dashboard/orders/${args.orderId}`,
+          metadata: { orderId: args.orderId, orderNumber: args.orderNumber },
+        });
+      }
+    } catch (e) {
+      void reportSrvError(e, { tag: 'orders.announce_line_change' });
+    }
+  }
+
   private async lineItemName(itemId: string): Promise<string | null> {
     const { data } = await this.ctx.supabase
       .from('inventory_items')
@@ -1261,6 +1315,164 @@ export class OrderRequestsService {
       .eq('id', itemId)
       .maybeSingle();
     return (data as { name?: string | null } | null)?.name ?? null;
+  }
+
+  /**
+   * Sum of quantity_requested still outstanding for one item across the order's
+   * lines, EXCLUDING one line (the one being removed or rewritten) and with an
+   * optional replacement figure for it. This is the target the item's active
+   * reservation has to match after the edit.
+   */
+  private async remainingRequestedForItem(
+    orderId: string,
+    itemId: string,
+    excludeLineId: string,
+    replacementQuantity: number,
+  ): Promise<number> {
+    const { data, error } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('id, item_id, quantity_requested, quantity_fulfilled')
+      .eq('order_request_id', orderId)
+      .eq('item_id', itemId);
+    if (error) throw new ServiceError('internal_error', error.message);
+    const others = (data ?? []) as Array<{
+      id: string;
+      item_id: string;
+      quantity_requested: number | null;
+      quantity_fulfilled: number | null;
+    }>;
+    // The invariant is requested-and-UNFULFILLED, not requested. Units already
+    // handed over are no longer promised — they left the building — so counting
+    // them keeps a hold alive for stock the order no longer owes. On a
+    // partially-fulfilled or resumed backordered line that is precisely the
+    // over-hold this sync exists to eliminate, so it must be subtracted per
+    // line and floored at zero (an over-receipt can leave fulfilled above
+    // requested, and a negative would silently shrink a sibling's share).
+    const owed = (l: { quantity_requested: number | null; quantity_fulfilled: number | null }) =>
+      Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+    // Re-assert the item match in JS: the reservation invariant is per item,
+    // and summing a row for a different item would hold stock for the wrong one.
+    return others
+      .filter((l) => l.id !== excludeLineId && l.item_id === itemId)
+      .reduce((sum, l) => sum + owed(l), replacementQuantity);
+  }
+
+  /**
+   * Re-point an item's SOFT HOLD at what the order still asks for.
+   *
+   * A stock_reservations row is a commitment record, not staged stock: it is
+   * minted for every line at APPROVAL (approve_order_request, mig 0044/0045)
+   * and withdrawn by stamping released_at + released_reason. Nothing physical
+   * moves either way. Treating its mere existence as "stock is staged" is the
+   * bug this replaces — it made removal impossible from approval onward, on
+   * orders where nothing had been picked.
+   *
+   * INVARIANT: after any line edit, the item's ACTIVE reservation total equals
+   * the quantity still requested-and-unfulfilled for that item on this order.
+   * The table has CHECK (quantity > 0), so a row that would fall to zero is
+   * RELEASED rather than written down to zero.
+   *
+   * Approval inserts one row PER LINE, so an item on two lines has two active
+   * rows; the target is spread across them oldest-first and any row left with
+   * no share is released.
+   *
+   * We never GROW a reservation here — see the note at the raise branch in
+   * updateLineQuantity.
+   */
+  private async syncItemReservation(
+    orderId: string,
+    itemId: string,
+    remaining: number,
+    releaseReason: 'line_removed' | 'line_quantity_lowered',
+  ): Promise<{ from: number; to: number; released: boolean } | null> {
+    // RLS grants SELECT on stock_reservations to members (0044/0140) — only the
+    // writes need the service role, so the read stays on the user client.
+    const { data, error } = await this.ctx.supabase
+      .from('stock_reservations')
+      .select('id, quantity, created_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderId)
+      .eq('item_id', itemId)
+      .is('released_at', null)
+      .order('created_at', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = ((data ?? []) as Array<{ id: string; quantity: number | null }>).map((r) => ({
+      id: r.id,
+      quantity: Number(r.quantity) || 0,
+    }));
+    if (rows.length === 0) return null;
+    const total = rows.reduce((sum, r) => sum + r.quantity, 0);
+    const target = Math.max(0, remaining);
+    // Already at or below what the order wants: leave it alone. Raising a line
+    // must not mint or grow a hold (addLines has never done so either).
+    if (target >= total) return null;
+
+    const admin = createAdminClient();
+    let budget = target;
+    for (const row of rows) {
+      const keep = Math.min(row.quantity, budget);
+      budget -= keep;
+      if (keep === row.quantity) continue;
+      const patch =
+        keep > 0
+          ? { quantity: keep }
+          : { released_at: new Date().toISOString(), released_reason: releaseReason };
+      // PRIVILEGED and fail CLOSED, exactly as the line writes above:
+      // stock_reservations carries no INSERT/UPDATE/DELETE policy at all
+      // (mig 0044) and 0119 pinned explicit USING/WITH CHECK false ones, so the
+      // user client would match zero rows and report success. Scoped by org +
+      // order + item + still-active so a stale read can never release someone
+      // else's hold, and a write that touches no row is surfaced.
+      const { data: written, error: wErr } = await admin
+        .from('stock_reservations')
+        .update(patch)
+        .eq('id', row.id)
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('order_request_id', orderId)
+        .eq('item_id', itemId)
+        .is('released_at', null)
+        .select('id')
+        .maybeSingle();
+      if (wErr) throw new ServiceError('internal_error', wErr.message);
+      if (!written) {
+        throw new ServiceError(
+          'conflict',
+          'The stock reserved for this item changed while you were editing. Refresh and check the order before trying again.',
+        );
+      }
+    }
+    return { from: total, to: target, released: target === 0 };
+  }
+
+  /**
+   * ORDERING: the line write lands FIRST, then the reservation is re-synced.
+   *
+   * If the second write fails we are left OVER-HOLDING — a hold with no line
+   * behind it. That is the self-correcting direction: cancel/deliver release
+   * every active row for the order by order_request_id (mig 0044/0045), so the
+   * stray hold clears on its own when the order closes, and until then it only
+   * makes us conservative about availability. The reverse order would leave us
+   * OVER-RELEASED — an approved line with no hold at all, which nothing later
+   * repairs and which lets the same units be promised twice.
+   *
+   * The failure is still surfaced rather than swallowed, and the audit row is
+   * written first so the trail records what actually happened.
+   */
+  private async syncReservationAfterLineWrite(
+    orderId: string,
+    itemId: string,
+    remaining: number,
+    releaseReason: 'line_removed' | 'line_quantity_lowered',
+  ): Promise<{
+    effect: { from: number; to: number; released: boolean } | null;
+    failure: ServiceError | null;
+  }> {
+    try {
+      return { effect: await this.syncItemReservation(orderId, itemId, remaining, releaseReason), failure: null };
+    } catch (err) {
+      if (err instanceof ServiceError) return { effect: null, failure: err };
+      throw err;
+    }
   }
 
   /**
@@ -1340,6 +1552,37 @@ export class OrderRequestsService {
       );
     }
 
+    // LOWERING shrinks the hold: units the order no longer wants must go back
+    // into everyone else's availability. RAISING deliberately does NOT grow it
+    // — addLines has never minted a reservation for an added line either; the
+    // approval/pick-slip path owns minting. The asymmetry is intentional.
+    let reservation: { from: number; to: number; released: boolean } | null = null;
+    let reservationFailure: ServiceError | null = null;
+    if (quantity < prior) {
+      // The edited line's own contribution is its NEW quantity minus what it
+      // has already fulfilled — same requested-and-unfulfilled rule the sibling
+      // lines get. U2 guarantees quantity >= quantity_fulfilled, so this is
+      // never negative, but it is floored anyway rather than relying on a
+      // guard several branches away.
+      const ownRemaining = Math.max(0, quantity - (Number(line.quantity_fulfilled) || 0));
+      const remaining = await this.remainingRequestedForItem(
+        h.id,
+        line.item_id,
+        line.id,
+        ownRemaining,
+      );
+      const synced = await this.syncReservationAfterLineWrite(
+        h.id,
+        line.item_id,
+        remaining,
+        'line_quantity_lowered',
+      );
+      reservation = synced.effect;
+      reservationFailure = synced.failure;
+    }
+
+    // One lookup, shared by the audit payload and the requester notification.
+    const itemName = await this.lineItemName(line.item_id);
     await audit(
       {
         event: 'order_request.line_quantity_changed',
@@ -1349,14 +1592,35 @@ export class OrderRequestsService {
         after: {
           lineId: line.id,
           itemId: line.item_id,
-          itemName: await this.lineItemName(line.item_id),
+          itemName,
           quantity,
           statusWhenChanged: h.status,
           pickSlipStale,
+          reservation: reservationFailure
+            ? { synced: false, error: reservationFailure.message }
+            : reservation
+              ? {
+                  synced: true,
+                  action: reservation.released ? 'released' : 'reduced',
+                  from: reservation.from,
+                  to: reservation.to,
+                }
+              : { synced: true, action: 'unchanged' },
         },
       },
       this.ctx,
     );
+
+    if (reservationFailure) throw reservationFailure;
+
+    await this.announceLineChange({
+      orderId: h.id,
+      orderNumber: h.order_number,
+      requesterUserId: h.requester_user_id,
+      type: 'order_request.line_quantity_changed',
+      title: `Order ${h.order_number != null ? `SO-${String(h.order_number).padStart(6, '0')}` : ''} was updated`.trim(),
+      body: `${itemName ?? 'An item'} changed from ${prior} to ${quantity}.`,
+    });
 
     return { pickSlipStale, quantity };
   }
@@ -1366,11 +1630,11 @@ export class OrderRequestsService {
    * a line that has ANY history against it — handed over, staged, or returned —
    * is a record of something that physically happened and is never deleted.
    *
-   * The reservation check is the subtle one. stock_reservations is keyed by
-   * (order_request_id, item_id), NOT by line id, so deleting the line while an
-   * un-released reservation still points at that item would leave stock
-   * committed to an order that no longer asks for it — invisible shrinkage.
-   * Regenerating the pick slip (or unstaging) releases them first.
+   * A reservation is NOT such a record and never blocks removal. It is a soft
+   * hold minted at approval, so refusing on its existence made every approved
+   * order un-editable (owner, production, 2026-07-22: "her order hasnt even
+   * been picked yet"). Instead the hold follows the line: it is released, or
+   * reduced to what the remaining lines for that item still ask for.
    *
    * Removing the LAST line is refused too: an order with no lines isn't a
    * meaningful record, and cancel() is the operation that actually means "this
@@ -1411,27 +1675,10 @@ export class OrderRequestsService {
       );
     }
 
-    // Reservations are per (order, item) — see getDetail. An un-released row
-    // means stock is still committed to this order for that item.
-    const { data: reservations, error: rErr } = await this.ctx.supabase
-      .from('stock_reservations')
-      .select('id')
-      .eq('order_request_id', h.id)
-      .eq('item_id', line.item_id)
-      .is('released_at', null)
-      .limit(1);
-    if (rErr) throw new ServiceError('internal_error', rErr.message);
-    if ((reservations ?? []).length > 0) {
-      throw new ServiceError(
-        'conflict',
-        'Stock is still reserved for this item — unstage the order or regenerate the pick slip to release it, then remove the line.',
-      );
-    }
-
     // Last line standing: an empty order is not a record anyone can act on.
     const { data: siblings, error: sErr } = await this.ctx.supabase
       .from('order_request_lines')
-      .select('id')
+      .select('id, item_id, quantity_requested, quantity_fulfilled')
       .eq('order_request_id', h.id);
     if (sErr) throw new ServiceError('internal_error', sErr.message);
     if ((siblings ?? []).length <= 1) {
@@ -1459,7 +1706,30 @@ export class OrderRequestsService {
       );
     }
 
+    // What the order still asks for of this item once the line is gone. The
+    // same item can sit on more than one line, so removal is not automatically
+    // a full release. Computed from the sibling read above — those rows were
+    // fetched before the delete, and this line is excluded by id.
+    // Requested-and-UNFULFILLED, not requested: units already handed over are
+    // no longer promised, so counting them would keep a hold alive for stock
+    // the order no longer owes (the over-hold this sync exists to remove).
+    // Floored per line because an over-receipt can push fulfilled past
+    // requested, and a negative would eat into a sibling's legitimate share.
+    const remaining = ((siblings ?? []) as Array<
+      { id: string; item_id: string; quantity_requested: number | null; quantity_fulfilled: number | null }
+    >)
+      .filter((l) => l.id !== line.id && l.item_id === line.item_id)
+      .reduce(
+        (sum, l) =>
+          sum + Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0)),
+        0,
+      );
+    const { effect: reservation, failure: reservationFailure } =
+      await this.syncReservationAfterLineWrite(h.id, line.item_id, remaining, 'line_removed');
+
     const pickSlipStale = h.pick_slip_generated_at != null;
+    // One lookup, shared by the audit payload and the requester notification.
+    const itemName = await this.lineItemName(line.item_id);
     await audit(
       {
         event: 'order_request.line_removed',
@@ -1468,7 +1738,7 @@ export class OrderRequestsService {
         before: {
           lineId: line.id,
           itemId: line.item_id,
-          itemName: await this.lineItemName(line.item_id),
+          itemName,
           quantity: Number(line.quantity_requested),
         },
         after: {
@@ -1477,10 +1747,32 @@ export class OrderRequestsService {
           quantity: 0,
           statusWhenRemoved: h.status,
           pickSlipStale,
+          reservation: reservationFailure
+            ? { synced: false, error: reservationFailure.message }
+            : reservation
+              ? {
+                  synced: true,
+                  action: reservation.released ? 'released' : 'reduced',
+                  from: reservation.from,
+                  to: reservation.to,
+                  ...(reservation.released ? { reason: 'line_removed' } : {}),
+                }
+              : { synced: true, action: 'unchanged' },
         },
       },
       this.ctx,
     );
+
+    if (reservationFailure) throw reservationFailure;
+
+    await this.announceLineChange({
+      orderId: h.id,
+      orderNumber: h.order_number,
+      requesterUserId: h.requester_user_id,
+      type: 'order_request.line_removed',
+      title: `Order ${h.order_number != null ? `SO-${String(h.order_number).padStart(6, '0')}` : ''} was updated`.trim(),
+      body: `${itemName ?? 'An item'} was removed from this order.`,
+    });
 
     return { pickSlipStale, removedItemId: line.item_id };
   }

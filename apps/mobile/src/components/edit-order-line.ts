@@ -31,7 +31,8 @@ export interface EditableOrderLine {
   /** order_request_lines.id. Null on a row whose id failed to load, which is
    *  not editable at all (there is nothing to address the write to). */
   orderRequestLineId: string | null;
-  /** inventory_items.id — the reservation check is keyed by item, not line. */
+  /** inventory_items.id — the fallback for the removal result's removedItemId
+   *  when the route's echo is missing. No rule below reads it. */
   itemId: string | null;
   name: string;
   /** quantity_requested. */
@@ -140,27 +141,33 @@ export function validateLineQuantity(line: EditableOrderLine, quantity: number):
   return { ok: true };
 }
 
-// ── Removal (mirror of R1 → R5) ─────────────────────────────────────────────
+// ── Removal (mirror of R1-R3 and R5; R4 is deleted — see below) ─────────────
 
 export interface RemoveLineInput {
   line: EditableOrderLine;
   /** How many lines the order has in total — removing the last one is refused. */
   totalLines: number;
-  /**
-   * Whether an UN-RELEASED stock_reservations row still points at this line's
-   * item for THIS order. Reservations are keyed by (order_request_id, item_id),
-   * not by line id, so deleting the line while stock is still committed to that
-   * item would leave the hold dangling — invisible shrinkage.
-   */
-  itemHasOpenReservation: boolean;
 }
 
 /**
  * Whether "Remove" is offered, and if not, what the user has to do first.
  *
  * The refusal ORDER matches removeLine exactly. It matters: a line that is both
- * staged and reserved must name the hand-over/staging problem first, because
- * that is the one the user can act on directly.
+ * staged and last must name the staging problem first, because that is the one
+ * the user can act on directly.
+ *
+ * DELETED (2026-07-22, production defect on SO-000060): there used to be a
+ * refusal here when an un-released stock_reservations row pointed at the line's
+ * item. A reservation is a SOFT HOLD minted for every line at APPROVAL — it
+ * moves no stock — so that rule made removal impossible from approval onward on
+ * an order where nothing had been picked, which is exactly what the owner hit.
+ * Worse, its copy told the user to "unstage the order or regenerate the pick
+ * slip to release it", and neither of those operations releases a reservation:
+ * the instruction could not be followed at all. The service now RE-SYNCS the
+ * hold to what the order still asks for (releasing it with released_reason
+ * 'line_removed' when nothing remains) instead of refusing, so there is nothing
+ * left for this mirror to warn about. What protects physical reality is
+ * quantity_fulfilled and quantity_picked, which are still hard refusals below.
  */
 export function canRemoveOrderLine(input: RemoveLineInput): LineEditDecision {
   const { line } = input;
@@ -186,13 +193,6 @@ export function canRemoveOrderLine(input: RemoveLineInput): LineEditDecision {
         'This line has returns recorded against it and has to stay on the order for the history to make sense.',
     };
   }
-  if (input.itemHasOpenReservation) {
-    return {
-      ok: false,
-      reason:
-        'Stock is still reserved for this item — unstage the order or regenerate the pick slip to release it, then remove the line.',
-    };
-  }
   if (input.totalLines <= 1) {
     return {
       ok: false,
@@ -202,15 +202,28 @@ export function canRemoveOrderLine(input: RemoveLineInput): LineEditDecision {
   return { ok: true };
 }
 
-/** Confirmation copy for a removal. Names the item, because the sheet is opened
- *  from a list and "Remove this line?" is not something you can check. */
+/**
+ * Confirmation copy for a removal. Names the item, because the sheet is opened
+ * from a list and "Remove this line?" is not something you can check.
+ *
+ * The release sentence is stated UNCONDITIONALLY and hedged ("any stock still
+ * held"), because the sheet no longer reads stock_reservations: the service
+ * re-syncs the hold on its own, and re-adding a per-item reservation query just
+ * to word this one sentence would put back the round trip whose result nothing
+ * else needed. Hedged is honest for all three cases — approved (a hold exists
+ * and is released), still pending approval (no hold to release), and the same
+ * item sitting on a second line (the hold is REDUCED by this line's share, not
+ * released). It is scoped to "this line" for exactly that last case: claiming
+ * the item's whole hold goes back would be wrong whenever a sibling line
+ * still asks for it.
+ */
 export function removeLineConfirmCopy(line: EditableOrderLine): {
   title: string;
   message: string;
 } {
   return {
     title: `Remove ${line.name}?`,
-    message: `All ${line.requested} of this item come off the order. The order keeps its other items; nothing is restocked, because none of these were picked or handed over.`,
+    message: `All ${line.requested} of this item come off the order. The order keeps its other items; nothing is restocked, because none of these were picked or handed over. Any stock still being held for this line goes back to available.`,
   };
 }
 
@@ -283,8 +296,8 @@ export function describeLineEditError(e: unknown): string {
  * conflict is usually a FLOOR — "3 of these are already picked and staged" —
  * which is exactly the thing the user fixes by choosing a different number, in
  * the sheet, with the message in front of them. Yanking the sheet away would
- * take the instruction with it. The screen still reloads behind it, so if the
- * conflict was actually the ship gate the affordance is gone on close.
+ * take the instruction with it. The ONE 409 that must not stay in the sheet is
+ * the post-write reservation-sync failure, which has its own predicate below.
  */
 export function lineEditErrorIsStale(e: unknown): boolean {
   const status = addLinesErrorStatus(e);
@@ -310,3 +323,32 @@ export const LINE_EDIT_INDETERMINATE_TITLE = 'Check the line before changing it 
 export const LINE_EDIT_INDETERMINATE_COPY =
   'We did not hear back from the server, so this change may already have been applied. ' +
   'The order has been refreshed — check the line before changing it again.';
+
+/**
+ * The one 409 on these routes that arrives AFTER the write has already
+ * committed.
+ *
+ * removeLine / updateLineQuantity write the line FIRST and then re-sync the
+ * item's stock reservation, deliberately in that order (over-holding is
+ * self-correcting; over-releasing is not). If that second write loses a race it
+ * throws a conflict — but the line change itself really happened. Treating it
+ * like every other 409 would leave the sheet open, showing the old number,
+ * telling the user to fix something that is already fixed, and inviting a
+ * second identical edit.
+ *
+ * Matched on the service's own sentence, which is how the whole of this file
+ * mirrors the server. If the wording ever drifts the match simply fails and we
+ * fall back to the ordinary 409 path — a worse message, never a wrong write.
+ */
+const RESERVATION_SYNC_MARKER = 'stock reserved for this item changed';
+
+export function lineEditErrorIsReservationSync(e: unknown): boolean {
+  if (addLinesErrorStatus(e) !== 409) return false;
+  return extractApiErrorMessage(e, '').toLowerCase().includes(RESERVATION_SYNC_MARKER);
+}
+
+export const LINE_EDIT_RESERVATION_SYNC_TITLE = 'Change saved — check the reserved stock';
+export const LINE_EDIT_RESERVATION_SYNC_COPY =
+  'The line was changed, but the stock still held for this item could not be updated to match. ' +
+  'The order has been refreshed. Nothing is lost — the hold is released when the order is ' +
+  'delivered or cancelled — but availability for this item stays low until then.';
