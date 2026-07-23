@@ -47,6 +47,37 @@ export async function transferStock(itemId: string, body: TransferStockBody): Pr
   }
 }
 
+export interface RemoveStockBody {
+  /** The holding (rack/crate) to draw down. */
+  locationId: string;
+  /** MANDATORY — stored verbatim on the 'remove' movement. */
+  reason: string;
+  /** Omit to remove the WHOLE holding (resolved server-side); a positive value
+   *  removes exactly that much, capped at the holding by the service. */
+  quantity?: number;
+}
+
+/**
+ * Remove (write off) stock from ONE rack — native parity for the web
+ * RemoveFromRackDialog. POSTs to /api/v1/items/<id>/remove-stock, which routes
+ * through InventoryService.removeStockFromLocation → adjustStock so the
+ * 'stock:adjust' PERMISSION is enforced server-side (the raw adjust_stock RPC
+ * only checks the staff-role floor). Leaves stock in every OTHER location
+ * untouched — unlike archive, which would hide the whole item and orphan it.
+ *
+ * Throws a clean Error (the server's friendly message) on a non-2xx.
+ */
+export async function removeStockFromLocation(
+  itemId: string,
+  body: RemoveStockBody,
+): Promise<void> {
+  try {
+    await api(`/api/v1/items/${itemId}/remove-stock`, { method: 'POST', body });
+  } catch (e) {
+    throw new Error(extractApiMessage(e));
+  }
+}
+
 /**
  * The api() client throws `Error("API 400: {\"error\":...,\"message\":\"...\"}")`.
  * Pull the server's friendly `message` out of that text so an Alert shows

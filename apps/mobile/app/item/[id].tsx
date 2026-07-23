@@ -9,6 +9,7 @@ import {
   Edit3,
   History,
   Minus,
+  PackageMinus,
   Plus,
   RotateCcw,
 } from 'lucide-react-native';
@@ -33,6 +34,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { can, formatOrderNumber, getCrateColor, type Role } from '@stockpilot/core';
 
 import { MoveStockModal } from '@/components/move-stock-modal';
+import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card, Hair } from '@/components/ui/card';
@@ -410,6 +412,7 @@ export default function ItemDetail() {
   );
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
+  const [removeOpen, setRemoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
@@ -424,6 +427,11 @@ export default function ItemDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canTransfer =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
+  // Remove-from-rack (write-off) gate — mirrors the web item detail's
+  // 'stock:adjust' requirement. Cosmetic only; /api/v1/items/[id]/remove-stock
+  // re-asserts stock:adjust inside InventoryService.removeStockFromLocation.
+  const canAdjustStock =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:adjust'));
   // Gates the inline "+ New rack" option in the move sheet; the transfer route
   // asserts 'locations:manage' independently when it creates the rack.
   const canCreateLocation =
@@ -1358,6 +1366,21 @@ export default function ItemDetail() {
                   Transfer / put away
                 </Button>
               ) : null}
+              {/* Remove-from-rack write-off (2026-07-23): draws down ONE rack,
+                  leaving stock in every other rack alone — the tool Andrew
+                  reached for when he archived a whole book to clear one rack.
+                  Only meaningful on an active item that still holds stock. */}
+              {canAdjustStock && item.status !== 'archived' && item.quantity_on_hand > 0 ? (
+                <Button
+                  block
+                  variant="outline"
+                  onPress={() => setRemoveOpen(true)}
+                  leading={<PackageMinus size={16} color={c.ink} strokeWidth={1.5} />}
+                  style={{ marginTop: 10 }}
+                >
+                  Remove from rack
+                </Button>
+              ) : null}
               {/* Task 4 (Model B / SKU grouping clarity): quantity is a
                   PER-PLACEMENT field — adjusting it here only changes
                   on-hand at this item's specific rack/charter, never other
@@ -1590,6 +1613,19 @@ export default function ItemDetail() {
         canCreateLocation={canCreateLocation}
         onClose={() => setMoveOpen(false)}
         onMoved={() => {
+          void load();
+          if (tab === 'movements') void loadMovements();
+          if (tab === 'activity') void loadActivity();
+        }}
+      />
+
+      <RemoveFromRackModal
+        visible={removeOpen}
+        itemId={item.id}
+        itemName={item.name}
+        organizationId={item.organization_id}
+        onClose={() => setRemoveOpen(false)}
+        onRemoved={() => {
           void load();
           if (tab === 'movements') void loadMovements();
           if (tab === 'activity') void loadActivity();
