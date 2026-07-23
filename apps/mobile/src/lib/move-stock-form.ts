@@ -37,6 +37,8 @@
  * itself cannot be rendered under vitest.
  */
 
+import { describeNewRackPlacement, type NewRackPlacementDecision } from '@stockpilot/core';
+
 export interface MoveDestination {
   id: string;
   name: string;
@@ -174,5 +176,61 @@ export function moveDestinationChoices(
     if (opts.excludeLocationId && d.id === opts.excludeLocationId) return false;
     if (scope.kind === 'warehouse' && d.warehouseId !== scope.warehouseId) return false;
     return true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// New-rack confirmation — the 2026-07-23 guard, mirrored on the phone.
+//
+// When "+ New rack…" is chosen in put-away and the typed label does NOT already
+// exist in the destination scope, the phone must ask before creating it — the
+// SAME question, in the SAME words as web, because the copy comes from the one
+// shared builder in @stockpilot/core. The pure derivation lives here so it can
+// be unit-tested; the modal only renders an Alert around the result.
+// ---------------------------------------------------------------------------
+
+export interface NewRackInput {
+  rackNumber: string;
+  rackRow?: string | null;
+  crateColor?: string | null;
+  crateNumber?: string | null;
+  /** Books can create crates; everything else is a rack. Gates the crate fields. */
+  isBook: boolean;
+}
+
+/**
+ * The display label a "+ New rack" form will create — the SAME derivation the
+ * web dialog uses, so both platforms feed the identical string to the shared
+ * copy builder. A crate reads "Blue #42"; a rack reads "22-B" or bare "22".
+ */
+export function newRackLabel(n: NewRackInput): { label: string; noun: 'rack' | 'crate' } {
+  const color = n.crateColor?.trim();
+  if (n.isBook && color) {
+    const num = n.crateNumber?.trim() || n.rackNumber.trim();
+    return { label: `${color} #${num}`, noun: 'crate' };
+  }
+  const row = n.rackRow?.trim();
+  const number = n.rackNumber.trim();
+  return { label: row ? `${number}-${row}` : number, noun: 'rack' };
+}
+
+/**
+ * Whether a put-away into a typed rack/crate must confirm, and the exact copy +
+ * near-match alternatives to show. Delegates the words to the shared core
+ * builder so the phone and the web dialog never drift apart.
+ */
+export function decideNewRackPlacement(input: {
+  rack: NewRackInput;
+  warehouseName?: string | null;
+  quantity: number;
+  existingLabels: readonly string[];
+}): NewRackPlacementDecision {
+  const { label, noun } = newRackLabel(input.rack);
+  return describeNewRackPlacement({
+    label,
+    warehouseName: input.warehouseName,
+    quantity: input.quantity,
+    existingLabels: input.existingLabels,
+    noun,
   });
 }

@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { normalizeRackFields } from '@stockpilot/core';
+
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -388,14 +390,21 @@ export default function NewItem() {
       Alert.alert('SKU required', 'Tap Suggest to generate one, or type your own.');
       return;
     }
+    // DECOMPOSE the rack fields through the ONE shared parser (web parity).
+    // A picker typing the whole shelf label "22-B" into the number box gets
+    // ("22","B") stored, not the composite that made items invisible to their
+    // own rack filter on 2026-07-23.
+    const rack = normalizeRackFields({ number: rackNumber, row: rackRow });
+    const rackNum = rack.number;
+    const rackRowValue = rackNum ? (rack.row ?? '').toUpperCase() : '';
     const cf: Record<string, unknown> = {};
     if (isBook) {
       if (modelNumber.trim()) cf.author = modelNumber.trim();
-      if (rackNumber.trim()) cf.book_rack_number = rackNumber.trim();
-      if (rackRow.trim()) cf.book_rack_row = rackRow.trim();
+      if (rackNum) cf.book_rack_number = rackNum;
+      if (rackRowValue) cf.book_rack_row = rackRowValue;
     } else {
-      if (rackNumber.trim()) cf.rack_number = rackNumber.trim();
-      if (rackRow.trim()) cf.rack_row = rackRow.trim();
+      if (rackNum) cf.rack_number = rackNum;
+      if (rackRowValue) cf.rack_row = rackRowValue;
     }
 
     setBusy(true);

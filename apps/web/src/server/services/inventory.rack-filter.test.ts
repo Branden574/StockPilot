@@ -20,6 +20,7 @@ function makeStub() {
   const eqCalls: Array<[string, unknown]> = [];
   const filterCalls: Array<[string, string, unknown]> = [];
   const ilikeCalls: Array<[string, string]> = [];
+  const orCalls: string[] = [];
   const chain: {
     select: () => typeof chain;
     eq: (c: string, v: unknown) => typeof chain;
@@ -31,7 +32,7 @@ function makeStub() {
     order: () => typeof chain;
     range: () => typeof chain;
     in: () => typeof chain;
-    or: () => typeof chain;
+    or: (expr: string) => typeof chain;
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) => unknown;
   } = {
     select: () => chain,
@@ -53,7 +54,10 @@ function makeStub() {
     order: () => chain,
     range: () => chain,
     in: () => chain,
-    or: () => chain,
+    or: (expr: string) => {
+      orCalls.push(expr);
+      return chain;
+    },
     then: (cb) => cb({ data: [], count: 0, error: null }),
   };
   return {
@@ -61,6 +65,7 @@ function makeStub() {
     _eqCalls: eqCalls,
     _filterCalls: filterCalls,
     _ilikeCalls: ilikeCalls,
+    _orCalls: orCalls,
   };
 }
 
@@ -79,14 +84,15 @@ describe('InventoryService.list rack filter', () => {
        
     } as any);
     await svc.list({ rack: '20-A', itemType: 'product' });
-    const numCall = stub._filterCalls.find(
-      (c) => c[0] === 'custom_fields->>rack_number',
+    // REWRITTEN 2026-07-23 (rack-shape incident): a number+row rack now emits
+    // ONE tolerant .or() instead of two .filter() calls, so a legacy composite
+    // row ("20-A" parked in rack_number, row NULL) still matches its own rack.
+    // The guarantee this test pins is unchanged — the decomposed number and row
+    // are still required TOGETHER, never as loose alternatives.
+    expect(stub._orCalls[0]).toBe(
+      'and(custom_fields->>rack_number.eq.20,custom_fields->>rack_row.eq.A),' +
+        'custom_fields->>rack_number.eq.20-A',
     );
-    const rowCall = stub._filterCalls.find(
-      (c) => c[0] === 'custom_fields->>rack_row',
-    );
-    expect(numCall).toEqual(['custom_fields->>rack_number', 'eq', '20']);
-    expect(rowCall).toEqual(['custom_fields->>rack_row', 'eq', 'A']);
   });
 
   it('matches book_rack_number on custom_fields for books', async () => {
@@ -101,14 +107,11 @@ describe('InventoryService.list rack filter', () => {
        
     } as any);
     await svc.list({ rack: '38-A', itemType: 'book' });
-    const numCall = stub._filterCalls.find(
-      (c) => c[0] === 'custom_fields->>book_rack_number',
+    // REWRITTEN 2026-07-23 — same reason as the non-book case above.
+    expect(stub._orCalls[0]).toBe(
+      'and(custom_fields->>book_rack_number.eq.38,custom_fields->>book_rack_row.eq.A),' +
+        'custom_fields->>book_rack_number.eq.38-A',
     );
-    const rowCall = stub._filterCalls.find(
-      (c) => c[0] === 'custom_fields->>book_rack_row',
-    );
-    expect(numCall).toEqual(['custom_fields->>book_rack_number', 'eq', '38']);
-    expect(rowCall).toEqual(['custom_fields->>book_rack_row', 'eq', 'A']);
   });
 
   it('matches bare book number when no row suffix is given', async () => {

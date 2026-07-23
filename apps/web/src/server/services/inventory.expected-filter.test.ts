@@ -150,8 +150,14 @@ describe('InventoryService.countExpected — the Expected chip badge (mig 0277)'
     expect(stub._inCalls).toContainEqual(['category_id', ['cat-1']]);
     expect(stub._inCalls).toContainEqual(['primary_location_id', ['loc-1']]);
     // rack "38-A" → the neutral rack keys for non-book item types.
-    expect(stub._filterCalls).toContainEqual(['custom_fields->>rack_number', 'eq', '38']);
-    expect(stub._filterCalls).toContainEqual(['custom_fields->>rack_row', 'eq', 'A']);
+    // REWRITTEN 2026-07-23 (rack-shape incident): a number+row rack now emits
+    // ONE tolerant .or() (decomposed pair OR the whole label in the number key)
+    // instead of two .filter() calls, shared verbatim with list() so the badge
+    // count can never disagree with the rows it counts.
+    expect(stub._orCalls).toContain(
+      'and(custom_fields->>rack_number.eq.38,custom_fields->>rack_row.eq.A),' +
+        'custom_fields->>rack_number.eq.38-A',
+    );
   });
 
   it('returns 0 without querying when a warehouse-scoped user has no readable warehouses (fail closed)', async () => {

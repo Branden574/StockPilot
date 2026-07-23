@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, PackageCheck } from 'lucide-react';
+import { AlertTriangle, Loader2, PackageCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -25,6 +25,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { describeNewRackPlacement } from '@stockpilot/core';
+
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
 
 const NEW_RACK_SENTINEL = '__new__';
@@ -47,12 +49,14 @@ interface BulkPlaceDialogProps {
   rows: BulkPlaceRow[];
   /** warehouseId → rack/crate destinations (same map the per-item dialog uses). */
   destinationsMap: Record<string, DestinationOption[]>;
+  /** warehouseId → display name, for the new-rack confirmation copy. */
+  warehouseNames: Record<string, string>;
   /** Called after a successful (full or partial) place so the parent can clear selection. */
   onPlaced: () => void;
   trigger: React.ReactNode;
 }
 
-export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: BulkPlaceDialogProps) {
+export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlaced, trigger }: BulkPlaceDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
 
@@ -61,6 +65,17 @@ export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: Bu
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
+  // The 2026-07-23 new-rack confirmation, same as PlaceFromStagingDialog. Bulk
+  // place had NO guard, so a typed rack name minted a rack and dumped EVERY
+  // selected row's stock into it silently — the same incident, worse. Set only
+  // when a genuinely-new rack is about to be created; holds the copy + the
+  // one-tap near-match alternatives.
+  const [pendingNewRack, setPendingNewRack] = React.useState<{
+    title: string;
+    message: string;
+    suggestions: string[];
+    destination: Parameters<typeof bulkPlaceStockAction>[0]['destination'];
+  } | null>(null);
 
   // All selected rows must share ONE warehouse — a rack belongs to a single
   // warehouse, so a shared destination is only meaningful within one. Rows with
@@ -72,6 +87,7 @@ export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: Bu
   const singleWarehouse = warehouseIds.length === 1 && warehouseIds[0] != null;
   const warehouseId = singleWarehouse ? (warehouseIds[0] as string) : null;
   const destinations = warehouseId ? (destinationsMap[warehouseId] ?? []) : [];
+  const warehouseName = warehouseId ? (warehouseNames[warehouseId] ?? null) : null;
 
   const totalUnits = rows.reduce((s, r) => s + r.quantity, 0);
   const isNew = destId === NEW_RACK_SENTINEL;
@@ -83,6 +99,7 @@ export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: Bu
     setNotes('');
     setRackNumber('');
     setRackRow('');
+    setPendingNewRack(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open]);
 
@@ -92,33 +109,70 @@ export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: Bu
     rows.length > 0 &&
     (isNew ? rackNumber.trim().length > 0 : destId.length > 0);
 
-  async function submit() {
+  function submit() {
     if (!warehouseId) {
       toast.error('Select items from a single warehouse to place them together.');
       return;
     }
 
-    let destination: Parameters<typeof bulkPlaceStockAction>[0]['destination'];
-    if (isNew) {
-      if (!rackNumber.trim()) {
-        toast.error('Enter a rack number.');
-        return;
-      }
-      destination = {
-        newRack: {
-          warehouseId,
-          rackNumber: rackNumber.trim(),
-          ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-        },
-      };
-    } else {
+    if (!isNew) {
       if (!destId) {
         toast.error('Select a destination location.');
         return;
       }
-      destination = { existingLocationId: destId };
+      void place({ existingLocationId: destId });
+      return;
     }
 
+    if (!rackNumber.trim()) {
+      toast.error('Enter a rack number.');
+      return;
+    }
+
+    // A typed rack destination: confirm before minting it (same guard as the
+    // single-item dialog). findOrCreateRackOrCrate reuses a name match, so an
+    // EXISTING label is not a creation and needs no confirmation — placing into
+    // a rack that already exists stays one action.
+    const label = rackRow.trim() ? `${rackNumber.trim()}-${rackRow.trim()}` : rackNumber.trim();
+    const destination: Parameters<typeof bulkPlaceStockAction>[0]['destination'] = {
+      newRack: {
+        warehouseId,
+        rackNumber: rackNumber.trim(),
+        ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+      },
+    };
+    const decision = describeNewRackPlacement({
+      label,
+      warehouseName,
+      quantity: totalUnits,
+      existingLabels: destinations.map((d) => d.name),
+      noun: 'rack',
+    });
+    if (decision.exists) {
+      void place(destination);
+      return;
+    }
+    setPendingNewRack({
+      title: decision.title,
+      message: decision.message,
+      suggestions: decision.suggestions,
+      destination,
+    });
+  }
+
+  // "Did you mean 10-A?" — place into the EXISTING rack the worker probably
+  // meant. The suggestion is an existing label; map it to that destination id.
+  function placeIntoSuggestion(label: string) {
+    const match = destinations.find(
+      (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
+    );
+    if (!match) return;
+    setPendingNewRack(null);
+    void place({ existingLocationId: match.id });
+  }
+
+  async function place(destination: Parameters<typeof bulkPlaceStockAction>[0]['destination']) {
+    setPendingNewRack(null);
     setSubmitting(true);
     const res = await bulkPlaceStockAction({
       placements: rows.map((r) => ({
@@ -223,19 +277,71 @@ export function BulkPlaceDialog({ rows, destinationsMap, onPlaced, trigger }: Bu
           </div>
         )}
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={!canSubmit}>
-            {submitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <PackageCheck className="h-4 w-4" /> Place {rows.length}
-              </>
+        {pendingNewRack && (
+          <div
+            role="alertdialog"
+            aria-label={pendingNewRack.title}
+            className="border-amber-500/40 bg-amber-500/10 space-y-2 rounded-md border p-3"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="text-amber-600 dark:text-amber-500 h-4 w-4 shrink-0" />
+              <p className="text-sm font-medium">{pendingNewRack.title}</p>
+            </div>
+            <p className="text-muted-foreground text-sm">{pendingNewRack.message}</p>
+            {pendingNewRack.suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {pendingNewRack.suggestions.map((s) => (
+                  <Button
+                    key={s}
+                    size="sm"
+                    variant="outline"
+                    disabled={submitting}
+                    onClick={() => placeIntoSuggestion(s)}
+                  >
+                    Use {s} instead
+                  </Button>
+                ))}
+              </div>
             )}
-          </Button>
+          </div>
+        )}
+
+        <DialogFooter>
+          {pendingNewRack ? (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setPendingNewRack(null)}
+                disabled={submitting}
+              >
+                Back
+              </Button>
+              <Button onClick={() => void place(pendingNewRack.destination)} disabled={submitting}>
+                {submitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <PackageCheck className="h-4 w-4" /> Create and place {rows.length}
+                  </>
+                )}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button onClick={submit} disabled={!canSubmit}>
+                {submitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <PackageCheck className="h-4 w-4" /> Place {rows.length}
+                  </>
+                )}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

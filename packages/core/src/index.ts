@@ -17,6 +17,8 @@ export * from './signature';
 export * from './inventory/size-run';
 export * from './inventory/crate-colors';
 export * from './inventory/rack-holdings';
+export * from './inventory/rack-label';
+export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
 export * from './orders/order-number';

@@ -18,7 +18,14 @@ import type {
   UpdateItemInput,
 } from '@stockpilot/core';
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
-import { historyNote, RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
+import {
+  formatRackLabel,
+  historyNote,
+  normalizeRackFields,
+  parseRackLabel,
+  RESERVED_CUSTOM_FIELD_KEYS,
+  validateCustomFields,
+} from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
@@ -38,6 +45,65 @@ export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): numb
   const then = new Date(receivedAtIso).getTime();
   if (Number.isNaN(then)) return null;
   return Math.max(0, Math.floor((nowMs - then) / 86_400_000));
+}
+
+/**
+ * Builds the PostgREST predicate for the Items rack filter.
+ *
+ * Pure + exported so both filter call sites (list() and the expected-count
+ * builder) share ONE definition and tests can assert the emitted clause
+ * without a live query.
+ *
+ * LEGACY TOLERANCE (incident 2026-07-23): a rack is *supposed* to be stored
+ * decomposed — custom_fields.rack_number "22" + rack_row "B" — but a composite
+ * row (the whole label "22-B" parked in the number key, row NULL) can reappear
+ * from an import, a restored backup, or a writer that skips the parser. The
+ * old filter required the decomposed pair and matched nothing against such a
+ * row, so the rack went blind while the Rack COLUMN still printed "22-B". We
+ * now match EITHER shape, so the filter degrades to "still finds the items"
+ * rather than "returns No items yet".
+ *
+ * SANITIZE: `num`/`row`/`label` are interpolated into PostgREST's .or() string.
+ * The allow-list keeps alphanumerics and the single dash a label legitimately
+ * contains — never a comma, paren, dot or percent, which is what would let a
+ * hostile value escape the and(...) clause and inject a sibling predicate.
+ */
+export function buildRackFilterClause(
+  rawRack: string,
+  itemType: string | undefined,
+):
+  | { kind: 'none' }
+  | { kind: 'eq'; column: string; value: string }
+  | { kind: 'or'; expr: string } {
+  const sanitize = (s: string | null | undefined): string =>
+    (s ?? '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 40);
+
+  const label = sanitize(rawRack.trim());
+  const parts = parseRackLabel(label);
+  const num = sanitize(parts.number);
+  const row = sanitize(parts.row);
+  if (!num) return { kind: 'none' };
+
+  const isBook = itemType === 'book';
+  const numKey = isBook ? 'custom_fields->>book_rack_number' : 'custom_fields->>rack_number';
+  const rowKey = isBook ? 'custom_fields->>book_rack_row' : 'custom_fields->>rack_row';
+
+  // One rack, either shape: (number AND row) OR the whole label in the number.
+  const tolerant = (nk: string, rk: string): string =>
+    row ? `or(and(${nk}.eq.${num},${rk}.eq.${row}),${nk}.eq.${label})` : `${nk}.eq.${num}`;
+
+  if (itemType === 'all') {
+    // OR-of-ANDs: (item is a book AND book keys match) OR (item is not a book
+    // AND rack keys match) — so each row matches against its OWN type's keys.
+    const bookClause = `and(item_type.eq.book,${tolerant('custom_fields->>book_rack_number', 'custom_fields->>book_rack_row')})`;
+    const itemClause = `and(item_type.neq.book,${tolerant('custom_fields->>rack_number', 'custom_fields->>rack_row')})`;
+    return { kind: 'or', expr: `${bookClause},${itemClause}` };
+  }
+  if (!row) return { kind: 'eq', column: numKey, value: num };
+  return {
+    kind: 'or',
+    expr: `and(${numKey}.eq.${num},${rowKey}.eq.${row}),${numKey}.eq.${label}`,
+  };
 }
 
 /** stock_movements.notes carries a receipts.id as TEXT for receipt-written rows
@@ -468,44 +534,12 @@ export class InventoryService {
       query = query.eq('barcode', filters.barcode.trim());
     }
     if (filters.rack && filters.rack.trim()) {
-      const rack = filters.rack.trim();
-      // Books use the legacy book_rack_* keys; everything else uses the
-      // neutral rack_* keys. Both are inside custom_fields and matched
-      // exactly. "38-A" splits into number/row; "38" alone matches just
-      // the number. When itemType is 'all' (the dashboard "Review low
-      // stock" link uses this), we OR both key sets so each row matches
-      // against its OWN type's keys.
-      //
-      // Sanitize: `num` and `row` are interpolated into PostgREST's .or()
-      // string for the 'all' branch. Without an alphanumeric allow-list a
-      // hostile rack value (e.g. "20),or(deleted_at.not.is.null") could
-      // escape the and(...) clause and inject a sibling predicate. Form
-      // and bulk inputs already digits-only / [A-Z0-9]; this is
-      // defense-in-depth at the service layer.
-      const sanitize = (s: string | undefined): string =>
-        (s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
-      const [rawNum, rawRow] = rack.split('-', 2);
-      const num = sanitize(rawNum);
-      const row = sanitize(rawRow);
-      if (num) {
-        if (filters.itemType === 'book') {
-          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
-          if (row) query = query.filter('custom_fields->>book_rack_row', 'eq', row);
-        } else if (filters.itemType === 'all') {
-          // OR-of-ANDs: (item is a book AND book keys match) OR
-          // (item is not a book AND rack keys match).
-          const bookClause = row
-            ? `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num},custom_fields->>book_rack_row.eq.${row})`
-            : `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num})`;
-          const itemClause = row
-            ? `and(item_type.neq.book,custom_fields->>rack_number.eq.${num},custom_fields->>rack_row.eq.${row})`
-            : `and(item_type.neq.book,custom_fields->>rack_number.eq.${num})`;
-          query = query.or(`${bookClause},${itemClause}`);
-        } else {
-          query = query.filter('custom_fields->>rack_number', 'eq', num);
-          if (row) query = query.filter('custom_fields->>rack_row', 'eq', row);
-        }
-      }
+      // Books use the legacy book_rack_* keys; everything else the neutral
+      // rack_* keys. buildRackFilterClause owns the split, the sanitization and
+      // the legacy-composite tolerance — see its doc comment.
+      const clause = buildRackFilterClause(filters.rack, filters.itemType);
+      if (clause.kind === 'eq') query = query.filter(clause.column, 'eq', clause.value);
+      else if (clause.kind === 'or') query = query.or(clause.expr);
     }
     // Multi-select takes precedence; fall back to legacy single-id when
     // the array is empty/missing so AI tools and any prior caller keep
@@ -927,28 +961,11 @@ export class InventoryService {
       }
     }
     if (opts.rack && opts.rack.trim()) {
-      const sanitize = (s: string | undefined): string =>
-        (s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
-      const [rawNum, rawRow] = opts.rack.trim().split('-', 2);
-      const num = sanitize(rawNum);
-      const row = sanitize(rawRow);
-      if (num) {
-        if (opts.itemType === 'book') {
-          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
-          if (row) query = query.filter('custom_fields->>book_rack_row', 'eq', row);
-        } else if (opts.itemType === 'all') {
-          const bookClause = row
-            ? `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num},custom_fields->>book_rack_row.eq.${row})`
-            : `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num})`;
-          const itemClause = row
-            ? `and(item_type.neq.book,custom_fields->>rack_number.eq.${num},custom_fields->>rack_row.eq.${row})`
-            : `and(item_type.neq.book,custom_fields->>rack_number.eq.${num})`;
-          query = query.or(`${bookClause},${itemClause}`);
-        } else {
-          query = query.filter('custom_fields->>rack_number', 'eq', num);
-          if (row) query = query.filter('custom_fields->>rack_row', 'eq', row);
-        }
-      }
+      // Same shared clause builder as list() — including the legacy-composite
+      // tolerance, so the expected-count never disagrees with the list itself.
+      const clause = buildRackFilterClause(opts.rack, opts.itemType);
+      if (clause.kind === 'eq') query = query.filter(clause.column, 'eq', clause.value);
+      else if (clause.kind === 'or') query = query.or(clause.expr);
     }
     if (opts.categoryIds && opts.categoryIds.length > 0) {
       query = query.in('category_id', opts.categoryIds);
@@ -1533,21 +1550,19 @@ export class InventoryService {
       sku,
       quantity: input.quantity,
     };
+    // DECOMPOSE the duplicate dialog's rack fields — a user duplicating an item
+    // onto "22-B" types the label they read off the shelf.
+    const dupRack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
+    const rackLabel = formatRackLabel(dupRack);
     if (input.itemType === 'book') {
-      const rackLabel = input.rackRow
-        ? `${input.rackNumber}-${input.rackRow}`
-        : input.rackNumber;
-      overrides.book_rack_number = input.rackNumber;
-      overrides.book_rack_row = input.rackRow ?? null;
+      overrides.book_rack_number = dupRack.number;
+      overrides.book_rack_row = dupRack.row;
       overrides.book_crate_color = input.crateColor;
       overrides.book_crate_number = input.crateNumber;
       overrides.bin_location = `${rackLabel} · ${input.crateColor}${input.crateNumber}`;
     } else {
-      const rackLabel = input.rackRow
-        ? `${input.rackNumber}-${input.rackRow}`
-        : input.rackNumber;
-      overrides.rack_number = input.rackNumber;
-      overrides.rack_row = input.rackRow ?? null;
+      overrides.rack_number = dupRack.number;
+      overrides.rack_row = dupRack.row;
       overrides.bin_location = rackLabel;
     }
 
@@ -1702,11 +1717,17 @@ export class InventoryService {
     // this would NOT-NULL-violate the inventory_items.sku constraint.
     const sharedBase = (input.baseSku && input.baseSku.trim()) || generateSku();
 
-    // Rack stamp shared by every variant. Stripped to the same shapes
-    // the form input enforces (digits-only number, A-Z0-9 row uppercase).
-    const rackNum = input.rackNumber?.trim().replace(/[^0-9]/g, '') || null;
+    // Rack stamp shared by every variant. DECOMPOSE first (so "22-B" typed in
+    // the number box becomes ("22","B") instead of being reduced to "22" with
+    // the row silently dropped), THEN strip to the shapes the form input
+    // enforces (digits-only number, A-Z0-9 row uppercase).
+    const parsedVariantRack = normalizeRackFields({
+      number: input.rackNumber,
+      row: input.rackRow,
+    });
+    const rackNum = parsedVariantRack.number.replace(/[^0-9]/g, '') || null;
     const rackRow =
-      input.rackRow?.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+      (rackNum && parsedVariantRack.row?.toUpperCase().replace(/[^A-Z0-9]/g, '')) || null;
     const variantCustomFields = (size: string) => {
       // Org custom fields first; the reserved variant keys (size/rack_*) are
       // applied last so they always win even if a stray key slipped through.
@@ -2364,9 +2385,15 @@ export class InventoryService {
     // so a UI like "Updated N items" doesn't lie when RLS filtered
     // some rows out.
     if (input.op.kind === 'set_rack') {
-      const num = input.op.rackNumber?.trim() || null;
-      const row = input.op.rackRow?.trim().toUpperCase() || null;
-      const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+      // DECOMPOSE: bulk "Set rack" takes free text, so "22-B" typed into the
+      // number box must land as ("22","B") — the shape the rack FILTER reads.
+      const parsedRack = normalizeRackFields({
+        number: input.op.rackNumber,
+        row: input.op.rackRow,
+      });
+      const num = parsedRack.number || null;
+      const row = num ? parsedRack.row?.toUpperCase() ?? null : null;
+      const composedBin = num ? formatRackLabel({ number: num, row }) : null;
 
       // Batch-read the OLD rack label before the RPC overwrites it, so the
       // per-item audit rows below can carry a real before→after diff
@@ -2776,10 +2803,17 @@ export class InventoryService {
   async stampPlacementBin(itemIds: string[], dest: PlaceDest): Promise<void> {
     if (itemIds.length === 0) return;
     const isRack = dest.kind === 'rack';
-    const num = isRack ? dest.rackNumber?.trim() || null : null;
-    const row = isRack ? dest.rackRow?.trim().toUpperCase() || null : null;
-    const bin =
-      isRack && num ? (row ? `${num}-${row}` : num) : dest.name?.trim() || null;
+    // DECOMPOSE the destination's rack pair before stamping it onto the item.
+    // `dest` is copied straight off the locations row (or the inline new-rack
+    // input), so a legacy composite location — ("22-B", null) — would otherwise
+    // be stamped verbatim onto every item put away there and go invisible to
+    // the "22-B" filter. That is exactly the 2026-07-23 incident.
+    const parsed = isRack
+      ? normalizeRackFields({ number: dest.rackNumber, row: dest.rackRow })
+      : { number: '', row: null };
+    const num = parsed.number || null;
+    const row = num ? parsed.row?.toUpperCase() ?? null : null;
+    const bin = isRack && num ? formatRackLabel({ number: num, row }) : dest.name?.trim() || null;
     const { error } = await this.ctx.supabase.rpc('inventory_set_rack', {
       p_item_ids: itemIds,
       p_rack_number: num,

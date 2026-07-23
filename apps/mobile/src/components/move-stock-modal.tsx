@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import {
+  decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
@@ -23,7 +24,7 @@ import {
   type MoveHolding,
   type MoveSource,
 } from '@/lib/move-stock-form';
-import { transferStock } from '@/lib/stock-api';
+import { transferStock, type NewRack } from '@/lib/stock-api';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -151,6 +152,9 @@ export function MoveStockModal({
   const [loading, setLoading] = React.useState(true);
   const [holdings, setHoldings] = React.useState<Holding[]>([]);
   const [destinations, setDestinations] = React.useState<MoveDestination[]>([]);
+  // Warehouse name for the fixed put-away source — shown verbatim in the
+  // new-rack confirmation copy so the phone's words match the web dialog's.
+  const [warehouseName, setWarehouseName] = React.useState<string | null>(null);
   const [source, setSource] = React.useState<MoveSource | null>(null);
   // The FREE-FORM mode's picked holding. Deliberately separate from the fixed
   // put-away source below: `fromId` ignores it entirely when the source is
@@ -182,6 +186,7 @@ export function MoveStockModal({
     setCrateNumber('');
     setSource(null);
     setChosenFromId('');
+    setWarehouseName(null);
     void (async () => {
       // Source holdings: every location this item has stock in (placed racks +
       // staging/unplaced). location_id → qty, with the location's name, kind
@@ -247,6 +252,20 @@ export function MoveStockModal({
         }));
       }
 
+      // The warehouse name for the confirmation copy — only meaningful under a
+      // warehouse scope (put-away), and best-effort: absent, the shared builder
+      // simply omits the "in <warehouse>" clause.
+      if (scope.kind === 'warehouse') {
+        const whRes = await supabase
+          .from('warehouses')
+          .select('name')
+          .eq('id', scope.warehouseId)
+          .maybeSingle();
+        if (cancelled) return;
+        const name = (whRes.data as { name?: string } | null)?.name;
+        if (typeof name === 'string') setWarehouseName(name);
+      }
+
       setHoldings(hs);
       setDestinations(ds);
       setSource(resolved);
@@ -296,21 +315,14 @@ export function MoveStockModal({
     return `${h.name} · ${h.quantity}`;
   }
 
-  async function submit() {
-    if (!canSubmit) return;
+  // The actual write. Split out from the gate so the new-rack confirmation and
+  // its "Use 10-A instead" alternatives share ONE permission-checked path.
+  async function performMove(
+    destination: { newRack: NewRack } | { toLocationId: string },
+  ) {
     setSubmitting(true);
     setError(null);
     try {
-      const destination = isNewRack
-        ? {
-            newRack: {
-              rackNumber: rackNumber.trim(),
-              ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-              ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
-              ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
-            },
-          }
-        : { toLocationId: toId };
       await transferStock(itemId, {
         fromLocationId: fromId,
         quantity: qtyNum,
@@ -326,6 +338,76 @@ export function MoveStockModal({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function submit() {
+    if (!canSubmit) return;
+
+    // Existing destination: nothing is created, so no confirmation — the common
+    // path stays exactly as many taps as before.
+    if (!isNewRack) {
+      void performMove({ toLocationId: toId });
+      return;
+    }
+
+    const newRack = {
+      rackNumber: rackNumber.trim(),
+      ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+      ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
+      ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+    };
+
+    // The 2026-07-23 guard: a typed rack/crate that does NOT already exist in
+    // this warehouse gets an explicit confirmation before it is minted. The
+    // decision (and its copy) come from the shared core builder, so the phone
+    // shows the same words as web. An EXISTING label is reused server-side and
+    // is not a creation, so it proceeds straight through.
+    // Existence must be judged against the warehouse the server will CREATE in
+    // — the source holding's own warehouse — not every warehouse the user can
+    // read. In free-form move mode the destination list spans all warehouses, so
+    // a same-named rack in a DIFFERENT warehouse would otherwise read as
+    // "exists", skip the confirmation, and let the server mint a brand-new rack
+    // in the source warehouse anyway. (In put-away mode the list is already
+    // scoped to that one warehouse, so this filter is a harmless no-op.)
+    const sourceWarehouseId = selected?.warehouseId ?? null;
+    const existingLabels = destinations
+      .filter((d) => sourceWarehouseId == null || d.warehouseId === sourceWarehouseId)
+      .map((d) => d.name);
+    const decision = decideNewRackPlacement({
+      rack: { rackNumber, rackRow, crateColor, crateNumber, isBook },
+      warehouseName,
+      quantity: qtyNum,
+      existingLabels,
+    });
+
+    if (decision.exists) {
+      void performMove({ newRack });
+      return;
+    }
+
+    // "Did you mean 10-A?" — offer existing near-matches as one tap each (place
+    // into that rack, creating nothing), then Cancel and the deliberate create.
+    // Android's native AlertDialog renders at most THREE buttons, so with Cancel
+    // and Create already taking two, only ONE suggestion fits there; iOS shows
+    // them all. The suggestion's rack is resolved within the SOURCE warehouse so
+    // a same-named rack elsewhere is never the target.
+    const maxSuggestions = Platform.OS === 'android' ? 1 : 2;
+    const suggestionButtons = decision.suggestions.slice(0, maxSuggestions).flatMap((label) => {
+      const match = destinations.find(
+        (d) =>
+          (sourceWarehouseId == null || d.warehouseId === sourceWarehouseId) &&
+          d.name.trim().toLowerCase() === label.trim().toLowerCase(),
+      );
+      return match
+        ? [{ text: `Use ${label} instead`, onPress: () => void performMove({ toLocationId: match.id }) }]
+        : [];
+    });
+
+    Alert.alert(decision.title, decision.message, [
+      { text: 'Cancel', style: 'cancel' },
+      ...suggestionButtons,
+      { text: 'Create and put away', onPress: () => void performMove({ newRack }) },
+    ]);
   }
 
   function Chip({

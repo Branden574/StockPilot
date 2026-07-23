@@ -10,6 +10,8 @@
  *   crate → "Blue #42"  (color + crate number, or the rack number as fallback)
  *   rack  → "A1-Row 3"  (rack number + row) or just "A1" when there's no row
  */
+import { formatRackLabel, normalizeRackFields } from '@stockpilot/core';
+
 export interface NewRackFields {
   rackNumber: string;
   rackRow?: string | null;
@@ -21,5 +23,9 @@ export function deriveLocationName(n: NewRackFields): string {
   if (n.crateColor) {
     return `${n.crateColor} #${n.crateNumber ?? n.rackNumber}`;
   }
-  return n.rackRow ? `${n.rackNumber}-${n.rackRow}` : n.rackNumber;
+  // Compose through the ONE parser so the rack's display name always matches
+  // the decomposed pair LocationsService.create stores. Typing "22-B" into the
+  // number box yields the name "22-B" AND the columns ("22","B") — before, the
+  // name was right while the columns were composite (incident 2026-07-23).
+  return formatRackLabel(normalizeRackFields({ number: n.rackNumber, row: n.rackRow }));
 }

@@ -46,7 +46,7 @@
  * sub-millisecond filter/sort passes on commodity hardware — Linear-
  * class feel with headroom above the largest current org (~251 rows).
  */
-import { sizeRunStyleKey } from '@stockpilot/core';
+import { parseRackLabel, sizeRunStyleKey } from '@stockpilot/core';
 
 export const INSTANT_MODE_MAX_ROWS = 2000;
 
@@ -313,9 +313,12 @@ export function rowMatchesCharters(charterId: string | null, charterIds: string[
  * mode never sees itemType='all' — the pages fall back to server mode
  * for it): books match custom_fields.book_rack_number/_row, items match
  * the neutral rack_number/rack_row. Same sanitize (strip non-
- * alphanumerics, cap 40), same first-dash split, same "number alone
- * matches just the number" semantics, same "empty number → no filter".
- * PostgREST's `->>` yields text, so values are compared as strings.
+ * alphanumerics bar the label's own dash, cap 40), same LAST-dash split
+ * (parseRackLabel), same "number alone matches just the number" semantics,
+ * same "empty number → no filter", and the SAME legacy tolerance as
+ * buildRackFilterClause: a row that stored the whole label in the number key
+ * ("22-B", row NULL — incident 2026-07-23) still matches its own rack rather
+ * than vanishing. PostgREST's `->>` yields text, so values compare as strings.
  */
 export function rowMatchesRack(
   customFields: Record<string, unknown> | null | undefined,
@@ -323,11 +326,12 @@ export function rowMatchesRack(
   view: 'items' | 'books',
 ): boolean {
   if (!rack || !rack.trim()) return true; // list(): filter only under rack && rack.trim()
-  const sanitize = (s: string | undefined): string =>
-    (s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
-  const [rawNum, rawRow] = rack.trim().split('-', 2);
-  const num = sanitize(rawNum);
-  const row = sanitize(rawRow);
+  const sanitize = (s: string | null | undefined): string =>
+    (s ?? '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 40);
+  const label = sanitize(rack.trim());
+  const parts = parseRackLabel(label);
+  const num = sanitize(parts.number);
+  const row = sanitize(parts.row);
   if (!num) return true; // list(): no filter when the number segment is empty
   const numKey = view === 'books' ? 'book_rack_number' : 'rack_number';
   const rowKey = view === 'books' ? 'book_rack_row' : 'rack_row';
@@ -335,9 +339,11 @@ export function rowMatchesRack(
     const v = customFields?.[key];
     return v === null || v === undefined ? null : String(v);
   };
-  if (text(numKey) !== num) return false;
-  if (row && text(rowKey) !== row) return false;
-  return true;
+  const stored = text(numKey);
+  if (!row) return stored === num;
+  // Decomposed pair, OR the whole label parked in the number key.
+  if (stored === num && text(rowKey) === row) return true;
+  return stored === label;
 }
 
 /** Every filter list() applies for the two list pages, in one pass.

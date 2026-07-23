@@ -13,6 +13,8 @@
  *
  * Keys the form does NOT own (e.g. size, isbn) are preserved untouched.
  */
+import { normalizeRackFields } from '@stockpilot/core';
+
 export const BOOK_FORM_RESERVED_KEYS = [
   'author',
   'book_rack_number',
@@ -44,8 +46,13 @@ export function composeBookCustomFields(
   for (const key of BOOK_FORM_RESERVED_KEYS) delete base[key];
   for (const key of params.customFieldDefKeys) delete base[key];
 
-  const num = params.rackNumber.trim();
-  const row = params.rackRow.trim().toUpperCase();
+  // DECOMPOSE: the rack-number input is free text, so a user who types the
+  // whole label ("38-A") off the shelf must still be stored as ("38","A") —
+  // the shape the Books rack filter reads. Storing the composite is what made
+  // eight items invisible to their own rack on 2026-07-23.
+  const rack = normalizeRackFields({ number: params.rackNumber, row: params.rackRow });
+  const num = rack.number;
+  const row = num ? (rack.row ?? '').toUpperCase() : '';
   const author = params.author.trim();
   const crateNumber = params.crateNumber.trim();
 

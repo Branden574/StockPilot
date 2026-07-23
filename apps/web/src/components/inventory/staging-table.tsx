@@ -231,6 +231,7 @@ export function StagingTable({
               warehouseId: r.warehouseId,
             }))}
             destinationsMap={destinationsMap}
+            warehouseNames={warehouseNames}
             onPlaced={clearSelection}
             trigger={
               <Button size="sm" variant="outline">
@@ -422,6 +423,7 @@ export function StagingTable({
                             sourceLocationId={row.sourceLocationId}
                             sourceKind={row.sourceKind}
                             warehouseId={row.warehouseId!}
+                            warehouseName={warehouseNames[row.warehouseId!]}
                             availableQuantity={row.quantity}
                             destinations={destinations}
                             trigger={

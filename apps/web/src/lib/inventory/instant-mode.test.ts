@@ -300,9 +300,39 @@ describe('rack filter (per-view custom_fields keys, list()-identical sanitize/sp
 
   it('whitespace-only / empty-number racks apply NO filter (list() parity); hostile chars are stripped like the service', () => {
     expect(rowMatchesRack(null, '   ', 'items')).toBe(true);
-    expect(rowMatchesRack(null, '-A', 'items')).toBe(true); // empty number segment
+    // BEHAVIOUR CHANGE (2026-07-23 rack-shape fix): "-A" used to split into an
+    // EMPTY number segment and fail open (no filter at all). The shared parser
+    // now trims edge dashes, so "-A" means rack "A" and filters accordingly —
+    // the same on the server (buildRackFilterClause), so the parity contract
+    // this suite pins still holds. A rack that is only dashes still no-ops.
+    expect(rowMatchesRack(null, '---', 'items')).toBe(true);
+    expect(rowMatchesRack(null, '-A', 'items')).toBe(false); // no custom_fields → NULL ≠ 'A'
+    expect(rowMatchesRack({ rack_number: 'A' }, '-A', 'items')).toBe(true);
     expect(rowMatchesRack({ rack_number: '20' }, '2)0', 'items')).toBe(true); // sanitize → '20'
     expect(rowMatchesRack(null, '38', 'items')).toBe(false); // no custom_fields → NULL ≠ '38'
+  });
+
+  // READER TOLERANCE (incident 2026-07-23) — instant mode is the THIRD rack
+  // reader (the client-side Items/Books table). It must cope with a legacy
+  // composite row exactly like the server filter does, or a big-org user on
+  // instant mode sees "No items yet" while a small-org user does not.
+  it('matches a LEGACY composite row (whole label in the number key, row NULL)', () => {
+    const legacyItem = { rack_number: '22-B' };
+    const legacyBook = { book_rack_number: '22-B' };
+    expect(rowMatchesRack(legacyItem, '22-B', 'items')).toBe(true);
+    expect(rowMatchesRack(legacyBook, '22-B', 'books')).toBe(true);
+    // ...without matching a DIFFERENT rack
+    expect(rowMatchesRack(legacyItem, '22-C', 'items')).toBe(false);
+    expect(rowMatchesRack(legacyItem, '22', 'items')).toBe(false);
+    // ...and the decomposed row still matches the same label
+    expect(rowMatchesRack({ rack_number: '22', rack_row: 'B' }, '22-B', 'items')).toBe(true);
+  });
+
+  it('splits a multi-dash rack on the LAST dash', () => {
+    expect(rowMatchesRack({ rack_number: 'E2E-RACK', rack_row: '1' }, 'E2E-RACK-1', 'items')).toBe(
+      true,
+    );
+    expect(rowMatchesRack({ rack_number: 'E2E-RACK-1' }, 'E2E-RACK-1', 'items')).toBe(true);
   });
 });
 

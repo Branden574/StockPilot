@@ -55,6 +55,8 @@ import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
   createItemSchema,
+  formatRackLabel,
+  normalizeRackFields,
   type CreateItemInput,
   type CustomFieldDefinition,
   type UpdateItemInput,
@@ -594,9 +596,11 @@ export function ItemForm({
         toast.error('Pick a category and warehouse before saving variants.');
         return;
       }
-      const num = rackNumber.trim();
-      const row = rackRow.trim().toUpperCase();
-      const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+      // DECOMPOSE before sending — see the edit branch below for why.
+      const sizedRack = normalizeRackFields({ number: rackNumber, row: rackRow });
+      const num = sizedRack.number;
+      const row = num ? (sizedRack.row ?? '').toUpperCase() : '';
+      const composedBin = formatRackLabel({ number: num, row }) || null;
       // TODO: bulkCreateSizedVariantsAction schema needs `rackNumber` and `rackRow` fields added by the inventory-service agent. The service writes them into per-row custom_fields.rack_number/rack_row.
       const res = await bulkCreateSizedVariantsAction({
         baseName: values.name,
@@ -703,8 +707,14 @@ export function ItemForm({
           }),
         }
       : (() => {
-          const num = rackNumber.trim();
-          const row = rackRow.trim().toUpperCase();
+          // DECOMPOSE: the rack-number input is free text and a warehouse user
+          // types the label they read off the shelf ("22-B"). Storing that
+          // whole label in rack_number with a NULL rack_row is what made items
+          // invisible to their own rack filter on 2026-07-23 — the parser
+          // splits it into ("22","B") instead of rejecting the input.
+          const itemRack = normalizeRackFields({ number: rackNumber, row: rackRow });
+          const num = itemRack.number;
+          const row = num ? (itemRack.row ?? '').toUpperCase() : '';
           // Explicitly delete rack keys before re-adding so emptying
           // the inputs on edit actually clears the stored value
           // instead of being preserved by the spread merge.

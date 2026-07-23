@@ -4,10 +4,12 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
   moveDestinationScope,
+  newRackLabel,
   resolveMoveSource,
   type MoveDestination,
   type MoveHolding,
@@ -122,6 +124,23 @@ describe('hazard: the destination scope disagreeing with the actual source', () 
         { scope: { kind: 'none' } },
       ),
     ).toEqual([]);
+  });
+
+  // 2026-07-23 review: in FREE-FORM move mode the destination list spans every
+  // warehouse the user can read, so the new-rack existence check must be scoped
+  // to the SOURCE holding's warehouse (where the server actually creates) or a
+  // same-named rack elsewhere falsely reads as "exists" and the confirmation is
+  // skipped while the server mints a brand-new rack anyway.
+  it('scopes the new-rack existence check to the SOURCE warehouse, not all warehouses', () => {
+    // existingLabels is filtered by the source holding's warehouse before the
+    // decision is taken.
+    expect(modal).toContain('const sourceWarehouseId = selected?.warehouseId ?? null;');
+    expect(modal).toContain('d.warehouseId === sourceWarehouseId');
+    expect(modal).toContain('existingLabels,');
+    // and it is NOT the old all-warehouses map.
+    expect(modal).not.toContain('existingLabels: destinations.map((d) => d.name)');
+    // Android's 3-button AlertDialog cap is honoured.
+    expect(modal).toContain("Platform.OS === 'android' ? 1 : 2");
   });
 
   it('takes the scope from the resolution in the modal, at query AND at render', () => {
@@ -306,5 +325,90 @@ describe('the write still goes through the transfer route', () => {
     expect(modal).toContain('await transferStock(itemId, {');
     expect(modal).not.toContain('transfer_stock');
     expect(modal).not.toContain('.rpc(');
+  });
+});
+
+// ── New-rack confirmation — the 2026-07-23 guard, mirrored on the phone ──────
+
+describe('newRackLabel', () => {
+  it('renders a rack with a row', () => {
+    expect(newRackLabel({ rackNumber: '22', rackRow: 'B', isBook: false })).toEqual({
+      label: '22-B',
+      noun: 'rack',
+    });
+  });
+
+  it('renders a bare rack number when there is no row', () => {
+    expect(newRackLabel({ rackNumber: '100-A', isBook: false })).toEqual({
+      label: '100-A',
+      noun: 'rack',
+    });
+  });
+
+  it('renders a crate for a book, falling back to the rack number for the crate number', () => {
+    expect(newRackLabel({ rackNumber: '7', crateColor: 'Blue', isBook: true })).toEqual({
+      label: 'Blue #7',
+      noun: 'crate',
+    });
+    expect(
+      newRackLabel({ rackNumber: '7', crateColor: 'Blue', crateNumber: '42', isBook: true }),
+    ).toEqual({ label: 'Blue #42', noun: 'crate' });
+  });
+
+  it('a crate colour on a non-book is ignored — non-books make racks', () => {
+    expect(newRackLabel({ rackNumber: '3', crateColor: 'Blue', isBook: false }).noun).toBe('rack');
+  });
+});
+
+describe('decideNewRackPlacement', () => {
+  // The incident warehouse: 1-A exists, 100-A does not.
+  const EXISTING = ['1-A', '22-B', '35', '40-A'];
+
+  it('a typed label that already exists is NOT a creation — no confirmation', () => {
+    const d = decideNewRackPlacement({
+      rack: { rackNumber: '22', rackRow: 'b', isBook: false },
+      warehouseName: 'Main',
+      quantity: 5,
+      existingLabels: EXISTING,
+    });
+    expect(d.exists).toBe(true);
+  });
+
+  it('a slipped "100-A" asks, names the warehouse and count, and offers 1-A', () => {
+    const d = decideNewRackPlacement({
+      rack: { rackNumber: '100', rackRow: 'A', isBook: false },
+      warehouseName: 'Main Warehouse',
+      quantity: 242,
+      existingLabels: EXISTING,
+    });
+    expect(d.exists).toBe(false);
+    expect(d.title).toBe('Create new rack 100-A?');
+    expect(d.message).toContain('does not exist in Main Warehouse yet');
+    expect(d.message).toContain('242 units');
+    expect(d.suggestions).toContain('1-A');
+  });
+});
+
+// ── Modal wiring: the guard is actually invoked, and the common path isn't ───
+
+describe('the put-away modal wires the confirmation', () => {
+  it('gates a new rack through the shared decision + an Alert, not a direct write', () => {
+    // The new-rack branch must ask decideNewRackPlacement first…
+    expect(modal).toContain('decideNewRackPlacement({');
+    // …and present it as an Alert with a deliberate create action…
+    expect(modal).toContain("Alert.alert(decision.title, decision.message");
+    expect(modal).toContain('Create and put away');
+    // …only proceeding when the destination already exists.
+    expect(modal).toContain('if (decision.exists)');
+  });
+
+  it('an existing destination still writes with no confirmation (common path unchanged)', () => {
+    // Picking an existing rack goes straight to the write.
+    expect(modal).toContain('void performMove({ toLocationId: toId });');
+  });
+
+  it('the near-match alternative places into an existing rack, creating nothing', () => {
+    expect(modal).toContain('Use ${label} instead');
+    expect(modal).toContain('performMove({ toLocationId: match.id })');
   });
 });

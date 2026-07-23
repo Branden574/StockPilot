@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { formatRackLabel, normalizeRackFields, parseRackLabel } from '@stockpilot/core';
 import { z } from 'zod';
 
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
@@ -73,6 +74,7 @@ export class LocationsService {
     if (isSiteLocation({ type: input.type ?? null, kind: input.kind ?? null })) {
       await assertPlanLimit(this.ctx, 'locations');
     }
+    const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .insert({
@@ -83,8 +85,15 @@ export class LocationsService {
         notes: input.notes ?? null,
         kind: input.kind ?? null,
         warehouse_id: input.warehouseId ?? null,
-        rack_number: input.rackNumber ?? null,
-        rack_row: input.rackRow ?? null,
+        // DECOMPOSE before storing. rack_number holds the bare number and
+        // rack_row the row; a user who types the whole label ("22-B") into the
+        // rack-number box gets it split rather than rejected. Storing the
+        // composite is what broke the Items rack filter on 2026-07-23 — every
+        // item put away there was stamped ("22-B", null) while the reader looks
+        // for ("22","B"). This insert is the ONLY place locations.rack_number
+        // is written, so normalising here covers every rack-creating surface.
+        rack_number: rack.number || null,
+        rack_row: rack.row,
         crate_color: input.crateColor ?? null,
         crate_number: input.crateNumber ?? null,
       })
@@ -128,11 +137,30 @@ export class LocationsService {
         .eq('kind', input.kind)
         .is('deleted_at', null);
       if (error) throw new ServiceError('internal_error', error.message);
+      const rows = candidates ?? [];
+      // Exact trimmed/lowercased match (what migration 0270's unique index
+      // keys on) — the fast, common path.
       const target = input.name.trim().toLowerCase();
-      const existing = (candidates ?? []).find(
+      const existing = rows.find(
         (loc) => (loc as { name: string }).name.trim().toLowerCase() === target,
       );
       if (existing) return existing;
+      // RACK fallback: canonicalise through the SAME rack-label normalisation
+      // the client's new-rack confirmation uses (formatRackLabel(parseRackLabel)).
+      // Without this the two disagree: a legacy rack stored as "22 - B" (spaces
+      // around the dash) reads as "exists" on the client, so no confirmation
+      // shows, yet the raw-name compare here misses it and mints a duplicate
+      // "22-B". Crates are excluded — their names ("Blue #42") are not
+      // rack-shaped and must not be run through the rack parser.
+      if (input.kind === 'rack') {
+        const canonTarget = formatRackLabel(parseRackLabel(input.name)).toLowerCase();
+        const canonMatch = rows.find(
+          (loc) =>
+            formatRackLabel(parseRackLabel((loc as { name: string }).name)).toLowerCase() ===
+            canonTarget,
+        );
+        if (canonMatch) return canonMatch;
+      }
     }
     return this.create(input);
   }

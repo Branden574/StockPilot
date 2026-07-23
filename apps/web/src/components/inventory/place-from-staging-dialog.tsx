@@ -1,6 +1,7 @@
 'use client';
 
-import { Loader2, PackageCheck } from 'lucide-react';
+import { describeNewRackPlacement } from '@stockpilot/core';
+import { AlertTriangle, Loader2, PackageCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -44,6 +45,8 @@ interface PlaceFromStagingDialogProps {
   /** Drives the "From" label + copy. 'unplaced' = on-hand stock that was never racked. */
   sourceKind: 'staging' | 'unplaced';
   warehouseId: string;
+  /** Warehouse display name — shown in the new-rack confirmation copy. */
+  warehouseName?: string;
   /** Quantity sitting in the source holding (the placement ceiling). */
   availableQuantity: number;
   destinations: DestinationOption[];
@@ -57,6 +60,7 @@ export function PlaceFromStagingDialog({
   sourceLocationId,
   sourceKind,
   warehouseId,
+  warehouseName,
   availableQuantity,
   destinations,
   trigger,
@@ -77,6 +81,15 @@ export function PlaceFromStagingDialog({
   const [crateNumber, setCrateNumber] = React.useState('');
 
   const [submitting, setSubmitting] = React.useState(false);
+  // When the chosen "+ New rack/crate" does NOT already exist in this warehouse,
+  // we pause on a confirmation before creating it — the 2026-07-23 guard. Null
+  // means no pending confirmation (the common path, an existing destination,
+  // never sets it). Holds the exact copy + one-tap near-match alternatives.
+  const [pendingNewRack, setPendingNewRack] = React.useState<{
+    title: string;
+    message: string;
+    suggestions: string[];
+  } | null>(null);
   // Server failures render inline (persistent) as well as via toast — same
   // rationale as StockTransferDialog: a toast alone auto-dismisses outside
   // the modal and a rejected submit can read as "nothing happened".
@@ -97,9 +110,18 @@ export function PlaceFromStagingDialog({
     setCrateColor('');
     setCrateNumber('');
     setServerError(null);
+    setPendingNewRack(null);
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Any edit to the destination/quantity invalidates a pending confirmation —
+  // its copy names a specific label and count, so it must not outlive the inputs
+  // it described. Cheap to recompute: hitting Place re-derives it.
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
+    setPendingNewRack(null);
+  }, [destId, rackNumber, rackRow, crateColor, crateNumber, quantity]);
 
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
@@ -109,36 +131,9 @@ export function PlaceFromStagingDialog({
     qtyValid &&
     (isNew ? rackNumber.trim().length > 0 : destId.length > 0);
 
-  async function submit() {
-    if (!qtyValid) {
-      toast.error(`Quantity must be between 1 and ${availableQuantity}.`);
-      return;
-    }
-
-    let destination: Parameters<typeof placeStockAction>[0]['destination'];
-
-    if (isNew) {
-      if (!rackNumber.trim()) {
-        toast.error('Enter a rack number.');
-        return;
-      }
-      destination = {
-        newRack: {
-          warehouseId,
-          rackNumber: rackNumber.trim(),
-          ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-          ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
-          ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
-        },
-      };
-    } else {
-      if (!destId) {
-        toast.error('Select a destination location.');
-        return;
-      }
-      destination = { existingLocationId: destId };
-    }
-
+  // Run the placement. Split out from the gate below so the confirmation step
+  // and the "Did you mean…" one-tap alternatives share ONE write path.
+  async function place(destination: Parameters<typeof placeStockAction>[0]['destination']) {
     setSubmitting(true);
     setServerError(null);
     const res = await placeStockAction({
@@ -159,6 +154,82 @@ export function PlaceFromStagingDialog({
     toast.success(`Placed ${qtyNum} ${qtyNum === 1 ? 'unit' : 'units'} of ${itemName}.`);
     setOpen(false);
     router.refresh();
+  }
+
+  function submit() {
+    if (!qtyValid) {
+      toast.error(`Quantity must be between 1 and ${availableQuantity}.`);
+      return;
+    }
+
+    if (!isNew) {
+      if (!destId) {
+        toast.error('Select a destination location.');
+        return;
+      }
+      void place({ existingLocationId: destId });
+      return;
+    }
+
+    if (!rackNumber.trim()) {
+      toast.error('Enter a rack number.');
+      return;
+    }
+
+    // The chosen destination is a rack/crate typed inline. Before creating it we
+    // ask whether it is genuinely new — the 2026-07-23 guard against a slipped
+    // keystroke minting a rack. describeNewRackPlacement checks the label against
+    // this warehouse's EXISTING rack/crate names (findOrCreateRackOrCrate reuses
+    // a name match, so an existing label is not a creation and needs no
+    // confirmation — zero friction on the common path).
+    const isCrate = isBook && crateColor.trim().length > 0;
+    const label = isCrate
+      ? `${crateColor.trim()} #${crateNumber.trim() || rackNumber.trim()}`
+      : rackRow.trim()
+        ? `${rackNumber.trim()}-${rackRow.trim()}`
+        : rackNumber.trim();
+    const decision = describeNewRackPlacement({
+      label,
+      warehouseName,
+      quantity: qtyNum,
+      existingLabels: destinations.map((d) => d.name),
+      noun: isCrate ? 'crate' : 'rack',
+    });
+
+    const destination = {
+      newRack: {
+        warehouseId,
+        rackNumber: rackNumber.trim(),
+        ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+        ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
+        ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+      },
+    } satisfies Parameters<typeof placeStockAction>[0]['destination'];
+
+    if (decision.exists) {
+      // Typed the name of a rack that already exists — the server will reuse it,
+      // nothing is created, so proceed without a confirmation.
+      void place(destination);
+      return;
+    }
+
+    setPendingNewRack({
+      title: decision.title,
+      message: decision.message,
+      suggestions: decision.suggestions,
+    });
+  }
+
+  // "Did you mean 10-A?" — place into the EXISTING rack the worker probably
+  // meant, instead of creating the typo. The suggestion is an existing label,
+  // so map it back to that destination's id and take the existing-location path.
+  function placeIntoSuggestion(label: string) {
+    const match = destinations.find(
+      (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
+    );
+    if (!match) return;
+    setPendingNewRack(null);
+    void place({ existingLocationId: match.id });
   }
 
   return (
@@ -291,6 +362,35 @@ export function PlaceFromStagingDialog({
           </div>
         </div>
 
+        {pendingNewRack && (
+          <div
+            role="alertdialog"
+            aria-label={pendingNewRack.title}
+            className="border-amber-500/40 bg-amber-500/10 space-y-2 rounded-md border p-3"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="text-amber-600 dark:text-amber-500 h-4 w-4 shrink-0" />
+              <p className="text-sm font-medium">{pendingNewRack.title}</p>
+            </div>
+            <p className="text-muted-foreground text-sm">{pendingNewRack.message}</p>
+            {pendingNewRack.suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {pendingNewRack.suggestions.map((s) => (
+                  <Button
+                    key={s}
+                    size="sm"
+                    variant="outline"
+                    disabled={submitting}
+                    onClick={() => placeIntoSuggestion(s)}
+                  >
+                    Use {s} instead
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {serverError && (
           <p role="alert" className="text-sm text-destructive">
             {serverError}
@@ -298,12 +398,42 @@ export function PlaceFromStagingDialog({
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={!canSubmit}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Place stock'}
-          </Button>
+          {pendingNewRack ? (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setPendingNewRack(null)}
+                disabled={submitting}
+              >
+                Back
+              </Button>
+              <Button
+                onClick={() =>
+                  void place({
+                    newRack: {
+                      warehouseId,
+                      rackNumber: rackNumber.trim(),
+                      ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+                      ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
+                      ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+                    },
+                  })
+                }
+                disabled={submitting}
+              >
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create and place'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button onClick={submit} disabled={!canSubmit}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Place stock'}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
