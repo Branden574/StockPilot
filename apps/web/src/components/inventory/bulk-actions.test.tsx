@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BulkActions } from './bulk-actions';
@@ -151,6 +152,68 @@ describe('BulkActions', () => {
     expect(bulkUpdateInventoryAction).toHaveBeenCalledWith({
       ids: ['a', 'b'],
       op: { kind: 'archive' },
+    });
+  });
+
+  it('when archive is refused for having stock, offers "Archive anyway" instead of a dead-end toast', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: false as const,
+      error: { code: 'validation_error', message: '2 items still hold stock — remove it first.' },
+    });
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    const confirm = await screen.findByRole('dialog');
+    const confirmButtons = within(confirm).getAllByRole('button', { name: /Archive/i });
+    await user.click(confirmButtons[confirmButtons.length - 1]!);
+
+    // No toast — the guard message is surfaced as an actionable override dialog.
+    expect(toast.error).not.toHaveBeenCalled();
+    const override = await screen.findByText(/Archive with stock still on hand\?/i);
+    expect(override).toBeInTheDocument();
+    expect(screen.getByText(/2 items still hold stock/i)).toBeInTheDocument();
+  });
+
+  it('"Archive anyway" re-runs the archive with acknowledgeStock', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction)
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: { code: 'validation_error', message: '1 item still holds stock — remove it first.' },
+      })
+      .mockResolvedValueOnce({ ok: true as const, data: { ok: 1, skipped: 0 } });
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    const confirm = await screen.findByRole('dialog');
+    const confirmButtons = within(confirm).getAllByRole('button', { name: /Archive/i });
+    await user.click(confirmButtons[confirmButtons.length - 1]!);
+
+    await user.click(await screen.findByRole('button', { name: /Archive anyway/i }));
+
+    expect(bulkUpdateInventoryAction).toHaveBeenLastCalledWith({
+      ids: ['a'],
+      op: { kind: 'archive' },
+      acknowledgeStock: true,
     });
   });
 

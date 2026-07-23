@@ -232,11 +232,29 @@ export function BulkActions({
     router.refresh();
   }
 
-  async function run(op: BulkInventoryOp) {
+  // The archive stock-guard block (2026-07-23): when a plain archive is refused
+  // because the items still hold stock, we stash the message and offer an
+  // explicit "Archive anyway" that re-runs with acknowledgeStock — the silent
+  // orphan is dead, but a deliberate archive-with-stock stays one click away.
+  const [pendingAckArchive, setPendingAckArchive] = React.useState<string | null>(null);
+
+  async function run(op: BulkInventoryOp, opts: { acknowledgeStock?: boolean } = {}) {
     setBusy(true);
-    const r = await bulkUpdateInventoryAction({ ids: selectedIds, op });
+    const r = await bulkUpdateInventoryAction({
+      ids: selectedIds,
+      op,
+      ...(opts.acknowledgeStock ? { acknowledgeStock: true } : {}),
+    });
     setBusy(false);
     if (!r.ok) {
+      // Archive is the only op that raises a validation error, and only the
+      // stock guard does — so a validation_error here is unambiguously "still
+      // has stock". Offer the override instead of a dead-end toast.
+      if (op.kind === 'archive' && r.error.code === 'validation_error' && !opts.acknowledgeStock) {
+        setDialog(null);
+        setPendingAckArchive(r.error.message);
+        return;
+      }
       toast.error(r.error.message);
       return;
     }
@@ -460,6 +478,43 @@ export function BulkActions({
         pending={busy}
         onConfirm={() => run({ kind: 'archive' })}
       />
+
+      {/* Archive-with-stock override: shown only after the guard refuses. */}
+      <Dialog
+        open={pendingAckArchive !== null}
+        onOpenChange={(v) => (v ? null : setPendingAckArchive(null))}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive with stock still on hand?</DialogTitle>
+            <DialogDescription>{pendingAckArchive}</DialogDescription>
+          </DialogHeader>
+          <p className="text-muted-foreground text-sm">
+            Archiving hides {count === 1 ? 'this item' : 'these items'} from the active view but keeps
+            the stock on the books — it stays counted in valuation until you remove it. Remove the
+            stock first if you want it off the count.
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPendingAckArchive(null)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setPendingAckArchive(null);
+                void run({ kind: 'archive' }, { acknowledgeStock: true });
+              }}
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Archive anyway'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Restore confirmation */}
       <Dialog

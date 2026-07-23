@@ -692,14 +692,21 @@ describe('InventoryService.archive / softDelete — no fictional stock_movements
     quantity_on_hand: 42,
   };
 
-  it('archive() on an item WITH stock on hand writes NO stock_movements row and still emits inventory.item.archived', async () => {
+  // Behaviour deliberately changed (archive stock-guard): archiving an item
+  // that still holds stock now REQUIRES an explicit acknowledgeStock flag — the
+  // silent orphan is gone, the deliberate write-off is not. This test keeps
+  // proving the ORIGINAL property (no fictional stock_movements row is written,
+  // and the lifecycle audit event still fires) but via the acknowledged path,
+  // which is the only way an item with stock is archivable now. The refuse-by-
+  // default behaviour is covered in the 'archive stock-guard' describe below.
+  it('archive({acknowledgeStock:true}) on an item WITH stock writes NO stock_movements row and still emits inventory.item.archived', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: ITEM_WITH_STOCK, error: null },
       'inventory_items.update': { data: null, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    await svc.archive('itm-stock');
+    await svc.archive('itm-stock', { acknowledgeStock: true });
 
     // No insert (or any query at all) against stock_movements.
     expect(stub.fromCalls).not.toContain('stock_movements');
@@ -764,5 +771,322 @@ describe('InventoryService.archive / softDelete — no fictional stock_movements
     await svc.archive('itm-stock');
 
     expect(stub.fromCalls).not.toContain('stock_movements');
+  });
+});
+
+// DELIVERABLE 1 — the archive stock-guard. Archiving an item that still holds
+// stock hides it from every active screen while item_stock_levels /
+// quantity_on_hand keep counting its units (orphaned stock: invisible but still
+// in valuation + reconciliation). The guard refuses by default, NAMING the
+// total and where it sits, and allows a deliberate override.
+describe('InventoryService.archive — stock guard', () => {
+  const ACTIVE_ITEM = {
+    id: 'itm-persepolis',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 181,
+  };
+  // Two rack holdings mirroring Andrew's real Persepolis record.
+  const HOLDINGS = [
+    { location_id: 'loc-100a', quantity: 140, locations: { id: 'loc-100a', name: '100-A', kind: 'rack' } },
+    { location_id: 'loc-38b', quantity: 41, locations: { id: 'loc-38b', name: '38-B', kind: 'rack' } },
+  ];
+
+  it('refuses to archive an item that still holds stock, naming the total and each location', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ACTIVE_ITEM, error: null },
+      'item_stock_levels.select': { data: HOLDINGS, error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.archive('itm-persepolis')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    // The status update must NOT have fired — the archive was blocked.
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+
+    // Re-run to inspect the message text (the rejection above consumed one call).
+    await svc.archive('itm-persepolis').catch((e: unknown) => {
+      const msg = (e as ServiceError).message;
+      expect(msg).toContain('181 units still on hand');
+      expect(msg).toContain('140 in 100-A');
+      expect(msg).toContain('41 in 38-B');
+    });
+  });
+
+  it('archives an item with stock when acknowledgeStock is set (deliberate write-off)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ACTIVE_ITEM, error: null },
+      'item_stock_levels.select': { data: HOLDINGS, error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.archive('itm-persepolis', { acknowledgeStock: true });
+
+    const payload = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(payload.status).toBe('archived');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'inventory.item.archived', entityId: 'itm-persepolis' }),
+      expect.anything(),
+    );
+  });
+
+  it('archives a zero-stock item with no ack (the auto-archive-equivalent path is untouched)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { ...ACTIVE_ITEM, quantity_on_hand: 0 }, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.archive('itm-persepolis');
+
+    const payload = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(payload.status).toBe('archived');
+  });
+
+  it('FAILS CLOSED: a stock-read error blocks the archive rather than risking an orphan', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ACTIVE_ITEM, error: null },
+      'item_stock_levels.select': { data: null, error: { message: 'connection reset' } },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.archive('itm-persepolis')).rejects.toBeInstanceOf(ServiceError);
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+  });
+});
+
+describe('InventoryService.bulkUpdate — stock guard', () => {
+  it('refuses a single-item bulk archive that still holds stock, with the detailed message', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-a' }], error: null },
+      'item_stock_levels.select': {
+        data: [
+          { item_id: 'item-1', location_id: 'l', quantity: 140, locations: { id: 'l', name: '100-A', kind: 'rack' } },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'archive' } }).catch((e: unknown) => {
+      expect((e as ServiceError).code).toBe('validation_error');
+      expect((e as ServiceError).message).toContain('140 in 100-A');
+    });
+    // Blocked → no status update fired.
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+  });
+
+  it('names the COUNT when several selected items hold stock', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'item-1', warehouse_id: 'wh-a' },
+          { id: 'item-2', warehouse_id: 'wh-a' },
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          { item_id: 'item-1', location_id: 'l1', quantity: 10, locations: { id: 'l1', name: 'A', kind: 'rack' } },
+          { item_id: 'item-2', location_id: 'l2', quantity: 5, locations: { id: 'l2', name: 'B', kind: 'rack' } },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({ ids: ['item-1', 'item-2'], op: { kind: 'archive' } }).catch((e: unknown) => {
+      expect((e as ServiceError).message).toContain('2 selected items still hold stock');
+    });
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+  });
+
+  it('a bulk set_status to "archived" is guarded the same way', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-a' }], error: null },
+      'item_stock_levels.select': {
+        data: [
+          { item_id: 'item-1', location_id: 'l', quantity: 3, locations: { id: 'l', name: 'C', kind: 'rack' } },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'set_status', status: 'archived' } }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('acknowledgeStock lets a bulk archive-with-stock through', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-a' }], error: null },
+      'item_stock_levels.select': {
+        data: [
+          { item_id: 'item-1', location_id: 'l', quantity: 3, locations: { id: 'l', name: 'C', kind: 'rack' } },
+        ],
+        error: null,
+      },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'archive' },
+      acknowledgeStock: true,
+    });
+    expect(res).toEqual({ ok: 1, skipped: 0 });
+  });
+});
+
+// DELIVERABLE 2 (service half) — remove stock from ONE rack, built on adjustStock.
+describe('InventoryService.removeStockFromLocation', () => {
+  const ACTIVE_ITEM = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 181,
+    reorder_point: 0,
+    name: 'Persepolis',
+    sku: 'SP-THV69-MG8',
+  };
+
+  it('draws down exactly ONE location with a negative "remove" delta + the reason verbatim', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ACTIVE_ITEM, error: null },
+      // The pre-read (maybeSingle) sees 140 in this holding; adjustStock's get()
+      // staged/unplaced read sees the same rows harmlessly.
+      'item_stock_levels.select': { data: [{ quantity: 140 }], error: null },
+      'rpc:adjust_stock': { data: { quantity_on_hand: 41, reorder_point: 0 }, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.removeStockFromLocation({
+      itemId: 'itm-1',
+      locationId: 'loc-100a',
+      quantity: 140,
+      reason: 'Consolidated onto 100-A for a clean count',
+    });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'adjust_stock');
+    expect(call).toBeTruthy();
+    expect(call!.args).toMatchObject({
+      p_item_id: 'itm-1',
+      p_quantity_change: -140,
+      p_movement_type: 'remove',
+      p_location_id: 'loc-100a',
+      p_reason: 'Consolidated onto 100-A for a clean count',
+    });
+    // The movement is recorded as a removal in the audit trail.
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'stock.removed',
+        entityId: 'itm-1',
+        reason: 'Consolidated onto 100-A for a clean count',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('refuses an over-quantity removal, naming what is actually there', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': { data: [{ quantity: 140 }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc
+      .removeStockFromLocation({
+        itemId: 'itm-1',
+        locationId: 'loc-100a',
+        quantity: 200,
+        reason: 'oops too many',
+      })
+      .catch((e: unknown) => {
+        expect((e as ServiceError).code).toBe('validation_error');
+        expect((e as ServiceError).message).toContain('only 140');
+      });
+    // adjust_stock must never have been called on an over-draw.
+    expect(stub.rpcCalls.find((c) => c.name === 'adjust_stock')).toBeUndefined();
+  });
+
+  it('refuses a zero-quantity removal', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': { data: [{ quantity: 140 }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.removeStockFromLocation({
+        itemId: 'itm-1',
+        locationId: 'loc-100a',
+        quantity: 0,
+        reason: 'nothing',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('refuses a removal from a location that holds no stock for the item', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': { data: [], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.removeStockFromLocation({
+        itemId: 'itm-1',
+        locationId: 'loc-empty',
+        quantity: 5,
+        reason: 'nothing here',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('composes with archive: after a removal that zeroes the item, archive no longer blocks', async () => {
+    let removed = false;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => ({
+        data: { ...ACTIVE_ITEM, quantity_on_hand: removed ? 0 : 41 },
+        error: null,
+      }),
+      'item_stock_levels.select': () => ({
+        data: removed
+          ? []
+          : [{ location_id: 'loc-38b', quantity: 41, locations: { id: 'loc-38b', name: '38-B', kind: 'rack' } }],
+        error: null,
+      }),
+      'inventory_items.update': { data: null, error: null },
+      'rpc:adjust_stock': { data: { quantity_on_hand: 0, reorder_point: 0 }, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.removeStockFromLocation({
+      itemId: 'itm-1',
+      locationId: 'loc-38b',
+      quantity: 41,
+      reason: 'Wrote off 38-B',
+    });
+    removed = true;
+
+    // Now at zero stock, the Deliverable-1 guard must NOT block the archive.
+    await expect(svc.archive('itm-1')).resolves.toBeUndefined();
+    const payload = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(payload.status).toBe('archived');
   });
 });

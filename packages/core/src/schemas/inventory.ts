@@ -112,6 +112,26 @@ export const adjustStockSchema = z.object({
 });
 export type AdjustStockInput = z.infer<typeof adjustStockSchema>;
 
+/**
+ * Remove (write off) a quantity of ONE item from ONE specific location — the
+ * rack-scoped removal Andrew reached for when he tried to archive a
+ * consolidated rack. A reason is MANDATORY and free-text (owner ask: review how
+ * the reason is captured), trimmed and stored verbatim on the resulting
+ * stock_movements row so the item history reads truthfully. The quantity is
+ * capped at the holding server-side; the schema only enforces "positive and
+ * sane" (the numeric(14,4) column bound mirrors adjustStock).
+ */
+export const removeStockFromLocationSchema = z.object({
+  itemId: uuidSchema,
+  locationId: uuidSchema,
+  quantity: z.coerce.number().positive().finite().max(1_000_000),
+  reason: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim() : v),
+    z.string().min(1, 'A reason is required to remove stock.').max(500),
+  ),
+});
+export type RemoveStockFromLocationInput = z.infer<typeof removeStockFromLocationSchema>;
+
 export const transferStockSchema = z
   .object({
     itemId: uuidSchema,

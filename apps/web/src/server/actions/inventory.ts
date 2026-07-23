@@ -14,6 +14,7 @@ import {
   createItemSchema,
   err,
   ok,
+  removeStockFromLocationSchema,
   updateItemSchema,
   type ActionResult,
   type AdjustStockInput,
@@ -83,12 +84,39 @@ export async function updateItemAction(
   }
 }
 
-export async function archiveItemAction(id: string): Promise<ActionResult<void>> {
+export async function archiveItemAction(
+  id: string,
+  // Deliberate archive-with-stock (a discontinued line written off wholesale).
+  // Omitted/false is the safe default: the service refuses and names the stock.
+  opts: { acknowledgeStock?: boolean } = {},
+): Promise<ActionResult<void>> {
   try {
     const svc = await InventoryService.forCurrentUser();
-    await svc.archive(id);
+    await svc.archive(id, { acknowledgeStock: opts.acknowledgeStock === true });
+    revalidatePath('/dashboard/inventory');
+    revalidatePath(`/dashboard/inventory/${id}`);
+    await revalidateInventoryListForCurrentOrg();
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+export async function removeStockFromLocationAction(
+  input: z.input<typeof removeStockFromLocationSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = removeStockFromLocationSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await InventoryService.forCurrentUser();
+    await svc.removeStockFromLocation(parsed.data);
+    revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
+    revalidatePath('/dashboard/books');
+    revalidatePath(`/dashboard/inventory/${parsed.data.itemId}`);
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -173,6 +201,9 @@ export type BulkInventoryOp =
 export async function bulkUpdateInventoryAction(input: {
   ids: string[];
   op: BulkInventoryOp;
+  // Deliberate archive-with-stock override for a bulk archive / set_status
+  // 'archived' batch. Ignored for every other op.
+  acknowledgeStock?: boolean;
 }): Promise<ActionResult<{ ok: number; skipped: number }>> {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
     return err('validation_error', 'No items selected');

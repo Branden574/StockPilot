@@ -18,11 +18,17 @@ import type {
   UpdateItemInput,
 } from '@stockpilot/core';
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
+import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import {
+  formatArchiveStockBlockMessage,
+  formatBulkArchiveStockBlockMessage,
+  formatHoldingLabel,
   formatRackLabel,
+  formatStockQuantity,
   historyNote,
   normalizeRackFields,
   parseRackLabel,
+  RACK_WRITE_OFF_MOVEMENT_TYPE,
   RESERVED_CUSTOM_FIELD_KEYS,
   validateCustomFields,
 } from '@stockpilot/core';
@@ -2278,11 +2284,132 @@ export class InventoryService {
     return data;
   }
 
-  async archive(id: string) {
+  /**
+   * Per-location holdings for the ARCHIVE STOCK-GUARD. Reads the SAME shape as
+   * placements() (item_stock_levels joined to the location for its display
+   * name, non-empty holdings only) but is FAIL-CLOSED where placements() is
+   * fail-open: a read error THROWS instead of degrading to [], because the
+   * guard must BLOCK an archive it cannot prove is safe — refusing a legitimate
+   * archive is recoverable, silently orphaning stock is not.
+   */
+  private async holdingsForGuard(
+    id: string,
+  ): Promise<Array<{ locationId: string; label: string; quantity: number }>> {
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('location_id, quantity, locations!inner(id, name, kind)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', id)
+      .gt('quantity', 0);
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not verify this item has no stock before archiving. Please try again.',
+      );
+    }
+    return ((data ?? []) as unknown as Array<{
+      location_id: string;
+      quantity: number;
+      locations: { name: string; kind: string | null };
+    }>).map((row) => ({
+      locationId: row.location_id,
+      label: formatHoldingLabel(row.locations?.kind ?? null, row.locations?.name ?? ''),
+      quantity: Number(row.quantity),
+    }));
+  }
+
+  /**
+   * Throws a NAMED validation error when an item still holds stock — the guard
+   * that stops archive() from silently orphaning it. `total` is the greater of
+   * the item row's quantity_on_hand and the sum of its holdings, so stock that
+   * exists on the row but isn't (yet) split into item_stock_levels still blocks.
+   */
+  private async assertArchivableOrThrow(id: string, item: unknown): Promise<void> {
+    const holdings = await this.holdingsForGuard(id);
+    const placedTotal = holdings.reduce((sum, h) => sum + h.quantity, 0);
+    const onHand = Number((item as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
+    const total = Math.max(onHand, placedTotal);
+    if (total > 0) {
+      throw new ServiceError(
+        'validation_error',
+        formatArchiveStockBlockMessage(
+          total,
+          holdings.map((h) => ({ label: h.label, quantity: h.quantity })),
+        ),
+      );
+    }
+  }
+
+  /**
+   * Bulk twin of assertArchivableOrThrow. ONE query reads every non-empty
+   * holding across `ids`; a single-item batch that still holds stock reuses the
+   * detailed archive() message (so bulk-of-one matches the item-detail dialog),
+   * a multi-item batch names the count of affected items. FAIL-CLOSED: a read
+   * error blocks the batch rather than risk orphaning stock.
+   */
+  private async assertBulkArchivableOrThrow(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('item_id, location_id, quantity, locations!inner(id, name, kind)')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', ids)
+      .gt('quantity', 0);
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not verify these items have no stock before archiving. Please try again.',
+      );
+    }
+    const byItem = new Map<string, Array<{ label: string; quantity: number }>>();
+    for (const row of (data ?? []) as unknown as Array<{
+      item_id: string;
+      quantity: number;
+      locations: { name: string; kind: string | null };
+    }>) {
+      const arr = byItem.get(row.item_id) ?? [];
+      arr.push({
+        label: formatHoldingLabel(row.locations?.kind ?? null, row.locations?.name ?? ''),
+        quantity: Number(row.quantity),
+      });
+      byItem.set(row.item_id, arr);
+    }
+    if (byItem.size === 0) return;
+
+    // Single-item batch → the detailed, location-naming message (bulk-of-one
+    // must read exactly like the item-detail archive dialog).
+    if (byItem.size === 1) {
+      const [holdings] = [...byItem.values()];
+      const total = holdings!.reduce((sum, h) => sum + h.quantity, 0);
+      throw new ServiceError('validation_error', formatArchiveStockBlockMessage(total, holdings!));
+    }
+    throw new ServiceError('validation_error', formatBulkArchiveStockBlockMessage(byItem.size));
+  }
+
+  /**
+   * @param opts.acknowledgeStock When true, SKIP the stock guard — a deliberate
+   *   archive-with-stock (a discontinued line written off wholesale). The guard
+   *   kills the SILENT orphan, not the ability to archive stock on purpose.
+   */
+  async archive(id: string, opts: { acknowledgeStock?: boolean } = {}) {
     assertPermission(this.ctx, 'items:update');
     const current = await this.get(id);
     const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+
+    // STOCK GUARD (hazard fix): archiving flips status to 'archived' and
+    // DELIBERATELY preserves quantity_on_hand — so an item archived while it
+    // still holds stock vanishes from every active screen while
+    // item_stock_levels/quantity_on_hand keep counting its units in valuation
+    // and reconciliation. That stock is orphaned: invisible but still counted.
+    // Refuse by default, naming the total and where it sits, unless the caller
+    // explicitly acknowledges. The zero-stock auto-archive cron never reaches
+    // here (it archives via auto-archive.ts's own UPDATE), so this guard cannot
+    // affect it.
+    if (!opts.acknowledgeStock) {
+      await this.assertArchivableOrThrow(id, current);
+    }
+
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({ status: 'archived', updated_by: this.ctx.userId })
@@ -2342,6 +2469,12 @@ export class InventoryService {
           rackNumber: string | null;
           rackRow: string | null;
         };
+    /**
+     * When true, SKIP the archive stock-guard for an 'archive' /
+     * set_status:'archived' batch — the bulk twin of archive()'s
+     * acknowledgeStock. Ignored for every other op.
+     */
+    acknowledgeStock?: boolean;
   }): Promise<{ ok: number; skipped: number }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
@@ -2373,6 +2506,21 @@ export class InventoryService {
       }
     }
     if (allowedIds.length === 0) return { ok: 0, skipped };
+
+    // STOCK GUARD (hazard fix), bulk twin of archive()'s: a bulk archive (or a
+    // bulk set_status to 'archived') hides every selected item while their
+    // stock keeps counting — the same silent-orphan hazard. Refuse the whole
+    // batch when any selected item still holds stock, unless the caller
+    // acknowledges. Naming every location across up to 500 items is noise, so a
+    // multi-item block names the COUNT; a single-item block reuses the detailed
+    // archive() message so bulk-of-one reads identically to the item-detail
+    // archive dialog. set_status to a non-archived status never triggers this.
+    const isBulkArchive =
+      input.op.kind === 'archive' ||
+      (input.op.kind === 'set_status' && input.op.status === 'archived');
+    if (isBulkArchive && !input.acknowledgeStock) {
+      await this.assertBulkArchivableOrThrow(allowedIds);
+    }
 
     // Rack ops merge into custom_fields server-side via a SECURITY
     // INVOKER Postgres function (migrations 0064/0068). The function
@@ -2744,6 +2892,77 @@ export class InventoryService {
       /* best-effort: an alert must never fail a stock adjustment */
     }
     return data;
+  }
+
+  /**
+   * Remove (write off) a quantity of one item from ONE specific location,
+   * leaving its stock in every OTHER location untouched. THE tool Andrew needed
+   * when he consolidated a rack and reached for archive instead: archive hides
+   * the whole item (all locations); this clears exactly one holding.
+   *
+   * Built entirely on adjustStock — a NEGATIVE delta scoped to `locationId`
+   * draws down exactly that holding via the adjust_stock RPC (which decrements
+   * the matching item_stock_levels row and writes a stock_movements row with
+   * from_location_id = that location), atomically. No new RPC, no direct write
+   * to item_stock_levels / quantity_on_hand. movement_type is 'remove' (a
+   * write-off is a removal, not a transfer — see RACK_WRITE_OFF_MOVEMENT_TYPE),
+   * and the mandatory reason is stored verbatim so the history reads truthfully.
+   *
+   * The quantity defaults to the whole holding at the call site; here it is
+   * CAPPED at the holding — adjust_stock guards the GLOBAL on-hand against going
+   * negative but NOT the per-location quantity (its on-conflict just adds the
+   * signed delta), so over-drawing one rack while the item has stock elsewhere
+   * would push that location negative. We pre-read the level and refuse an
+   * over-draw with a clear message rather than let it happen.
+   */
+  async removeStockFromLocation(input: RemoveStockFromLocationInput) {
+    assertPermission(this.ctx, 'stock:adjust');
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new ServiceError('validation_error', 'A reason is required to remove stock.');
+    }
+    const qty = Number(input.quantity);
+    if (!(qty > 0)) {
+      throw new ServiceError('validation_error', 'Enter a quantity greater than zero to remove.');
+    }
+
+    // Read the specific holding being drawn down. Fail-closed: a read error
+    // blocks the write-off rather than risk pushing a location negative.
+    const { data: level, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('quantity')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', input.itemId)
+      .eq('location_id', input.locationId)
+      .maybeSingle();
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not read the stock in that location. Please try again.',
+      );
+    }
+    const onHandAtLocation = Number((level as { quantity?: number } | null)?.quantity ?? 0);
+    if (onHandAtLocation <= 0) {
+      throw new ServiceError('validation_error', 'That location holds no stock for this item.');
+    }
+    if (qty > onHandAtLocation) {
+      throw new ServiceError(
+        'validation_error',
+        `Cannot remove ${formatStockQuantity(qty)} — only ${formatStockQuantity(
+          onHandAtLocation,
+        )} in this location.`,
+      );
+    }
+
+    // Delegate the mutation: adjustStock re-asserts stock:adjust + warehouse
+    // write access, blocks archived items, and emits the movement + audit row.
+    return this.adjustStock({
+      itemId: input.itemId,
+      quantityChange: -qty,
+      movementType: RACK_WRITE_OFF_MOVEMENT_TYPE,
+      locationId: input.locationId,
+      reason,
+    });
   }
 
   async transferStock(input: TransferStockInput) {

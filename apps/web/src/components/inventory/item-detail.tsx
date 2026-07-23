@@ -463,7 +463,16 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                       (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
                     }
                   />
-                  <PlacementsBreakdown placements={holdings} />
+                  <PlacementsBreakdown
+                    placements={holdings}
+                    itemId={id}
+                    itemName={item.name as string}
+                    // Rack-scoped write-off (2026-07-23): the tool to reach for
+                    // instead of archiving a whole item to clear one rack. Gated
+                    // on the same permission adjustStock asserts; archived items
+                    // can't be adjusted, so hide it there too.
+                    canRemoveStock={canAdjustStock && item.status !== 'archived'}
+                  />
                   {(() => {
                     // Staged + Unplaced = on-hand that hasn't been put away
                     // yet (derivePlacement fields assigned by svc.get above).
