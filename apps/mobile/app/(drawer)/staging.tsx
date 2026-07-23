@@ -1,5 +1,5 @@
 import { useNavigation, useRouter } from 'expo-router';
-import { ArrowLeft, LayoutList, Menu } from 'lucide-react-native';
+import { ArrowLeft, History, LayoutList, Menu } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { can, type Role } from '@stockpilot/core';
 
+import { ItemHistorySheet } from '@/components/item-history-sheet';
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -68,6 +69,13 @@ import { useWorkspace } from '@/lib/use-workspace';
  *    cell for cell — including the em dash web shows for an unknown value. The
  *    owner reads the two side by side.
  *
+ * The History action opens ItemHistorySheet, which reads
+ * GET /api/v1/items/[id]/history — the same shared service the web dialog
+ * renders. It answers the question the em dash could not ("who moved them,
+ * when, where, why") by showing the ledger rows AS THEY ARE, and it touches
+ * nothing on this list: the source PO/receipt, the received date and the age /
+ * Stale badge above are still exactly what stagedWorklist() returned.
+ *
  * The Place action goes through MoveStockModal → POST /api/v1/items/[id]/
  * transfer (never the transfer_stock RPC, which only checks the staff-role
  * floor), so 'stock:transfer' is enforced server-side. `canPlace` from the
@@ -95,6 +103,10 @@ export default function StagingScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [placing, setPlacing] = React.useState<StagingWorklistRow | null>(null);
+  // The row whose movement history is open. Read-only and gated by nothing
+  // beyond 'items:read' (the route asserts it), so every user who can see a
+  // staging row can see how that stock got there.
+  const [viewingHistory, setViewingHistory] = React.useState<StagingWorklistRow | null>(null);
 
   // warehouseId → name, the mobile twin of the web page's `warehouseNames`
   // prop. A row whose warehouse is missing here (archived/inactive) falls back
@@ -282,6 +294,7 @@ export default function StagingScreen() {
               router.push({ pathname: '/item/[id]', params: { id: item.itemId } })
             }
             onPlace={() => setPlacing(item)}
+            onOpenHistory={() => setViewingHistory(item)}
           />
         )}
       />
@@ -311,6 +324,18 @@ export default function StagingScreen() {
           }}
         />
       ) : null}
+
+      {viewingHistory ? (
+        <ItemHistorySheet
+          visible
+          itemId={viewingHistory.itemId}
+          // The list's own name/sku, so the sheet opens with a title instead of
+          // a blank while the first page is in flight.
+          itemName={viewingHistory.name}
+          itemSku={viewingHistory.sku}
+          onClose={() => setViewingHistory(null)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -322,6 +347,7 @@ function StagingCard({
   disabledReason,
   onOpenItem,
   onPlace,
+  onOpenHistory,
 }: {
   row: StagingWorklistRow;
   warehouseNames: Record<string, string>;
@@ -331,6 +357,7 @@ function StagingCard({
   disabledReason: string | null;
   onOpenItem: () => void;
   onPlace: () => void;
+  onOpenHistory: () => void;
 }) {
   const { c } = useTheme();
   const age = stagingAgeLabel(row.ageDays);
@@ -388,22 +415,37 @@ function StagingCard({
             <Pill status="crit">{STAGING_STALE_LABEL}</Pill>
           ) : null}
         </View>
-        {canPlace ? (
-          <Button size="sm" variant="outline" onPress={onPlace}>
-            Place
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, flexShrink: 1 }}>
+          {/* History is offered on EVERY row, including one that cannot be
+              placed: "where did this come from" is exactly the question a row
+              with no PO and no warehouse raises, and it is a read — the route
+              asserts only 'items:read', which the user already has to be
+              looking at this list. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            onPress={onOpenHistory}
+            leading={<History size={14} color={c.ink} strokeWidth={1.6} />}
+          >
+            History
           </Button>
-        ) : disabledReason ? (
-          <View style={{ alignItems: 'flex-end', gap: 4, flexShrink: 1 }}>
-            <Button size="sm" variant="outline" disabled>
+          {canPlace ? (
+            <Button size="sm" variant="outline" onPress={onPlace}>
               Place
             </Button>
-            {/* The web button carries this as a tooltip; a phone has no hover,
-                so the same words go on screen. */}
-            <Mono size={9.5} color={c.ink4} style={{ textAlign: 'right' }}>
-              {disabledReason}
-            </Mono>
-          </View>
-        ) : null}
+          ) : disabledReason ? (
+            <View style={{ alignItems: 'flex-end', gap: 4, flexShrink: 1 }}>
+              <Button size="sm" variant="outline" disabled>
+                Place
+              </Button>
+              {/* The web button carries this as a tooltip; a phone has no hover,
+                  so the same words go on screen. */}
+              <Mono size={9.5} color={c.ink4} style={{ textAlign: 'right' }}>
+                {disabledReason}
+              </Mono>
+            </View>
+          ) : null}
+        </View>
       </View>
     </Card>
   );

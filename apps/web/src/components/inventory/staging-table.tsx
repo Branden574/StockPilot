@@ -1,10 +1,11 @@
 'use client';
 
-import { Clock } from 'lucide-react';
+import { Clock, History } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { BulkPlaceDialog } from '@/components/inventory/bulk-place-dialog';
+import { ItemHistoryDialog } from '@/components/inventory/item-history-dialog';
 import { PlaceFromStagingDialog } from '@/components/inventory/place-from-staging-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -290,11 +291,12 @@ export function StagingTable({
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
                 Warehouse
               </th>
-              {canPlace && (
-                <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                  Actions
-                </th>
-              )}
+              {/* Always rendered: History is available to anyone who can read
+                  this page (the route already gates on 'items:read'), while
+                  Place additionally needs 'stock:transfer'. */}
+              <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -389,32 +391,57 @@ export function StagingTable({
                     )}
                   </td>
 
-                  {/* Place action */}
-                  {canPlace && (
-                    <td className="px-3 py-3">
-                      {canPlaceRow ? (
-                        <PlaceFromStagingDialog
-                          itemId={row.itemId}
-                          itemName={row.name}
-                          itemType={row.itemType}
-                          sourceLocationId={row.sourceLocationId}
-                          sourceKind={row.sourceKind}
-                          warehouseId={row.warehouseId!}
-                          availableQuantity={row.quantity}
-                          destinations={destinations}
-                          trigger={
-                            <Button size="sm" variant="outline">
-                              Place
-                            </Button>
-                          }
-                        />
-                      ) : (
-                        <Button size="sm" variant="outline" disabled title="No warehouse — cannot place">
-                          Place
-                        </Button>
-                      )}
-                    </td>
-                  )}
+                  {/* Actions — History for everyone, Place when permitted.
+                      The em dash in the Source column only ever meant "this
+                      stock did not arrive on a PO"; History is where the rest
+                      of the story (who, when, where from, why) actually lives,
+                      so it must not be hidden behind the place permission. */}
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <ItemHistoryDialog
+                        itemId={row.itemId}
+                        itemName={row.name}
+                        itemSku={row.sku}
+                        trigger={
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`View history for ${row.name}`}
+                          >
+                            <History className="h-4 w-4" />
+                            History
+                          </Button>
+                        }
+                      />
+                      {canPlace &&
+                        (canPlaceRow ? (
+                          <PlaceFromStagingDialog
+                            itemId={row.itemId}
+                            itemName={row.name}
+                            itemType={row.itemType}
+                            sourceLocationId={row.sourceLocationId}
+                            sourceKind={row.sourceKind}
+                            warehouseId={row.warehouseId!}
+                            availableQuantity={row.quantity}
+                            destinations={destinations}
+                            trigger={
+                              <Button size="sm" variant="outline">
+                                Place
+                              </Button>
+                            }
+                          />
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            title="No warehouse — cannot place"
+                          >
+                            Place
+                          </Button>
+                        ))}
+                    </div>
+                  </td>
                 </tr>
               );
             })}

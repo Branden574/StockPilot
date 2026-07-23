@@ -17,7 +17,8 @@ import type {
   TransferStockInput,
   UpdateItemInput,
 } from '@stockpilot/core';
-import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
+import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
+import { historyNote, RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
@@ -38,6 +39,11 @@ export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): numb
   if (Number.isNaN(then)) return null;
   return Math.max(0, Math.floor((nowMs - then) / 86_400_000));
 }
+
+/** stock_movements.notes carries a receipts.id as TEXT for receipt-written rows
+ *  (post_receipt_v2 / adjust_stock p_notes). Only a well-formed uuid is treated
+ *  as a receipt reference — anything else is an operator's typed note. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Maps an adjustStock movement_type to the closest existing AuditEvent so
@@ -3133,4 +3139,314 @@ export class InventoryService {
       };
     });
   }
+
+  /**
+   * Full stock-movement HISTORY for ONE item, newest-first — the "what came
+   * from where, on what date and time, and why, and who" read behind the
+   * staging row (owner ask, 2026-07-22).
+   *
+   * DELIBERATELY SEPARATE FROM stagedWorklist(). Two earlier attempts answered
+   * this ask by INFERRING a single winning source movement per holding, inside
+   * the worklist query. Both regressed the worklist itself: one widened the
+   * movement query into the PostgREST 1000-row cap (which can erase PO
+   * attribution that renders correctly today), the other let the winning
+   * movement overwrite the row's date, resetting a month-old staging row to
+   * "today / 0d" and deleting its Stale badge. This method reads the ledger
+   * rows AS THEY ARE and touches nothing stagedWorklist() computes — its
+   * fields, its source attribution and its ageDays are unchanged by this work,
+   * which is the whole safety property of the history approach.
+   *
+   * PAGINATION. The window is explicit (`limit`/`offset`) and the page fetch
+   * goes through fetchAllRows, so a caller asking for more than one PostgREST
+   * page gets every row instead of a silent truncation at `[api] max_rows`.
+   * Three separate defects in this codebase came from a client-side constant
+   * guessing the server cap; there is no such constant here. `hasMore` is
+   * derived by over-fetching ONE row past the window, and `total` is an exact
+   * head count, so the surface never has to guess either.
+   *
+   * BATCHED JOINS, never N+1: the actor comes from the user_profiles embed
+   * (same embed MovementsService.list uses), and location names + receipts are
+   * each an `in(...)` query over the ids on the page — CHUNKED at 500, because
+   * `limit` clamps at 2000 and a single `in(...)` would be silently truncated
+   * at PostgREST's 1000-row cap, losing route and PO attribution on the rows
+   * past the cut (see chunkIdsForInFilter).
+   *
+   * TRUTHFULNESS. Rendering vocabulary lives in @stockpilot/core
+   * (formatHistoryMovement) so web and mobile say the same words; this method
+   * only supplies facts. Notably it never infers intent from movement_type —
+   * `return` rows are handed over as-is because cancel_order_request writes
+   * that type for an internally-cancelled pick — and never promotes an
+   * internal token or a raw UUID into `note` (historyNote decides).
+   */
+  async itemMovementHistory(params: {
+    itemId: string;
+    /** Page size. Defaults to 50. Clamped to 2000 — deliberately ABOVE the
+     *  PostgREST `[api] max_rows` ceiling of 1000, because the window is
+     *  assembled by fetchAllRows and so is not bounded by that cap. A caller
+     *  wanting a whole busy item's ledger in one read gets it. */
+    limit?: number;
+    /** Rows to skip, newest-first. */
+    offset?: number;
+  }): Promise<ItemHistoryPage> {
+    assertPermission(this.ctx, 'items:read');
+    const limit = Math.min(Math.max(1, Math.floor(params.limit ?? 50)), 2000);
+    const offset = Math.max(0, Math.floor(params.offset ?? 0));
+
+    // 1. The item itself — also the access anchor. Org-scoped on top of RLS.
+    const { data: itemRow, error: itemErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, name, sku, warehouse_id, deleted_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', params.itemId)
+      .maybeSingle();
+    if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+    const item = itemRow as
+      | { id: string; name: string; sku: string; warehouse_id: string | null; deleted_at: string | null }
+      | null;
+    if (!item || item.deleted_at) throw new ServiceError('not_found', 'Item not found');
+
+    // 2. Warehouse scoping. Pass our own ctx so the helper never falls back to
+    //    requireOrgContext() — that path throws NEXT_REDIRECT inside /api and
+    //    surfaces as a generic 500 (recurring trap #23).
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && (!item.warehouse_id || !access.readableIds.includes(item.warehouse_id))) {
+      throw new ForbiddenError('No access to this item’s warehouse.');
+    }
+
+    // 3. Exact total so the surface can say "50 of 214" instead of guessing.
+    const { count, error: countErr } = await this.ctx.supabase
+      .from('stock_movements')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', item.id);
+    if (countErr) throw new ServiceError('internal_error', countErr.message);
+    const total = count ?? 0;
+
+    // 4. The window itself. created_at DESC is the reading order; id DESC is
+    //    the tiebreak that makes paging deterministic — without a stable
+    //    secondary sort the same row can land on two pages or none (two of the
+    //    owner's movements share created_at to the microsecond).
+    const window = await fetchAllRows<Record<string, unknown>>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('stock_movements')
+          .select(
+            `
+            id, movement_type, quantity_change, previous_quantity, new_quantity,
+            moved_quantity, from_location_id, to_location_id, reason, notes,
+            created_at, user_id,
+            actor:user_profiles!user_id (id, full_name, email)
+          `,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('item_id', item.id)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(offset + from, offset + to),
+      // Over-fetch exactly one row so hasMore is a fact, not an inference from
+      // a page being "full".
+      { cap: limit + 1 },
+    );
+    const hasMore = window.length > limit;
+    const raw = window.slice(0, limit);
+
+    // 5. Batched joins over the ids ON THIS PAGE only — one query each.
+    const locationIds = [
+      ...new Set(
+        raw.flatMap((r) => [r.from_location_id, r.to_location_id]).filter(Boolean) as string[],
+      ),
+    ];
+    const locationNames = new Map<string, string>();
+    // CHUNKED, not one `.in()`. These lookups are bounded by the number of
+    // distinct ids ON THIS PAGE, and `limit` clamps to 2000 (deliberately above
+    // PostgREST's 1000-row `[api] max_rows` ceiling, see the param doc) — so a
+    // large page can ask for more than 1000 rows here and PostgREST would
+    // silently return the first 1000. The rows past the cut would render with
+    // no route and no receipt/PO attribution, which is the SAME defect (a
+    // widened query hitting the 1000-row cap and erasing PO attribution) that
+    // got the first attempt at this feature reverted. Chunking is preferred
+    // over lowering the route's limit because the limit's whole purpose is
+    // "give me this busy item's entire ledger in one read".
+    for (const idChunk of chunkIdsForInFilter(locationIds)) {
+      const { data: locs, error: locErr } = await this.ctx.supabase
+        .from('locations')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', idChunk);
+      // Graceful degradation: an unresolvable location renders no route rather
+      // than hiding the movement (or leaking a raw uuid as a "name").
+      if (locErr) console.error('item history: location lookup failed', { error: locErr.message });
+      for (const l of (locs ?? []) as Array<{ id: string; name: string }>) {
+        locationNames.set(l.id, l.name);
+      }
+    }
+
+    // post_receipt_v2 (mig 0190) stores receipts.id in stock_movements.notes
+    // (the p_notes arg of adjust_stock), NOT reference_id — the same schema
+    // quirk stagedWorklist documents. That is why receipt provenance is keyed
+    // off `notes` here.
+    const receiptIds = [
+      ...new Set(
+        raw
+          .map((r) => ((r.notes as string | null) ?? '').trim())
+          .filter((n) => UUID_RE.test(n)),
+      ),
+    ];
+    type ReceiptMeta = {
+      receiptNumber: string | null;
+      status: string | null;
+      poNumber: string | null;
+      poStatus: string | null;
+      reversedReceiptId: string | null;
+      reversalReason: string | null;
+    };
+    const receiptMeta = new Map<string, ReceiptMeta>();
+    // Chunked for the same reason as the location lookup above: a 2000-row page
+    // can carry more than 1000 distinct receipt ids, and a single `.in()` would
+    // silently drop the receipt/PO provenance of everything past PostgREST's
+    // 1000-row cap.
+    for (const idChunk of chunkIdsForInFilter(receiptIds)) {
+      const { data: receipts, error: rErr } = await this.ctx.supabase
+        .from('receipts')
+        .select(
+          'id, receipt_number, status, reversed_receipt_id, reversal_reason, purchase_orders(po_number, status)',
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', idChunk);
+      // Graceful degradation: the movement still renders, just without its
+      // receipt/PO provenance, rather than the whole history failing.
+      if (rErr) console.error('item history: receipt/PO lookup failed', { error: rErr.message });
+      for (const r of (receipts ?? []) as Array<Record<string, unknown>>) {
+        const poField = r.purchase_orders as
+          | { po_number?: string | null; status?: string | null }
+          | Array<{ po_number?: string | null; status?: string | null }>
+          | null;
+        const po = Array.isArray(poField) ? (poField[0] ?? null) : poField;
+        receiptMeta.set(r.id as string, {
+          receiptNumber: (r.receipt_number as string | null) ?? null,
+          status: (r.status as string | null) ?? null,
+          poNumber: po?.po_number ?? null,
+          poStatus: po?.status ?? null,
+          reversedReceiptId: (r.reversed_receipt_id as string | null) ?? null,
+          reversalReason: (r.reversal_reason as string | null) ?? null,
+        });
+      }
+    }
+
+    // 6. Reversal pairing. `receipts.reversed_receipt_id` is the RECORDED link
+    //    between an undo and what it undid — we read it rather than matching on
+    //    the "-REV" suffix or on equal-and-opposite quantities, either of which
+    //    would be a guess. Both halves write their own movement, so both
+    //    receipts are normally already in `receiptMeta`; when the counterpart
+    //    falls outside the loaded page we still state the ROLE (which comes
+    //    from this receipt's own status) and simply omit the counterpart.
+    const movementByReceiptId = new Map<string, string>();
+    for (const r of raw) {
+      const rid = ((r.notes as string | null) ?? '').trim();
+      if (UUID_RE.test(rid) && !movementByReceiptId.has(rid)) {
+        movementByReceiptId.set(rid, r.id as string);
+      }
+    }
+    const reversalByOriginalId = new Map<string, string>();
+    for (const [rid, meta] of receiptMeta) {
+      if (meta.reversedReceiptId) reversalByOriginalId.set(meta.reversedReceiptId, rid);
+    }
+
+    const rows: ItemHistoryMovement[] = raw.map((r) => {
+      const actorField = r.actor as
+        | { id: string; full_name: string | null; email: string | null }
+        | Array<{ id: string; full_name: string | null; email: string | null }>
+        | null
+        | undefined;
+      const actorRaw = Array.isArray(actorField) ? (actorField[0] ?? null) : (actorField ?? null);
+      // Rule 5: a row with no user_id was written by a trigger/system process.
+      // It gets NO actor — never "System" dressed up as a person.
+      const actorName = actorRaw ? (actorRaw.full_name?.trim() || actorRaw.email || null) : null;
+      // Only surface the email when it is a genuinely second fact.
+      const actorEmail =
+        actorRaw?.email && actorRaw.email !== actorName ? actorRaw.email : null;
+
+      const rid = ((r.notes as string | null) ?? '').trim();
+      const meta = UUID_RE.test(rid) ? (receiptMeta.get(rid) ?? null) : null;
+
+      let reversal: ItemHistoryMovement['reversal'] = null;
+      let reversalReason: string | null = null;
+      if (meta?.status === 'reversal' && meta.reversedReceiptId) {
+        const original = receiptMeta.get(meta.reversedReceiptId) ?? null;
+        reversal = {
+          role: 'reversal',
+          counterpartMovementId: movementByReceiptId.get(meta.reversedReceiptId) ?? null,
+          counterpartReceiptNumber: original?.receiptNumber ?? null,
+        };
+        // The typed reason lives on the REVERSING receipt.
+        reversalReason = meta.reversalReason?.trim() || null;
+      } else if (meta?.status === 'reversed') {
+        const revId = reversalByOriginalId.get(rid) ?? null;
+        const rev = revId ? (receiptMeta.get(revId) ?? null) : null;
+        reversal = {
+          role: 'reversed',
+          counterpartMovementId: revId ? (movementByReceiptId.get(revId) ?? null) : null,
+          counterpartReceiptNumber: rev?.receiptNumber ?? null,
+        };
+        reversalReason = rev?.reversalReason?.trim() || null;
+      }
+
+      return {
+        id: r.id as string,
+        at: r.created_at as string,
+        movementType: r.movement_type as string,
+        quantityChange: Number(r.quantity_change ?? 0),
+        movedQuantity: r.moved_quantity === null || r.moved_quantity === undefined
+          ? null
+          : Number(r.moved_quantity),
+        previousQuantity: Number(r.previous_quantity ?? 0),
+        newQuantity: Number(r.new_quantity ?? 0),
+        actorName,
+        actorEmail,
+        fromLocationName: r.from_location_id
+          ? (locationNames.get(r.from_location_id as string) ?? null)
+          : null,
+        toLocationName: r.to_location_id
+          ? (locationNames.get(r.to_location_id as string) ?? null)
+          : null,
+        note: historyNote((r.reason as string | null) ?? null, (r.notes as string | null) ?? null),
+        receiptNumber: meta?.receiptNumber ?? null,
+        receiptStatus: meta?.status ?? null,
+        poNumber: meta?.poNumber ?? null,
+        poStatus: meta?.poStatus ?? null,
+        reversalReason,
+        reversal,
+      };
+    });
+
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      itemSku: item.sku,
+      rows,
+      total,
+      limit,
+      offset,
+      hasMore,
+    };
+  }
+}
+
+/**
+ * Splits a list of ids into batches small enough that a PostgREST `.in()`
+ * filter can return ALL of the matches.
+ *
+ * PostgREST truncates any single response at `[api] max_rows` (1000 on this
+ * project) WITHOUT an error — the client just gets fewer rows than it asked
+ * about, which reads as "those ids do not exist". For a lookup that decorates
+ * rows (location names, receipt/PO provenance) that silent truncation shows up
+ * as missing attribution on real movements, not as a failure. 500 leaves
+ * headroom for a row-per-id join fanning out (a receipt embeds its PO).
+ *
+ * Returns an empty array for an empty input, so callers can simply `for…of` it.
+ */
+function chunkIdsForInFilter(ids: readonly string[], size = 500): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
 }

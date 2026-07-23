@@ -18,5 +18,6 @@ export * from './inventory/size-run';
 export * from './inventory/crate-colors';
 export * from './inventory/rack-holdings';
 export * from './inventory/group-by-sku';
+export * from './inventory/movement-history';
 export * from './orders/order-number';
 export * from './orders/pick-shortfall';
