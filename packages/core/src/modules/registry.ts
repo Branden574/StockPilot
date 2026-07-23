@@ -107,6 +107,10 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       { surface: 'web_sidebar', section: 'inventory', label: 'Staging', href: '/dashboard/inventory/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Tags', href: '/dashboard/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Items', href: '/inventory', iconName: 'Box', defaultSortOrder: 0, mobileTabEligible: true, requires: 'items:read' },
+      // Native twin of the web Staging page — same section, same sort order,
+      // same 'items:read' gate, so the phone's drawer mirrors the sidebar.
+      // Put-away is done on foot; it used to be desk-only.
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Staging', href: '/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
     ],
   },

@@ -13,6 +13,12 @@ const UUID = '([0-9a-fA-F-]{36})';
 
 const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/orders/${UUID}`), to: (m) => `/order/${m[1]}` },
+  // Staging has a native twin now. It must be matched BEFORE the generic
+  // /dashboard/* catch-all (which would dead-end it on home) — and it sits
+  // above the item-detail rule only for readability: 'staging' can never
+  // satisfy the 36-char UUID pattern. Query (the ?type= filter) is dropped →
+  // the full worklist.
+  { re: /\/dashboard\/inventory\/staging(\?.*)?$/, to: () => '/staging' },
   { re: new RegExp(`/dashboard/inventory/${UUID}`), to: (m) => `/item/${m[1]}` },
   { re: new RegExp(`/dashboard/purchase-orders/${UUID}`), to: (m) => `/po/${m[1]}` },
   { re: /\/dashboard\/schedule(\/.*)?$/, to: () => '/schedule' },

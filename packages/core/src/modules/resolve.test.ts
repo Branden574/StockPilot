@@ -156,7 +156,12 @@ describe('nav order is frozen to the original static nav', () => {
       .flatMap((s) => s.items.map((i) => i.href));
     expect(hrefs).toEqual([
       '/',
-      '/inventory', '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
+      // Staging gained a native twin (put-away is done on foot; it used to be
+      // desk-only). Deliberate addition to the frozen sequence, placed exactly
+      // where the web sidebar already puts it: sortOrder 5, immediately after
+      // Items. Everything else is byte-for-byte the legacy order.
+      '/inventory', '/staging',
+      '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
       '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/recurring-pos', '/po-imports',
       '/locations', '/suppliers', '/reports',
       '/ai', '/schedule', '/notifications', '/team', '/settings',

@@ -98,8 +98,37 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     });
 
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`API ${res.status}: ${text || res.statusText}`);
+      // NEVER echo the raw body. Our own API answers errors as
+      // { error, message }, but anything that does not reach a route handler —
+      // a 404 from the framework, an edge/bot challenge, a proxy error page —
+      // answers with an HTML DOCUMENT. Echoing that put a full page of raw
+      // markup on screen where a sentence belonged (seen in the simulator on
+      // the staging screen, 2026-07-22). Read the body, use it ONLY when it
+      // parses as our JSON error shape, and otherwise say something a person
+      // can act on.
+      const raw = await res.text().catch(() => '');
+      let message: string | null = null;
+      if (raw.trimStart().startsWith('{')) {
+        try {
+          const body = JSON.parse(raw) as { message?: unknown; error?: unknown };
+          const m = typeof body.message === 'string' ? body.message : null;
+          const e = typeof body.error === 'string' ? body.error : null;
+          message = m ?? e;
+        } catch {
+          message = null;
+        }
+      }
+      if (!message) {
+        message =
+          res.status === 401 || res.status === 403
+            ? 'You do not have access to that.'
+            : res.status === 404
+              ? 'That is not available on this version of the app. Update the app and try again.'
+              : res.status >= 500
+                ? 'The server had a problem. Try again in a moment.'
+                : `Request failed (${res.status}).`;
+      }
+      throw new Error(message);
     }
     return (await res.json()) as T;
   } catch (err) {

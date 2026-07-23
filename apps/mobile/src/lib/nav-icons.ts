@@ -13,6 +13,7 @@ import {
   Handshake,
   Home,
   Layers,
+  LayoutList,
   type LucideIcon,
   MapPin,
   Network,
@@ -68,6 +69,8 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   Building2,
   Warehouse,
   Layers,
+  // Staging (put-away worklist) — same icon name the web sidebar placement uses.
+  LayoutList,
   FileLock,
   // Zendesk uses a custom react-native-svg mark (not in lucide); cast to
   // LucideIcon since it accepts the same { size, color } prop shape the

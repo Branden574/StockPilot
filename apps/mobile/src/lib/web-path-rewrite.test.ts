@@ -19,6 +19,24 @@ describe('rewriteWebPath audit routes', () => {
   });
 });
 
+// Staging got a native twin (put-away is done on foot). Every web link to it —
+// a notification, a What's New CTA, a pasted URL — must land on the screen
+// instead of falling through the /dashboard/* catch-all to home.
+
+describe('rewriteWebPath staging', () => {
+  it('the web staging page resolves to the native screen', () => {
+    expect(rewriteWebPath('/dashboard/inventory/staging')).toBe('/staging');
+  });
+  it('the ?type= filter is dropped to the full worklist', () => {
+    expect(rewriteWebPath('/dashboard/inventory/staging?type=book')).toBe('/staging');
+  });
+  it('item detail still wins for a real item id under the same prefix', () => {
+    expect(
+      rewriteWebPath('/dashboard/inventory/22222222-2222-4222-8222-222222222222'),
+    ).toBe('/item/22222222-2222-4222-8222-222222222222');
+  });
+});
+
 describe('rewriteWebPath existing rules stay intact', () => {
   it('order detail keeps its native twin', () => {
     expect(
