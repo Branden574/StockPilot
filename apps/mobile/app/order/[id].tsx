@@ -256,6 +256,10 @@ export default function OrderDetail() {
   const [acting, setActing] = React.useState<string | null>(null);
   const [denyOpen, setDenyOpen] = React.useState(false);
   const [denyReason, setDenyReason] = React.useState('');
+  // Manager override: reopen a picked/packed (pre-signature) order back to
+  // picking to fix a miscount. Same reason-required pattern as deny.
+  const [reopenOpen, setReopenOpen] = React.useState(false);
+  const [reopenReason, setReopenReason] = React.useState('');
   const [driverOpen, setDriverOpen] = React.useState(false);
   const [drivers, setDrivers] = React.useState<OrderDriver[] | null>(null);
   const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
@@ -736,6 +740,17 @@ export default function OrderDetail() {
     setDenyOpen(false);
     await act({ action: 'deny', reason }, 'deny');
     setDenyReason('');
+  }
+
+  async function reopenPicking() {
+    const reason = reopenReason.trim();
+    if (!reason) {
+      Alert.alert('Reason required', 'Enter a reason before reopening picking.');
+      return;
+    }
+    setReopenOpen(false);
+    await act({ action: 'reopen_picking', reason }, 'reopen');
+    setReopenReason('');
   }
 
   async function openDriverPicker() {
@@ -1356,6 +1371,9 @@ export default function OrderDetail() {
                     void act({ action: 'generate_packing_slips' }, 'gpk'),
                   )
                 : null}
+              {order.status === 'picking_complete' && isManager
+                ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
+                : null}
               {order.status === 'packing_slip_generated' && order.fulfillmentType === 'pickup'
                 ? actionBtn('Mark staged for pickup', 'stage', () =>
                     void act({ action: 'stage', target: 'staged_for_pickup' }, 'stage'),
@@ -1365,6 +1383,9 @@ export default function OrderDetail() {
                 ? actionBtn('Mark staged for delivery', 'stage', () =>
                     void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
                   )
+                : null}
+              {order.status === 'packing_slip_generated' && isManager
+                ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
                 : null}
               {order.status === 'staged_for_delivery'
                 ? actionBtn(
@@ -1767,6 +1788,78 @@ export default function OrderDetail() {
                 style={[styles.addBtn, { backgroundColor: '#b42318', paddingHorizontal: 18 }]}
               >
                 <Mono size={13} color="#fff">Deny</Mono>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Reopen-picking reason capture — manager override that sends a
+          picked/packed (pre-signature) order back to picking_in_progress.
+          Same reason-required pattern as the deny modal above; the confirm
+          button additionally stays disabled until a reason is entered
+          (Alert.prompt is iOS-only, so this can't be a native prompt). */}
+      <Modal
+        visible={reopenOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReopenOpen(false)}
+      >
+        <Pressable
+          onPress={() => setReopenOpen(false)}
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            padding: 24,
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+          }}
+        >
+          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Reopen picking?</Body>
+            <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+              Sends this order back to picking so the count can be corrected. The picked
+              quantities and the assigned picker are kept, but the stock that was picked returns
+              to Unplaced — not necessarily its original rack — and will need to be put away
+              again before it can ship.
+              {order?.status === 'packing_slip_generated'
+                ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
+                : ''}{' '}
+              A signed order can&apos;t be reopened. This is recorded in the audit log.
+            </Mono>
+            <TextInput
+              value={reopenReason}
+              onChangeText={setReopenReason}
+              placeholder="Why is this being reopened? (e.g. miscount on line 3)"
+              placeholderTextColor={c.ink4}
+              multiline
+              style={{
+                minHeight: 72,
+                borderWidth: 1,
+                borderColor: c.hair,
+                borderRadius: 10,
+                padding: 10,
+                color: c.ink,
+                fontFamily: FONT.mono,
+                fontSize: 13,
+                textAlignVertical: 'top',
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+              <Pressable
+                onPress={() => setReopenOpen(false)}
+                style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+              >
+                <Mono size={13} color={c.ink}>Cancel</Mono>
+              </Pressable>
+              <Pressable
+                onPress={() => void reopenPicking()}
+                disabled={!reopenReason.trim()}
+                style={[
+                  styles.addBtn,
+                  { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: reopenReason.trim() ? 1 : 0.5 },
+                ]}
+              >
+                <Mono size={13} color="#fff">Reopen picking</Mono>
               </Pressable>
             </View>
           </Pressable>
