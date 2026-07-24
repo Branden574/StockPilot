@@ -136,6 +136,9 @@ export type AuditEvent =
   | 'order.delivery_assigned'
   | 'order.in_transit'
   | 'order.fulfillment_resumed'
+  // Manager override: a picked/packed (pre-signature) order was rewound to
+  // picking_in_progress to fix a miscount (0289 reopen_picking RPC).
+  | 'order.picking_reopened'
   | 'order.closed_partial'
   | 'order.signature_collected'
   | 'order.completed'

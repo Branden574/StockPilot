@@ -2190,6 +2190,71 @@ export class OrderRequestsService {
   }
 
   /**
+   * Reopen picking on a picked/packed (pre-signature) order — rewind to
+   * picking_in_progress so a manager can fix a miscount. Reason-required +
+   * audited; the RPC reverses complete_picking's stock draw, restores
+   * reservations, preserves quantity_picked, and refuses once signed. Manager+
+   * only (orders:approve, which also enforces the org MFA/AAL2 step-up). The
+   * RPC only VALIDATES the reason — it does not persist it anywhere, so the
+   * audit call below is the ONE place it is recorded.
+   */
+  async reopenPicking(id: string, reason: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'orders:approve');
+    if (!reason || reason.trim() === '') {
+      throw new ServiceError('validation_error', 'A reason is required to reopen picking.', {
+        reason: 'reopen_reason_required',
+      });
+    }
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('reopen_picking', {
+      p_id: id,
+      p_reason: reason.trim(),
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      // The RPC checks auth before anything else; ctx.supabase is normally
+      // already user-authenticated by the time a service method runs, so this
+      // is defense-in-depth for a session that expired mid-request.
+      if (msg.includes('unauthenticated'))
+        throw new ServiceError('unauthenticated', 'You must be signed in to reopen picking.');
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('reopen_reason_required'))
+        throw new ServiceError('validation_error', 'A reason is required to reopen picking.', {
+          reason: 'reopen_reason_required',
+        });
+      if (msg.includes('already_signed'))
+        throw new ServiceError(
+          'conflict',
+          "This order has been signed for and can't be reopened.",
+        );
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only a manager can reopen picking.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError(
+          'validation_error',
+          "This order isn't at a stage that can be reopened.",
+        );
+      // Covers the RPC's defensive unplaced_location_not_found (P0002) too —
+      // an internal-configuration failure, not something the caller can fix.
+      throw new ServiceError('internal_error', 'Could not reopen picking.');
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      {
+        event: 'order.picking_reopened',
+        entityType: 'order_request',
+        entityId: id,
+        reason: reason.trim(),
+      },
+      this.ctx,
+    );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
+    return row;
+  }
+
+  /**
    * Close a backordered order as delivered-partial (→ completed). Keeps
    * quantity_fulfilled as the record of what was provided and releases the hold
    * on the un-shipped remainder; no stock moves. Manager+ only.
