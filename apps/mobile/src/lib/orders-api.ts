@@ -34,6 +34,9 @@ export type OrderAction =
   | { action: 'assign_picking'; pickerUserId: string }
   | { action: 'release_picking' }
   | { action: 'complete_picking' }
+  // Manager override: rewind a picked/packed (pre-signature) order to picking
+  // so a miscount can be fixed. Reason required; the server refuses once signed.
+  | { action: 'reopen_picking'; reason: string }
   | { action: 'generate_packing_slips' }
   | { action: 'stage'; target: 'staged_for_pickup' | 'staged_for_delivery' }
   | { action: 'assign_delivery'; deliveryUserId: string }

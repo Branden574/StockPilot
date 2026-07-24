@@ -42,8 +42,13 @@ export const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = 
   approved: ['pick_slip_generated', 'cancelled'],
   pick_slip_generated: ['picking_in_progress', 'picking_complete', 'cancelled'],
   picking_in_progress: ['picking_complete', 'cancelled'],
-  picking_complete: ['packing_slip_generated', 'cancelled'],
-  packing_slip_generated: ['staged_for_pickup', 'staged_for_delivery', 'cancelled'],
+  picking_complete: ['packing_slip_generated', 'picking_in_progress', 'cancelled'],
+  packing_slip_generated: [
+    'staged_for_pickup',
+    'staged_for_delivery',
+    'picking_in_progress',
+    'cancelled',
+  ],
   // Hand-over (signature) forks on owed qty: → completed if fully fulfilled,
   // → backordered if units are still owed.
   staged_for_pickup: ['completed', 'backordered', 'cancelled'],
@@ -166,6 +171,10 @@ export type OrderAction =
   | 'open_digital_pick'
   | 'print_pick_slip'
   | 'mark_picking_complete'
+  // Manager override: send a picked/packed (pre-signature) order back to
+  // picking_in_progress to fix a miscount. Reason-required + audited; the RPC
+  // refuses once signed. Reverses complete_picking's stock draw.
+  | 'reopen_picking'
   | 'generate_packing_slips'
   | 'print_customer_slip'
   | 'print_warehouse_slip'
@@ -273,13 +282,13 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
     }
     case 'picking_complete':
       actions.push('generate_packing_slips');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (isManagerOrAbove) actions.push('reopen_picking', 'cancel');
       break;
     case 'packing_slip_generated':
       actions.push('print_customer_slip', 'print_warehouse_slip');
       if (input.fulfillmentType === 'pickup') actions.push('mark_staged_pickup');
       else actions.push('mark_staged_delivery');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (isManagerOrAbove) actions.push('reopen_picking', 'cancel');
       break;
     case 'staged_for_pickup':
       actions.push('collect_signature', 'print_warehouse_slip');

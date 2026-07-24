@@ -514,6 +514,38 @@ export async function resumeFulfillmentAction(
   }
 }
 
+const reopenPickingSchema = z.object({
+  id: z.string().uuid(),
+  reason: z.string().trim().min(1, 'A reason is required.').max(500),
+});
+
+/**
+ * Manager override: send a picked/packed (pre-signature) order back to
+ * picking_in_progress to fix a miscount. Reason is mandatory — the service
+ * re-validates it, but the schema's `.min(1)` (after trimming) is the first
+ * line of defence against a blank submit. See
+ * OrderRequestsService.reopenPicking for the stock/audit/error-mapping
+ * details.
+ */
+export async function reopenPickingAction(
+  input: z.input<typeof reopenPickingSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = reopenPickingSchema.safeParse(input);
+  if (!parsed.success)
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.reopenPicking(parsed.data.id, parsed.data.reason);
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function closePartialAction(
   input: z.input<typeof backorderExitSchema>,
 ): Promise<ActionResult<void>> {
