@@ -67,6 +67,33 @@
 --   completed / denied / cancelled
 --     -> refused by the invalid_status_transition guard above the loop.
 --
+-- THE CLASSIFICATION IS EXHAUSTIVE, NOT A MEMBERSHIP TEST.
+--
+-- Written as `v_stock_drawn := status in (…the drawn five…)` the table above
+-- would be true today and quietly wrong tomorrow: the implicit default for any
+-- value not in the list is FALSE, i.e. "skip the restock". The two failure
+-- directions are not symmetric.
+--
+--   restocking when the units were NOT drawn -> phantom stock. Visible: an
+--     adjust_stock 'return' movement row is written, on_hand climbs, a cycle
+--     count catches it, and the row says which order to blame.
+--   skipping a restock that WAS owed -> the units are gone. NOTHING is written.
+--     on_hand simply never comes back, there is no movement row to trace, and
+--     the order is terminal so the restock can never be replayed. Nobody finds
+--     this except as unexplained shrink weeks later.
+--
+-- So a future `staged_for_freight` added to order_requests_status_check must
+-- not be allowed to inherit the silent-skip default. Every constraint value is
+-- enumerated in a `case` and the `else` RAISES. A cancel that refuses is a
+-- support ticket and a one-line follow-up migration; a cancel that silently
+-- eats a picked batch is unrecoverable. The case is shaped to mirror
+-- _validate_order_request_status_transition (0289), the other place a new
+-- status has to be wired in, so the two read as a pair.
+--
+-- The exception is proved by case K of 0290_cancel_restock_guard.test.sql,
+-- which admits an unknown status and asserts cancel refuses rather than
+-- dropping the batch.
+--
 -- quantity_picked IS STILL CLEARED WHEN THE RESTOCK IS SKIPPED. The clear sits
 -- OUTSIDE the guard on purpose, so the bookkeeping is byte-for-byte what the
 -- live body does and the ONLY behavioural difference in this migration is that
@@ -117,16 +144,47 @@ begin
   end if;
 
   -- Are this order's quantity_picked units currently OUT of quantity_on_hand?
-  -- See the status table at the top of this migration. picking_in_progress is
-  -- the exclusion that matters: partial_pick_line never drew, and reopen_picking
-  -- already gave the draw back.
-  v_stock_drawn := v_req.status in (
-    'picking_complete',
-    'packing_slip_generated',
-    'staged_for_pickup',
-    'staged_for_delivery',
-    'in_transit'
-  );
+  -- See the status table at the top of this migration.
+  --
+  -- EXHAUSTIVE BY CONSTRUCTION. Every value of order_requests_status_check is
+  -- classified explicitly and an unrecognised one RAISES — see the note on
+  -- asymmetric failure at the top of this migration.
+  case v_req.status
+    -- DRAWN. complete_picking is the only writer of 'picking_complete' and it
+    -- calls adjust_stock(-batch) in the same transaction; nothing between there
+    -- and the signature touches quantity_picked or stock.
+    when 'picking_complete', 'packing_slip_generated', 'staged_for_pickup',
+         'staged_for_delivery', 'in_transit' then
+      v_stock_drawn := true;
+
+    -- NOT DRAWN. pending_confirmation / pending_approval / approved /
+    -- pick_slip_generated carry no batch yet, so the loop no-ops regardless.
+    -- picking_in_progress is the exclusion that matters: partial_pick_line
+    -- never drew, and reopen_picking already gave its draw back. backordered
+    -- had quantity_picked nulled at hand-over.
+    when 'pending_confirmation', 'pending_approval', 'approved',
+         'pick_slip_generated', 'picking_in_progress', 'backordered' then
+      v_stock_drawn := false;
+
+    -- completed / denied / cancelled never reach here — the
+    -- invalid_status_transition refusal above rejects them first — so this
+    -- branch fires only for a status that did not exist when this was written.
+    else
+      raise exception 'unclassified_order_status_for_restock'
+        using errcode = 'P0001',
+              detail  = v_req.status,
+              hint    = 'order_requests has a status that cancel_order_request '
+                        'does not classify. Decide whether an order in this '
+                        'status has its quantity_picked units OUT of '
+                        'quantity_on_hand, then add it to the drawn or the '
+                        'not-drawn branch of the case in cancel_order_request '
+                        '(latest definition: supabase/migrations/'
+                        '0290_cancel_restock_guard.sql) and cover it in '
+                        'supabase/tests/0290_cancel_restock_guard.test.sql. Do '
+                        'not let it fall through to the not-drawn branch '
+                        'without checking: skipping a restock that was owed '
+                        'destroys stock with no stock_movements row.';
+  end case;
 
   -- Restock the CURRENT staged batch (quantity_picked) — units complete_picking
   -- pulled off the shelf that are still in the building. quantity_fulfilled
@@ -184,4 +242,8 @@ comment on function public.cancel_order_request(uuid, text) is
   'staged_for_pickup, staged_for_delivery, in_transit. A mid-pick '
   '(picking_in_progress) order has not drawn yet, and a reopen_picking order '
   'has already had its draw returned — restocking either would invent stock. '
-  'quantity_picked is cleared either way; quantity_fulfilled is never restocked.';
+  'quantity_picked is cleared either way; quantity_fulfilled is never restocked. '
+  'The status classification is exhaustive over order_requests_status_check: an '
+  'unrecognised status raises unclassified_order_status_for_restock rather than '
+  'defaulting to skip-the-restock, because a skipped restock destroys stock '
+  'silently while a refused cancel is retryable.';
