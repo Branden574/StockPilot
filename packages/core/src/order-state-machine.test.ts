@@ -387,3 +387,54 @@ describe('availableOrderActions', () => {
     });
   });
 });
+
+describe('reopen picking (manager override)', () => {
+  it('allows picking_complete → picking_in_progress', () => {
+    expect(ALLOWED_TRANSITIONS.picking_complete).toContain('picking_in_progress');
+  });
+  it('allows packing_slip_generated → picking_in_progress', () => {
+    expect(ALLOWED_TRANSITIONS.packing_slip_generated).toContain('picking_in_progress');
+  });
+  it('offers reopen_picking to a manager at picking_complete', () => {
+    const actions = availableOrderActions({
+      status: 'picking_complete',
+      viewerRole: 'manager',
+      viewerUserId: 'u1',
+      assignedPickerId: null,
+      assignedDeliveryUserId: null,
+      hasAssignedDelivery: false,
+      isShortStock: false,
+      hasFulfillableStock: false,
+      fulfillmentType: 'pickup',
+    });
+    expect(actions).toContain('reopen_picking');
+  });
+  it('offers reopen_picking to a manager at packing_slip_generated', () => {
+    const actions = availableOrderActions({
+      status: 'packing_slip_generated',
+      viewerRole: 'admin',
+      viewerUserId: 'u1',
+      assignedPickerId: null,
+      assignedDeliveryUserId: null,
+      hasAssignedDelivery: false,
+      isShortStock: false,
+      hasFulfillableStock: false,
+      fulfillmentType: 'pickup',
+    });
+    expect(actions).toContain('reopen_picking');
+  });
+  it('does NOT offer reopen_picking to a non-manager (staff)', () => {
+    const actions = availableOrderActions({
+      status: 'picking_complete',
+      viewerRole: 'staff',
+      viewerUserId: 'u1',
+      assignedPickerId: null,
+      assignedDeliveryUserId: null,
+      hasAssignedDelivery: false,
+      isShortStock: false,
+      hasFulfillableStock: false,
+      fulfillmentType: 'pickup',
+    });
+    expect(actions).not.toContain('reopen_picking');
+  });
+});
