@@ -56,6 +56,7 @@ import {
   generatePickSlipAction,
   markInTransitAction,
   releasePickingAction,
+  reopenPickingAction,
   resumeFulfillmentAction,
   setOrderInternalNotesAction,
   setOrderNeededByAction,
@@ -131,6 +132,7 @@ type BusyKey =
   | 'resume-fulfillment'
   | 'close-partial'
   | 'physical-signature'
+  | 'reopen-picking'
   | 'notes'
   | null;
 
@@ -226,6 +228,8 @@ export function ManagerActionsPanel({
   const [physicalSignerName, setPhysicalSignerName] = React.useState('');
   const [denyReason, setDenyReason] = React.useState('');
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
+  const [reopenOpen, setReopenOpen] = React.useState(false);
+  const [reopenReason, setReopenReason] = React.useState('');
 
   async function approve() {
     setBusy('approve');
@@ -375,6 +379,25 @@ export function ManagerActionsPanel({
       return;
     }
     toast.success('Fulfillment resumed — a new pick slip is ready for the remaining items.');
+    router.refresh();
+  }
+
+  async function reopenPicking() {
+    const reason = reopenReason.trim();
+    if (!reason) {
+      toast.error('Enter a reason before reopening.');
+      return;
+    }
+    setBusy('reopen-picking');
+    const res = await reopenPickingAction({ id: orderId, reason });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setReopenOpen(false);
+    setReopenReason('');
+    toast.success('Picking reopened — the pick is editable again.');
     router.refresh();
   }
 
@@ -630,6 +653,12 @@ export function ManagerActionsPanel({
                 <Printer className="h-3.5 w-3.5" />
                 Print pick slip
               </Button>
+              {actions.includes('reopen_picking') && (
+                <Button variant="outline" onClick={() => setReopenOpen(true)} disabled={busy !== null}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reopen picking
+                </Button>
+              )}
             </>
           )}
 
@@ -691,6 +720,13 @@ export function ManagerActionsPanel({
                 <PackageCheck className="h-3.5 w-3.5" />
               )}
               Mark staged for delivery
+            </Button>
+          )}
+
+          {status === 'packing_slip_generated' && actions.includes('reopen_picking') && (
+            <Button variant="outline" onClick={() => setReopenOpen(true)} disabled={busy !== null}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reopen picking
             </Button>
           )}
 
@@ -867,6 +903,68 @@ export function ManagerActionsPanel({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
               Deny request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen-picking reason dialog — manager override that sends a
+          picked/packed (pre-signature) order back to picking_in_progress.
+          Same iOS-webview-safe pattern as the deny dialog above: no
+          window.prompt(). */}
+      <Dialog
+        open={reopenOpen}
+        onOpenChange={(v) => {
+          if (busy === 'reopen-picking') return;
+          setReopenOpen(v);
+          if (!v) setReopenReason('');
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reopen picking?</DialogTitle>
+            <DialogDescription>
+              Sends this order back to picking so the count can be corrected.
+              The picked quantities and the assigned picker are kept, but the
+              stock that was picked returns to Unplaced — not necessarily its
+              original rack — and will need to be put away again before it
+              can ship.
+              {status === 'packing_slip_generated'
+                ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
+                : ''}{' '}
+              A signed order can&apos;t be reopened. This is recorded in the
+              audit log.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="reopen-reason">Reason</Label>
+            <Textarea
+              id="reopen-reason"
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              rows={3}
+              maxLength={500}
+              placeholder="Why is this being reopened? (e.g. miscount on line 3)"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setReopenOpen(false)}
+              disabled={busy === 'reopen-picking'}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={reopenPicking}
+              disabled={busy === 'reopen-picking' || !reopenReason.trim()}
+            >
+              {busy === 'reopen-picking' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Reopen picking
             </Button>
           </DialogFooter>
         </DialogContent>

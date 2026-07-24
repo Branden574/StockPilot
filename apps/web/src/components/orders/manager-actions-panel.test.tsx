@@ -1,5 +1,8 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { reopenPickingAction } from '@/server/actions/order-requests';
 
 import { ManagerActionsPanel } from './manager-actions-panel';
 
@@ -34,11 +37,14 @@ vi.mock('@/server/actions/order-requests', () => ({
   generatePickSlipAction: vi.fn(),
   markInTransitAction: vi.fn(),
   releasePickingAction: vi.fn(),
+  reopenPickingAction: vi.fn(),
   setOrderInternalNotesAction: vi.fn(),
   setOrderNeededByAction: vi.fn(),
   stageOrderAction: vi.fn(),
   suggestNeededByAction: vi.fn(),
 }));
+
+const reopenPicking = vi.mocked(reopenPickingAction);
 
 type PanelProps = React.ComponentProps<typeof ManagerActionsPanel>;
 
@@ -165,5 +171,104 @@ describe('ManagerActionsPanel — picking claim/lock states', () => {
       screen.getByRole('button', { name: /Reassign picker/ }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Release/ })).toBeInTheDocument();
+  });
+});
+
+describe('ManagerActionsPanel — reopen picking', () => {
+  beforeEach(() => {
+    reopenPicking.mockReset();
+    reopenPicking.mockResolvedValue({ ok: true, data: undefined });
+  });
+
+  it('offers Reopen picking to a manager at picking_complete', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reopen picking' })).toBeInTheDocument();
+  });
+
+  it('offers Reopen picking to a manager at packing_slip_generated', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          status: 'packing_slip_generated',
+          canApprove: true,
+          viewerRole: 'manager',
+          fulfillmentType: 'pickup',
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reopen picking' })).toBeInTheDocument();
+  });
+
+  it('hides Reopen picking from staff — manager-or-above override only', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: false, viewerRole: 'staff' })}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Reopen picking' })).not.toBeInTheDocument();
+  });
+
+  it('keeps confirm disabled until a reason is typed, then submits id + reason', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Reopen picking' }));
+    const dialog = await screen.findByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', { name: 'Reopen picking' });
+    expect(confirmButton).toBeDisabled();
+
+    await user.type(within(dialog).getByLabelText('Reason'), 'Miscount on line 2');
+    expect(confirmButton).toBeEnabled();
+
+    await user.click(confirmButton);
+    expect(reopenPicking).toHaveBeenCalledWith({ id: 'order-1', reason: 'Miscount on line 2' });
+  });
+
+  it('blocks submit on a whitespace-only reason', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Reopen picking' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Reason'), '   ');
+
+    expect(within(dialog).getByRole('button', { name: 'Reopen picking' })).toBeDisabled();
+    expect(reopenPicking).not.toHaveBeenCalled();
+  });
+
+  it('closes the dialog and refreshes on success; shows the error toast and keeps it open on failure', async () => {
+    reopenPicking.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: "This order has been signed for and can't be reopened." },
+    });
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Reopen picking' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Reason'), 'Miscount on line 2');
+    await user.click(within(dialog).getByRole('button', { name: 'Reopen picking' }));
+
+    // Failure: dialog stays open, reason is preserved.
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Reason')).toHaveValue('Miscount on line 2');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Reopen picking' }));
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
   });
 });
