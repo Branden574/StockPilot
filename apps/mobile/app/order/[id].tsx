@@ -830,6 +830,26 @@ export default function OrderDetail() {
   const canClaimPick = pickActions.includes('claim_picking');
   const canDigitalPick = pickActions.includes('open_digital_pick');
   const canReleasePick = pickActions.includes('release_picking');
+  // Reopen-picking gate: the same shared-state-machine call as `pickActions`
+  // above, but WITHOUT the `isPickingPhase` guard — `isPickingPhase` is false
+  // at exactly picking_complete/packing_slip_generated, the two statuses
+  // reopen applies to, so reusing `pickActions` directly would hide the
+  // button. Deriving from `availableOrderActions` (rather than re-checking
+  // role + status inline) means mobile can never drift from web on who may
+  // reopen picking or from which statuses.
+  const canReopenPicking =
+    order && role
+      ? availableOrderActions({
+          status: st as OrderStatus,
+          fulfillmentType: (ft as FulfillmentType | null) ?? 'pickup',
+          hasAssignedDelivery: order.assignedDeliveryUserId !== null,
+          viewerRole: role as Role,
+          viewerUserId: user?.id ?? '',
+          assignedPickerId: order.assignedPickerId,
+          assignedDeliveryUserId: order.assignedDeliveryUserId,
+          viewerCanPick,
+        }).includes('reopen_picking')
+      : false;
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'
@@ -1371,7 +1391,7 @@ export default function OrderDetail() {
                     void act({ action: 'generate_packing_slips' }, 'gpk'),
                   )
                 : null}
-              {order.status === 'picking_complete' && isManager
+              {order.status === 'picking_complete' && canReopenPicking
                 ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
                 : null}
               {order.status === 'packing_slip_generated' && order.fulfillmentType === 'pickup'
@@ -1384,7 +1404,7 @@ export default function OrderDetail() {
                     void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
                   )
                 : null}
-              {order.status === 'packing_slip_generated' && isManager
+              {order.status === 'packing_slip_generated' && canReopenPicking
                 ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
                 : null}
               {order.status === 'staged_for_delivery'
