@@ -31,6 +31,7 @@ const bodySchema = z.object({
     'assign_picking',
     'release_picking',
     'complete_picking',
+    'reopen_picking',
     'generate_packing_slips',
     'stage',
     'assign_delivery',
@@ -115,6 +116,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       case 'complete_picking':
         order = await svc.completePicking(id);
         break;
+      case 'reopen_picking':
+        if (!a.reason || a.reason.trim() === '') {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'A reason is required to reopen picking.' },
+            { status: 400 },
+          );
+        }
+        order = await svc.reopenPicking(id, a.reason.trim());
+        break;
       case 'generate_packing_slips':
         order = await svc.generatePackingSlips(id);
         break;
@@ -160,11 +170,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         order = await svc.cancel(id, a.reason?.trim() || null);
         break;
     }
-    // complete_picking decrements stock and cancel restocks picked stock —
-    // both change the cached Items/Books default views. The other actions
+    // complete_picking decrements stock, cancel restocks picked stock, and
+    // reopen_picking reverses complete_picking's draw (restocks) — all three
+    // change the cached Items/Books default views. The other actions
     // (including resume/close_partial, which only move reservations) are
     // status-only; one cheap tag revalidate covers the set.
-    if (a.action === 'complete_picking' || a.action === 'cancel') {
+    if (a.action === 'complete_picking' || a.action === 'cancel' || a.action === 'reopen_picking') {
       revalidateInventoryList(ctx.organizationId);
     }
     // Every transition can move availability (reserve/release/decrement) —
