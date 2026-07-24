@@ -156,6 +156,15 @@ begin
           limit 1;
       end if;
 
+      -- Both lookups failed to resolve an Unplaced bucket: refuse instead of
+      -- falling through to adjust_stock's null-location default, which would
+      -- silently land the reversal in Staging (see note (a) at the top) — the
+      -- exact unfinishable-order failure mode this migration exists to prevent.
+      if v_loc is null then
+        raise exception 'unplaced_location_not_found'
+          using errcode = 'P0002', detail = v_line.item_id::text;
+      end if;
+
       perform public.adjust_stock(
         v_line.item_id,
         v_line.picked,

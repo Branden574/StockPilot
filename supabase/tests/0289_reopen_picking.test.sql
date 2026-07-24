@@ -19,7 +19,7 @@
 
 begin;
 
-select plan(18);
+select plan(24);
 
 \set org   '\'d0289000-0000-0000-0000-000000000001\''
 \set mgr   '\'d0289000-0000-0000-0000-000000000002\''
@@ -164,6 +164,18 @@ select is(
   10::numeric(14,4),
   'A: quantity_picked preserved for the recount');
 select is(
+  (select assigned_picker_id from public.order_requests where id = :ord_a),
+  :mgr,
+  'A: assigned_picker_id preserved (the picker keeps their claim on reopen)');
+select is(
+  (select picking_completed_at from public.order_requests where id = :ord_a),
+  null,
+  'A: picking_completed_at cleared');
+select is(
+  (select picking_completed_by from public.order_requests where id = :ord_a),
+  null,
+  'A: picking_completed_by cleared');
+select is(
   (select released_at from public.stock_reservations where id = :resv_a),
   null,
   'A: reservation restored (released_at back to NULL)');
@@ -174,6 +186,18 @@ select is(
     where s.item_id = :item_a and l.kind <> 'staging'),
   10::numeric(14,4),
   'A: the 10 reversed units are placed (not stranded in Staging)');
+-- The reversal must write a VISIBLE stock_movements row, the inverse of the
+-- "Order pick" movement complete_picking wrote.
+select ok(
+  exists (
+    select 1 from public.stock_movements
+     where item_id = :item_a
+       and organization_id = :org
+       and quantity_change = 10::numeric(14,4)
+       and to_location_id is not null
+       and reason like 'Reopen picking (order_request %'
+  ),
+  'A: reopen wrote a visible + stock_movements row for the reversal');
 
 -- The gate: correct the miscount to 8 through the real pick RPC and re-complete.
 -- on_hand must be 2 — a double-decrement would land at -6.
@@ -203,6 +227,14 @@ select is(
   (select signature_token from public.order_requests where id = :ord_b),
   null,
   'B: signature token cleared (a stale sign link cannot be replayed)');
+select is(
+  (select packing_slip_generated_by from public.order_requests where id = :ord_b),
+  null,
+  'B: packing_slip_generated_by cleared');
+select is(
+  (select signature_token_expires_at from public.order_requests where id = :ord_b),
+  null,
+  'B: signature_token_expires_at cleared');
 select is(
   (select quantity_on_hand from public.inventory_items where id = :item_b),
   10::numeric(14,4),
