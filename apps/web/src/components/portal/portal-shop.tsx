@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { requestPortalReturnAction, submitPortalOrderAction } from '@/server/actions/portal';
 import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
 
-import { ORDER_STATUS_META, isOrderStatusKey } from '@stockpilot/core';
+import { ORDER_STATUS_META, isOrderStatusKey, type PortalPricingMode } from '@stockpilot/core';
 
 /** Orders in a terminal fulfilled state are the only ones with a return budget. */
 const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
@@ -64,10 +64,12 @@ export function PortalShop({
   catalog,
   orders,
   returnsEnabled,
+  pricingMode,
 }: {
   catalog: PortalCatalogItem[];
   orders: PortalOrder[];
   returnsEnabled: boolean;
+  pricingMode: PortalPricingMode;
 }) {
   const router = useRouter();
   const [cart, setCart] = React.useState<Record<string, number>>({});
@@ -142,8 +144,9 @@ export function PortalShop({
         </h2>
         {catalog.length === 0 ? (
           <div className="text-muted-foreground rounded-xl border border-dashed p-8 text-center text-sm">
-            Your catalog is empty right now — your supplier hasn&apos;t priced
-            any items for your account yet.
+            {pricingMode === 'no_charge'
+              ? "Your supplier hasn't added any items to this account's catalog yet."
+              : "Your catalog is empty right now — your supplier hasn't priced any items for your account yet."}
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -156,21 +159,24 @@ export function PortalShop({
                       <p className="font-medium leading-snug">{item.name}</p>
                       <p className="text-muted-foreground mt-0.5 text-xs">
                         {item.sku ? `${item.sku} · ` : ''}
-                        {item.inStock ? (
-                          <span className="text-green-600 dark:text-green-500">In stock</span>
+                        {item.quantityAvailable > 0 ? (
+                          <span className="text-green-600 dark:text-green-500">
+                            {item.quantityAvailable} available
+                          </span>
                         ) : (
                           <span className="text-amber-600 dark:text-amber-500">
-                            Backorder — ships when available
+                            Out of stock — ships when available
                           </span>
                         )}
                       </p>
                     </div>
-                    {/* unitPrice is now nullable (no-charge orgs, unpriced items).
-                        Compile guard only — the next task replaces this line with
-                        the mode-aware price / "Request quote" rendering. */}
-                    <p className="shrink-0 font-mono text-sm">
-                      ${(item.unitPrice ?? 0).toFixed(2)}
-                    </p>
+                    {pricingMode === 'no_charge' ? null : item.quotable ? (
+                      <p className="text-muted-foreground shrink-0 text-sm">Request quote</p>
+                    ) : (
+                      <p className="shrink-0 font-mono text-sm">
+                        ${(item.unitPrice ?? 0).toFixed(2)}
+                      </p>
+                    )}
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <Button
@@ -247,7 +253,9 @@ export function PortalShop({
                       <span className="text-muted-foreground text-xs">
                         {isOrderStatusKey(o.status) ? ORDER_STATUS_META[o.status].label : o.status}
                       </span>
-                      <span className="font-mono text-sm">${o.total.toFixed(2)}</span>
+                      {pricingMode !== 'no_charge' && (
+                        <span className="font-mono text-sm">${o.total.toFixed(2)}</span>
+                      )}
                       <Button variant="outline" size="sm" onClick={() => reorder(o)}>
                         <RotateCcw className="h-3.5 w-3.5" /> Reorder
                       </Button>
@@ -325,8 +333,13 @@ export function PortalShop({
             <div className="flex items-center gap-3">
               <ShoppingCart className="text-muted-foreground h-4 w-4 shrink-0" />
               <span className="text-sm">
-                {cartLines.reduce((s, [, q]) => s + q, 0)} units ·{' '}
-                <span className="font-mono">${total.toFixed(2)}</span>
+                {cartLines.reduce((s, [, q]) => s + q, 0)} units
+                {pricingMode !== 'no_charge' && (
+                  <>
+                    {' '}
+                    · <span className="font-mono">${total.toFixed(2)}</span>
+                  </>
+                )}
               </span>
               <input
                 className="border-input bg-background min-w-0 flex-1 rounded-md border px-3 py-1.5 text-sm"
