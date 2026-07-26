@@ -204,7 +204,7 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
     // The mode rides on the SAME b2b_portal row the gate above already read.
     // Absent/malformed settings resolve to no_charge inside the shared
     // resolver — never add a second default here.
-    pricingMode: resolvePortalPricingMode((moduleRow as { settings?: unknown }).settings),
+    pricingMode: resolvePortalPricingMode((moduleRow as { settings?: unknown } | null)?.settings),
   };
 }
 
@@ -253,20 +253,44 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
   const ids = catalogRows.map((r) => r.item_id);
   if (ids.length === 0) return [];
 
-  const { data: items } = await admin
-    .from('inventory_items')
-    .select('id, name, sku, quantity_on_hand, status')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', ids)
-    .eq('status', 'active')
-    // Expected items (mig 0277): never received — excluded from the
-    // customer catalog until first stock arrives. Checkout re-validates
-    // every line against THIS set (portalSubmitOrder), so the exclusion
-    // also rejects a crafted submit.
-    .eq('awaiting_first_receipt', false)
-    .is('deleted_at', null);
+  // Chunked, not one `.in(...)`: this now receives the customer's ENTIRE
+  // allowlist (previously it got the smaller allowlist-∩-priced set), and two
+  // things silently break at scale otherwise. First, PostgREST caps a single
+  // response at max_rows regardless of how many ids matched (1000,
+  // supabase/config.toml) — a big-enough allowlist would come back truncated
+  // with no error. Second, a few hundred UUIDs in one `.in(...)` can overrun a
+  // proxy's URL length limit before the request reaches Postgres. 500 ids per
+  // batch (UUIDs are 36 chars, so ~18KB of query string) matches the existing
+  // chunkIdsForInFilter precedent (services/inventory.ts) and keeps each
+  // batch's own response bounded well under the row cap, since this query
+  // returns at most one row per id. A batch error is NOT swallowed — unlike a
+  // decorative lookup, this set decides catalog membership, so a failed batch
+  // must fail the whole read rather than quietly rendering an incomplete (or
+  // empty) catalog.
+  const ITEMS_BATCH_SIZE = 500;
+  const items: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < ids.length; i += ITEMS_BATCH_SIZE) {
+    const batch = ids.slice(i, i + ITEMS_BATCH_SIZE);
+    const { data, error } = await admin
+      .from('inventory_items')
+      .select('id, name, sku, quantity_on_hand, status')
+      .eq('organization_id', ctx.organizationId)
+      .in('id', batch)
+      .eq('status', 'active')
+      // Expected items (mig 0277): never received — excluded from the
+      // customer catalog until first stock arrives. Checkout re-validates
+      // every line against THIS set (portalSubmitOrder), so the exclusion
+      // also rejects a crafted submit.
+      .eq('awaiting_first_receipt', false)
+      .is('deleted_at', null);
+    if (error) {
+      void reportError(new Error(error.message), { tag: 'portal.catalog.items' });
+      throw new Error('Catalog could not be loaded. Please try again.');
+    }
+    items.push(...((data ?? []) as Array<Record<string, unknown>>));
+  }
 
-  return ((items ?? []) as Array<Record<string, unknown>>).map((i) => ({
+  return items.map((i) => ({
     itemId: i.id as string,
     name: (i.name as string) ?? '',
     sku: (i.sku as string | null) ?? null,

@@ -121,6 +121,11 @@ function makeDb(): Record<string, Row[]> {
 function makeAdmin(db: Record<string, Row[]>) {
   const fromCalls: string[] = [];
   const inserts: Array<{ table: string; rows: Row[] }> = [];
+  // Records the size of every `.in()` call, per table — lets a test prove a
+  // large id list actually got chunked into multiple bounded calls, rather
+  // than one `.in(...)` (which this in-memory client would happily accept
+  // even unchunked, since it doesn't emulate PostgREST's max_rows cap).
+  const inCallSizes: Record<string, number[]> = {};
 
   function chain(table: string) {
     const preds: Array<(r: Row) => boolean> = [];
@@ -140,6 +145,7 @@ function makeAdmin(db: Record<string, Row[]>) {
         return builder;
       },
       in: (col: string, vals: unknown[]) => {
+        (inCallSizes[table] ??= []).push(vals.length);
         preds.push((r) => vals.includes(r[col]));
         return builder;
       },
@@ -182,6 +188,7 @@ function makeAdmin(db: Record<string, Row[]>) {
     },
     fromCalls,
     inserts,
+    inCallSizes,
   };
 }
 
@@ -289,6 +296,30 @@ describe('portalCatalog — the allowlist is still the only gate', () => {
   });
 });
 
+describe('portalCatalog — the final inventory_items read is chunked', () => {
+  it('returns the FULL set when the allowlist spans more than one 500-id batch', async () => {
+    // 650 > one batch (500), so covering it proves the id list was actually
+    // split and stitched back together, not just handed to one `.in(...)`.
+    const bulkIds = Array.from({ length: 650 }, (_, n) => `bulk-${String(n).padStart(4, '0')}`);
+    const db = makeDb();
+    db.inventory_items = bulkIds.map((id) => item(id));
+    db.customer_catalog = bulkIds.map((id) => ({ customer_id: CUSTOMER, item_id: id }));
+    admin = makeAdmin(db);
+    adminRef.current = admin.client;
+
+    const rows = await portalCatalog(ctxNoCharge);
+
+    expect(rows.map((r) => r.itemId).sort()).toEqual([...bulkIds].sort());
+    // And prove it via the read pattern itself, not just the result: more
+    // than one `.in()` call against inventory_items, each within the 500-id
+    // batch size, together covering exactly the 650 requested ids.
+    const sizes = admin.inCallSizes.inventory_items ?? [];
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(sizes.every((n) => n <= 500)).toBe(true);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(650);
+  });
+});
+
 describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
   it('checkout accepts exactly what the catalog showed, in no_charge mode', async () => {
     const rows = await portalCatalog(ctxNoCharge);
@@ -337,7 +368,7 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
 });
 
 describe('resolvePortalContext — the mode comes from the org', () => {
-  function seedOrg(settings: unknown) {
+  function seedOrg(settings: unknown, enabled = true) {
     const db = makeDb();
     db.customer_users = [
       {
@@ -356,7 +387,7 @@ describe('resolvePortalContext — the mode comes from the org', () => {
       },
     ];
     db.organization_modules = [
-      { organization_id: ORG, module_id: 'b2b_portal', enabled: true, settings },
+      { organization_id: ORG, module_id: 'b2b_portal', enabled, settings },
     ];
     db.organizations = [
       { id: ORG, name: 'L4L North Region', logo_url: null, plan: null, access_tier: 'business' },
@@ -375,5 +406,15 @@ describe('resolvePortalContext — the mode comes from the org', () => {
     seedOrg(null);
     const ctx = await resolvePortalContext();
     expect(ctx?.pricingMode).toBe('no_charge');
+  });
+
+  // Test gap named in review: both cases above seed enabled:true, so nothing
+  // exercised the module gate itself. resolvePortalContext must refuse the
+  // WHOLE portal (not just fall back on pricing mode) once b2b_portal is
+  // disabled for the org — mirrors the org-side gate.
+  it('returns null — no portal at all — when the b2b_portal module row is disabled', async () => {
+    seedOrg({ pricingMode: 'priced' }, false);
+    const ctx = await resolvePortalContext();
+    expect(ctx).toBeNull();
   });
 });
