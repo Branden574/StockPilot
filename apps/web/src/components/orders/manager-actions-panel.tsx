@@ -255,6 +255,18 @@ export function ManagerActionsPanel({
     router.refresh();
   }
 
+  // Single place that closes the deny dialog: routed to by the Cancel
+  // button, by Escape/backdrop (via Dialog's onOpenChange), and by a
+  // successful submit below. Whichever path closes it, the typed reason is
+  // wiped so it can never resurface pre-filled against a different order —
+  // it's an audit-logged field. A failed submit does NOT go through this
+  // (the dialog stays open and the reason is deliberately kept).
+  function closeDenyDialog(open: boolean) {
+    if (busy === 'deny') return;
+    setDenyOpen(open);
+    if (!open) setDenyReason('');
+  }
+
   async function deny() {
     const reason = denyReason.trim();
     if (!reason) {
@@ -268,8 +280,7 @@ export function ManagerActionsPanel({
       toast.error(res.error.message);
       return;
     }
-    setDenyOpen(false);
-    setDenyReason('');
+    closeDenyDialog(false);
     toast.success('Request denied.');
     router.refresh();
   }
@@ -382,6 +393,16 @@ export function ManagerActionsPanel({
     router.refresh();
   }
 
+  // Same single-close-point pattern as closeDenyDialog above: Cancel,
+  // Escape/backdrop, and a successful submit all route here so the reason
+  // is cleared on every dismissal-without-submit and on success, but never
+  // on a failed submit (dialog stays open, reason stays put).
+  function closeReopenDialog(open: boolean) {
+    if (busy === 'reopen-picking') return;
+    setReopenOpen(open);
+    if (!open) setReopenReason('');
+  }
+
   async function reopenPicking() {
     const reason = reopenReason.trim();
     if (!reason) {
@@ -395,8 +416,7 @@ export function ManagerActionsPanel({
       toast.error(res.error.message);
       return;
     }
-    setReopenOpen(false);
-    setReopenReason('');
+    closeReopenDialog(false);
     toast.success('Picking reopened — the pick is editable again.');
     router.refresh();
   }
@@ -858,14 +878,7 @@ export function ManagerActionsPanel({
 
       {/* Deny-reason dialog. Replaces the old window.prompt() which
           was blocked in iOS Safari webviews and couldn't be styled. */}
-      <Dialog
-        open={denyOpen}
-        onOpenChange={(v) => {
-          if (busy === 'deny') return;
-          setDenyOpen(v);
-          if (!v) setDenyReason('');
-        }}
-      >
+      <Dialog open={denyOpen} onOpenChange={closeDenyDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Deny this request?</DialogTitle>
@@ -889,7 +902,7 @@ export function ManagerActionsPanel({
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setDenyOpen(false)}
+              onClick={() => closeDenyDialog(false)}
               disabled={busy === 'deny'}
             >
               Cancel
@@ -912,14 +925,7 @@ export function ManagerActionsPanel({
           picked/packed (pre-signature) order back to picking_in_progress.
           Same iOS-webview-safe pattern as the deny dialog above: no
           window.prompt(). */}
-      <Dialog
-        open={reopenOpen}
-        onOpenChange={(v) => {
-          if (busy === 'reopen-picking') return;
-          setReopenOpen(v);
-          if (!v) setReopenReason('');
-        }}
-      >
+      <Dialog open={reopenOpen} onOpenChange={closeReopenDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Reopen picking?</DialogTitle>
@@ -951,7 +957,7 @@ export function ManagerActionsPanel({
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setReopenOpen(false)}
+              onClick={() => closeReopenDialog(false)}
               disabled={busy === 'reopen-picking'}
             >
               Cancel

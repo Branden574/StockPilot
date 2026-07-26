@@ -731,6 +731,19 @@ export default function OrderDetail() {
     await runAction(busyKey, () => transitionOrder(id, body));
   }
 
+  // Single place that dismisses the deny modal WITHOUT submitting — Cancel,
+  // the backdrop press, and Android's hardware back (onRequestClose) all
+  // route here. The typed reason is wiped on every one of those paths so it
+  // can never resurface pre-filled against a later, unrelated order — it's
+  // an audit-logged field. submitDeny below is untouched and does NOT call
+  // this: it already closes the modal and clears the reason on its own
+  // (pre-existing, unrelated to this fix), so this function only covers the
+  // dismiss-without-submit paths that used to leak the typed text.
+  function dismissDenyModal() {
+    setDenyOpen(false);
+    setDenyReason('');
+  }
+
   async function submitDeny() {
     const reason = denyReason.trim();
     if (!reason) {
@@ -740,6 +753,12 @@ export default function OrderDetail() {
     setDenyOpen(false);
     await act({ action: 'deny', reason }, 'deny');
     setDenyReason('');
+  }
+
+  // Same single-dismiss-point pattern as dismissDenyModal above.
+  function dismissReopenModal() {
+    setReopenOpen(false);
+    setReopenReason('');
   }
 
   async function reopenPicking() {
@@ -1765,9 +1784,9 @@ export default function OrderDetail() {
       </Modal>
 
       {/* Deny-reason capture (the requester sees this reason). */}
-      <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={() => setDenyOpen(false)}>
+      <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={dismissDenyModal}>
         <Pressable
-          onPress={() => setDenyOpen(false)}
+          onPress={dismissDenyModal}
           style={{
             flex: 1,
             justifyContent: 'center',
@@ -1798,7 +1817,7 @@ export default function OrderDetail() {
             />
             <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
               <Pressable
-                onPress={() => setDenyOpen(false)}
+                onPress={dismissDenyModal}
                 style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
               >
                 <Mono size={13} color={c.ink}>Cancel</Mono>
@@ -1823,10 +1842,10 @@ export default function OrderDetail() {
         visible={reopenOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setReopenOpen(false)}
+        onRequestClose={dismissReopenModal}
       >
         <Pressable
-          onPress={() => setReopenOpen(false)}
+          onPress={dismissReopenModal}
           style={{
             flex: 1,
             justifyContent: 'center',
@@ -1866,7 +1885,7 @@ export default function OrderDetail() {
             />
             <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
               <Pressable
-                onPress={() => setReopenOpen(false)}
+                onPress={dismissReopenModal}
                 style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
               >
                 <Mono size={13} color={c.ink}>Cancel</Mono>
