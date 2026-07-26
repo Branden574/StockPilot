@@ -21,6 +21,12 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => adminStubHolder.current.client,
 }));
 
+// Outbound integration dispatch is fire-and-forget; capture it so the
+// return.created payload (which external webhooks/Zendesk consume) can be
+// asserted rather than escaping to the real endpoint drainer.
+const dispatchMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('./integration-events', () => ({ dispatchEvent: dispatchMock }));
+
 import { RMAService } from './returns';
 import { ServiceError } from './context';
 
@@ -857,6 +863,142 @@ describe('RMAService.returnableLinesForOrder (durable budget)', () => {
     );
 
     await expect(svc.returnableLinesForOrder(ORDER_ID)).resolves.toEqual([]);
+  });
+});
+
+// ── Parent order handle (SO number) ────────────────────────────────────────
+// `returns` stores only the FK order_request_id and no number snapshot, so the
+// reads embed the parent order's order_number. Every returns surface prints
+// formatOrderNumber(order_number) and falls back to the id prefix, because
+// order_number is null on orders created before it existed.
+describe('RMAService reads carry the parent order number', () => {
+  it('list() embeds order_number and flattens the embed onto the row', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [
+          {
+            id: 'ret-1',
+            organization_id: 'org-test',
+            order_request_id: ORDER_ID,
+            status: 'requested',
+            order_request: { order_number: 49 },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    const rows = await svc.list();
+    expect(rows[0]).toMatchObject({ id: 'ret-1', order_number: 49 });
+    // The raw embed must not leak onto the row the pages consume.
+    expect(rows[0]).not.toHaveProperty('order_request');
+    // Wiring: the select has to ask the parent order for its number.
+    expect(String(stub.chainArgs.get('returns.select')?.[0]?.[0])).toContain(
+      'order_requests!order_request_id',
+    );
+  });
+
+  it('list() reports order_number null for a legacy order with no number', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [
+          {
+            id: 'ret-1',
+            organization_id: 'org-test',
+            order_request_id: ORDER_ID,
+            status: 'requested',
+            order_request: { order_number: null },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.list()).resolves.toMatchObject([{ order_number: null }]);
+  });
+
+  it('get() surfaces order_number on the detail header', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [
+          {
+            id: 'ret-1',
+            organization_id: 'org-test',
+            order_request_id: ORDER_ID,
+            status: 'closed',
+            order_request: { order_number: 1234 },
+          },
+        ],
+        error: null,
+      },
+      'return_lines.select': { data: [], error: null },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    const detail = await svc.get('ret-1');
+    expect(detail).toMatchObject({ id: 'ret-1', order_number: 1234 });
+    expect(detail).not.toHaveProperty('order_request');
+  });
+
+  it('get() tolerates a missing embed (order_number null, never undefined)', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [{ id: 'ret-1', organization_id: 'org-test', order_request_id: ORDER_ID, status: 'closed' }],
+        error: null,
+      },
+      'return_lines.select': { data: [], error: null },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.get('ret-1')).resolves.toMatchObject({ order_number: null });
+  });
+});
+
+describe('return.created integration payload', () => {
+  it('sends the real SO number as orderNumber', async () => {
+    const stub = makeCreateStub({
+      'order_requests.select': {
+        data: [{ ...COMPLETED_ORDER, order_number: 49 }],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    const created = await svc.createFromOrder(ORDER_ID, VALID_INPUT);
+
+    expect(created.order_number).toBe(49);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      'org-test',
+      'return.created',
+      expect.objectContaining({ orderNumber: 'SO-000049' }),
+    );
+  });
+
+  it('falls back to the order id prefix when the order has no number', async () => {
+    const stub = makeCreateStub();
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await svc.createFromOrder(ORDER_ID, VALID_INPUT);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      'org-test',
+      'return.created',
+      expect.objectContaining({ orderNumber: ORDER_ID.slice(0, 8).toUpperCase() }),
+    );
   });
 });
 

@@ -214,3 +214,48 @@ describe('LotsService.recordLotPicks', () => {
     expect(stub.fromCalls).toContain('lot_pick_events');
   });
 });
+
+// The lot-trace report shows which ORDER consumed a lot. lot_pick_events holds
+// only the FK order_request_id, so the trace embeds the parent order's number —
+// otherwise the report prints a raw UUID prefix mislabelled as an order number.
+describe('LotsService.traceLot', () => {
+  it('surfaces the picking order number from the embed', async () => {
+    const stub = makeSupabaseStub({
+      'receipt_line_lots.select': { data: [], error: null },
+      'lot_pick_events.select': {
+        data: [
+          {
+            order_request_id: 'o1', qty: 3, picked_at: '2026-07-01T00:00:00Z',
+            picked_by: 'u1', lot_number: 'A', order_request: { order_number: 49 },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    const res = await svc.traceLot('A');
+    expect(res.picks[0]).toMatchObject({ orderRequestId: 'o1', orderNumber: 49 });
+    // Wiring: the pick select must ask the parent order for its number.
+    expect(String(stub.chainArgs.get('lot_pick_events.select')?.[0]?.[0])).toContain(
+      'order_requests!order_request_id',
+    );
+  });
+
+  it('reports orderNumber null for a legacy pick with no order number', async () => {
+    const stub = makeSupabaseStub({
+      'receipt_line_lots.select': { data: [], error: null },
+      'lot_pick_events.select': {
+        data: [
+          {
+            order_request_id: 'o1', qty: 3, picked_at: '2026-07-01T00:00:00Z',
+            picked_by: null, lot_number: 'A', order_request: { order_number: null },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    const res = await svc.traceLot('A');
+    expect(res.picks[0]).toMatchObject({ orderRequestId: 'o1', orderNumber: null });
+  });
+});
