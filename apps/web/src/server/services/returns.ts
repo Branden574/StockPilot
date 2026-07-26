@@ -3,7 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
-import { can } from '@stockpilot/core';
+import { can, formatOrderNumber } from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -115,6 +115,17 @@ export interface ReturnRow {
   updated_at: string;
 }
 
+/**
+ * A `returns` row plus the parent order's number. `returns` snapshots no order
+ * handle — only the FK — so every read that feeds a UI embeds order_number and
+ * the surface prints formatOrderNumber(order_number), the identical SO- handle
+ * the order page shows. NULL on orders created before order_number existed, so
+ * every call site keeps a fallback to the order id prefix.
+ */
+export interface ReturnRowWithOrder extends ReturnRow {
+  order_number: number | null;
+}
+
 export interface ReturnLineRow {
   id: string;
   return_id: string;
@@ -127,7 +138,7 @@ export interface ReturnLineRow {
   created_at: string;
 }
 
-export interface ReturnWithLines extends ReturnRow {
+export interface ReturnWithLines extends ReturnRowWithOrder {
   lines: ReturnLineRow[];
 }
 
@@ -171,6 +182,35 @@ export type CreateFromOrderInput = z.infer<typeof createFromOrderSchema>;
 /** Returnable order statuses: a fully-fulfilled 'completed' order, or the
  * legacy 'delivered' status some older orders still carry. */
 const RETURNABLE_ORDER_STATUSES = new Set<string>(['completed', 'delivered']);
+
+/**
+ * The read projection for a `returns` row: everything on the row PLUS the
+ * parent order's number, so a returns surface can print the same SO- handle the
+ * order page does instead of a raw order-id prefix. Single FK, so this is a
+ * plain to-one embed (no dual-FK ambiguity). `order_requests` is readable by
+ * every accepted org member under RLS, so the embed does not null out for a
+ * read-only viewer holding only returns:read.
+ */
+const RETURN_SELECT_WITH_ORDER =
+  '*, order_request:order_requests!order_request_id (order_number)';
+
+/** The raw row shape RETURN_SELECT_WITH_ORDER resolves to. */
+type ReturnRowEmbed = ReturnRow & {
+  order_request?: { order_number: number | null } | { order_number: number | null }[] | null;
+};
+
+/**
+ * Flattens the parent-order embed onto `order_number` so callers never touch
+ * the nested shape (PostgREST can hand a to-one embed back as an object or, in
+ * some shapes, a one-element array — same defensive read as the item embed in
+ * returnableLinesForOrder). Always resolves to a number or null, never
+ * undefined, so a display fallback can test it with a single `??`.
+ */
+function withOrderNumber(row: ReturnRowEmbed): ReturnRowWithOrder {
+  const { order_request: embed, ...rest } = row;
+  const order = Array.isArray(embed) ? (embed[0] ?? null) : (embed ?? null);
+  return { ...rest, order_number: order?.order_number ?? null };
+}
 
 /**
  * Live PENDING return demand per source line: the sum of unapplied
@@ -262,12 +302,12 @@ export class RMAService {
 
   // ── Reads ────────────────────────────────────────────────────────────
 
-  async list(filters: ListReturnsFilters = {}): Promise<ReturnRow[]> {
+  async list(filters: ListReturnsFilters = {}): Promise<ReturnRowWithOrder[]> {
     this.gateRead();
 
     let query = this.ctx.supabase
       .from('returns')
-      .select('*')
+      .select(RETURN_SELECT_WITH_ORDER)
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false });
 
@@ -281,7 +321,7 @@ export class RMAService {
 
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data as ReturnRow[] | null) ?? [];
+    return ((data as ReturnRowEmbed[] | null) ?? []).map(withOrderNumber);
   }
 
   async get(id: string): Promise<ReturnWithLines> {
@@ -289,7 +329,7 @@ export class RMAService {
 
     const { data: header, error: headerError } = await this.ctx.supabase
       .from('returns')
-      .select('*')
+      .select(RETURN_SELECT_WITH_ORDER)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -305,7 +345,7 @@ export class RMAService {
     if (linesError) throw new ServiceError('internal_error', linesError.message);
 
     return {
-      ...(header as ReturnRow),
+      ...withOrderNumber(header as ReturnRowEmbed),
       lines: (lines as ReturnLineRow[] | null) ?? [],
     };
   }
@@ -414,16 +454,19 @@ export class RMAService {
 
     const parsed = createFromOrderSchema.parse(input);
 
-    // 1. The order must exist in this org and be returnable.
+    // 1. The order must exist in this org and be returnable. order_number comes
+    //    along so the created return (and the outbound return.created event)
+    //    carries the real SO- handle rather than a UUID prefix.
     const { data: order, error: orderError } = await this.ctx.supabase
       .from('order_requests')
-      .select('id, organization_id, status')
+      .select('id, organization_id, status, order_number')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', orderRequestId)
       .maybeSingle();
     if (orderError) throw new ServiceError('internal_error', orderError.message);
     if (!order) throw new ServiceError('not_found', 'Order not found.');
 
+    const orderNumber = (order as { order_number?: number | null }).order_number ?? null;
     const orderStatus = (order as { status: string }).status;
     if (!RETURNABLE_ORDER_STATUSES.has(orderStatus)) {
       throw new ServiceError(
@@ -628,7 +671,12 @@ export class RMAService {
     void dispatchEvent(this.ctx.organizationId, 'return.created', {
       id: header.id,
       returnNumber: header.return_number,
-      orderNumber: typeof orderRequestId === 'string' ? orderRequestId.slice(0, 8).toUpperCase() : null,
+      // The REAL order handle (SO-######) — this used to send an order-id
+      // prefix mislabelled as an order number, which external consumers could
+      // not match against anything. Falls back to that prefix only for legacy
+      // orders that carry no order_number.
+      orderNumber:
+        formatOrderNumber(orderNumber) ?? orderRequestId.slice(0, 8).toUpperCase(),
     });
 
     // Zendesk shell: surface a new return as a ticket (best-effort; dormant
@@ -650,7 +698,11 @@ export class RMAService {
       /* best-effort: a publish failure must not fail the created return */
     }
 
-    return { ...header, lines: (insertedLines as ReturnLineRow[] | null) ?? [] };
+    return {
+      ...header,
+      order_number: orderNumber,
+      lines: (insertedLines as ReturnLineRow[] | null) ?? [],
+    };
   }
 
   // ── Lifecycle transitions ──────────────────────────────────────────────

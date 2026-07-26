@@ -47,6 +47,9 @@ export interface LotTraceResult {
   }>;
   picks: Array<{
     orderRequestId: string | null;
+    /** The picking order's number (drives the SO- handle); null on legacy
+     *  orders that predate order_number, and when the pick has no order. */
+    orderNumber: number | null;
     qty: number;
     pickedAt: string;
     pickedBy: string | null;
@@ -264,9 +267,16 @@ export class LotsService {
       .ilike('lot_number', `%${term}%`);
     if (lotErr) throw new ServiceError('internal_error', lotErr.message);
 
+    // The parent order's number rides along: lot_pick_events snapshots no order
+    // handle, and the trace report shows WHICH order consumed the lot — it must
+    // print the same SO- number the order page does, not an id prefix.
+    // order_requests is readable by every accepted org member under RLS.
     const { data: pickRows, error: pickErr } = await this.ctx.supabase
       .from('lot_pick_events')
-      .select('order_request_id, qty, picked_at, picked_by, lot_number')
+      .select(
+        `order_request_id, qty, picked_at, picked_by, lot_number,
+         order_request:order_requests!order_request_id (order_number)`,
+      )
       .eq('organization_id', this.ctx.organizationId)
       .ilike('lot_number', `%${term}%`);
     if (pickErr) throw new ServiceError('internal_error', pickErr.message);
@@ -281,14 +291,24 @@ export class LotsService {
         qty: Number(r.qty_base),
         expirationDate: r.expiration_date,
       })),
-      picks: ((pickRows ?? []) as Array<{
+      picks: ((pickRows ?? []) as unknown as Array<{
         order_request_id: string | null; qty: number; picked_at: string; picked_by: string | null;
-      }>).map((p) => ({
-        orderRequestId: p.order_request_id,
-        qty: Number(p.qty),
-        pickedAt: p.picked_at,
-        pickedBy: p.picked_by,
-      })),
+        order_request:
+          | { order_number: number | null }
+          | { order_number: number | null }[]
+          | null;
+      }>).map((p) => {
+        const order = Array.isArray(p.order_request)
+          ? (p.order_request[0] ?? null)
+          : (p.order_request ?? null);
+        return {
+          orderRequestId: p.order_request_id,
+          orderNumber: order?.order_number ?? null,
+          qty: Number(p.qty),
+          pickedAt: p.picked_at,
+          pickedBy: p.picked_by,
+        };
+      }),
     };
   }
 

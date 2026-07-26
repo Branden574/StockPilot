@@ -22,7 +22,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatRelative } from '@/lib/utils';
 import { RMAService, type ReturnStatus } from '@/server/services/returns';
 
-import { can } from '@stockpilot/core';
+import { can, formatOrderNumber } from '@stockpilot/core';
 
 const STATUS_FILTERS: Array<{ value: ReturnStatus | 'all'; label: string }> = [
   { value: 'all', label: 'All' },
@@ -146,7 +146,10 @@ export default async function ReturnsPage({
                         href={`/dashboard/orders/${r.order_request_id}`}
                         className="text-muted-foreground text-xs hover:underline"
                       >
-                        {r.order_request_id.slice(0, 8)}
+                        {/* The real SO- handle, matching the order page.
+                            Legacy orders carry no order_number — those fall
+                            back to the order id prefix. */}
+                        {formatOrderNumber(r.order_number) ?? r.order_request_id.slice(0, 8)}
                       </Link>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">

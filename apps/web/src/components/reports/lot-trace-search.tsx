@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { traceLotAction } from '@/server/actions/lot-trace';
@@ -80,7 +82,9 @@ export function LotTraceSearch() {
                   )}
                   {result.picks.map((p, i) => (
                     <tr key={i} className="border-t">
-                      <td className="px-3 py-2 font-mono">{p.orderRequestId ? p.orderRequestId.slice(0, 8).toUpperCase() : '—'}</td>
+                      {/* The real SO- handle. Legacy orders carry no
+                          order_number — those fall back to the id prefix. */}
+                      <td className="px-3 py-2 font-mono">{formatOrderNumber(p.orderNumber) ?? (p.orderRequestId ? p.orderRequestId.slice(0, 8).toUpperCase() : '—')}</td>
                       <td className="px-3 py-2">{p.pickedAt.slice(0, 10)}</td>
                       <td className="px-3 py-2 text-right">{p.qty}</td>
                     </tr>

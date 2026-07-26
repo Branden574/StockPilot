@@ -23,7 +23,7 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 import { RMAService } from '@/server/services/returns';
 import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
-import { can } from '@stockpilot/core';
+import { can, formatOrderNumber } from '@stockpilot/core';
 
 export default async function ReturnDetailPage({
   params,
@@ -116,7 +116,11 @@ export default async function ReturnDetailPage({
                 href={`/dashboard/orders/${detail.order_request_id}`}
                 className="text-foreground font-medium hover:underline"
               >
-                order {detail.order_request_id.slice(0, 8)}
+                {/* The real SO- handle, matching the order page. Legacy orders
+                    carry no order_number — those fall back to the id prefix. */}
+                order{' '}
+                {formatOrderNumber(detail.order_number) ??
+                  detail.order_request_id.slice(0, 8)}
               </Link>
             </p>
           </div>
