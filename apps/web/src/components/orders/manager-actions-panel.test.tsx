@@ -272,3 +272,54 @@ describe('ManagerActionsPanel — reopen picking', () => {
     });
   });
 });
+
+describe('ManagerActionsPanel — reason dialogs clear on cancel', () => {
+  // Regression coverage: Cancel used to call setXOpen(false) directly,
+  // bypassing the onOpenChange handler that clears the typed reason.
+  // Escape/backdrop already routed through onOpenChange and worked; the
+  // Cancel button did not — so the stale reason resurfaced (and was
+  // submittable) against a later, unrelated open of the same dialog.
+
+  it('reopen dialog: typing a reason then hitting Cancel leaves it empty on the next open', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Reopen picking' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Reason'), 'Miscount on line 2');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(reopenPicking).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Reopen picking' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Reason')).toHaveValue('');
+  });
+
+  it('deny dialog: typing a reason then hitting Cancel leaves it empty on the next open', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'pending_approval', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Deny' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Reason'), 'Duplicate request');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Deny' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Reason')).toHaveValue('');
+  });
+});
