@@ -165,7 +165,12 @@ export function PortalShop({
                         )}
                       </p>
                     </div>
-                    <p className="shrink-0 font-mono text-sm">${item.unitPrice.toFixed(2)}</p>
+                    {/* unitPrice is now nullable (no-charge orgs, unpriced items).
+                        Compile guard only — the next task replaces this line with
+                        the mode-aware price / "Request quote" rendering. */}
+                    <p className="shrink-0 font-mono text-sm">
+                      ${(item.unitPrice ?? 0).toFixed(2)}
+                    </p>
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <Button

@@ -2,7 +2,12 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { planAllowsB2bPortal, type OrgBillingState } from '@stockpilot/core';
+import {
+  planAllowsB2bPortal,
+  resolvePortalPricingMode,
+  type OrgBillingState,
+  type PortalPricingMode,
+} from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -37,9 +42,10 @@ async function fetchAllAdmin<T>(
  * write below runs on the service-role client AFTER resolvePortalContext()
  * proves the signed-in auth user is an invited customer_user, and every query
  * is explicitly scoped to that customer's org + catalog + price list. Only
- * SAFE projections leave this module: name/sku/image/price/in-stock — never
- * cost, quantity, bin, or anything org-internal. (Mirrors the public-catalog
- * posture; the dashboard principal keeps using RLS-scoped services.)
+ * SAFE projections leave this module: name/sku/image/price/availability —
+ * never cost, bin, or anything org-internal. (Available quantity is exposed
+ * by owner decision 2026-07-24, the same call the public item page already
+ * made; the dashboard principal keeps using RLS-scoped services.)
  */
 
 export interface PortalContext {
@@ -51,6 +57,8 @@ export interface PortalContext {
   orgName: string;
   orgLogoUrl: string | null;
   priceListId: string | null;
+  /** How this org's portal treats money (org setting; defaults to no_charge). */
+  pricingMode: PortalPricingMode;
 }
 
 export interface PortalCatalogItem {
@@ -58,7 +66,12 @@ export interface PortalCatalogItem {
   name: string;
   sku: string | null;
   imageUrl: string | null;
-  unitPrice: number;
+  /** null in no_charge, and in a priced org when the item has no price yet. */
+  unitPrice: number | null;
+  /** Priced org, no price for this item — the customer asks instead of buying. */
+  quotable: boolean;
+  /** Real on-hand units (owner decision 2026-07-24) — never cost or bin. */
+  quantityAvailable: number;
   inStock: boolean;
 }
 
@@ -152,7 +165,7 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   const [{ data: moduleRow }, { data: org }] = await Promise.all([
     admin
       .from('organization_modules')
-      .select('module_id')
+      .select('module_id, settings')
       .eq('organization_id', customer.organization_id)
       .eq('module_id', 'b2b_portal')
       .eq('enabled', true)
@@ -188,21 +201,31 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
     orgName: (org as { name?: string } | null)?.name ?? 'Supplier',
     orgLogoUrl: (org as { logo_url?: string | null } | null)?.logo_url ?? null,
     priceListId: customer.price_list_id,
+    // The mode rides on the SAME b2b_portal row the gate above already read.
+    // Absent/malformed settings resolve to no_charge inside the shared
+    // resolver — never add a second default here.
+    pricingMode: resolvePortalPricingMode((moduleRow as { settings?: unknown }).settings),
   };
 }
 
 /**
- * The customer's catalog: allowlisted items ∩ price-list entries. BOTH are
- * required — an item without an explicit price never appears (decided
- * default), and an unassigned price list means an empty portal.
+ * The customer's catalog: the items on THEIR allowlist, in their org, active,
+ * not soft-deleted and not awaiting first receipt. The allowlist alone decides
+ * membership; the org's pricing mode only decides what money is shown. Checkout
+ * re-validates every line against this exact set (portalSubmitOrder), so
+ * anything added here becomes orderable — never relax the allowlist.
  */
 export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogItem[]> {
-  if (!ctx.priceListId) return [];
   const admin = createAdminClient();
+  const noCharge = ctx.pricingMode === 'no_charge';
 
   // Paginate both to exhaustion — checkout re-validates against this exact set,
   // so a silent 1000-row cap would let a visible item fail at checkout (recurring
   // pattern: never leave an undisclosed cap on a set another path re-checks).
+  //
+  // In no_charge the price list is irrelevant and is not read at all — an org
+  // that does not charge has no price list, and requiring one is exactly what
+  // left its portal empty.
   const [catalogRows, priceRows] = await Promise.all([
     fetchAllAdmin<{ item_id: string }>((from, to) =>
       admin
@@ -212,18 +235,22 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
         .order('item_id', { ascending: true })
         .range(from, to),
     ),
-    fetchAllAdmin<{ item_id: string; unit_price: number }>((from, to) =>
-      admin
-        .from('price_list_items')
-        .select('item_id, unit_price')
-        .eq('price_list_id', ctx.priceListId as string)
-        .order('item_id', { ascending: true })
-        .range(from, to),
-    ),
+    noCharge || !ctx.priceListId
+      ? Promise.resolve([] as Array<{ item_id: string; unit_price: number }>)
+      : fetchAllAdmin<{ item_id: string; unit_price: number }>((from, to) =>
+          admin
+            .from('price_list_items')
+            .select('item_id, unit_price')
+            .eq('price_list_id', ctx.priceListId as string)
+            .order('item_id', { ascending: true })
+            .range(from, to),
+        ),
   ]);
-  const allowed = new Set(catalogRows.map((r) => r.item_id));
   const prices = new Map(priceRows.map((r) => [r.item_id, Number(r.unit_price) || 0]));
-  const ids = [...allowed].filter((id) => prices.has(id));
+  // The ALLOWLIST alone decides what a customer can see. Previously an unpriced
+  // item was filtered out here; the owner's 2026-07-24 decision is to show it
+  // with a request-quote action instead.
+  const ids = catalogRows.map((r) => r.item_id);
   if (ids.length === 0) return [];
 
   const { data: items } = await admin
@@ -246,8 +273,14 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     // Item photos live in a private bucket (storage_path + signed URLs) —
     // portal images are a follow-up; the catalog stands without them.
     imageUrl: null,
-    unitPrice: prices.get(i.id as string) ?? 0,
-    // Badge only — never the actual quantity (decided default).
+    unitPrice: noCharge ? null : (prices.get(i.id as string) ?? null),
+    // Quotable = a priced org has no price for this item yet, so the customer
+    // asks rather than buys. Never true in no_charge, where nothing is sold.
+    quotable: !noCharge && !prices.has(i.id as string),
+    // Real on-hand (owner decision 2026-07-24, replacing the in-stock badge).
+    // Still never cost or bin — those remain org-internal.
+    quantityAvailable: Number(i.quantity_on_hand) || 0,
+    // Kept only until the shop swaps the badge for the quantity (next task).
     inStock: (Number(i.quantity_on_hand) || 0) > 0,
   }));
 }
@@ -262,7 +295,8 @@ const submitSchema = z.object({
 export type PortalSubmitInput = z.infer<typeof submitSchema>;
 
 /**
- * Checkout: validates every line against the catalog∩price-list set, then
+ * Checkout: validates every line against the catalog set above — the
+ * customer's own allowlist, org-scoped and orderable — then
  * creates ONE normal order_requests row (source 'portal', pending_approval —
  * the same approval pipeline internal requests use; decided default) with the
  * customer's prices recorded per line. Returns the new order id.
