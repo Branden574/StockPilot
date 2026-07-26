@@ -11,11 +11,14 @@
 --      happens, and still writes its visible movement.
 --   D. POST-HAND-OVER — quantity_picked is null on every line, so the loop
 --      no-ops and quantity_fulfilled is preserved. Unchanged from today.
---   E. THE RESUMED-BACKORDER COUNTEREXAMPLE — resume_fulfillment (0247) does
---      NOT clear picking_completed_at, so a resumed order part-picks with a
---      STALE non-null picking_completed_at and nothing drawn. This is why the
---      guard is on status and not on that timestamp: a timestamp gate would
---      restock here and re-invent the stock BUG 1 is about.
+--   E. THE RESUMED-BACKORDER COUNTEREXAMPLE — at the time this migration
+--      shipped, resume_fulfillment (0247) did not clear picking_completed_at,
+--      so a resumed order part-picked with a STALE non-null timestamp and
+--      nothing drawn. This is why the guard is on status and not on that
+--      timestamp: a timestamp gate would restock here and re-invent the stock
+--      BUG 1 is about. resume_fulfillment now clears the field (0291), but the
+--      guard never read it either way, so the scenario still proves the same
+--      point: cancelling a resumed-then-part-picked order must not restock.
 --   F. DRAWN BUT UNTIMESTAMPED — an in_transit order with picking_completed_at
 --      NULL still restocks. Same shape as the cancel fixture in
 --      0158_returns_invariants.test.sql, which a timestamp gate would break.
@@ -341,16 +344,22 @@ select is(
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- E — THE COUNTEREXAMPLE that rules out a picking_completed_at gate.
---     resume_fulfillment leaves the superseded cycle's picking_completed_at in
---     place, so a resumed order part-picks with a stale non-null timestamp and
---     nothing drawn.
+--     At the time this migration shipped, resume_fulfillment left the
+--     superseded cycle's picking_completed_at in place, so a resumed order
+--     part-picked with a stale non-null timestamp and nothing drawn — this is
+--     precisely why the guard above is on status, not on that timestamp.
+--     0291_resume_fulfillment_clear_picking_stamps.sql has since fixed
+--     resume_fulfillment to null the field out, but the guard was never
+--     reading it either way, so a resumed-then-part-picked order must still
+--     go uncharged on cancel regardless of what picking_completed_at holds.
 -- ════════════════════════════════════════════════════════════════════════════
 do $$ begin perform public.resume_fulfillment('d0290000-0000-0000-0000-0000000000e1'::uuid); end $$;
 
-select isnt(
+select is(
   (select picking_completed_at from public.order_requests where id = :ord_e),
   null,
-  'E: resume_fulfillment leaves a STALE picking_completed_at (not cleared)');
+  'E: resume_fulfillment clears picking_completed_at (0291) — the status guard '
+  || 'above never depended on this field either way');
 
 do $$ begin perform public.partial_pick_line('d0290000-0000-0000-0000-0000000000e2'::uuid, 6); end $$;
 
@@ -361,7 +370,7 @@ select is(
 select is(
   (select quantity_on_hand from public.inventory_items where id = :item_e),
   10::numeric(14,4),
-  'E: still nothing drawn (on_hand 10) despite the non-null timestamp');
+  'E: still nothing drawn (on_hand 10)');
 
 do $$ begin perform public.cancel_order_request('d0290000-0000-0000-0000-0000000000e1'::uuid,
   'cancelled mid-pick on a resumed backorder'); end $$;
@@ -369,7 +378,7 @@ do $$ begin perform public.cancel_order_request('d0290000-0000-0000-0000-0000000
 select is(
   (select quantity_on_hand from public.inventory_items where id = :item_e),
   10::numeric(14,4),
-  'E: cancel leaves on_hand 10 — a picking_completed_at gate would invent 6');
+  'E: cancel leaves on_hand 10 — a status guard correctly skips the restock');
 select is(
   (select quantity_picked from public.order_request_lines where id = :line_e),
   null,
