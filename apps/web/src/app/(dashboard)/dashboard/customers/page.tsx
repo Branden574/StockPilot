@@ -50,6 +50,11 @@ export default async function CustomersPage() {
   const pricingMode = resolvePortalPricingMode(
     (portalModuleRes.data as { settings?: unknown } | null)?.settings,
   );
+  // Owner/admin only, matching the writer (CustomersService.setPricingMode)
+  // and the RLS floor on organization_modules (mig 0219). customers:manage is
+  // manager-and-above, so showing the panel to everyone on this page would
+  // hand a manager a Save button that can only ever fail.
+  const canSetPricingMode = ctx.role === 'owner' || ctx.role === 'admin';
 
   const svc = new CustomersService(svcCtx);
   const [customers, priceLists, inventory] = await Promise.all([
@@ -90,8 +95,8 @@ export default async function CustomersPage() {
         </h1>
         <p className="text-muted-foreground mt-1 text-sm">
           B2B accounts that order through your portal — each with its own users,
-          price list, and catalog. Items without a price on the customer&apos;s
-          list are hidden from their portal.
+          price list, and catalog. The catalog alone decides what an account can
+          see and order.
         </p>
       </div>
 
@@ -103,9 +108,11 @@ export default async function CustomersPage() {
         </div>
       )}
 
-      <div className="mb-6">
-        <PortalPricingModePanel initial={pricingMode} />
-      </div>
+      {canSetPricingMode && (
+        <div className="mb-6">
+          <PortalPricingModePanel initial={pricingMode} />
+        </div>
+      )}
 
       <CustomersPanel
         customers={customers}

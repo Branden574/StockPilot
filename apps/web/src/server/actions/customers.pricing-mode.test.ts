@@ -46,7 +46,12 @@ function makeClient() {
 // vi.hoisted: the vi.mock() factory below is itself hoisted above normal
 // top-level `const`s, so a plain `const permissionSpy = vi.fn()` referenced
 // directly in the factory body would hit the TDZ.
-const { permissionSpy } = vi.hoisted(() => ({ permissionSpy: vi.fn() }));
+const { permissionSpy, auditSpy } = vi.hoisted(() => ({
+  permissionSpy: vi.fn(),
+  auditSpy: vi.fn(async () => {}),
+}));
+
+vi.mock('@/server/services/audit', () => ({ audit: auditSpy }));
 
 vi.mock('@/server/services/context', async () => {
   const actual = await vi.importActual<typeof import('@/server/services/context')>(
@@ -133,5 +138,48 @@ describe('setPortalPricingModeAction', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('forbidden');
     expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  // Writing organization_modules is has_org_role(..., 'admin') at the RLS layer
+  // (mig 0219). customers:manage is manager-and-above, so gating only on it let
+  // a manager reach the write and get a raw Postgres RLS error back in a toast.
+  // The gate now sits at the altitude the database enforces.
+  it.each(['manager', 'staff', 'viewer'] as const)(
+    'refuses a %s — the RLS floor on organization_modules is admin',
+    async (role) => {
+      sessionState.role = role;
+      const res = await setPortalPricingModeAction('priced');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('forbidden');
+      expect(upsertSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['owner', 'admin'] as const)('allows an %s to save', async (role) => {
+    sessionState.role = role;
+    expect((await setPortalPricingModeAction('priced')).ok).toBe(true);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('audits the change with before and after', async () => {
+    dbState.existingSettings = { pricingMode: 'no_charge' };
+    const res = await setPortalPricingModeAction('priced');
+    expect(res.ok).toBe(true);
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'portal_pricing_mode.updated',
+        entityType: 'organization_module',
+        entityId: 'b2b_portal',
+        before: { pricingMode: 'no_charge' },
+        after: { pricingMode: 'priced' },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('does not audit a change that was refused', async () => {
+    sessionState.role = 'manager';
+    await setPortalPricingModeAction('priced');
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 });

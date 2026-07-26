@@ -220,6 +220,10 @@ export type AuditEvent =
   // Automatic-reordering settings — an admin toggled auto-reorder / mode / cap,
   // stored in organization_modules.settings for 'purchase_orders'.
   | 'auto_reorder_settings.updated'
+  // B2B portal pricing mode — an admin switched whether the customer portal
+  // shows prices and order totals at all ('no_charge' | 'priced'), stored in
+  // organization_modules.settings for 'b2b_portal'.
+  | 'portal_pricing_mode.updated'
   // Archived-item auto-cleanup settings — an admin toggled auto-delete /
   // retention days, stored in organization_modules.settings for 'inventory'.
   | 'archive_cleanup_settings.updated'

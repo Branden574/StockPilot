@@ -85,10 +85,10 @@ export default function CustomersScreen() {
   return (
     <DataListScreen
       eyebrow={`B2B · ${rows.filter((r) => r.status === 'active').length} ACTIVE`}
-      title="Customers"
+      title="Accounts"
       italic="."
-      emptyTitle="No customers yet."
-      emptyBody="Create B2B customers on the web dashboard (Customers) — assign a price list and catalog, invite portal users, and their orders flow into your normal approval queue."
+      emptyTitle="No accounts yet."
+      emptyBody="Create B2B accounts on the web dashboard (Accounts) — assign a price list and catalog, invite portal users, and their orders flow into your normal approval queue."
       emptyIcon={Handshake}
       data={rows}
       loading={loading}

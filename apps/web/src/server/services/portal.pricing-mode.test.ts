@@ -117,8 +117,12 @@ function makeDb(): Record<string, Row[]> {
 /**
  * Minimal in-memory admin client: chainable like the real builder, but eq/in/
  * is/range actually filter, so the service's own predicates decide the rowset.
+ *
+ * `failTables` makes a named table's reads come back the way PostgREST reports
+ * a transient failure — `{ data: null, error: { message } }` — which is the
+ * exact shape a swallow-the-error reader turns into a silent empty rowset.
  */
-function makeAdmin(db: Record<string, Row[]>) {
+function makeAdmin(db: Record<string, Row[]>, failTables: Record<string, string> = {}) {
   const fromCalls: string[] = [];
   const inserts: Array<{ table: string; rows: Row[] }> = [];
   // Records the size of every `.in()` call, per table — lets a test prove a
@@ -171,10 +175,20 @@ function makeAdmin(db: Record<string, Row[]>) {
       },
       update: () => builder,
       delete: () => builder,
-      maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
-      single: async () => ({ data: rows()[0] ?? null, error: null }),
-      then: (resolve: (v: { data: Row[]; error: null }) => void) =>
-        resolve({ data: rows(), error: null }),
+      maybeSingle: async () =>
+        failTables[table]
+          ? { data: null, error: { message: failTables[table] } }
+          : { data: rows()[0] ?? null, error: null },
+      single: async () =>
+        failTables[table]
+          ? { data: null, error: { message: failTables[table] } }
+          : { data: rows()[0] ?? null, error: null },
+      then: (resolve: (v: { data: Row[] | null; error: { message: string } | null }) => void) =>
+        resolve(
+          failTables[table]
+            ? { data: null, error: { message: failTables[table]! } }
+            : { data: rows(), error: null },
+        ),
     };
     return builder;
   }
@@ -266,8 +280,44 @@ describe('portalCatalog — pricing modes', () => {
   it('still never projects cost or bin', async () => {
     const row = (await portalCatalog(ctxPriced))[0]!;
     expect(Object.keys(row).sort()).toEqual(
-      ['imageUrl', 'inStock', 'itemId', 'name', 'quantityAvailable', 'quotable', 'sku', 'unitPrice'].sort(),
+      ['imageUrl', 'itemId', 'name', 'quantityAvailable', 'quotable', 'sku', 'unitPrice'].sort(),
     );
+  });
+});
+
+describe('portalCatalog — a failed read fails the catalog, it never fakes one', () => {
+  /**
+   * The failure this suite exists for: a transient price_list_items error used
+   * to be swallowed, leaving `prices` empty. In a PRICED org that is not a
+   * degraded read, it is a WRONG one — every allowlisted item turns quotable
+   * with a null price, the customer is invited to "Request quote" on goods
+   * they are genuinely billed for, and checkout stamps
+   * unit_price_at_request = 0 onto real order_request_lines. There is no
+   * recovery from that write, so the read must fail loudly instead.
+   */
+  it('priced: a failing price read throws instead of returning a quotable catalog', async () => {
+    admin = makeAdmin(makeDb(), { price_list_items: 'connection reset' });
+    adminRef.current = admin.client;
+
+    await expect(portalCatalog(ctxPriced)).rejects.toThrow(/could not be loaded/i);
+  });
+
+  it('priced: and checkout therefore cannot record a zero price from that failure', async () => {
+    admin = makeAdmin(makeDb(), { price_list_items: 'connection reset' });
+    adminRef.current = admin.client;
+
+    await expect(
+      portalSubmitOrder(ctxPriced, { lines: [{ itemId: ITEM_A, quantity: 3 }] }),
+    ).rejects.toThrow(/could not be loaded/i);
+    expect(admin.inserts.find((i) => i.table === 'order_request_lines')).toBeUndefined();
+    expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
+  });
+
+  it('a failing allowlist read throws rather than rendering an empty catalog', async () => {
+    admin = makeAdmin(makeDb(), { customer_catalog: 'connection reset' });
+    adminRef.current = admin.client;
+
+    await expect(portalCatalog(ctxNoCharge)).rejects.toThrow(/could not be loaded/i);
   });
 });
 

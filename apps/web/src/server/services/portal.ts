@@ -20,14 +20,28 @@ import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
  * reads run on the service-role client (portal users have no RLS grants), so
  * they don't get fetchAllRows' RLS context — this is the same range-loop with
  * an explicit 1000 cap per PostgREST's max_rows.
+ *
+ * A page error is NEVER swallowed. Both callers feed portalCatalog, whose
+ * result decides both what the customer SEES and what checkout accepts, and a
+ * silently-empty page there is not a degraded read but a WRONG one: an empty
+ * price map turns every priced item into a $0 "Request quote" line and
+ * checkout then writes unit_price_at_request = 0 onto real order_request_lines.
+ * Failing the whole read (same posture as the chunked item read below) keeps
+ * that failure visible and recoverable.
  */
 async function fetchAllAdmin<T>(
+  tag: string,
   page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
 ): Promise<T[]> {
   const out: T[] = [];
   const SIZE = 1000;
   for (let from = 0; ; from += SIZE) {
-    const { data } = await page(from, from + SIZE - 1);
+    const { data, error } = await page(from, from + SIZE - 1);
+    if (error) {
+      const message = (error as { message?: string } | null)?.message ?? 'read failed';
+      void reportError(new Error(message), { tag });
+      throw new Error('Catalog could not be loaded. Please try again.');
+    }
     const rows = (data ?? []) as T[];
     out.push(...rows);
     if (rows.length < SIZE) break;
@@ -72,7 +86,6 @@ export interface PortalCatalogItem {
   quotable: boolean;
   /** Real on-hand units (owner decision 2026-07-24) — never cost or bin. */
   quantityAvailable: number;
-  inStock: boolean;
 }
 
 export interface PortalOrder {
@@ -227,7 +240,7 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
   // that does not charge has no price list, and requiring one is exactly what
   // left its portal empty.
   const [catalogRows, priceRows] = await Promise.all([
-    fetchAllAdmin<{ item_id: string }>((from, to) =>
+    fetchAllAdmin<{ item_id: string }>('portal.catalog.allowlist', (from, to) =>
       admin
         .from('customer_catalog')
         .select('item_id')
@@ -237,7 +250,7 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     ),
     noCharge || !ctx.priceListId
       ? Promise.resolve([] as Array<{ item_id: string; unit_price: number }>)
-      : fetchAllAdmin<{ item_id: string; unit_price: number }>((from, to) =>
+      : fetchAllAdmin<{ item_id: string; unit_price: number }>('portal.catalog.prices', (from, to) =>
           admin
             .from('price_list_items')
             .select('item_id, unit_price')
@@ -304,8 +317,6 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     // Real on-hand (owner decision 2026-07-24, replacing the in-stock badge).
     // Still never cost or bin — those remain org-internal.
     quantityAvailable: Number(i.quantity_on_hand) || 0,
-    // Kept only until the shop swaps the badge for the quantity (next task).
-    inStock: (Number(i.quantity_on_hand) || 0) > 0,
   }));
 }
 

@@ -572,7 +572,11 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
   b2b_portal: {
     id: 'b2b_portal',
     tier: 'optional',
-    title: 'Accounts',
+    // `title` names the CAPABILITY — it is what Settings → Modules, the
+    // module-not-enabled screen and the industry-pack summaries print, where a
+    // bare "Accounts" would read as billing or logins. The nav wording lives on
+    // placements[].label below, which is where the "Accounts" rename belongs.
+    title: 'B2B customer accounts',
     // Portal checkout creates order_requests, so the orders pipeline must be on.
     dependsOn: ['orders'],
     permissions: ['customers:manage'],

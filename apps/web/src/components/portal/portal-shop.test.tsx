@@ -21,9 +21,6 @@ const ITEM = {
   sku: 'NB-001',
   imageUrl: null,
   quantityAvailable: 28,
-  // PortalCatalogItem still carries inStock (portal.ts is out of scope for
-  // this task) — the component itself no longer reads it.
-  inStock: true,
 };
 
 function renderShop(over: Partial<React.ComponentProps<typeof PortalShop>>) {
