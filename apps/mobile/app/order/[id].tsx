@@ -712,23 +712,28 @@ export default function OrderDetail() {
 
   // Run any order mutation under a shared busy key, then reload. The server
   // enforces module + permission + status (and 409 on a claim race); we just
-  // surface its message on failure.
-  async function runAction(busyKey: string, fn: () => Promise<void>) {
+  // surface its message on failure. Returns whether the mutation succeeded so
+  // the reason-capture flows below can decide whether to dismiss — every
+  // other caller still just fires this with `void` and ignores the result,
+  // exactly as before.
+  async function runAction(busyKey: string, fn: () => Promise<void>): Promise<boolean> {
     setActing(busyKey);
     try {
       await fn();
       await load();
+      return true;
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
+      return false;
     } finally {
       setActing(null);
     }
   }
 
   // Advance the order through the pipeline, then reload.
-  async function act(body: OrderAction, busyKey: string) {
-    if (!id) return;
-    await runAction(busyKey, () => transitionOrder(id, body));
+  async function act(body: OrderAction, busyKey: string): Promise<boolean> {
+    if (!id) return false;
+    return runAction(busyKey, () => transitionOrder(id, body));
   }
 
   // Single place that dismisses the deny modal WITHOUT submitting — Cancel,
@@ -745,14 +750,21 @@ export default function OrderDetail() {
   }
 
   async function submitDeny() {
+    if (acting !== null) return;
     const reason = denyReason.trim();
     if (!reason) {
       Alert.alert('Reason required', 'Enter a reason before denying.');
       return;
     }
-    setDenyOpen(false);
-    await act({ action: 'deny', reason }, 'deny');
-    setDenyReason('');
+    // Keep the modal open (with the typed reason) until the deny actually
+    // goes through — act() swallows the error into an Alert rather than
+    // rethrowing, so a `false` result means it failed and the reason must
+    // stay put for the user to retry instead of vanishing with the modal.
+    const ok = await act({ action: 'deny', reason }, 'deny');
+    if (ok) {
+      setDenyOpen(false);
+      setDenyReason('');
+    }
   }
 
   // Same single-dismiss-point pattern as dismissDenyModal above.
@@ -762,14 +774,19 @@ export default function OrderDetail() {
   }
 
   async function reopenPicking() {
+    if (acting !== null) return;
     const reason = reopenReason.trim();
     if (!reason) {
       Alert.alert('Reason required', 'Enter a reason before reopening picking.');
       return;
     }
-    setReopenOpen(false);
-    await act({ action: 'reopen_picking', reason }, 'reopen');
-    setReopenReason('');
+    // Same rationale as submitDeny above: only dismiss + clear once the
+    // reopen actually succeeds, so a failure leaves the typed reason intact.
+    const ok = await act({ action: 'reopen_picking', reason }, 'reopen');
+    if (ok) {
+      setReopenOpen(false);
+      setReopenReason('');
+    }
   }
 
   async function openDriverPicker() {
@@ -1824,7 +1841,11 @@ export default function OrderDetail() {
               </Pressable>
               <Pressable
                 onPress={() => void submitDeny()}
-                style={[styles.addBtn, { backgroundColor: '#b42318', paddingHorizontal: 18 }]}
+                disabled={acting !== null}
+                style={[
+                  styles.addBtn,
+                  { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
+                ]}
               >
                 <Mono size={13} color="#fff">Deny</Mono>
               </Pressable>
@@ -1892,10 +1913,14 @@ export default function OrderDetail() {
               </Pressable>
               <Pressable
                 onPress={() => void reopenPicking()}
-                disabled={!reopenReason.trim()}
+                disabled={!reopenReason.trim() || acting !== null}
                 style={[
                   styles.addBtn,
-                  { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: reopenReason.trim() ? 1 : 0.5 },
+                  {
+                    backgroundColor: '#b42318',
+                    paddingHorizontal: 18,
+                    opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
+                  },
                 ]}
               >
                 <Mono size={13} color="#fff">Reopen picking</Mono>
