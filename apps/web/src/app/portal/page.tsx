@@ -58,7 +58,12 @@ export default async function PortalPage() {
         </div>
       </header>
 
-      <PortalShop catalog={catalog} orders={orders} returnsEnabled={returnsEnabled} />
+      <PortalShop
+        catalog={catalog}
+        orders={orders}
+        returnsEnabled={returnsEnabled}
+        pricingMode={ctx.pricingMode}
+      />
     </main>
   );
 }
