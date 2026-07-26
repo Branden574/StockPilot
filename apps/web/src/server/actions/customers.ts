@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { ServiceError, withContext } from '@/server/services/context';
 import { CustomersService, customerSchema, type CustomerInput } from '@/server/services/customers';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, ok, type ActionResult, type PortalPricingMode } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // B2B customers (Phase 1) actions. The service gates module + customers:manage
@@ -168,6 +168,30 @@ export async function addCatalogItemAction(
   try {
     await svc.addCatalogItem(parsed.data.customerId, parsed.data.itemId);
     revalidatePath(REVALIDATE_PATH);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const pricingModeSchema = z.enum(['no_charge', 'priced']);
+
+/**
+ * Set how this org's portal treats money. Merges into the b2b_portal
+ * module's settings jsonb — a wholesale replace would wipe any other
+ * setting stored there.
+ */
+export async function setPortalPricingModeAction(
+  mode: PortalPricingMode,
+): Promise<ActionResult<void>> {
+  const parsed = pricingModeSchema.safeParse(mode);
+  if (!parsed.success) return err('validation_error', 'Invalid pricing mode');
+  const { svc, error } = await gated();
+  if (error || !svc) return error as ActionResult<never>;
+  try {
+    await svc.setPricingMode(parsed.data);
+    revalidatePath(REVALIDATE_PATH);
+    revalidatePath('/portal');
     return ok(undefined);
   } catch (e) {
     return toResult(e);

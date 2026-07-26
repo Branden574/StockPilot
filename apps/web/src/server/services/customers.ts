@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { planAllowsB2bPortal, type OrgBillingState } from '@stockpilot/core';
+import { planAllowsB2bPortal, type OrgBillingState, type PortalPricingMode } from '@stockpilot/core';
 
 import { env } from '@/lib/env';
 import { renderPortalInviteEmail } from '@/lib/email/es/families/invites';
@@ -468,6 +468,39 @@ export class CustomersService {
       .delete()
       .eq('customer_id', customerId)
       .eq('user_id', userId);
+    if (error) throw new ServiceError('internal_error', error.message);
+  }
+
+  // ── Portal pricing mode ───────────────────────────────────────────────────
+
+  /**
+   * Set how this org's portal treats money ('no_charge' | 'priced'), stored
+   * in the b2b_portal module's organization_modules.settings jsonb under
+   * `pricingMode` (resolvePortalPricingMode in @stockpilot/core reads it back
+   * on the portal-facing side). MERGES into whatever settings already exist
+   * on that row — a wholesale replace would wipe any other setting stored
+   * there.
+   */
+  async setPricingMode(mode: PortalPricingMode): Promise<void> {
+    this.gate();
+    const { data: existing, error: readError } = await this.ctx.supabase
+      .from('organization_modules')
+      .select('settings')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('module_id', 'b2b_portal')
+      .maybeSingle();
+    if (readError) throw new ServiceError('internal_error', readError.message);
+
+    const prev = (existing as { settings?: unknown } | null)?.settings;
+    const prevSettings = prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {};
+    const nextSettings = { ...prevSettings, pricingMode: mode };
+
+    const { error } = await this.ctx.supabase
+      .from('organization_modules')
+      .upsert(
+        { organization_id: this.ctx.organizationId, module_id: 'b2b_portal', settings: nextSettings },
+        { onConflict: 'organization_id,module_id' },
+      );
     if (error) throw new ServiceError('internal_error', error.message);
   }
 }

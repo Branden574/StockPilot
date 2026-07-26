@@ -572,7 +572,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
   b2b_portal: {
     id: 'b2b_portal',
     tier: 'optional',
-    title: 'B2B customer portal',
+    title: 'Accounts',
     // Portal checkout creates order_requests, so the orders pipeline must be on.
     dependsOn: ['orders'],
     permissions: ['customers:manage'],
@@ -590,9 +590,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // Org-side management surface only; the customer-facing portal lives at
     // /portal/* outside the dashboard shell. Web-only (P4 adds mobile).
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'Customers', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Accounts', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
       // Mobile twin (parity rule): org-side customers management, read + archive.
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Customers', href: '/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Accounts', href: '/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
     ],
   },
 

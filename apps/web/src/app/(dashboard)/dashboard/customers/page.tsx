@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { Handshake } from 'lucide-react';
 
 import { CustomersPanel } from '@/components/customers/customers-panel';
+import { PortalPricingModePanel } from '@/components/customers/portal-pricing-mode-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -10,11 +11,12 @@ import { withContext } from '@/server/services/context';
 import { CustomersService } from '@/server/services/customers';
 import { InventoryService } from '@/server/services/inventory';
 
-import { can, planAllowsB2bPortal, type OrgBillingState } from '@stockpilot/core';
+import { can, planAllowsB2bPortal, resolvePortalPricingMode, type OrgBillingState } from '@stockpilot/core';
 
 /**
  * B2B customers management (b2b_portal module, Phase 1). Business+ gated;
- * requires customers:manage. Customers, portal users, price lists, catalogs.
+ * requires customers:manage. Customers, portal users, price lists, catalogs,
+ * and the org-level pricing mode (does this org charge its customers?).
  */
 export default async function CustomersPage() {
   const moduleAccess = await checkModuleAccess('b2b_portal');
@@ -28,7 +30,7 @@ export default async function CustomersPage() {
   }
 
   const supabase = await createClient();
-  const [orgBillingRes, svcCtx, inventorySvc] = await Promise.all([
+  const [orgBillingRes, portalModuleRes, svcCtx, inventorySvc] = await Promise.all([
     supabase
       .from('organizations')
       .select(
@@ -36,9 +38,18 @@ export default async function CustomersPage() {
       )
       .eq('id', ctx.organizationId)
       .maybeSingle(),
+    supabase
+      .from('organization_modules')
+      .select('settings')
+      .eq('organization_id', ctx.organizationId)
+      .eq('module_id', 'b2b_portal')
+      .maybeSingle(),
     withContext(),
     InventoryService.forCurrentUser(),
   ]);
+  const pricingMode = resolvePortalPricingMode(
+    (portalModuleRes.data as { settings?: unknown } | null)?.settings,
+  );
 
   const svc = new CustomersService(svcCtx);
   const [customers, priceLists, inventory] = await Promise.all([
@@ -75,7 +86,7 @@ export default async function CustomersPage() {
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <Handshake className="h-6 w-6" /> Customers
+          <Handshake className="h-6 w-6" /> Accounts
         </h1>
         <p className="text-muted-foreground mt-1 text-sm">
           B2B accounts that order through your portal — each with its own users,
@@ -91,6 +102,10 @@ export default async function CustomersPage() {
           needs a Business or Enterprise plan.
         </div>
       )}
+
+      <div className="mb-6">
+        <PortalPricingModePanel initial={pricingMode} />
+      </div>
 
       <CustomersPanel
         customers={customers}
