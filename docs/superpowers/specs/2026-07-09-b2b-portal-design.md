@@ -1,11 +1,22 @@
 # B2B Customer Portal (Phase 6) — Design
 
-**Status:** DRAFT — needs owner review before implementation (introduces an
-external-customer auth principal; several decisions below are product calls).
-**Goal:** An authenticated, branded portal where an org's B2B customers log in,
-browse THEIR catalog at THEIR prices, place orders, see order history, and
-reorder — replacing the anonymous one-token /r/[token] request page for orgs
-that sell to repeat wholesale customers.
+**Status:** APPROVED for implementation (2026-07-24). The four open product
+decisions are resolved — see section 4. Introduces an external-customer auth
+principal, so the RLS surface is the highest-risk part of the build and gets an
+adversarial cross-tenant pass before any customer is invited.
+**Goal:** An authenticated, branded portal where an org's repeat customers log
+in, browse THEIR catalog, place orders, see order history, and reorder.
+
+**It does NOT replace the public request link.** The anonymous `/r/[token]`
+page has its own job and stays: letting someone **without an account** place a
+request when they need to. The two coexist — the portal serves known, repeat
+buyers who benefit from history and reorder; the public link serves one-off
+accountless requests.
+
+**Charging is per-organization, and many orgs do not charge at all.** L4L North
+Region distributes to its schools at no cost. So price display is an ORG-LEVEL
+setting, not a product-wide default (section 4, decision 1). Anything that
+assumes "customer + catalog implies prices" is wrong for the no-charge case.
 
 ---
 
@@ -73,19 +84,49 @@ customer_catalog     (customer_id, item_id)                     -- allowlist; em
 - **P4 — mobile:** org-side customers management parity (portal itself is
   web-first; customer-side native app explicitly out of scope v1).
 
-## 4. Open decisions (owner)
+## 4. Decisions (RESOLVED by owner 2026-07-24)
 
-1. **Price exposure default:** items with no price-list entry — hidden from the
-   portal (recommended; explicit-only prevents accidental price leaks) or shown
-   as "request quote"?
-2. **Who approves portal orders:** same pending_approval flow as internal
-   requests (recommended — zero new pipeline) or auto-approve for trusted
-   customers (a per-customer flag, can come later)?
-3. **Availability display:** show on-hand quantities to customers (real
-   number vs in-stock/out-of-stock badge — recommended: badge only)?
-4. **Naming:** "Customers" vs "Accounts" in the dashboard nav (charter-school
-   orgs may prefer "Programs"— the label can ride ORDER_STATUS_META-style
-   per-org config later).
+1. **Pricing is an ORG-LEVEL MODE, not a product-wide default.** An org sets
+   how its portal treats money, because some orgs charge and some do not:
+   - `no_charge` — the portal shows NO prices anywhere and no cart totals.
+     Items are simply requestable. This is L4L North Region's mode: it
+     distributes to its schools at no cost, so a price column, a "request
+     quote" action, and an order total would all be meaningless there.
+     Per-customer price lists are inert in this mode.
+   - `priced` — customer-specific prices from their price list. Items in the
+     customer's catalog that have NO price-list entry are still SHOWN, with no
+     price and a "request quote" action (owner's choice; the alternative was
+     hiding them). Note this only ever applies to items already allowlisted for
+     that customer — the catalog allowlist, not the price list, controls what a
+     customer can see at all.
+   The mode must be explicit per org with `no_charge` as the safer default, so
+   a misconfigured org cannot accidentally display prices. Cost price is NEVER
+   exposed in either mode.
+2. **Approvals:** portal orders land in the SAME `pending_approval` queue as
+   internal requests. No new pipeline, no per-customer auto-approve in v1.
+3. **Availability:** show REAL on-hand quantities to customers. Owner chose
+   this over an in-stock/out badge. Recorded tradeoff: invited customers can
+   therefore see actual stock levels, including when the org is low; revisit if
+   that proves undesirable (it is a display-layer change, not structural).
+4. **Naming:** "Accounts" in the dashboard nav (not "Customers"). The
+   underlying tables keep the `customers` / `customer_users` names; this is a
+   label-only decision and can ride per-org terminology config later.
+
+## 4b. The public request link (unchanged, and why)
+
+The existing anonymous `/r/[token]` page keeps its current behaviour and shows
+NO prices. That is already the right shape for a no-charge org like L4L, whose
+entire model is accountless requesting at no cost, and it remains the deliberate
+leak-prevention posture for everyone else. Putting prices on the public link is
+NOT part of this work: an anonymous link has no customer identity, so there is
+no price list to resolve against, and org-wide pricing on a public URL is a
+different (and riskier) feature. If a charging org ever wants that, it is its
+own spec.
+
+Consequence for this build: the portal must not assume it is the only external
+ordering path. Both create ordinary `order_requests`, so the org-side pipeline
+already treats them identically; nothing in P1-P4 may narrow or reroute the
+public path.
 
 ## 5. Out of scope (v1)
 
