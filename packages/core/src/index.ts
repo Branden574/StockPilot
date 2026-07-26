@@ -24,3 +24,4 @@ export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
 export * from './orders/order-number';
 export * from './orders/pick-shortfall';
+export * from './b2b/pricing-mode';
