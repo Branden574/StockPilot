@@ -60,7 +60,8 @@ comment on table public.size_scales is
 create table public.size_scale_values (
   id             uuid primary key default gen_random_uuid(),
   size_scale_id  uuid not null references public.size_scales(id) on delete cascade,
-  /* As printed on the sticker: 'XL', '10.5', '7Y'. Preserved verbatim. */
+  /* As printed on the sticker: 'XL', '10.5', '7'. Preserved verbatim — the
+     youth scale prints bare numerals ('1'..'7'), NOT a 'Y'-suffixed form. */
   value          text not null,
   /* Case/space-normalized form used for matching. Never shown to a user. */
   normalized     text not null,
@@ -164,6 +165,19 @@ as $$
 $$;
 
 grant execute on function public.category_default_uom(uuid) to authenticated;
+
+-- SECURITY: both resolvers are SECURITY DEFINER, and PostgreSQL grants EXECUTE
+-- to PUBLIC on a new function by default. PostgREST exposes every executable
+-- public function as an RPC, so leaving the default in place lets an
+-- UNAUTHENTICATED `anon` caller POST /rest/v1/rpc/category_tracking_mode with a
+-- guessed category id and read a FOREIGN org's tracking policy — the definer
+-- rights bypass the RLS on `categories` that would otherwise stop it. Revoking
+-- PUBLIC (and anon explicitly, so the intent survives a future re-grant to
+-- PUBLIC) leaves the grants to `authenticated` above as the only way in.
+revoke execute on function
+  public.category_tracking_mode(uuid),
+  public.category_default_uom(uuid)
+  from public, anon;
 
 -- ── 5) RLS ──────────────────────────────────────────────────────────────────
 alter table public.size_scales       enable row level security;

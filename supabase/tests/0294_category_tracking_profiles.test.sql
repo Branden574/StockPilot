@@ -12,14 +12,17 @@
 -- Anti-vacuity: assertion 6 proves the child really has a NULL tracking_mode,
 -- so the inheritance assertions are not passing on a stamped value.
 --
--- Assertion map (22):
+-- Assertion map (31):
 --    1-5   the five new categories columns exist
 --    6     fixture check: the child's tracking_mode really is NULL
 --    7-9   the tracking-mode inheritance resolver (own / inherited / default)
 --   10-11  the counting-unit resolver (inherited / default)
---   12-13  the two CHECK constraints reject nonsense
---   14-16  the seeded system scales and their values
---   17-22  RLS (system scale readable, its values readable through the
+--   12-13  neither SECURITY DEFINER resolver is callable by anon
+--   14-15  the two CHECK constraints reject nonsense
+--   16-25  the seeded system scales: exact row counts AND exact printed labels
+--          at pinned sort_orders, so a regression in the label expression
+--          cannot slide past a >= check
+--   26-31  RLS (system scale readable, its values readable through the
 --          composed policy, cross-org invisible, only a manager+ may write,
 --          and nobody may forge a system scale)
 --
@@ -27,7 +30,7 @@
 
 begin;
 
-select plan(22);
+select plan(31);
 
 \set org    '\'5c294000-0000-0000-0000-000000000001\''
 \set admin  '\'5c294000-0000-0000-0000-000000000002\''
@@ -107,6 +110,21 @@ select is(
   'unit',
   'an unconfigured category still counts in ''unit'' — existing orgs unaffected');
 
+-- ── The resolvers are NOT reachable by an unauthenticated caller ────────────
+-- Both are SECURITY DEFINER, so they read `categories` with the owner's rights
+-- and RLS never applies. PostgreSQL grants EXECUTE to PUBLIC by default and
+-- PostgREST publishes anything executable as an RPC, so without the explicit
+-- REVOKE in 0294 an anon POST to /rest/v1/rpc/category_tracking_mode would
+-- return a FOREIGN org's tracking policy. anon inherits PUBLIC, so these two
+-- assertions prove the revoke from BOTH grantees landed.
+select ok(
+  not has_function_privilege('anon', 'public.category_tracking_mode(uuid)', 'execute'),
+  'anon holds no EXECUTE on category_tracking_mode (SECURITY DEFINER not exposed as a public RPC)');
+
+select ok(
+  not has_function_privilege('anon', 'public.category_default_uom(uuid)', 'execute'),
+  'anon holds no EXECUTE on category_default_uom (SECURITY DEFINER not exposed as a public RPC)');
+
 -- ── CHECK constraints reject nonsense ───────────────────────────────────────
 select throws_ok(
   $$ update public.categories
@@ -141,6 +159,64 @@ select ok(
      join public.size_scales s on s.id = v.size_scale_id
     where s.key = 'us_mens_shoe' and v.is_half) > 0,
   'numeric shoe scales include half sizes');
+
+-- ── Exact seed shape ────────────────────────────────────────────────────────
+-- The counts above are open-ended (>=, >0) and would survive a generate_series
+-- that produced the wrong span. These pin the real numbers: US Men's / Women's
+-- run 4.0-18.0 in half steps = 29 values each; US Youth runs 1.0-7.0 = 13.
+select is(
+  (select count(*)::int from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_mens_shoe'),
+  29,
+  'US Men''s shoe seeds exactly 29 values (4.0-18.0 in half steps)');
+
+select is(
+  (select count(*)::int from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_womens_shoe'),
+  29,
+  'US Women''s shoe seeds exactly 29 values (4.0-18.0 in half steps)');
+
+select is(
+  (select count(*)::int from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_youth_shoe'),
+  13,
+  'US Youth shoe seeds exactly 13 values (1.0-7.0 in half steps)');
+
+-- LABEL FIDELITY. 0294 builds the printed value by integer division precisely
+-- because to_char(size,'FM990.9') renders every WHOLE size as '9.' — a trailing
+-- dot on the sticker. A count-only assertion passes with that bug intact, so
+-- pin the exact text at known sort_orders (sort_order = size * 10).
+select is(
+  (select v.value from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_mens_shoe' and v.sort_order = 100),
+  '10',
+  'a whole size prints as ''10'' — no trailing dot (the to_char regression)');
+
+select is(
+  (select v.value from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_mens_shoe' and v.sort_order = 95),
+  '9.5',
+  'a half size prints as ''9.5''');
+
+select is(
+  (select v.value from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null and s.key = 'us_youth_shoe' and v.sort_order = 70),
+  '7',
+  'the youth scale tops out at a bare ''7'' — the values carry no ''Y'' suffix');
+
+select is(
+  (select count(*)::int from public.size_scale_values v
+     join public.size_scales s on s.id = v.size_scale_id
+    where s.organization_id is null
+      and (v.value like '%.' or v.normalized like '%.')),
+  0,
+  'not one seeded system size value ends in a trailing dot');
 
 -- ── RLS on size_scales ──────────────────────────────────────────────────────
 -- As the org-A ADMIN (rank 80, so has_org_role(org,'manager') is true).
