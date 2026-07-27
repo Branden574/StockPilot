@@ -3,8 +3,12 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { APPAREL_ALPHA_SIZES } from '@stockpilot/core';
+
 import {
+  apparelFallbackSizeOptions,
   buildCreateItemInput,
+  buildQuickAddInput,
   buildSizedVariantsInput,
   collectSizedVariants,
   deriveRackFields,
@@ -320,6 +324,152 @@ describe('sizeOptionsFromScale — sizes are ordered, never alphabetical', () =>
   });
 });
 
+/**
+ * The seeded apparel_alpha scale (migration 0294), verbatim: the union of every
+ * spelling the codebase emits or parses, aliases included.
+ */
+const SEEDED_APPAREL_ALPHA: { value: string; sort_order: number }[] = [
+  { value: 'XS', sort_order: 10 },
+  { value: 'S', sort_order: 20 },
+  { value: 'M', sort_order: 30 },
+  { value: 'L', sort_order: 40 },
+  { value: 'XL', sort_order: 50 },
+  { value: 'XXL', sort_order: 60 },
+  { value: '2XL', sort_order: 61 },
+  { value: 'XXXL', sort_order: 70 },
+  { value: '3XL', sort_order: 71 },
+  { value: 'XXXXL', sort_order: 80 },
+  { value: '4XL', sort_order: 81 },
+  { value: 'XXXXXL', sort_order: 90 },
+  { value: '5XL', sort_order: 91 },
+  { value: '6XL', sort_order: 100 },
+];
+
+describe('apparelFallbackSizeOptions — one chip per physical size', () => {
+  it('offers the SAME nine letters the web form offers, in wearing order', () => {
+    // Not "nine values" — the exact nine, from the one shared list. A category
+    // with size_scale_id NULL is every category today, so this is what a real
+    // native size run renders.
+    expect(apparelFallbackSizeOptions(SEEDED_APPAREL_ALPHA)).toEqual([
+      ...APPAREL_ALPHA_SIZES,
+    ]);
+  });
+
+  it('drops the alias spellings that would create two items for one shirt', () => {
+    const options = apparelFallbackSizeOptions(SEEDED_APPAREL_ALPHA);
+    // XXL survives, 2XL does not: tapping both used to create two inventory
+    // items, two SKUs and two stock levels for the same physical size.
+    expect(options).toContain('XXL');
+    for (const alias of ['2XL', '3XL', '4XL', '5XL', '6XL']) {
+      expect(options).not.toContain(alias);
+    }
+    expect(new Set(options).size).toBe(options.length);
+  });
+
+  it('is NOT alias resolution — it never rewrites 2XL to XXL', () => {
+    // Deciding the two name one variant is Tasks 17/19. Filtering a picker is
+    // not merging: an alias-only scale yields nothing rather than a guess.
+    expect(apparelFallbackSizeOptions([{ value: '2XL', sort_order: 61 }])).toEqual([]);
+  });
+
+  it('leaves a category-owned scale alone — a shoe run goes through sizeOptionsFromScale', () => {
+    // The filter is fallback-only. Applied to a shoe scale it would empty the
+    // picker, which is exactly why the screen branches on size_scale_id.
+    const shoes = [
+      { value: '9', sort_order: 90 },
+      { value: '9.5', sort_order: 95 },
+      { value: '10', sort_order: 100 },
+    ];
+    expect(sizeOptionsFromScale(shoes)).toEqual(['9', '9.5', '10']);
+    expect(apparelFallbackSizeOptions(shoes)).toEqual([]);
+  });
+});
+
+describe('buildQuickAddInput — the Scan tab cards use the SHARED schema', () => {
+  const upc = {
+    itemType: 'product' as const,
+    name: 'Wireless mouse',
+    sku: 'ITEM-45678905',
+    barcode: '012345678905',
+    modelNumber: 'MX432LL/A',
+    description: 'A mouse.',
+    quantity: '3',
+    warehouseId: '22222222-2222-2222-2222-222222222222',
+    customFields: { brand: 'Logitech' } as Record<string, unknown>,
+  };
+
+  it('carries the UPC card through: model number, brand, opening quantity', () => {
+    const res = buildQuickAddInput(upc);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.input.name).toBe('Wireless mouse');
+    expect(res.input.modelNumber).toBe('MX432LL/A');
+    expect(res.input.barcode).toBe('012345678905');
+    expect(res.input.customFields).toEqual({ brand: 'Logitech' });
+    expect(res.input.itemType).toBe('product');
+    // Opening stock rides on the ITEM, so the server's create() writes the
+    // `initial` movement into Unplaced. The book card's old adjust_stock call
+    // with a null location put it in STAGING instead.
+    expect(res.input.quantityOnHand).toBe(3);
+  });
+
+  it('leaves unitOfMeasure unset so the category counting unit still wins', () => {
+    const res = buildQuickAddInput(upc);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.input.unitOfMeasure).toBeUndefined();
+  });
+
+  it('sends NULL, not "", for a photo ID with no readable code', () => {
+    const res = buildQuickAddInput({ ...upc, barcode: '' });
+    expect(res.ok).toBe(true);
+    // A placeholder empty barcode would collide with the next codeless add.
+    if (res.ok) expect(res.input.barcode ?? null).toBeNull();
+  });
+
+  it('keeps the book card on custom_fields.author and sends no model number', () => {
+    const res = buildQuickAddInput({
+      itemType: 'book',
+      name: 'The Great Gatsby',
+      sku: 'BOOK-38016 3',
+      barcode: '9780553380163',
+      modelNumber: '',
+      description: null,
+      quantity: '1',
+      warehouseId: '22222222-2222-2222-2222-222222222222',
+      customFields: { author: 'F. Scott Fitzgerald', publisher: 'Scribner' },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.input.itemType).toBe('book');
+    expect(res.input.modelNumber).toBeUndefined();
+    // Written ONCE, under the key the web book form reads.
+    expect(res.input.customFields).toEqual({
+      author: 'F. Scott Fitzgerald',
+      publisher: 'Scribner',
+    });
+  });
+
+  it('floors a negative typed quantity at zero', () => {
+    const res = buildQuickAddInput({ ...upc, quantity: '-3' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.input.quantityOnHand).toBe(0);
+  });
+
+  it('TRUNCATES an over-long looked-up description instead of refusing the add', () => {
+    // The text came from Google Books / upcitemdb / the AI fallback — the user
+    // never typed it and the card has no field to shorten it in.
+    const res = buildQuickAddInput({ ...upc, description: 'x'.repeat(6000) });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.input.description).toHaveLength(5000);
+  });
+
+  it('REJECTS an over-long name with a named field, as the shared schema does', () => {
+    const res = buildQuickAddInput({ ...upc, name: 'x'.repeat(300) });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.field).toBe('name');
+  });
+});
+
 describe('collectSizedVariants', () => {
   it('keeps scale order and drops the sizes left at zero or blank', () => {
     expect(
@@ -446,5 +596,83 @@ describe('app/item/new.tsx is wired to the shared create path', () => {
   it('still uploads photos and still honours the scanned barcode prefill', () => {
     expect(src).toMatch(/uploadPhotosFor/);
     expect(src).toMatch(/params\.barcode/);
+  });
+
+  it('narrows the NO-SCALE fallback to the canonical letters', () => {
+    // A category-owned scale must still render verbatim, so both seams have to
+    // be present and the fallback branch must pick the filtered one.
+    expect(src).toContain('apparelFallbackSizeOptions');
+    expect(src).toContain('sizeOptionsFromScale');
+    expect(src).toMatch(/isFallback\s*\?\s*apparelFallbackSizeOptions/);
+  });
+
+  it('does not render a MODEL NUMBER box the sized fan-out would discard', () => {
+    // bulkCreateSizedVariantsSchema carries no model number and the service
+    // never writes model_number, so the field is hidden during a size run
+    // rather than silently dropped.
+    expect(src).toMatch(/variantsEnabled \? null : \(/);
+  });
+});
+
+/**
+ * WIRING PINS for the Scan tab's quick-add cards. Same reason as above: they
+ * import react-native at top level, so only their SOURCE is asserted here.
+ */
+describe('the Scan tab quick-add cards are wired to the shared create path', () => {
+  const cards: [string, string][] = [
+    ['AddItemCard', '../components/AddItemCard.tsx'],
+    ['AddBookCard', '../components/AddBookCard.tsx'],
+  ];
+
+  for (const [label, rel] of cards) {
+    describe(label, () => {
+      const src = readFileSync(path.resolve(__dirname, rel), 'utf8');
+
+      it('no longer raw-inserts inventory_items', () => {
+        expect(src).not.toMatch(/from\('inventory_items'\)/);
+      });
+
+      it('no longer writes stock_movements or calls an RPC', () => {
+        expect(src).not.toMatch(/from\('stock_movements'\)/);
+        expect(src).not.toMatch(/\.rpc\(/);
+      });
+
+      it('no longer guesses the org from the first organization_members row', () => {
+        // `.limit(1)` on organization_members returns the FIRST membership, not
+        // the workspace the user switched into — a scan in the second org
+        // created the item in the first. The Bearer context owns the org now.
+        // Matched on the QUERY form so the explanatory comment in each card
+        // (which names the table) does not satisfy the pin.
+        expect(src).not.toMatch(/from\('organization_members'\)/);
+        expect(src).not.toMatch(/organization_id:/);
+        // No direct Supabase client left in these cards at all.
+        expect(src).not.toMatch(/from '@\/lib\/supabase'/);
+      });
+
+      it('posts through buildQuickAddInput + submitCreateItem', () => {
+        expect(src).toContain('buildQuickAddInput');
+        expect(src).toContain('submitCreateItem');
+        expect(src).toContain('describeFailure');
+        expect(src).toMatch(/from '@\/lib\/item-create'/);
+      });
+
+      it('keeps its warehouse picker and its initial-quantity box', () => {
+        expect(src).toContain('listWarehouses');
+        expect(src).toContain('Initial qty');
+      });
+    });
+  }
+
+  it('AddItemCard still carries the model number and the brand custom field', () => {
+    const src = readFileSync(path.resolve(__dirname, '../components/AddItemCard.tsx'), 'utf8');
+    expect(src).toMatch(/customFields\.brand = enrichment\.brand/);
+    expect(src).toContain('modelNumber');
+  });
+
+  it('AddBookCard still carries author, publisher and grade', () => {
+    const src = readFileSync(path.resolve(__dirname, '../components/AddBookCard.tsx'), 'utf8');
+    expect(src).toMatch(/customFields\.author/);
+    expect(src).toMatch(/customFields\.publisher/);
+    expect(src).toMatch(/customFields\.book_grade/);
   });
 });

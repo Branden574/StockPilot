@@ -28,6 +28,7 @@ import {
   bulkCreateSizedVariantsSchema,
   createItemSchema,
   formatRackLabel,
+  isApparelAlphaSize,
   normalizeRackFields,
   type BulkCreateSizedVariantsInput,
   type CreateItemInput,
@@ -229,6 +230,86 @@ export function buildSizedVariantsInput(
   return { ok: true, input: parsed.data };
 }
 
+/**
+ * The Scan tab's one-tap quick add — the tiny form AddItemCard (UPC) and
+ * AddBookCard (ISBN) put in front of a scanned code.
+ *
+ * It is a SUBSET of the full add-item screen, not a second create path. Both
+ * cards used to raw-insert `inventory_items` themselves and guess the org with
+ * `organization_members ... .limit(1)`, which is the first membership row, NOT
+ * the workspace the user switched into — so a scan in the second org created
+ * the item in the first, where RLS happily allowed it. Neither card ran the
+ * shared schema, the permission gate, the plan limit, the audit event or the
+ * search embedding, and the book card additionally called `adjust_stock` with a
+ * null location, routing every ISBN add's opening stock into STAGING instead of
+ * Unplaced (the exact bug the item card had already been fixed for).
+ *
+ * The org now comes from the Bearer context (`X-Organization-Id`, validated
+ * server-side against membership) and every rule from `InventoryService`. This
+ * function only maps the card's strings onto `ItemFormState`.
+ */
+export interface QuickAddForm {
+  itemType: 'product' | 'book';
+  /** Product name / book title, as typed. */
+  name: string;
+  sku: string;
+  /** The scanned UPC/ISBN. Empty (a photo ID with no readable code) means NULL. */
+  barcode: string;
+  /** Manufacturer model number. Products only — a book card sends ''. */
+  modelNumber: string;
+  /** Looked-up description; the card shows it read-only. */
+  description: string | null;
+  /** Opening quantity as typed. The server writes the `initial` movement. */
+  quantity: string;
+  warehouseId: string | null;
+  /** brand (UPC) or author/publisher/book_grade (ISBN) — passed through verbatim. */
+  customFields: Record<string, unknown>;
+}
+
+export function buildQuickAddInput(
+  form: QuickAddForm,
+): BuildResult<CreateItemInput> | BuildFailure {
+  return buildCreateItemInput({
+    name: form.name.trim(),
+    sku: form.sku.trim(),
+    // A photo ID with no readable code passes '' — the shared schema maps an
+    // empty barcode to undefined, so the column stays NULL rather than holding
+    // a placeholder that would collide with the next codeless add.
+    barcode: form.barcode.trim(),
+    // Never routed through the book branch of deriveRackFields: the ISBN card
+    // already puts the author in customFields, and sending it twice would be
+    // two spellings of one value.
+    modelNumber: form.itemType === 'book' ? '' : form.modelNumber,
+    // Truncated, not rejected. This text is a LOOKUP result the user never
+    // typed (Google Books, upcitemdb, or the AI description fallback) and both
+    // cards already sliced it to the column's 5000 before inserting. Letting
+    // the shared schema's max(5000) refuse it instead would turn a long
+    // publisher blurb into "Description: String must contain at most 5000
+    // character(s)" on a one-tap card with no description field to shorten.
+    description: (form.description ?? '').slice(0, 5000),
+    categoryId: null,
+    supplierId: null,
+    primaryLocationId: null,
+    warehouseId: form.warehouseId,
+    charterId: null,
+    rackNumber: '',
+    rackRow: '',
+    unitCost: '',
+    retailPrice: '',
+    // Floored at zero exactly as both cards did. A quick-add card has no
+    // "remove stock" meaning, and a typed '-3' must not open a negative
+    // balance the shared numeric bound would otherwise accept.
+    onHand: String(Math.max(0, Number(form.quantity) || 0)),
+    reorderPoint: '',
+    reorderQuantity: '',
+    // Blank, so the server stamps the category's counting unit. Same contract
+    // as the full screen; a literal 'unit' here would overrule the category.
+    unitOfMeasure: '',
+    itemType: form.itemType,
+    customFields: form.customFields,
+  });
+}
+
 /** POST one validated item. The server owns every remaining guard. */
 export async function submitCreateItem(input: CreateItemInput): Promise<{ id: string }> {
   return api<{ id: string }>('/api/v1/items', { method: 'POST', body: input });
@@ -269,6 +350,30 @@ export function sizeOptionsFromScale(rows: SizeScaleValueRow[]): string[] {
       seen.add(key);
       return true;
     });
+}
+
+/**
+ * The vocabulary for a category that carries NO size scale of its own — today
+ * that is every category, because the 0294 scales are opt-in and nothing has
+ * been backfilled. So this is the list nearly every native size run actually
+ * renders, which is exactly why it has to match the web.
+ *
+ * The built-in `apparel_alpha` scale is the UNION of every spelling in the
+ * codebase (14 rows: nine canonical letters plus the 2XL/3XL/4XL/5XL aliases
+ * and 6XL) so that inbound strings still match. Offered as CHOICES, that union
+ * shows XXL and 2XL as two chips for one shirt — tap both and the server
+ * happily creates two inventory items, two SKUs and two stock levels for one
+ * physical size, while the web form beside it offers nine. Filter the fallback
+ * down to the canonical nine (@stockpilot/core, `inventory/apparel-sizes`).
+ *
+ * This filter applies ONLY to the fallback. A category with its own scale
+ * renders that scale verbatim through `sizeOptionsFromScale` — a shoe run is
+ * numbers with halves and must never be squeezed through a letter list.
+ * Deciding that 'XXL' and '2XL' name the same variant is alias RESOLUTION and
+ * belongs to Tasks 17/19; dropping the aliases from a picker is not that.
+ */
+export function apparelFallbackSizeOptions(rows: SizeScaleValueRow[]): string[] {
+  return sizeOptionsFromScale(rows).filter((v) => isApparelAlphaSize(v));
 }
 
 /**

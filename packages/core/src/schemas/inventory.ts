@@ -156,7 +156,13 @@ export const bulkCreateSizedVariantsSchema = z.object({
   warehouseId: uuidSchema,
   charterId: uuidSchema.nullable(),
   primaryLocationId: uuidSchema.nullable(),
-  binLocation: z.string().max(120).nullable(),
+  // 64, matching createItemSchema. `inventory_items.bin_location` is unbounded
+  // `text` (migration 0002), so the DB imposes no limit and the two schemas had
+  // simply picked different numbers — 64 here and 120 there for the same column
+  // on the same row. 64 is the tighter of the two and still comfortably clears
+  // every value this path can produce: bin_location is composed by
+  // `formatRackLabel` from rackNumber (max 50) + '-' + rackRow (max 10) = 61.
+  binLocation: z.string().max(64).nullable(),
   retailPrice: z.coerce.number().min(0),
   unitCost: z.coerce.number().min(0),
   reorderPoint: z.coerce.number().int().min(0),

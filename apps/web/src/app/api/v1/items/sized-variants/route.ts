@@ -36,9 +36,22 @@ export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
-  // Per-user throttle mirroring POST /api/v1/items. One request here can create
-  // up to 60 rows (the schema's cap), so the same 60/min budget is deliberately
-  // stricter in row terms than the single-create route.
+  // Per-user throttle mirroring POST /api/v1/items: 60 requests per minute.
+  //
+  // Stated honestly, because the arithmetic runs the other way from what a
+  // "same budget" reading suggests: the schema caps ONE request at 60 variants,
+  // so this route's ceiling is 60 x 60 = 3,600 rows a minute against the
+  // single-create route's 60. In ROW terms it is 60x LOOSER, not stricter.
+  //
+  // That is accepted rather than overlooked. The throttle exists to blunt
+  // hammering, not to bound how much inventory an authorized user may create —
+  // a real shoe drop is legitimately 40+ rows in one tap, and rate-limiting the
+  // request count is the only shape that does not punish a big honest run. What
+  // actually bounds total rows is `assertPlanLimit(ctx, 'items', n)` inside
+  // `bulkCreateSizedVariants`, which counts the org's existing items and
+  // refuses the whole batch past the plan's cap, plus the `items:create`
+  // permission gate. Both run per request and neither can be outpaced by
+  // spending more requests.
   const rl = await checkRateLimit(`items-sized-create:${ctx.userId}`, 60, 60_000);
   if (!rl.allowed) {
     return NextResponse.json(

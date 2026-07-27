@@ -54,16 +54,23 @@ import {
 import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
+  APPAREL_ALPHA_SIZES,
   createItemSchema,
   formatRackLabel,
   normalizeRackFields,
+  type ApparelAlphaSize,
   type CreateItemInput,
   type CustomFieldDefinition,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
-type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
+// The nine canonical apparel letters now live in @stockpilot/core
+// (`inventory/apparel-sizes`) so this form, the "add sizes" dialog and the
+// native fallback all offer the SAME list. There used to be three private
+// copies; the native one had already drifted to the 14-row union of the
+// apparel_alpha scale, which offers XXL and 2XL as two chips for one shirt.
+type SizeCode = ApparelAlphaSize;
+const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // HEIC + HEIF added so iPhone Safari (which ships HEIC by default

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
-import { supabase } from '@/lib/supabase';
+import { buildQuickAddInput, describeFailure, submitCreateItem } from '@/lib/item-create';
 import { radius, space, theme } from '@/lib/theme';
 
 import type { User } from '@supabase/supabase-js';
@@ -56,6 +56,11 @@ interface Props {
  *
  * The AI-source tag is shown when description was AI-generated so the
  * user knows to review it before tapping save.
+ *
+ * This card holds NO creation rules. It collects strings and hands them to
+ * src/lib/item-create.ts, which parses them with the SAME zod the web uses and
+ * POSTs /api/v1/items. It used to raw-insert inventory_items and guess the org
+ * from the first organization_members row — see buildQuickAddInput's doc.
  */
 export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
   const isExisting = Boolean(result.existingItem);
@@ -103,66 +108,34 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
       Alert.alert('Name required', 'Type a product name before saving.');
       return;
     }
-    const initialQty = Math.max(0, Number(qty) || 0);
+
+    // Brand rides along as a custom field, exactly as before. Everything else
+    // — the SKU fallback, the NULL barcode for a codeless photo ID, the
+    // opening quantity landing in UNPLACED via the initial movement — is the
+    // shared create path's, not this card's.
+    const customFields: Record<string, unknown> = {};
+    if (enrichment.brand) customFields.brand = enrichment.brand;
+
+    const built = buildQuickAddInput({
+      itemType: 'product',
+      name,
+      sku,
+      barcode: result.upc,
+      modelNumber,
+      description: enrichment.description ?? null,
+      quantity: qty,
+      warehouseId,
+      customFields,
+    });
+    if (!built.ok) {
+      Alert.alert('Check the form', describeFailure(built));
+      return;
+    }
 
     setBusy(true);
     try {
-      const { data: member } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .not('accepted_at', 'is', null)
-        .limit(1)
-        .maybeSingle();
-      const orgId = (member?.organization_id as string | undefined) ?? null;
-      if (!orgId) throw new Error('No organization for this user');
-
-      const customFields: Record<string, unknown> = {};
-      if (enrichment.brand) customFields.brand = enrichment.brand;
-
-      const { data: created, error: insErr } = await supabase
-        .from('inventory_items')
-        .insert({
-          organization_id: orgId,
-          sku: sku.trim(),
-          name: name.trim(),
-          // Photo ID without a readable code passes upc: '' — store NULL, not
-          // a placeholder that would collide future barcode lookups.
-          barcode: result.upc || null,
-          model_number: modelNumber.trim() || null,
-          description: enrichment.description?.slice(0, 5000) ?? null,
-          item_type: 'product',
-          custom_fields: customFields,
-          warehouse_id: warehouseId,
-          status: 'active',
-          // Set the initial qty ON THE ITEM so the seed-initial-level trigger
-          // places it in UNPLACED — matching the web "+ New item" create.
-          // Previously this inserted qoh=0 then adjust_stock(p_location_id:null),
-          // which routed every mobile-added item's stock into STAGING.
-          quantity_on_hand: initialQty,
-          created_by: user.id,
-          updated_by: user.id,
-        })
-        .select('id')
-        .single();
-      if (insErr) throw new Error(insErr.message);
-
-      // Mirror the web create's audit movement (ledger + sparkline). Best-effort
-      // — the stock already exists (Unplaced) from the trigger above, so a
-      // movement-log hiccup must not fail the add.
-      if (initialQty > 0) {
-        await supabase.from('stock_movements').insert({
-          organization_id: orgId,
-          item_id: (created as { id: string }).id,
-          movement_type: 'initial',
-          quantity_change: initialQty,
-          previous_quantity: 0,
-          new_quantity: initialQty,
-          user_id: user.id,
-          to_location_id: null,
-        });
-      }
-      onCreated((created as { id: string }).id);
+      const { id } = await submitCreateItem(built.input);
+      onCreated(id);
     } catch (e) {
       Alert.alert('Could not add', e instanceof Error ? e.message : 'Unknown error');
     } finally {

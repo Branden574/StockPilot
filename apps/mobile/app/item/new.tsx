@@ -22,6 +22,7 @@ import { useAuth } from '@/lib/auth-context';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import { resizeForUpload } from '@/lib/image-resize';
 import {
+  apparelFallbackSizeOptions,
   buildCreateItemInput,
   buildSizedVariantsInput,
   collectSizedVariants,
@@ -374,11 +375,17 @@ export default function NewItem() {
   }, [orgId, loadCategories]);
 
   // Load the selected category's size vocabulary. A category that carries its
-  // own scale (a shoe category -> US Men's, halves included) uses it; one that
-  // only has supports_sizes falls back to the BUILT-IN apparel_alpha system
-  // scale seeded by migration 0294 — read from the database, so there is still
-  // no size list in this file. Both are ordered by the scale's sort_order:
-  // sizes are ordered, never alphabetical.
+  // own scale (a shoe category -> US Men's, halves included) uses it VERBATIM;
+  // one that only has supports_sizes falls back to the BUILT-IN apparel_alpha
+  // system scale seeded by migration 0294 — read from the database, so there is
+  // still no size list in this file. Both are ordered by the scale's
+  // sort_order: sizes are ordered, never alphabetical.
+  //
+  // The FALLBACK is narrowed to the canonical letters (see
+  // apparelFallbackSizeOptions). The seeded scale is deliberately the union of
+  // every spelling in the codebase, aliases included, so offering it whole
+  // would put XXL and 2XL on screen as two chips for one shirt — and today
+  // EVERY category takes this branch, because no category has a scale yet.
   React.useEffect(() => {
     setSizeQty({});
     if (!sizesEnabled) {
@@ -390,6 +397,7 @@ export default function NewItem() {
     void (async () => {
       try {
         let scaleId = selectedCategory?.size_scale_id ?? null;
+        const isFallback = !scaleId;
         if (!scaleId) {
           const { data: fallback } = await supabase
             .from('size_scales')
@@ -409,10 +417,9 @@ export default function NewItem() {
           .eq('size_scale_id', scaleId)
           .order('sort_order', { ascending: true });
         if (cancelled) return;
+        const rows = (data ?? []) as Array<{ value: string; sort_order: number }>;
         setSizeOptions(
-          sizeOptionsFromScale(
-            (data ?? []) as Array<{ value: string; sort_order: number }>,
-          ),
+          isFallback ? apparelFallbackSizeOptions(rows) : sizeOptionsFromScale(rows),
         );
       } catch {
         // A missing scale is not an error the user can act on — fall through to
@@ -658,15 +665,26 @@ export default function NewItem() {
             </Field>
           </Row>
 
-          <Field label={isBook ? 'AUTHOR' : 'MODEL NUMBER'}>
-            <TextInput
-              value={modelNumber}
-              onChangeText={setModelNumber}
-              placeholder={isBook ? 'Stephen Hawking' : 'MX432LL/A'}
-              placeholderTextColor={c.ink4}
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
-            />
-          </Field>
+          {/*
+            Hidden during a size run. `bulkCreateSizedVariantsSchema` carries no
+            model number and `InventoryService.bulkCreateSizedVariants` never
+            writes `model_number`, so anything typed here on a sized category
+            was silently dropped — the worst kind of field, one that looks
+            saved. A box the server cannot honour must not be on screen. (Web's
+            item form still renders it in its own sized mode and discards it the
+            same way; that copy is out of this change's scope.)
+          */}
+          {variantsEnabled ? null : (
+            <Field label={isBook ? 'AUTHOR' : 'MODEL NUMBER'}>
+              <TextInput
+                value={modelNumber}
+                onChangeText={setModelNumber}
+                placeholder={isBook ? 'Stephen Hawking' : 'MX432LL/A'}
+                placeholderTextColor={c.ink4}
+                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+              />
+            </Field>
+          )}
 
           <Field label="DESCRIPTION">
             <TextInput
