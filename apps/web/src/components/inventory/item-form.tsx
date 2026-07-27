@@ -1564,7 +1564,12 @@ export function ItemForm({
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
                   <SelectItem value="serial">Serial (one per unit, required)</SelectItem>
-                  <SelectItem value="serial_optional">Serial (optional per unit)</SelectItem>
+                  {/* serial_optional is DELIBERATELY not offered here yet. The value
+                      exists end-to-end (schema, RPC, enumerators) as of mig 0295/0296,
+                      but it belongs to the sports module's tracking profiles — Task 8
+                      surfaces it through category-driven stamping, not this free-pick.
+                      Offering it now would let a lot_serial org create one ahead of the
+                      sports gating rules. */}
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">
