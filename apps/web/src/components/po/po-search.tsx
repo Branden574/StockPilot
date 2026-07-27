@@ -9,8 +9,8 @@ import { Input } from '@/components/ui/input';
 /**
  * Search box for the purchase-orders list. Uses client-side navigation
  * (router.push) rather than a native GET form so searching is an in-app SPA
- * navigation — the dashboard shell stays mounted and the cold-load BootSplash
- * never re-fires. Preserves the active status tab in the query string.
+ * navigation — the dashboard shell stays mounted rather than cold-loading.
+ * Preserves the active status tab in the query string.
  */
 export function PoSearch({ status, initialQuery }: { status: string; initialQuery: string }) {
   const router = useRouter();

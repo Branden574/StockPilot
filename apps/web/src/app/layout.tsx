@@ -3,7 +3,6 @@ import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/
 import type { ReactNode } from 'react';
 
 import { PostHogProvider } from '@/components/analytics/posthog-provider';
-import { BootSplash } from '@/components/dashboard/boot-splash';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 
@@ -118,13 +117,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           */}
           <PostHogProvider>{children}</PostHogProvider>
           <Toaster />
-          {/*
-            Branded boot screen. Lives at the ROOT so it persists across the
-            sign-in → dashboard redirect during app entry. It plays ONLY on the
-            landing's first load or after an app-entry CTA sets the handoff flag
-            (never on a refresh or a direct dashboard load) — see BootSplash.
-          */}
-          <BootSplash />
         </ThemeProvider>
       </body>
     </html>
