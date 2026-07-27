@@ -108,6 +108,11 @@ export const PERMISSIONS = [
   // default (mirrors who could see it before), grantable to an auditor.
   'returns:read',
   'returns:manage',
+  // Sports module (self-contained, NO lot_serial dependency — owner decision
+  // 2026-07-27): create sports categories/subcategories, edit tracking
+  // profiles and size scales, override product grouping, and change an
+  // item's tracking mode. Gated by the off-by-default `sports` module.
+  'sports:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -159,6 +164,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     // viewers do not.
     'returns:read',
     'returns:manage',
+    'sports:manage',
   ],
   staff: [
     'members:read',
@@ -328,6 +334,9 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   public request links (mig 0261) — RLS is has_permission-based from day
   //   one, so a grant is fully effective end-to-end.
   'public_links:manage',
+  // Sports module — the write-path RLS in 0294 uses has_permission(), so a
+  // grant is fully effective end-to-end.
+  'sports:manage',
 ]);
 
 /**
@@ -607,6 +616,13 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description:
       'Cancel an active rental, edit lines on an active rental. Manager+ only.',
   },
+
+  'sports:manage': {
+    group: 'Inventory',
+    label: 'Manage sports products',
+    description:
+      'Create sports categories and subcategories, edit tracking profiles and size scales, override product grouping, and change an item tracking mode.',
+  },
 };
 
 // Every group used in PERMISSION_META must appear here. The two consumers
@@ -615,6 +631,7 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
 // renders out of place. Keep this list exhaustive so ordering is intentional.
 export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
   'Items',
+  'Inventory',
   'Stock',
   'Locations',
   'Categories',

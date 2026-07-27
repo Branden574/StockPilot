@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning' | 'b2b_portal'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'instant_size_count' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'instant_size_count' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk' | 'sports';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -730,6 +730,42 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
         iconName: 'ScanLine',
         defaultSortOrder: 95,
         requires: 'stock:adjust',
+      },
+    ],
+  },
+  sports: {
+    id: 'sports',
+    tier: 'premium',
+    title: 'Sports inventory',
+    // NO lot_serial dependency (owner decision 2026-07-27). This module grants
+    // its OWN serial modes for sports categories; lot_serial stays
+    // grandfathered off and untouched for every org.
+    dependsOn: ['inventory'],
+    permissions: ['sports:manage'],
+    surfaces: ['web', 'mobile'],
+    apiPrefixes: ['/api/v1/product-groups'],
+    ownsTables: ['product_groups', 'size_scales', 'size_scale_values'],
+    minPlan: 'business',
+    // Off by default everywhere — enabled per-org for sports customers.
+    defaultOnFor: [],
+    placements: [
+      {
+        surface: 'web_sidebar',
+        section: 'inventory',
+        label: 'Product groups',
+        href: '/dashboard/product-groups',
+        iconName: 'Layers',
+        defaultSortOrder: 25,
+        requires: 'sports:manage',
+      },
+      {
+        surface: 'mobile_drawer',
+        section: 'inventory',
+        label: 'Product groups',
+        href: '/product-groups',
+        iconName: 'Layers',
+        defaultSortOrder: 25,
+        requires: 'sports:manage',
       },
     ],
   },
