@@ -112,12 +112,19 @@ category tracking_mode stamps per-item tracking_type (keeps the proven
 post_receipt_v2 seam) · `serial_optional` as a tracking_type value · per-
 category size scales · extend the po_imports chassis for variant import.
 
-## Escalated to the owner
+## Owner decisions (2026-07-27) — all three resolved
 
-1. PAIR counting: uom convention vs first-class count-unit conversions.
-2. Existing sized inventory: opt-in group linking with a review tool vs
-   auto-backfill from the fragile name heuristic.
-3. Packaging: a `sports` module granting its own serial modes vs depending on
-   the grandfathered-off `lot_serial` premium module.
-(Plus the requirements doc's §policy list: jersey number required?, player-
-name grouping, colorway group-vs-variant, which size systems ship first.)
+1. **PAIR counting = display convention.** Category default uom 'pair'; every
+   shoe quantity means pairs and every surface says so. No conversion logic;
+   ledger invariants untouched.
+2. **Existing sized inventory = opt-in + review tool.** New items group at
+   creation; existing families link via a bulk review tool the owner drives.
+   Display heuristics remain as fallback. NO name-heuristic auto-backfill.
+3. **Packaging = self-contained 'sports' module** in the entitlement registry:
+   enables group/variant UI and grants its own serial modes for sports
+   categories, with NO lot_serial dependency (that module stays grandfathered
+   OFF and untouched).
+
+Still open for the spec (non-blocking, resolve during design): jersey number
+required or optional per subcategory; player-name grouping; colorway at group
+vs variant level; which size scales seed first.
