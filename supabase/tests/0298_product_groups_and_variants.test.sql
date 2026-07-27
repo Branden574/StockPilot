@@ -4,7 +4,7 @@
 -- requirements scenarios, and the regression anchors that keep the most
 -- shared table in the app intact.
 --
--- Assertion index (47):
+-- Assertion index (51):
 --    1-13  schema shape: the table exists, all ten variant columns exist,
 --          product_groups owns NO quantity column, group_id is NULLABLE with
 --          NO default (the "no backfill" structural anchor)
@@ -21,18 +21,25 @@
 --          number repeats across GROUPS as well as across sizes
 --   34-35  variant_size length guard
 --   36-37  group_key uniqueness is per-ORG, not global
---   38-40  the three new inventory_items indexes exist
+--   38-40  the new inventory_items indexes: inventory_items_group_idx pinned
+--          byte-identically as NON-PARTIAL (a partial index cannot serve the
+--          inventory_items_group_id_fkey RI probe), no partial index leads
+--          with group_id at all, and the jersey-number index exists
 --   41-47  RLS + view security: the roll-up view is security_invoker (a
 --          default-owner view would leak every org's totals), a foreign org
 --          sees neither the group nor its roll-up, the owning manager does,
 --          and a foreign org CANNOT attach its item to my group (insert or
 --          update) even though it can attach to its own
+--   48-51  category visibility: an unrestricted member reads both groups
+--          (positive control), a category-restricted viewer reads ZERO rows
+--          for a group outside their whitelist, reads EXACTLY the whitelisted
+--          one, and the roll-up view hides the same group
 --
 -- Namespace: 9e298000. Wrapped in begin/rollback - nothing leaks.
 
 begin;
 
-select plan(47);
+select plan(51);
 
 \set org    '\'9e298000-0000-0000-0000-000000000001\''
 \set usr    '\'9e298000-0000-0000-0000-000000000002\''
@@ -51,11 +58,17 @@ select plan(47);
 \set gJersB '\'9e298000-0000-0000-0000-000000000015\''
 \set gJers2 '\'9e298000-0000-0000-0000-000000000016\''
 \set j12alt '\'9e298000-0000-0000-0000-000000000017\''
+\set vwr    '\'9e298000-0000-0000-0000-000000000018\''
+\set catVis '\'9e298000-0000-0000-0000-000000000019\''
+\set catHid '\'9e298000-0000-0000-0000-000000000020\''
+\set gVis   '\'9e298000-0000-0000-0000-000000000021\''
+\set gHid   '\'9e298000-0000-0000-0000-000000000022\''
 
 -- organizations.slug and warehouses.code are NOT NULL with no default.
 insert into auth.users (id, email) values
   (:usr,  'u-0298@example.test'),
-  (:mgrB, 'mgrb-0298@example.test')
+  (:mgrB, 'mgrb-0298@example.test'),
+  (:vwr,  'viewer-0298@example.test')
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
   (:org,  'Sports 0298 Org', 'sports-0298-org'),
@@ -63,12 +76,24 @@ insert into public.organizations (id, name, slug) values
   on conflict (id) do nothing;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:org,  :usr,  'manager', now()),
-  (:orgB, :mgrB, 'manager', now())
+  (:orgB, :mgrB, 'manager', now()),
+  -- A VIEWER in org A, restricted to catVis by the assignment row below.
+  (:org,  :vwr,  'viewer',  now())
   on conflict do nothing;
 insert into public.warehouses (id, organization_id, name, code) values
   (:wh,  :org,  'WH 0298',   'WH0298'),
   (:whB, :orgB, 'WH 0298 B', 'WH0298B')
   on conflict (id) do nothing;
+
+-- Category-visibility fixtures for 48-51. The viewer needs NO warehouse
+-- assignment: group visibility is org membership AND category, nothing else.
+insert into public.categories (id, organization_id, name) values
+  (:catVis, :org, 'Visible Cat 0298'),
+  (:catHid, :org, 'Hidden Cat 0298')
+  on conflict (id) do nothing;
+insert into public.user_category_assignments (organization_id, user_id, category_id) values
+  (:org, :vwr, :catVis)
+  on conflict do nothing;
 
 -- A pre-existing item in a DIFFERENT org, standing in for "every item in every
 -- existing org". Assertion 15 scans it, so that assertion is never vacuous
@@ -352,15 +377,29 @@ select lives_ok(
              'shoes|nike|pegasus 41|fd2722|black-white') $$,
   'the SAME group_key in a DIFFERENT org is fine - uniqueness is per-org, not global');
 
--- ── 38-40. The three new inventory_items indexes ────────────────────────────
-select ok(
-  exists (select 1 from pg_indexes where schemaname = 'public'
-            and indexname = 'inventory_items_group_idx'),
-  'inventory_items_group_idx exists (group detail page + import matcher)');
-select ok(
-  exists (select 1 from pg_indexes where schemaname = 'public'
-            and indexname = 'inventory_items_group_variant_idx'),
-  'inventory_items_group_variant_idx exists');
+-- ── 38-40. The new inventory_items indexes ──────────────────────────────────
+-- Pinned BYTE-IDENTICALLY, not merely by name: the point of the 2026-07-27
+-- review fix is the ABSENCE of the WHERE clause. Postgres runs the
+-- inventory_items_group_id_fkey RI probe as a bare `where group_id = $1` with
+-- no knowledge of deleted_at, so it cannot use a partial index - re-adding
+-- `where group_id is not null and deleted_at is null` would silently turn every
+-- `delete from product_groups` into a sequential scan and row-lock of the
+-- 1.2 M-row items table.
+select is(
+  (select indexdef from pg_indexes
+    where schemaname = 'public' and indexname = 'inventory_items_group_idx'),
+  'CREATE INDEX inventory_items_group_idx ON public.inventory_items USING btree (group_id)',
+  'inventory_items_group_idx is NON-PARTIAL on (group_id) - the FK RI probe can use it');
+
+-- The same guarantee restated structurally, so a differently NAMED partial
+-- index cannot reintroduce the problem.
+select is(
+  (select count(*)::int from pg_indexes
+    where schemaname = 'public' and tablename = 'inventory_items'
+      and indexdef like '%(group_id%' and indexdef like '%WHERE%'),
+  0,
+  'no partial index leads with group_id - a group delete never falls back to a seq scan');
+
 select ok(
   exists (select 1 from pg_indexes where schemaname = 'public'
             and indexname = 'inventory_items_jersey_number_idx'),
@@ -381,6 +420,15 @@ select is(
 insert into public.product_groups
   (id, organization_id, name, group_key, default_counting_unit)
   values (:gJersB, :orgB, 'Org B Jersey', 'jerseys|orgb|2026|home', 'each')
+  on conflict (id) do nothing;
+
+-- Two groups in org A that differ ONLY by category: one inside the restricted
+-- viewer's whitelist, one outside it (48-51).
+insert into public.product_groups
+  (id, organization_id, category_id, name, group_key, default_counting_unit)
+values
+  (:gVis, :org, :catVis, 'Group In Visible Cat', 'shoes|visible-cat|0298', 'each'),
+  (:gHid, :org, :catHid, 'Group In Hidden Cat',  'shoes|hidden-cat|0298',  'each')
   on conflict (id) do nothing;
 
 -- As the OWNING org's manager: the group and its real total are visible.
@@ -441,6 +489,49 @@ select throws_ok(
   '42501',
   null,
   'org B CANNOT re-point an existing item at org A''s group either');
+
+-- ── 48-51. Category visibility: the restricted-viewer boundary ──────────────
+-- Reviewed 2026-07-27: product_groups_select was is_org_member ALONE, making
+-- this the one read surface in the app that ignored viewer category
+-- visibility. The same viewer reads zero categories (categories_select) and
+-- zero items (inventory_items_select) outside their whitelist, yet could read
+-- the group row - name, brand, team, style number, season - for a category
+-- invisible to them. Quantities were already masked; the identity was not.
+
+-- Positive control FIRST, as the org's own (unrestricted) manager, so the
+-- viewer's zero below is a real refusal and not an empty fixture.
+set local "request.jwt.claim.sub" to '9e298000-0000-0000-0000-000000000002';
+
+select is(
+  (select count(*)::int from public.product_groups
+    where id in ('9e298000-0000-0000-0000-000000000021'::uuid,
+                 '9e298000-0000-0000-0000-000000000022'::uuid)),
+  2,
+  'an UNRESTRICTED member of the org reads both the visible-category and the hidden-category group');
+
+-- Now the viewer restricted to catVis only.
+set local "request.jwt.claim.sub" to '9e298000-0000-0000-0000-000000000018';
+
+select is(
+  (select count(*)::int from public.product_groups
+    where id = '9e298000-0000-0000-0000-000000000022'::uuid),
+  0,
+  'a category-restricted viewer reads ZERO group rows for a category outside their whitelist - no name/brand/style leak');
+
+-- Exactness, not just the one refusal: the three NULL-category groups in the
+-- same org are hidden too, matching how a NULL-category item behaves under
+-- inventory_items_select.
+select is(
+  (select array_agg(name order by name) from public.product_groups
+    where organization_id = '9e298000-0000-0000-0000-000000000001'::uuid),
+  array['Group In Visible Cat'],
+  'the restricted viewer reads EXACTLY the whitelisted-category group - the NULL-category groups are hidden as well');
+
+select is(
+  (select count(*)::int from public.product_group_rollups
+    where group_id = '9e298000-0000-0000-0000-000000000022'::uuid),
+  0,
+  'the roll-up view hides the same group - security_invoker means product_groups RLS is the caller''s');
 
 reset role;
 select * from finish();

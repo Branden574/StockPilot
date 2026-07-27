@@ -156,16 +156,30 @@ comment on column public.inventory_items.group_id is
   'ever writes this column.';
 
 -- Variant lookup: the group detail page and the import matcher both start here.
+--
+-- DELIBERATELY NON-PARTIAL, and it must stay that way. This index is also the
+-- only thing standing between `delete from product_groups` and a sequential
+-- scan of 1.2 M inventory_items rows. The referential-integrity probe that
+-- Postgres runs for inventory_items_group_id_fkey (on delete set null) is a
+-- bare `... where group_id = $1`, executed by the RI SECURITY DEFINER snapshot
+-- with NO knowledge of the deleted_at predicate — the planner cannot prove a
+-- partial index's WHERE clause is implied, so a partial index is unusable
+-- there and every group delete would seq-scan AND row-lock the whole items
+-- table. (Reviewed 2026-07-27: the original `where group_id is not null and
+-- deleted_at is null` form did exactly that.)
+--
+-- Nothing is lost by widening it: a btree simply stores the NULL group_ids too,
+-- and the group-detail / import-matcher queries still get the same index scan
+-- with `deleted_at is null` applied as a cheap filter over the handful of rows
+-- one group owns.
+--
+-- The former inventory_items_group_variant_idx on (group_id, variant_key) is
+-- deliberately NOT recreated. A group holds a handful of variant rows, so
+-- (group_id) alone answers `where group_id = ? and variant_key = ?` with a
+-- trivial filter, and a second index on the most-written table in the app is
+-- pure write cost. One non-partial index serves the reads and the RI probe.
 create index inventory_items_group_idx
-  on public.inventory_items (group_id)
-  where group_id is not null and deleted_at is null;
-
--- Variant identity within a group. Not UNIQUE: Model B allows several
--- PLACEMENT rows for one variant (same sku, different charter/bin), and each
--- carries the same variant_key.
-create index inventory_items_group_variant_idx
-  on public.inventory_items (group_id, variant_key)
-  where group_id is not null and deleted_at is null;
+  on public.inventory_items (group_id);
 
 -- Jersey-number search, per org. Non-unique on purpose.
 create index inventory_items_jersey_number_idx
@@ -247,9 +261,37 @@ alter policy inventory_items_update on public.inventory_items
 -- ── 4) RLS on product_groups ────────────────────────────────────────────────
 alter table public.product_groups enable row level security;
 
+-- SELECT is org membership AND category visibility. Both arms are required.
+--
+-- Reviewed 2026-07-27: the first cut used is_org_member alone, which made this
+-- table the one read surface in the whole app that ignored the viewer
+-- category-visibility boundary. A viewer restricted to a category set reads
+-- ZERO categories (categories_select, 0129 -> 0140) and ZERO items
+-- (inventory_items_select, 0129 -> 0229) outside that set, but could still read
+-- the group row for a category invisible to them: name, brand, team, style
+-- number, season. Quantities were already masked (product_group_rollups is
+-- security_invoker and its numbers come from inventory_items), so the leak was
+-- identity metadata — still a leak, and still the wrong boundary.
+--
+-- The second arm is the 0229 hashed-set spelling of
+-- user_can_see_item_category(auth.uid(), organization_id, category_id), which
+-- is what inventory_items_select uses today. Identical row set, including the
+-- NULL case: a group whose category_id IS NULL is visible to every
+-- unrestricted member and hidden from a restricted viewer, exactly as a
+-- NULL-category item is. The set form is used rather than the plpgsql function
+-- (categories_select's 0129 spelling) for the reason 0229 documents: the two
+-- helpers reference no outer column, so they are hashed once per statement
+-- instead of re-executed per row.
 create policy product_groups_select on public.product_groups
   for select to authenticated
-  using ((select public.is_org_member(organization_id)));
+  using (
+    (select public.is_org_member(organization_id))
+    and (
+      organization_id in (select public.rls_cat_unrestricted_org_ids())
+      or (organization_id, category_id) in
+           (select * from public.rls_cat_allowed_category_ids())
+    )
+  );
 
 create policy product_groups_insert on public.product_groups
   for insert to authenticated
@@ -279,6 +321,17 @@ create policy product_groups_update on public.product_groups
 create policy product_groups_delete on public.product_groups
   for delete to authenticated
   using ((select public.has_org_role(organization_id, 'manager')));
+
+-- KNOWN GAP, Minor, DEFERRED (review 2026-07-27) — no behaviour change here.
+-- product_groups.organization_id is MUTABLE: nothing above pins it across an
+-- UPDATE. This is NOT a cross-tenant escalation — USING is evaluated on the OLD
+-- row and WITH CHECK on the NEW one, so re-homing a group requires manager (or
+-- sports:manage) in BOTH orgs. What it does allow is someone holding manager in
+-- two orgs moving a group out from under its variants: product_group_in_org is
+-- only enforced on inventory_items writes, so the already-attached items would
+-- keep pointing at a group that now lives in another org. A guard belongs with
+-- the group service (Task 6+) as an organization_id-immutability trigger; it is
+-- deliberately not added in 0298, which stays a pure schema migration.
 
 -- EXPLICIT GRANT (0067). Missing grants cause real 403s on hardened projects
 -- even when RLS would allow the row. Migration 0283 omitted this; do not.
