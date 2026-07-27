@@ -363,6 +363,11 @@ function RolePickerSheet({
           .from('categories')
           .select('id, name')
           .eq('organization_id', orgId)
+          // Deleting a category soft-deletes it, so without this the picker
+          // lists the tombstone alongside its live replacement and every
+          // re-created category reads as a duplicate. Web has always filtered
+          // here (dashboard/team/page.tsx); this screen was the one that did not.
+          .is('deleted_at', null)
           .order('name', { ascending: true }),
         supabase
           .from('user_category_assignments')
