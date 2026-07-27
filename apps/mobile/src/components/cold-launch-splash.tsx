@@ -2,124 +2,151 @@ import * as React from 'react';
 import {
   AccessibilityInfo,
   Animated,
-  type DimensionValue,
   Easing,
   Pressable,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import Svg, { Circle, Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Mask, Path, Rect } from 'react-native-svg';
 
-import { ACCENT, FONT, palette } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 
-// ── Tunable durations (named so they're easy to adjust) ───────────────
-export const LOADING_MS = 2000; // branded hold before hand-off
-export const CROSSFADE_MS = 450; // splash-out → Face-ID-in dissolve
-const REDUCED_HOLD_MS = 1100; // shortened static hold under reduce-motion
+/**
+ * StockPilot cold-launch screen — the native twin of the landing page's
+ * "Scanline" intro (apps/web/src/components/marketing/landing-intro).
+ *
+ * A thin beam sweeps the ink surface and reveals the finished lockup in its
+ * wake, one green confirm pulses on the pip, then it cross-dissolves into the
+ * Face-ID lock rendered underneath. One pass, one pulse, and deliberately NO
+ * progress theater: no percentage counter, no progress bar, no status line and
+ * no SKIP pill. The whole surface is the skip affordance, exactly as on web —
+ * a progress bar that is not measuring anything is a lie told sixty times a
+ * second, and the previous 0-100% counter was doing precisely that.
+ *
+ * Timings and easings are the design package's, shared verbatim with the web
+ * intro so the two surfaces cannot drift.
+ */
 
-// Stroke-draw lengths (SVG user units). Slight over-estimates of the actual
-// path lengths so each stroke is fully drawn at p=1 with a single clean dash
-// segment (react-native-svg has no reliable pathLength normalization).
-const RECT_LEN = 96; // rounded-square perimeter (~93.7)
-const CURVE_LEN = 52; // S-curve path length (~47)
+// ── timeline (ms) — mirrors the web intro exactly ─────────────────────
+const GRID_IN = 200;
+const BEAM_START = 120;
+const BEAM_END = 620;
+const PULSE_START = 640;
+const ANIM_DONE = 900; // full sequence complete
+const REDUCED_DONE = 300; // opacity-only lane
+export const CROSSFADE_MS = 460; // splash-out → Face-ID-in dissolve
+const REDUCED_CROSSFADE_MS = 240;
 
-// The splash is ALWAYS dark per the brief (a branded dark loading screen),
-// independent of the app's light/dark theme.
-const D = palette('dark');
+// Brand surface. ALWAYS dark — a branded loading screen, independent of theme.
+// Ink matches the landing hero so the two surfaces are the same colour.
+const INK = '#0b0c0a';
+const PAPER = '#faf9f4';
+const MINT = '#5db89f';
+const GRID_LINE = 'rgba(250,249,244,0.045)';
+const GRID_CELL = 56;
 
-// ── math helpers (verbatim from the design prototype) ─────────────────
+// ── easings (verbatim from the design prototype) ──────────────────────
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const seg = (t: number, a: number, b: number) => clamp01((t - a) / (b - a));
 const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
-const easeOutBack = (x: number) => {
-  const c = 1.70158;
-  return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2);
-};
+const easeInOut = (x: number) =>
+  x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 
-// ── animated brand mark — the rounded-square + S-curve draw themselves on,
-//    the teal pip pops at the end. `p` is 0..1 draw progress. ────────────
-function SPMarkDraw({ size, p }: { size: number; p: number }) {
-  const rectP = easeOut(clamp01(p / 0.5));
-  const curveP = easeOut(clamp01((p - 0.28) / 0.72));
-  const pipP = clamp01((p - 0.9) / 0.1);
-  const sw = 1.7;
-  const pipScale = 0.4 + 0.6 * easeOutBack(pipP || 0.0001);
+/**
+ * The mark, in the landing nav's geometry — the S and the pip are carved
+ * negative space through a mask, never drawn as foreground strokes. Kept
+ * identical to the web intro's mark so both surfaces show one logo.
+ */
+function IntroMark({ size }: { size: number }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-      <Rect
-        x={3}
-        y={3}
-        width={26}
-        height={26}
-        rx={6}
-        stroke={D.ink}
-        strokeWidth={sw}
-        strokeLinecap="round"
-        fill="none"
-        strokeDasharray={[RECT_LEN, RECT_LEN]}
-        strokeDashoffset={RECT_LEN * (1 - rectP)}
-      />
-      <Path
-        d="M11 23.5 Q24 23.5 24 19.5 Q24 15.5 18 15.5 Q11 15.5 11 11.5 Q11 7.5 24 7.5"
-        stroke={D.ink}
-        strokeWidth={sw}
-        strokeLinecap="round"
-        fill="none"
-        strokeDasharray={[CURVE_LEN, CURVE_LEN]}
-        strokeDashoffset={CURVE_LEN * (1 - curveP)}
-      />
-      <Circle cx={24} cy={7.5} r={1.5 * pipScale} fill={ACCENT.pipTeal} opacity={pipP} />
+    <Svg width={size} height={size} viewBox="0 0 100 100">
+      <Defs>
+        <Mask id="cl-mark">
+          <Rect width={100} height={100} fill="#fff" />
+          <Path
+            d="M64 38 q0 -10 -14 -10 q-14 0 -14 11 q0 9 14 11 q14 2 14 11 q0 11 -14 11 q-14 0 -14 -10"
+            fill="none"
+            stroke="#000"
+            strokeWidth={9}
+            strokeLinecap="round"
+          />
+        </Mask>
+      </Defs>
+      <Rect x={12} y={12} width={76} height={76} rx={16} fill={PAPER} mask="url(#cl-mark)" />
+      <Circle cx={72} cy={24} r={6} fill={MINT} />
     </Svg>
   );
 }
 
+/** Confirmation pulse, anchored to the pip at (72%, 24%) of the mark box. */
+function Pulse({ markSize, p }: { markSize: number; p: number }) {
+  if (p <= 0 || p >= 1) return null;
+  const ring = easeOut(p);
+  const dot = clamp01(p / 0.25) * (1 - clamp01((p - 0.45) / 0.55));
+  return (
+    <View
+      pointerEvents="none"
+      style={[styles.pulse, { left: markSize * 0.72, top: markSize * 0.24 }]}
+    >
+      <View
+        style={[
+          styles.pulseRing,
+          { transform: [{ scale: 0.4 + ring * 1.9 }], opacity: 0.75 * (1 - ring) },
+        ]}
+      />
+      <View style={[styles.pulseDot, { opacity: dot }]} />
+    </View>
+  );
+}
+
 interface ColdLaunchSplashProps {
-  /** Fired when the dissolve BEGINS (at LOADING_MS or on skip/tap) — the parent
-   *  uses this to release the biometric lock's Face-ID auto-prompt so it appears
-   *  as the splash fades. */
+  /** Fired when the dissolve BEGINS (at the end of the sequence, or on tap) —
+   *  the parent uses this to release the biometric lock's Face-ID auto-prompt
+   *  so it appears as the splash fades. */
   onHandoff?: () => void;
   /** Fired after the dissolve completes — the parent unmounts the splash. */
   onDone?: () => void;
 }
 
-/**
- * StockPilot cold-launch loading screen. Fire-once on a hard relaunch: the S
- * mark snaps + draws in, a branded hold runs to LOADING_MS with a stepped mono
- * status + 00→100% counter + mint hairline progress, then it cross-dissolves
- * (opacity, on two stacked layers) into the existing Face-ID lock screen
- * rendered underneath. Tapping anywhere — or the SKIP pill — hands off
- * immediately. Honors reduce-motion (static mark, short hold, then dissolve).
- */
 export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
+  const { width: vw, height: vh } = useWindowDimensions();
   const [t, setT] = React.useState(0);
   const [reduceMotion, setReduceMotion] = React.useState(false);
 
   const fade = React.useRef(new Animated.Value(1)).current;
-  const startRef = React.useRef<number | null>(null);
   const rafRef = React.useRef<number | null>(null);
+  const startRef = React.useRef<number | null>(null);
   const handedOff = React.useRef(false);
+  /** Real lockup width, from layout. The beam-driven reveal needs the true
+   *  width to know where the lockup starts and ends on screen; an estimate
+   *  makes the wipe finish early or late, and a percentage-width curtain does
+   *  not resolve reliably against a content-sized row in React Native. */
+  const [lockW, setLockW] = React.useState(0);
+
+  // Lockup geometry — the web intro's small breakpoint (phones are <= 480px).
+  const markSize = 56;
+  const wordSize = 34;
+  const gap = 14;
 
   const handoff = React.useCallback(() => {
     if (handedOff.current) return;
     handedOff.current = true;
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     onHandoff?.();
-    // Pure opacity crossfade on the stacked layer — never gates the incoming
-    // (Face ID) layer's visibility, so an instant skip still reveals it.
     Animated.timing(fade, {
       toValue: 0,
-      duration: CROSSFADE_MS,
+      duration: reduceMotion ? REDUCED_CROSSFADE_MS : CROSSFADE_MS,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start(() => onDone?.());
-  }, [fade, onHandoff, onDone]);
+  }, [fade, onHandoff, onDone, reduceMotion]);
 
-  // Always call the latest handoff from the timeline without making the
-  // timeline effect depend on (and restart on) callback identity.
+  // Hold the latest handoff so the timeline effect never restarts on re-render.
   const handoffRef = React.useRef(handoff);
   handoffRef.current = handoff;
 
-  // Detect reduce-motion once.
   React.useEffect(() => {
     let active = true;
     void AccessibilityInfo.isReduceMotionEnabled().then((on) => {
@@ -130,19 +157,14 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
     };
   }, []);
 
-  // Drive the timeline. Reduce-motion → static frame, short hold, then dissolve.
-  // Depends only on reduceMotion so the rAF loop is never restarted by a
-  // re-render; it calls the latest handoff via the ref.
+  // Drive the timeline. Depends only on reduceMotion.
   React.useEffect(() => {
-    if (reduceMotion) {
-      const id = setTimeout(() => handoffRef.current(), REDUCED_HOLD_MS);
-      return () => clearTimeout(id);
-    }
+    const done = reduceMotion ? REDUCED_DONE : ANIM_DONE;
     const loop = (now: number) => {
       if (startRef.current == null) startRef.current = now;
       const elapsed = now - startRef.current;
       setT(elapsed);
-      if (elapsed >= LOADING_MS) {
+      if (elapsed >= done) {
         handoffRef.current();
         return;
       }
@@ -154,182 +176,143 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
     };
   }, [reduceMotion]);
 
-  // Under reduce-motion, render the settled end-frame.
-  const tt = reduceMotion ? LOADING_MS : t;
+  // ── the frame ───────────────────────────────────────────────────────
+  let gridOpacity: number;
+  let lockOpacity: number;
+  let hiddenPx = 0; // px of the lockup still behind the curtain, from the right
+  let beam: { x: number; opacity: number } | null = null;
+  let pulseP = 0;
 
-  // sub-timelines (ms) — verbatim from the prototype
-  const draw = clamp01((tt - 60) / 820);
-  const markIn = reduceMotion ? 1 : easeOut(clamp01((tt - 40) / 320));
-  const word = clamp01((tt - 760) / 480);
-  const meta = clamp01((tt - 1000) / 360);
-  const prog = clamp01(tt / LOADING_MS);
-  const settle = easeOut(clamp01((tt - 1700) / 300));
+  if (reduceMotion) {
+    // Opacity only: static grid, no beam, no pulse, nothing translates.
+    gridOpacity = 0.5;
+    lockOpacity = easeOut(seg(t, 0, REDUCED_DONE));
+  } else {
+    gridOpacity = easeOut(seg(t, 0, GRID_IN)) * 0.9;
+    const sweep = easeInOut(seg(t, BEAM_START, BEAM_END));
+    const span = Math.min(vw * 0.56, 700);
+    const beamX = vw / 2 - span / 2 + sweep * span;
+    const beamO = seg(t, BEAM_START, 190) * (1 - seg(t, 560, 650));
+    if (beamO > 0.01) beam = { x: beamX, opacity: beamO };
+    // Hold the lockup fully hidden until we have measured it — revealing it
+    // against a guessed width is what made it pop in rather than wipe in.
+    const left = vw / 2 - lockW / 2;
+    const cov = lockW === 0 ? 0 : t >= BEAM_END ? 1 : clamp01((beamX - left) / lockW);
+    hiddenPx = (1 - cov) * lockW;
+    lockOpacity = t < BEAM_START ? 0 : 1;
+    pulseP = seg(t, PULSE_START, ANIM_DONE);
+  }
 
-  const status =
-    tt < 720
-      ? 'INITIALIZING'
-      : tt < 1350
-        ? 'SYNCING LEDGER'
-        : tt < 1850
-          ? 'SECURING SESSION'
-          : 'READY';
-
-  const markScale = (0.86 + 0.14 * markIn) * (1 - 0.015 * settle);
-  const counter = String(Math.round(prog * 100)).padStart(2, '0');
+  const rows = Math.ceil(vh / GRID_CELL) + 1;
+  const cols = Math.ceil(vw / GRID_CELL) + 1;
 
   return (
     <Animated.View style={[StyleSheet.absoluteFill, styles.root, { opacity: fade }]}>
-      {/* Tap anywhere to skip → hand off immediately. */}
-      <Pressable style={StyleSheet.absoluteFill} onPress={handoff} accessibilityRole="button" accessibilityLabel="Skip intro">
-        {/* faint mint radial wash, top-left */}
-        <View
-          pointerEvents="none"
-          style={[styles.wash, { opacity: 0.4 + 0.6 * easeOut(draw) }]}
-        >
-          <Svg width={420} height={420}>
-            <Defs>
-              <RadialGradient id="cl-wash" cx="50%" cy="50%" r="50%">
-                <Stop offset="0%" stopColor={ACCENT.mint} stopOpacity={0.16} />
-                <Stop offset="65%" stopColor={ACCENT.mint} stopOpacity={0} />
-              </RadialGradient>
-            </Defs>
-            <Rect x={0} y={0} width={420} height={420} fill="url(#cl-wash)" />
-          </Svg>
-        </View>
-
-        {/* centered lockup: mark + wordmark */}
-        <View style={styles.center}>
-          <View style={{ transform: [{ scale: markScale }], opacity: markIn }}>
-            <SPMarkDraw size={104} p={draw} />
-          </View>
-
-          <View
-            style={{
-              opacity: word,
-              transform: [{ translateY: (1 - easeOut(word)) * 12 }],
-            }}
-          >
-            <Text style={styles.wordmark} allowFontScaling={false}>
-              Stock<Text style={styles.wordmarkLight}>Pilot</Text>
-            </Text>
-          </View>
-        </View>
-
-        {/* bottom: status readout + hairline progress */}
-        <View style={[styles.bottom, { opacity: meta }]}>
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel} allowFontScaling={false}>
-              {'— '}
-              {status}
-            </Text>
-            <Text style={styles.counter} allowFontScaling={false}>
-              {counter}%
-            </Text>
-          </View>
-          <View style={styles.track}>
-            <View style={[styles.fill, { width: `${prog * 100}%` as DimensionValue }]} />
-          </View>
-        </View>
-      </Pressable>
-
-      {/* SKIP pill, top-right */}
+      {/* The whole surface is the skip affordance — no SKIP pill, as on web. */}
       <Pressable
-        onPress={handoff}
-        hitSlop={12}
-        style={styles.skip}
+        style={StyleSheet.absoluteFill}
+        onPress={() => handoffRef.current()}
         accessibilityRole="button"
-        accessibilityLabel="Skip"
+        accessibilityLabel="Loading StockPilot"
       >
-        <Text style={styles.skipText} allowFontScaling={false}>
-          SKIP
-        </Text>
+        {/* warehouse grid, mirroring the landing hero's */}
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: gridOpacity }]}>
+          {Array.from({ length: rows }).map((_, i) => (
+            <View key={`h${i}`} style={[styles.gridH, { top: i * GRID_CELL - 28 }]} />
+          ))}
+          {Array.from({ length: cols }).map((_, i) => (
+            <View key={`v${i}`} style={[styles.gridV, { left: i * GRID_CELL - 28 }]} />
+          ))}
+        </View>
+
+        {/* the scan beam: 1.5px leading edge + trailing gradient */}
+        {beam ? (
+          <View pointerEvents="none" style={[styles.beam, { left: beam.x - 90, opacity: beam.opacity }]}>
+            <View style={styles.beamTail} />
+            <View style={styles.beamEdge} />
+          </View>
+        ) : null}
+
+        {/* the lockup, revealed in the beam's wake, centred at 44% of the
+            viewport height exactly as the design specifies */}
+        <View pointerEvents="none" style={[styles.lockWrap, { top: vh * 0.44 }]}>
+          <View
+            onLayout={(e) => setLockW(e.nativeEvent.layout.width)}
+            style={[styles.lock, { opacity: lockOpacity }]}
+          >
+            <View>
+              <IntroMark size={markSize} />
+              <Pulse markSize={markSize} p={pulseP} />
+            </View>
+            <Text style={[styles.word, { fontSize: wordSize, marginLeft: gap }]}>
+              Stock<Text style={styles.wordDim}>Pilot</Text>
+            </Text>
+            {/* React Native has no clip-path, so the not-yet-revealed remainder
+                is covered by an ink curtain that retreats with the beam. Same
+                result, and it stays on the surface colour so there is no seam. */}
+            {hiddenPx > 0.5 ? (
+              <View pointerEvents="none" style={[styles.curtain, { width: hiddenPx }]} />
+            ) : null}
+          </View>
+        </View>
       </Pressable>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { backgroundColor: D.paper, overflow: 'hidden' },
-  wash: { position: 'absolute', top: -120, left: -90, width: 420, height: 420 },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 26,
+  root: { backgroundColor: INK, zIndex: 100 },
+  gridH: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: GRID_LINE },
+  gridV: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: GRID_LINE },
+  beam: { position: 'absolute', top: 0, bottom: 0, width: 91.5 },
+  beamTail: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 1.5,
+    width: 90,
+    backgroundColor: 'rgba(250,249,244,0.10)',
   },
-  wordmark: {
-    fontFamily: FONT.displaySemi,
-    fontSize: 27,
-    letterSpacing: -0.8,
-    color: D.ink,
-    lineHeight: 28,
-    includeFontPadding: false,
+  beamEdge: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: 1.5,
+    backgroundColor: PAPER,
+    opacity: 0.9,
   },
-  wordmarkLight: {
-    fontFamily: FONT.displayRegular,
-    color: 'rgba(250,250,247,0.5)',
-  },
-  bottom: {
+  // Positioned by `top` from the render (44% of viewport height, per the
+  // design) and pulled back up by half its own height so 44% is its CENTRE.
+  lockWrap: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    paddingHorizontal: 32,
-    paddingBottom: 44, // fixed — clears the home indicator (no SafeAreaProvider in tree)
-    gap: 14,
-  },
-  statusRow: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    transform: [{ translateY: -28 }],
   },
-  statusLabel: {
-    fontFamily: FONT.mono,
-    fontSize: 10.5,
-    letterSpacing: 2.1,
-    color: D.ink3,
-    includeFontPadding: false,
-  },
-  counter: {
-    fontFamily: FONT.mono,
-    fontSize: 10.5,
-    letterSpacing: 0.8,
-    color: D.ink4,
-    fontVariant: ['tabular-nums'],
-    includeFontPadding: false,
-  },
-  track: {
-    height: 2,
-    borderRadius: 100,
-    backgroundColor: D.hair,
-    overflow: 'hidden',
-  },
-  fill: {
-    height: '100%',
-    borderRadius: 100,
-    backgroundColor: ACCENT.mint,
-    shadowColor: ACCENT.mint,
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  skip: {
+  lock: { flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
+  curtain: { position: 'absolute', top: -20, bottom: -20, right: 0, backgroundColor: INK },
+  word: { fontFamily: FONT.display, color: PAPER, letterSpacing: -0.85 },
+  wordDim: { opacity: 0.55 },
+  pulse: { position: 'absolute', width: 0, height: 0 },
+  pulseRing: {
     position: 'absolute',
-    top: 54, // fixed — clears the status bar / notch (no SafeAreaProvider in tree)
-    right: 16,
-    height: 28,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: D.hair,
-    alignItems: 'center',
-    justifyContent: 'center',
+    left: -7,
+    top: -7,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: MINT,
   },
-  skipText: {
-    fontFamily: FONT.mono,
-    fontSize: 10.5,
-    letterSpacing: 1.5,
-    color: D.ink3,
-    includeFontPadding: false,
+  pulseDot: {
+    position: 'absolute',
+    left: -3.5,
+    top: -3.5,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: MINT,
   },
 });
