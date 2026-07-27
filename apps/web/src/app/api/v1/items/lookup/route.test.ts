@@ -70,6 +70,10 @@ describe('GET /api/v1/items/lookup', () => {
             quantity_on_hand: 4,
             charter_id: 'charter-a',
             bin_location: 'Rack A-1',
+            group_id: null,
+            variant_size: null,
+            jersey_number: null,
+            unit_of_measure: null,
             charter: { name: 'Charter A' },
           },
           {
@@ -80,6 +84,10 @@ describe('GET /api/v1/items/lookup', () => {
             quantity_on_hand: 9,
             charter_id: 'charter-b',
             bin_location: 'Rack B-2',
+            group_id: null,
+            variant_size: null,
+            jersey_number: null,
+            unit_of_measure: null,
             charter: { name: 'Charter B' },
           },
         ],
@@ -103,6 +111,10 @@ describe('GET /api/v1/items/lookup', () => {
         placementLabel: 'Rack A-1',
         quantityOnHand: 4,
         rackHoldings: [],
+        groupId: null,
+        variantSize: null,
+        jerseyNumber: null,
+        unitOfMeasure: null,
       },
       {
         id: 'item-b',
@@ -114,6 +126,10 @@ describe('GET /api/v1/items/lookup', () => {
         placementLabel: 'Rack B-2',
         quantityOnHand: 9,
         rackHoldings: [],
+        groupId: null,
+        variantSize: null,
+        jerseyNumber: null,
+        unitOfMeasure: null,
       },
     ]);
   });
