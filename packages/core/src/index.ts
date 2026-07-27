@@ -22,6 +22,7 @@ export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
+export * from './sports/tracking-modes';
 export * from './orders/order-number';
 export * from './orders/pick-shortfall';
 export * from './b2b/pricing-mode';
