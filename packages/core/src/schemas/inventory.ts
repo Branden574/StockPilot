@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { TRACKING_TYPE_VALUES } from '../sports/tracking-modes';
 import { uuidSchema } from './common';
+import { createProductGroupSchema, trackingModeSchema, variantAttributesSchema } from './sports';
 
 export const itemStatusSchema = z.enum(['active', 'archived', 'discontinued']);
 export type ItemStatus = z.infer<typeof itemStatusSchema>;
@@ -33,71 +34,95 @@ const numericQty = z.coerce.number().max(1_000_000_000);
 const emptyToUndefined = (v: unknown) =>
   typeof v === 'string' && v.trim().length === 0 ? undefined : v;
 
-export const createItemSchema = z.object({
-  name: z.string().min(1).max(200).trim(),
-  sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().nullable().optional()),
-  barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
-  modelNumber: z.preprocess(emptyToUndefined, z.string().max(120).trim().nullable().optional()),
-  description: z.string().max(5000).nullable().optional(),
-  categoryId: uuidSchema.nullable().optional(),
-  supplierId: uuidSchema.nullable().optional(),
-  primaryLocationId: uuidSchema.nullable().optional(),
-  warehouseId: uuidSchema.nullable().optional(),
-  /** null/undefined = generic stock (any charter the warehouse services can use). */
-  charterId: uuidSchema.nullable().optional(),
-  unitCost: numericMoney.default(0),
-  retailPrice: numericMoney.default(0),
-  quantityOnHand: numericQty.default(0),
-  reorderPoint: numericQty.default(0),
-  reorderQuantity: numericQty.default(0),
-  unitOfMeasure: z.string().max(32).default('unit'),
-  binLocation: z.string().max(64).nullable().optional(),
-  /**
-   * 'none' (default), 'lot', 'serial', or 'serial_optional'. Drives capture
-   * requirements at receive time. 'serial_optional' (0295) accepts 0..qty
-   * serials and never requires them — the Sports OPTIONAL_SERIALIZED mode.
-   *
-   * The values come from TRACKING_TYPE_VALUES (packages/core/src/sports/
-   * tracking-modes.ts), which is the ONE vocabulary shared with
-   * trackingTypeForMode(). Never re-list the literals here — a second list is
-   * exactly how an enumerator drifts out of sync with the DB CHECK.
-   */
-  trackingType: z.enum(TRACKING_TYPE_VALUES).default('none'),
-  /** Phase 5 (lot_serial module): per-item shelf life in days. */
-  shelfLifeDays: z.preprocess(
-    (v) => (v === '' || v === null ? null : v),
-    z.coerce.number().int().positive().nullable().optional(),
-  ),
-  /**
-   * Phase 5: near/expired lot behavior. 'block' rejects FEFO picks of expired
-   * lots. Optional (NOT defaulted) so existing CreateItemInput construction
-   * sites need no change; the default 'warn' is applied by InventoryService
-   * (`input.expiryPolicy ?? 'warn'`) and the DB column default.
-   */
-  expiryPolicy: z.enum(['none', 'warn', 'block']).optional(),
-  /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */
-  itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
-  // Bounded to stop a writer from bloating the JSONB column (e.g. 1000 keys ×
-  // multi-MB values): 64-char keys (matches isSnakeCaseKey), ≤50 keys, and no
-  // single string value over 10k chars. Keys without an active field definition
-  // are ignored by validateCustomFields, but the raw payload still lands in the
-  // column, so the gate belongs here at the schema boundary.
-  customFields: z
-    .record(z.string().max(64), z.unknown())
-    .refine((v) => Object.keys(v).length <= 50, 'Too many custom fields (max 50).')
-    .refine(
-      (v) => Object.values(v).every((x) => typeof x !== 'string' || x.length <= 10_000),
-      'A custom field value is too long (max 10000 characters).',
-    )
-    .default({}),
-  status: itemStatusSchema.default('active'),
-  /**
-   * When true, marks the item as a rental asset (canopy, equipment, etc.).
-   * Rental items appear ONLY on /dashboard/rentals/items — they are hidden
-   * from the regular inventory list and order picker. Default false.
-   */
-  isRental: z.boolean().optional(),
-});
+export const createItemSchema = z
+  .object({
+    name: z.string().min(1).max(200).trim(),
+    sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().nullable().optional()),
+    barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
+    modelNumber: z.preprocess(
+      emptyToUndefined,
+      z.string().max(120).trim().nullable().optional(),
+    ),
+    description: z.string().max(5000).nullable().optional(),
+    categoryId: uuidSchema.nullable().optional(),
+    supplierId: uuidSchema.nullable().optional(),
+    primaryLocationId: uuidSchema.nullable().optional(),
+    warehouseId: uuidSchema.nullable().optional(),
+    /** null/undefined = generic stock (any charter the warehouse services can use). */
+    charterId: uuidSchema.nullable().optional(),
+    unitCost: numericMoney.default(0),
+    retailPrice: numericMoney.default(0),
+    quantityOnHand: numericQty.default(0),
+    reorderPoint: numericQty.default(0),
+    reorderQuantity: numericQty.default(0),
+    unitOfMeasure: z.string().max(32).default('unit'),
+    binLocation: z.string().max(64).nullable().optional(),
+    /**
+     * 'none' (default), 'lot', 'serial', or 'serial_optional'. Drives capture
+     * requirements at receive time. 'serial_optional' (0295) accepts 0..qty
+     * serials and never requires them — the Sports OPTIONAL_SERIALIZED mode.
+     *
+     * The values come from TRACKING_TYPE_VALUES (packages/core/src/sports/
+     * tracking-modes.ts), which is the ONE vocabulary shared with
+     * trackingTypeForMode(). Never re-list the literals here — a second list is
+     * exactly how an enumerator drifts out of sync with the DB CHECK.
+     */
+    trackingType: z.enum(TRACKING_TYPE_VALUES).default('none'),
+    /** Phase 5 (lot_serial module): per-item shelf life in days. */
+    shelfLifeDays: z.preprocess(
+      (v) => (v === '' || v === null ? null : v),
+      z.coerce.number().int().positive().nullable().optional(),
+    ),
+    /**
+     * Phase 5: near/expired lot behavior. 'block' rejects FEFO picks of expired
+     * lots. Optional (NOT defaulted) so existing CreateItemInput construction
+     * sites need no change; the default 'warn' is applied by InventoryService
+     * (`input.expiryPolicy ?? 'warn'`) and the DB column default.
+     */
+    expiryPolicy: z.enum(['none', 'warn', 'block']).optional(),
+    /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */
+    itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
+    // Bounded to stop a writer from bloating the JSONB column (e.g. 1000 keys ×
+    // multi-MB values): 64-char keys (matches isSnakeCaseKey), ≤50 keys, and no
+    // single string value over 10k chars. Keys without an active field definition
+    // are ignored by validateCustomFields, but the raw payload still lands in the
+    // column, so the gate belongs here at the schema boundary.
+    customFields: z
+      .record(z.string().max(64), z.unknown())
+      .refine((v) => Object.keys(v).length <= 50, 'Too many custom fields (max 50).')
+      .refine(
+        (v) => Object.values(v).every((x) => typeof x !== 'string' || x.length <= 10_000),
+        'A custom field value is too long (max 10000 characters).',
+      )
+      .default({}),
+    status: itemStatusSchema.default('active'),
+    /**
+     * When true, marks the item as a rental asset (canopy, equipment, etc.).
+     * Rental items appear ONLY on /dashboard/rentals/items — they are hidden
+     * from the regular inventory list and order picker. Default false.
+     */
+    isRental: z.boolean().optional(),
+  })
+  // Sports (Task 7): every variant field is optional, so no existing
+  // CreateItemInput construction site needs to change. See variantAttributesSchema
+  // in ./sports for the field-by-field contract shared with web, Expo and the
+  // server's group/variant resolution (Tasks 8-19).
+  .merge(variantAttributesSchema)
+  .extend({
+    /**
+     * Sports only. When the chosen category resolves to a variant-shaped
+     * tracking mode, the server may CREATE the group from these attributes if
+     * `groupId` is absent. Never trusted for authorization — the org always
+     * comes from the service context.
+     */
+    productGroup: createProductGroupSchema.optional(),
+    /**
+     * An authorized override of the category's default tracking mode. The
+     * SERVER checks it against the subcategory profile's allowedModes and
+     * against the `sports:manage` permission; the form is never trusted.
+     */
+    trackingModeOverride: trackingModeSchema.optional(),
+  });
 export type CreateItemInput = z.infer<typeof createItemSchema>;
 
 export const updateItemSchema = createItemSchema.partial();
