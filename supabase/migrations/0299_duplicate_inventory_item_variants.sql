@@ -32,7 +32,11 @@
 -- inventory_items_insert WITH CHECK arm added by 0298
 -- (product_group_in_org(group_id, organization_id)) is satisfied for free,
 -- because group_id and organization_id are copied from the same source row.
--- variant_size / jersey_number / variant_key are OVERRIDABLE via p_overrides
+-- variant_size / jersey_number are OVERRIDABLE via p_overrides. variant_key is
+-- NOT: it is server-computed identity (buildVariantKey in packages/core), so a
+-- client-supplied value is never trusted. If any variant attribute is
+-- overridden the copied key would be stale, so it is cleared to NULL for the
+-- service layer to recompute; otherwise it is copied from the source row.
 -- so "duplicate size 10 as size 11" works in one call.
 --
 -- Model B (0234) is untouched: the SKU and bin_location still come from
@@ -107,8 +111,13 @@ begin
     then nullif(p_overrides->>'jersey_number', '') else v_original.jersey_number end;
   v_player_name := case when p_overrides ? 'player_name'
     then nullif(p_overrides->>'player_name', '') else v_original.player_name end;
-  v_variant_key := case when p_overrides ? 'variant_key'
-    then nullif(p_overrides->>'variant_key', '') else v_original.variant_key end;
+  -- Never read variant_key from p_overrides (client-forgeable identity).
+  v_variant_key := case
+    when p_overrides ?| array['variant_size','variant_size_system','variant_width',
+                              'variant_fit','variant_color','jersey_number']
+      then null
+    else v_original.variant_key
+  end;
 
   -- Compose custom_fields: copy original blob, then overwrite the
   -- location keys (items vs books branch).

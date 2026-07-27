@@ -47,7 +47,7 @@ const variantOverrides = {
     .nullable()
     .optional(),
   playerName: z.string().max(120).nullable().optional(),
-  variantKey: z.string().max(240).nullable().optional(),
+  // variantKey deliberately absent: server-computed only (see buildVariantKey).
 };
 
 export const duplicateItemAsProductSchema = z.object({

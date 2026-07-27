@@ -152,12 +152,14 @@ describe('InventoryService.duplicateItem', () => {
       rackRow: 'A',
       quantity: 1,
       variantSize: '11',
-      variantKey: 'size=11|system=US_MENS',
       jerseyNumber: null,
     });
     const overrides = rpcCalls[0]!.args.p_overrides as Record<string, unknown>;
     expect(overrides.variant_size).toBe('11');
-    expect(overrides.variant_key).toBe('size=11|system=US_MENS');
+    // variant_key is server-computed identity: the service must NEVER forward
+    // one, even if a caller smuggles it past the schema. The RPC clears the
+    // copied key when attributes are overridden.
+    expect(Object.hasOwn(overrides, 'variant_key')).toBe(false);
     expect(Object.hasOwn(overrides, 'jersey_number')).toBe(true);
     expect(overrides.jersey_number).toBeNull();
     // Untouched neighbours must still be absent, not null.

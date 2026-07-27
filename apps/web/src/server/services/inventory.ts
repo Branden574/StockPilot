@@ -1597,7 +1597,9 @@ export class InventoryService {
     if (input.variantColor !== undefined) overrides.variant_color = input.variantColor;
     if (input.jerseyNumber !== undefined) overrides.jersey_number = input.jerseyNumber;
     if (input.playerName !== undefined) overrides.player_name = input.playerName;
-    if (input.variantKey !== undefined) overrides.variant_key = input.variantKey;
+    // variant_key is SERVER-COMPUTED only (buildVariantKey) — never accepted from
+    // the client. When any variant attribute is overridden the RPC recomputes it
+    // from the final column values; otherwise it is copied from the source row.
 
     const { data: newId, error: rpcErr } = await this.ctx.supabase.rpc(
       'duplicate_inventory_item',

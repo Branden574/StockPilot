@@ -30,7 +30,7 @@
 
 begin;
 
-select plan(47);
+select plan(48);
 
 \set org   '\'d0299000-0000-0000-0000-000000000001\''
 \set usr   '\'d0299000-0000-0000-0000-000000000002\''
@@ -244,8 +244,14 @@ select lives_ok(
          'quantity', 3,
          'variant_size', '11',
          'variant_size_original', 'US 11',
-         'variant_key', 'size=11|system=US_MENS')) $$,
+         'variant_key', 'FORGED|by=client')) $$,
   'duplicating size 10 as size 11 succeeds in ONE call');
+
+select is(
+  (select variant_key from public.inventory_items
+    where organization_id = :org and sku = 'PEG41-11'),
+  null,
+  'client-supplied variant_key is IGNORED and the stale key cleared on attribute override');
 
 select is(
   (select variant_size from public.inventory_items
@@ -303,14 +309,16 @@ select is(
 
 -- ── 29-31. The group roll-up over four placements ───────────────────────────
 -- Four rows now hang off the group: the source (size=10), its inherited copy
--- (same variant_key), the size-11 copy, and the cleared copy (variant_key was
--- not overridden, so it still reads size=10). variant_count is
--- count(DISTINCT variant_key), so it is 2 - not one per placement.
+-- (same variant_key) plus the size-11 copy. Because the size-11 duplicate
+-- overrode a variant attribute, the RPC CLEARED its variant_key (identity is
+-- server-computed; a copied key would be stale) — so only the size-10 key is
+-- present until the service recomputes. variant_count counts DISTINCT non-null
+-- keys: 1, not one per placement and not 2.
 select is(
   (select variant_count::int from public.product_group_rollups
     where group_id = :grp),
-  2,
-  'variant_count is DISTINCT variant_key - four placements, two variants');
+  1,
+  'variant_count is DISTINCT non-null variant_key - cleared key not counted');
 
 select is(
   (select placement_count::int from public.product_group_rollups
