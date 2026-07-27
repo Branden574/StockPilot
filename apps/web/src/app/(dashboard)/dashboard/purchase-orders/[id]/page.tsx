@@ -116,7 +116,11 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       quantityReceived: l.quantity_received as number,
       unitCost: l.unit_cost as number,
       lineTotal: l.line_total as number,
-      trackingType: (item?.tracking_type ?? 'none') as 'none' | 'lot' | 'serial',
+      trackingType: (item?.tracking_type ?? 'none') as
+        | 'none'
+        | 'lot'
+        | 'serial'
+        | 'serial_optional',
       imageUrl: (l.imageUrl as string | null | undefined) ?? null,
       previewUrl: (l.previewUrl as string | null | undefined) ?? null,
     };

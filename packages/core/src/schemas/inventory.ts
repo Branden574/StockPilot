@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { TRACKING_TYPE_VALUES } from '../sports/tracking-modes';
 import { uuidSchema } from './common';
 
 export const itemStatusSchema = z.enum(['active', 'archived', 'discontinued']);
@@ -51,8 +52,17 @@ export const createItemSchema = z.object({
   reorderQuantity: numericQty.default(0),
   unitOfMeasure: z.string().max(32).default('unit'),
   binLocation: z.string().max(64).nullable().optional(),
-  /** 'none' (default), 'lot', or 'serial'. Drives capture requirements at receive time. */
-  trackingType: z.enum(['none', 'lot', 'serial']).default('none'),
+  /**
+   * 'none' (default), 'lot', 'serial', or 'serial_optional'. Drives capture
+   * requirements at receive time. 'serial_optional' (0295) accepts 0..qty
+   * serials and never requires them — the Sports OPTIONAL_SERIALIZED mode.
+   *
+   * The values come from TRACKING_TYPE_VALUES (packages/core/src/sports/
+   * tracking-modes.ts), which is the ONE vocabulary shared with
+   * trackingTypeForMode(). Never re-list the literals here — a second list is
+   * exactly how an enumerator drifts out of sync with the DB CHECK.
+   */
+  trackingType: z.enum(TRACKING_TYPE_VALUES).default('none'),
   /** Phase 5 (lot_serial module): per-item shelf life in days. */
   shelfLifeDays: z.preprocess(
     (v) => (v === '' || v === null ? null : v),

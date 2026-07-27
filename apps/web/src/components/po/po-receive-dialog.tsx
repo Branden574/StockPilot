@@ -27,7 +27,17 @@ interface Line {
   sku: string;
   quantityOrdered: number;
   quantityReceived: number;
-  trackingType: 'none' | 'lot' | 'serial';
+  trackingType: 'none' | 'lot' | 'serial' | 'serial_optional';
+}
+
+/** Both serial modes render the capture grid. */
+function wantsSerials(t: Line['trackingType']): boolean {
+  return t === 'serial' || t === 'serial_optional';
+}
+
+/** Only 'serial' demands one serial per accepted unit. */
+function serialsRequired(t: Line['trackingType']): boolean {
+  return t === 'serial';
 }
 
 interface PoReceiveDialogProps {
@@ -141,19 +151,37 @@ export function PoReceiveDialog({
         }
       }
 
-      if (line.trackingType === 'serial' && entry.accepted > 0) {
-        if (entry.serials.length !== entry.accepted) {
+      if (wantsSerials(line.trackingType) && entry.accepted > 0) {
+        // 'serial' is unchanged: exactly one non-empty serial per accepted
+        // unit. 'serial_optional' (0295/0296) accepts 0..accepted — blanks in
+        // the grid are simply untagged units and are dropped from the payload
+        // below, never sent as empty strings.
+        const filled = entry.serials.map((s) => s.trim()).filter((s) => s.length > 0);
+
+        if (serialsRequired(line.trackingType)) {
+          if (entry.serials.length !== entry.accepted) {
+            toast.error(
+              `Line "${line.name}": expected ${entry.accepted} serials, got ${entry.serials.length}.`,
+            );
+            return;
+          }
+          if (entry.serials.some((s) => !s.trim())) {
+            toast.error(`Line "${line.name}": every serial number must be non-empty.`);
+            return;
+          }
+        } else if (filled.length > entry.accepted) {
           toast.error(
-            `Line "${line.name}": expected ${entry.accepted} serials, got ${entry.serials.length}.`,
+            `Line "${line.name}": ${filled.length} serials entered but only ${entry.accepted} units accepted.`,
           );
           return;
         }
-        if (entry.serials.some((s) => !s.trim())) {
-          toast.error(`Line "${line.name}": every serial number must be non-empty.`);
-          return;
-        }
-        const dedup = new Set(entry.serials.map((s) => s.trim()));
-        if (dedup.size !== entry.serials.length) {
+
+        // The within-line duplicate check applies to BOTH modes — it is a real
+        // guard the RPC does not have (the DB only catches duplicates that
+        // collide with the item's EXISTING registry rows, and only as a raw
+        // 23505). Compared over the non-blank entries so that untagged units
+        // in a serial_optional grid do not read as duplicates of each other.
+        if (new Set(filled).size !== filled.length) {
           toast.error(`Line "${line.name}": duplicate serials in the list.`);
           return;
         }
@@ -178,9 +206,14 @@ export function PoReceiveDialog({
                 qtyBase: Number(l.qtyBase),
               }))
             : undefined,
+        // Blanks are filtered out, so a serial_optional line with an untouched
+        // grid sends an empty array (a legitimate pure-quantity receipt) and a
+        // partially filled grid sends only the tags that were actually
+        // scanned. For 'serial' the filter is a no-op — validation above
+        // already rejected any blank.
         serials:
-          line.trackingType === 'serial' && entry.accepted > 0
-            ? entry.serials.map((s) => s.trim())
+          wantsSerials(line.trackingType) && entry.accepted > 0
+            ? entry.serials.map((s) => s.trim()).filter((s) => s.length > 0)
             : undefined,
       })),
       notes: notes || undefined,
@@ -285,11 +318,12 @@ export function PoReceiveDialog({
                     />
                   </div>
                 )}
-                {l.trackingType === 'serial' && e.accepted > 0 && (
+                {wantsSerials(l.trackingType) && e.accepted > 0 && (
                   <div className="sm:col-span-12">
                     <SerialCapture
                       serials={e.serials}
                       requiredCount={e.accepted}
+                      required={serialsRequired(l.trackingType)}
                       onChange={(serials) => setField(l.id, { serials })}
                     />
                   </div>
@@ -398,10 +432,18 @@ function LotCapture({
 function SerialCapture({
   serials,
   requiredCount,
+  required,
   onChange,
 }: {
   serials: string[];
+  /** Always the accepted qty — the grid size, and the CAP in both modes. */
   requiredCount: number;
+  /**
+   * true for tracking_type='serial' (one serial per unit, all mandatory).
+   * false for 'serial_optional', where any subset may be left blank and the
+   * untouched grid is a legitimate pure-quantity receipt.
+   */
+  required: boolean;
   onChange: (next: string[]) => void;
 }) {
   // Resize the array whenever requiredCount changes (accepted qty changed).
@@ -412,9 +454,11 @@ function SerialCapture({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiredCount]);
 
-  const filled = serials.filter((s) => s.trim().length > 0).length;
-  const dedup = new Set(serials.map((s) => s.trim())).size;
-  const hasDup = dedup !== serials.length && serials.some((s) => s.trim().length > 0);
+  const nonBlank = serials.map((s) => s.trim()).filter((s) => s.length > 0);
+  const filled = nonBlank.length;
+  // Compare over the NON-BLANK entries: in an optional grid several untagged
+  // units are all '' and must not read as duplicates of one another.
+  const hasDup = new Set(nonBlank).size !== nonBlank.length;
 
   function update(i: number, value: string) {
     onChange(serials.map((s, idx) => (idx === i ? value : s)));
@@ -432,12 +476,14 @@ function SerialCapture({
   return (
     <div className="mt-2 rounded-md border border-blue-200 bg-blue-50/40 p-3 text-xs dark:border-blue-900/40 dark:bg-blue-950/20">
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-medium">Serial capture</span>
+        <span className="font-medium">
+          Serial capture{required ? '' : ' (optional)'}
+        </span>
         <span
           className={
             hasDup
               ? 'text-destructive'
-              : filled === requiredCount
+              : !required || filled === requiredCount
               ? 'text-emerald-700 dark:text-emerald-300'
               : 'text-blue-700 dark:text-blue-300'
           }
@@ -446,6 +492,12 @@ function SerialCapture({
           {hasDup ? ' · duplicate detected' : ''}
         </span>
       </div>
+      {!required && (
+        <p className="text-muted-foreground mb-2 text-[11px]">
+          Serials are optional for this item. Fill in only the units that carry
+          one and leave the rest blank — never enter a placeholder.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {Array.from({ length: requiredCount }, (_, i) => (
           <Input

@@ -138,8 +138,9 @@ export interface OrderRequestLineWithItem extends OrderRequestLineRow {
      *  book_rack_* / book_crate_* keys for books. Pick-slip and
      *  packing-slip renderers read this. */
     custom_fields: Record<string, unknown> | null;
-    /** Phase 5 (lot_serial): "none" | "lot" | "serial" — drives the
-     *  advisory FEFO picking hint on the pick surface. */
+    /** Phase 5 (lot_serial): "none" | "lot" | "serial" | "serial_optional"
+     *  (the last added by migration 0295) — drives the advisory FEFO picking
+     *  hint on the pick surface, which keys on "lot" only. */
     tracking_type: string | null;
     /** Item-ownership charter (inventory_items.charter_id) — the site this
      *  stock is earmarked for. null = generic/shared stock. Distinct from the

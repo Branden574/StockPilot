@@ -21,7 +21,12 @@ export const postReceiptLineSchema = z
     notes: z.string().max(2000).optional(),
     /** Required when item.tracking_type='lot' and qtyAccepted > 0. */
     lots: z.array(lotEntrySchema).optional(),
-    /** Required when item.tracking_type='serial' and qtyAccepted > 0. One serial per accepted unit. */
+    /**
+     * Required when item.tracking_type='serial' and qtyAccepted > 0 — exactly
+     * one serial per accepted unit. OPTIONAL when tracking_type is
+     * 'serial_optional' (migration 0295/0296): omit it, or send 0..qtyAccepted
+     * serials for the units that actually carry one. Never send placeholders.
+     */
     serials: z.array(z.string().min(1).max(120).trim()).optional(),
   })
   .refine(

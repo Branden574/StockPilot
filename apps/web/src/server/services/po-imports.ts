@@ -1240,7 +1240,7 @@ export class PoImportsService {
               charterId: ownershipCharterId,
               categoryId: it.category_id ?? null,
               primaryLocationId: null,
-              trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
+              trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | 'serial_optional' | null) ?? 'none',
               itemType:
                 (it.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ?? 'product',
               customFields: {},

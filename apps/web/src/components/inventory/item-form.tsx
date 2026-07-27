@@ -1554,14 +1554,17 @@ export function ItemForm({
               <Select
                 value={watch('trackingType') ?? 'none'}
                 onValueChange={(v) =>
-                  setValue('trackingType', v as 'none' | 'lot' | 'serial', { shouldDirty: true })
+                  setValue('trackingType', v as 'none' | 'lot' | 'serial' | 'serial_optional', {
+                    shouldDirty: true,
+                  })
                 }
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
-                  <SelectItem value="serial">Serial</SelectItem>
+                  <SelectItem value="serial">Serial (one per unit, required)</SelectItem>
+                  <SelectItem value="serial_optional">Serial (optional per unit)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">

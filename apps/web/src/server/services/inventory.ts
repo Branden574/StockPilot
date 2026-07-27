@@ -873,7 +873,7 @@ export class InventoryService {
         primary_location_id: string | null;
         warehouse_id: string | null;
         charter_id: string | null;
-        tracking_type: 'none' | 'lot' | 'serial';
+        tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
         item_type: 'product' | 'book' | 'asset' | 'consumable';
         /** True only when the SYSTEM auto-archived this item on zero
          *  stock (migration 0266) — backs the Archived view's
@@ -1013,7 +1013,7 @@ export class InventoryService {
       sku: string;
       name: string;
       barcode: string | null;
-      tracking_type: 'none' | 'lot' | 'serial';
+      tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
     }>
   > {
     if (ids.length === 0) return [];
@@ -1038,7 +1038,8 @@ export class InventoryService {
       tracking_type: ((r.tracking_type as string | null) ?? 'none') as
         | 'none'
         | 'lot'
-        | 'serial',
+        | 'serial'
+        | 'serial_optional',
     }));
   }
 
@@ -1382,6 +1383,15 @@ export class InventoryService {
     // Phase 5: lot/serial tracking + shelf-life/expiry are gated behind the
     // lot_serial module. Fail closed — a disabled org cannot make an item
     // lot/serial-tracked or set expiry config.
+    //
+    // SPORTS DEPENDENCY (0295): 'serial_optional' is a tracking_type, so it
+    // trips this gate exactly like 'serial' does. That is deliberate for now —
+    // the `sports` module does not exist yet (Task 4 seeds it in migration
+    // 0297) and the owner decision is that `sports` grants its own serial
+    // modes with NO lot_serial dependency. Widening this predicate to accept
+    // `serial_optional` under the `sports` entitlement belongs to the task
+    // that threads the sports/category fields through create() — doing it here
+    // would mean referencing a module id that is not yet in the registry.
     if (
       input.trackingType !== 'none' ||
       input.shelfLifeDays != null ||
@@ -1850,7 +1860,7 @@ export class InventoryService {
       reorderPoint?: number;
       reorderQuantity?: number;
       unitOfMeasure?: string;
-      trackingType?: 'none' | 'lot' | 'serial';
+      trackingType?: 'none' | 'lot' | 'serial' | 'serial_optional';
       customFields?: Record<string, unknown> | null;
       status?: 'active' | 'archived' | 'discontinued';
     }>;

@@ -273,7 +273,7 @@ interface InventoryListRowBase {
   primary_location_id: string | null;
   warehouse_id: string | null;
   charter_id: string | null;
-  tracking_type: 'none' | 'lot' | 'serial';
+  tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
   item_type: 'product' | 'book' | 'asset' | 'consumable';
   /** True only when the SYSTEM auto-archived this item on zero stock
    *  (migration 0266) — backs the Archived view's "Auto-archived"

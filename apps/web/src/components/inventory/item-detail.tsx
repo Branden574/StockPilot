@@ -298,9 +298,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // Warehouse names (for the Add dialog's destination select) load only
   // when the panel renders AND the user can edit — a dropdown-weight
   // query, skipped entirely on non-serial items.
+  // 'serial_optional' (0295) joins 'serial' here: the item may legitimately
+  // carry serials for only part of its quantity, and the panel is the only
+  // place staff can see or add them.
   const showSerialsPanel =
-    ((item as { tracking_type?: string | null }).tracking_type ?? 'none') === 'serial' ||
-    serialsPage.total > 0;
+    ['serial', 'serial_optional'].includes(
+      (item as { tracking_type?: string | null }).tracking_type ?? 'none',
+    ) || serialsPage.total > 0;
   const serialWarehouses =
     showSerialsPanel && canEditItem
       ? await new WarehousesService(ctx).listNames().catch(() => [])

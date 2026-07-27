@@ -245,6 +245,17 @@ export class ReceivingService {
           'The lot quantities must add up to the accepted quantity for this line.',
         );
       }
+      // Raised only by the 'serial_optional' branch (migration 0296): serials
+      // are welcome but must never outnumber the units that actually arrived,
+      // or the tagged and untagged halves double-count. Checked BEFORE the
+      // exact-count arm below purely for readability — the three strings are
+      // mutually exclusive, so order is not load-bearing.
+      if (error.message.includes('serial_count_exceeds_quantity')) {
+        throw new ServiceError(
+          'validation_error',
+          'More serial numbers were entered than units accepted. Remove the extras, or raise the accepted quantity.',
+        );
+      }
       if (
         error.message.includes('serials_required') ||
         error.message.includes('serial_count_mismatch')
@@ -252,6 +263,19 @@ export class ReceivingService {
         throw new ServiceError(
           'validation_error',
           'This item is serial-tracked — enter exactly one serial number per accepted unit.',
+        );
+      }
+      // serial_registry carries UNIQUE (organization_id, item_id,
+      // serial_number). Posting a serial the item already holds raises 23505
+      // straight out of the INSERT, with no named RPC code to match on, so it
+      // used to fall through to the masked generic "An internal error
+      // occurred." 'serial_optional' makes this far easier to hit (staff
+      // scanning the same tag twice on a partially tagged receipt), and pgTAP
+      // 0296 assertions 19-20 prove both serial modes land on this same code.
+      if (error.code === '23505' && `${error.message} ${error.details ?? ''}`.includes('serial_registry')) {
+        throw new ServiceError(
+          'conflict',
+          'That serial number is already registered for this item.',
         );
       }
       throw new ServiceError('internal_error', error.message);

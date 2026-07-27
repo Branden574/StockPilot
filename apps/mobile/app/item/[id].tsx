@@ -1466,10 +1466,13 @@ export default function ItemDetail() {
               );
             })()}
 
-            {/* Serials — shown for serial-tracked items OR any item that
-                already holds registry rows (tracking may have been
-                switched off after receipts stamped serials). */}
-            {item.tracking_type === 'serial' || serialCount > 0 ? (
+            {/* Serials — shown for either serial mode ('serial_optional' from
+                migration 0295 carries serials for only part of its quantity)
+                OR any item that already holds registry rows (tracking may have
+                been switched off after receipts stamped serials). */}
+            {item.tracking_type === 'serial' ||
+            item.tracking_type === 'serial_optional' ||
+            serialCount > 0 ? (
               <SerialsCard
                 itemId={item.id}
                 organizationId={item.organization_id}

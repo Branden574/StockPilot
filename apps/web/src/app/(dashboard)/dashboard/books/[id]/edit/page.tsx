@@ -161,8 +161,13 @@ export default async function EditBookPage({
               unitOfMeasure: item.unit_of_measure as string,
               binLocation: (item.bin_location as string | null) ?? '',
               trackingType:
-                ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ??
-                  'none') as 'none' | 'lot' | 'serial',
+                ((item.tracking_type as
+                  | 'none'
+                  | 'lot'
+                  | 'serial'
+                  | 'serial_optional'
+                  | null
+                  | undefined) ?? 'none') as 'none' | 'lot' | 'serial' | 'serial_optional',
               shelfLifeDays: (item.shelf_life_days as number | null | undefined) ?? null,
               expiryPolicy:
                 ((item.expiry_policy as 'none' | 'warn' | 'block' | null | undefined) ?? 'warn') as

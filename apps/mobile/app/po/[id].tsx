@@ -269,10 +269,12 @@ export default function PoReceiveScreen() {
       return;
     }
 
-    // App-side over-receive guard: the post_receipt_v2 RPC also hard-blocks this
-    // (raises over_receive_blocked) and refuses an already-'received' PO, but we
-    // catch it here to show a clear message instead of a raw DB error — so you
-    // can't over-receive chromebooks you've already fully received.
+    // App-side over-receive guard. NOTE: the RPC no longer blocks over-receipt
+    // — migration 0285 (owner decision 2026-07-21) removed the
+    // over_receive_blocked guard because vendors legitimately over-ship, and
+    // the web receive dialog allows it. This check is therefore MOBILE-ONLY
+    // policy, not a mirror of a server rule. The RPC still refuses an
+    // already-'received' PO (po_already_closed).
     for (const l of lines) {
       const entered = Number((draft[l.id] ?? { received: '' }).received) || 0;
       const remaining = Math.max(0, l.quantity_ordered - l.quantity_received);

@@ -481,7 +481,7 @@ export async function createItemsFromPoLines(
             charterId,
             categoryId: (existing.category_id as string | null) ?? null,
             primaryLocationId,
-            trackingType: (existing.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
+            trackingType: (existing.tracking_type as 'none' | 'lot' | 'serial' | 'serial_optional' | null) ?? 'none',
             itemType:
               (existing.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ??
               input.itemType ??
