@@ -24,8 +24,8 @@ import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
  * A page error is NEVER swallowed. Both callers feed portalCatalog, whose
  * result decides both what the customer SEES and what checkout accepts, and a
  * silently-empty page there is not a degraded read but a WRONG one: an empty
- * price map turns every priced item into a $0 "Request quote" line and
- * checkout then writes unit_price_at_request = 0 onto real order_request_lines.
+ * price map turns every priced item into a "Request quote" line and checkout
+ * then writes an unpriced order_request_line for goods that ARE priced.
  * Failing the whole read (same posture as the chunked item read below) keeps
  * that failure visible and recoverable.
  */
@@ -405,12 +405,18 @@ export async function portalSubmitOrder(
   // Accounting split: unit_cost_at_request = the item's COST (consistent with
   // internal/public orders + the Sage/QBO return-valuation readers);
   // unit_price_at_request = the customer's SELL price (portal history reads it).
+  //
+  // A line with no agreed price stamps NULL, never 0. The column is nullable, and
+  // the two cases are genuinely different: 0 means "agreed, costs nothing", NULL
+  // means "no price yet — to be quoted". That is every line in a no_charge org,
+  // and the quotable ones in a priced org. Writing 0 for both would tell anyone
+  // reading the history later that a to-be-quoted line had been settled at free.
   const linePayload = parsed.lines.map((l) => ({
     order_request_id: header.id as string,
     item_id: l.itemId,
     quantity_requested: l.quantity,
     unit_cost_at_request: Number(itemMeta.get(l.itemId)?.unit_cost) || 0,
-    unit_price_at_request: byId.get(l.itemId)?.unitPrice ?? 0,
+    unit_price_at_request: byId.get(l.itemId)?.unitPrice ?? null,
   }));
   const { error: lineErr } = await admin.from('order_request_lines').insert(linePayload);
   if (lineErr) {

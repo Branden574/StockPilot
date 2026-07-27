@@ -392,19 +392,20 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
     }
   });
 
-  it('records a zero price for a no-charge line, and the cost snapshot as always', async () => {
+  it('records NO price for a no-charge line, and the cost snapshot as always', async () => {
     await portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 2 }] });
     const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
       item_id: ITEM_A,
       quantity_requested: 2,
-      unit_price_at_request: 0,
+      // NULL, not 0 — nothing was priced, so nothing was agreed at zero.
+      unit_price_at_request: null,
       unit_cost_at_request: 4.25,
     });
   });
 
-  it('records the customer price in priced mode, and zero for a quotable line', async () => {
+  it('records the customer price in priced mode, and NO price for a quotable line', async () => {
     await portalSubmitOrder(ctxPriced, {
       lines: [
         { itemId: ITEM_A, quantity: 1 },
@@ -413,7 +414,8 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
     });
     const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
     expect(lines.find((l) => l.item_id === ITEM_A)?.unit_price_at_request).toBe(12.5);
-    expect(lines.find((l) => l.item_id === ITEM_B)?.unit_price_at_request).toBe(0);
+    // ITEM_B is quotable: to-be-quoted must be distinguishable from agreed-free.
+    expect(lines.find((l) => l.item_id === ITEM_B)?.unit_price_at_request).toBeNull();
   });
 });
 

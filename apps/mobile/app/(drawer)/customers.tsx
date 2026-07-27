@@ -73,7 +73,7 @@ export default function CustomersScreen() {
     if (error || !data) {
       Alert.alert(
         'Could not update',
-        error?.message ?? 'You need manager access to change customers.',
+        error?.message ?? 'You need manager access to change accounts.',
       );
       return;
     }
