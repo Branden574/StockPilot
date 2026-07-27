@@ -25,18 +25,26 @@ import { FONT } from '@/lib/theme';
  * a progress bar that is not measuring anything is a lie told sixty times a
  * second, and the previous 0-100% counter was doing precisely that.
  *
- * Timings and easings are the design package's, shared verbatim with the web
- * intro so the two surfaces cannot drift.
+ * PERFORMANCE: every moving part is an Animated.Value with useNativeDriver, so
+ * the sequence runs on the UI thread and React re-renders ZERO times while it
+ * plays. The first cut drove it from a rAF loop calling setState each frame,
+ * which re-rendered the whole tree — grid included — around sixty times a
+ * second and visibly stuttered on device. Only transform and opacity are
+ * animated here; that is also exactly what the native driver supports.
  */
 
 // ── timeline (ms) — mirrors the web intro exactly ─────────────────────
 const GRID_IN = 200;
 const BEAM_START = 120;
-const BEAM_END = 620;
+const BEAM_SWEEP = 500; // 120 → 620
+const BEAM_FADE_IN = 70; // 120 → 190
+const BEAM_HOLD = 370; // 190 → 560
+const BEAM_FADE_OUT = 90; // 560 → 650
 const PULSE_START = 640;
-const ANIM_DONE = 900; // full sequence complete
-const REDUCED_DONE = 300; // opacity-only lane
-export const CROSSFADE_MS = 460; // splash-out → Face-ID-in dissolve
+const PULSE_DUR = 260; // 640 → 900
+const ANIM_DONE = 900;
+const REDUCED_DONE = 300;
+export const CROSSFADE_MS = 460;
 const REDUCED_CROSSFADE_MS = 240;
 
 // Brand surface. ALWAYS dark — a branded loading screen, independent of theme.
@@ -47,19 +55,17 @@ const MINT = '#5db89f';
 const GRID_LINE = 'rgba(250,249,244,0.045)';
 const GRID_CELL = 56;
 
-// ── easings (verbatim from the design prototype) ──────────────────────
-const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-const seg = (t: number, a: number, b: number) => clamp01((t - a) / (b - a));
-const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
-const easeInOut = (x: number) =>
-  x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+/** The design's cubic-in-out, as an Easing the native driver can run. */
+const EASE_IN_OUT = Easing.bezier(0.65, 0, 0.35, 1);
 
 /**
  * The mark, in the landing nav's geometry — the S and the pip are carved
  * negative space through a mask, never drawn as foreground strokes. Kept
  * identical to the web intro's mark so both surfaces show one logo.
+ *
+ * Memoised: it takes no animated input, so it must never re-render mid-sequence.
  */
-function IntroMark({ size }: { size: number }) {
+const IntroMark = React.memo(function IntroMark({ size }: { size: number }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 100 100">
       <Defs>
@@ -78,28 +84,26 @@ function IntroMark({ size }: { size: number }) {
       <Circle cx={72} cy={24} r={6} fill={MINT} />
     </Svg>
   );
-}
+});
 
-/** Confirmation pulse, anchored to the pip at (72%, 24%) of the mark box. */
-function Pulse({ markSize, p }: { markSize: number; p: number }) {
-  if (p <= 0 || p >= 1) return null;
-  const ring = easeOut(p);
-  const dot = clamp01(p / 0.25) * (1 - clamp01((p - 0.45) / 0.55));
+/**
+ * The warehouse grid. Memoised on its dimensions so the ~25 hairline Views are
+ * built once for the whole sequence; only the parent's opacity animates.
+ */
+const Grid = React.memo(function Grid({ w, h }: { w: number; h: number }) {
+  const rows = Math.ceil(h / GRID_CELL) + 1;
+  const cols = Math.ceil(w / GRID_CELL) + 1;
   return (
-    <View
-      pointerEvents="none"
-      style={[styles.pulse, { left: markSize * 0.72, top: markSize * 0.24 }]}
-    >
-      <View
-        style={[
-          styles.pulseRing,
-          { transform: [{ scale: 0.4 + ring * 1.9 }], opacity: 0.75 * (1 - ring) },
-        ]}
-      />
-      <View style={[styles.pulseDot, { opacity: dot }]} />
-    </View>
+    <>
+      {Array.from({ length: rows }, (_, i) => (
+        <View key={`h${i}`} style={[styles.gridH, { top: i * GRID_CELL - 28 }]} />
+      ))}
+      {Array.from({ length: cols }, (_, i) => (
+        <View key={`v${i}`} style={[styles.gridV, { left: i * GRID_CELL - 28 }]} />
+      ))}
+    </>
   );
-}
+});
 
 interface ColdLaunchSplashProps {
   /** Fired when the dissolve BEGINS (at the end of the sequence, or on tap) —
@@ -112,17 +116,9 @@ interface ColdLaunchSplashProps {
 
 export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
   const { width: vw, height: vh } = useWindowDimensions();
-  const [t, setT] = React.useState(0);
-  const [reduceMotion, setReduceMotion] = React.useState(false);
-
-  const fade = React.useRef(new Animated.Value(1)).current;
-  const rafRef = React.useRef<number | null>(null);
-  const startRef = React.useRef<number | null>(null);
-  const handedOff = React.useRef(false);
-  /** Real lockup width, from layout. The beam-driven reveal needs the true
-   *  width to know where the lockup starts and ends on screen; an estimate
-   *  makes the wipe finish early or late, and a percentage-width curtain does
-   *  not resolve reliably against a content-sized row in React Native. */
+  const [reduceMotion, setReduceMotion] = React.useState<boolean | null>(null);
+  /** Real lockup width, from layout — the reveal needs it to know where the
+   *  lockup starts and ends. Set once; not animated. */
   const [lockW, setLockW] = React.useState(0);
 
   // Lockup geometry — the web intro's small breakpoint (phones are <= 480px).
@@ -130,20 +126,34 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
   const wordSize = 34;
   const gap = 14;
 
+  // ── animated values: the entire sequence, all native-driven ─────────
+  const fade = React.useRef(new Animated.Value(1)).current; // crossfade out
+  const gridV = React.useRef(new Animated.Value(0)).current; // 0 → 1
+  const beamV = React.useRef(new Animated.Value(0)).current; // sweep 0 → 1
+  const beamO = React.useRef(new Animated.Value(0)).current; // beam opacity
+  const lockV = React.useRef(new Animated.Value(0)).current; // lockup opacity
+  const pulseV = React.useRef(new Animated.Value(0)).current; // 0 → 1
+
+  const handedOff = React.useRef(false);
+  const onHandoffRef = React.useRef(onHandoff);
+  const onDoneRef = React.useRef(onDone);
+  React.useEffect(() => {
+    onHandoffRef.current = onHandoff;
+    onDoneRef.current = onDone;
+  });
+
   const handoff = React.useCallback(() => {
     if (handedOff.current) return;
     handedOff.current = true;
-    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    onHandoff?.();
+    onHandoffRef.current?.();
     Animated.timing(fade, {
       toValue: 0,
       duration: reduceMotion ? REDUCED_CROSSFADE_MS : CROSSFADE_MS,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => onDone?.());
-  }, [fade, onHandoff, onDone, reduceMotion]);
+    }).start(() => onDoneRef.current?.());
+  }, [fade, reduceMotion]);
 
-  // Hold the latest handoff so the timeline effect never restarts on re-render.
   const handoffRef = React.useRef(handoff);
   handoffRef.current = handoff;
 
@@ -157,54 +167,113 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
     };
   }, []);
 
-  // Drive the timeline. Depends only on reduceMotion.
+  // Run the sequence once, when we know the lane and the lockup's real width.
+  const started = React.useRef(false);
   React.useEffect(() => {
-    const done = reduceMotion ? REDUCED_DONE : ANIM_DONE;
-    const loop = (now: number) => {
-      if (startRef.current == null) startRef.current = now;
-      const elapsed = now - startRef.current;
-      setT(elapsed);
-      if (elapsed >= done) {
-        handoffRef.current();
-        return;
-      }
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [reduceMotion]);
+    if (started.current || reduceMotion === null) return;
+    if (!reduceMotion && lockW === 0) return; // wait for the measurement
+    started.current = true;
 
-  // ── the frame ───────────────────────────────────────────────────────
-  let gridOpacity: number;
-  let lockOpacity: number;
-  let hiddenPx = 0; // px of the lockup still behind the curtain, from the right
-  let beam: { x: number; opacity: number } | null = null;
-  let pulseP = 0;
+    if (reduceMotion) {
+      // Opacity only: static grid, no beam, no pulse, nothing translates.
+      gridV.setValue(0.5 / 0.9); // grid renders at 0.5 via the interpolation
+      Animated.timing(lockV, {
+        toValue: 1,
+        duration: REDUCED_DONE,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) handoffRef.current();
+      });
+      return;
+    }
 
-  if (reduceMotion) {
-    // Opacity only: static grid, no beam, no pulse, nothing translates.
-    gridOpacity = 0.5;
-    lockOpacity = easeOut(seg(t, 0, REDUCED_DONE));
-  } else {
-    gridOpacity = easeOut(seg(t, 0, GRID_IN)) * 0.9;
-    const sweep = easeInOut(seg(t, BEAM_START, BEAM_END));
-    const span = Math.min(vw * 0.56, 700);
-    const beamX = vw / 2 - span / 2 + sweep * span;
-    const beamO = seg(t, BEAM_START, 190) * (1 - seg(t, 560, 650));
-    if (beamO > 0.01) beam = { x: beamX, opacity: beamO };
-    // Hold the lockup fully hidden until we have measured it — revealing it
-    // against a guessed width is what made it pop in rather than wipe in.
-    const left = vw / 2 - lockW / 2;
-    const cov = lockW === 0 ? 0 : t >= BEAM_END ? 1 : clamp01((beamX - left) / lockW);
-    hiddenPx = (1 - cov) * lockW;
-    lockOpacity = t < BEAM_START ? 0 : 1;
-    pulseP = seg(t, PULSE_START, ANIM_DONE);
-  }
+    Animated.parallel([
+      Animated.timing(gridV, {
+        toValue: 1,
+        duration: GRID_IN,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.delay(BEAM_START),
+        Animated.timing(beamV, {
+          toValue: 1,
+          duration: BEAM_SWEEP,
+          easing: EASE_IN_OUT,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.sequence([
+        Animated.delay(BEAM_START),
+        Animated.timing(beamO, { toValue: 1, duration: BEAM_FADE_IN, useNativeDriver: true }),
+        Animated.delay(BEAM_HOLD),
+        Animated.timing(beamO, { toValue: 0, duration: BEAM_FADE_OUT, useNativeDriver: true }),
+      ]),
+      Animated.sequence([
+        Animated.delay(BEAM_START),
+        Animated.timing(lockV, { toValue: 1, duration: 1, useNativeDriver: true }),
+      ]),
+      Animated.sequence([
+        Animated.delay(PULSE_START),
+        Animated.timing(pulseV, {
+          toValue: 1,
+          duration: PULSE_DUR,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+      // Nothing visual; just holds the parallel open to the full sequence length
+      // so the completion callback fires at ANIM_DONE.
+      Animated.delay(ANIM_DONE),
+    ]).start(({ finished }) => {
+      if (finished) handoffRef.current();
+    });
+  }, [reduceMotion, lockW, gridV, beamV, beamO, lockV, pulseV]);
 
-  const rows = Math.ceil(vh / GRID_CELL) + 1;
-  const cols = Math.ceil(vw / GRID_CELL) + 1;
+  // ── derived styles, all interpolations of the values above ──────────
+  const span = Math.min(vw * 0.56, 700);
+  const beamFrom = vw / 2 - span / 2;
+
+  const gridStyle = { opacity: gridV.interpolate({ inputRange: [0, 1], outputRange: [0, 0.9] }) };
+
+  const beamStyle = {
+    opacity: beamO,
+    transform: [
+      {
+        translateX: beamV.interpolate({
+          inputRange: [0, 1],
+          outputRange: [beamFrom - 90, beamFrom + span - 90],
+        }),
+      },
+    ],
+  };
+
+  // The curtain hides the not-yet-revealed remainder and slides right exactly
+  // with the beam, so the wipe and the beam can never drift apart — they are
+  // driven by the same value.
+  const curtainStyle = {
+    transform: [
+      {
+        translateX: beamV.interpolate({
+          inputRange: [0, 1],
+          outputRange: [(lockW - span) / 2, span + (lockW - span) / 2],
+          extrapolate: 'clamp' as const,
+        }),
+      },
+    ],
+  };
+
+  const pulseRingStyle = {
+    opacity: pulseV.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0] }),
+    transform: [{ scale: pulseV.interpolate({ inputRange: [0, 1], outputRange: [0.4, 2.3] }) }],
+  };
+  const pulseDotStyle = {
+    opacity: pulseV.interpolate({
+      inputRange: [0, 0.25, 0.45, 1],
+      outputRange: [0, 1, 1, 0],
+    }),
+  };
 
   return (
     <Animated.View style={[StyleSheet.absoluteFill, styles.root, { opacity: fade }]}>
@@ -215,45 +284,43 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
         accessibilityRole="button"
         accessibilityLabel="Loading StockPilot"
       >
-        {/* warehouse grid, mirroring the landing hero's */}
-        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: gridOpacity }]}>
-          {Array.from({ length: rows }).map((_, i) => (
-            <View key={`h${i}`} style={[styles.gridH, { top: i * GRID_CELL - 28 }]} />
-          ))}
-          {Array.from({ length: cols }).map((_, i) => (
-            <View key={`v${i}`} style={[styles.gridV, { left: i * GRID_CELL - 28 }]} />
-          ))}
-        </View>
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, gridStyle]}>
+          <Grid w={vw} h={vh} />
+        </Animated.View>
 
         {/* the scan beam: 1.5px leading edge + trailing gradient */}
-        {beam ? (
-          <View pointerEvents="none" style={[styles.beam, { left: beam.x - 90, opacity: beam.opacity }]}>
-            <View style={styles.beamTail} />
-            <View style={styles.beamEdge} />
-          </View>
-        ) : null}
+        <Animated.View pointerEvents="none" style={[styles.beam, beamStyle]}>
+          <View style={styles.beamTail} />
+          <View style={styles.beamEdge} />
+        </Animated.View>
 
         {/* the lockup, revealed in the beam's wake, centred at 44% of the
             viewport height exactly as the design specifies */}
         <View pointerEvents="none" style={[styles.lockWrap, { top: vh * 0.44 }]}>
-          <View
+          <Animated.View
             onLayout={(e) => setLockW(e.nativeEvent.layout.width)}
-            style={[styles.lock, { opacity: lockOpacity }]}
+            style={[styles.lock, { opacity: lockV }]}
           >
             <View>
               <IntroMark size={markSize} />
-              <Pulse markSize={markSize} p={pulseP} />
+              <View style={[styles.pulse, { left: markSize * 0.72, top: markSize * 0.24 }]}>
+                <Animated.View style={[styles.pulseRing, pulseRingStyle]} />
+                <Animated.View style={[styles.pulseDot, pulseDotStyle]} />
+              </View>
             </View>
             <Text style={[styles.word, { fontSize: wordSize, marginLeft: gap }]}>
               Stock<Text style={styles.wordDim}>Pilot</Text>
             </Text>
-            {/* React Native has no clip-path, so the not-yet-revealed remainder
-                is covered by an ink curtain that retreats with the beam. Same
-                result, and it stays on the surface colour so there is no seam. */}
-            {hiddenPx > 0.5 ? (
-              <View pointerEvents="none" style={[styles.curtain, { width: hiddenPx }]} />
+            {/* React Native has no clip-path, so the remainder is covered by an
+                ink curtain that slides right with the beam. translateX (not
+                width) so it can run on the native driver. */}
+            {!reduceMotion && lockW > 0 ? (
+              <Animated.View
+                pointerEvents="none"
+                style={[styles.curtain, { width: lockW }, curtainStyle]}
+              />
             ) : null}
-          </View>
+          </Animated.View>
         </View>
       </Pressable>
     </Animated.View>
@@ -264,7 +331,7 @@ const styles = StyleSheet.create({
   root: { backgroundColor: INK, zIndex: 100 },
   gridH: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: GRID_LINE },
   gridV: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: GRID_LINE },
-  beam: { position: 'absolute', top: 0, bottom: 0, width: 91.5 },
+  beam: { position: 'absolute', top: 0, bottom: 0, left: 0, width: 91.5 },
   beamTail: {
     position: 'absolute',
     top: 0,
@@ -292,7 +359,7 @@ const styles = StyleSheet.create({
     transform: [{ translateY: -28 }],
   },
   lock: { flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
-  curtain: { position: 'absolute', top: -20, bottom: -20, right: 0, backgroundColor: INK },
+  curtain: { position: 'absolute', top: -20, bottom: -20, left: 0, backgroundColor: INK },
   word: { fontFamily: FONT.display, color: PAPER, letterSpacing: -0.85 },
   wordDim: { opacity: 0.55 },
   pulse: { position: 'absolute', width: 0, height: 0 },
