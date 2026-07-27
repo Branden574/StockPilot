@@ -73,6 +73,17 @@ describe('exit schedule (ES) math', () => {
     expect(s.hiddenAt).toBeLessThanOrEqual(550);
   });
 
+  it('reduced motion ignores readiness entirely — slow content cannot stretch it', () => {
+    // The other lanes hold for content; this one must not (the page is SSR'd,
+    // and a lingering veil is the opposite of what reduced-motion asked for).
+    for (const ready of [600, 1200, 2600, Number.POSITIVE_INFINITY]) {
+      const s = schedule('reduced', ready);
+      expect(s.exitStart).toBe(300);
+      expect(s.hiddenAt).toBeLessThanOrEqual(550);
+      expect(s.forced).toBe(false);
+    }
+  });
+
   it('uses the documented per-lane animation lengths', () => {
     expect(animDoneFor('first')).toBe(900);
     expect(animDoneFor('repeat')).toBe(320);

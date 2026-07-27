@@ -63,20 +63,26 @@ export interface Schedule {
  * The 450ms floor stops a fast page from flashing the brand for two frames.
  * The 1500ms cap guarantees the page is never held hostage by a slow signal.
  *
- * REDUCED MOTION IS EXEMPT FROM THE FLOOR. The design package conflicts with
- * itself here: liSchedule applies the 450 floor to every lane, but the brief's
- * acceptance criterion is "reduced motion completes <= 550ms" — unreachable
- * with a 450 floor plus a 240ms exit (690ms). Someone who asked the OS for less
- * motion should get to content sooner, so the stated 550ms budget wins.
+ * REDUCED MOTION IS EXEMPT FROM BOTH THE FLOOR AND THE READINESS GATE. The
+ * design package conflicts with itself here: liSchedule applies the 450 floor
+ * to every lane, but the brief's acceptance criterion is "reduced motion
+ * completes <= 550ms" — unreachable with a 450 floor plus a 240ms exit (690ms),
+ * and unreachable again if the exit waits on fonts/LCP like the other lanes
+ * (any readyAt past ~310ms blows the budget). Someone who asked the OS for less
+ * motion has asked for the page, not for a veil that lingers while images
+ * decode — the page is fully server-rendered underneath, so revealing it
+ * mid-decode is exactly what a no-intro load would have shown them. The stated
+ * 550ms budget wins: 300ms fade-in + 240ms fade-out = 540ms, always.
  */
 export function schedule(mode: IntroMode, readyAt: number): Schedule {
   const animDone = animDoneFor(mode);
-  const floor = mode === 'reduced' ? 0 : LI.MIN_VISIBLE;
-  const natural = Math.max(animDone, readyAt, floor);
+  if (mode === 'reduced') {
+    return { animDone, exitStart: animDone, hiddenAt: animDone + LI.EXIT_REDUCED, forced: false };
+  }
+  const natural = Math.max(animDone, readyAt, LI.MIN_VISIBLE);
   const forced = natural > LI.MAX_CAP;
   const exitStart = Math.min(natural, LI.MAX_CAP);
-  const exitDur = mode === 'reduced' ? LI.EXIT_REDUCED : LI.EXIT_FADE;
-  return { animDone, exitStart, hiddenAt: exitStart + exitDur, forced };
+  return { animDone, exitStart, hiddenAt: exitStart + LI.EXIT_FADE, forced };
 }
 
 export interface Dims {
