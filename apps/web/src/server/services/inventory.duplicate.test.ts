@@ -114,6 +114,56 @@ describe('InventoryService.duplicateItem', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  // Migration 0299. The RPC tells an ABSENT key (inherit) apart from a key
+  // PRESENT WITH null (clear), so the service must not manufacture keys.
+  it('omits every variant override the caller did not supply', async () => {
+    const { ctx, rpcCalls } = makeCtx(async () => 'new-item-id');
+    const svc = new InventoryService(ctx);
+    await svc.duplicateItem({
+      originalId: '00000000-0000-0000-0000-000000000001',
+      itemType: 'product',
+      rackNumber: '38',
+      rackRow: 'A',
+      quantity: 1,
+    });
+    const overrides = rpcCalls[0]!.args.p_overrides as Record<string, unknown>;
+    for (const key of [
+      'variant_size',
+      'variant_size_original',
+      'variant_size_system',
+      'variant_width',
+      'variant_fit',
+      'variant_color',
+      'jersey_number',
+      'player_name',
+      'variant_key',
+    ]) {
+      expect(Object.hasOwn(overrides, key)).toBe(false);
+    }
+  });
+
+  it('forwards supplied variant overrides, and a null CLEARS rather than being dropped', async () => {
+    const { ctx, rpcCalls } = makeCtx(async () => 'new-item-id');
+    const svc = new InventoryService(ctx);
+    await svc.duplicateItem({
+      originalId: '00000000-0000-0000-0000-000000000001',
+      itemType: 'product',
+      rackNumber: '38',
+      rackRow: 'A',
+      quantity: 1,
+      variantSize: '11',
+      variantKey: 'size=11|system=US_MENS',
+      jerseyNumber: null,
+    });
+    const overrides = rpcCalls[0]!.args.p_overrides as Record<string, unknown>;
+    expect(overrides.variant_size).toBe('11');
+    expect(overrides.variant_key).toBe('size=11|system=US_MENS');
+    expect(Object.hasOwn(overrides, 'jersey_number')).toBe(true);
+    expect(overrides.jersey_number).toBeNull();
+    // Untouched neighbours must still be absent, not null.
+    expect(Object.hasOwn(overrides, 'player_name')).toBe(false);
+  });
+
   it('book branch sends crate fields and book_ bin label', async () => {
     const { ctx, rpcCalls } = makeCtx(async () => 'new-id', {
       originalSku: 'BK-XYZ',

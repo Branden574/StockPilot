@@ -1582,6 +1582,23 @@ export class InventoryService {
       overrides.bin_location = rackLabel;
     }
 
+    // Variant overrides (migration 0299). The RPC distinguishes an ABSENT key
+    // (inherit the original) from a key PRESENT WITH null (clear the field),
+    // so only set one the caller actually supplied. `undefined` would be
+    // dropped by JSON serialisation anyway, but leaving the key out keeps the
+    // two states explicit at this seam.
+    if (input.variantSize !== undefined) overrides.variant_size = input.variantSize;
+    if (input.variantSizeOriginal !== undefined)
+      overrides.variant_size_original = input.variantSizeOriginal;
+    if (input.variantSizeSystem !== undefined)
+      overrides.variant_size_system = input.variantSizeSystem;
+    if (input.variantWidth !== undefined) overrides.variant_width = input.variantWidth;
+    if (input.variantFit !== undefined) overrides.variant_fit = input.variantFit;
+    if (input.variantColor !== undefined) overrides.variant_color = input.variantColor;
+    if (input.jerseyNumber !== undefined) overrides.jersey_number = input.jerseyNumber;
+    if (input.playerName !== undefined) overrides.player_name = input.playerName;
+    if (input.variantKey !== undefined) overrides.variant_key = input.variantKey;
+
     const { data: newId, error: rpcErr } = await this.ctx.supabase.rpc(
       'duplicate_inventory_item',
       { p_original_id: input.originalId, p_overrides: overrides },
