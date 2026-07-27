@@ -1564,12 +1564,15 @@ export function ItemForm({
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
                   <SelectItem value="serial">Serial (one per unit, required)</SelectItem>
-                  {/* serial_optional is DELIBERATELY not offered here yet. The value
-                      exists end-to-end (schema, RPC, enumerators) as of mig 0295/0296,
-                      but it belongs to the sports module's tracking profiles — Task 8
-                      surfaces it through category-driven stamping, not this free-pick.
-                      Offering it now would let a lot_serial org create one ahead of the
-                      sports gating rules. */}
+                  {/* serial_optional is DELIBERATELY not offered here, and that is now
+                      permanent rather than pending. The value exists end-to-end (schema,
+                      RPC, enumerators) as of mig 0295/0296, but it is reached ONLY by
+                      category-driven stamping: InventoryService.create() resolves the
+                      category's tracking mode server-side and stamps the tracking_type
+                      itself, gating a sports subcategory's serial modes on the `sports`
+                      module rather than lot_serial. Adding it back to this free-pick
+                      would let a lot_serial org mint one with no category behind it,
+                      which is exactly what the server-side authority rule forbids. */}
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">

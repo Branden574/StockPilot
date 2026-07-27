@@ -466,6 +466,12 @@ function cachedRow(over: Partial<InventoryListCachedRow> = {}): InventoryListCac
     image_storage_path: null,
     image_thumb_path: null,
     image_lqip: null,
+    // Sports variant columns (0298) — null on an ungrouped row.
+    group_id: null,
+    variant_size: null,
+    variant_size_system: null,
+    jersey_number: null,
+    variant_key: null,
     ...over,
   };
 }

@@ -44,7 +44,23 @@ const BASE_INPUT = {
  *   - stock_movements: the post-insert audit-log writeback. The service
  *     swallows movement-log errors, so an absent table just no-ops here.
  */
-function buildStub(customFieldDefs: Array<Record<string, unknown>> = []) {
+function buildStub(
+  customFieldDefs: Array<Record<string, unknown>> = [],
+  /** Category row backing resolveTrackingProfile. Defaults to a plain category
+   *  with no tracking mode and no size scale — every category in every org
+   *  today — so the sized-variant path behaves exactly as it always has. */
+  categoryRow: Record<string, unknown> | null = {
+    id: 'cat-1',
+    parent_id: null,
+    tracking_mode: null,
+    size_scale_id: null,
+    default_unit_of_measure: null,
+    sports_subcategory_key: null,
+    tracking_profile: null,
+  },
+  /** (value, normalized) rows for the category's size scale, when it has one. */
+  sizeScaleValues: Array<{ value: string; normalized: string }> = [],
+) {
   const insertedItems: Array<Record<string, unknown>> = [];
   const insertedMovements: Array<Record<string, unknown>> = [];
   return {
@@ -52,6 +68,22 @@ function buildStub(customFieldDefs: Array<Record<string, unknown>> = []) {
     insertedMovements,
 
     from(table: string): any {
+      if (table === 'categories' || table === 'size_scales' || table === 'size_scale_values') {
+        const data =
+          table === 'categories'
+            ? categoryRow
+            : table === 'size_scales'
+              ? { id: 'scale-1', size_system: 'US_MENS' }
+              : sizeScaleValues;
+        const builder: any = {
+          select: () => builder,
+          eq: () => builder,
+          is: () => builder,
+          maybeSingle: async () => ({ data, error: null }),
+          then: (cb: any) => cb({ data, error: null }),
+        };
+        return builder;
+      }
       if (table === 'custom_field_definitions') {
         // CustomFieldsService.listDefinitions chains
         // .select().eq().eq().eq?().order().order() then awaits the builder.
@@ -248,6 +280,129 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect(cf.rack_number).toBeUndefined();
     // ...but a non-reserved org key with no definition flows through untouched.
     expect(cf.material).toBe('wool');
+  });
+
+  // ── Sports (Task 8): first-class variant columns on the sized-variant path ──
+
+  it('stamps variant_size / _original / variant_key alongside the legacy custom_fields.size', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: 'xl', quantity: 2 }],
+    });
+
+    const row = stub.insertedItems[0]!;
+    // Normalized for MATCHING, original preserved verbatim.
+    expect(row.variant_size).toBe('XL');
+    expect(row.variant_size_original).toBe('xl');
+    expect(row.variant_key).toBe('size=xl');
+    expect(row.group_id).toBeNull();
+    // The legacy reader has not moved yet — both are written (Task 19 retires
+    // the custom_fields copy).
+    expect((row.custom_fields as Record<string, unknown>).size).toBe('xl');
+  });
+
+  it('accepts a size the old nine-value enum could not express', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [
+        { size: '10.5', quantity: 1 },
+        { size: '11', quantity: 1 },
+      ],
+    });
+
+    expect(stub.insertedItems.map((r) => r.variant_size)).toEqual(['10.5', '11']);
+    expect(stub.insertedItems.map((r) => r.variant_key)).toEqual(['size=10.5', 'size=11']);
+  });
+
+  it('rejects a size the category size scale does not contain', async () => {
+    const stub = buildStub(
+      [],
+      {
+        id: 'cat-1',
+        parent_id: null,
+        tracking_mode: null,
+        size_scale_id: 'scale-1',
+        default_unit_of_measure: null,
+        sports_subcategory_key: 'shoes',
+        tracking_profile: null,
+      },
+      [
+        { value: '10', normalized: '10' },
+        { value: '10.5', normalized: '10.5' },
+      ],
+    );
+    const svc = makeSvc(stub);
+
+    await expect(
+      svc.bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: '10', quantity: 1 },
+          { size: '99', quantity: 1 },
+        ],
+      }),
+    ).rejects.toThrow(/not a size in this category's size scale/i);
+    expect(stub.insertedItems).toHaveLength(0);
+  });
+
+  it('stamps the size system from the category scale when there is one', async () => {
+    const stub = buildStub(
+      [],
+      {
+        id: 'cat-1',
+        parent_id: null,
+        tracking_mode: null,
+        size_scale_id: 'scale-1',
+        default_unit_of_measure: null,
+        sports_subcategory_key: 'shoes',
+        tracking_profile: null,
+      },
+      [{ value: '10', normalized: '10' }],
+    );
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: 'US 10', quantity: 1 }],
+    });
+
+    const row = stub.insertedItems[0]!;
+    expect(row.variant_size_system).toBe('US_MENS');
+    // The redundant system prefix is stripped for matching, kept verbatim in
+    // _original. NEVER converted between systems.
+    expect(row.variant_size).toBe('10');
+    expect(row.variant_size_original).toBe('US 10');
+    expect(row.variant_key).toBe('size=10|system=us_mens');
+  });
+
+  it('rejects the same size listed twice instead of creating two identical variants', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    await expect(
+      svc.bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'M', quantity: 1 },
+          { size: 'm', quantity: 2 },
+        ],
+      }),
+    ).rejects.toThrow(/listed twice/i);
+    expect(stub.insertedItems).toHaveLength(0);
+  });
+
+  it('rejects a blank size', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+    await expect(
+      svc.bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: '   ', quantity: 1 }] }),
+    ).rejects.toThrow(/needs a size/i);
   });
 
   it('enforces a REQUIRED custom field on the sized-variant path (rejects, no write)', async () => {

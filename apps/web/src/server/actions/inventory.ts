@@ -156,15 +156,23 @@ const bulkCreateSizedSchema = z.object({
   // Per-org custom field values applied to every created variant. The service
   // strips reserved keys and runs the authoritative validator (assertCustomFieldsValid).
   customFields: z.record(z.string(), z.unknown()).nullable().optional(),
+  // The product group these variants belong to. Optional; NULL keeps the run
+  // ungrouped, which is exactly the pre-sports behaviour.
+  groupId: z.string().uuid().nullable().optional(),
   variants: z
     .array(
       z.object({
-        size: z.enum(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL']),
+        // Free text, validated server-side against the category's size scale.
+        // It was a nine-value enum, which could not express a shoe run at all.
+        // 24 is the inventory_items_variant_size_check bound (0298).
+        size: z.string().min(1).max(24),
         quantity: z.coerce.number().int().min(0),
       }),
     )
     .min(1)
-    .max(7),
+    // Was .max(7), which silently rejected valid input: the form already
+    // offered NINE apparel sizes, and a shoe run is routinely 20+.
+    .max(60),
 });
 
 export async function bulkCreateSizedVariantsAction(

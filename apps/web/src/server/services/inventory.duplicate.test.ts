@@ -25,11 +25,27 @@ import { InventoryService } from './inventory';
 
 function makeCtx(
   rpcImpl: (name: string, args: Record<string, unknown>) => unknown,
-  opts?: { originalSku?: string; rpcError?: { code: string; message: string } | null },
+  opts?: {
+    originalSku?: string;
+    rpcError?: { code: string; message: string } | null;
+    /** The duplicate's variant columns as the RPC left them, read back by the
+     *  post-RPC variant_key recompute (0299 clears the key on an override). */
+    duplicateRow?: Record<string, string | null>;
+  },
 ) {
   const originalSku = opts?.originalSku ?? 'SP-ABC';
   const rpcError = opts?.rpcError ?? null;
+  const duplicateRow = opts?.duplicateRow ?? {
+    variant_size: null,
+    variant_size_system: null,
+    variant_width: null,
+    variant_fit: null,
+    variant_color: null,
+    jersey_number: null,
+    player_name: null,
+  };
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const keyUpdates: Array<Record<string, unknown>> = [];
   const supabase = {
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
       rpcCalls.push({ name, args });
@@ -48,13 +64,22 @@ function makeCtx(
         throw new Error(`unexpected table ${table}`);
       }
       return {
-        select: () => ({
+        // Two read shapes now share this chain: the original-SKU lookup and
+        // the recomputeVariantKey read-back. Branch on the column list.
+        select: (cols: string) => ({
           eq: () => ({
             eq: () => ({
-              maybeSingle: async () => ({ data: { sku: originalSku }, error: null }),
+              maybeSingle: async () => ({
+                data: cols.includes('variant_size') ? duplicateRow : { sku: originalSku },
+                error: null,
+              }),
             }),
           }),
         }),
+        update: (patch: Record<string, unknown>) => {
+          keyUpdates.push(patch);
+          return { eq: () => ({ eq: async () => ({ error: null }) }) };
+        },
       };
     },
   } as unknown;
@@ -66,6 +91,7 @@ function makeCtx(
       role: 'admin',
     } as unknown as ConstructorParameters<typeof InventoryService>[0],
     rpcCalls,
+    keyUpdates,
   };
 }
 
@@ -164,6 +190,54 @@ describe('InventoryService.duplicateItem', () => {
     expect(overrides.jersey_number).toBeNull();
     // Untouched neighbours must still be absent, not null.
     expect(Object.hasOwn(overrides, 'player_name')).toBe(false);
+  });
+
+  // Migration 0299 CLEARS variant_key to NULL whenever a variant attribute is
+  // overridden, precisely so the client can never supply one. The service owns
+  // the recompute; without it the duplicate would be invisible to the group
+  // roll-up's count(distinct variant_key) and to the import matcher.
+  it('RECOMPUTES the variant_key the RPC cleared, from the row the RPC actually wrote', async () => {
+    const { ctx, keyUpdates } = makeCtx(async () => 'new-item-id', {
+      duplicateRow: {
+        variant_size: '11',
+        variant_size_system: 'US_MENS',
+        variant_width: 'D',
+        variant_fit: null,
+        variant_color: null,
+        // Inherited from the original, NOT sent in this request — proof the
+        // recompute reads the final row rather than re-deriving from input.
+        jersey_number: '07',
+        player_name: null,
+      },
+    });
+    const svc = new InventoryService(ctx);
+    await svc.duplicateItem({
+      originalId: '00000000-0000-0000-0000-000000000001',
+      itemType: 'product',
+      rackNumber: '38',
+      rackRow: 'A',
+      quantity: 1,
+      variantSize: '11',
+    });
+
+    expect(keyUpdates).toHaveLength(1);
+    expect(keyUpdates[0]!.variant_key).toBe('number=07|size=11|system=us_mens|width=d');
+  });
+
+  it('does NOT recompute when no variant attribute was overridden (the RPC copied a valid key)', async () => {
+    const { ctx, keyUpdates } = makeCtx(async () => 'new-item-id');
+    const svc = new InventoryService(ctx);
+    await svc.duplicateItem({
+      originalId: '00000000-0000-0000-0000-000000000001',
+      itemType: 'product',
+      rackNumber: '38',
+      rackRow: 'A',
+      quantity: 1,
+      // player_name is NOT one of the six attributes 0299 keys the clear on,
+      // so the copied key is still correct and must be left alone.
+      playerName: 'Vega',
+    });
+    expect(keyUpdates).toHaveLength(0);
   });
 
   it('book branch sends crate fields and book_ bin label', async () => {

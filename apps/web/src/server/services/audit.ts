@@ -31,6 +31,15 @@ export type AuditEvent =
   | 'inventory.item.archived'
   | 'inventory.item.restored'
   | 'inventory.item.deleted'
+  // Sports product-group identity + variant provenance. 'matched' is recorded
+  // as well as 'created' because "this import joined an existing group" is the
+  // event a reviewer needs when a grouping later looks wrong.
+  | 'sports.group.created'
+  | 'sports.group.matched'
+  | 'sports.variant.created'
+  | 'sports.variant.imported'
+  | 'sports.import.mapping_confirmed'
+  | 'sports.import.match_overridden'
   | 'stock.adjusted'
   | 'stock.received'
   | 'stock.transferred'

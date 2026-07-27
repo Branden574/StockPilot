@@ -19,7 +19,9 @@ import type {
 } from '@stockpilot/core';
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
+import type { CountingUnit } from '@stockpilot/core';
 import {
+  buildVariantKey,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
@@ -27,6 +29,7 @@ import {
   formatStockQuantity,
   historyNote,
   normalizeRackFields,
+  normalizeSizeValue,
   parseRackLabel,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RESERVED_CUSTOM_FIELD_KEYS,
@@ -38,6 +41,12 @@ import { fetchAllRows } from './lib/paginate';
 import { audit, type AuditEvent } from './audit';
 import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
+import { ProductGroupsService } from './product-groups';
+import {
+  assertVariantAttributesValid,
+  resolveModeOverride,
+  resolveTrackingProfile,
+} from './sports-profiles';
 import { LocationsService } from './locations';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
@@ -448,7 +457,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, created_at, updated_at, created_by, updated_by',
+        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by',
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -884,6 +893,16 @@ export class InventoryService {
          *  lists/ordering; shown under the "Expected" chip with a pill. */
         awaiting_first_receipt: boolean;
         custom_fields: Record<string, unknown>;
+        /** Sports variant identity (0298). NULL on every ungrouped item, which
+         *  is every item in every org until an opt-in link is made. Kept in
+         *  lockstep with ITEM_SELECT_COLUMNS in loaders/inventory-list.ts —
+         *  that list is a verbatim copy of this select, so the cached and live
+         *  paths must gain columns together or the two rows drift. */
+        group_id: string | null;
+        variant_size: string | null;
+        variant_size_system: string | null;
+        jersey_number: string | null;
+        variant_key: string | null;
         created_at: string;
         updated_at: string;
         staged_quantity: number;
@@ -1384,14 +1403,15 @@ export class InventoryService {
     // lot_serial module. Fail closed — a disabled org cannot make an item
     // lot/serial-tracked or set expiry config.
     //
-    // SPORTS DEPENDENCY (0295): 'serial_optional' is a tracking_type, so it
-    // trips this gate exactly like 'serial' does. That is deliberate for now —
-    // the `sports` module does not exist yet (Task 4 seeds it in migration
-    // 0297) and the owner decision is that `sports` grants its own serial
-    // modes with NO lot_serial dependency. Widening this predicate to accept
-    // `serial_optional` under the `sports` entitlement belongs to the task
-    // that threads the sports/category fields through create() — doing it here
-    // would mean referencing a module id that is not yet in the registry.
+    // SPORTS (Task 8): this gate reads `input.trackingType` — what the CALLER
+    // asked for — and it is deliberately unchanged. The sports serial exception
+    // is not a wider input contract, it is a CATEGORY-DRIVEN STAMP: a sports
+    // category resolves its own tracking_type further down (see the profile
+    // block) and is gated there against the `sports` module instead of
+    // `lot_serial`, per the owner decision that `sports` carries no lot_serial
+    // dependency. A caller posting `serial_optional` DIRECTLY still needs
+    // lot_serial exactly as before, because at this point nothing has been
+    // proven about the category and the form is never the authority.
     if (
       input.trackingType !== 'none' ||
       input.shelfLifeDays != null ||
@@ -1410,6 +1430,71 @@ export class InventoryService {
     // Reject any custom_fields value that violates the org's field definitions
     // before we touch the DB (mirrors the form's client-side check).
     await this.assertCustomFieldsValid(input.customFields);
+
+    // ── Sports profile resolution (server-side; the form is never trusted) ──
+    // For every category that has never been given a tracking_mode — which is
+    // every category in every org today — this returns QUANTITY / 'none' /
+    // 'unit' with `modeIsExplicit: false`, and the whole block below is inert.
+    const profile = resolveModeOverride(
+      this.ctx,
+      await resolveTrackingProfile(this.ctx, input.categoryId ?? null),
+      input.trackingModeOverride,
+    );
+    assertVariantAttributesValid(profile.profile, input);
+
+    let resolvedGroupId: string | null = input.groupId ?? null;
+    // Attaching to a group is the `sports` entitlement, whatever the category
+    // says. RLS already pins the group to this org (product_group_in_org, 0298)
+    // but says nothing about the module, so gate it here too.
+    if (resolvedGroupId) assertModuleEnabled(this.ctx, 'sports');
+    // variant_key is SERVER-COMPUTED identity, ALWAYS. `createItemSchema` does
+    // not even carry the field (zod strips a client-supplied one), and it is
+    // rebuilt here from the parsed attributes: the key decides which physical
+    // stock an item merges with, so a caller choosing its own would be choosing
+    // that merge.
+    let resolvedVariantKey: string | null = null;
+    if (profile.isSports) {
+      assertModuleEnabled(this.ctx, 'sports');
+      if (!resolvedGroupId && input.productGroup) {
+        const groups = new ProductGroupsService(this.ctx);
+        const { group } = await groups.findOrCreate({
+          ...input.productGroup,
+          subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+          categoryId: input.categoryId ?? null,
+          defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+            profile.countingUnit) as CountingUnit,
+        });
+        resolvedGroupId = group.id;
+      }
+      resolvedVariantKey = buildVariantKey({
+        size: input.variantSize,
+        sizeSystem: input.variantSizeSystem,
+        width: input.variantWidth,
+        fit: input.variantFit,
+        color: input.variantColor,
+        jerseyNumber: input.jerseyNumber,
+      });
+    }
+
+    // The category mode STAMPS tracking_type. An explicit `input.trackingType`
+    // still wins wherever the category expresses no policy, so every existing
+    // caller is bit-for-bit unaffected; a category that DOES carry a mode (a
+    // sports subcategory, or any category an admin gave an explicit
+    // tracking_mode) overrides it, because the category is the authority
+    // (requirement 11: server-side, never trust the form).
+    const stampedTrackingType =
+      profile.isSports || profile.modeIsExplicit ? profile.trackingType : input.trackingType;
+    if (stampedTrackingType !== input.trackingType && stampedTrackingType !== 'none') {
+      // The CATEGORY asked for this, not the caller, so the lot_serial gate at
+      // the top of this method never saw it. 'serial' / 'serial_optional' on a
+      // Sports subcategory are granted by the `sports` module itself (already
+      // asserted above); every other case — 'lot' anywhere, a serial mode on a
+      // non-sports category — still belongs to lot_serial, unchanged.
+      const grantedBySports =
+        profile.isSports &&
+        (stampedTrackingType === 'serial' || stampedTrackingType === 'serial_optional');
+      if (!grantedBySports) assertModuleEnabled(this.ctx, 'lot_serial');
+    }
 
     const sku = (input.sku && input.sku.trim()) || generateSku();
 
@@ -1470,9 +1555,24 @@ export class InventoryService {
         quantity_on_hand: input.quantityOnHand,
         reorder_point: input.reorderPoint,
         reorder_quantity: input.reorderQuantity,
-        unit_of_measure: input.unitOfMeasure,
+        // Counting unit: an explicit input wins; otherwise the category default
+        // (PAIR for shoes). DISPLAY convention only — there is no conversion
+        // anywhere, and 'unit' is both the schema default and the category
+        // fallback, so a category with no default is byte-identical to before.
+        unit_of_measure:
+          input.unitOfMeasure !== 'unit' ? input.unitOfMeasure : profile.countingUnit,
         bin_location: input.binLocation ?? null,
-        tracking_type: input.trackingType,
+        tracking_type: stampedTrackingType,
+        group_id: resolvedGroupId,
+        variant_size: input.variantSize ?? null,
+        variant_size_original: input.variantSizeOriginal ?? input.variantSize ?? null,
+        variant_size_system: input.variantSizeSystem ?? null,
+        variant_width: input.variantWidth ?? null,
+        variant_fit: input.variantFit ?? null,
+        variant_color: input.variantColor ?? null,
+        jersey_number: input.jerseyNumber ?? null,
+        player_name: input.playerName ?? null,
+        variant_key: resolvedVariantKey,
         ...(lotSerialEnabled
           ? {
               shelf_life_days: input.shelfLifeDays ?? null,
@@ -1597,9 +1697,20 @@ export class InventoryService {
     if (input.variantColor !== undefined) overrides.variant_color = input.variantColor;
     if (input.jerseyNumber !== undefined) overrides.jersey_number = input.jerseyNumber;
     if (input.playerName !== undefined) overrides.player_name = input.playerName;
-    // variant_key is SERVER-COMPUTED only (buildVariantKey) — never accepted from
-    // the client. When any variant attribute is overridden the RPC recomputes it
-    // from the final column values; otherwise it is copied from the source row.
+    // variant_key is SERVER-COMPUTED only (buildVariantKey) — never accepted
+    // from the client, so the RPC deliberately ignores any variant_key in
+    // p_overrides. When a variant attribute IS overridden the copied key would
+    // be stale, so 0299 CLEARS it to NULL and leaves the recompute to this
+    // service. Track whether that happened so we can do exactly that below.
+    const variantOverrideKeys = [
+      'variant_size',
+      'variant_size_system',
+      'variant_width',
+      'variant_fit',
+      'variant_color',
+      'jersey_number',
+    ] as const;
+    const variantAttributesOverridden = variantOverrideKeys.some((k) => k in overrides);
 
     const { data: newId, error: rpcErr } = await this.ctx.supabase.rpc(
       'duplicate_inventory_item',
@@ -1618,6 +1729,16 @@ export class InventoryService {
       throw new ServiceError('internal_error', rpcErr.message);
     }
 
+    // Recompute the identity 0299 cleared. `buildVariantKey` lives in
+    // packages/core and is the ONE place a key is built, so the recompute reads
+    // the row's FINAL column values back (the RPC merged overrides with the
+    // original's) rather than re-deriving them from the request. Leaving the
+    // key NULL would take the duplicate out of every variant lookup and let a
+    // later import create a second row for the same physical variant.
+    if (variantAttributesOverridden) {
+      await this.recomputeVariantKey(newId as string);
+    }
+
     void audit(
       {
         event: 'inventory.item.duplicated',
@@ -1629,6 +1750,91 @@ export class InventoryService {
     );
 
     return newId as string;
+  }
+
+  /**
+   * Load a size scale's system and its legal values.
+   *
+   * Returns `allowedSizes: null` when the category has no scale — that is
+   * every category in every org today, and it means "accept any size" rather
+   * than "accept none". Both the printed `value` and the stored `normalized`
+   * form are admitted, upper-cased, because `normalizeSizeValue` upper-cases
+   * alpha sizes and leaves numerics alone.
+   */
+  private async loadSizeScale(
+    sizeScaleId: string | null,
+  ): Promise<{ sizeSystem: string | null; allowedSizes: Set<string> | null }> {
+    if (!sizeScaleId) return { sizeSystem: null, allowedSizes: null };
+    const { data: scale, error: scaleErr } = await this.ctx.supabase
+      .from('size_scales')
+      .select('id, size_system')
+      .eq('id', sizeScaleId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (scaleErr) throw new ServiceError('internal_error', scaleErr.message);
+    if (!scale) return { sizeSystem: null, allowedSizes: null };
+
+    const { data: values, error: valErr } = await this.ctx.supabase
+      .from('size_scale_values')
+      .select('value, normalized')
+      .eq('size_scale_id', sizeScaleId);
+    if (valErr) throw new ServiceError('internal_error', valErr.message);
+    const rows = (values ?? []) as Array<{ value: string; normalized: string }>;
+    // A scale with no values yet must not lock the whole category out.
+    if (rows.length === 0) {
+      return { sizeSystem: (scale as { size_system: string | null }).size_system, allowedSizes: null };
+    }
+    const allowed = new Set<string>();
+    for (const r of rows) {
+      if (r.value) allowed.add(r.value.toUpperCase());
+      if (r.normalized) allowed.add(r.normalized.toUpperCase());
+    }
+    return {
+      sizeSystem: (scale as { size_system: string | null }).size_system,
+      allowedSizes: allowed,
+    };
+  }
+
+  /**
+   * Rebuild `variant_key` for one item from its own persisted attributes.
+   *
+   * The single recompute seam. Called after `duplicate_inventory_item` clears
+   * the key on an attribute override (0299); a variant with a NULL key is
+   * invisible to the group roll-up's `count(distinct variant_key)` and to the
+   * import matcher, so the row is repaired rather than left half-identified.
+   *
+   * Best-effort by design: the duplicate itself already exists and is correct
+   * in every other respect, so a failure here is logged, not thrown — the same
+   * posture as the movement-log writeback below.
+   */
+  private async recomputeVariantKey(itemId: string): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select(
+        'variant_size, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', itemId)
+      .maybeSingle();
+    if (error || !data) {
+      console.warn('[recomputeVariantKey] read failed', error?.message ?? 'row not found');
+      return;
+    }
+    const row = data as Record<string, string | null>;
+    const variantKey = buildVariantKey({
+      size: row.variant_size,
+      sizeSystem: row.variant_size_system,
+      width: row.variant_width,
+      fit: row.variant_fit,
+      color: row.variant_color,
+      jerseyNumber: row.jersey_number,
+    });
+    const { error: updErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .update({ variant_key: variantKey })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', itemId);
+    if (updErr) console.warn('[recomputeVariantKey] update failed', updErr.message);
   }
 
   /**
@@ -1684,10 +1890,19 @@ export class InventoryService {
      * builder owns those.
      */
     customFields?: Record<string, unknown> | null;
-    variants: Array<{
-      size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
-      quantity: number;
-    }>;
+    /**
+     * The group these variants belong to. Optional and NULL by default: an
+     * ungrouped size run behaves exactly as it did before the sports program.
+     * Never inferred from the name (owner decision: no name-heuristic
+     * grouping) — the caller either knows the group or there isn't one.
+     */
+    groupId?: string | null;
+    /**
+     * A size is now free TEXT, not one of nine apparel letters. A shoe run is
+     * '7'..'15' with halves and an apparel run is 'XS'..'5XL'; the authority is
+     * the category's size scale (migration 0294), validated below.
+     */
+    variants: Array<{ size: string; quantity: number }>;
   }): Promise<Array<{ id: string; name: string; sku: string }>> {
     assertPermission(this.ctx, 'items:create');
     if (input.variants.length === 0) {
@@ -1697,6 +1912,69 @@ export class InventoryService {
       );
     }
     await assertPlanLimit(this.ctx, 'items', input.variants.length);
+
+    // ── Size vocabulary + variant identity ──────────────────────────────────
+    // The category decides the size system and, when it carries a size scale,
+    // which sizes are legal at all. With no scale configured — every category
+    // in every org today — any non-empty size is accepted and the behaviour is
+    // unchanged apart from the nine-letter cap being gone.
+    const profile = await resolveTrackingProfile(this.ctx, input.categoryId);
+    const { sizeSystem, allowedSizes } = await this.loadSizeScale(profile.sizeScaleId);
+
+    const resolvedGroupId = input.groupId ?? null;
+    if (resolvedGroupId) {
+      // Attaching to a group is the `sports` entitlement — same gate create()
+      // applies, so the two create paths cannot disagree.
+      assertModuleEnabled(this.ctx, 'sports');
+      // Confirm the group is ours BEFORE the insert. The RLS WITH CHECK arm
+      // (product_group_in_org, 0298) would refuse a foreign group anyway, but
+      // it surfaces as an opaque row-level-security error rather than a
+      // sentence a user can act on.
+      const { data: g, error: gErr } = await this.ctx.supabase
+        .from('product_groups')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', resolvedGroupId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (gErr) throw new ServiceError('internal_error', gErr.message);
+      if (!g) throw new ServiceError('not_found', 'That product group no longer exists.');
+    }
+
+    const seenVariantKeys = new Set<string>();
+    for (const v of input.variants) {
+      const raw = v.size?.trim() ?? '';
+      if (raw.length === 0) {
+        throw new ServiceError('validation_error', 'Every variant needs a size.', {
+          code: 'SHOE_SIZE_REQUIRED',
+        });
+      }
+      const normalized = normalizeSizeValue(raw, sizeSystem);
+      // The inventory_items_variant_size_check constraint (0298) caps this at
+      // 24 characters; refuse it here so the batch fails with a sentence
+      // instead of a constraint name.
+      if (!normalized || normalized.length > 24) {
+        throw new ServiceError(
+          'validation_error',
+          `"${raw}" is not a usable size. Sizes are 1 to 24 characters.`,
+          { code: 'SHOE_SIZE_REQUIRED' },
+        );
+      }
+      if (allowedSizes && !allowedSizes.has(normalized.toUpperCase())) {
+        throw new ServiceError(
+          'validation_error',
+          `"${raw}" is not a size in this category's size scale.`,
+          { code: 'SHOE_SIZE_REQUIRED' },
+        );
+      }
+      const key = buildVariantKey({ size: normalized, sizeSystem });
+      if (seenVariantKeys.has(key)) {
+        throw new ServiceError('validation_error', `Size "${raw}" is listed twice.`, {
+          code: 'VARIANT_ALREADY_EXISTS',
+        });
+      }
+      seenVariantKeys.add(key);
+    }
 
     // Per-org custom fields shared by every variant. Strip any reserved key the
     // variant builder owns (size/rack_*) so a stray payload can't clobber them,
@@ -1772,7 +2050,9 @@ export class InventoryService {
       return cf;
     };
 
-    const rows = input.variants.map((v) => ({
+    const rows = input.variants.map((v) => {
+      const normalizedSize = normalizeSizeValue(v.size, sizeSystem) as string;
+      return {
       organization_id: this.ctx.organizationId,
       name: `${input.baseName} - ${v.size}`,
       sku: `${sharedBase}-${v.size}`,
@@ -1793,10 +2073,21 @@ export class InventoryService {
       item_type: 'product',
       status: 'active',
       tracking_type: 'none',
+      // First-class variant columns (0298). custom_fields.size is STILL
+      // written above: the legacy size readers (display heuristics, the
+      // existing filters) have not moved yet, and Task 19 owns the dual-write
+      // backfill that retires them. Writing both keeps this path consistent
+      // with every row those readers already depend on.
+      group_id: resolvedGroupId,
+      variant_size: normalizedSize,
+      variant_size_original: v.size,
+      variant_size_system: sizeSystem,
+      variant_key: buildVariantKey({ size: normalizedSize, sizeSystem }),
       custom_fields: variantCustomFields(v.size),
       created_by: this.ctx.userId,
       updated_by: this.ctx.userId,
-    }));
+      };
+    });
 
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
