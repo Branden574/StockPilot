@@ -154,6 +154,170 @@ describe('buildVariantKey', () => {
   });
 });
 
+/**
+ * Split on UNESCAPED occurrences of `delim`, leaving the escape sequences in
+ * the returned segments (so a second pass can split on the other delimiter).
+ * Deliberately written from scratch here rather than imported: a round-trip
+ * test that reuses the production splitter would pass even if both sides were
+ * wrong together.
+ */
+function splitUnescaped(s: string, delim: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i]!;
+    if (ch === '\\') {
+      cur += ch + (s[i + 1] ?? '');
+      i += 1;
+      continue;
+    }
+    if (ch === delim) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function unescapeSlot(s: string): string {
+  return s.replace(/\\(.)/g, '$1');
+}
+
+/** The same normalization the builders apply, so tests can predict the slots. */
+function norm(v: string | null | undefined): string {
+  if (v == null) return '';
+  return v.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+describe('key escaping — delimiter injection', () => {
+  it('does NOT let a delimiter inside a size forge another variant slot', () => {
+    // Proven collision before the fix: both produced 'size=10|width=w'.
+    const forged = buildVariantKey({ size: '10|width=w' });
+    const real = buildVariantKey({ size: '10', width: 'w' });
+    expect(forged).not.toBe(real);
+    expect(real).toBe('size=10|width=w');
+    expect(forged).toBe('size=10\\|width\\=w');
+  });
+
+  it('does NOT let a pipe inside a team shift the jersey group slots', () => {
+    // Proven collision before the fix: both produced 'jerseys|a|b|||||||'.
+    const forged = buildGroupKey({ subcategoryKey: 'jerseys', team: 'a|b' });
+    const real = buildGroupKey({ subcategoryKey: 'jerseys', team: 'a', league: 'b' });
+    expect(forged).not.toBe(real);
+    // 9 fields: the subcategory plus the 8 jersey slots.
+    expect(real).toBe('jerseys|a|b||||||');
+    expect(forged).toBe('jerseys|a\\|b|||||||');
+  });
+
+  it('escapes the escape character itself, so a literal backslash cannot forge one', () => {
+    // 'x\|y' typed literally must not decode as the delimiter.
+    const forged = buildVariantKey({ size: 'x\\|y' });
+    const real = buildVariantKey({ size: 'x\\', width: 'y' });
+    expect(forged).not.toBe(real);
+    expect(splitUnescaped(forged, '|')).toHaveLength(1);
+    expect(splitUnescaped(real, '|')).toHaveLength(2);
+  });
+
+  it('leaves clean values byte-identical (existing keys stay stable)', () => {
+    expect(buildVariantKey({ size: '10.5', sizeSystem: 'US_MENS' })).toBe(
+      'size=10.5|system=us_mens',
+    );
+    expect(
+      buildGroupKey({
+        subcategoryKey: 'shoes',
+        brand: 'Nike',
+        model: 'Pegasus 41',
+        styleNumber: 'FD2722',
+        colorway: 'Black/White',
+      }),
+    ).toBe('shoes|nike|pegasus 41|fd2722|black/white');
+  });
+
+  it('round-trips every nasty value back out of a variant key', () => {
+    for (const v of ['10|W', 'a=b', 'x\\y', '\\', '|', '=', 'a|b=c\\d', 'plain 10']) {
+      const key = buildVariantKey({ size: v, width: 'D' });
+      const [sizePair, widthPair] = splitUnescaped(key, '|');
+      const [sizeName, sizeValue] = splitUnescaped(sizePair!, '=');
+      expect(unescapeSlot(sizeName!)).toBe('size');
+      expect(unescapeSlot(sizeValue!)).toBe(norm(v));
+      expect(unescapeSlot(widthPair!)).toBe('width=d');
+    }
+  });
+
+  it('round-trips every nasty value back out of a group key', () => {
+    for (const v of ['10|W', 'a=b', 'x\\y', '\\', '|', '=', 'a|b=c\\d', 'plain']) {
+      const parts = splitUnescaped(
+        buildGroupKey({ subcategoryKey: 'shoes', brand: v, model: 'M' }),
+        '|',
+      );
+      expect(parts).toHaveLength(5);
+      expect(unescapeSlot(parts[0]!)).toBe('shoes');
+      expect(unescapeSlot(parts[1]!)).toBe(norm(v));
+      expect(unescapeSlot(parts[2]!)).toBe('m');
+    }
+  });
+
+  it('is injective: distinct variant tuples NEVER share a key', () => {
+    const nasty = ['10|W', 'a=b', 'x\\y', '\\|', '', null, '10', 'W'];
+    const seen = new Map<string, string>();
+    for (const size of nasty) {
+      for (const width of nasty) {
+        for (const fit of nasty) {
+          const key = buildVariantKey({ size, width, fit });
+          // '' and null both mean ABSENT, so compare on the normalized tuple.
+          const canonical = JSON.stringify([norm(size), norm(width), norm(fit)]);
+          const prior = seen.get(key);
+          if (prior !== undefined) expect(prior).toBe(canonical);
+          seen.set(key, canonical);
+        }
+      }
+    }
+    // 8 values over 3 slots, minus the '' / null pairs that mean the same
+    // absent slot: 7^3 distinct tuples must yield 7^3 distinct keys.
+    expect(new Set(seen.values()).size).toBe(343);
+    expect(seen.size).toBe(343);
+  });
+
+  it('is injective: distinct group tuples NEVER share a key', () => {
+    const nasty = ['a|b', 'a', 'b', 'x=y', 'x\\y', '', null];
+    const seen = new Map<string, string>();
+    for (const team of nasty) {
+      for (const league of nasty) {
+        for (const season of nasty) {
+          const key = buildGroupKey({
+            subcategoryKey: 'jerseys',
+            team,
+            league,
+            season,
+          });
+          const canonical = JSON.stringify([norm(team), norm(league), norm(season)]);
+          const prior = seen.get(key);
+          if (prior !== undefined) expect(prior).toBe(canonical);
+          seen.set(key, canonical);
+        }
+      }
+    }
+    // 7 values, one of which ('' / null) duplicates: 6^3 distinct tuples.
+    expect(seen.size).toBe(216);
+  });
+
+  it('cannot forge the name-fallback key from a real attribute', () => {
+    const fallback = buildGroupKey({ subcategoryKey: 'balls', name: 'Practice Ball' });
+    expect(fallback).toBe('balls|name:practice ball');
+    // A brand that spells the fallback still lands in the brand slot.
+    expect(buildGroupKey({ subcategoryKey: 'balls', brand: 'name:practice ball' })).not.toBe(
+      fallback,
+    );
+    // A subcategory carrying a pipe cannot reach across into the name slot.
+    expect(buildGroupKey({ subcategoryKey: 'balls|name:x', name: 'y' })).not.toBe(
+      buildGroupKey({ subcategoryKey: 'balls', name: 'x|name:y' }),
+    );
+  });
+});
+
 describe('groupRollupLabel', () => {
   it('renders the counting unit as the requirements phrase it', () => {
     expect(groupRollupLabel(6, 52, 'pairs')).toBe('6 variants · 52 pairs total');

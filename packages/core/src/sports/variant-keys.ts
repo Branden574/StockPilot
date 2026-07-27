@@ -16,6 +16,43 @@ function norm(v: string | null | undefined): string {
 }
 
 /**
+ * Escape a single slot value so the join delimiters can never be forged.
+ *
+ * Both keys are built by joining user-supplied text with '|' (and '=' for the
+ * named variant slots). Without escaping, a value that CONTAINS a delimiter
+ * silently rewrites the key's structure:
+ *
+ *   buildVariantKey({ size: '10|width=w' })  ===  buildVariantKey({ size: '10', width: 'w' })
+ *   buildGroupKey({ ..., team: 'a|b' })      ===  buildGroupKey({ ..., team: 'a', league: 'b' })
+ *
+ * `product_groups.group_key` is UNIQUE per organization (migration 0298), so a
+ * forged collision does not error — it silently MERGES two distinct products
+ * into one group, and their stock with it. That is a data-integrity hole a
+ * spreadsheet import can trip by accident, not just an attacker.
+ *
+ * The escape is the classic three-step, and the ORDER matters: the escape
+ * character itself goes first, otherwise escaping '|' would produce a
+ * backslash that the next pass would escape again and corrupt the round trip.
+ *
+ *   \  ->  \\
+ *   |  ->  \|
+ *   =  ->  \=
+ *
+ * The mapping is injective, so distinct normalized tuples can never produce
+ * equal keys. Values containing none of the three characters — which is nearly
+ * every real brand, size and team — pass through byte-identical, so keys
+ * already written to the database stay stable.
+ */
+function esc(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/=/g, '\\=');
+}
+
+/** Normalize for matching, then escape for joining. Every slot goes through this. */
+function slot(v: string | null | undefined): string {
+  return esc(norm(v));
+}
+
+/**
  * Normalize a jersey/uniform number.
  *
  * Leading zeroes are MEANINGFUL and preserved: 0, 00, 07 and 7 are four
@@ -114,33 +151,38 @@ export interface GroupKeyParts {
  * collide on the same slot despite meaning different things.
  */
 export function buildGroupKey(parts: GroupKeyParts): string {
+  // The subcategory decides the SHAPE, so it is matched on the normalized
+  // value and only escaped on the way into the key.
   const sub = norm(parts.subcategoryKey);
   const slots: string[] =
     sub === 'jerseys' || sub === 'uniforms'
       ? [
-          norm(parts.team),
-          norm(parts.league),
-          norm(parts.season),
-          norm(parts.homeAway),
-          norm(parts.manufacturer),
-          norm(parts.brand),
-          norm(parts.styleNumber),
-          norm(parts.color),
+          slot(parts.team),
+          slot(parts.league),
+          slot(parts.season),
+          slot(parts.homeAway),
+          slot(parts.manufacturer),
+          slot(parts.brand),
+          slot(parts.styleNumber),
+          slot(parts.color),
         ]
       : [
-          norm(parts.brand),
-          norm(parts.model),
-          norm(parts.styleNumber),
-          norm(parts.colorway),
+          slot(parts.brand),
+          slot(parts.model),
+          slot(parts.styleNumber),
+          slot(parts.colorway),
         ];
 
   const identifying = slots.filter((s) => s.length > 0);
   if (identifying.length === 0) {
     // Nothing identifying at all — fall back to the name so a group can still
     // be created, but mark it so the import review can flag it as weak.
-    return `${sub}|name:${norm(parts.name)}`;
+    // The fallback carries 2 escaped fields where a real key carries 5 or 9,
+    // and no slot can contain an unescaped '|', so the two shapes are
+    // unambiguous and a name can never impersonate an attribute.
+    return `${esc(sub)}|name:${slot(parts.name)}`;
   }
-  return [sub, ...slots].join('|');
+  return [esc(sub), ...slots].join('|');
 }
 
 /** Attributes that identify a VARIANT within its group. */
@@ -157,12 +199,16 @@ export interface VariantKeyParts {
 
 /**
  * Build the variant identity key. Slots are NAMED so an absent width and an
- * absent fit cannot shift a value into the wrong position.
+ * absent fit cannot shift a value into the wrong position, and every value is
+ * escaped (see `esc`) so a value CONTAINING '|' or '=' cannot invent a slot.
+ *
+ * The slot names are fixed literals here and contain neither delimiter, so
+ * only the values need escaping.
  */
 export function buildVariantKey(parts: VariantKeyParts): string {
   const pairs: Array<[string, string]> = [];
   const push = (k: string, v: string | null | undefined) => {
-    const n = norm(v);
+    const n = slot(v);
     if (n.length > 0) pairs.push([k, n]);
   };
   // jersey_number FIRST so a numbered variant sorts and reads naturally.

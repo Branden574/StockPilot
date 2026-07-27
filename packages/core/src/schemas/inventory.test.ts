@@ -66,6 +66,16 @@ describe('createItemSchema — sports variant fields (Task 7)', () => {
     expect(parsed.trackingModeOverride).toBe('NUMBERED_VARIANT');
   });
 
+  it('STRIPS a client-supplied variantKey from a create payload', () => {
+    const parsed = createItemSchema.parse({
+      name: 'Nike Pegasus 41 — size 10',
+      variantSize: '10',
+      variantKey: 'size=9|system=us_mens',
+    });
+    expect('variantKey' in parsed).toBe(false);
+    expect(parsed.variantSize).toBe('10');
+  });
+
   it('rejects a trackingModeOverride outside the shared vocabulary', () => {
     expect(() =>
       createItemSchema.parse({ name: 'Falcons Home Jersey', trackingModeOverride: 'BOGUS_MODE' }),

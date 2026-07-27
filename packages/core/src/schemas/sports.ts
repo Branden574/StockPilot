@@ -1,10 +1,7 @@
 import { z } from 'zod';
 
 import { COUNTING_UNITS, TRACKING_MODES } from '../sports/tracking-modes';
-import { uuidSchema } from './common';
-
-const emptyToUndefined = (v: unknown) =>
-  typeof v === 'string' && v.trim().length === 0 ? undefined : v;
+import { emptyToUndefined, uuidSchema } from './common';
 
 /** 1-4 digits, digits only, leading zeroes preserved. Never an integer. */
 export const jerseyNumberSchema = z.preprocess(
@@ -31,7 +28,15 @@ export const sizeSystemSchema = z.preprocess(
 export const countingUnitSchema = z.enum(COUNTING_UNITS);
 export const trackingModeSchema = z.enum(TRACKING_MODES);
 
-/** The variant attributes an item may carry. Every one is optional. */
+/**
+ * The variant attributes an item may carry. Every one is optional.
+ *
+ * This is the CLIENT-ACCEPTED contract (web forms, Expo, /api/v1 bodies).
+ * `variantKey` is deliberately ABSENT: it is derived, not supplied. zod strips
+ * unknown keys, so a client that posts one has it dropped here rather than
+ * rejected — old builds keep working and the value simply never reaches a
+ * service. Use `serverVariantAttributesSchema` below on the write path.
+ */
 export const variantAttributesSchema = z.object({
   groupId: uuidSchema.nullable().optional(),
   variantSize: z.preprocess(emptyToUndefined, z.string().max(24).nullable().optional()),
@@ -42,9 +47,29 @@ export const variantAttributesSchema = z.object({
   variantColor: z.preprocess(emptyToUndefined, z.string().max(64).nullable().optional()),
   jerseyNumber: jerseyNumberSchema,
   playerName: z.preprocess(emptyToUndefined, z.string().max(120).nullable().optional()),
-  variantKey: z.preprocess(emptyToUndefined, z.string().max(240).nullable().optional()),
 });
 export type VariantAttributes = z.infer<typeof variantAttributesSchema>;
+
+/**
+ * SERVER-SIDE ONLY. The same attributes PLUS the computed `variantKey`.
+ *
+ * `variant_key` is the identity a variant is matched and de-duplicated on, so
+ * a caller that chooses its own value chooses which physical stock its item
+ * merges with. It must therefore always be DERIVED, never accepted:
+ *
+ *   Task 8+ (ProductGroupsService, PO-import matching, mobile parity) MUST
+ *   recompute it with buildVariantKey(...) from the parsed attributes
+ *   immediately before persisting, and MUST NEVER trust a client-supplied
+ *   value. Parse the request with `variantAttributesSchema` (which strips the
+ *   field), compute the key, then validate the row with this schema.
+ *
+ * The 240-char bound is a sanity cap on the derived string, not a contract
+ * with any client — the DB column is plain `text` (migration 0298).
+ */
+export const serverVariantAttributesSchema = variantAttributesSchema.extend({
+  variantKey: z.preprocess(emptyToUndefined, z.string().max(240).nullable().optional()),
+});
+export type ServerVariantAttributes = z.infer<typeof serverVariantAttributesSchema>;
 
 export const createProductGroupSchema = z.object({
   name: z.string().min(1).max(200).trim(),

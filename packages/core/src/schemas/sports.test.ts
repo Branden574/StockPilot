@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createProductGroupSchema,
   jerseyNumberSchema,
+  serverVariantAttributesSchema,
   sizeSystemSchema,
   variantAttributesSchema,
 } from './sports';
@@ -87,6 +88,45 @@ describe('variantAttributesSchema', () => {
 
   it('rejects an invalid jersey number rather than silently dropping it', () => {
     expect(() => variantAttributesSchema.parse({ jerseyNumber: 'ABC' })).toThrow();
+  });
+
+  it('STRIPS a client-supplied variantKey — the key is server-computed only', () => {
+    // A client that posts its own variant_key could steer two distinct
+    // variants onto one identity (or split one across two). The value is
+    // derived from the attributes by buildVariantKey on the server, so it is
+    // dropped here rather than merely ignored downstream.
+    const parsed = variantAttributesSchema.parse({
+      variantSize: '10',
+      variantKey: 'size=9|system=us_mens',
+    });
+    expect('variantKey' in parsed).toBe(false);
+    expect((parsed as Record<string, unknown>).variantKey).toBeUndefined();
+    expect(parsed.variantSize).toBe('10');
+  });
+
+  it('does not FAIL on a client-supplied variantKey — it is dropped, not rejected', () => {
+    // Older clients (and the mobile app between OTA releases) still send it.
+    expect(variantAttributesSchema.safeParse({ variantKey: 'anything' }).success).toBe(true);
+  });
+});
+
+describe('serverVariantAttributesSchema', () => {
+  it('is the ONLY shape that carries variantKey', () => {
+    const parsed = serverVariantAttributesSchema.parse({
+      variantSize: '10',
+      variantKey: 'size=10|system=us_mens',
+    });
+    expect(parsed.variantKey).toBe('size=10|system=us_mens');
+  });
+
+  it('accepts a null variantKey (a variant-less item)', () => {
+    expect(serverVariantAttributesSchema.parse({ variantKey: null }).variantKey).toBeNull();
+  });
+
+  it('still carries every client-side variant attribute', () => {
+    const parsed = serverVariantAttributesSchema.parse({ jerseyNumber: '07', playerName: 'J. S.' });
+    expect(parsed.jerseyNumber).toBe('07');
+    expect(parsed.playerName).toBe('J. S.');
   });
 });
 
