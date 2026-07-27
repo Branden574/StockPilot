@@ -150,7 +150,9 @@ const bulkCreateSizedSchema = z.object({
   unitCost: z.coerce.number().min(0),
   reorderPoint: z.coerce.number().int().min(0),
   reorderQuantity: z.coerce.number().int().min(0),
-  unitOfMeasure: z.string().min(1).max(40),
+  // Optional: omitted means "take the category's counting unit", the same
+  // contract createItemSchema now uses. An explicit value still wins.
+  unitOfMeasure: z.string().min(1).max(40).optional(),
   rackNumber: z.string().max(50).nullable().optional(),
   rackRow: z.string().max(10).nullable().optional(),
   // Per-org custom field values applied to every created variant. The service

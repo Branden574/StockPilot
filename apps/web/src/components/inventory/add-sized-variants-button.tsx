@@ -57,7 +57,8 @@ export interface AddSizedVariantsButtonProps {
     unitCost: number;
     reorderPoint: number;
     reorderQuantity: number;
-    unitOfMeasure: string;
+    /** Omit to let the server take the category's counting unit. */
+    unitOfMeasure?: string;
     /**
      * Item type of the source row. Drives post-submit routing so the
      * user lands back on the same tab they started on — books go to

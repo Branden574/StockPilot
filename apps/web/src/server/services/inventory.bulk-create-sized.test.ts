@@ -9,6 +9,11 @@ vi.mock('./context', () => ({
   },
   assertPermission: vi.fn(),
   assertPlanLimit: vi.fn(),
+  // The sized fan-out now stamps tracking_type from the category and gates it
+  // exactly as create() does, so the module assertion is on this path too. The
+  // dedicated gate tests live in inventory.sports-create.test.ts, which uses
+  // the real context module.
+  assertModuleEnabled: vi.fn(),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, readableIds: [] })),
@@ -379,6 +384,63 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect(row.variant_size).toBe('10');
     expect(row.variant_size_original).toBe('US 10');
     expect(row.variant_key).toBe('size=10|system=us_mens');
+  });
+
+  it("stamps tracking_type from the category instead of hardcoding 'none'", async () => {
+    // Review fix: this fan-out is the sized-apparel twin of create(), so a
+    // SERIALIZED (or OPTIONAL_SERIALIZED) category producing untracked rows
+    // here while create() produced tracked ones gave the same physical product
+    // two different receive-time contracts.
+    const stub = buildStub([], {
+      id: 'cat-1',
+      parent_id: null,
+      tracking_mode: 'OPTIONAL_SERIALIZED',
+      size_scale_id: null,
+      default_unit_of_measure: null,
+      sports_subcategory_key: 'shoes',
+      tracking_profile: null,
+      deleted_at: null,
+    });
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: '10', quantity: 1 }],
+    });
+
+    expect(stub.insertedItems[0]?.tracking_type).toBe('serial_optional');
+  });
+
+  it("still writes tracking_type 'none' for a category with no policy", async () => {
+    // Every category in every org today — the path is byte-identical.
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: 'M', quantity: 1 }],
+    });
+
+    expect(stub.insertedItems[0]?.tracking_type).toBe('none');
+  });
+
+  it("takes the category's counting unit when the caller omits unitOfMeasure", async () => {
+    const stub = buildStub([], {
+      id: 'cat-1',
+      parent_id: null,
+      tracking_mode: null,
+      size_scale_id: null,
+      default_unit_of_measure: null,
+      sports_subcategory_key: 'shoes',
+      tracking_profile: null,
+      deleted_at: null,
+    });
+    const svc = makeSvc(stub);
+
+    const { unitOfMeasure: _omitted, ...noUom } = BASE_INPUT;
+    await svc.bulkCreateSizedVariants({ ...noUom, variants: [{ size: '10', quantity: 1 }] });
+
+    expect(stub.insertedItems[0]?.unit_of_measure).toBe('pair');
   });
 
   it('rejects the same size listed twice instead of creating two identical variants', async () => {

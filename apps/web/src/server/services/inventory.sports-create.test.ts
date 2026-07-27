@@ -29,7 +29,9 @@ const BASE = {
   quantityOnHand: 0,
   reorderPoint: 0,
   reorderQuantity: 0,
-  unitOfMeasure: 'unit',
+  // `unitOfMeasure` is deliberately ABSENT: it is optional in createItemSchema
+  // now, and omitting it is the only way a caller says "take the category
+  // default". Tests that care pass one explicitly.
   trackingType: 'none' as const,
   itemType: 'product' as const,
   customFields: {},
@@ -47,6 +49,7 @@ function categoryRow(over: Record<string, unknown> = {}) {
     default_unit_of_measure: null,
     sports_subcategory_key: null,
     tracking_profile: null,
+    deleted_at: null,
     ...over,
   };
 }
@@ -345,5 +348,174 @@ describe('InventoryService.create — sports categories', () => {
       trackingModeOverride: 'QUANTITY',
     });
     expect(insertedRow(stub).tracking_type).toBe('none');
+  });
+
+  it('DOWNGRADES a caller-requested serial on a QUANTITY sports category', async () => {
+    // The category is the authority in BOTH directions. A shoes category an
+    // admin pinned to QUANTITY stamps 'none' even though the caller asked for
+    // 'serial' — so a receipt against this item must never demand serials.
+    // lot_serial is on only because the TOP gate still reads the caller's own
+    // trackingType (deliberately unchanged); the STAMP is what is under test.
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'shoes', tracking_mode: 'QUANTITY' }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory', 'sports', 'lot_serial']),
+    });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      trackingType: 'serial',
+      variantSize: '10',
+      variantSizeSystem: 'US_MENS',
+    });
+
+    expect(insertedRow(stub).tracking_type).toBe('none');
+  });
+
+  it('still stamps from an ARCHIVED category instead of trusting the caller', async () => {
+    // Review fix: a soft-deleted category used to read back as "no category",
+    // which handed the decision to input.trackingType.
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({
+          tracking_mode: 'SERIALIZED',
+          deleted_at: '2026-01-01T00:00:00Z',
+        }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: LOT_SERIAL_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1' });
+
+    expect(insertedRow(stub).tracking_type).toBe('serial');
+  });
+
+  it('REFUSES a category whose sports_subcategory_key resolves to nothing', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'not_a_subcategory' }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1' }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  it('reads each category ONCE across repeated creates on one service instance', async () => {
+    // po-imports builds one InventoryService and loops create() per line.
+    const stub = buildStub({ 'categories.select': { data: categoryRow(), error: null } });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.create({ ...BASE, categoryId: 'cat-1' });
+    await svc.create({ ...BASE, categoryId: 'cat-1' });
+    await svc.create({ ...BASE, categoryId: 'cat-1' });
+
+    expect(stub.fromCalls.filter((t) => t === 'categories')).toHaveLength(1);
+  });
+});
+
+describe('InventoryService.create — variant_key on a GROUPED row', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('computes variant_key for a grouped item under a NON-sports category', async () => {
+    // Review fix: `groupId` is accepted independently of the category, so a
+    // grouped row under a plain category used to land with variant_key = NULL —
+    // invisible to product_group_rollups (which counts DISTINCT variant_key)
+    // and to the import matcher, which then creates a second variant for the
+    // same physical size.
+    const stub = buildStub({ 'categories.select': { data: categoryRow(), error: null } });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      groupId: '11111111-1111-1111-1111-111111111111',
+      variantSize: 'M',
+      variantColor: 'Black',
+    });
+
+    const row = insertedRow(stub);
+    expect(row.group_id).toBe('11111111-1111-1111-1111-111111111111');
+    expect(row.variant_key).toBe('size=m|color=black');
+  });
+
+  it('computes variant_key for a grouped item with NO category at all', async () => {
+    const stub = buildStub();
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      groupId: '11111111-1111-1111-1111-111111111111',
+      variantSize: 'L',
+    });
+
+    expect(insertedRow(stub).variant_key).toBe('size=l');
+  });
+
+  it("keys a grouped row with no variant attributes as 'default', never NULL", async () => {
+    const stub = buildStub();
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      groupId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(insertedRow(stub).variant_key).toBe('default');
+  });
+
+  it('leaves variant_key NULL for an UNGROUPED non-sports row', async () => {
+    // The guard must not widen to every item that happens to carry a size.
+    const stub = buildStub({ 'categories.select': { data: categoryRow(), error: null } });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.create({ ...BASE, categoryId: 'cat-1', variantSize: 'M' });
+
+    expect(insertedRow(stub).variant_key).toBeNull();
+  });
+});
+
+describe('InventoryService.create — unit_of_measure precedence', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const shoesCategory = () => categoryRow({ sports_subcategory_key: 'shoes' });
+
+  it("takes the category's counting unit when the caller omits one", async () => {
+    const stub = buildStub({ 'categories.select': { data: shoesCategory(), error: null } });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      variantSize: '10',
+      variantSizeSystem: 'US_MENS',
+    });
+
+    expect(insertedRow(stub).unit_of_measure).toBe('pair');
+  });
+
+  it("lets an EXPLICIT 'unit' win over the category default", async () => {
+    // Review fix: 'unit' used to be read as "unset", so a charter sibling
+    // copied off a real 'unit' row silently became 'pair'.
+    const stub = buildStub({ 'categories.select': { data: shoesCategory(), error: null } });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      unitOfMeasure: 'unit',
+      variantSize: '10',
+      variantSizeSystem: 'US_MENS',
+    });
+
+    expect(insertedRow(stub).unit_of_measure).toBe('unit');
+  });
+
+  it("falls back to 'unit' with no category and no caller value", async () => {
+    const stub = buildStub();
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.create({ ...BASE });
+
+    expect(insertedRow(stub).unit_of_measure).toBe('unit');
   });
 });

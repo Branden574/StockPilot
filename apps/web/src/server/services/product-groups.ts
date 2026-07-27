@@ -153,6 +153,7 @@ export class ProductGroupsService {
 
   /** Exact key lookup. Returns null rather than throwing — callers branch on it. */
   async findByKey(groupKey: string): Promise<ProductGroupRow | null> {
+    assertModuleEnabled(this.ctx, 'sports');
     const { data, error } = await this.ctx.supabase
       .from('product_groups')
       .select(GROUP_COLUMNS)
@@ -327,10 +328,16 @@ export class ProductGroupsService {
 
   /** Derived roll-ups. Reads the view; never a stored total. */
   async rollups(groupIds: string[]): Promise<Map<string, GroupRollup>> {
+    assertModuleEnabled(this.ctx, 'sports');
     if (groupIds.length === 0) return new Map();
     const { data, error } = await this.ctx.supabase
       .from('product_group_rollups')
       .select('group_id, variant_count, total_quantity, counting_unit')
+      // The view is security_invoker, so RLS already scopes it — but every
+      // other read here carries the org filter and a defence-in-depth predicate
+      // costs nothing. It also keeps the query honest if the view is ever read
+      // through a service-role context, where RLS is not in play at all.
+      .eq('organization_id', this.ctx.organizationId)
       .in('group_id', groupIds);
     if (error) throw new ServiceError('internal_error', error.message);
     const out = new Map<string, GroupRollup>();
@@ -346,6 +353,7 @@ export class ProductGroupsService {
 
   /** The variants (inventory_items rows) under one group. */
   async variants(groupId: string): Promise<VariantRow[]> {
+    assertModuleEnabled(this.ctx, 'sports');
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .select(VARIANT_COLUMNS)
@@ -369,6 +377,7 @@ export class ProductGroupsService {
    * heuristic that would bake a wrong grouping into persistent identity.
    */
   async candidates(parts: GroupKeyParts): Promise<ProductGroupRow[]> {
+    assertModuleEnabled(this.ctx, 'sports');
     const q = () =>
       this.ctx.supabase
         .from('product_groups')

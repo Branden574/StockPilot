@@ -249,7 +249,10 @@ export function ItemForm({
       quantityOnHand: defaults?.quantityOnHand ?? 0,
       reorderPoint: defaults?.reorderPoint ?? 0,
       reorderQuantity: defaults?.reorderQuantity ?? 0,
-      unitOfMeasure: defaults?.unitOfMeasure ?? 'unit',
+      // Blank on a NEW item so the server can apply the category's counting
+      // unit (PAIR for shoes). Pre-filling 'unit' made every form submission
+      // an EXPLICIT 'unit', which now wins over the category default.
+      unitOfMeasure: defaults?.unitOfMeasure ?? '',
       binLocation: defaults?.binLocation ?? '',
       trackingType: defaults?.trackingType ?? 'none',
       shelfLifeDays: defaults?.shelfLifeDays ?? null,
@@ -619,7 +622,7 @@ export function ItemForm({
         unitCost: values.unitCost,
         reorderPoint: values.reorderPoint,
         reorderQuantity: values.reorderQuantity,
-        unitOfMeasure: values.unitOfMeasure,
+        unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
         // Per-org custom fields entered in the "Additional fields" section apply
         // to every variant. The service strips reserved keys + runs the
         // authoritative required-field gate, so this path no longer silently
@@ -1705,7 +1708,7 @@ export function ItemForm({
                 unitCost: Number(watch('unitCost') ?? 0),
                 reorderPoint: Number(watch('reorderPoint') ?? 0),
                 reorderQuantity: Number(watch('reorderQuantity') ?? 0),
-                unitOfMeasure: watch('unitOfMeasure') ?? 'unit',
+                unitOfMeasure: watch('unitOfMeasure')?.trim() || undefined,
                 itemType: (watch('itemType') ?? itemType) as
                   | 'product'
                   | 'book'

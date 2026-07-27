@@ -428,12 +428,13 @@ async function loadInventoryRows(
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryListRowsPayload> {
-  // v4: rows now EXCLUDE items awaiting first receipt (migration 0277)
-  // and the payload gained expectedCount — bumped so a stale v3 entry
-  // (flagged rows included, no count) can't serve for a TTL post-deploy.
-  // (v3: rows+placement split out of the bundled v2 payload.) One-time
+  // v5: the row shape gained the five variant columns (group_id, variant_size,
+  // variant_size_system, variant_key, jersey_number) — a stale v4 entry would
+  // serve rows missing them for a whole TTL after deploy.
+  // (v4: rows EXCLUDE items awaiting first receipt (0277) + expectedCount.
+  //  v3: rows+placement split out of the bundled v2 payload.) One-time
   // cold recompute per org — the */30 prewarm cron covers hot orgs.
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v4'], {
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v5'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });

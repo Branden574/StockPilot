@@ -45,7 +45,17 @@ export const createItemSchema = z
     quantityOnHand: numericQty.default(0),
     reorderPoint: numericQty.default(0),
     reorderQuantity: numericQty.default(0),
-    unitOfMeasure: z.string().max(32).default('unit'),
+    /**
+     * OPTIONAL, and deliberately NOT defaulted here. It used to carry
+     * `.default('unit')`, which made an omitted value indistinguishable from a
+     * caller that deliberately said 'unit' — so `InventoryService.create()` had
+     * to treat 'unit' as "unset" and a system path copying a real 'unit' off an
+     * existing row silently got the category's counting unit instead. Leaving
+     * it undefined is the ONLY honest signal for "caller expressed no
+     * preference"; the service applies the category default, and 'unit' when
+     * there is none.
+     */
+    unitOfMeasure: z.preprocess(emptyToUndefined, z.string().max(32).optional()),
     binLocation: z.string().max(64).nullable().optional(),
     /**
      * 'none' (default), 'lot', 'serial', or 'serial_optional'. Drives capture

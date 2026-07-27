@@ -261,6 +261,41 @@ describe('ProductGroupsService.rollups', () => {
     expect((await new ProductGroupsService(sportsCtx(stub.client)).rollups([])).size).toBe(0);
     expect(stub.fromCalls).toEqual([]);
   });
+
+  it('scopes the view read to this organization', async () => {
+    // The view is security_invoker so RLS already scopes it, but a service-role
+    // context has no RLS at all — every other read here carries the predicate.
+    const stub = makeSupabaseStub({
+      'product_group_rollups.select': { data: [], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).rollups(['grp-1']);
+
+    const args = stub.chainArgs.get('product_group_rollups.select') ?? [];
+    expect(args).toContainEqual(['organization_id', 'org-test']);
+  });
+});
+
+describe('ProductGroupsService — sports module gate on the READ paths', () => {
+  const NO_SPORTS = new Set<ModuleId>(['inventory']);
+
+  it('refuses findByKey / rollups / variants / candidates with the module off', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new ProductGroupsService(
+      makeServiceContext(stub.client, { enabledModules: NO_SPORTS }),
+    );
+
+    await expect(svc.findByKey('shoes|nike|pegasus 41||')).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+    await expect(svc.rollups(['grp-1'])).rejects.toMatchObject({ code: 'module_disabled' });
+    await expect(svc.variants('grp-1')).rejects.toMatchObject({ code: 'module_disabled' });
+    await expect(svc.candidates({ subcategoryKey: 'shoes', styleNumber: 'FD2722' })).rejects.toMatchObject(
+      { code: 'module_disabled' },
+    );
+    // Refused BEFORE any query — an entitlement check that still reads is not
+    // a gate, it is a filter.
+    expect(stub.fromCalls).toEqual([]);
+  });
 });
 
 describe('ProductGroupsService.update', () => {

@@ -27,6 +27,7 @@ function categoryRow(over: Record<string, unknown> = {}) {
     default_unit_of_measure: null,
     sports_subcategory_key: null,
     tracking_profile: null,
+    deleted_at: null,
     ...over,
   };
 }
@@ -190,6 +191,109 @@ describe('resolveTrackingProfile', () => {
     expect(resolved.trackingType).toBe('none');
     expect(resolved.isSports).toBe(false);
     expect(resolved.categoryId).toBe('cat-gone');
+  });
+
+  it('resolves an ARCHIVED category exactly like a live one', async () => {
+    // Review fix: a soft-deleted row used to be indistinguishable from a bad
+    // id, so it fell through to the non-sports default and let the CALLER's
+    // trackingType decide — archiving a SERIALIZED category was a way out of
+    // serial tracking. Reachable from the po-imports charter-sibling path,
+    // which re-creates with `categoryId: existing.category_id`.
+    const stub = makeSupabaseStub({
+      'categories.select': {
+        data: [categoryRow({ tracking_mode: 'SERIALIZED', deleted_at: '2026-01-01T00:00:00Z' })],
+        error: null,
+      },
+    });
+    const resolved = await resolveTrackingProfile(makeServiceContext(stub.client), 'cat-1');
+
+    expect(resolved.mode).toBe('SERIALIZED');
+    expect(resolved.trackingType).toBe('serial');
+    expect(resolved.modeIsExplicit).toBe(true);
+    // …and the read must not filter the row out in the first place.
+    expect(stub.chains.get('categories.select')).not.toContain('is');
+  });
+
+  it('REFUSES a sports_subcategory_key that resolves to no profile', async () => {
+    // `categories.sports_subcategory_key` carries no CHECK constraint (0294),
+    // so a typo used to resolve isSports:false and silently drop every sports
+    // rule the category was configured for.
+    const stub = makeSupabaseStub({
+      'categories.select': {
+        data: [categoryRow({ sports_subcategory_key: 'shooes' })],
+        error: null,
+      },
+    });
+    try {
+      await resolveTrackingProfile(makeServiceContext(stub.client), 'cat-1');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as { code: string }).code).toBe('validation_error');
+      expect((e as { details?: { code?: string } }).details?.code).toBe(
+        'SPORTS_SUBCATEGORY_REQUIRED',
+      );
+    }
+  });
+
+  it('accepts an unknown key when the category carries the full jsonb profile', async () => {
+    // A CUSTOM subcategory is legal — it just has to define itself.
+    const stub = makeSupabaseStub({
+      'categories.select': {
+        data: [
+          categoryRow({
+            sports_subcategory_key: 'custom_singlets',
+            tracking_profile: {
+              ...DEFAULT_SUBCATEGORY_PROFILES.jerseys,
+              key: 'custom_singlets',
+              label: 'Singlets',
+            },
+          }),
+        ],
+        error: null,
+      },
+    });
+    const resolved = await resolveTrackingProfile(makeServiceContext(stub.client), 'cat-1');
+    expect(resolved.isSports).toBe(true);
+    expect(resolved.subcategoryKey).toBe('custom_singlets');
+  });
+
+  it('MEMOIZES a repeated category id and never re-reads it', async () => {
+    // po-imports loops create() per line; each line used to pay 1-2 category
+    // reads for the same handful of ids.
+    const stub = makeSupabaseStub({
+      'categories.select': { data: [categoryRow({ tracking_mode: 'SERIALIZED' })], error: null },
+    });
+    const ctx = makeServiceContext(stub.client);
+    const cache = new Map();
+
+    const first = await resolveTrackingProfile(ctx, 'cat-1', cache);
+    const second = await resolveTrackingProfile(ctx, 'cat-1', cache);
+    const third = await resolveTrackingProfile(ctx, 'cat-2', cache);
+
+    expect(second).toBe(first);
+    expect(third).not.toBe(first);
+    // Two distinct ids → exactly two reads, not three.
+    expect(stub.fromCalls.filter((t) => t === 'categories')).toHaveLength(2);
+  });
+
+  it('never memoizes a read error', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'categories.select': () => {
+        call += 1;
+        return call === 1
+          ? { data: null, error: { message: 'connection reset' } }
+          : { data: [categoryRow({ tracking_mode: 'SERIALIZED' })], error: null };
+      },
+    });
+    const ctx = makeServiceContext(stub.client);
+    const cache = new Map();
+
+    await expect(resolveTrackingProfile(ctx, 'cat-1', cache)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    // A retry inside the same request must reach the DB again.
+    expect((await resolveTrackingProfile(ctx, 'cat-1', cache)).trackingType).toBe('serial');
   });
 });
 

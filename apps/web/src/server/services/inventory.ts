@@ -46,6 +46,7 @@ import {
   assertVariantAttributesValid,
   resolveModeOverride,
   resolveTrackingProfile,
+  type TrackingProfileCache,
 } from './sports-profiles';
 import { LocationsService } from './locations';
 import { TagsService } from './tags';
@@ -413,6 +414,16 @@ export type PlaceDest = {
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
+
+  /**
+   * Per-INSTANCE memo for `resolveTrackingProfile`. A service instance is built
+   * per request (`forCurrentUser()`), and `po-imports` deliberately builds ONE
+   * and loops `create()` over every import line — without this each line paid
+   * one or two `categories` reads for the same handful of category ids. A
+   * category's tracking policy cannot change inside a request, so a hit is
+   * always sound. Never share an instance across requests.
+   */
+  private readonly trackingProfiles: TrackingProfileCache = new Map();
 
   static async forCurrentUser() {
     return new InventoryService(await withContext());
@@ -1437,7 +1448,7 @@ export class InventoryService {
     // 'unit' with `modeIsExplicit: false`, and the whole block below is inert.
     const profile = resolveModeOverride(
       this.ctx,
-      await resolveTrackingProfile(this.ctx, input.categoryId ?? null),
+      await resolveTrackingProfile(this.ctx, input.categoryId ?? null, this.trackingProfiles),
       input.trackingModeOverride,
     );
     assertVariantAttributesValid(profile.profile, input);
@@ -1447,12 +1458,6 @@ export class InventoryService {
     // says. RLS already pins the group to this org (product_group_in_org, 0298)
     // but says nothing about the module, so gate it here too.
     if (resolvedGroupId) assertModuleEnabled(this.ctx, 'sports');
-    // variant_key is SERVER-COMPUTED identity, ALWAYS. `createItemSchema` does
-    // not even carry the field (zod strips a client-supplied one), and it is
-    // rebuilt here from the parsed attributes: the key decides which physical
-    // stock an item merges with, so a caller choosing its own would be choosing
-    // that merge.
-    let resolvedVariantKey: string | null = null;
     if (profile.isSports) {
       assertModuleEnabled(this.ctx, 'sports');
       if (!resolvedGroupId && input.productGroup) {
@@ -1466,15 +1471,32 @@ export class InventoryService {
         });
         resolvedGroupId = group.id;
       }
-      resolvedVariantKey = buildVariantKey({
-        size: input.variantSize,
-        sizeSystem: input.variantSizeSystem,
-        width: input.variantWidth,
-        fit: input.variantFit,
-        color: input.variantColor,
-        jerseyNumber: input.jerseyNumber,
-      });
     }
+
+    // variant_key is SERVER-COMPUTED identity, ALWAYS. `createItemSchema` does
+    // not even carry the field (zod strips a client-supplied one), and it is
+    // rebuilt here from the parsed attributes: the key decides which physical
+    // stock an item merges with, so a caller choosing its own would be choosing
+    // that merge.
+    //
+    // Computed whenever the row is SPORTS **or GROUPED** (review fix). It used
+    // to be sports-only, but `groupId` is accepted independently of the
+    // category: a caller could attach a variant to a group under a non-sports,
+    // unresolvable or archived category and land a grouped row with
+    // `variant_key = NULL`. That row is invisible to `product_group_rollups`
+    // (which counts DISTINCT variant_key) and to the import matcher, so the
+    // next import would create a second variant for the same physical size.
+    const resolvedVariantKey =
+      profile.isSports || resolvedGroupId
+        ? buildVariantKey({
+            size: input.variantSize,
+            sizeSystem: input.variantSizeSystem,
+            width: input.variantWidth,
+            fit: input.variantFit,
+            color: input.variantColor,
+            jerseyNumber: input.jerseyNumber,
+          })
+        : null;
 
     // The category mode STAMPS tracking_type. An explicit `input.trackingType`
     // still wins wherever the category expresses no policy, so every existing
@@ -1555,12 +1577,14 @@ export class InventoryService {
         quantity_on_hand: input.quantityOnHand,
         reorder_point: input.reorderPoint,
         reorder_quantity: input.reorderQuantity,
-        // Counting unit: an explicit input wins; otherwise the category default
-        // (PAIR for shoes). DISPLAY convention only — there is no conversion
-        // anywhere, and 'unit' is both the schema default and the category
-        // fallback, so a category with no default is byte-identical to before.
-        unit_of_measure:
-          input.unitOfMeasure !== 'unit' ? input.unitOfMeasure : profile.countingUnit,
+        // Counting unit: an EXPLICIT input always wins, including an explicit
+        // 'unit'; the category default (PAIR for shoes) applies only when the
+        // caller omitted the field entirely. The old spelling compared against
+        // 'unit' as a stand-in for "unset", which quietly re-wrote a sibling
+        // copied off a real 'unit' row. DISPLAY convention only — there is no
+        // conversion anywhere, and `profile.countingUnit` falls back to 'unit',
+        // so a category with no default is byte-identical to before.
+        unit_of_measure: input.unitOfMeasure ?? profile.countingUnit,
         bin_location: input.binLocation ?? null,
         tracking_type: stampedTrackingType,
         group_id: resolvedGroupId,
@@ -1880,7 +1904,9 @@ export class InventoryService {
     unitCost: number;
     reorderPoint: number;
     reorderQuantity: number;
-    unitOfMeasure: string;
+    /** Omit to take the category's counting unit (PAIR for shoes); an explicit
+     *  value — including 'unit' — always wins. Mirrors create(). */
+    unitOfMeasure?: string;
     /** Structured rack stamp written to every variant's custom_fields.rack_number/rack_row. */
     rackNumber?: string | null;
     rackRow?: string | null;
@@ -1918,8 +1944,33 @@ export class InventoryService {
     // which sizes are legal at all. With no scale configured — every category
     // in every org today — any non-empty size is accepted and the behaviour is
     // unchanged apart from the nine-letter cap being gone.
-    const profile = await resolveTrackingProfile(this.ctx, input.categoryId);
+    const profile = await resolveTrackingProfile(
+      this.ctx,
+      input.categoryId,
+      this.trackingProfiles,
+    );
     const { sizeSystem, allowedSizes } = await this.loadSizeScale(profile.sizeScaleId);
+
+    // The category STAMPS tracking_type here exactly as it does in create().
+    // This fan-out is sports-only sized apparel, so hardcoding 'none' meant a
+    // SERIALIZED (or OPTIONAL_SERIALIZED) category produced untracked rows
+    // through this path and tracked ones through create() — the same physical
+    // product with two different receive-time contracts. There is no caller
+    // trackingType on this path at all, so 'none' remains the answer for every
+    // category that expresses no policy: unchanged for every org today.
+    const stampedTrackingType =
+      profile.isSports || profile.modeIsExplicit ? profile.trackingType : 'none';
+    if (profile.isSports) assertModuleEnabled(this.ctx, 'sports');
+    if (stampedTrackingType !== 'none') {
+      // Same handoff as create(): a sports subcategory's serial modes are
+      // granted by the `sports` module (asserted just above); everything else
+      // — 'lot' anywhere, a serial mode from a non-sports category — is still
+      // lot_serial's.
+      const grantedBySports =
+        profile.isSports &&
+        (stampedTrackingType === 'serial' || stampedTrackingType === 'serial_optional');
+      if (!grantedBySports) assertModuleEnabled(this.ctx, 'lot_serial');
+    }
 
     const resolvedGroupId = input.groupId ?? null;
     if (resolvedGroupId) {
@@ -2069,10 +2120,12 @@ export class InventoryService {
       reorder_point: input.reorderPoint,
       reorder_quantity: input.reorderQuantity,
       quantity_on_hand: v.quantity,
-      unit_of_measure: input.unitOfMeasure,
+      // Explicit caller value wins; the category default fills an omission.
+      // Same rule as create() so the two create paths cannot disagree.
+      unit_of_measure: input.unitOfMeasure ?? profile.countingUnit,
       item_type: 'product',
       status: 'active',
-      tracking_type: 'none',
+      tracking_type: stampedTrackingType,
       // First-class variant columns (0298). custom_fields.size is STILL
       // written above: the legacy size readers (display heuristics, the
       // existing filters) have not moved yet, and Task 19 owns the dual-write

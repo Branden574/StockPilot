@@ -1002,7 +1002,8 @@ describe('sub-loader cache wiring', () => {
     // Pin the version keys: a rename here silently orphans warm entries
     // (one-time cold recompute) — bump deliberately, never accidentally.
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
-      'inventory-list-v4',
+      // v5 = the row shape gained the five sports variant columns.
+      'inventory-list-v5',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
