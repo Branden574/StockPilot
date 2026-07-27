@@ -128,6 +128,68 @@ export type CreateItemInput = z.infer<typeof createItemSchema>;
 export const updateItemSchema = createItemSchema.partial();
 export type UpdateItemInput = z.infer<typeof updateItemSchema>;
 
+/**
+ * The sized-variant fan-out REQUEST. Shared, deliberately, by every surface:
+ * the web form's `bulkCreateSizedVariantsAction`, `POST /api/v1/items/
+ * sized-variants` (the native seam), and Expo's `app/item/new.tsx`.
+ *
+ * It moved here from `apps/web/src/server/actions/inventory.ts` as part of the
+ * Task 10 parity fix. Mobile used to run its OWN fan-out against raw
+ * PostgREST: its own nine-letter apparel list (so a shoe run was unexpressible),
+ * no upper bound on the number of rows a single tap could insert, no size-scale
+ * check, no plan-limit check and no custom-field validation. There is now ONE
+ * implementation of the fan-out — `InventoryService.bulkCreateSizedVariants` —
+ * and every client only describes the request with this schema.
+ *
+ * Note what is NOT here: `variantKey`, `variantSizeSystem`, the per-variant
+ * name and the per-variant SKU. All four are DERIVED server-side (the size
+ * system comes from the category's size scale, migration 0294), because a
+ * client that picks them picks which physical stock its rows merge with.
+ */
+export const bulkCreateSizedVariantsSchema = z.object({
+  baseName: z.string().min(1).max(200),
+  baseSku: z.string().max(120).nullable(),
+  baseBarcode: z.string().max(120).nullable(),
+  description: z.string().max(2000).nullable(),
+  categoryId: uuidSchema,
+  supplierId: uuidSchema.nullable(),
+  warehouseId: uuidSchema,
+  charterId: uuidSchema.nullable(),
+  primaryLocationId: uuidSchema.nullable(),
+  binLocation: z.string().max(120).nullable(),
+  retailPrice: z.coerce.number().min(0),
+  unitCost: z.coerce.number().min(0),
+  reorderPoint: z.coerce.number().int().min(0),
+  reorderQuantity: z.coerce.number().int().min(0),
+  // Optional: omitted means "take the category's counting unit", the same
+  // contract createItemSchema uses. An explicit value still wins.
+  unitOfMeasure: z.string().min(1).max(40).optional(),
+  rackNumber: z.string().max(50).nullable().optional(),
+  rackRow: z.string().max(10).nullable().optional(),
+  // Per-org custom field values applied to every created variant. The service
+  // strips reserved keys and runs the authoritative validator
+  // (assertCustomFieldsValid).
+  customFields: z.record(z.string(), z.unknown()).nullable().optional(),
+  // The product group these variants belong to. Optional; NULL keeps the run
+  // ungrouped, which is exactly the pre-sports behaviour.
+  groupId: uuidSchema.nullable().optional(),
+  variants: z
+    .array(
+      z.object({
+        // Free text, validated server-side against the category's size scale.
+        // It was a nine-value enum, which could not express a shoe run at all.
+        // 24 is the inventory_items_variant_size_check bound (0298).
+        size: z.string().min(1).max(24),
+        quantity: z.coerce.number().int().min(0),
+      }),
+    )
+    .min(1)
+    // Was .max(7), which silently rejected valid input: the form already
+    // offered NINE apparel sizes, and a shoe run is routinely 20+.
+    .max(60),
+});
+export type BulkCreateSizedVariantsInput = z.infer<typeof bulkCreateSizedVariantsSchema>;
+
 export const adjustStockSchema = z.object({
   itemId: uuidSchema,
   // Caps deliberately wide enough for realistic restocks (a pallet of

@@ -11,6 +11,7 @@ import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   adjustStockSchema,
+  bulkCreateSizedVariantsSchema,
   createItemSchema,
   err,
   ok,
@@ -135,52 +136,16 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
   }
 }
 
-const bulkCreateSizedSchema = z.object({
-  baseName: z.string().min(1).max(200),
-  baseSku: z.string().max(120).nullable(),
-  baseBarcode: z.string().max(120).nullable(),
-  description: z.string().max(2000).nullable(),
-  categoryId: z.string().uuid(),
-  supplierId: z.string().uuid().nullable(),
-  warehouseId: z.string().uuid(),
-  charterId: z.string().uuid().nullable(),
-  primaryLocationId: z.string().uuid().nullable(),
-  binLocation: z.string().max(120).nullable(),
-  retailPrice: z.coerce.number().min(0),
-  unitCost: z.coerce.number().min(0),
-  reorderPoint: z.coerce.number().int().min(0),
-  reorderQuantity: z.coerce.number().int().min(0),
-  // Optional: omitted means "take the category's counting unit", the same
-  // contract createItemSchema now uses. An explicit value still wins.
-  unitOfMeasure: z.string().min(1).max(40).optional(),
-  rackNumber: z.string().max(50).nullable().optional(),
-  rackRow: z.string().max(10).nullable().optional(),
-  // Per-org custom field values applied to every created variant. The service
-  // strips reserved keys and runs the authoritative validator (assertCustomFieldsValid).
-  customFields: z.record(z.string(), z.unknown()).nullable().optional(),
-  // The product group these variants belong to. Optional; NULL keeps the run
-  // ungrouped, which is exactly the pre-sports behaviour.
-  groupId: z.string().uuid().nullable().optional(),
-  variants: z
-    .array(
-      z.object({
-        // Free text, validated server-side against the category's size scale.
-        // It was a nine-value enum, which could not express a shoe run at all.
-        // 24 is the inventory_items_variant_size_check bound (0298).
-        size: z.string().min(1).max(24),
-        quantity: z.coerce.number().int().min(0),
-      }),
-    )
-    .min(1)
-    // Was .max(7), which silently rejected valid input: the form already
-    // offered NINE apparel sizes, and a shoe run is routinely 20+.
-    .max(60),
-});
-
+/**
+ * The request shape moved to `@stockpilot/core` (Task 10). It is no longer a
+ * web-only contract: `POST /api/v1/items/sized-variants` and Expo's Add Item
+ * screen parse the SAME object, so a size run valid on one surface is valid on
+ * every surface. Nothing about this action's behaviour changed.
+ */
 export async function bulkCreateSizedVariantsAction(
-  input: z.input<typeof bulkCreateSizedSchema>,
+  input: z.input<typeof bulkCreateSizedVariantsSchema>,
 ): Promise<ActionResult<{ created: number; ids: string[] }>> {
-  const parsed = bulkCreateSizedSchema.safeParse(input);
+  const parsed = bulkCreateSizedVariantsSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }

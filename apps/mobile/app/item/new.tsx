@@ -16,13 +16,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { normalizeRackFields } from '@stockpilot/core';
-
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import { resizeForUpload } from '@/lib/image-resize';
+import {
+  buildCreateItemInput,
+  buildSizedVariantsInput,
+  collectSizedVariants,
+  describeFailure,
+  sizeOptionsFromScale,
+  submitCreateItem,
+  submitSizedVariants,
+  type ItemFormState,
+} from '@/lib/item-create';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -206,6 +214,14 @@ const photoStyles = StyleSheet.create({
  *
  * For books, rack number/row write to custom_fields.book_rack_* (the
  * web app keys); for products they write to custom_fields.rack_*.
+ *
+ * THIS SCREEN HOLDS NO CREATION RULES. It collects strings, hands them to
+ * src/lib/item-create.ts (which parses them with the SAME zod the web uses),
+ * and POSTs to the Bearer API. It previously built raw PostgREST inserts and
+ * ran its own sized fan-out with a hardcoded nine-letter size list, which
+ * silently skipped every length cap, numeric bound, permission check, plan
+ * limit, custom-field rule, audit event and bin_location stamp the web
+ * enforces. See the module doc in src/lib/item-create.ts.
  */
 export default function NewItem() {
   const router = useRouter();
@@ -227,7 +243,7 @@ export default function NewItem() {
 
   // Classification + location lookups
   const [categories, setCategories] = React.useState<
-    Array<{ id: string; name: string; supports_sizes: boolean }>
+    Array<{ id: string; name: string; supports_sizes: boolean; size_scale_id: string | null }>
   >([]);
   const [suppliers, setSuppliers] = React.useState<Array<{ id: string; name: string }>>([]);
   const [locations, setLocations] = React.useState<Array<{ id: string; name: string }>>([]);
@@ -248,17 +264,20 @@ export default function NewItem() {
   const [onHand, setOnHand] = React.useState('0');
   const [reorderPoint, setReorderPoint] = React.useState('');
   const [reorderQuantity, setReorderQuantity] = React.useState('');
-  const [unitOfMeasure, setUnitOfMeasure] = React.useState('unit');
+  // Left BLANK, not 'unit'. An empty box is the only honest way to say "no
+  // preference", and the server then stamps the category's counting unit
+  // (PAIR for a shoe category). Sending a literal 'unit' would overrule it.
+  const [unitOfMeasure, setUnitOfMeasure] = React.useState('');
 
   // Size variants — only meaningful when the selected category has
-  // supports_sizes = true (e.g. "Swag" / shirts). Mirrors the web
-  // form's per-size quantity matrix and writes one inventory_items
-  // row per chosen size on save.
-  const ALL_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'] as const;
-  type SizeCode = (typeof ALL_SIZES)[number];
-  const [sizeQty, setSizeQty] = React.useState<Record<SizeCode, string>>({
-    XS: '', S: '', M: '', L: '', XL: '', XXL: '', XXXL: '', XXXXL: '', XXXXXL: '',
-  });
+  // supports_sizes = true (e.g. "Swag" / shirts). The size VOCABULARY comes
+  // from the category's size scale (migration 0294), never from a list in this
+  // file: the nine apparel letters that used to live here could not express a
+  // shoe run ('9', '9.5', '10'...) at all, and were one of five copies of the
+  // same list that had already drifted apart.
+  const [sizeOptions, setSizeOptions] = React.useState<string[]>([]);
+  const [sizesLoading, setSizesLoading] = React.useState(false);
+  const [sizeQty, setSizeQty] = React.useState<Record<string, string>>({});
 
   // Photos staged in-memory. Each entry holds the local URI + extension;
   // they upload after the inventory_items row is created (the storage
@@ -272,19 +291,54 @@ export default function NewItem() {
     [categories, categoryId],
   );
   const sizesEnabled = !isBook && (selectedCategory?.supports_sizes ?? false);
+  // The size run needs an actual vocabulary. When a sized category resolves no
+  // scale at all, the screen degrades to a normal single-item create (with the
+  // ON HAND box back) instead of stranding the user on a Create button that can
+  // only ever say "pick a size".
+  const variantsEnabled = sizesEnabled && sizeOptions.length > 0;
+
+  /**
+   * The category list, with each category's size scale when the database has
+   * one.
+   *
+   * `categories.size_scale_id` arrives with migration 0294. Asking for it
+   * against an environment that has not applied 0294 yet does NOT return the
+   * other columns — PostgREST rejects the whole select with "column does not
+   * exist", so the category picker would come back EMPTY. A missing size scale
+   * must only cost the size chips, never the picker, so the widened read falls
+   * back to the narrow one this screen has always used.
+   */
+  const loadCategories = React.useCallback(async (org: string) => {
+    type Row = {
+      id: string;
+      name: string;
+      supports_sizes: boolean | null;
+      size_scale_id?: string | null;
+    };
+    const run = (columns: string) =>
+      supabase
+        .from('categories')
+        .select(columns)
+        .eq('organization_id', org)
+        .is('deleted_at', null)
+        .order('name', { ascending: true });
+    let resp = await run('id, name, supports_sizes, size_scale_id');
+    if (resp.error) resp = await run('id, name, supports_sizes');
+    return ((resp.data ?? []) as unknown as Row[]).map((r) => ({
+      id: r.id,
+      name: r.name,
+      supports_sizes: !!r.supports_sizes,
+      size_scale_id: r.size_scale_id ?? null,
+    }));
+  }, []);
 
   React.useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
     void (async () => {
-      const [whs, catsResp, supsResp, locsResp, chtsResp] = await Promise.all([
+      const [whs, cats, supsResp, locsResp, chtsResp] = await Promise.all([
         listWarehouses(),
-        supabase
-          .from('categories')
-          .select('id, name, supports_sizes')
-          .eq('organization_id', orgId)
-          .is('deleted_at', null)
-          .order('name', { ascending: true }),
+        loadCategories(orgId),
         supabase
           .from('suppliers')
           .select('id, name')
@@ -309,11 +363,7 @@ export default function NewItem() {
       if (cancelled) return;
       setWarehouses(whs);
       if (whs.length > 0) setWarehouseId(whs[0]?.id ?? null);
-      setCategories(
-        ((catsResp.data ?? []) as Array<{ id: string; name: string; supports_sizes: boolean | null }>).map(
-          (r) => ({ id: r.id, name: r.name, supports_sizes: !!r.supports_sizes }),
-        ),
-      );
+      setCategories(cats);
       setSuppliers((supsResp.data ?? []) as Array<{ id: string; name: string }>);
       setLocations((locsResp.data ?? []) as Array<{ id: string; name: string }>);
       setCharters((chtsResp.data ?? []) as Array<{ id: string; name: string }>);
@@ -321,7 +371,61 @@ export default function NewItem() {
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, loadCategories]);
+
+  // Load the selected category's size vocabulary. A category that carries its
+  // own scale (a shoe category -> US Men's, halves included) uses it; one that
+  // only has supports_sizes falls back to the BUILT-IN apparel_alpha system
+  // scale seeded by migration 0294 — read from the database, so there is still
+  // no size list in this file. Both are ordered by the scale's sort_order:
+  // sizes are ordered, never alphabetical.
+  React.useEffect(() => {
+    setSizeQty({});
+    if (!sizesEnabled) {
+      setSizeOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setSizesLoading(true);
+    void (async () => {
+      try {
+        let scaleId = selectedCategory?.size_scale_id ?? null;
+        if (!scaleId) {
+          const { data: fallback } = await supabase
+            .from('size_scales')
+            .select('id')
+            .is('organization_id', null)
+            .eq('key', 'apparel_alpha')
+            .maybeSingle();
+          scaleId = (fallback as { id: string } | null)?.id ?? null;
+        }
+        if (!scaleId) {
+          if (!cancelled) setSizeOptions([]);
+          return;
+        }
+        const { data } = await supabase
+          .from('size_scale_values')
+          .select('value, sort_order')
+          .eq('size_scale_id', scaleId)
+          .order('sort_order', { ascending: true });
+        if (cancelled) return;
+        setSizeOptions(
+          sizeOptionsFromScale(
+            (data ?? []) as Array<{ value: string; sort_order: number }>,
+          ),
+        );
+      } catch {
+        // A missing scale is not an error the user can act on — fall through to
+        // the plain single-item create rather than blocking the screen.
+        if (!cancelled) setSizeOptions([]);
+      } finally {
+        if (!cancelled) setSizesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sizesEnabled, selectedCategory?.size_scale_id]);
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -373,172 +477,87 @@ export default function NewItem() {
     }
   }
 
+  /** The screen's raw strings, exactly as typed. No rules, no coercion. */
+  function currentForm(): ItemFormState {
+    return {
+      name,
+      sku,
+      barcode,
+      modelNumber,
+      description,
+      categoryId,
+      supplierId,
+      primaryLocationId,
+      warehouseId,
+      charterId,
+      rackNumber,
+      rackRow,
+      unitCost,
+      retailPrice,
+      onHand,
+      reorderPoint,
+      reorderQuantity,
+      unitOfMeasure,
+      itemType,
+      customFields: {},
+    };
+  }
+
   async function save() {
     if (busy) return;
     if (!user || !orgId) {
       Alert.alert('Not signed in', 'Sign in again to add inventory.');
       return;
     }
-    if (!name.trim()) {
-      Alert.alert(
-        isBook ? 'Title required' : 'Name required',
-        'Type a name before saving.',
-      );
-      return;
-    }
-    if (!sku.trim()) {
-      Alert.alert('SKU required', 'Tap Suggest to generate one, or type your own.');
-      return;
-    }
-    // DECOMPOSE the rack fields through the ONE shared parser (web parity).
-    // A picker typing the whole shelf label "22-B" into the number box gets
-    // ("22","B") stored, not the composite that made items invisible to their
-    // own rack filter on 2026-07-23.
-    const rack = normalizeRackFields({ number: rackNumber, row: rackRow });
-    const rackNum = rack.number;
-    const rackRowValue = rackNum ? (rack.row ?? '').toUpperCase() : '';
-    const cf: Record<string, unknown> = {};
-    if (isBook) {
-      if (modelNumber.trim()) cf.author = modelNumber.trim();
-      if (rackNum) cf.book_rack_number = rackNum;
-      if (rackRowValue) cf.book_rack_row = rackRowValue;
-    } else {
-      if (rackNum) cf.rack_number = rackNum;
-      if (rackRowValue) cf.rack_row = rackRowValue;
-    }
 
+    const form = currentForm();
     setBusy(true);
     try {
-      if (sizesEnabled) {
-        // Multi-variant create: build one row per size with qty > 0,
-        // suffix SKU + name with the size code, and stamp size into
-        // custom_fields. Matches `bulkCreateSizedVariants` on the web.
-        const variants = ALL_SIZES
-          .map((sz) => ({ sz, qty: Math.max(0, Number(sizeQty[sz]) || 0) }))
-          .filter((v) => v.qty > 0);
+      // ── Sized run ────────────────────────────────────────────────────────
+      // ONE request. The fan-out itself — the per-variant name, the SKU
+      // suffix, the size-scale check, the normalized size, variant_key, the
+      // tracking-type stamp, the plan limit, the initial stock movements and
+      // the audit rows — is InventoryService.bulkCreateSizedVariants'. This
+      // screen only says which sizes and how many of each.
+      if (variantsEnabled) {
+        const variants = collectSizedVariants(sizeOptions, sizeQty);
         if (variants.length === 0) {
+          // Guidance, not a rule: the shared schema refuses an empty run too
+          // (variants.min(1)), this just says it in words a picker can act on.
           Alert.alert(
             'Pick at least one size',
             'Set a quantity on at least one size, or change the category.',
           );
-          setBusy(false);
           return;
         }
-        const base = sku.trim();
-        const rows = variants.map((v) => ({
-          organization_id: orgId,
-          sku: `${base}-${v.sz}`,
-          name: `${name.trim()} - ${v.sz}`,
-          barcode: barcode.trim() || null,
-          description: description.trim() || null,
-          item_type: 'product',
-          custom_fields: { ...cf, size: v.sz },
-          category_id: categoryId,
-          supplier_id: supplierId,
-          primary_location_id: primaryLocationId,
-          warehouse_id: warehouseId,
-          charter_id: charterId,
-          unit_cost: unitCost ? Number(unitCost) : 0,
-          retail_price: retailPrice ? Number(retailPrice) : 0,
-          reorder_point: reorderPoint ? Number(reorderPoint) : 0,
-          reorder_quantity: reorderQuantity ? Number(reorderQuantity) : 0,
-          unit_of_measure: unitOfMeasure.trim() || 'unit',
-          status: 'active',
-          quantity_on_hand: v.qty,
-          created_by: user.id,
-          updated_by: user.id,
-        }));
-        const { data: created, error: insErr } = await supabase
-          .from('inventory_items')
-          .insert(rows)
-          .select('id, quantity_on_hand, primary_location_id');
-        if (insErr) {
-          if ((insErr as { code?: string }).code === '23505') {
-            throw new Error(
-              'One or more variant SKUs already exist. Pick a different base SKU.',
-            );
-          }
-          throw new Error(insErr.message);
+        const built = buildSizedVariantsInput(form, variants);
+        if (!built.ok) {
+          Alert.alert('Check the form', describeFailure(built));
+          return;
         }
-        const insertedRows = (created ?? []) as Array<{
-          id: string;
-          quantity_on_hand: number;
-          primary_location_id: string | null;
-        }>;
-        // Audit-trail rows so the 14-day sparklines + movements feed
-        // pick up the initial qty events. Mirrors the web service.
-        const movements = insertedRows
-          .filter((r) => r.quantity_on_hand > 0)
-          .map((r) => ({
-            organization_id: orgId,
-            item_id: r.id,
-            movement_type: 'initial',
-            quantity_change: r.quantity_on_hand,
-            previous_quantity: 0,
-            new_quantity: r.quantity_on_hand,
-            user_id: user.id,
-            to_location_id: r.primary_location_id,
-          }));
-        if (movements.length > 0) {
-          const { error: movErr } = await supabase.from('stock_movements').insert(movements);
-          if (movErr) console.warn('[new-item] variant movements failed:', movErr.message);
-        }
+        const { created, ids } = await submitSizedVariants(built.input);
         // Photos apply to every variant the same way (shared design).
-        for (const r of insertedRows) await uploadPhotosFor(r.id);
+        for (const id of ids) await uploadPhotosFor(id);
         Alert.alert(
           'Variants created',
-          `${insertedRows.length} size${insertedRows.length === 1 ? '' : 's'} added.`,
+          `${created} size${created === 1 ? '' : 's'} added.`,
         );
         router.replace('/');
         return;
       }
 
-      // Single-row path (the standard add).
-      const initialQty = Math.max(0, Number(onHand) || 0);
-      const insertPayload: Record<string, unknown> = {
-        organization_id: orgId,
-        sku: sku.trim(),
-        name: name.trim(),
-        barcode: barcode.trim() || null,
-        model_number: !isBook && modelNumber.trim() ? modelNumber.trim() : null,
-        description: description.trim() || null,
-        item_type: itemType,
-        custom_fields: cf,
-        category_id: categoryId,
-        supplier_id: supplierId,
-        primary_location_id: primaryLocationId,
-        warehouse_id: warehouseId,
-        charter_id: charterId,
-        unit_cost: unitCost ? Number(unitCost) : 0,
-        retail_price: retailPrice ? Number(retailPrice) : 0,
-        reorder_point: reorderPoint ? Number(reorderPoint) : 0,
-        reorder_quantity: reorderQuantity ? Number(reorderQuantity) : 0,
-        unit_of_measure: unitOfMeasure.trim() || 'unit',
-        status: 'active',
-        quantity_on_hand: 0,
-        created_by: user.id,
-        updated_by: user.id,
-      };
-      const { data: created, error: insErr } = await supabase
-        .from('inventory_items')
-        .insert(insertPayload)
-        .select('id')
-        .single();
-      if (insErr) throw new Error(insErr.message);
-      const newId = (created as { id: string }).id;
-      if (initialQty > 0) {
-        const { error: adjErr } = await supabase.rpc('adjust_stock', {
-          p_item_id: newId,
-          p_quantity_change: initialQty,
-          p_movement_type: 'initial',
-          p_location_id: null,
-          p_reason: 'Manual add (mobile)',
-          p_notes: null,
-        });
-        if (adjErr) throw new Error(adjErr.message);
+      // ── Single item ──────────────────────────────────────────────────────
+      // No adjust_stock call afterwards: the server writes the `initial`
+      // stock movement inside create(), so calling the RPC from here would
+      // double-count the opening quantity.
+      const built = buildCreateItemInput(form);
+      if (!built.ok) {
+        Alert.alert('Check the form', describeFailure(built));
+        return;
       }
-      await uploadPhotosFor(newId);
-      router.replace({ pathname: '/item/[id]', params: { id: newId } });
+      const { id } = await submitCreateItem(built.input);
+      await uploadPhotosFor(id);
+      router.replace({ pathname: '/item/[id]', params: { id } });
     } catch (e) {
       Alert.alert('Could not add', e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -758,30 +777,47 @@ export default function NewItem() {
           {sizesEnabled ? (
             <>
               <SectionLabel>SIZES & QUANTITIES</SectionLabel>
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-                One item per size will be created. Leave a size at 0 to skip it.
-              </Mono>
-              <View style={{ marginTop: 10, gap: 8 }}>
-                {ALL_SIZES.map((sz) => (
-                  <View key={sz} style={styles.sizeRow}>
-                    <View style={[styles.sizeBadge, { borderColor: c.hair }]}>
-                      <Mono size={12} tracking={0.06} color={c.ink} style={{ fontFamily: FONT.display }}>
-                        {sz}
-                      </Mono>
-                    </View>
-                    <TextInput
-                      value={sizeQty[sz]}
-                      onChangeText={(v) =>
-                        setSizeQty((prev) => ({ ...prev, [sz]: v.replace(/[^0-9]/g, '') }))
-                      }
-                      placeholder="0"
-                      placeholderTextColor={c.ink4}
-                      keyboardType="numeric"
-                      style={[styles.input, { color: c.ink, borderColor: c.hair, flex: 1 }]}
-                    />
+              {sizesLoading ? (
+                <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                  Loading this category&apos;s size scale…
+                </Mono>
+              ) : sizeOptions.length === 0 ? (
+                <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                  This category has no size scale yet. Saving creates one item.
+                </Mono>
+              ) : (
+                <>
+                  <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                    One item per size will be created. Leave a size at 0 to skip it.
+                  </Mono>
+                  <View style={{ marginTop: 10, gap: 8 }}>
+                    {sizeOptions.map((sz) => (
+                      <View key={sz} style={styles.sizeRow}>
+                        <View style={[styles.sizeBadge, { borderColor: c.hair }]}>
+                          <Mono
+                            size={12}
+                            tracking={0.06}
+                            color={c.ink}
+                            style={{ fontFamily: FONT.display }}
+                          >
+                            {sz}
+                          </Mono>
+                        </View>
+                        <TextInput
+                          value={sizeQty[sz] ?? ''}
+                          onChangeText={(v) =>
+                            setSizeQty((prev) => ({ ...prev, [sz]: v.replace(/[^0-9]/g, '') }))
+                          }
+                          placeholder="0"
+                          placeholderTextColor={c.ink4}
+                          keyboardType="numeric"
+                          style={[styles.input, { color: c.ink, borderColor: c.hair, flex: 1 }]}
+                        />
+                      </View>
+                    ))}
                   </View>
-                ))}
-              </View>
+                </>
+              )}
             </>
           ) : null}
 
@@ -811,7 +847,7 @@ export default function NewItem() {
           </Row>
 
           <Row>
-            {sizesEnabled ? null : (
+            {variantsEnabled ? null : (
               <Field flex label="ON HAND">
                 <TextInput
                   value={onHand}
