@@ -94,6 +94,7 @@ function line(overrides: Partial<PoImportLineRow>): PoImportLineRow {
     jersey_number: null,
     player_name: null,
     group_hint: null,
+    serial_hint: null,
     suggested_group_id: null,
     mapping_confidence: null,
     ...overrides,

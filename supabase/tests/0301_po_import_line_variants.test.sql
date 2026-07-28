@@ -3,32 +3,37 @@
 -- Proves 0301: po_import_lines carries the sports variant fields, and that
 -- adding them changed NOTHING about the prod-hardened import chassis.
 --
--- Assertion index (26):
---    1-11  all eleven new columns exist
---   12     every one of them is NULLABLE (an existing import path that has
+-- Assertion index (30):
+--    1-12  all twelve new columns exist
+--   13     every one of them is NULLABLE (an existing import path that has
 --          never heard of them must keep inserting)
---   13-15  the types that matter: jersey_number is TEXT (never numeric),
+--   14-16  the types that matter: jersey_number is TEXT (never numeric),
 --          suggested_group_id is uuid, mapping_confidence is numeric(4,3)
---   16     suggested_group_id FKs product_groups
---   17     ...with ON DELETE SET NULL (a suggestion never blocks a delete)
---   18     the partial index on suggested_group_id exists
---   19     ANTI-VACUITY / backward compatibility: a line inserted with only
+--   17     serial_hint is TEXT (a serial is a string: leading zeroes, dashes)
+--   18     suggested_group_id FKs product_groups
+--   19     ...with ON DELETE SET NULL (a suggestion never blocks a delete)
+--   20     the partial index on suggested_group_id exists
+--   21     ANTI-VACUITY / backward compatibility: a line inserted with only
 --          the pre-0301 columns still succeeds
---   20     ...and every new column reads back NULL on it (missing stays
+--   22     ...and every new column reads back NULL on it (missing stays
 --          missing — no default back-filled a value nobody supplied)
---   21-23  LEADING ZEROES: '07', '00' and '0' round-trip byte-for-byte.
+--   23-25  LEADING ZEROES: '07', '00' and '0' round-trip byte-for-byte.
 --          A numeric column would return 7, 0 and 0.
---   24     a long, unbounded source string survives verbatim
+--   26     a long, unbounded source string survives verbatim
 --          (variant_size_original is "exactly as printed", never truncated)
---   25     mapping_confidence keeps its three decimals
---   26     deleting the suggested group nulls the suggestion and LEAVES THE
+--   27     mapping_confidence keeps its three decimals
+--   28     serial_hint round-trips VERBATIM, punctuation and case intact —
+--          it is the document's own string, never normalized
+--   29     serial_hint is NULL on a line whose document printed no serial
+--          (never a placeholder: no 'N/A', no '0000')
+--   30     deleting the suggested group nulls the suggestion and LEAVES THE
 --          LINE (the 0233 suggestion-not-link discipline, group edition)
 --
 -- Namespace: b0300000. Wrapped in begin/rollback - nothing leaks.
 
 begin;
 
-select plan(26);
+select plan(30);
 
 \set org   '\'b0300000-0000-0000-0000-000000000001\''
 \set usr   '\'b0300000-0000-0000-0000-000000000002\''
@@ -41,7 +46,7 @@ select plan(26);
 \set ln_d  '\'b0300000-0000-0000-0000-00000000000d\''
 \set ln_e  '\'b0300000-0000-0000-0000-00000000000e\''
 
--- ── 1-11. The columns exist ────────────────────────────────────────────────
+-- ── 1-12. The columns exist ────────────────────────────────────────────────
 select has_column('public', 'po_import_lines', 'variant_size',
   'po_import_lines has variant_size');
 select has_column('public', 'po_import_lines', 'variant_size_original',
@@ -64,8 +69,10 @@ select has_column('public', 'po_import_lines', 'suggested_group_id',
   'po_import_lines has suggested_group_id');
 select has_column('public', 'po_import_lines', 'mapping_confidence',
   'po_import_lines has mapping_confidence');
+select has_column('public', 'po_import_lines', 'serial_hint',
+  'po_import_lines has serial_hint');
 
--- ── 12. Every new column is nullable ───────────────────────────────────────
+-- ── 13. Every new column is nullable ───────────────────────────────────────
 select is(
   (select count(*)::int
      from information_schema.columns
@@ -75,11 +82,12 @@ select is(
       and column_name in (
         'variant_size','variant_size_original','variant_size_system',
         'variant_width','variant_fit','variant_color','jersey_number',
-        'player_name','group_hint','suggested_group_id','mapping_confidence')),
+        'player_name','group_hint','suggested_group_id','mapping_confidence',
+        'serial_hint')),
   0,
-  'none of the eleven new columns is NOT NULL');
+  'none of the twelve new columns is NOT NULL');
 
--- ── 13-15. Types ───────────────────────────────────────────────────────────
+-- ── 14-17. Types ───────────────────────────────────────────────────────────
 -- TEXT, deliberately: a numeric jersey number loses '07' and '00'.
 select col_type_is('public', 'po_import_lines', 'jersey_number', 'text',
   'jersey_number is text, never a number type');
@@ -87,8 +95,12 @@ select col_type_is('public', 'po_import_lines', 'suggested_group_id', 'uuid',
   'suggested_group_id is uuid');
 select col_type_is('public', 'po_import_lines', 'mapping_confidence', 'numeric(4,3)',
   'mapping_confidence is numeric(4,3), matching match_confidence');
+-- A serial is a STRING. 'SN-0007' and '0007' are not numbers, and the column
+-- must never coerce one into 7 the way jersey_number must not.
+select col_type_is('public', 'po_import_lines', 'serial_hint', 'text',
+  'serial_hint is text, never a number type');
 
--- ── 16-17. The advisory FK ─────────────────────────────────────────────────
+-- ── 18-19. The advisory FK ─────────────────────────────────────────────────
 select fk_ok('public', 'po_import_lines', 'suggested_group_id',
              'public', 'product_groups', 'id',
   'suggested_group_id references product_groups(id)');
@@ -102,7 +114,7 @@ select is(
   'n',
   'the suggested_group_id FK is ON DELETE SET NULL');
 
--- ── 18. The lookup index ───────────────────────────────────────────────────
+-- ── 20. The lookup index ───────────────────────────────────────────────────
 select has_index('public', 'po_import_lines', 'po_import_lines_suggested_group_idx',
   'po_import_lines_suggested_group_idx exists');
 
@@ -129,7 +141,7 @@ insert into public.product_groups
   values (:grp, :org, 'shoes', 'Nike Pegasus 41', 'Nike', 'Pegasus 41',
           'shoes|nike|pegasus 41||', 'pair');
 
--- ── 19-20. Backward compatibility: the pre-0301 insert shape still works ───
+-- ── 21-22. Backward compatibility: the pre-0301 insert shape still works ───
 select lives_ok(
   $$ insert into public.po_import_lines
        (id, po_import_id, line_number, line_type, description,
@@ -143,25 +155,25 @@ select is(
   (select num_nonnulls(variant_size, variant_size_original, variant_size_system,
                        variant_width, variant_fit, variant_color, jersey_number,
                        player_name, group_hint, suggested_group_id,
-                       mapping_confidence)
+                       mapping_confidence, serial_hint)
      from public.po_import_lines where id = :ln_a),
   0,
-  'a legacy line reads back NULL in all eleven columns (no back-filled default)');
+  'a legacy line reads back NULL in all twelve columns (no back-filled default)');
 
--- ── 21-23. Leading zeroes survive ──────────────────────────────────────────
+-- ── 23-25. Leading zeroes survive ──────────────────────────────────────────
 insert into public.po_import_lines
   (id, po_import_id, line_number, line_type, description, jersey_number,
    variant_size, variant_size_original, variant_size_system, variant_width,
    variant_fit, variant_color, player_name, group_hint, suggested_group_id,
-   mapping_confidence)
+   mapping_confidence, serial_hint)
   values
   (:ln_b, :imp, 2, 'inventory', 'Falcons Home Jersey - M', '07',
    'M', 'Medium', 'ALPHA', null, 'mens', 'Red/Black', 'A. Rosas',
-   'Falcons Home Jersey 2026', :grp, 0.875),
+   'Falcons Home Jersey 2026', :grp, 0.875, 'sn-00A7/b'),
   (:ln_c, :imp, 3, 'inventory', 'Falcons Home Jersey - L', '00',
-   'L', 'Large', 'ALPHA', null, 'mens', 'Red/Black', null, null, null, null),
+   'L', 'Large', 'ALPHA', null, 'mens', 'Red/Black', null, null, null, null, null),
   (:ln_d, :imp, 4, 'inventory', 'Falcons Home Jersey - XL', '0',
-   'XL', 'X-Large', 'ALPHA', null, null, null, null, null, null, null);
+   'XL', 'X-Large', 'ALPHA', null, null, null, null, null, null, null, null);
 
 select is(
   (select jersey_number from public.po_import_lines where id = :ln_b),
@@ -176,7 +188,7 @@ select is(
   '0',
   E'jersey number \'0\' round-trips as the string 0');
 
--- ── 24. A long source string is preserved verbatim ─────────────────────────
+-- ── 26. A long source string is preserved verbatim ─────────────────────────
 -- variant_size_original is deliberately unbounded: it is what the DOCUMENT
 -- printed, and a vendor is free to print something absurd. Truncating it
 -- would break "preserve source values".
@@ -191,13 +203,28 @@ select is(
   3000,
   'a 3000-character variant_size_original is stored untruncated');
 
--- ── 25. mapping_confidence keeps three decimals ────────────────────────────
+-- ── 27. mapping_confidence keeps three decimals ────────────────────────────
 select is(
   (select mapping_confidence from public.po_import_lines where id = :ln_b),
   0.875::numeric(4,3),
   'mapping_confidence keeps its three decimal places');
 
--- ── 26. Deleting the suggested group nulls the hint, never the line ────────
+-- ── 28-29. serial_hint is the document's own string, or nothing ────────────
+-- Verbatim: no upper-casing, no stripping of punctuation. The import stores
+-- what was printed and the receipt is where a serial is actually enforced.
+select is(
+  (select serial_hint from public.po_import_lines where id = :ln_b),
+  'sn-00A7/b',
+  'serial_hint round-trips verbatim, case and punctuation intact');
+
+-- Missing stays missing. A line whose document printed no serial must read
+-- back NULL, never a fabricated placeholder.
+select is(
+  (select serial_hint from public.po_import_lines where id = :ln_c),
+  null,
+  'a line with no printed serial reads back NULL, never a placeholder');
+
+-- ── 30. Deleting the suggested group nulls the hint, never the line ────────
 delete from public.product_groups where id = :grp;
 
 select is(

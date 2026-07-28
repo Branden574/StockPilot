@@ -25,6 +25,12 @@ alter table public.po_import_lines
   /* Free-text style/group hint the extractor read off the document
      ("Nike Pegasus 41 FD2722"). Used to build a candidate group key. */
   add column if not exists group_hint text,
+  /* The serial the DOCUMENT printed for this line, verbatim, or NULL.
+     Never invented, never a placeholder ('N/A', '0000'), and never derived
+     from a jersey number. It exists so a SERIALIZED category's import line
+     can be settled at review; receipt-time enforcement (post_receipt_v2)
+     is untouched and remains the authority on what actually arrives. */
+  add column if not exists serial_hint text,
   /* ADVISORY group match. Never auto-linked — mirrors suggested_item_id (0233). */
   add column if not exists suggested_group_id uuid
     references public.product_groups(id) on delete set null,
@@ -43,6 +49,12 @@ comment on column public.po_import_lines.jersey_number is
 
 comment on column public.po_import_lines.variant_size_original is
   'The size string exactly as printed. Requirements: "preserve source values".';
+
+comment on column public.po_import_lines.serial_hint is
+  'The serial number the document printed for this line, verbatim, or NULL. '
+  'NEVER invented and NEVER a placeholder — a serialized line with no printed '
+  'serial stays blocked in review rather than being given a fake one. Distinct '
+  'from jersey_number, which is a uniform number and never a serial.';
 
 create index if not exists po_import_lines_suggested_group_idx
   on public.po_import_lines (suggested_group_id)

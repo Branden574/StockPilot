@@ -82,6 +82,16 @@ export const canonicalPoLineSchema = z.object({
   /** Free-text style/product identity read off the document. */
   groupHint: z.string().max(256).nullable().optional(),
   /**
+   * The serial the document PRINTED for this line, verbatim, or null.
+   *
+   * COPIED, never invented — the extractor is instructed to leave this empty
+   * rather than guess, and no code path fabricates a placeholder. A serialized
+   * product whose document printed no serial keeps this null and stays blocked
+   * in review, which is the point: the value has to come from the document or
+   * from a human, never from the importer.
+   */
+  serialHint: z.string().max(128).nullable().optional(),
+  /**
    * How confident the extractor is that each value landed in the RIGHT FIELD
    * — separate from extraction confidence (reading the characters). Bounded
    * 0..1 here; the DB column is numeric(4,3).

@@ -233,3 +233,145 @@ describe('PoImportsService.confirmLineMappings', () => {
     ).rejects.toThrow(/approved/);
   });
 });
+
+/**
+ * A line with NO sports field mapping on it.
+ *
+ * This is what every AI-scanned PO in production looks like: the extractor
+ * emits `mappingConfidence` for every line it reads, sports or not.
+ */
+function preSportsLine(over: Record<string, unknown> = {}) {
+  return line({
+    description: 'Duracell Coppertop AA, 24/Pack',
+    variant_size: null,
+    variant_size_original: null,
+    variant_size_system: null,
+    variant_color: null,
+    jersey_number: null,
+    player_name: null,
+    group_hint: null,
+    serial_hint: null,
+    ...over,
+  });
+}
+
+describe('the mapping gate is scoped to sports mappings (prod-chassis regression)', () => {
+  const APPROVE_INPUT = {
+    poImportId: IMPORT_ID,
+    warehouseId: '33333333-3333-4333-8333-333333333333',
+    vendorId: '44444444-4444-4444-8444-444444444444',
+    locationId: '55555555-5555-4555-8555-555555555555',
+    lineOverrides: [],
+  };
+
+  it('APPROVES an ordinary low-confidence scan that mapped nothing sports-y', async () => {
+    const { svc } = svcFor({
+      'po_imports.select': { data: { id: IMPORT_ID, status: 'parsed' }, error: null },
+      'po_import_lines.select': {
+        data: [preSportsLine({ item_id: 'itm-1', mapping_confidence: 0.4 })],
+        error: null,
+      },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    // The gate must not fire. The call still fails further down on the
+    // charter/location resolution this stub does not serve — which is exactly
+    // how the shipped "skipped line" test proves the same thing.
+    const e = (await svc.approve(APPROVE_INPUT).catch((err: unknown) => err)) as Error;
+    expect(e).toBeInstanceOf(Error);
+    expect(e.message).not.toMatch(/ambiguous column mapping/i);
+  });
+
+  it('still REFUSES the same confidence when the line carries a sports value', async () => {
+    const { svc } = svcFor({
+      'po_imports.select': { data: { id: IMPORT_ID, status: 'parsed' }, error: null },
+      'po_import_lines.select': {
+        data: [preSportsLine({ item_id: 'itm-1', jersey_number: '12' })],
+        error: null,
+      },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await expect(svc.approve(APPROVE_INPUT)).rejects.toThrow(/ambiguous column mapping/);
+  });
+
+  it('resolves an ordinary low-confidence line as ready, not mapping_review_required', async () => {
+    const { svc } = svcFor({
+      'po_imports.select': { data: { id: IMPORT_ID, status: 'needs_review' }, error: null },
+      'po_import_lines.select': { data: [preSportsLine()], error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    const out = await svc.resolveLineResults(IMPORT_ID);
+    expect(out[LINE_ID]?.result).toBe('ready');
+  });
+});
+
+describe('confirmLineMappings — the write is checked, and serial is settleable', () => {
+  const HEADER = { data: { id: IMPORT_ID, status: 'needs_review' }, error: null };
+
+  it('FAILS CLOSED when the update matches no row', async () => {
+    const { svc } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line()], error: null },
+      // `.update().eq()` returns no error when it matches nothing — RLS
+      // refusal, a concurrent cancel, a deleted line. Reporting "confirmed"
+      // for a change that never happened sent the reviewer straight back into
+      // the approval gate with no explanation.
+      'po_import_lines.update': { data: null, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await expect(
+      svc.confirmLineMappings({
+        poImportId: IMPORT_ID,
+        decisions: { [LINE_ID]: 'jersey_number' },
+      }),
+    ).rejects.toThrow(/could not be saved/);
+    // Nothing is audited for a write that did not land.
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('moves the value into serial_hint when the reviewer says it is a serial', async () => {
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line()], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'serial' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    // The DOCUMENT's value, relocated — never a fabricated one, and never
+    // left sitting in the jersey-number field it does not belong in.
+    expect(patch.serial_hint).toBe('12');
+    expect(patch.jersey_number).toBeNull();
+  });
+
+  it('never overwrites a serial the document already printed', async () => {
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line({ serial_hint: 'SN-0001' })], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'serial' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).not.toHaveProperty('serial_hint');
+  });
+});

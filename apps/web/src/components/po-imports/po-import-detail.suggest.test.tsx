@@ -19,6 +19,7 @@ vi.mock('@/server/actions/po-imports', () => ({
   parsePoImportAction: vi.fn(),
   createItemsFromPoLinesAction: vi.fn(),
   findDuplicatesForPoLinesAction: vi.fn(),
+  resolvePoImportLineResultsAction: vi.fn(async () => ({ ok: true, data: {} })),
 }));
 
 import { PoImportDetail, type LineWithSuggestion } from './po-import-detail';
@@ -84,6 +85,7 @@ const SUGGESTED_LINE: LineWithSuggestion = {
   jersey_number: null,
   player_name: null,
   group_hint: null,
+  serial_hint: null,
   suggested_group_id: null,
   mapping_confidence: null,
 };

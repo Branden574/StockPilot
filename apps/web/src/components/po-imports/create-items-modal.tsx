@@ -30,6 +30,7 @@ import { formatCurrency, formatNumber } from '@/lib/utils';
 import {
   createItemsFromPoLinesAction,
   findDuplicatesForPoLinesAction,
+  resolvePoImportLineResultsAction,
 } from '@/server/actions/po-imports';
 // Import the TYPE from the service (not re-exported through the 'use server'
 // actions file): Turbopack miscompiles a `export type { X }` re-export in a
@@ -111,6 +112,20 @@ export function CreateItemsModal({
 }: CreateItemsModalProps) {
   const [names, setNames] = React.useState<Record<string, string>>({});
   const [categoryId, setCategoryId] = React.useState<string>('');
+  /**
+   * Verdicts re-resolved for the CHOSEN category.
+   *
+   * The `resolutions` prop is resolved on the server before a category exists,
+   * so for a create-mode line (item_id null) it can only ever say 'ready'. The
+   * category is what decides the tracking profile, and therefore whether the
+   * line needs a group, a size or a serial — so the moment the reviewer picks
+   * one, the verdicts are recomputed against it. Read-only: nothing is written
+   * or linked by asking.
+   */
+  const [liveResolutions, setLiveResolutions] =
+    React.useState<Record<string, LineResolution> | null>(null);
+  const [resolving, setResolving] = React.useState(false);
+  const effectiveResolutions = liveResolutions ?? resolutions;
   // Per-line fixes for a missing required attribute, so a reviewer never has
   // to leave the screen. These never overwrite the line's stored source text.
   const [variants, setVariants] = React.useState<
@@ -144,6 +159,7 @@ export function CreateItemsModal({
     setDuplicates({});
     setVariants({});
     setGroupChoices({});
+    setLiveResolutions(null);
 
     // Scan for duplicate candidates per line. Matching is ADVISORY ONLY:
     // a barcode/name hit surfaces the yellow "possible duplicate" notice
@@ -167,6 +183,39 @@ export function CreateItemsModal({
       })
       .finally(() => setScanning(false));
   }, [open, lines, poImportId]);
+
+  // Re-resolve whenever the chosen category changes (including back to none).
+  // Group choices made against the OLD category's candidates are dropped: they
+  // answered a question that no longer exists, and carrying them forward could
+  // link a group the new verdict never offered.
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    /* eslint-disable react-hooks/set-state-in-effect -- the category is an
+       input to a SERVER read, and the stale answers have to be cleared the
+       moment it changes; both calls are the "start of an async fetch" case,
+       not derived state. */
+    setResolving(true);
+    setGroupChoices({});
+    /* eslint-enable react-hooks/set-state-in-effect */
+    resolvePoImportLineResultsAction({ poImportId, categoryId: categoryId || null })
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.ok) {
+          // Non-fatal: fall back to the server-rendered verdicts. The create
+          // call re-resolves server-side regardless, so nothing slips through.
+          console.warn('line verdict resolve failed', r.error.message);
+          return;
+        }
+        setLiveResolutions(r.data);
+      })
+      .finally(() => {
+        if (!cancelled) setResolving(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, poImportId, categoryId]);
 
   function resetToCleaned(lineId: string) {
     const l = lines.find((x) => x.id === lineId);
@@ -204,14 +253,14 @@ export function CreateItemsModal({
       // imported, and a use_existing line points at an item whose identity a
       // human already settled.
       if (decisions[l.id]?.mode !== 'create') return false;
-      const res = resolutions?.[l.id];
+      const res = effectiveResolutions?.[l.id];
       if (!res || !BLOCKING_LINE_RESULTS.has(res.result)) return false;
       const settleable =
         res.result === 'possible_duplicate' || res.result === 'ambiguous_variant_match';
       return !settleable || !groupChoices[l.id];
     });
     if (unanswered) {
-      const res = resolutions?.[unanswered.id];
+      const res = effectiveResolutions?.[unanswered.id];
       toast.error(
         `Line ${unanswered.line_number}: ${res?.message ?? 'this line needs review before it can be imported.'}`,
       );
@@ -323,6 +372,7 @@ export function CreateItemsModal({
             <span className="text-muted-foreground text-[11px]">
               A Sports category groups a size run into one product; every other
               category behaves exactly as before.
+              {resolving && ' (checking what each line will do…)'}
             </span>
           </div>
         </DialogHeader>
@@ -335,7 +385,7 @@ export function CreateItemsModal({
             const isCleaned = current === cleaned;
             const dupes = duplicates[l.id] ?? [];
             const decision = decisions[l.id] ?? { mode: 'create' };
-            const res = resolutions?.[l.id];
+            const res = effectiveResolutions?.[l.id];
             const blocked =
               decision.mode === 'create' && res != null && BLOCKING_LINE_RESULTS.has(res.result);
             const groupChoice = groupChoices[l.id];
@@ -475,6 +525,31 @@ export function CreateItemsModal({
                         {res.message ? ` — ${res.message}` : ''}
                       </span>
                     </div>
+                    {/*
+                      An ambiguous VARIANT match: the group is settled, the
+                      question is which existing variant this line is. Picking
+                      one switches the line to use_existing so it receives into
+                      that variant rather than spawning a duplicate of it.
+                    */}
+                    {res.variantCandidates.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {res.variantCandidates.map((vc) => (
+                          <Button
+                            key={vc.id}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10.5px]"
+                            disabled={busy}
+                            onClick={() =>
+                              setDecision(l.id, { mode: 'use_existing', itemId: vc.id })
+                            }
+                          >
+                            Receive into {vc.name} · {vc.sku}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                     {res.groupCandidates.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {res.groupCandidates.map((c) => {
@@ -509,7 +584,16 @@ export function CreateItemsModal({
                             setGroupChoices((m) => ({ ...m, [l.id]: { mode: 'new' } }))
                           }
                         >
-                          Confirm a new group
+                          {/*
+                            'new' means "not one of those candidates". With a
+                            group already matched exactly it keeps that group
+                            and adds a variant; with only a SUGGESTED group it
+                            confirms a brand-new one. Same decision, two
+                            honest labels.
+                          */}
+                          {res.groupId
+                            ? 'Add a new variant to this group'
+                            : 'Confirm a new group'}
                         </Button>
                       </div>
                     )}
@@ -607,7 +691,7 @@ export function CreateItemsModal({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy} variant="gradient">
+          <Button onClick={submit} disabled={busy || resolving} variant="gradient">
             {busy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (

@@ -23,6 +23,7 @@ vi.mock('@/server/actions/po-imports', () => ({
   parsePoImportAction: vi.fn(),
   createItemsFromPoLinesAction: vi.fn(),
   findDuplicatesForPoLinesAction: vi.fn(),
+  resolvePoImportLineResultsAction: vi.fn(async () => ({ ok: true, data: {} })),
   confirmPoImportMappingsAction: vi.fn(),
 }));
 
@@ -89,6 +90,7 @@ const LINE: LineWithSuggestion = {
   jersey_number: null,
   player_name: null,
   group_hint: 'Nike Pegasus 41',
+  serial_hint: null,
   suggested_group_id: null,
   mapping_confidence: null,
 };

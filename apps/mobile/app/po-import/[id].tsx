@@ -1,6 +1,6 @@
 import {
   can,
-  IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
+  lineNeedsMappingConfirmation,
   type Role,
 } from '@stockpilot/core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -107,8 +107,14 @@ interface ImportLine {
   variant_color: string | null;
   /** TEXT with leading zeroes intact. NEVER shown or labelled as a serial. */
   jersey_number: string | null;
-  /** Confidence in the FIELD MAPPING. Below the shared threshold the line is
-   *  flagged here and BLOCKS approval, exactly as it does on web. */
+  player_name: string | null;
+  group_hint: string | null;
+  /** The serial the DOCUMENT printed, or null. Read here so the shared
+   *  mapping-confirmation predicate sees the same fields the server does. */
+  serial_hint: string | null;
+  /** Confidence in the FIELD MAPPING. Below the shared threshold, and only on
+   *  a line that carries a sports field mapping, the line is flagged here and
+   *  BLOCKS approval — exactly as it does on web. */
   mapping_confidence: number | null;
 }
 
@@ -282,7 +288,7 @@ export default function PoImportDetailScreen() {
            description, unit_cost, line_total, vendor_item_number, item_id,
            suggested_item_id, exception_reason,
            variant_size, variant_size_system, variant_color, jersey_number,
-           mapping_confidence`,
+           player_name, group_hint, serial_hint, mapping_confidence`,
         )
         .eq('po_import_id', id)
         .order('line_number', { ascending: true })
@@ -350,6 +356,9 @@ export default function PoImportDetailScreen() {
         variant_size_system: (lr.variant_size_system as string | null) ?? null,
         variant_color: (lr.variant_color as string | null) ?? null,
         jersey_number: (lr.jersey_number as string | null) ?? null,
+        player_name: (lr.player_name as string | null) ?? null,
+        group_hint: (lr.group_hint as string | null) ?? null,
+        serial_hint: (lr.serial_hint as string | null) ?? null,
         mapping_confidence:
           lr.mapping_confidence == null ? null : Number(lr.mapping_confidence),
       };
@@ -787,9 +796,9 @@ function LineCard({
   ]
     .filter((v): v is string => typeof v === 'string' && v.length > 0)
     .join(' · ');
-  const needsMapping =
-    line.mapping_confidence != null &&
-    line.mapping_confidence < IMPORT_MAPPING_CONFIDENCE_THRESHOLD;
+  // ONE predicate with the web review table and with approve(): a bare
+  // confidence test flagged every AI-scanned non-sports line here too.
+  const needsMapping = lineNeedsMappingConfirmation(line);
   const matched = line.item_id ? itemsById[line.item_id] : undefined;
   const suggested = line.suggested_item_id ? itemsById[line.suggested_item_id] : undefined;
 

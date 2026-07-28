@@ -75,6 +75,63 @@ export function lineResultBlocksApproval(result: LineResult): boolean {
 export const IMPORT_MAPPING_CONFIDENCE_THRESHOLD = 0.7;
 
 /**
+ * The line columns whose value could only have come from a SPORTS field
+ * mapping (migration 0301). `serial_hint` is in the list because a serial
+ * column is one of the meanings a bare "Number" header can turn out to have.
+ */
+export const SPORTS_MAPPED_LINE_FIELDS = [
+  'variant_size',
+  'variant_size_original',
+  'variant_size_system',
+  'variant_width',
+  'variant_fit',
+  'variant_color',
+  'jersey_number',
+  'player_name',
+  'group_hint',
+  'serial_hint',
+] as const;
+
+/** True when the extractor actually put a value in a sports field on this line. */
+export function lineCarriesSportsMapping(
+  line: Partial<Record<(typeof SPORTS_MAPPED_LINE_FIELDS)[number], string | null>>,
+): boolean {
+  return SPORTS_MAPPED_LINE_FIELDS.some((f) => {
+    const v = line[f];
+    return typeof v === 'string' && v.trim().length > 0;
+  });
+}
+
+/**
+ * THE predicate for "this line's column mapping must be confirmed by a human".
+ *
+ * ONE definition, shared by the resolver, `approve()`, the web review screen
+ * and the Expo screen, so a line the server refuses is always a line the UI
+ * offered a control for — and vice versa.
+ *
+ * SCOPED TO SPORTS MAPPINGS (review fix). A bare confidence test blocked
+ * approval on EVERY AI-scanned import, sports or not: the extractor emits
+ * `mappingConfidence` for every line it reads, so an ordinary non-sports PO
+ * with one awkward column header became unapprovable — a regression on a
+ * chassis that has been in production since long before the sports program.
+ *
+ * The gate exists to stop a MIS-MAPPED value from becoming permanent identity
+ * (a "Number" column silently becoming a jersey number). When the extractor
+ * mapped nothing into any sports field, there is no such value on the line and
+ * nothing for a human to confirm, so the line behaves exactly as it did before
+ * sports existed. A low confidence with a sports value present still blocks.
+ */
+export function lineNeedsMappingConfirmation(
+  line: {
+    mapping_confidence: number | null;
+  } & Partial<Record<(typeof SPORTS_MAPPED_LINE_FIELDS)[number], string | null>>,
+): boolean {
+  if (line.mapping_confidence == null) return false;
+  if (line.mapping_confidence >= IMPORT_MAPPING_CONFIDENCE_THRESHOLD) return false;
+  return lineCarriesSportsMapping(line);
+}
+
+/**
  * What an ambiguous source column may turn out to mean.
  *
  * A bare "Number" column is the canonical case — it could be a jersey number,

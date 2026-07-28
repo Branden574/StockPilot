@@ -5,6 +5,7 @@ import { buildGroupKey, DEFAULT_SUBCATEGORY_PROFILES } from '@stockpilot/core';
 import {
   resolveLinesForReview,
   resolveLineVariant,
+  toVariantLine,
   type PoImportVariantLine,
   type ResolveLineVariantDeps,
 } from './po-imports-variants';
@@ -34,6 +35,7 @@ function line(over: Partial<PoImportVariantLine> = {}): PoImportVariantLine {
     jersey_number: null,
     player_name: null,
     group_hint: 'Nike Pegasus 41',
+    serial_hint: null,
     mapping_confidence: null,
     ...over,
   };
@@ -419,5 +421,91 @@ describe('resolveLinesForReview', () => {
     expect(out.a?.result).toBe('create_new_group');
     expect(out.b?.result).toBe('mapping_review_required');
     expect(out.c?.result).toBe('ready');
+  });
+});
+
+// ── Review fixes ────────────────────────────────────────────────────────────
+
+describe('an ambiguous VARIANT match is answerable', () => {
+  it('offers the exactly-matched group as a candidate so the row has a control', async () => {
+    const { deps, findByKey, variantsByKey } = makeDeps();
+    findByKey.mockResolvedValue(groupRow());
+    variantsByKey.mockResolvedValue([
+      { id: 'itm-a', name: 'Pegasus 41 US 10', sku: 'SKU-A' },
+      { id: 'itm-b', name: 'Pegasus 41 US 10', sku: 'SKU-B' },
+    ]);
+
+    const r = await resolveLineVariant(deps, line(), profileFor('shoes'));
+
+    expect(r.result).toBe('ambiguous_variant_match');
+    // Both halves of the answer are present: WHICH variant, or "a new one in
+    // this group". An empty groupCandidates list rendered no control at all.
+    expect(r.variantCandidates).toHaveLength(2);
+    expect(r.groupCandidates).toEqual([{ id: 'grp-1', name: 'Nike Pegasus 41' }]);
+    expect(r.groupId).toBe('grp-1');
+  });
+});
+
+describe('serial verdicts are settleable, not dead ends', () => {
+  it('blocks a serialized line that printed no serial', async () => {
+    const { deps } = makeDeps();
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: null, qty_ordered_original: 3 }),
+      profileFor('shoes', { trackingType: 'serial' }),
+    );
+    expect(r.result).toBe('serial_required');
+    expect(r.errorCode).toBe('SERIAL_NUMBER_REQUIRED');
+  });
+
+  it('clears once the document’s serial reaches the line', async () => {
+    const { deps } = makeDeps();
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: 'SN-00A7', qty_ordered_original: 3 }),
+      profileFor('shoes', { trackingType: 'serial' }),
+    );
+    // Past the serial gate entirely — it resolves on identity like any other.
+    expect(r.result).not.toBe('serial_required');
+    expect(r.result).toBe('create_new_group');
+  });
+
+  it('still refuses a serial on a COUNTED product', async () => {
+    const { deps } = makeDeps();
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: 'SN-00A7' }),
+      profileFor('shoes'),
+    );
+    expect(r.errorCode).toBe('SERIAL_NUMBER_NOT_ALLOWED_FOR_GROUPED_IMPORT');
+  });
+});
+
+describe('toVariantLine normalizes at the review boundary', () => {
+  it('narrows a free-text size system exactly as the create path does', () => {
+    expect(toVariantLine({ id: 'l', line_number: 1, variant_size_system: 'us mens' })
+      .variant_size_system).toBe('US_MENS');
+    // Unrecognized reads as MISSING, so the size-system gate fires instead of
+    // a junk value riding into a permanent identity key.
+    expect(toVariantLine({ id: 'l', line_number: 1, variant_size_system: 'metric-ish' })
+      .variant_size_system).toBeNull();
+  });
+
+  it('makes the review verdict match the create verdict for the same row', async () => {
+    const { deps } = makeDeps();
+    const row = {
+      id: 'l1',
+      line_number: 1,
+      description: 'Nike Pegasus 41',
+      qty_ordered_original: 6,
+      vendor_product_number: 'FD2722',
+      variant_size: '10',
+      // What a document actually prints. Raw, this READ as present and the
+      // create path read it as missing — two different verdicts, one row.
+      variant_size_system: 'us mens',
+      group_hint: 'Nike Pegasus 41',
+    };
+    const r = await resolveLineVariant(deps, toVariantLine(row), profileFor('shoes'));
+    expect(r.result).toBe('create_new_group');
   });
 });

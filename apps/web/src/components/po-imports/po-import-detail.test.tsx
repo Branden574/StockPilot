@@ -20,6 +20,7 @@ vi.mock('@/server/actions/po-imports', () => ({
   parsePoImportAction: vi.fn(),
   createItemsFromPoLinesAction: vi.fn(),
   findDuplicatesForPoLinesAction: vi.fn(),
+  resolvePoImportLineResultsAction: vi.fn(async () => ({ ok: true, data: {} })),
 }));
 
 import { PoImportDetail } from './po-import-detail';

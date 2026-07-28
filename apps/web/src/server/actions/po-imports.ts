@@ -14,6 +14,7 @@ import {
   findDuplicatesForPoLinesSchema,
   type DuplicateCandidate,
 } from '@/server/services/po-imports-lines';
+import type { LineResolution } from '@/server/services/po-imports-variants';
 import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -268,6 +269,43 @@ export async function confirmPoImportMappingsAction(input: {
     const result = await svc.confirmLineMappings(parsed.data);
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     return ok(result);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+const resolveLineResultsSchema = z.object({
+  poImportId: z.string().uuid(),
+  /** The category the reviewer picked in the create-items modal, or null. */
+  categoryId: z.string().uuid().nullable().optional(),
+});
+
+/**
+ * Re-resolve every line's verdict against a chosen category.
+ *
+ * The page renders verdicts server-side, but a line that will CREATE an item
+ * has no `item_id` and therefore no category until the reviewer picks one in
+ * the create-items modal. Without this the modal showed 'ready' for every
+ * sports line and the reviewer met the real verdict as a server throw at
+ * create time. The category is a READ input here: nothing is written, linked
+ * or merged, so a wrong pick costs a re-render and nothing else.
+ */
+export async function resolvePoImportLineResultsAction(input: {
+  poImportId: string;
+  categoryId?: string | null;
+}): Promise<ActionResult<Record<string, LineResolution>>> {
+  const parsed = resolveLineResultsSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await PoImportsService.forCurrentUser();
+    return ok(
+      await svc.resolveLineResults(parsed.data.poImportId, {
+        categoryId: parsed.data.categoryId ?? null,
+      }),
+    );
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

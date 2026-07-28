@@ -8,6 +8,7 @@ const findDuplicatesForPoLinesAction = vi.fn();
 vi.mock('@/server/actions/po-imports', () => ({
   createItemsFromPoLinesAction: (...args: unknown[]) => createItemsFromPoLinesAction(...args),
   findDuplicatesForPoLinesAction: (...args: unknown[]) => findDuplicatesForPoLinesAction(...args),
+  resolvePoImportLineResultsAction: vi.fn(async () => ({ ok: true, data: {} })),
 }));
 
 import { CreateItemsModal } from './create-items-modal';

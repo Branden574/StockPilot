@@ -148,6 +148,11 @@ const PO_SCHEMA = {
             description:
               'The style/product identity this line belongs to, as printed ("Nike Pegasus 41 FD2722", "Falcons Home Jersey 2026"). This is what lets several size lines resolve to ONE product. Empty string if unclear.',
           },
+          serialNumber: {
+            type: SchemaType.STRING,
+            description:
+              'The SERIAL NUMBER printed on this line, copied exactly (keep dashes, letters and leading zeroes). Only fill this when the document explicitly labels the value as a serial, IMEI, or asset serial. NEVER put a jersey/uniform number, a quantity, a SKU or a style number here, and NEVER invent one or write a placeholder like "N/A" or "0000" — return an empty string when the document prints no serial.',
+          },
           mappingConfidence: {
             type: SchemaType.NUMBER,
             description:
@@ -231,6 +236,8 @@ export interface ExtractedPo {
     playerName: string;
     /** Free-text style/product identity used to resolve several size lines to ONE product. */
     groupHint: string;
+    /** The serial the document PRINTED, verbatim, or '' — never invented, never a placeholder. */
+    serialNumber: string;
     /** 0..1 confidence in the FIELD MAPPING (not the character reading). Null when the model gave none. */
     mappingConfidence: number | null;
   }>;
@@ -375,6 +382,10 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
     jerseyNumber: typeof l.jerseyNumber === 'string' ? l.jerseyNumber.trim() : '',
     playerName: typeof l.playerName === 'string' ? l.playerName.trim() : '',
     groupHint: typeof l.groupHint === 'string' ? l.groupHint.trim() : '',
+    // A serial is a STRING and only ever a copy. Same guard as jerseyNumber:
+    // a model that returns 7 must LOSE the value rather than have it
+    // stringified into a serial the document never printed.
+    serialNumber: typeof l.serialNumber === 'string' ? l.serialNumber.trim() : '',
     mappingConfidence:
       typeof l.mappingConfidence === 'number' && Number.isFinite(l.mappingConfidence)
         ? Math.min(1, Math.max(0, l.mappingConfidence))

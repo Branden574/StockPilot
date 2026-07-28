@@ -24,6 +24,7 @@ const line = (p: Partial<Line>): Line => ({
   jerseyNumber: '',
   playerName: '',
   groupHint: '',
+  serialNumber: '',
   mappingConfidence: null,
   ...p,
 });

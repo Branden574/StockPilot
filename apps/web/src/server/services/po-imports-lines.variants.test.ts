@@ -369,3 +369,59 @@ describe('createItemsFromPoLines — sports identity', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('createItemsFromPoLines — "new" never discards an exact group match', () => {
+  it('keeps the matched group when the reviewer adds a NEW variant to it', async () => {
+    // Two variants already share the resolved variant key, so the verdict is
+    // ambiguous_variant_match on a group that WAS matched exactly.
+    const stub = stubFor({
+      sportsCategory: true,
+      groupHit: true,
+      variants: [
+        { id: 'itm-a', name: 'Pegasus 41 US 10', sku: 'SKU-A' },
+        { id: 'itm-b', name: 'Pegasus 41 US 10', sku: 'SKU-B' },
+      ],
+    });
+    const { create, deps } = depsFor(stub);
+
+    await createItemsFromPoLines(deps, {
+      ...BASE_INPUT,
+      categoryId: CATEGORY_ID,
+      groupDecisions: { [LINE_ID]: { mode: 'new' } },
+    });
+
+    // 'new' means "not one of those variants", NOT "forget the group". Losing
+    // it here created an orphan variant of a product the org already has.
+    expect((create.mock.calls[0]?.[0] as Record<string, unknown>).groupId).toBe(GROUP_ID);
+    // ...and with a group already resolved there is nothing to find-or-create.
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('productGroup');
+  });
+
+  it('threads the group IDENTITY when the line must create one', async () => {
+    const stub = stubFor({ sportsCategory: true, groupHit: false });
+    const { create, deps } = depsFor(stub);
+
+    await createItemsFromPoLines(deps, { ...BASE_INPUT, categoryId: CATEGORY_ID });
+
+    const arg = create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg.groupId).toBeNull();
+    // Without this, create() skipped find-or-create entirely and every
+    // create_new_group line landed group_id = NULL.
+    expect(arg.productGroup).toMatchObject({
+      name: 'Nike Pegasus 41',
+      subcategoryKey: 'shoes',
+      model: 'Nike Pegasus 41',
+      styleNumber: 'FD2722',
+      categoryId: CATEGORY_ID,
+    });
+  });
+
+  it('passes NO group identity for a non-sports import', async () => {
+    const stub = stubFor({ sportsCategory: false });
+    const { create, deps } = depsFor(stub);
+
+    await createItemsFromPoLines(deps, BASE_INPUT);
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('productGroup');
+  });
+});

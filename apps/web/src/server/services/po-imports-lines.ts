@@ -2,14 +2,20 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { lineResultBlocksApproval } from '@stockpilot/core';
+import {
+  lineResultBlocksApproval,
+  type CountingUnit,
+  type CreateProductGroupInput,
+} from '@stockpilot/core';
 
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
 import type { InventoryService } from './inventory';
 import {
   asSizeSystem,
+  groupPartsForLine,
   resolveLineVariant,
+  toVariantLine,
   type LineResolution,
   type PoImportVariantLine,
   type ResolveLineVariantDeps,
@@ -300,7 +306,15 @@ async function settleGroupDecision(
     );
   }
 
-  let chosen: string | null = null;
+  // 'new' means "do not link me to one of these candidates". It does NOT mean
+  // "forget the group this line already resolved to": an
+  // `ambiguous_variant_match` on an EXACTLY-matched group is asking which
+  // VARIANT, and answering "a new one" must keep the group. Returning null
+  // here dropped that group on the floor and created an orphan variant of a
+  // product the org already has. Where no group was matched (a
+  // `possible_duplicate` suggestion), `resolution.groupId` is null and 'new'
+  // still means a brand-new group, exactly as before.
+  let chosen: string | null = decision.mode === 'new' ? resolution.groupId : null;
   if (decision.mode === 'link') {
     if (!decision.groupId) {
       throw new ServiceError(
@@ -458,7 +472,7 @@ export async function createItemsFromPoLines(
     // column Task 13 left out; without it the confidence gate below reads
     // undefined and never fires.
     .select(
-      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, suggested_group_id, mapping_confidence',
+      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, serial_hint, suggested_group_id, mapping_confidence',
     )
     .eq('po_import_id', input.poImportId)
     .in('id', input.lineIds);
@@ -496,32 +510,17 @@ export async function createItemsFromPoLines(
     // a line is still refused — by approve(), which every path funnels through.
     // Non-sports lines resolve to 'ready' and change nothing either way.
     const overrides = input.variantOverrides?.[l.id as string];
-    const variantLine: PoImportVariantLine = {
-      id: l.id as string,
-      line_number: l.line_number as number,
-      description: (l.description as string | null) ?? null,
-      qty_ordered_original: (l.qty_ordered_original as number | null) ?? null,
-      vendor_product_number: vendorProductNumber,
-      // The reviewer's on-screen fix wins over what the document said; the
-      // document's own text is preserved in variant_size_original below.
-      variant_size: overrides?.size ?? (l.variant_size as string | null) ?? null,
-      // Normalized at the point of USE, never at the point of storage: the
-      // column keeps whatever the document said (requirements: "preserve
-      // source values"), and an unrecognized system reads as MISSING here so
-      // the size-system gate below fires instead of a junk value riding into
-      // the identity key.
-      variant_size_system: asSizeSystem(
-        overrides?.sizeSystem ?? (l.variant_size_system as string | null),
-      ),
-      variant_width: (l.variant_width as string | null) ?? null,
-      variant_fit: (l.variant_fit as string | null) ?? null,
-      variant_color: (l.variant_color as string | null) ?? null,
-      jersey_number: overrides?.jerseyNumber ?? (l.jersey_number as string | null) ?? null,
-      player_name: (l.player_name as string | null) ?? null,
-      group_hint: (l.group_hint as string | null) ?? null,
-      mapping_confidence: (l.mapping_confidence as number | null) ?? null,
-    };
+    // ONE mapper, shared with the review path, so a verdict shown on screen
+    // and the verdict enforced here are computed from the same normalized row.
+    const variantLine: PoImportVariantLine = toVariantLine(l as Record<string, unknown>, {
+      size: overrides?.size ?? undefined,
+      sizeSystem: overrides?.sizeSystem ?? undefined,
+      jerseyNumber: overrides?.jerseyNumber ?? undefined,
+    });
     let resolvedGroupId: string | null = null;
+    // Set only when this line must FIND-OR-CREATE its group. `create()` needs
+    // the group's identity attributes, not just the (absent) id — see below.
+    let newGroupInput: CreateProductGroupInput | null = null;
     if (decision.mode === 'create') {
       const resolution = await resolveLineVariant(variantDeps, variantLine, importProfile);
       resolvedGroupId = await settleGroupDecision(
@@ -530,6 +529,31 @@ export async function createItemsFromPoLines(
         variantLine,
         input.groupDecisions?.[l.id as string],
       );
+
+      // NO GROUP RESOLVED, BUT THE LINE IS A SPORTS LINE → this is the
+      // create-a-group case, and the group has to actually be created.
+      //
+      // Passing `groupId: null` alone was silently a no-op: `create()` only
+      // find-or-creates when `productGroup` is present, so every
+      // `create_new_group` line landed `group_id = NULL` — no group, no
+      // roll-up, and the next import matched nothing and created another set.
+      // The parts come from the SAME helper the resolver keyed on, so three
+      // size lines off one PO converge on one row (R2): line 1 inserts it,
+      // lines 2 and 3 find it by exact key.
+      if (resolvedGroupId == null && importProfile.isSports && sportsEnabled) {
+        const parts = groupPartsForLine(variantLine, importProfile);
+        const groupName = (parts.name ?? description).slice(0, 200);
+        newGroupInput = {
+          name: groupName,
+          categoryId: input.categoryId ?? null,
+          subcategoryKey: parts.subcategoryKey,
+          brand: parts.brand ?? null,
+          model: parts.model ?? null,
+          styleNumber: parts.styleNumber ?? null,
+          colorway: parts.colorway ?? null,
+          defaultCountingUnit: importProfile.countingUnit as CountingUnit,
+        };
+      }
 
       // An EXACT variant-key hit inside an already-resolved group is not a
       // guess — it is the same product, and creating a second row for it would
@@ -772,6 +796,12 @@ export async function createItemsFromPoLines(
         // from an EXACT key hit or an explicitly accepted candidate, and
         // variant_key is recomputed inside create() — never passed in.
         groupId: resolvedGroupId,
+        // ...and when nothing was resolved, the group's IDENTITY, so create()
+        // can find-or-create it. Only ever present for a sports line whose
+        // verdict said "new group" (or whose reviewer confirmed one), never as
+        // a way to link an existing group — that still requires an explicit
+        // decision through settleGroupDecision above.
+        ...(newGroupInput ? { productGroup: newGroupInput } : {}),
         variantSize: variantLine.variant_size,
         variantSizeOriginal:
           (l.variant_size_original as string | null) ??

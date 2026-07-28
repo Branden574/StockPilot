@@ -27,7 +27,9 @@ import {
 import {
   asSizeSystem,
   resolveLinesForReview,
+  toVariantLine,
   type LineResolution,
+  type PoImportVariantLine,
   type ResolveLineVariantDeps,
 } from './po-imports-variants';
 import { ProductGroupsService } from './product-groups';
@@ -41,7 +43,7 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-import { IMPORT_MAPPING_CONFIDENCE_THRESHOLD } from '@stockpilot/core';
+import { lineNeedsMappingConfirmation } from '@stockpilot/core';
 
 import type {
   ApprovePoImportInput,
@@ -164,6 +166,10 @@ export interface PoImportLineRow {
   player_name: string | null;
   /** Free-text style/product identity, used to resolve a size run to ONE product. */
   group_hint: string | null;
+  /** The serial the DOCUMENT printed, verbatim, or null. Never invented, never
+      a placeholder, and never the jersey number. Settles the `serial_required`
+      verdict at review; post_receipt_v2 still enforces serials at receipt. */
+  serial_hint: string | null;
   /** Advisory "possible existing product group" — mirrors suggested_item_id;
       never auto-linked, the user must accept it in review. */
   suggested_group_id: string | null;
@@ -939,6 +945,11 @@ export class PoImportsService {
         jersey_number: sourceValue(l.jerseyNumber),
         player_name: sourceValue(l.playerName),
         group_hint: sourceValue(l.groupHint),
+        // COPIED off the document or NULL. The extractor is instructed to
+        // return '' rather than guess, and sourceValue turns that into a real
+        // NULL — a serialized line with no printed serial then blocks in
+        // review instead of importing a fabricated one.
+        serial_hint: sourceValue(l.serialNumber),
         suggested_group_id: null,
         mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
@@ -1105,6 +1116,7 @@ export class PoImportsService {
         jersey_number: sourceValue(l.jerseyNumber),
         player_name: sourceValue(l.playerName),
         group_hint: sourceValue(l.groupHint),
+        serial_hint: sourceValue(l.serialHint),
         suggested_group_id: null,
         mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
@@ -1205,11 +1217,15 @@ export class PoImportsService {
     // blocking verdicts are enforced where they can do damage — at item
     // CREATION, in createItemsFromPoLines — but a mis-mapped column is a
     // property of the LINE, so it has to be caught before the PO exists.
-    const unconfirmed = finalLines.find(
-      (l) =>
-        l.mapping_confidence != null &&
-        l.mapping_confidence < IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
-    );
+    //
+    // SCOPED (review fix). The predicate is the shared
+    // `lineNeedsMappingConfirmation`, not a bare confidence test: the
+    // extractor emits mappingConfidence on EVERY scanned line, so testing
+    // confidence alone made an ordinary non-sports PO with one awkward column
+    // header unapprovable — a regression on a chassis that shipped long before
+    // sports. A line that carries no sports field mapping has nothing to
+    // confirm and approves exactly as it always did.
+    const unconfirmed = finalLines.find((l) => lineNeedsMappingConfirmation(l));
     if (unconfirmed) {
       throw new ServiceError(
         'validation_error',
@@ -1683,20 +1699,41 @@ export class PoImportsService {
   /**
    * The review-table verdict for every line of an import.
    *
-   * The tracking profile is per LINE, not per import: once a line points at an
-   * internal item, that item's category is the authority on how the line should
-   * be read. An unmapped line has no category yet, so it resolves against the
-   * non-sports default — which still runs the mapping-confidence gate, the one
-   * check that must fire before anything is matched.
+   * The tracking profile is per LINE, not per import. Which category a line is
+   * read against, in priority order:
+   *
+   *   1. The line's own internal item — once a line points at one, that item's
+   *      category is the authority on how the line should be read.
+   *   2. `options.categoryId` — the category the reviewer picked in the
+   *      create-items modal, for the lines that will CREATE items.
+   *   3. The line's SUGGESTED item's category — advisory only, and used here
+   *      only to decide how to READ the line. It never links anything (0233).
+   *
+   * Step 2 and 3 are the review fix. A create-mode line has `item_id = null`
+   * by definition, so deriving the profile from `item_id` alone meant every
+   * sports line resolved 'ready': the Group and Result columns rendered
+   * nothing, the reviewer saw no verdict to answer, and the first sign of
+   * trouble was a raw server throw from `createItemsFromPoLines`. The whole
+   * point of the review table is that the verdict is visible BEFORE approval.
    *
    * Read-only. Nothing here writes, links or merges.
    */
-  async resolveLineResults(poImportId: string): Promise<Record<string, LineResolution>> {
+  async resolveLineResults(
+    poImportId: string,
+    options: { categoryId?: string | null } = {},
+  ): Promise<Record<string, LineResolution>> {
     assertModuleEnabled(this.ctx, 'po_imports');
     const { lines } = await this.get(poImportId);
 
-    // One query for every mapped line's category, rather than one per line.
-    const itemIds = [...new Set(lines.map((l) => l.item_id).filter((v): v is string => !!v))];
+    // One query for every mapped OR suggested line's category, rather than one
+    // per line.
+    const itemIds = [
+      ...new Set(
+        lines
+          .flatMap((l) => [l.item_id, l.suggested_item_id])
+          .filter((v): v is string => !!v),
+      ),
+    ];
     const categoryByItem = new Map<string, string | null>();
     if (itemIds.length > 0) {
       const { data, error } = await this.ctx.supabase
@@ -1719,11 +1756,20 @@ export class PoImportsService {
       sportsEnabled: this.ctx.enabledModules.has('sports'),
     };
 
-    const withProfiles: Array<{ line: PoImportLineRow; profile: ResolvedTrackingProfile }> = [];
+    const withProfiles: Array<{
+      line: PoImportVariantLine;
+      profile: ResolvedTrackingProfile;
+    }> = [];
     for (const line of lines) {
-      const categoryId = line.item_id ? (categoryByItem.get(line.item_id) ?? null) : null;
+      const categoryId = line.item_id
+        ? (categoryByItem.get(line.item_id) ?? null)
+        : (options.categoryId ??
+          (line.suggested_item_id ? (categoryByItem.get(line.suggested_item_id) ?? null) : null));
       withProfiles.push({
-        line,
+        // Normalized through the SAME mapper the create path uses, so a
+        // document that printed "us mens" cannot read as having a size system
+        // here and as missing one at creation.
+        line: toVariantLine(line as unknown as Record<string, unknown>),
         profile: await resolveTrackingProfile(this.ctx, categoryId, cache),
       });
     }
@@ -1765,16 +1811,24 @@ export class PoImportsService {
       const sourceValue = line.jersey_number;
       // 'jersey_number' confirms what was read; every other meaning says the
       // value is NOT a number, so it leaves the number field. It is only ever
-      // MOVED to a field that means the same thing (style number), never
-      // rewritten into a quantity or a serial — inventing either is exactly
-      // what the requirements forbid.
+      // MOVED to a field that means the same thing — the style number, or the
+      // serial the reviewer says it is — never rewritten into a quantity.
+      // Inventing a quantity is exactly what the requirements forbid.
       const patch: Record<string, unknown> = { mapping_confidence: 1 };
       if (meaning !== 'jersey_number') patch.jersey_number = null;
       if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
         patch.vendor_product_number = sourceValue;
       }
+      // A reviewer declaring the column to BE a serial is one of the three
+      // ways serial_hint is populated, and the one that makes the
+      // `serial_required` verdict settleable from the review screen. The value
+      // still comes from the DOCUMENT — this only says which field it belongs
+      // in. Nothing is fabricated when there was no value to move.
+      if (meaning === 'serial' && sourceValue && !line.serial_hint) {
+        patch.serial_hint = sourceValue;
+      }
 
-      const { error } = await this.ctx.supabase
+      const { data: updated, error } = await this.ctx.supabase
         .from('po_import_lines')
         .update(patch)
         .eq('po_import_id', input.poImportId)
@@ -1782,6 +1836,17 @@ export class PoImportsService {
         .select('id')
         .maybeSingle();
       if (error) throw new ServiceError('internal_error', error.message);
+      // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
+      // rows, so ignoring the result meant a confirmation that RLS refused —
+      // or that raced a cancel — still counted as confirmed, told the reviewer
+      // so, and wrote an audit entry for a change that never happened. The
+      // line would then hit the approval gate again with no explanation.
+      if (!updated) {
+        throw new ServiceError(
+          'conflict',
+          `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
+        );
+      }
 
       await audit(
         {

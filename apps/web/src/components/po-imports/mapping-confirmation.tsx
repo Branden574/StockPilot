@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import {
   AMBIGUOUS_COLUMN_MEANINGS,
   AMBIGUOUS_COLUMN_MEANING_LABELS,
-  IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
+  lineNeedsMappingConfirmation,
   type AmbiguousColumnMeaning,
 } from '@stockpilot/core';
 
@@ -38,14 +38,12 @@ import type { PoImportLineRow } from '@/server/services/po-imports';
  * Nothing is pre-selected. There is no "accept all" and no default meaning:
  * the whole point of the step is that a human states what the column is.
  */
-export function needsMappingConfirmation(line: {
-  mapping_confidence: number | null;
-}): boolean {
-  return (
-    line.mapping_confidence != null &&
-    line.mapping_confidence < IMPORT_MAPPING_CONFIDENCE_THRESHOLD
-  );
-}
+/**
+ * Re-exported from core rather than reimplemented: this component and
+ * `approve()` must agree exactly on which lines are flagged, or the screen
+ * shows a block with no control (or hides one the server will refuse).
+ */
+export const needsMappingConfirmation = lineNeedsMappingConfirmation;
 
 interface Props {
   poImportId: string;
