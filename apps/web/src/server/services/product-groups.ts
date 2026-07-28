@@ -13,12 +13,14 @@ import {
 
 import { audit } from './audit';
 import {
+  assertAnyPermission,
   assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 /** One `product_groups` row. Identity only — a group NEVER owns a quantity. */
 export interface ProductGroupRow {
@@ -185,11 +187,20 @@ export class ProductGroupsService {
    * NEVER fuzzy-matches. `candidates()` is the separate, advisory path that
    * surfaces near-misses for a HUMAN to resolve — this method is exact-key
    * only, so an import can never auto-merge an uncertain match.
+   *
+   * EITHER permission opens this path. Two legitimate callers arrive by two
+   * different routes: the item form (an `items:create` holder naming a new
+   * sized product) and the group-linking review tool (a `sports:manage`
+   * reviewer promoting an existing family). The linking write itself gates on
+   * `sports:manage`, so demanding `items:create` here refused a reviewer at
+   * the "create the group to link into" step of a screen they were entitled
+   * to open. A group is identity and owns no stock, so neither permission is
+   * the weaker one — see `assertAnyPermission`.
    */
   async findOrCreate(
     input: CreateProductGroupInput & { subcategoryKey: string },
   ): Promise<{ group: ProductGroupRow; created: boolean }> {
-    assertPermission(this.ctx, 'items:create');
+    assertAnyPermission(this.ctx, ['items:create', 'sports:manage']);
     assertModuleEnabled(this.ctx, 'sports');
 
     const groupKey = buildGroupKey({
@@ -465,16 +476,21 @@ export class ProductGroupsService {
   }
 
   /**
-   * The variants for MANY groups at once, size-ordered within each group.
+   * The variants for MANY groups at once, keyed by group id.
    *
-   * This exists so a list of groups can render its per-variant expansion
-   * without one query per group. The roll-up VIEW already aggregates counts
-   * and totals server-side; this is the same discipline for the rows behind
-   * them — the list page must never become N+1 (app-wide nav perf note).
+   * NOT the list page's path — that expands ONE group at a time, on demand
+   * (`loadGroupVariantsAction`), because a collapsed page has no business
+   * reading every variant of every group on it. This is for a caller that
+   * genuinely needs the whole batch at once.
    *
-   * Chunked for the same reason `displayByIds` is: PostgREST silently
-   * truncates a single `.in()` past its max_rows with no error, and a
-   * truncated read here would show a group with fewer variants than it has.
+   * PAGED BY ROWS, NOT BY GROUPS. The batch used to count GROUPS (100 per
+   * `.in()`) while PostgREST caps the RESPONSE at `max_rows` = 1000: 100
+   * groups of 13 sizes is 1300 rows, of which 1000 came back — silently, with
+   * no error — so an expansion showed fewer variants than the group holds
+   * while its header (read from the roll-up VIEW) kept the true total. A
+   * ceiling on the wrong unit is not a ceiling. `fetchAllRows` walks
+   * 1000-row windows on a stable `id` order until a short page proves the end,
+   * so the row count no longer has a cap at all.
    */
   async variantsByGroupIds(groupIds: string[]): Promise<Map<string, VariantRow[]>> {
     assertModuleEnabled(this.ctx, 'sports');
@@ -482,22 +498,35 @@ export class ProductGroupsService {
     const out = new Map<string, VariantRow[]>();
     if (unique.length === 0) return out;
 
+    // Groups are still chunked into `.in()` batches — that bounds the URL
+    // length, which is a separate limit from max_rows — but each batch is now
+    // itself row-paged.
     const GROUP_BATCH_SIZE = 100;
     for (let i = 0; i < unique.length; i += GROUP_BATCH_SIZE) {
       const batch = unique.slice(i, i + GROUP_BATCH_SIZE);
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select(`${VARIANT_COLUMNS}, group_id`)
-        .eq('organization_id', this.ctx.organizationId)
-        .in('group_id', batch)
-        .is('deleted_at', null)
-        .order('sku', { ascending: true });
-      if (error) throw new ServiceError('internal_error', error.message);
-      for (const row of (data ?? []) as unknown as Array<VariantRow & { group_id: string }>) {
+      const rows = await fetchAllRows<VariantRow & { group_id: string }>((from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(`${VARIANT_COLUMNS}, group_id`)
+          .eq('organization_id', this.ctx.organizationId)
+          .in('group_id', batch)
+          .is('deleted_at', null)
+          // The paging order MUST be the stable one (`fetchAllRows` header):
+          // an unstable sort lands the same row on two windows or on none.
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
+      for (const row of rows) {
         const arr = out.get(row.group_id);
         if (arr) arr.push(row);
         else out.set(row.group_id, [row]);
       }
+    }
+    // Sorted after the fact so paging keeps its stable key: callers re-sort by
+    // SIZE anyway (the group's authored scale lives in `displayByIds`), and a
+    // sku order is the deterministic fallback for a group with no scale.
+    for (const arr of out.values()) {
+      arr.sort((a, b) => (a.sku ?? '').localeCompare(b.sku ?? '', 'en'));
     }
     return out;
   }

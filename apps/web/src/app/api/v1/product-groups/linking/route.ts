@@ -37,7 +37,11 @@ export const dynamic = 'force-dynamic';
 function errorResponse(e: unknown) {
   if (e instanceof ServiceError) {
     return NextResponse.json(
-      { error: e.code, message: e.message },
+      // `details` carries the sports vocabulary code (ITEM_ALREADY_GROUPED,
+      // VARIANT_ALREADY_EXISTS) and the offending item ids when the service set
+      // them, so the native client can render the mapped title/action and mark
+      // the exact rows rather than showing one blob of text.
+      { error: e.code, message: e.message, details: e.details ?? null },
       { status: serviceErrorStatus(e.code) },
     );
   }

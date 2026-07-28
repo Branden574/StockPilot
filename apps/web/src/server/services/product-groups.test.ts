@@ -157,12 +157,41 @@ describe('ProductGroupsService.findOrCreate', () => {
     ).rejects.toMatchObject({ code: 'module_disabled' });
   });
 
-  it('refuses a caller without items:create', async () => {
+  it('refuses a caller holding NEITHER items:create nor sports:manage', async () => {
     const stub = makeSupabaseStub({});
     const ctx = sportsCtx(stub.client, { role: 'viewer' });
     await expect(
       new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT),
     ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  // Task 18 review fix: the linking tool gates its WRITE on sports:manage, so
+  // a reviewer granted only that could open the tool, tick a family, and be
+  // refused at the "create the group to link into" step.
+  it('accepts a sports:manage reviewer who was never granted items:create', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: groupRow(), error: null },
+    });
+    const ctx = sportsCtx(stub.client, {
+      role: 'viewer',
+      permissions: new Set(['sports:manage']),
+    });
+    const out = await new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT);
+    expect(out.created).toBe(true);
+  });
+
+  it('still accepts an items:create caller with no sports:manage', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: groupRow(), error: null },
+    });
+    const ctx = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['items:create']),
+    });
+    const out = await new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT);
+    expect(out.created).toBe(true);
   });
 });
 
@@ -453,5 +482,80 @@ describe('ProductGroupsService.displayByIds (Task 16 review fix: chunking)', () 
     });
     const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(['grp-1']);
     expect(out.get('grp-1')).toMatchObject({ name: 'Nike Pegasus 41', countingUnit: 'pair' });
+  });
+});
+
+describe('ProductGroupsService.variantsByGroupIds (Task 18 review fix: ROW-safe paging)', () => {
+  /** One variant row, only the columns the merge reads. */
+  function variantRow(id: string, groupId: string) {
+    return {
+      id,
+      sku: `SKU-${id}`,
+      name: `Variant ${id}`,
+      quantity_on_hand: 1,
+      variant_size: '9',
+      variant_size_original: null,
+      variant_size_system: null,
+      variant_width: null,
+      variant_fit: null,
+      variant_color: null,
+      jersey_number: null,
+      player_name: null,
+      variant_key: null,
+      unit_of_measure: 'pair',
+      tracking_type: 'none',
+      warehouse_id: null,
+      status: 'active',
+      group_id: groupId,
+    };
+  }
+
+  // The defect: the batch counted GROUPS (100 per `.in()`) while PostgREST caps
+  // the RESPONSE at max_rows = 1000. 100 groups x 13 sizes = 1300 rows, of
+  // which 1000 came back — silently, with no error — so an expansion showed
+  // fewer variants than the group holds while the header (which reads the
+  // roll-up VIEW) kept the true total. Paging by ROWS is the only fix.
+  it('keeps paging past a FULL 1000-row response instead of taking it as the whole answer', async () => {
+    const groupIds = Array.from({ length: 100 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        call += 1;
+        // First response is exactly the cap; the truth is 1300 rows.
+        if (call === 1) {
+          return {
+            data: Array.from({ length: 1000 }, (_, i) => variantRow(`a${i}`, 'grp-0')),
+            error: null,
+          };
+        }
+        return { data: [variantRow('b0', 'grp-1'), variantRow('b1', 'grp-1')], error: null };
+      },
+    });
+
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds(groupIds);
+
+    expect(call).toBeGreaterThan(1);
+    expect(out.get('grp-0')).toHaveLength(1000);
+    expect(out.get('grp-1')).toHaveLength(2);
+  });
+
+  it('stops at a short page and never loops forever', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [variantRow('v1', 'grp-1')], error: null },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds([
+      'grp-1',
+    ]);
+    expect(out.get('grp-1')).toHaveLength(1);
+    expect(stub.chainsAll.get('inventory_items.select')).toHaveLength(1);
+  });
+
+  it('throws rather than swallowing a read error', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: null, error: { message: 'boom' } },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds(['grp-1']),
+    ).rejects.toMatchObject({ code: 'internal_error' });
   });
 });

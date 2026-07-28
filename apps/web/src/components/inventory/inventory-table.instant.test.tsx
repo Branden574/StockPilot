@@ -2084,4 +2084,35 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     expect(screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i })).toBeInTheDocument();
     expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
   });
+
+  // The pagination twin of the tests above. A group is the unit of DISPLAY, so
+  // it must be the unit of PAGINATION: with the family straddling a fixed
+  // 2-row slice, one member rendered flat on the next page and the header on
+  // this one summed 32 instead of 52.
+  it('keeps a group whose names defeat the size regex whole on one page, with the full total', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9', updated_at: '2026-01-09T00:00:00+00:00' }),
+      item({ id: 'x1', name: 'Stapler', sku: 'STP-1', quantity_on_hand: 1, updated_at: '2026-01-08T00:00:00+00:00' }),
+      item({ id: 'x2', name: 'Kettle', sku: 'KTL-1', quantity_on_hand: 1, updated_at: '2026-01-07T00:00:00+00:00' }),
+      item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10', updated_at: '2026-01-06T00:00:00+00:00' }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={rows.length}
+        pageSize={2}
+        instant={{ items: rows, view: 'items' }}
+        productGroupUnits={{ 'grp-1': 'pair' }}
+      />,
+    );
+
+    // ONE header, both variants behind it, and the roll-up is the whole
+    // family (32 + 20), never the page-slice 32.
+    expect(screen.getAllByRole('button', { name: /expand/i })).toHaveLength(1);
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Stapler')).not.toBeInTheDocument();
+  });
 });

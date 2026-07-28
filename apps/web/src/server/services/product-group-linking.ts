@@ -280,6 +280,11 @@ interface LinkTargetRow {
  * identity two variants are matched on, so a client-supplied key would let a
  * caller merge two physical sizes into one variant — and merge their stock
  * with them.
+ *
+ * Nothing is written until the WHOLE batch is resolved and checked: an item
+ * from another org, an item in a different group, or two items claiming one
+ * variant key (`assertNoVariantKeyCollision`) all refuse the call before the
+ * first update.
  */
 export async function linkFamily(
   deps: {
@@ -364,8 +369,10 @@ export async function linkFamily(
     }
   }
 
-  let linked = 0;
-  for (const member of input.members) {
+  // Resolve every member's final attributes BEFORE writing anything, so the
+  // duplicate-key check below sees the whole batch and a refusal costs no
+  // half-applied link.
+  const planned = input.members.map((member) => {
     const before = byId.get(member.itemId)!;
 
     // Normalize what the human typed, keeping the original text alongside it
@@ -389,7 +396,13 @@ export async function linkFamily(
       jerseyNumber: jersey,
       playerName: before.player_name,
     });
+    return { member, before, size, sizeOriginal, sizeSystem, jersey, variantKey };
+  });
 
+  await assertNoVariantKeyCollision({ supabase, ctx, groupId, planned });
+
+  let linked = 0;
+  for (const { member, before, size, sizeOriginal, sizeSystem, jersey, variantKey } of planned) {
     const patch = {
       group_id: groupId,
       variant_size: size,
@@ -451,6 +464,122 @@ export async function linkFamily(
   }
 
   return { groupId, linked };
+}
+
+/** One resolved member, as `linkFamily` computed it before writing. */
+interface PlannedLink {
+  member: LinkFamilyMember;
+  before: LinkTargetRow;
+  variantKey: string;
+}
+
+/** SKU comparison for the collision rule below. Blank never equals blank: two
+ *  unidentified rows are not evidence of the same placement. */
+function sameSku(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = (a ?? '').trim().toLowerCase();
+  const y = (b ?? '').trim().toLowerCase();
+  return x.length > 0 && x === y;
+}
+
+/**
+ * Refuse a link that would leave TWO different items answering to one
+ * `variant_key` inside one group.
+ *
+ * WHY THIS IS A HARD REFUSAL. `variant_key` carries no uniqueness constraint
+ * (see `variantsByKey`, which deliberately returns every colliding row rather
+ * than picking a winner), so nothing downstream errors — receiving, counting
+ * and PO matching simply find two candidates for one size and have to send a
+ * human back to fix an identity that a human already confirmed. Two "L" rows
+ * linked into one group is that state, created on purpose. Cheaper to refuse
+ * the two rows now, while the reviewer is looking at them.
+ *
+ * THE MODEL B EXCEPTION. Uniqueness on `inventory_items` is (org, sku, charter,
+ * bin) — the SAME sku legitimately exists as several rows, one per placement.
+ * Those rows are one variant in two bins, not two variants claiming one
+ * identity, so a matching SKU is allowed through. Only DIFFERING skus collide.
+ *
+ * `force` does not bypass this. Force answers "move this item out of its other
+ * group"; it says nothing about two items claiming one size.
+ */
+async function assertNoVariantKeyCollision(args: {
+  supabase: ServiceContext['supabase'];
+  ctx: ServiceContext;
+  groupId: string;
+  planned: readonly PlannedLink[];
+}): Promise<void> {
+  const { supabase, ctx, groupId, planned } = args;
+  const conflicts: Array<{ itemId: string; message: string }> = [];
+
+  // (a) Inside the batch itself: the "two L rows" case.
+  const byKey = new Map<string, PlannedLink[]>();
+  for (const p of planned) {
+    const arr = byKey.get(p.variantKey);
+    if (arr) arr.push(p);
+    else byKey.set(p.variantKey, [p]);
+  }
+  for (const [, rows] of byKey) {
+    if (rows.length < 2) continue;
+    for (const row of rows) {
+      const clash = rows.find((o) => o !== row && !sameSku(o.before.sku, row.before.sku));
+      if (!clash) continue;
+      conflicts.push({
+        itemId: row.before.id,
+        message: `"${row.before.name}" (${row.before.sku ?? 'no SKU'}) and "${clash.before.name}" (${clash.before.sku ?? 'no SKU'}) would both be the same variant.`,
+      });
+    }
+  }
+
+  // (b) Against what the destination group already holds. Probed by the exact
+  // keys being written, so the read is bounded by the batch, never by the
+  // group's size.
+  const keys = Array.from(new Set(planned.map((p) => p.variantKey))).filter(Boolean);
+  if (keys.length > 0) {
+    const { data, error } = await supabase
+      .from('inventory_items')
+      .select('id, name, sku, variant_key')
+      .eq('organization_id', ctx.organizationId)
+      .eq('group_id', groupId)
+      .in('variant_key', keys)
+      .is('deleted_at', null);
+    if (error) throw new ServiceError('internal_error', error.message);
+    const existing = (data ?? []) as unknown as Array<{
+      id: string;
+      name: string;
+      sku: string | null;
+      variant_key: string | null;
+    }>;
+    const inBatch = new Set(planned.map((p) => p.before.id));
+    for (const p of planned) {
+      const clash = existing.find(
+        (e) =>
+          // Never the item against itself: re-linking to correct a size is a
+          // normal edit, and the row it would "collide" with is the row being
+          // rewritten.
+          !inBatch.has(e.id) && e.variant_key === p.variantKey && !sameSku(e.sku, p.before.sku),
+      );
+      if (!clash) continue;
+      conflicts.push({
+        itemId: p.before.id,
+        message: `"${p.before.name}" (${p.before.sku ?? 'no SKU'}) would duplicate "${clash.name}" (${clash.sku ?? 'no SKU'}), already in this group.`,
+      });
+    }
+  }
+
+  if (conflicts.length === 0) return;
+  // Deduped per item so a row named in both halves is reported once.
+  const seen = new Set<string>();
+  const unique = conflicts.filter((c) => (seen.has(c.itemId) ? false : seen.add(c.itemId)));
+  throw new ServiceError(
+    'conflict',
+    `${unique.length} ${unique.length === 1 ? 'item' : 'items'} would duplicate a variant that already exists in this group. ` +
+      unique.map((c) => c.message).join(' ') +
+      ' Give each one its own size or number, or leave the duplicates out.',
+    {
+      code: 'VARIANT_ALREADY_EXISTS',
+      itemIds: unique.map((c) => c.itemId),
+      rows: unique,
+    },
+  );
 }
 
 /**

@@ -366,6 +366,128 @@ describe('linkFamily — writes only what a human named', () => {
   });
 });
 
+// Task 18 review fix: a variant key is what receiving, counting and PO
+// matching resolve a size onto, and it carries NO uniqueness constraint. Two
+// rows linked under one key are therefore a permanent ambiguity — the exact
+// state `variantsByKey` refuses to pick a winner for. Catch it at the link.
+describe('linkFamily — refuses a duplicate variant_key in the destination group', () => {
+  /** First `inventory_items.select` = the link targets; second = the rows the
+   *  destination group already holds under one of the computed keys. */
+  function collisionStub(targets: StubItemRow[], existing: Array<Record<string, unknown>>) {
+    let call = 0;
+    return makeSupabaseStub({
+      'inventory_items.select': () => {
+        call += 1;
+        return { data: call === 1 ? targets : existing, error: null };
+      },
+      'inventory_items.update': { data: [{ id: 'ok' }], error: null },
+    });
+  }
+
+  const TWO_L = [
+    itemRow({ id: 'i-l1', name: 'L4L - Pink Shirt - L', sku: 'SP-L1' }),
+    itemRow({ id: 'i-l2', name: 'L4L - Pink Shirt - L (old)', sku: 'SP-L2' }),
+  ];
+  const BOTH_L = [
+    { itemId: 'i-l1', variantSize: 'L', variantSizeOriginal: null, variantSizeSystem: null, jerseyNumber: null },
+    { itemId: 'i-l2', variantSize: 'L', variantSizeOriginal: null, variantSizeSystem: null, jerseyNumber: null },
+  ];
+
+  it('refuses two rows in ONE batch that compute the same key from different SKUs', async () => {
+    const stub = collisionStub(TWO_L, []);
+    await expect(
+      linkFamily(
+        { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { groupId: 'grp-1', members: BOTH_L, reason: 'Both look like the L' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      details: { code: 'VARIANT_ALREADY_EXISTS' },
+    });
+    // Nothing partial: the batch is refused BEFORE the first write.
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+  });
+
+  it('refuses a row whose key already belongs to a DIFFERENT item in the group', async () => {
+    const stub = collisionStub(
+      [itemRow({ id: 'i-l1', sku: 'SP-L1' })],
+      [{ id: 'i-existing', sku: 'SP-OLD-L', name: 'Pink Shirt L', variant_key: buildVariantKey({ size: 'L' }) }],
+    );
+    await expect(
+      linkFamily(
+        { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { groupId: 'grp-1', members: [BOTH_L[0]!], reason: 'Adding the L' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      details: { code: 'VARIANT_ALREADY_EXISTS' },
+    });
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+  });
+
+  // MODEL B: (org, sku, charter, bin) uniqueness means the SAME sku legitimately
+  // exists as several rows — one per placement. Those are the same variant in
+  // two bins, not two variants claiming one identity.
+  it('ALLOWS a same-SKU row already in the group (a second placement, not a collision)', async () => {
+    const stub = collisionStub(
+      [itemRow({ id: 'i-l1', sku: 'SP-L' })],
+      [{ id: 'i-other-bin', sku: 'SP-L', name: 'Pink Shirt L', variant_key: buildVariantKey({ size: 'L' }) }],
+    );
+    const out = await linkFamily(
+      { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+      { groupId: 'grp-1', members: [BOTH_L[0]!], reason: 'Second bin' },
+    );
+    expect(out).toEqual({ groupId: 'grp-1', linked: 1 });
+  });
+
+  it('ALLOWS two batch rows sharing a SKU and a size (the same variant in two bins)', async () => {
+    const stub = collisionStub(
+      [
+        itemRow({ id: 'i-l1', sku: 'SP-L' }),
+        itemRow({ id: 'i-l2', sku: 'SP-L' }),
+      ],
+      [],
+    );
+    const out = await linkFamily(
+      { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+      { groupId: 'grp-1', members: BOTH_L, reason: 'One style, two bins' },
+    );
+    expect(out.linked).toBe(2);
+  });
+
+  it('does not count the item against ITSELF on a re-link', async () => {
+    const stub = collisionStub(
+      [itemRow({ id: 'i-l1', sku: 'SP-L1', group_id: 'grp-1', variant_key: buildVariantKey({ size: 'L' }) })],
+      [{ id: 'i-l1', sku: 'SP-L1', name: 'Pink Shirt L', variant_key: buildVariantKey({ size: 'L' }) }],
+    );
+    const out = await linkFamily(
+      { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+      { groupId: 'grp-1', members: [BOTH_L[0]!], reason: 'Fixed the size system' },
+    );
+    expect(out.linked).toBe(1);
+  });
+
+  it('force does NOT wave a collision through — force is about moving groups', async () => {
+    const stub = collisionStub(TWO_L, []);
+    await expect(
+      linkFamily(
+        { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { groupId: 'grp-1', members: BOTH_L, reason: 'Anyway', force: true },
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', details: { code: 'VARIANT_ALREADY_EXISTS' } });
+  });
+
+  it('names the offending rows so the reviewer knows which two to fix', async () => {
+    const stub = collisionStub(TWO_L, []);
+    const error = await linkFamily(
+      { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+      { groupId: 'grp-1', members: BOTH_L, reason: 'Both look like the L' },
+    ).catch((e: unknown) => e as ServiceError);
+    expect((error as ServiceError).details?.itemIds).toEqual(['i-l1', 'i-l2']);
+    expect((error as ServiceError).message).toContain('SP-L2');
+  });
+});
+
 describe('unlinkItems — the undo', () => {
   it('restores group_id to null and clears the now-meaningless variant_key', async () => {
     const stub = makeSupabaseStub({

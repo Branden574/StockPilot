@@ -2,7 +2,7 @@ import { Layers } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { can, compareSizeValues } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ProductGroupRollupList } from '@/components/inventory/product-group-rollup-list';
@@ -21,9 +21,9 @@ export const metadata = { title: 'Product groups' };
  *
  * A group owns NO quantity. Every number on this page is aggregated at read
  * time — the counts and totals come from `product_group_rollups` (a
- * security_invoker view over `inventory_items`), and the variant rows come from
- * one batched read for the whole page. Neither is a stored column and neither
- * is one query per group.
+ * security_invoker view over `inventory_items`), never a stored column. The
+ * variant ROWS behind a group are fetched only when that group is expanded, so
+ * a collapsed page issues no per-group query at all.
  *
  * Gated twice, as the module registry declares: the `sports` module must be on
  * AND the viewer must hold `sports:manage`. A non-sports org never reaches this
@@ -50,21 +50,16 @@ export default async function ProductGroupsPage(props: {
   const groups = await svc.list({ search: search || undefined, limit: 100 });
   const ids = groups.map((g) => g.id);
 
-  // Three reads for the whole page, never one per group: the aggregate view,
-  // the batched variant rows, and the display metadata that carries each
-  // group's authored size order.
-  const [rollups, variantsByGroup, display] = await Promise.all([
-    svc.rollups(ids),
-    svc.variantsByGroupIds(ids),
-    svc.displayByIds(ids),
-  ]);
+  // TWO reads for the whole page: the groups and the aggregate view. The
+  // variant ROWS are not read here at all — the page renders collapsed, every
+  // number on it is a server-side aggregate, and a group's rows are fetched
+  // only when a human opens it (`loadGroupVariantsAction`). Reading them all
+  // up front was both wasted work and capped by PostgREST's max_rows, which
+  // let a large page silently under-report an expansion.
+  const rollups = await svc.rollups(ids);
 
   const rows = groups.map((g) => {
     const roll = rollups.get(g.id);
-    const order = display.get(g.id)?.sizeOrder ?? null;
-    const variants = [...(variantsByGroup.get(g.id) ?? [])].sort((a, b) =>
-      compareSizeValues(a.variant_size, b.variant_size, order),
-    );
     return {
       id: g.id,
       name: g.name,
@@ -75,24 +70,10 @@ export default async function ProductGroupsPage(props: {
       subcategoryKey: g.subcategory_key,
       trackingMode: g.tracking_mode,
       countingUnit: g.default_counting_unit,
-      // The AUTHORITATIVE roll-up: whole-group figures from the view, not a
-      // sum of the rows this page happens to have loaded.
+      // The AUTHORITATIVE roll-up: whole-group figures from the view, never a
+      // sum of the rows an expansion happens to have loaded.
       variantCount: roll?.variantCount ?? 0,
       totalQuantity: roll?.totalQuantity ?? 0,
-      variants: variants.map((v) => ({
-        id: v.id,
-        sku: v.sku,
-        name: v.name,
-        quantity: Number(v.quantity_on_hand) || 0,
-        variantSize: v.variant_size,
-        variantSizeSystem: v.variant_size_system,
-        variantWidth: v.variant_width,
-        variantColor: v.variant_color,
-        jerseyNumber: v.jersey_number,
-        trackingType: v.tracking_type,
-        unitOfMeasure: v.unit_of_measure,
-        status: v.status,
-      })),
     };
   });
 
