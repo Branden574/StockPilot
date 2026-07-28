@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createProductGroupSchema,
   jerseyNumberSchema,
+  linkFamilyMemberSchema,
   serverVariantAttributesSchema,
   sizeSystemSchema,
   variantAttributesSchema,
@@ -157,5 +158,38 @@ describe('createProductGroupSchema', () => {
     expect(
       createProductGroupSchema.safeParse({ name: 'Falcons Jersey', homeAway: 'neutral' }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * `inventory_items_variant_size_check` (migration 0298) caps variant_size at 24
+ * characters. `variantAttributesSchema` matches it; `linkFamilyMemberSchema` was
+ * left at 32, so a 25-32 character size passed validation, reached the service,
+ * and blew up mid-batch on the DB CHECK — after earlier members of the same link
+ * had already been written (linkFamily updates row by row). A 400 at the
+ * boundary is a message a reviewer can act on; a 500 halfway through a 200-item
+ * link is a half-linked family.
+ */
+describe('linkFamilyMemberSchema — variantSize matches the DB CHECK', () => {
+  const member = (variantSize: string) => ({
+    itemId: '11111111-1111-1111-1111-111111111111',
+    variantSize,
+  });
+
+  it('accepts a size at the 24-character DB limit', () => {
+    expect(linkFamilyMemberSchema.safeParse(member('X'.repeat(24))).success).toBe(true);
+  });
+
+  it('REFUSES a size the DB CHECK would reject mid-batch', () => {
+    for (const len of [25, 32]) {
+      expect(linkFamilyMemberSchema.safeParse(member('X'.repeat(len))).success).toBe(false);
+    }
+  });
+
+  it('agrees with variantAttributesSchema, the bound every other path uses', () => {
+    const long = 'X'.repeat(25);
+    expect(variantAttributesSchema.safeParse({ variantSize: long }).success).toBe(
+      linkFamilyMemberSchema.safeParse(member(long)).success,
+    );
   });
 });

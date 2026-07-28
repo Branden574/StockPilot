@@ -65,12 +65,20 @@ function buildStub(
   },
   /** (value, normalized) rows for the category's size scale, when it has one. */
   sizeScaleValues: Array<{ value: string; normalized: string }> = [],
+  /** Ledger-invariant tests: make the stock_movements insert (and optionally
+   *  the compensating on-hand rollback) fail. */
+  failure: {
+    movements?: { message: string; code?: string };
+    compensation?: { message: string; code?: string };
+  } = {},
 ) {
   const insertedItems: Array<Record<string, unknown>> = [];
   const insertedMovements: Array<Record<string, unknown>> = [];
+  const itemUpdates: Array<Record<string, unknown>> = [];
   return {
     insertedItems,
     insertedMovements,
+    itemUpdates,
 
     from(table: string): any {
       if (table === 'categories' || table === 'size_scales' || table === 'size_scale_values') {
@@ -109,7 +117,7 @@ function buildStub(
             insertedItems.push(...rows);
             return {
               select: () => ({
-                 
+
                 then: (cb: any) =>
                   cb({
                     data: rows.map((r, i) => ({ ...r, id: `i-${i}` })),
@@ -118,13 +126,34 @@ function buildStub(
               }),
             };
           },
+          // The compensating rollback the ledger guard performs when the
+          // movement insert fails.
+          update: (payload: Record<string, unknown>) => {
+            itemUpdates.push(payload);
+            let ids: string[] = [];
+            const builder: any = {
+              eq: () => builder,
+              in: (_col: string, v: string[]) => {
+                ids = v;
+                return builder;
+              },
+              select: () => builder,
+              then: (cb: any) =>
+                cb(
+                  failure.compensation
+                    ? { data: null, error: failure.compensation }
+                    : { data: ids.map((id) => ({ id })), error: null },
+                ),
+            };
+            return builder;
+          },
         };
       }
       if (table === 'stock_movements') {
         return {
           insert: (rows: Array<Record<string, unknown>>) => {
             insertedMovements.push(...rows);
-            return Promise.resolve({ error: null });
+            return Promise.resolve({ error: failure.movements ?? null });
           },
         };
       }
@@ -499,5 +528,63 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
       }),
     ).rejects.toThrow(/required/i);
     expect(stub.insertedItems).toHaveLength(0);
+  });
+});
+
+// THE LEDGER INVARIANT IS ABSOLUTE: SUM(stock_movements.quantity_change) for an
+// item equals its quantity_on_hand. This path used to console.warn a failed
+// movement insert and return SUCCESS, leaving rows carrying stock that no
+// movement anywhere explains — invisible to the item Activity feed, to the
+// 14-day sparklines and to every reconciliation that sums the ledger, and
+// silently understating what a later restore or audit would rebuild.
+describe('InventoryService.bulkCreateSizedVariants — movement-insert failure', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('does NOT report success when the opening movements could not be written', async () => {
+    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
+    await expect(
+      makeSvc(stub).bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [{ size: 'S', quantity: 3 }],
+      }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
+  it('COMPENSATES by zeroing the on-hand it could not explain, restoring 0 = 0', async () => {
+    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
+    await makeSvc(stub)
+      .bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'S', quantity: 3 },
+          { size: 'M', quantity: 0 },
+        ],
+      })
+      .catch(() => undefined);
+
+    expect(stub.itemUpdates).toHaveLength(1);
+    expect(stub.itemUpdates[0]?.quantity_on_hand).toBe(0);
+  });
+
+  it('says so loudly when even the rollback fails, instead of swallowing both', async () => {
+    const stub = buildStub([], undefined, [], {
+      movements: { message: 'ledger down' },
+      compensation: { message: 'rollback down' },
+    });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
+      .catch((e: unknown) => e)) as { code: string; message: string };
+
+    expect(err.code).toBe('internal_error');
+    expect(err.message).toMatch(/support/i);
+  });
+
+  it('never compensates when the movements DID land', async () => {
+    const stub = buildStub();
+    await makeSvc(stub).bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: 'S', quantity: 3 }],
+    });
+    expect(stub.itemUpdates).toHaveLength(0);
   });
 });

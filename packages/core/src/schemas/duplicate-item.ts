@@ -1,6 +1,8 @@
 // packages/core/src/schemas/duplicate-item.ts
 import { z } from 'zod';
 
+import { sizeSystemEnum } from './sports';
+
 const trimmedNonEmpty = z
   .string()
   .trim()
@@ -37,7 +39,13 @@ const quantitySchema = z
 const variantOverrides = {
   variantSize: z.string().max(24).nullable().optional(),
   variantSizeOriginal: z.string().max(64).nullable().optional(),
-  variantSizeSystem: z.string().max(32).nullable().optional(),
+  // The SHARED vocabulary, not free text. Every other path parses this against
+  // SIZE_SYSTEMS; leaving it open here let a duplicate stamp a system no picker
+  // offers and no other writer produces ('us mens', 'US-MENS'). Because
+  // `variant_size_system` participates in `variant_key`, such a row's identity
+  // was unreachable from create(), the import matcher and the review tool
+  // alike. `.nullable()` keeps the 0299 "present-with-null clears" state.
+  variantSizeSystem: sizeSystemEnum.nullable().optional(),
   variantWidth: z.string().max(16).nullable().optional(),
   variantFit: z.string().max(32).nullable().optional(),
   variantColor: z.string().max(64).nullable().optional(),

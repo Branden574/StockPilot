@@ -217,6 +217,70 @@ describe('linkFamily — writes only what a human named', () => {
     expect(patch.variant_key).toBe(buildVariantKey({ size: 'XL', jerseyNumber: '07' }));
   });
 
+  // OWNER DISPOSITION: a player name is an ASSIGNMENT / a label, not identity —
+  // #7 in XL is one variant whether Vega or Ruiz is wearing it this season.
+  // Every other builder (create(), bulkCreateSizedVariants, recomputeVariantKey)
+  // already omits it; linkFamily was the ONE place that fed it into the key, so
+  // a family linked through the review tool minted keys no other path could ever
+  // reproduce — and the import matcher then created a second variant per size.
+  it('EXCLUDES player_name from the key, matching every other builder', async () => {
+    const stub = linkStub([itemRow({ id: 'i-l', sku: 'SP-L', player_name: 'Vega' })]);
+    await linkFamily(
+      { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+      {
+        groupId: 'grp-1',
+        members: [
+          {
+            itemId: 'i-l',
+            variantSize: 'XL',
+            variantSizeOriginal: null,
+            variantSizeSystem: null,
+            jerseyNumber: '07',
+          },
+        ],
+        reason: 'Confirmed',
+      },
+    );
+    const patch = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
+      string,
+      unknown
+    >;
+    // What create() would mint for the same variant — no `player` slot.
+    expect(patch.variant_key).toBe(buildVariantKey({ size: 'XL', jerseyNumber: '07' }));
+    expect(patch.variant_key).not.toMatch(/player=/);
+  });
+
+  it('keys two DIFFERENT players in the same size identically', async () => {
+    // The regression this exists for: two placements of #07 XL that happen to
+    // record different player names are ONE variant, not two.
+    const keys: string[] = [];
+    for (const player of ['Vega', 'Ruiz']) {
+      const stub = linkStub([itemRow({ id: 'i-l', sku: 'SP-L', player_name: player })]);
+      await linkFamily(
+        { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+        {
+          groupId: 'grp-1',
+          members: [
+            {
+              itemId: 'i-l',
+              variantSize: 'XL',
+              variantSizeOriginal: null,
+              variantSizeSystem: null,
+              jerseyNumber: '07',
+            },
+          ],
+          reason: 'Confirmed',
+        },
+      );
+      const patch = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
+        string,
+        unknown
+      >;
+      keys.push(patch.variant_key as string);
+    }
+    expect(keys[0]).toBe(keys[1]);
+  });
+
   it('NEVER touches quantity_on_hand and NEVER writes a stock_movements row', async () => {
     const stub = linkStub();
     await linkFamily(

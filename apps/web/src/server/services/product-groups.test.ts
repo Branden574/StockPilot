@@ -361,6 +361,56 @@ describe('ProductGroupsService.update', () => {
     expect(patch).not.toHaveProperty('organization_id');
   });
 
+  // `subcategoryKey` was merged with `??`, which cannot see the difference
+  // between "absent — keep the current one" and "explicitly null — clear it".
+  // A patch of `{ subcategoryKey: null }` wrote NULL to the column while
+  // computing group_key from the OLD subcategory, so the stored key described a
+  // shape the row no longer had — and the subcategory decides which SLOTS
+  // participate (jersey slots vs shoe slots), so the next findOrCreate for this
+  // identity missed the key entirely and minted a duplicate group.
+  it('computes group_key from the RESULTING state when the subcategory is explicitly cleared', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': { data: [groupRow({ subcategory_key: null })], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', {
+      subcategoryKey: null,
+    });
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch.subcategory_key).toBeNull();
+    expect(patch.group_key).toBe(
+      buildGroupKey({
+        subcategoryKey: '',
+        brand: 'Nike',
+        model: 'Pegasus 41',
+        styleNumber: 'FD2722',
+        colorway: 'Black/White',
+        name: 'Nike Pegasus 41',
+      }),
+    );
+    // The key must NOT still describe the subcategory the row just lost.
+    expect(patch.group_key).not.toBe(groupRow().group_key);
+  });
+
+  it('still keeps the current subcategory when the patch omits it', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': { data: [groupRow({ name: 'Renamed' })], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', { name: 'Renamed' });
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).not.toHaveProperty('subcategory_key');
+    expect(patch.group_key).toBe(groupRow().group_key);
+  });
+
   it('requires sports:manage, not merely items:create', async () => {
     const stub = makeSupabaseStub({
       'product_groups.select': { data: [groupRow()], error: null },

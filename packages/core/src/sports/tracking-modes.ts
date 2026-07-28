@@ -347,9 +347,13 @@ export const SPORTS_ERROR_META: Record<SportsErrorCode, SportsErrorMeta> = {
     severity: 'warning',
   },
   TRACKING_MODE_CHANGE_REQUIRES_MIGRATION: {
-    title: 'Changing tracking mode needs a migration',
-    explanation: 'This product already has transactions, so the mode cannot change in place.',
-    action: 'Run the guided tracking-mode migration with a reason.',
+    title: 'Changing how this is tracked needs a migration',
+    explanation:
+      'This product already has stock movements, so the units already counted were received under the current rules. Changing them in place would leave that history describing a contract the product no longer has.',
+    // NO WIZARD. There is no guided tracking-mode migration in the product and
+    // pointing a user at one they cannot find is worse than saying who to ask.
+    action:
+      'Contact support to migrate this product, or create a new product with the tracking you need.',
     severity: 'error',
   },
 };

@@ -169,7 +169,13 @@ export type UpdateProductGroupInput = z.infer<typeof updateProductGroupSchema>;
  */
 export const linkFamilyMemberSchema = z.object({
   itemId: uuidSchema,
-  variantSize: z.preprocess(emptyToUndefined, z.string().max(32).nullable().optional()),
+  // 24, matching inventory_items_variant_size_check (0298) and
+  // variantAttributesSchema above. At 32 a 25-32 character size passed here,
+  // reached the service, and tripped the DB CHECK MID-BATCH — linkFamily writes
+  // row by row, so earlier members of the same link were already committed and
+  // the reviewer got a 500 over a half-linked family instead of a 400 they
+  // could act on.
+  variantSize: z.preprocess(emptyToUndefined, z.string().max(24).nullable().optional()),
   variantSizeOriginal: z.preprocess(emptyToUndefined, z.string().max(64).nullable().optional()),
   variantSizeSystem: sizeSystemSchema,
   jerseyNumber: jerseyNumberSchema,

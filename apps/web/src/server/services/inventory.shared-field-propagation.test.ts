@@ -89,6 +89,17 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
     item_type: 'product',
     tracking_type: 'none',
     quantity_on_hand: 5,
+    category_id: null,
+    group_id: null,
+    variant_size: 'M',
+    variant_size_original: 'M',
+    variant_size_system: null,
+    variant_width: null,
+    variant_fit: null,
+    variant_color: null,
+    jersey_number: null,
+    player_name: null,
+    variant_key: 'size=m',
   };
 
   const ctxUpdates: UpdateCall[] = [];
@@ -306,6 +317,41 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
       }),
       expect.anything(),
     );
+  });
+
+  // Model B says one SKU is ONE product. A variant's identity — its size, its
+  // width, its number, and the variant_key derived from them — is therefore a
+  // PRODUCT fact, not a per-rack one. Leaving the variant columns out of the
+  // fan-out meant editing a size on the rack you were standing at forked that
+  // SKU's identity: the other bins kept the old size and the old key, so the
+  // group roll-up counted two variants and the next import created a third row
+  // for a size that already existed twice.
+  it('fans a size edit out to every placement of the SKU — size, original AND key', async () => {
+    const { svc, adminUpdates } = harness({ targetSku: 'SP-X' });
+    await svc.update('row-a', { variantSize: 'L' });
+
+    const sibling = adminUpdates.find((u) => u.scope === 'siblings');
+    expect(sibling).toBeDefined();
+    expect(sibling!.payload.variant_size).toBe('L');
+    expect(sibling!.payload.variant_size_original).toBe('L');
+    // The DERIVED key travels in the SAME statement as the size it is derived
+    // from — a fan-out that moved the size but not the key would leave every
+    // sibling keyed under the size it no longer has.
+    expect(sibling!.payload.variant_key).toBe('size=l');
+    // Still org- and sku-scoped on the service-role client.
+    expect(sibling!.filterOrg).toBe('org-1');
+    expect(sibling!.filterSku).toBe('SP-X');
+  });
+
+  it('never fans out a per-placement field alongside the variant identity', async () => {
+    const { svc, adminUpdates } = harness({ targetSku: 'SP-X' });
+    await svc.update('row-a', { variantSize: 'L', binLocation: 'A-9', charterId: 'chr-3' });
+
+    const sibling = adminUpdates.find((u) => u.scope === 'siblings');
+    expect(sibling!.payload.variant_size).toBe('L');
+    expect(sibling!.payload).not.toHaveProperty('bin_location');
+    expect(sibling!.payload).not.toHaveProperty('charter_id');
+    expect(sibling!.payload).not.toHaveProperty('quantity_on_hand');
   });
 
   it('a sibling-update 23505 (re-keying into a colliding group) surfaces as a friendly conflict', async () => {

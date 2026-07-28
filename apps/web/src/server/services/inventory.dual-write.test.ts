@@ -35,6 +35,19 @@ vi.mock('@/lib/auth/warehouse', () => ({
   ForbiddenError: class extends Error {},
 }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+// variant_size is a SHARED_ITEM_FIELD now (Model B: a variant's identity is a
+// product fact, not a per-rack one), so a size edit takes the sibling fan-out
+// and that runs on the service-role client. Stubbed to a no-op: WHICH client
+// the fan-out uses is proven in inventory.shared-field-propagation.test.ts.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(() => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ['update', 'eq', 'is', 'neq', 'select']) chain[m] = () => chain;
+    (chain as { then: unknown }).then = (res: (v: unknown) => unknown) =>
+      res({ data: null, error: null });
+    return { from: () => chain };
+  }),
+}));
 
 import { InventoryService } from './inventory';
 
@@ -273,5 +286,75 @@ describe('InventoryService.update — variant_size / custom_fields.size dual-wri
     await new InventoryService(ctx).update('itm-1', { variantSize: 'L' });
 
     for (const u of updates) expect('quantity_on_hand' in u).toBe(false);
+  });
+});
+
+// The bulk and import paths have always run the typed size through
+// normalizeSizeValue before it reaches a column or a key. create() and update()
+// did not, so '  l  ' typed on the item form persisted verbatim and minted
+// `size=  l  ` while the same shoe arriving on a PO minted `size=l`. Two keys,
+// one physical size, and the import matcher creating a second variant for it.
+describe('InventoryService.update — size normalization (parity with the bulk path)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('normalizes the patched size into the column', async () => {
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '  l  ' });
+    expect(rowWrite(updates).variant_size).toBe('L');
+  });
+
+  it('keeps the RAW typed text in variant_size_original', async () => {
+    // 0298's contract: the original is what a human or an import actually
+    // typed, and it is never cleaned up.
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '  l  ' });
+    expect(rowWrite(updates).variant_size_original).toBe('  l  ');
+  });
+
+  it('mints the key off the NORMALIZED size, so both paths agree', async () => {
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '  l  ' });
+    expect(rowWrite(updates).variant_key).toBe('size=l');
+  });
+
+  it("drops a numeric size's trailing .0 exactly as the bulk path does", async () => {
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '10.0' });
+    expect(rowWrite(updates).variant_size).toBe('10');
+  });
+
+  it('writes the normalized size to custom_fields.size too, so the two never disagree', async () => {
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '  l  ' });
+    expect(rowWrite(updates).custom_fields).toMatchObject({ size: 'L' });
+  });
+
+  it('treats a size that normalizes to the STORED value as no change at all', async () => {
+    // ITEM.variant_size is 'XL'. Re-submitting '  xl  ' is the same size, so
+    // neither the original nor the key may be rewritten.
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: '  xl  ' });
+
+    const w = rowWrite(updates);
+    expect(w.variant_size).toBe('XL');
+    expect('variant_size_original' in w).toBe(false);
+    expect('variant_key' in w).toBe(false);
+  });
+
+  it('leaves variant_size_system alone when the resolved system already matches', async () => {
+    // No category, no scale, stored system null → nothing to write. The column
+    // is only touched when the key would otherwise carry a system the row does
+    // not have (recomputeVariantKey rebuilds from the columns).
+    const { ctx, updates } = makeCtx();
+    await new InventoryService(ctx).update('itm-1', { variantSize: 'L' });
+    expect('variant_size_system' in rowWrite(updates)).toBe(false);
+  });
+
+  it('refuses a size longer than the DB check allows, before any write', async () => {
+    const { ctx, updates } = makeCtx();
+    await expect(
+      new InventoryService(ctx).update('itm-1', { variantSize: 'X'.repeat(25) }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(updates).toHaveLength(0);
   });
 });

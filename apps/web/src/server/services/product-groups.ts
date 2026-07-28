@@ -290,7 +290,18 @@ export class ProductGroupsService {
 
     const current = await this.get(id);
     const merged = {
-      subcategoryKey: patch.subcategoryKey ?? current.subcategory_key ?? '',
+      // PRESENCE, not truthiness. `??` could not tell "absent — keep what the
+      // row has" from "explicitly null — clear it", so a patch of
+      // `{ subcategoryKey: null }` wrote NULL to the column while computing
+      // group_key from the OLD subcategory. The subcategory decides which SLOTS
+      // participate in the key at all (jersey slots vs shoe slots), so the
+      // stored key described a shape the row no longer had and the next
+      // findOrCreate for that identity missed it and minted a duplicate group.
+      // Every other field below already tests presence; this one now does too.
+      subcategoryKey:
+        patch.subcategoryKey !== undefined
+          ? (patch.subcategoryKey ?? '')
+          : (current.subcategory_key ?? ''),
       name: patch.name ?? current.name,
       brand: patch.brand !== undefined ? patch.brand : current.brand,
       manufacturer: patch.manufacturer !== undefined ? patch.manufacturer : current.manufacturer,

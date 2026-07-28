@@ -384,9 +384,19 @@ export async function linkFamily(
     const sizeSystem = member.variantSizeSystem?.trim() || null;
     const jersey = normalizeJerseyNumber(member.jerseyNumber);
 
-    // Attributes NOT under review (width / fit / colour / player) are carried
-    // through from the row so the key describes the whole variant, not just
-    // the two fields this screen happens to edit.
+    // Attributes NOT under review (width / fit / colour) are carried through
+    // from the row so the key describes the whole variant, not just the two
+    // fields this screen happens to edit.
+    //
+    // `playerName` is deliberately ABSENT (owner disposition: a player name is
+    // an ASSIGNMENT and a label, never identity — #7 in XL is one variant
+    // whether Vega or Ruiz wears it this season). Every other builder —
+    // create(), bulkCreateSizedVariants, recomputeVariantKey, the PO-import
+    // matcher — already omits it. This was the ONE place that fed it in, so a
+    // family linked through the review tool minted keys no other path could
+    // reproduce: the next import found no match and created a second variant
+    // per size, and two placements of the same jersey recorded under different
+    // names became two variants inside one group.
     const variantKey = buildVariantKey({
       size,
       sizeSystem,
@@ -394,7 +404,6 @@ export async function linkFamily(
       fit: before.variant_fit,
       color: before.variant_color,
       jerseyNumber: jersey,
-      playerName: before.player_name,
     });
     return { member, before, size, sizeOriginal, sizeSystem, jersey, variantKey };
   });

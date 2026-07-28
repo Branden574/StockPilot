@@ -753,7 +753,9 @@ export async function createItemsFromPoLines(
             },
             // Born from an inbound PO at qty 0 → hidden ("Expected") until
             // the first receipt clears the flag (migration 0277 trigger).
-            { awaitingFirstReceipt: true },
+            // `source` only picks which variant-provenance audit event fires
+            // (sports.variant.imported vs .created) — it changes no column.
+            { awaitingFirstReceipt: true, source: 'import' },
           );
           resolvedItemId = siblingItem.id as string;
           created++;
@@ -825,7 +827,9 @@ export async function createItemsFromPoLines(
         },
         // Born from an inbound PO at qty 0 → hidden ("Expected") until
         // the first receipt clears the flag (migration 0277 trigger).
-        { awaitingFirstReceipt: true },
+        // `source` only picks which variant-provenance audit event fires
+        // (sports.variant.imported vs .created) — it changes no column.
+        { awaitingFirstReceipt: true, source: 'import' },
       );
       created++;
       didCreate = true;

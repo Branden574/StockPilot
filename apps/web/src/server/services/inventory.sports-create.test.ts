@@ -14,6 +14,7 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
 
 import { InventoryService } from './inventory';
+import { audit } from './audit';
 
 /**
  * `create()` is the most shared write path in the app, so the assertions that
@@ -474,6 +475,183 @@ describe('InventoryService.create — variant_key on a GROUPED row', () => {
     await svc.create({ ...BASE, categoryId: 'cat-1', variantSize: 'M' });
 
     expect(insertedRow(stub).variant_key).toBeNull();
+  });
+});
+
+// bulkCreateSizedVariants and the PO-import matcher have always normalized the
+// size before it reaches a column or a key. create() fed the RAW client string
+// into buildVariantKey AND persisted it raw, so the same physical size minted a
+// DIFFERENT variant_key depending on which path created it — and the import
+// matcher, finding no key match, created a second variant for it.
+describe('InventoryService.create — size normalization (parity with the bulk path)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const jerseys = () => categoryRow({ sports_subcategory_key: 'jerseys' });
+
+  it('normalizes the size into the column and the key, keeping the original verbatim', async () => {
+    const stub = buildStub({ 'categories.select': { data: jerseys(), error: null } });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1', variantSize: '  xl  ' });
+
+    const row = insertedRow(stub);
+    expect(row.variant_size).toBe('XL');
+    expect(row.variant_size_original).toBe('  xl  ');
+    expect(row.variant_key).toBe('size=xl');
+  });
+
+  it("drops a numeric size's trailing .0 but keeps halves", async () => {
+    for (const [raw, expected] of [
+      ['10.0', '10'],
+      ['10.5', '10.5'],
+    ] as const) {
+      const stub = buildStub({
+        'categories.select': { data: categoryRow({ sports_subcategory_key: 'shoes' }), error: null },
+      });
+      const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+      await new InventoryService(ctx).create({
+        ...BASE,
+        categoryId: 'cat-1',
+        variantSize: raw,
+        variantSizeSystem: 'US_MENS',
+      });
+      expect(insertedRow(stub).variant_size).toBe(expected);
+    }
+  });
+
+  it('strips a system prefix that is redundant with the size system', async () => {
+    // normalizeSizeValue('US 10', 'US_MENS') === '10'. The bulk path has always
+    // done this; create() persisted 'US 10' and keyed 'size=us 10'.
+    const stub = buildStub({
+      'categories.select': { data: categoryRow({ sports_subcategory_key: 'shoes' }), error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      variantSize: 'US 10',
+      variantSizeSystem: 'US_MENS',
+    });
+
+    const row = insertedRow(stub);
+    expect(row.variant_size).toBe('10');
+    expect(row.variant_key).toBe('size=10|system=us_mens');
+  });
+
+  it("enforces the category's size scale, refusing a size that is not in it", async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'shoes', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: 'US_MENS' }, error: null },
+      'size_scale_values.select': {
+        data: [
+          { value: '9', normalized: '9' },
+          { value: '10', normalized: '10' },
+        ],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({
+        ...BASE,
+        categoryId: 'cat-1',
+        variantSize: '13',
+        variantSizeSystem: 'US_MENS',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  it("takes the scale's size system when the caller supplied none, so key and columns agree", async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'balls', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: 'ALPHA' }, error: null },
+      'size_scale_values.select': { data: [], error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1', variantSize: 'L' });
+
+    const row = insertedRow(stub);
+    // The column must be able to REPRODUCE the key — recomputeVariantKey reads
+    // the columns, so a key that carries a system the column dropped would
+    // silently re-key the row on the next duplicate.
+    expect(row.variant_size_system).toBe('ALPHA');
+    expect(row.variant_key).toBe('size=l|system=alpha');
+  });
+
+  it('never reads a size scale for a row with no size at all', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'training_equipment', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1' });
+
+    expect(stub.fromCalls).not.toContain('size_scales');
+    expect(insertedRow(stub).variant_size).toBeNull();
+  });
+});
+
+// The audit union declared 'sports.variant.created' / '.imported' and nothing
+// emitted either — declared vocabulary no reviewer could ever see.
+describe('InventoryService.create — variant provenance audit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('emits sports.variant.created when a variant_key is minted', async () => {
+    const stub = buildStub({
+      'categories.select': { data: categoryRow({ sports_subcategory_key: 'jerseys' }), error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1', variantSize: 'M' });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'sports.variant.created',
+        entityType: 'inventory_item',
+        extra: expect.objectContaining({ variant_key: 'size=m' }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("emits sports.variant.imported instead when the caller is an import", async () => {
+    const stub = buildStub({
+      'categories.select': { data: categoryRow({ sports_subcategory_key: 'jerseys' }), error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create(
+      { ...BASE, categoryId: 'cat-1', variantSize: 'M' },
+      { source: 'import' },
+    );
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'sports.variant.imported' }),
+      expect.anything(),
+    );
+    expect(audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'sports.variant.created' }),
+      expect.anything(),
+    );
+  });
+
+  it('emits NEITHER for a plain non-sports, ungrouped item', async () => {
+    const stub = buildStub();
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.create({ ...BASE });
+
+    for (const event of ['sports.variant.created', 'sports.variant.imported']) {
+      expect(audit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event }),
+        expect.anything(),
+      );
+    }
   });
 });
 

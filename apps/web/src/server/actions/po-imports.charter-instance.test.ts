@@ -126,7 +126,7 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ charterId: CHARTER_KVA }),
-      { awaitingFirstReceipt: true },
+      { awaitingFirstReceipt: true, source: 'import' },
     );
 
     // The line points at the NEW item, flagged item_created, with the CVW
@@ -176,11 +176,11 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     // Both PO-born instances carry awaitingFirstReceipt (mig 0277).
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ charterId: CHARTER_KVA }),
-      { awaitingFirstReceipt: true },
+      { awaitingFirstReceipt: true, source: 'import' },
     );
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ charterId: CHARTER_DEF }),
-      { awaitingFirstReceipt: true },
+      { awaitingFirstReceipt: true, source: 'import' },
     );
     expect(mockCreate).toHaveBeenCalledTimes(2); // two separate instances, never merged
   });
@@ -277,7 +277,7 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ charterId: CHARTER_KVA, sku: 'SKU-X', name: 'Chromebook' }),
-      { awaitingFirstReceipt: true },
+      { awaitingFirstReceipt: true, source: 'import' },
     );
     const upd = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
     expect(upd.item_id).toBe('new-item-1'); // the created KVA sibling
