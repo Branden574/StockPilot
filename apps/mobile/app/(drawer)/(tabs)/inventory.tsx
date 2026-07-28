@@ -50,7 +50,7 @@ import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
-import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import {
@@ -1011,12 +1011,12 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
       <View style={{ flex: 1, minWidth: 0 }}>
-        {/* Dynamic Type: two lines, not one. The row is paddingVertical-based,
-            so it grows for free — a single line here is pure loss. */}
+        {/* Dynamic Type: unbounded. The row is paddingVertical-based, so it
+            grows for free — any line ceiling here is pure loss, and the name
+            is content (plan §3), not chrome. */}
         <Mono
           color={c.ink}
           size={15.5}
-          numberOfLines={2}
           style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
         >
           {baseName}
@@ -1111,14 +1111,18 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         strokeWidth={2}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
-      <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
+      <View
+        style={stacked ? rowStyles.bodyStacked : [rowStyles.bodyRow, rowStyles.bodyRowTight]}
+      >
         <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
-          {/* Dynamic Type: two lines, not one — same padding-based row as the
-              size-run header above. */}
+          {/* Dynamic Type: unbounded, like the placement rows this header
+              expands to and like the size-run header above. The row is
+              paddingVertical-based, so it grows for free; any line ceiling is
+              pure loss, and it is exactly what still truncated the title on
+              the line the stacked layout hands it the full width. */}
           <Mono
             color={c.ink}
             size={15.5}
-            numberOfLines={2}
             style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
           >
             {name}
@@ -1291,13 +1295,22 @@ const rowStyles = StyleSheet.create({
    * Dynamic Type: the trailing quantity + status-pill column. RN defaults to
    * `flexShrink: 0`, so at AX sizes this column claims its full intrinsic
    * width and the `flex: 1, minWidth: 0` name column beside it collapses to a
-   * few characters per line. Capping it at 40% and letting it shrink keeps the
-   * item name — the thing the picker is actually reading — over half the row.
+   * few characters per line. A ceiling plus `flexShrink` keeps the item name —
+   * the thing the picker is actually reading — over half the row.
+   *
+   * The ceiling is a POINT value, never a percentage. It used to be `'40%'`,
+   * which was correct only while this column was a direct child of the row: a
+   * percentage resolves against its CURRENT parent, so nesting it inside
+   * `bodyRow` silently re-based it on a box that already excludes the thumb,
+   * the select-mode slot and the gaps. Measured on the real files, that turned
+   * 128pt into 100pt (84pt in select mode) on a 393pt screen and 128 into 77
+   * on a 375pt one — under the 85.6pt an 8-character `ARCHIVED` / `EXPECTED`
+   * pill needs at DEFAULT size. See `TRAILING_COLUMN_MAX_WIDTH`.
    */
   trailingCol: {
     alignItems: 'flex-end',
     gap: 6,
-    maxWidth: '40%',
+    maxWidth: TRAILING_COLUMN_MAX_WIDTH,
     flexShrink: 1,
   },
   /**
@@ -1306,14 +1319,17 @@ const rowStyles = StyleSheet.create({
    * `Sunglasse/s` and `Perfum/e` are a WIDTH defect, not a text one — iOS only
    * breaks inside a word when the word cannot fit its container at any break
    * opportunity, and RN exposes no `overflow-wrap`. Measured on a 393pt screen:
-   * the row spends 32pt of padding, a 56pt thumb and two 14pt gaps, so the name
-   * and the trailing column share 277pt; at AX3 a capped `IN STOCK` pill needs
-   * ~116pt of it (a 12-character pill takes the full 40% = 144pt), leaving the
-   * name ~161pt against the ~177pt that `Sunglasses` needs at 15.5 × 2.286.
-   * It cannot fit, so iOS breaks the glyph run. Select mode takes 36pt more.
+   * the FlatList spends 20pt of padding a side, leaving a 353pt row card whose
+   * 1pt borders and 16pt padding a side leave 319pt of content; the 56pt thumb
+   * and the 14pt gap after it take 70pt more, so the name and the trailing
+   * column share 249pt (211pt in select mode, which costs another gap, a 22pt
+   * checkbox and its 2pt margin). Held side by side at AX3 the trailing column
+   * would take its full 106pt ceiling, leaving the name ~129pt against the
+   * ~177pt `Sunglasses` needs at 15.5 × 2.286 — it cannot fit, so iOS breaks
+   * the glyph run.
    *
    * Past the shared `shouldStackRow` threshold the two become a column: the
-   * name gets the whole 291pt (255pt in select mode) and the quantity + pill
+   * name gets the whole 249pt (211pt in select mode) and the quantity + pill
    * move to their own line under it. No cap, no truncation, no soft hyphens in
    * the data — just the width the word needs. Same threshold as every other
    * stacking decision in this pass; deliberately NOT a second breakpoint.
@@ -1325,6 +1341,14 @@ const rowStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
   },
+  /**
+   * The SKU-group header runs a 10pt gap, not the 14pt the placement rows use
+   * — its leading glyph is an 18pt chevron, not a 56pt thumb. Its name and
+   * trailing column were direct children of that row and inherited it; moving
+   * them into `bodyRow` handed them bodyRow's 14 and pushed the header's
+   * quantity 4pt off the alignment it had always held with the rows below it.
+   */
+  bodyRowTight: { gap: 10 },
   bodyStacked: {
     flex: 1,
     minWidth: 0,

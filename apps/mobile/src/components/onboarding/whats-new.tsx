@@ -278,9 +278,12 @@ const styles = StyleSheet.create({
   eyebrow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   scroll: { flexShrink: 1 },
   title: { marginTop: 10 },
-  // No hardcoded lineHeight: 19 — Body scales its own, and pinning it made
-  // 13pt announcement copy overlap itself at accessibility sizes.
-  body: { marginTop: 6 },
+  // lineHeight stays PINNED at 19, deliberately — see the twin in
+  // mobile-tour.tsx. React Native scales a fixed lineHeight by the same
+  // effective font multiplier it applies to fontSize, so this never overlapped
+  // at accessibility sizes; removing it only changed the leading at DEFAULT
+  // size (Body derives 19.5 for this 13pt copy).
+  body: { marginTop: 6, lineHeight: 19 },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -455,9 +455,13 @@ const styles = StyleSheet.create({
   title: { flex: 1, paddingRight: 8 },
   // The only child that yields when the card hits its maxHeight.
   scroll: { flexShrink: 1 },
-  // No hardcoded lineHeight: 19 — Body derives lineHeight from its own scaled
-  // size, and pinning it made 13pt copy overlap itself at accessibility sizes.
-  body: { marginTop: 6 },
+  // lineHeight stays PINNED at 19, deliberately. It was removed on the premise
+  // that a fixed leading makes copy overlap at accessibility sizes; that is not
+  // how React Native behaves — it scales lineHeight by the same effective font
+  // multiplier it scales fontSize by, on both renderers. So the pinned value
+  // never overlapped, and dropping it only changed the leading at DEFAULT size
+  // (Body would derive 18.75 at 12.5pt and 19.5 at 13pt).
+  body: { marginTop: 6, lineHeight: 19 },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',

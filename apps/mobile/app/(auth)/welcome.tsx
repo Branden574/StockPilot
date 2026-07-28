@@ -17,7 +17,6 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const FEATURES: { icon: LucideIcon; title: string; body: string }[] = [
@@ -76,18 +75,18 @@ export default function Welcome() {
         {/* Four cells across ~349pt give each label ~87pt. Past the shared
             threshold the strip becomes one column so a label like "live
             integrations" gets the full width instead of breaking per
-            character; the cap keeps it from outgrowing the value above it. */}
+            character.
+
+            NO cap on the label: the stacking is the fix, and it has already
+            given the label the whole width by the time any ceiling could bind
+            — so a cap here would be pure suppression of the one line that says
+            what each number MEANS. The value it sits under is a `Display`,
+            which carries its own 48pt ceiling. */}
         <View style={[styles.statRow, stackStats && styles.statRowStacked]}>
           {STATS.map((s) => (
             <View key={s.label} style={stackStats ? styles.statCellStacked : styles.statCell}>
               <Display size={24}>{s.value}</Display>
-              <Mono
-                size={9.5}
-                tracking={0.04}
-                color={c.ink4}
-                maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
-                style={{ marginTop: 4 }}
-              >
+              <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
                 {s.label}
               </Mono>
             </View>

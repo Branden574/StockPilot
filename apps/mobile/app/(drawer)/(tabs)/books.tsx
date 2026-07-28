@@ -46,7 +46,7 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
-import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
   listStatusPredicate,
   stockPill,
@@ -831,12 +831,11 @@ const BookCard = React.memo(function BookCard({
           <Thumb size={56} icon={BookMarked} imageUrl={book.imageUrl} />
           <View style={stacked ? styles.bodyStacked : styles.bodyRow}>
             <View style={stacked ? styles.nameColStacked : styles.nameCol}>
-              <Body
-                size={15.5}
-                color={c.ink}
-                style={{ fontFamily: FONT.display }}
-                numberOfLines={2}
-              >
+              {/* Unbounded, matching ItemRow's name in the Items twin: a line
+                  ceiling here truncated the very title the stacked layout
+                  above hands the card's full width. The card is padding-based
+                  and grows for free, and a title is content (plan §3). */}
+              <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                 {book.name}
               </Body>
               {author ? (
@@ -962,12 +961,9 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
           <Thumb size={56} icon={BookMarked} imageUrl={imageUrl} />
           <View style={stacked ? styles.bodyStacked : styles.bodyRow}>
             <View style={stacked ? styles.nameColStacked : styles.nameCol}>
-              <Body
-                size={15.5}
-                color={c.ink}
-                style={{ fontFamily: FONT.display }}
-                numberOfLines={2}
-              >
+              {/* Unbounded, matching the placement cards this header expands
+                  to and the SKU-group header in the Items twin. */}
+              <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                 {name}
               </Body>
               <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
@@ -1035,11 +1031,21 @@ const styles = StyleSheet.create({
    * Dynamic Type: trailing quantity + status-pill column. RN's default
    * `flexShrink: 0` lets it claim full intrinsic width, collapsing the
    * `flex: 1, minWidth: 0` title column beside it to a few characters a line.
+   *
+   * The ceiling is a POINT value, never a percentage — the twin of
+   * `rowStyles.trailingCol` in (tabs)/inventory.tsx, and for the same reason.
+   * `'40%'` resolved against the ROW while this column was a direct child of
+   * it; nesting it inside `bodyRow` re-based the SAME literal on a box that
+   * excludes the thumb, the trailing slot and the gaps, taking the ceiling
+   * from 129pt to 87pt on a 393pt screen and from 122pt to 80pt on a 375pt
+   * one. An 8-character `ARCHIVED` / `EXPECTED` pill needs 85.6pt at DEFAULT
+   * size, so 80 clamped it — and `Pill`'s label shrinks rather than overflows,
+   * with no space in the word to wrap at. See `TRAILING_COLUMN_MAX_WIDTH`.
    */
   trailingCol: {
     alignItems: 'flex-end',
     gap: 6,
-    maxWidth: '40%',
+    maxWidth: TRAILING_COLUMN_MAX_WIDTH,
     flexShrink: 1,
   },
   /**
@@ -1051,12 +1057,13 @@ const styles = StyleSheet.create({
    * only when the word cannot fit its container at any break opportunity, and
    * React Native exposes no `overflow-wrap`. Measured on a 393pt screen, this
    * list is tighter than the Items one — 20pt of list padding a side leaves a
-   * 353pt card, whose 1pt border and 14pt padding leave 323pt of interior, and
-   * the 56pt thumb, the 22pt trailing slot and two 14pt gaps take 106pt of
-   * that. So the title and the trailing column share 217pt, and with the pill
-   * column at its 40% ceiling (~87pt) plus the gap the title is left ~116pt —
-   * against the ~177pt a 10-character title needs at 15.5 x 2.286. It cannot
-   * fit, so iOS breaks the glyph run.
+   * 353pt card, whose 1pt border and 14pt padding a side leave 323pt of
+   * interior, and the 56pt thumb, the 22pt trailing slot and two 14pt gaps
+   * take 106pt of that. So the title and the trailing column share 217pt, and
+   * held side by side at AX3 the trailing column would take its full 106pt
+   * ceiling, leaving the title ~97pt — against the ~177pt a 10-character title
+   * needs at 15.5 x 2.286. It cannot fit, so iOS breaks the glyph run. Select
+   * mode costs nothing here: the trailing slot is reserved either way.
    *
    * Past the shared `shouldStackRow` threshold the two become a column and the
    * title gets the whole 217pt. No cap, no truncation, and no soft hyphens or

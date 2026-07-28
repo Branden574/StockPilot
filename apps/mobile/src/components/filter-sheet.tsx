@@ -1,9 +1,19 @@
 import { Check, SlidersHorizontal, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
 import { Button } from '@/components/ui/button';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -386,6 +396,7 @@ export function ActiveFilterPill({
   };
 }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
   const parts: string[] = [];
   if (state.status === 'low') parts.push('Low + critical');
   if (state.status === 'out') parts.push('Out of stock');
@@ -416,12 +427,19 @@ export function ActiveFilterPill({
         { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.8 : 1 },
       ]}
     >
-      {/* Two lines and a chrome ceiling: this is a summary of state the sheet
-          below already spells out, and at one uncapped line an accessibility
-          size showed three characters and an ellipsis. The X stays put. */}
+      {/* NO cap: `parts` splices USER-AUTHORED category, location and charter
+          names in beside the built-in status words, and plan §3 keeps content
+          scaling — a ceiling here would suppress exactly the segments the user
+          named themselves.
+
+          The second line is GATED on the shared stack threshold instead of
+          always on: this pill sits under the search bar on both hot lists, so
+          an ungated `numberOfLines={2}` doubled the filter bar's height at
+          DEFAULT text size for every user. Past the threshold the extra line
+          is what stops an accessibility size showing three characters and an
+          ellipsis. The X stays put either way. */}
       <Text
-        numberOfLines={2}
-        maxFontSizeMultiplier={capTo(11, TYPE_CEILING.chrome)}
+        numberOfLines={shouldStackRow(fontScale) ? 2 : 1}
         style={{
           flex: 1,
           minWidth: 0,

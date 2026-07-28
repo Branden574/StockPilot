@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FOOTER_CLEARANCE,
+  LONGEST_STOCK_PILL_CHARS,
   ROW_STACK_FONT_SCALE,
+  TRAILING_COLUMN_MAX_WIDTH,
   footerReservation,
+  pillWidth,
   shouldStackRow,
 } from './dynamic-type-layout';
 
@@ -100,5 +103,92 @@ describe('footerReservation', () => {
   it('honours a caller-supplied clearance', () => {
     expect(footerReservation(200, 140, 0)).toBe(200);
     expect(footerReservation(200, 140, 50)).toBe(250);
+  });
+});
+
+describe('pillWidth', () => {
+  it('measures the longest stock pill at default text size', () => {
+    // `ARCHIVED` / `EXPECTED`: 32pt of fixed chrome (1pt border + 9pt padding a
+    // side, a 6pt dot and the 6pt gap after it) plus 8 monospace advances of
+    // 0.6em at 10.5pt with 0.4pt of tracking each.
+    expect(pillWidth(LONGEST_STOCK_PILL_CHARS, 1)).toBeCloseTo(85.6, 5);
+  });
+
+  it('scales only the glyph advances — tracking, padding, dot and border are points', () => {
+    // letterSpacing is applied in UNSCALED points on iOS (NSKernAttributeName),
+    // and none of the box chrome scales with text either.
+    const fixed = 32 + LONGEST_STOCK_PILL_CHARS * 0.4;
+    // 1.4 rather than 2: past 1.904 the Pill's own label cap binds instead.
+    expect(pillWidth(LONGEST_STOCK_PILL_CHARS, 1.4) - fixed).toBeCloseTo(
+      1.4 * (pillWidth(LONGEST_STOCK_PILL_CHARS, 1) - fixed),
+      5,
+    );
+  });
+
+  it('stops growing at the Pill label’s own chrome ceiling', () => {
+    // ui/pill.tsx caps its label at capTo(10.5, TYPE_CEILING.chrome) = 1.904x,
+    // so reserving width for AX5 would reserve width the pill can never use.
+    expect(pillWidth(8, 3.571)).toBeCloseTo(pillWidth(8, 20 / 10.5), 5);
+  });
+
+  it('is monotonic in both characters and scale', () => {
+    for (let chars = 1; chars <= 16; chars += 1) {
+      expect(pillWidth(chars + 1, 1)).toBeGreaterThan(pillWidth(chars, 1));
+    }
+    for (let scale = 1; scale <= 1.9; scale += 0.05) {
+      expect(pillWidth(8, scale + 0.01)).toBeGreaterThan(pillWidth(8, scale));
+    }
+  });
+
+  it('treats a missing or nonsense scale as default size, never smaller', () => {
+    const atDefault = pillWidth(8, 1);
+    for (const scale of [undefined, null, Number.NaN, 0, -1, 0.5]) {
+      expect(pillWidth(8, scale)).toBe(atDefault);
+    }
+  });
+});
+
+describe('TRAILING_COLUMN_MAX_WIDTH', () => {
+  it('is a point ceiling, not a percentage', () => {
+    // The whole defect: `maxWidth: '40%'` resolves against whatever box the
+    // column is currently parented to, so wrapping the name and the trailing
+    // column in a `bodyRow` silently re-based it.
+    expect(typeof TRAILING_COLUMN_MAX_WIDTH).toBe('number');
+    expect(Number.isInteger(TRAILING_COLUMN_MAX_WIDTH)).toBe(true);
+  });
+
+  it('holds the longest stock pill on ONE line at every unstacked size', () => {
+    // Past ROW_STACK_FONT_SCALE the row stacks and `trailingColStacked` hands
+    // the column the full width, so this ceiling only has to survive up to and
+    // including the threshold itself (shouldStackRow is strictly greater).
+    for (let scale = 1; scale <= ROW_STACK_FONT_SCALE; scale += 0.01) {
+      expect(TRAILING_COLUMN_MAX_WIDTH).toBeGreaterThanOrEqual(
+        pillWidth(LONGEST_STOCK_PILL_CHARS, scale),
+      );
+    }
+    expect(TRAILING_COLUMN_MAX_WIDTH).toBeGreaterThanOrEqual(
+      pillWidth(LONGEST_STOCK_PILL_CHARS, ROW_STACK_FONT_SCALE),
+    );
+  });
+
+  it('clears every measured percentage ceiling that fractured the badge', () => {
+    // Measured against the real files. `maxWidth: '40%'` of the bodyRow box:
+    //   Books   393pt device -> 87pt, 375pt -> 80pt
+    //   Items   393pt device -> 100pt, 84pt in select mode; 375pt -> 92pt / 77pt
+    // An 8-character pill needs 85.6pt at DEFAULT size, so 84, 80 and 77 all
+    // clamped it, and `ARCHIVED` has no break opportunity: iOS broke the glyph
+    // run inside the badge.
+    for (const brokenCeiling of [77, 80, 84, 87, 92, 100]) {
+      expect(TRAILING_COLUMN_MAX_WIDTH).toBeGreaterThan(brokenCeiling);
+    }
+  });
+
+  it('never gives the trailing column more room than the pre-wrapper ceiling did', () => {
+    // The ceilings this replaces, measured as 40% of the ROW's content box:
+    // 128pt (Items, 393pt), 122pt (Items and Books, 375pt), 129pt (Books,
+    // 393pt). Staying under the tightest of them means the item NAME — which
+    // section 3 keeps uncapped and reflowing — gains width at every size
+    // rather than losing it.
+    expect(TRAILING_COLUMN_MAX_WIDTH).toBeLessThanOrEqual(122);
   });
 });
