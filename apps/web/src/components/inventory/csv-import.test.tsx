@@ -9,8 +9,12 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture ??= () => {};
 });
 
+const { mockPush, mockRefresh } = vi.hoisted(() => ({
+  mockPush: vi.fn(),
+  mockRefresh: vi.fn(),
+}));
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: mockPush, refresh: mockRefresh }),
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/server/actions/import', () => ({
@@ -481,6 +485,104 @@ describe('CsvImport — the upload guard knows the mapping vocabulary', () => {
 
     expect(prepareItemImportAction).not.toHaveBeenCalled();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+/**
+ * OWNER, live prod: "showed imported those 4 items but its still on the same
+ * screen".
+ *
+ * The import DID work — the Result card appended "Imported 4 · Failed 0" at the
+ * bottom. But Step 3 stayed mounted above it with the same parsed file, the same
+ * review table and an Import button that was enabled again the moment
+ * `importing` flipped back to false. So the screen read as "nothing happened",
+ * and the one obvious next gesture — click Import again — was a live re-submit
+ * of a file that had already landed. (The server's fingerprint gate catches the
+ * SECOND one with a duplicate warning, which is a backstop, not a UI.)
+ *
+ * A finished import is a finished thing: leave the flow, say what happened, and
+ * point at the items.
+ */
+describe('CsvImport — a finished import is finished', () => {
+  const OK = { ok: true, data: { total: 4, created: 4, failed: 0, errors: [] } };
+
+  it('PROBE: leaves the review step and offers the imported items', async () => {
+    vi.mocked(importItemsAction).mockResolvedValue(OK as never);
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+    await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
+
+    // The success state names the count in words a human reads as "done".
+    expect(await screen.findByText(/imported 4 items/i)).toBeTruthy();
+    // …and the review step is GONE, not merely scrolled past.
+    await waitFor(() => expect(screen.queryByRole('table')).toBeNull());
+    expect(screen.queryByRole('button', { name: /^import \d+ item/i })).toBeNull();
+
+    // The primary action goes to the Items list, newest first, so the four rows
+    // that just landed are the four rows at the top.
+    await user.click(screen.getByRole('button', { name: /view imported items/i }));
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/inventory?sort=created_desc');
+  });
+
+  it('a stray second click cannot import the same file twice', async () => {
+    let resolve!: (v: unknown) => void;
+    vi.mocked(importItemsAction).mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }) as never,
+    );
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+
+    const btn = await screen.findByRole('button', { name: /import 1 item/i });
+    // Two clicks inside the same tick, before React re-renders the disabled
+    // state — the exact double-submit `disabled={importing}` cannot stop.
+    await Promise.all([user.click(btn), user.click(btn)]);
+    resolve(OK);
+
+    await screen.findByText(/imported 4 items/i);
+    expect(importItemsAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the flow when the import itself failed, so it can be retried', async () => {
+    vi.mocked(importItemsAction).mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'This same file was already imported' },
+    } as never);
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+    await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
+
+    // Still on Step 3 with the file loaded: a failure is not a completion.
+    expect(await screen.findByRole('table')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /import 1 item/i })).toBeTruthy();
+    expect(screen.queryByText(/imported 4 items/i)).toBeNull();
+  });
+
+  it('offers no "view items" when nothing was created, and lists the row errors', async () => {
+    vi.mocked(importItemsAction).mockResolvedValue({
+      ok: true,
+      data: {
+        total: 2,
+        created: 0,
+        failed: 2,
+        errors: [
+          { row: 2, message: 'A warehouse must be selected before creating an item.' },
+          { row: 3, message: 'Invalid row' },
+        ],
+      },
+    } as never);
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+    await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
+
+    expect(await screen.findByText(/no items were imported/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /view imported items/i })).toBeNull();
+    expect(screen.getByText(/Row 2:/)).toBeTruthy();
   });
 });
 

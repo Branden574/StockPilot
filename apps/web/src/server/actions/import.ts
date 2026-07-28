@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { assertPermission, ServiceError, withContext } from '@/server/services/context';
+import { assertPermission, planLimitBudget, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import {
   ItemImportBatchesService,
@@ -239,7 +239,34 @@ function indexWarehousesByName(
   return index;
 }
 
-interface ImportSummary {
+export /**
+ * Runs `fn` over `items` with at most `limit` in flight.
+ *
+ * `limit` workers each pull the next index off a shared cursor, so a slow row
+ * never blocks the queue behind it. `fn` must swallow its own errors — a
+ * rejection here would abandon the remaining rows, and a half-imported file
+ * with no per-row report is worse than a slow one.
+ */
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await fn(items[index] as T);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+}
+
+export interface ImportSummary {
   total: number;
   created: number;
   failed: number;
@@ -289,6 +316,9 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
       supersedePredecessors: Boolean(duplicate),
     });
 
+    // ONE service instance for the whole file, deliberately: its per-instance
+    // `trackingProfiles` memo is what stops every row re-reading the same
+    // category, and a fresh instance per row would defeat it.
     const svc = new InventoryService(ctx);
     const summary: ImportSummary = { total: parsed.data.rows.length, created: 0, failed: 0, errors: [] };
 
@@ -296,9 +326,29 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     // file, so one read serves 5,000 rows. Skipped entirely when no row names a
     // warehouse, which is the ordinary case — the screen's picker covers it.
     const namesWanted = parsed.data.rows.some((r) => (r?.warehouse_name ?? '').trim() !== '');
-    const warehouseIdByName = namesWanted
-      ? indexWarehousesByName(await new WarehousesService(ctx).listNames())
-      : new Map<string, string | null>();
+    const [warehouseIdByName, planBudget] = await Promise.all([
+      namesWanted
+        ? indexWarehousesByName(await new WarehousesService(ctx).listNames())
+        : Promise.resolve(new Map<string, string | null>()),
+      // OWNER, live prod: "took very long to import needs to be faster" — four
+      // rows. The plan gate inside `create()` is two reads (the org's plan, then
+      // a COUNT over inventory_items), and it ran ONCE PER ROW: eight reads to
+      // answer the same question four times, serially, before a single item was
+      // written. Resolved once here, spent per row below. Same check, same
+      // refusal, same message — the reads are what move.
+      planLimitBudget(ctx, 'items'),
+    ]);
+
+    // ── Pass 1: validate and resolve every row, in order, no I/O ────────────
+    // Pure CPU, so it stays a plain loop and `summary.errors` keeps its file
+    // order. Only the rows that survive reach the concurrent write pass.
+    interface PlannedRow {
+      /** 1-based source row as the user sees it in their spreadsheet. */
+      sourceRow: number;
+      input: Parameters<InventoryService['create']>[0];
+    }
+    const planned: PlannedRow[] = [];
+    const rowErrors = new Map<number, string>();
 
     for (let i = 0; i < parsed.data.rows.length; i++) {
       // The confirmed mapping is what lands: an aliased header ("Qty") fills
@@ -308,8 +358,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
       const raw = applyItemCsvHeaderDecisions(parsed.data.rows[i] ?? {}, mappings, decisions);
       const validated = csvRowSchema.safeParse(raw);
       if (!validated.success) {
-        summary.failed++;
-        summary.errors.push({ row: i + 2, message: validated.error.issues[0]?.message ?? 'Invalid row' });
+        rowErrors.set(i + 2, validated.error.issues[0]?.message ?? 'Invalid row');
         continue;
       }
       // Per-row override, org-scoped by construction: the index only ever holds
@@ -320,26 +369,25 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
       let rowWarehouseId = parsed.data.warehouseId;
       if (namedWarehouse) {
         if (!warehouseIdByName.has(namedWarehouse.toLowerCase())) {
-          summary.failed++;
-          summary.errors.push({
-            row: i + 2,
-            message: `No active warehouse named "${namedWarehouse}" in this organization. Use the exact name from Warehouses, or clear the warehouse_name cell to use the destination picked above.`,
-          });
+          rowErrors.set(
+            i + 2,
+            `No active warehouse named "${namedWarehouse}" in this organization. Use the exact name from Warehouses, or clear the warehouse_name cell to use the destination picked above.`,
+          );
           continue;
         }
         const match = warehouseIdByName.get(namedWarehouse.toLowerCase()) ?? null;
         if (!match) {
-          summary.failed++;
-          summary.errors.push({
-            row: i + 2,
-            message: `More than one active warehouse is named "${namedWarehouse}", so this row could go to either. Rename one of them, or clear the warehouse_name cell to use the destination picked above.`,
-          });
+          rowErrors.set(
+            i + 2,
+            `More than one active warehouse is named "${namedWarehouse}", so this row could go to either. Rename one of them, or clear the warehouse_name cell to use the destination picked above.`,
+          );
           continue;
         }
         rowWarehouseId = match;
       }
-      try {
-        await svc.create({
+      planned.push({
+        sourceRow: i + 2,
+        input: {
           name: validated.data.name,
           sku: validated.data.sku,
           barcode: validated.data.barcode,
@@ -375,15 +423,118 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
           variantColor: validated.data.color,
           jerseyNumber: validated.data.jersey_number,
           playerName: validated.data.player_name,
-        });
-        summary.created++;
+        },
+      });
+    }
+
+    // ── Pass 2: write the surviving rows, a few at a time ───────────────────
+    // These used to run strictly one after another, so the file's wall clock
+    // was the SUM of every row's round trips — and a row's round trips are
+    // almost all latency, not work. Nothing here is order-dependent: each row
+    // is its own insert, the rows share no state but the (synchronous) plan
+    // budget and the service's read caches, and the CSV path never touches
+    // product-group find-or-create (it passes `categoryId: null`, so
+    // `profile.isSports` is false and the group block is unreachable) — which
+    // is the one place in create() a race could mint a duplicate. Even there,
+    // `ProductGroupsService.findOrCreate` converges on a 23505 by re-reading
+    // the winner's row, the behaviour Task 15 proved.
+    //
+    // Bounded, not unbounded: 5,000 rows fired at once would exhaust the
+    // connection pool and defeat the point. Six is comfortably under Supabase's
+    // per-request pooling and keeps a small file's cost at roughly one row's.
+    const CONCURRENCY = 6;
+
+    /** Writes one planned row. Returns false when the plan had no slot for it —
+     *  the caller decides whether that is final. */
+    const writeRow = async (row: PlannedRow): Promise<boolean> => {
+      // Reserved BEFORE the write and released if the write fails, so the
+      // headroom always reflects rows that actually landed — exactly what the
+      // per-row COUNT used to report, without the COUNT.
+      const slot = planBudget.take(1);
+      if (!slot) return false;
+      try {
+        // ONLY `planSlot` is added here. `source: 'import'` would be the
+        // truthful provenance for the audit trail, but this action has never
+        // sent it, and switching a shipped audit label is not this change's
+        // business. (It is inert on this path either way: the CSV always passes
+        // `categoryId: null` and no group, so `variant_key` stays null and the
+        // variant-provenance audit never fires. Noted, not fixed.)
+        await svc.create(row.input, { planSlot: slot });
       } catch (e) {
-        summary.failed++;
-        summary.errors.push({
-          row: i + 2,
-          message: e instanceof Error ? e.message : 'Unknown error',
-        });
+        slot.release();
+        rowErrors.set(row.sourceRow, e instanceof Error ? e.message : 'Unknown error');
       }
+      return true;
+    };
+
+    // ── The plan limit is enforced HERE and nowhere else ────────────────────
+    // Nothing in the database rejects an over-limit item: there is no trigger,
+    // no check constraint, no unique index standing behind a plan tier. So a
+    // budget read once and then spent across a whole file is not just stale, it
+    // is the only thing between two simultaneous imports and double the org's
+    // allowance — each request would snapshot the same `limit - used` and both
+    // would happily spend it.
+    //
+    // So the file is written in BATCHES of `CONCURRENCY`, and the count is
+    // re-read between them. One extra COUNT per six rows is negligible next to
+    // the six inserts it guards, and it means a second import running alongside
+    // this one becomes visible within one batch instead of never.
+    //
+    // RESIDUAL, stated rather than hidden: within a single batch, up to
+    // `CONCURRENCY - 1` rows can be reserved against a count that a concurrent
+    // request is already invalidating, so two simultaneous imports can still
+    // overshoot by that in-flight window (~5 items) before the next refresh
+    // sees it. That is the same check-then-insert class the shipped serial code
+    // had — its window was one row instead of five — and closing it properly
+    // needs DB-level enforcement, which does not exist for plan limits today.
+    for (let start = 0; start < planned.length; start += CONCURRENCY) {
+      // Between batches only, and with nothing in flight — `refresh()` rebases
+      // on a count that already includes this request's own inserts, so an
+      // outstanding reservation would be double-counted.
+      if (start > 0) await planBudget.refresh();
+
+      // The plan filled up — either from our own rows or someone else's. No
+      // later row can fit, so stop asking and refuse the remainder in one go
+      // rather than making a COUNT per batch for the rest of a 5,000-row file.
+      if (planBudget.isFull()) {
+        for (const row of planned.slice(start)) {
+          rowErrors.set(row.sourceRow, planBudget.exceeded().message);
+        }
+        break;
+      }
+
+      const batch = planned.slice(start, start + CONCURRENCY);
+
+      // Rows the budget had no room for WHILE siblings were still in flight.
+      // Not an error yet: a row that reserved a slot and then failed its insert
+      // gives that slot back, and under concurrency it can give it back after a
+      // later row was already turned away. The old serial loop could not see
+      // that ordering, so treating "no room right now" as final here would
+      // refuse rows the shipped code imported. They get one more look below,
+      // once every release in this batch has landed.
+      const deferred: PlannedRow[] = [];
+      await runWithConcurrency(batch, CONCURRENCY, async (row) => {
+        if (!(await writeRow(row))) deferred.push(row);
+      });
+
+      // Deliberately SERIAL and in file order: this is the plan boundary, where
+      // each row's outcome decides the next row's headroom. That is precisely
+      // the shipped loop's shape, so the file fills to the limit the same way it
+      // always did — the concurrency above is an optimisation for the ordinary
+      // case, never a change to who gets in.
+      for (const row of deferred.sort((a, b) => a.sourceRow - b.sourceRow)) {
+        if (!(await writeRow(row))) {
+          rowErrors.set(row.sourceRow, planBudget.exceeded().message);
+        }
+      }
+    }
+
+    // Folded in FILE order, never completion order: a user reads these against
+    // their spreadsheet, so row 7 must come after row 3 however they finished.
+    summary.failed = rowErrors.size;
+    summary.created = summary.total - summary.failed;
+    for (const sourceRow of [...rowErrors.keys()].sort((a, b) => a - b)) {
+      summary.errors.push({ row: sourceRow, message: rowErrors.get(sourceRow) as string });
     }
 
     await batches.recordOutcome(batchId, {

@@ -1,6 +1,14 @@
 'use client';
 
-import { AlertTriangle, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Download,
+  FileSpreadsheet,
+  Loader2,
+  Upload,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -27,7 +35,7 @@ import { parseCsv, rowsToObjects, toCsv } from '@/lib/csv';
 import { importItemsAction, prepareItemImportAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
 
-import type { ItemImportPreview } from '@/server/actions/import';
+import type { ImportSummary, ItemImportPreview } from '@/server/actions/import';
 
 /**
  * The template columns.
@@ -162,7 +170,26 @@ export function CsvImport({
   const [parsed, setParsed] = React.useState<
     { header: string[]; rows: Record<string, string>[]; fileName: string } | null
   >(null);
-  const [summary, setSummary] = React.useState<Awaited<ReturnType<typeof importItemsAction>> | null>(null);
+  /**
+   * The finished import, and ONLY a finished one.
+   *
+   * OWNER, live prod: "showed imported those 4 items but its still on the same
+   * screen". The result used to be appended below a Step 3 that stayed mounted
+   * with the same file, the same review table and an Import button that
+   * re-enabled the instant `importing` went false — so a completed import read
+   * as "nothing happened", and the obvious next click re-submitted a file that
+   * had already landed. Setting this is what ENDS the flow: the Step 3 card is
+   * unmounted with it (see `setParsed(null)` in `runImport`), so there is
+   * nothing left to click.
+   */
+  const [done, setDone] = React.useState<ImportSummary | null>(null);
+  /**
+   * The synchronous double-submit latch. `disabled={importing}` is a RENDER,
+   * and two clicks landing in the same tick both pass it before React has
+   * re-rendered anything — which is exactly how one file becomes two imports.
+   * A ref flips before the first await, so the second click has nothing to do.
+   */
+  const submitting = React.useRef(false);
   /**
    * The SERVER's review of this file. Everything the table shows — the per-row
    * Result, the group/variant columns, the ambiguous headers and the duplicate
@@ -237,7 +264,7 @@ export function CsvImport({
       }
       const next = { header, rows: objects, fileName: file.name };
       setParsed(next);
-      setSummary(null);
+      setDone(null);
       setPreview(null);
       setDecisions({});
       setAcknowledgeDuplicate(false);
@@ -256,27 +283,42 @@ export function CsvImport({
   }
 
   async function runImport() {
+    // Latched BEFORE the first await — see `submitting`.
+    if (submitting.current) return;
     if (!parsed) return;
     if (!warehouseId) {
       toast.error(`Pick a ${warehouseLabel.toLowerCase()} before importing items.`);
       return;
     }
+    submitting.current = true;
     setImporting(true);
-    const res = await importItemsAction({
-      rows: parsed.rows,
-      headers: parsed.header,
-      headerDecisions: decisions,
-      fileName: parsed.fileName,
-      acknowledgeDuplicate,
-      warehouseId,
-    });
-    setImporting(false);
-    setSummary(res);
-    if (res.ok) {
+    try {
+      const res = await importItemsAction({
+        rows: parsed.rows,
+        headers: parsed.header,
+        headerDecisions: decisions,
+        fileName: parsed.fileName,
+        acknowledgeDuplicate,
+        warehouseId,
+      });
+      if (!res.ok) {
+        // A failure is not a completion: the file, its answers and its
+        // duplicate override all stay put so the same click can be retried.
+        toast.error(res.error.message);
+        return;
+      }
+      // END THE FLOW. Step 3 unmounts with `parsed`, so the file cannot be
+      // submitted a second time — by a stray click or by a reloaded tab.
+      setDone(res.data);
+      setParsed(null);
+      setPreview(null);
+      setDecisions({});
+      setAcknowledgeDuplicate(false);
       toast.success(`Imported ${res.data.created} of ${res.data.total} rows.`);
       router.refresh();
-    } else {
-      toast.error(res.error.message);
+    } finally {
+      setImporting(false);
+      submitting.current = false;
     }
   }
 
@@ -599,30 +641,58 @@ export function CsvImport({
         </Card>
       )}
 
-      {summary?.ok && (
+      {/*
+        THE COMPLETION STATE. It replaces the old bare "Result" panel, which
+        printed three numbers under a still-live Step 3 and offered nothing to
+        do next. This one says the import is over, in a sentence, and hands the
+        user the only thing they actually wanted: the items.
+      */}
+      {done && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Result</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {done.created > 0 ? (
+                <CheckCircle2 className="text-success h-4 w-4" />
+              ) : (
+                <AlertTriangle className="text-warning h-4 w-4" />
+              )}
+              {done.created > 0
+                ? `Imported ${done.created} item${done.created === 1 ? '' : 's'}`
+                : 'No items were imported'}
+            </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm">
-              Imported <strong className="text-success">{summary.data.created}</strong> · Failed{' '}
-              <strong className={summary.data.failed > 0 ? 'text-destructive' : ''}>{summary.data.failed}</strong> ·{' '}
-              Total {summary.data.total}
+          <CardContent className="space-y-3">
+            <p className="text-muted-foreground text-sm">
+              {done.created > 0
+                ? `${done.created} of ${done.total} row${done.total === 1 ? '' : 's'} became items.`
+                : `All ${done.total} row${done.total === 1 ? '' : 's'} were rejected — nothing was written.`}
+              {done.failed > 0 && ` ${done.failed} row${done.failed === 1 ? '' : 's'} failed.`}
+              {' Upload another file above to import more.'}
             </p>
-            {summary.data.errors.length > 0 && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-sm text-muted-foreground">
-                  Show {summary.data.errors.length} error{summary.data.errors.length === 1 ? '' : 's'}
+            {done.errors.length > 0 && (
+              <details open={done.created === 0}>
+                <summary className="text-muted-foreground cursor-pointer text-sm">
+                  Show {done.errors.length} error{done.errors.length === 1 ? '' : 's'}
                 </summary>
                 <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs">
-                  {summary.data.errors.map((e, i) => (
-                    <li key={i} className="rounded bg-destructive/10 px-2 py-1 text-destructive">
+                  {done.errors.map((e, i) => (
+                    <li key={i} className="bg-destructive/10 text-destructive rounded px-2 py-1">
                       Row {e.row}: {e.message}
                     </li>
                   ))}
                 </ul>
               </details>
+            )}
+            {done.created > 0 && (
+              <Button
+                variant="gradient"
+                // Newest first, so the rows that just landed are the rows at the
+                // top of the list. `created_desc` is an existing, validated sort
+                // on /dashboard/inventory — no new URL vocabulary here.
+                onClick={() => router.push('/dashboard/inventory?sort=created_desc')}
+              >
+                View imported items <ArrowRight className="h-4 w-4" />
+              </Button>
             )}
           </CardContent>
         </Card>

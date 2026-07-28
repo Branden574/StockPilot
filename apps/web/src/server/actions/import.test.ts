@@ -14,6 +14,26 @@ vi.mock('@/server/loaders/inventory-list', () => ({
 const WAREHOUSE_A = '11111111-1111-4111-8111-111111111111';
 const WAREHOUSE_B = '22222222-2222-4222-8222-222222222222';
 
+/**
+ * The per-file plan budget, as `planLimitBudget` returns it. Headroom is
+ * unlimited by default; a test that cares sets `planHeadroom` first.
+ *
+ * The REAL one is two reads against `ctx.supabase`, which this suite's context
+ * does not carry — but it is also the whole point of the perf work, so the fake
+ * counts its own calls: exactly ONE per import, however many rows the file has.
+ */
+let planHeadroom = Number.POSITIVE_INFINITY;
+
+/**
+ * The ORG'S ACTUAL ITEM COUNT, shared by every budget minted in a test — which
+ * is what makes two simultaneous imports modelable. `refresh()` re-reads it,
+ * exactly as the real one re-runs its COUNT, and `mockCreate` increments it,
+ * exactly as a real INSERT would. `planHeadroom` is the plan's limit.
+ */
+let orgItemCount = 0;
+/** COUNT re-reads, per import. One per concurrency batch is the whole point. */
+let planRefreshCount = 0;
+
 const {
   mockCreate,
   mockWithContext,
@@ -23,8 +43,12 @@ const {
   mockClaim,
   mockRecordOutcome,
   mockRelease,
+  mockPlanLimitBudget,
 } = vi.hoisted(() => ({
-  mockCreate: vi.fn(async (_input: Record<string, unknown>) => ({ id: 'itm-1' })),
+  mockCreate: vi.fn(async (_input: Record<string, unknown>, _opts?: Record<string, unknown>) => ({
+    id: 'itm-1',
+  })),
+  mockPlanLimitBudget: vi.fn(),
   // enabledModules carries 'sports' so the sports half of the mapping
   // vocabulary is live; the module gate is read from the CONTEXT, never from
   // the client's payload.
@@ -57,6 +81,7 @@ vi.mock('@/server/services/context', async () => {
     ...actual,
     withContext: mockWithContext,
     assertPermission: mockAssertPermission,
+    planLimitBudget: mockPlanLimitBudget,
   };
 });
 vi.mock('@/server/services/inventory', () => ({
@@ -95,6 +120,40 @@ function row(extra: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  planHeadroom = Number.POSITIVE_INFINITY;
+  orgItemCount = 0;
+  planRefreshCount = 0;
+  // Every successful create is a row in the org, which is what the next
+  // refresh() will COUNT — the real INSERT/COUNT relationship, modelled.
+  mockCreate.mockImplementation(async () => {
+    orgItemCount++;
+    return { id: 'itm-1' };
+  });
+  // A faithful stand-in for the real budget: a synchronous take/release over a
+  // count that refresh() re-reads from the SHARED org total. Two budgets minted
+  // in one test therefore see each other's writes, exactly as two simultaneous
+  // requests would.
+  mockPlanLimitBudget.mockImplementation(async () => {
+    let used = orgItemCount;
+    return {
+      take: (n = 1) => {
+        if (used + n > planHeadroom) return null;
+        used += n;
+        return {
+          release: () => {
+            used -= n;
+          },
+        };
+      },
+      refresh: async () => {
+        planRefreshCount++;
+        used = orgItemCount;
+      },
+      isFull: () => used >= planHeadroom,
+      exceeded: () =>
+        new Error("You've reached your Free plan limit of 100 items. Upgrade to add more."),
+    };
+  });
 });
 
 describe('importItemsAction — sports variant columns', () => {
@@ -567,5 +626,258 @@ describe('prepareItemImportAction — review before commit', () => {
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockClaim).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * OWNER, live prod: "took very long to import needs to be faster" — on FOUR
+ * rows.
+ *
+ * Profiled before touching anything. Per CSV row, `InventoryService.create()`
+ * made four sequential Supabase round trips, and the action awaited each row
+ * before starting the next:
+ *
+ *   1. `assertPlanLimit` → organizations (the org's plan)
+ *   2. `assertPlanLimit` → inventory_items COUNT
+ *   3. the inventory_items INSERT
+ *   4. the stock_movements INSERT (rows with quantity)
+ *
+ * Two of the four answered a question whose answer cannot change inside one
+ * request, and they were asked once per row: a 4-row file spent eight reads
+ * re-deriving the same plan headroom before writing anything. The other two
+ * blocked every later row for no reason — the rows are independent inserts.
+ *
+ * (The remaining per-row awaits were already free and were left alone, which
+ * the profile had to establish before any of this counted as a diagnosis:
+ * `resolveTrackingProfile` short-circuits on the CSV's `categoryId: null` and
+ * memoizes per org:category on the ONE service instance the action builds;
+ * `assertCustomFieldsValid` returns early on the empty `customFields`; and
+ * `forcedWarehouseId` / `assertWarehouseAccess` both go through the React
+ * `cache()`d `getWarehouseAccess`, keyed on the single ctx object, so only the
+ * first row pays for it.)
+ *
+ * So: resolve the plan ONCE per file, and stop serialising independent writes.
+ */
+describe('importItemsAction — a file is not N files', () => {
+  /** A pessimistic-but-plausible Supabase round trip from a Vercel function. */
+  const ROUND_TRIP_MS = 10;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  function fixture(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      name: `Item ${i + 1}`,
+      sku: `SKU-${i + 1}`,
+      quantity_on_hand: '3',
+    }));
+  }
+
+  it('resolves the plan limit ONCE for the whole file, not once per row', async () => {
+    const res = await importItemsAction({ rows: fixture(20) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(20);
+    // The headline: 1 budget for 20 rows. It was 20 (× two reads each).
+    expect(mockPlanLimitBudget).toHaveBeenCalledTimes(1);
+    expect(mockCreate).toHaveBeenCalledTimes(20);
+    // …and every row carries the reservation, which is what tells create() the
+    // check already ran for it. Without this the per-row reads come straight
+    // back and the budget is decoration.
+    for (const call of mockCreate.mock.calls) {
+      expect((call[1] as { planSlot?: unknown } | undefined)?.planSlot).toBeTruthy();
+    }
+  });
+
+  it('MEASURED: 20 rows cost about one row, not twenty', async () => {
+    // Each surviving row is 2 round trips now (INSERT + the movement INSERT);
+    // it was 4, because the plan gate ran inside every one of them.
+    mockCreate.mockImplementation(async () => {
+      await sleep(ROUND_TRIP_MS * 2);
+      return { id: 'itm-1' };
+    });
+
+    // BEFORE — the shipped shape: every row's four round trips, end to end.
+    const beforeStart = performance.now();
+    for (let i = 0; i < 20; i++) await sleep(ROUND_TRIP_MS * 4);
+    const before = performance.now() - beforeStart;
+
+    // AFTER — the real action over the same 20 rows.
+    const afterStart = performance.now();
+    const res = await importItemsAction({ rows: fixture(20) });
+    const after = performance.now() - afterStart;
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(20);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[import perf] 20 rows @ ${ROUND_TRIP_MS}ms/round-trip — before ${before.toFixed(0)}ms, after ${after.toFixed(0)}ms (${(before / after).toFixed(1)}x)`,
+    );
+    // Halving the round trips and running six at a time is a >3x floor; the
+    // measured figure is far better. Asserted as a floor so the gain cannot
+    // quietly regress, not as a benchmark.
+    expect(after).toBeLessThan(before / 3);
+  });
+
+  it('still refuses the row that crosses the plan limit, and only that row', async () => {
+    planHeadroom = 2;
+    const res = await importItemsAction({ rows: fixture(5) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Same outcome the per-row COUNT produced: the file imports up to the
+    // limit and the rest fail individually. Not all-or-nothing.
+    expect(res.data.created).toBe(2);
+    expect(res.data.failed).toBe(3);
+    expect(res.data.errors[0]!.message).toMatch(/plan limit/i);
+  });
+
+  it('hands the slot back when the write fails, so a failure costs no headroom', async () => {
+    planHeadroom = 2;
+    // The first row fails AFTER reserving; its slot must return to the pool or
+    // a later good row is refused for a plan that has room.
+    mockCreate
+      .mockImplementationOnce(async () => {
+        throw new Error('A item with that SKU already exists');
+      })
+      .mockImplementation(async () => ({ id: 'itm-1' }));
+
+    const res = await importItemsAction({ rows: fixture(3) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(2);
+    expect(res.data.failed).toBe(1);
+  });
+
+  it('reports errors in FILE order however the rows finished', async () => {
+    // Row 2 is slow and row 4 is instant, so completion order is not file
+    // order — a user reading these against their spreadsheet needs file order.
+    mockCreate.mockImplementation(async (input: Record<string, unknown>) => {
+      const n = Number(String(input.name).replace('Item ', ''));
+      await sleep(n === 2 ? 30 : 1);
+      if (n === 2 || n === 4) throw new Error(`row ${n} failed`);
+      return { id: 'itm-1' };
+    });
+
+    const res = await importItemsAction({ rows: fixture(5) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Source rows are 1-based + a header line, so Item 2 is row 3.
+    expect(res.data.errors.map((e) => e.row)).toEqual([3, 5]);
+    expect(res.data.created).toBe(3);
+  });
+
+  it('keeps a row-level validation failure separate from a write failure', async () => {
+    const res = await importItemsAction({
+      // Row 2 has no name at all — it never reaches create().
+      rows: [{ name: 'Good', sku: 'A' }, { name: '', sku: 'B' }, { name: 'Also good', sku: 'C' }],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(2);
+    expect(res.data.failed).toBe(1);
+    expect(res.data.errors).toHaveLength(1);
+    expect(res.data.errors[0]!.row).toBe(3);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * REVIEW FINDING (fix/import-ux). The plan limit has NO database-level
+ * enforcement — no trigger, no check constraint, nothing that would reject an
+ * over-limit insert. `planLimitBudget` is the entire mechanism.
+ *
+ * So resolving it once and spending it across a whole file, as the first cut
+ * did, meant two simultaneous imports each snapshotted the same `limit - used`
+ * and each spent all of it: an org 10 items from its cap could land 20. The
+ * speed win is real, but it cannot be paid for with the limit.
+ *
+ * The fix keeps the win and restores the guard: rows are written in batches of
+ * CONCURRENCY, and the count is re-read between batches. One COUNT per six
+ * inserts is cheap, and a competing import becomes visible within one batch.
+ *
+ * The residual window is stated, not hidden — see the last test.
+ */
+describe('importItemsAction — the plan limit survives concurrency', () => {
+  function fixture(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ name: `Item ${i + 1}`, sku: `SKU-${i + 1}` }));
+  }
+
+  it('re-reads the count between batches instead of trusting one snapshot', async () => {
+    const res = await importItemsAction({ rows: fixture(24) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(24);
+    // 24 rows at 6 wide = 4 batches, so 3 refreshes after the opening read.
+    // The point is that it is per-BATCH, not once per file and not once a row.
+    expect(planRefreshCount).toBe(3);
+  });
+
+  it('PROBE: two simultaneous imports cannot jointly blow past the limit', async () => {
+    // 20 free slots, and two imports of 30 rows each racing for them.
+    planHeadroom = 20;
+    orgItemCount = 0;
+
+    const [a, b] = await Promise.all([
+      importItemsAction({ rows: fixture(30) }),
+      importItemsAction({ rows: fixture(30) }),
+    ]);
+
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    const landed = a.data.created + b.data.created;
+
+    // The guarantee. Without the between-batch refresh both requests spend the
+    // same 20 and 40 items land — double the org's allowance, permanently,
+    // because nothing downstream would ever reject them.
+    expect(orgItemCount).toBe(landed);
+    // ACCEPTED BOUND: each request can have up to CONCURRENCY - 1 = 5 rows
+    // reserved against a count the other is already invalidating, so the joint
+    // total may exceed the limit by at most one in-flight window. This is the
+    // same check-then-insert class the shipped SERIAL code had (its window was
+    // one row); closing it fully needs DB-level enforcement, which plan limits
+    // do not have.
+    const IN_FLIGHT_WINDOW = 5;
+    expect(landed).toBeGreaterThanOrEqual(20);
+    expect(landed).toBeLessThanOrEqual(20 + IN_FLIGHT_WINDOW);
+
+    // Neither import silently dropped rows: every row is created or reported.
+    expect(a.data.created + a.data.failed).toBe(30);
+    expect(b.data.created + b.data.failed).toBe(30);
+  });
+
+  it('stops the file once the plan is full rather than COUNTing per batch', async () => {
+    planHeadroom = 4;
+    const res = await importItemsAction({ rows: fixture(60) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(4);
+    expect(res.data.failed).toBe(56);
+    // Hard stop: it does not keep re-reading the count for the other 9 batches
+    // of a file that provably cannot fit another row.
+    expect(planRefreshCount).toBeLessThanOrEqual(1);
+    // Every refused row still says WHY, in file order.
+    expect(res.data.errors).toHaveLength(56);
+    expect(res.data.errors[0]!.message).toMatch(/plan limit/i);
+    expect(res.data.errors.map((e) => e.row)).toEqual(
+      [...res.data.errors.map((e) => e.row)].sort((x, y) => x - y),
+    );
+  });
+
+  it('an import that fits leaves the org exactly as full as its rows', async () => {
+    planHeadroom = 50;
+    orgItemCount = 10;
+
+    const res = await importItemsAction({ rows: fixture(12) });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(12);
+    expect(orgItemCount).toBe(22);
   });
 });

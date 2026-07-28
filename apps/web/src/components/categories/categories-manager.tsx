@@ -436,6 +436,56 @@ export function CategoriesManager({
   );
 }
 
+/** The three sports-policy keys the edit dialog can post, exactly as the
+ *  update action names them. `undefined` = the key is absent from the payload. */
+interface SportsPolicyPatch {
+  sportsSubcategoryKey?: string | null;
+  trackingMode?: TrackingMode | null;
+  trackingProfile?: SubcategoryTrackingProfile | null;
+}
+
+/** Key-order-independent value identity. `tracking_profile` arrives from the DB
+ *  as JSON and leaves as a draft object, so a naive stringify would call two
+ *  identical profiles different and resend one that never changed. */
+function sameValue(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): string =>
+    JSON.stringify(v ?? null, (_k, val) =>
+      val && typeof val === 'object' && !Array.isArray(val)
+        ? Object.fromEntries(Object.entries(val as object).sort(([x], [y]) => x.localeCompare(y)))
+        : val,
+    );
+  return norm(a) === norm(b);
+}
+
+/**
+ * Strips every sports key whose value the row already holds, so an edit that did
+ * not touch the sports section posts no sports field at all.
+ *
+ * This is what makes ABSENT reachable from the UI. The server's whole
+ * absent-vs-null contract was unusable while the dialog sent all three keys on
+ * every save — see the comment at the call site.
+ */
+function dropUnchangedSportsFields(
+  patch: SportsPolicyPatch,
+  current: CategoryRow,
+): SportsPolicyPatch {
+  const currentBy: Record<keyof SportsPolicyPatch, unknown> = {
+    sportsSubcategoryKey: current.sports_subcategory_key,
+    trackingMode: current.tracking_mode,
+    trackingProfile: current.tracking_profile,
+  };
+  const out: SportsPolicyPatch = {};
+  for (const key of Object.keys(patch) as Array<keyof SportsPolicyPatch>) {
+    const next = patch[key];
+    // A key the builder already left out stays out — `trackingMode: undefined`
+    // on the built-in branch means "no override", which is absence, not a clear.
+    if (next === undefined) continue;
+    if (sameValue(next, currentBy[key])) continue;
+    Object.assign(out, { [key]: next });
+  }
+  return out;
+}
+
 function CategoryDialog({
   open,
   onOpenChange,
@@ -543,7 +593,27 @@ function CategoryDialog({
       color: values.color || undefined,
       supportsSizes: values.supportsSizes,
       parentId,
-      ...sportsFields,
+      // ABSENT means "untouched"; NULL means "clear it". The server has read the
+      // two apart since the Task 12 fix (`touchesSportsPolicy` is
+      // `patch[k] !== undefined`, and update()'s merge is
+      // `patch.X !== undefined ? (patch.X ?? null) : current.X`) — this dialog
+      // just never said "untouched". It spread all three sports keys on EVERY
+      // save the section was on screen for, including three explicit nulls on
+      // the not-a-sports-subcategory branch, so a plain RENAME posted a
+      // sports-policy write: it demanded `sports:manage` and re-ran
+      // `assertSportsRootChildValid` against an unchanged row, refusing the
+      // rename of a profile-less Sports-root child with
+      // SPORTS_SUBCATEGORY_REQUIRED.
+      //
+      // Same rule the parentId half already follows (the dialog resends the
+      // current parent and the server only treats a genuine MOVE as a move),
+      // applied where it was missing. Dropping a key the human did not touch
+      // takes nothing away: clearing a profile is still an explicit null, still
+      // gated, still refused when the resulting state is incomplete.
+      //
+      // CREATE is untouched — there is no prior row to compare against, and a
+      // new category states its whole sports intent by definition.
+      ...(editing ? dropUnchangedSportsFields(sportsFields, editing) : sportsFields),
     };
     const res = editing
       ? await updateCategoryAction(editing.id, payload)

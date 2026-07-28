@@ -40,7 +40,7 @@ import {
   validateCustomFields,
 } from '@stockpilot/core';
 
-import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type PlanLimitSlot, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 import { audit, type AuditEvent } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -1523,7 +1523,19 @@ export class InventoryService {
    */
   async create(
     input: CreateItemInput,
-    opts: { awaitingFirstReceipt?: boolean; source?: 'import' } = {},
+    opts: {
+      awaitingFirstReceipt?: boolean;
+      source?: 'import';
+      /**
+       * A plan slot the CALLER already reserved off a per-file
+       * `planLimitBudget` (see `importItemsAction`). Its presence is proof the
+       * plan check ran for this row — not a way to skip it — and it lets a
+       * loop pay the plan's two reads once for the whole file instead of twice
+       * per row. Server-only, like the rest of this bag: no request schema
+       * parses into it, so a payload cannot conjure one.
+       */
+      planSlot?: PlanLimitSlot;
+    } = {},
   ) {
     assertPermission(this.ctx, 'items:create');
 
@@ -1553,7 +1565,11 @@ export class InventoryService {
     // the module is an operational opt-in that applies 0162 first.
     const lotSerialEnabled = this.ctx.enabledModules.has('lot_serial');
 
-    await assertPlanLimit(this.ctx, 'items');
+    // Two reads, and every caller but one still makes them per create. A caller
+    // looping this method over a whole file reserves the row's slot itself off
+    // one per-file budget and hands it in, which is the same check with the
+    // reads amortised — see `opts.planSlot`.
+    if (!opts.planSlot) await assertPlanLimit(this.ctx, 'items');
 
     // Reject any custom_fields value that violates the org's field definitions
     // before we touch the DB (mirrors the form's client-side check).

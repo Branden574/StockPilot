@@ -301,6 +301,154 @@ export async function assertRoleUnchanged(ctx: ServiceContext): Promise<void> {
   }
 }
 
+/** A reservation against a `PlanLimitBudget`. Releasing it hands the slot back
+ *  — for the row that took one and then failed for some other reason. */
+export interface PlanLimitSlot {
+  release(): void;
+}
+
+/**
+ * A plan limit resolved once and then spent in memory, with the count
+ * re-readable on demand.
+ *
+ * `assertPlanLimit` costs two round trips (the org's plan, then a COUNT), which
+ * is right for a single create and wrong for a loop. `importItemsAction` calls
+ * `InventoryService.create()` once per CSV row, so a 4-row file paid EIGHT
+ * reads to answer the same question four times — measurably the largest single
+ * cost in the import, and the reason the owner reported a 4-row file as slow.
+ *
+ * The budget answers it once and then tracks the headroom locally, so the
+ * check stays per-row (the row that would cross the limit is still the row that
+ * fails, with the same message) while the reads happen per-batch.
+ *
+ * `take()` is SYNCHRONOUS on purpose: rows run concurrently, and a reservation
+ * that awaited anything could let two rows both see the last free slot.
+ *
+ * ENFORCEMENT LIVES HERE, NOWHERE ELSE. There is no DB constraint behind a plan
+ * limit — no trigger, no check, nothing that would reject the insert. So a
+ * budget held across a long loop is not merely stale, it is the ONLY thing
+ * standing between two simultaneous imports and double the org's item
+ * allowance. `refresh()` exists so a long-running caller can re-read the truth
+ * between batches instead of trusting a snapshot it took minutes ago; see
+ * `importItemsAction`, which calls it once per concurrency batch.
+ */
+export interface PlanLimitBudget {
+  /** Reserve `n` slots, or null when the plan has no room for them. */
+  take(n?: number): PlanLimitSlot | null;
+  /**
+   * Re-read the resource count and discard every outstanding reservation.
+   *
+   * Only safe to call with NOTHING in flight — it rebases the headroom on the
+   * database's current truth, which already includes the rows this request has
+   * written, so any slot still held would be counted twice.
+   */
+  refresh(): Promise<void>;
+  /** True once the plan is full as of the last read — the caller should stop
+   *  rather than keep asking, because no later row can fit either. */
+  isFull(): boolean;
+  /** The exact error `assertPlanLimit` throws when there is no room. */
+  exceeded(): ServiceError;
+}
+
+/**
+ * Resolves the org's effective plan and its CURRENT count for `resource`, and
+ * returns a budget over the remaining headroom. Two round trips, once.
+ *
+ * A budget must never outlive the request that built it — it is a snapshot of a
+ * count another request can move, and `refresh()` is how a long loop re-reads it.
+ */
+export async function planLimitBudget(
+  ctx: ServiceContext,
+  resource: 'items' | 'locations' | 'members',
+): Promise<PlanLimitBudget> {
+  const { data: org } = await ctx.supabase
+    .from('organizations')
+    .select(
+      'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+    )
+    .eq('id', ctx.organizationId)
+    .single();
+  // Resolve the EFFECTIVE tier (admin override > stripe > trial > plan column),
+  // so a platform-admin "access_tier" override (e.g. Comped Enterprise) lifts
+  // the limits exactly as configured — the single source of truth.
+  const plan: PlanId = resolveEffectivePlan((org as OrgBillingState | null) ?? { plan: null }).tier;
+  const limit = PLANS[plan].limits[resource];
+  const exceeded = () =>
+    new ServiceError(
+      'plan_limit_exceeded',
+      `You've reached your ${PLANS[plan].name} plan limit of ${limit} ${resource}. Upgrade to add more.`,
+      { plan, limit, resource },
+    );
+  const FREE_SLOT: PlanLimitSlot = { release: () => {} };
+  // No count needed, and no accounting: an unlimited plan can never refuse.
+  if (isUnlimited(limit)) {
+    return {
+      take: () => FREE_SLOT,
+      refresh: async () => {},
+      isFull: () => false,
+      exceeded,
+    };
+  }
+
+  const table =
+    resource === 'items'
+      ? 'inventory_items'
+      : resource === 'locations'
+        ? 'locations'
+        : 'organization_members';
+
+  /** The COUNT, re-runnable. `refresh()` needs the identical predicate the
+   *  first read used, so it is built here rather than inline. */
+  const readCount = async (): Promise<number> => {
+    let query = ctx.supabase
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId);
+
+    if (resource === 'items' || resource === 'locations') {
+      query = query.is('deleted_at', null);
+    }
+    if (resource === 'locations') {
+      // The locations entitlement governs SITES — what pickers offer and the
+      // Locations page's "Sites" tab shows. Racks/shelves/crates/areas and the
+      // auto-created staging/unplaced buckets must not consume it (every
+      // warehouse spawns 2 system rows; put-away creates racks freely). SQL
+      // mirror of isSiteLocation() — the two .or() groups AND together, and
+      // each keeps NULL rows (NOT IN drops NULLs on its own).
+      query = query
+        .or(`kind.is.null,kind.not.in.(${[...SYSTEM_KINDS, ...PLACEMENT_KINDS].join(',')})`)
+        .or(`type.is.null,type.not.in.(${PLACEMENT_TYPES.join(',')})`);
+    }
+    if (resource === 'members') {
+      query = query.not('accepted_at', 'is', null);
+    }
+
+    const { count } = await query;
+    return count ?? 0;
+  };
+
+  let used = await readCount();
+  return {
+    take(n = 1) {
+      if (used + n > limit) return null;
+      used += n;
+      return {
+        release: () => {
+          used -= n;
+        },
+      };
+    },
+    // Rebases on the database, which already counts everything this request has
+    // written — so this both picks up OTHER requests' inserts and drops our own
+    // local tally, and must only be called with nothing in flight.
+    refresh: async () => {
+      used = await readCount();
+    },
+    isFull: () => used >= limit,
+    exceeded,
+  };
+}
+
 /**
  * Looks up the org's current plan and asserts that the relevant resource
  * count is below its plan limit. Throws a `plan_limit_exceeded` ServiceError
@@ -317,56 +465,6 @@ export async function assertPlanLimit(
    */
   addCount: number = 1,
 ): Promise<void> {
-  const { data: org } = await ctx.supabase
-    .from('organizations')
-    .select(
-      'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
-    )
-    .eq('id', ctx.organizationId)
-    .single();
-  // Resolve the EFFECTIVE tier (admin override > stripe > trial > plan column),
-  // so a platform-admin "access_tier" override (e.g. Comped Enterprise) lifts
-  // the limits exactly as configured — the single source of truth.
-  const plan: PlanId = resolveEffectivePlan((org as OrgBillingState | null) ?? { plan: null }).tier;
-  const limit = PLANS[plan].limits[resource];
-  if (isUnlimited(limit)) return;
-
-  const table =
-    resource === 'items'
-      ? 'inventory_items'
-      : resource === 'locations'
-        ? 'locations'
-        : 'organization_members';
-
-  let query = ctx.supabase
-    .from(table)
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', ctx.organizationId);
-
-  if (resource === 'items' || resource === 'locations') {
-    query = query.is('deleted_at', null);
-  }
-  if (resource === 'locations') {
-    // The locations entitlement governs SITES — what pickers offer and the
-    // Locations page's "Sites" tab shows. Racks/shelves/crates/areas and the
-    // auto-created staging/unplaced buckets must not consume it (every
-    // warehouse spawns 2 system rows; put-away creates racks freely). SQL
-    // mirror of isSiteLocation() — the two .or() groups AND together, and
-    // each keeps NULL rows (NOT IN drops NULLs on its own).
-    query = query
-      .or(`kind.is.null,kind.not.in.(${[...SYSTEM_KINDS, ...PLACEMENT_KINDS].join(',')})`)
-      .or(`type.is.null,type.not.in.(${PLACEMENT_TYPES.join(',')})`);
-  }
-  if (resource === 'members') {
-    query = query.not('accepted_at', 'is', null);
-  }
-
-  const { count } = await query;
-  if ((count ?? 0) + addCount > limit) {
-    throw new ServiceError(
-      'plan_limit_exceeded',
-      `You've reached your ${PLANS[plan].name} plan limit of ${limit} ${resource}. Upgrade to add more.`,
-      { plan, limit, resource },
-    );
-  }
+  const budget = await planLimitBudget(ctx, resource);
+  if (!budget.take(addCount)) throw budget.exceeded();
 }
