@@ -483,10 +483,19 @@ export async function createItemsFromPoLines(
   let linked = 0;
   let skipped = 0;
   for (const l of lines ?? []) {
-    // Skip lines that aren't inventory or already have an item — caller
-    // shouldn't pass them but be defensive.
+    // Skip lines that aren't inventory — caller shouldn't pass them but be
+    // defensive.
     if (l.line_type !== 'inventory') continue;
-    if (l.item_id) continue;
+    // Same-request retry safety. findOrCreate is exact-key and re-reads on a
+    // 23505 race, so re-running a partially-completed batch converges on the
+    // SAME group rather than creating a second one. A line already carrying an
+    // item_id is skipped outright — that is what distinguishes a RETRY from an
+    // intentional second shipment, which arrives as a NEW import with its own
+    // lines and legitimately receives more quantity into the same variant.
+    if (l.item_id) {
+      skipped++;
+      continue;
+    }
     const description = (l.description as string | null)?.trim();
     if (!description) continue;
 
