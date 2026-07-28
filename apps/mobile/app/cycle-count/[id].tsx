@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { variantLabel } from '@stockpilot/core';
+
 import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet';
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
@@ -32,12 +34,25 @@ import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
 
+/** The joined item columns the variant label is built from. */
+interface VariantItemRow {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  variant_size: string | null;
+  jersey_number: string | null;
+}
+
 interface UiLine {
   id: string;
   itemId: string;
   itemName: string;
   itemSku: string;
   itemBarcode: string | null;
+  /** "Size 10", "#12 · Size XL" — WHICH VARIANT this line is. Null for a
+   *  non-sports item, where nothing extra renders. */
+  itemVariantLabel: string | null;
   expected: number;
   counted: number | null;
   localDirty: boolean;
@@ -79,7 +94,12 @@ export default function CycleCountDetail() {
   const [reassignOpen, setReassignOpen] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [pendingForThis, setPendingForThis] = React.useState(0);
-  const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached'>('none');
+  const [emptyState, setEmptyState] = React.useState<
+    'none' | 'offline-uncached' | 'read-failed'
+  >('none');
+  /** The server's own message for a refused read, shown instead of an empty
+   *  count. Only ever set when there is no cached snapshot to fall back to. */
+  const [readError, setReadError] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
 
   const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -97,6 +117,7 @@ export default function CycleCountDetail() {
     if (!id) return;
     setLoading(true);
     setEmptyState('none');
+    setReadError(null);
 
     const cached = await getCycleCount(id);
     if (cached) {
@@ -137,14 +158,25 @@ export default function CycleCountDetail() {
         .from('cycle_count_lines')
         .select(
           `id, expected_quantity, counted_quantity, counted_at, updated_at,
-           item:inventory_items!item_id (id, name, sku, barcode)`,
+           item:inventory_items!item_id (id, name, sku, barcode, variant_size, jersey_number)`,
         )
         .eq('cycle_count_id', id),
     ]);
 
     if (ccErr || lErr || !cc) {
-      // Couldn't fetch — if we already have a cache hit, just show it.
+      // Couldn't fetch — if we already have a cache hit, just show it (the
+      // offline-first contract: cached data is real data, not a false claim).
+      //
+      // With NO cache this used to stop loading and render an empty count, so a
+      // REFUSED read looked like a count with no lines. This read was widened by
+      // the sports branch with 0298's `variant_size` / `jersey_number` on the
+      // item embed, so a build running ahead of the database gets the whole
+      // select refused — and a counter would have started tallying nothing.
+      // Fail loud instead (release-order rule).
       if (!cached) {
+        const message = (ccErr ?? lErr)?.message ?? null;
+        setReadError(message);
+        setEmptyState(message ? 'read-failed' : 'none');
         setLoading(false);
       }
       return;
@@ -167,8 +199,8 @@ export default function CycleCountDetail() {
 
     const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
       const itm = r.item as
-        | { id: string; name: string; sku: string; barcode: string | null }
-        | { id: string; name: string; sku: string; barcode: string | null }[]
+        | VariantItemRow
+        | VariantItemRow[]
         | null;
       const item = Array.isArray(itm) ? itm[0] : itm;
       const updatedAt =
@@ -181,6 +213,12 @@ export default function CycleCountDetail() {
         itemName: item?.name ?? 'Unknown',
         itemSku: item?.sku ?? '',
         itemBarcode: item?.barcode ?? null,
+        // One shared builder, so the phone, the web row and the printed count
+        // sheet all call this variant the same thing.
+        itemVariantLabel: variantLabel({
+          jerseyNumber: item?.jersey_number ?? null,
+          size: item?.variant_size ?? null,
+        }),
         expected: Number(r.expected_quantity),
         counted:
           r.counted_quantity === null || r.counted_quantity === undefined
@@ -223,6 +261,7 @@ export default function CycleCountDetail() {
         itemName: l.itemName,
         itemSku: l.itemSku,
         itemBarcode: l.itemBarcode,
+        itemVariantLabel: l.itemVariantLabel,
         expected: l.expected,
         counted: l.counted,
         localDirty: l.localDirty,
@@ -341,6 +380,36 @@ export default function CycleCountDetail() {
   // canceled counts are opened from history read-only.
   const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
   const postDisabled = posting || countedCount === 0 || offline || hasPending;
+
+  if (emptyState === 'read-failed') {
+    return (
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+            <Text style={styles.backText}>← Back</Text>
+          </Pressable>
+        </View>
+        <View style={styles.center}>
+          <Text style={styles.emptyTitle}>Could not load this count</Text>
+          <Text style={styles.emptyBody}>
+            {readError}
+            {'\n\n'}If the app was just updated, the server may still be catching up.
+          </Text>
+          <Pressable
+            style={styles.retryBtn}
+            onPress={() => {
+              setReadError(null);
+              setEmptyState('none');
+              void load();
+            }}
+          >
+            <Text style={styles.retryLabel}>Retry</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (emptyState === 'offline-uncached') {
     return (
@@ -471,6 +540,9 @@ export default function CycleCountDetail() {
                   <Text style={styles.itemName} numberOfLines={2}>
                     {l.itemName}
                   </Text>
+                  {l.itemVariantLabel ? (
+                    <Text style={styles.itemVariant}>{l.itemVariantLabel}</Text>
+                  ) : null}
                   <Text style={styles.itemSku}>{l.itemSku}</Text>
                   <Text style={styles.expected}>
                     Expected: {l.expected}
@@ -644,6 +716,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   itemName: { color: theme.text, fontSize: 14, fontWeight: '600' },
+  itemVariant: { color: theme.primary, fontSize: 12, fontWeight: '600', marginTop: 1 },
   itemSku: {
     color: theme.textMuted,
     fontFamily: 'Menlo',

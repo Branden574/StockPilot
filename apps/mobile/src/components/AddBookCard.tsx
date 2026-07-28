@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
-import { supabase } from '@/lib/supabase';
+import { buildQuickAddInput, describeFailure, submitCreateItem } from '@/lib/item-create';
 import { radius, space, theme } from '@/lib/theme';
 
 import type { User } from '@supabase/supabase-js';
@@ -55,11 +55,15 @@ interface Props {
  *   • Warehouse — picker, defaults to first available
  *   • Initial qty — defaults to 1
  *
- * Confirm path: directly inserts inventory_items + an initial
- * adjust_stock movement. RLS already prevents cross-org writes.
- * No queue here — book creation is an online-only action in v1
- * (the initial adjust uses the existing RPC, which the offline queue
- * doesn't yet wrap).
+ * Confirm path: POST /api/v1/items through the SHARED create schema
+ * (src/lib/item-create.ts), so this card enforces the same permission,
+ * plan-limit, custom-field and audit rules the web form does. It used to
+ * raw-insert inventory_items, guess the org from the first
+ * organization_members row, and then call adjust_stock with a null location —
+ * which routed every ISBN add's opening stock into STAGING instead of
+ * Unplaced. The server now writes the `initial` movement inside create(), so
+ * there is no RPC call left to make. Still online-only: no offline queue wraps
+ * item creation.
  */
 export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
   const isExisting = Boolean(result.existingItem);
@@ -103,61 +107,35 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
       Alert.alert('Title required', 'Type a title before saving.');
       return;
     }
-    const initialQty = Math.max(0, Number(qty) || 0);
+
+    // The book fields the web book form keys off. Author stays a custom field
+    // here rather than riding the shared form's "model number" slot, so it is
+    // written once and spelled the same way it always has been.
+    const customFields: Record<string, unknown> = {};
+    if (author.trim()) customFields.author = author.trim();
+    if (meta.publisher) customFields.publisher = meta.publisher;
+    if (meta.grade) customFields.book_grade = meta.grade;
+
+    const built = buildQuickAddInput({
+      itemType: 'book',
+      name: title,
+      sku,
+      barcode: result.isbn,
+      modelNumber: '',
+      description: meta.description ?? null,
+      quantity: qty,
+      warehouseId,
+      customFields,
+    });
+    if (!built.ok) {
+      Alert.alert('Check the form', describeFailure(built));
+      return;
+    }
 
     setBusy(true);
     try {
-      // org_id resolution — read from the user's org_membership the
-      // same way scan.tsx does. This module is offline-tolerant for
-      // reads but creating an item requires a network round-trip.
-      const { data: member } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .not('accepted_at', 'is', null)
-        .limit(1)
-        .maybeSingle();
-      const orgId = (member?.organization_id as string | undefined) ?? null;
-      if (!orgId) throw new Error('No organization for this user');
-
-      const customFields: Record<string, unknown> = {};
-      if (author.trim()) customFields.author = author.trim();
-      if (meta.publisher) customFields.publisher = meta.publisher;
-      if (meta.grade) customFields.book_grade = meta.grade;
-
-      const { data: created, error: insErr } = await supabase
-        .from('inventory_items')
-        .insert({
-          organization_id: orgId,
-          sku: sku.trim(),
-          name: title.trim(),
-          barcode: result.isbn,
-          description: meta.description?.slice(0, 5000) ?? null,
-          item_type: 'book',
-          custom_fields: customFields,
-          warehouse_id: warehouseId,
-          status: 'active',
-          quantity_on_hand: 0,
-          created_by: user.id,
-          updated_by: user.id,
-        })
-        .select('id')
-        .single();
-      if (insErr) throw new Error(insErr.message);
-
-      // Apply initial qty if any.
-      if (initialQty > 0) {
-        const { error: adjErr } = await supabase.rpc('adjust_stock', {
-          p_item_id: (created as { id: string }).id,
-          p_quantity_change: initialQty,
-          p_movement_type: 'initial',
-          p_location_id: null,
-          p_reason: 'Mobile ISBN add',
-          p_notes: null,
-        });
-        if (adjErr) throw new Error(adjErr.message);
-      }
-      onCreated((created as { id: string }).id);
+      const { id } = await submitCreateItem(built.input);
+      onCreated(id);
     } catch (e) {
       Alert.alert('Could not add', e instanceof Error ? e.message : 'Unknown error');
     } finally {

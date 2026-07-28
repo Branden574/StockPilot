@@ -1,0 +1,804 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildGroupKey, type ModuleId } from '@stockpilot/core';
+
+import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+
+import { ProductGroupsService } from './product-groups';
+
+vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+
+const SPORTS_MODULES = new Set<ModuleId>(['inventory', 'sports']);
+
+function sportsCtx(client: unknown, over: Record<string, unknown> = {}) {
+  return makeServiceContext(client, { enabledModules: SPORTS_MODULES, ...over });
+}
+
+function groupRow(over: Record<string, unknown> = {}) {
+  return {
+    id: 'grp-1',
+    organization_id: 'org-test',
+    category_id: 'cat-1',
+    subcategory_key: 'shoes',
+    name: 'Nike Pegasus 41',
+    brand: 'Nike',
+    manufacturer: null,
+    model: 'Pegasus 41',
+    style_number: 'FD2722',
+    colorway: 'Black/White',
+    team: null,
+    league: null,
+    season: null,
+    home_away: null,
+    color: null,
+    size_scale_id: null,
+    default_counting_unit: 'pair',
+    tracking_mode: null,
+    group_key: buildGroupKey({
+      subcategoryKey: 'shoes',
+      brand: 'Nike',
+      model: 'Pegasus 41',
+      styleNumber: 'FD2722',
+      colorway: 'Black/White',
+    }),
+    status: 'active',
+    created_at: '2026-07-27T00:00:00Z',
+    updated_at: '2026-07-27T00:00:00Z',
+    ...over,
+  };
+}
+
+const CREATE_INPUT = {
+  subcategoryKey: 'shoes',
+  name: 'Nike Pegasus 41',
+  categoryId: 'cat-1',
+  brand: 'Nike',
+  model: 'Pegasus 41',
+  styleNumber: 'FD2722',
+  colorway: 'Black/White',
+  defaultCountingUnit: 'pair' as const,
+};
+
+describe('ProductGroupsService.findOrCreate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('creates on the first call and matches the same key on the second', async () => {
+    // First pass: the key lookup misses, so the insert runs.
+    const first = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: groupRow(), error: null },
+    });
+    const created = await new ProductGroupsService(sportsCtx(first.client)).findOrCreate(
+      CREATE_INPUT,
+    );
+    expect(created.created).toBe(true);
+    expect(created.group.id).toBe('grp-1');
+
+    // The key written is the one buildGroupKey derives — never a client value.
+    const insertArgs = first.chainArgs.get('product_groups.insert')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insertArgs.group_key).toBe(groupRow().group_key);
+    expect(insertArgs.organization_id).toBe('org-test');
+
+    // Second pass: the same key now exists, so nothing is inserted.
+    const second = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const matched = await new ProductGroupsService(sportsCtx(second.client)).findOrCreate(
+      CREATE_INPUT,
+    );
+    expect(matched.created).toBe(false);
+    expect(matched.group.id).toBe('grp-1');
+    expect(second.chains.has('product_groups.insert')).toBe(false);
+  });
+
+  it('re-reads instead of throwing when a concurrent writer wins the 23505 race', async () => {
+    let selectCall = 0;
+    const stub = makeSupabaseStub({
+      // Miss on the pre-check, hit on the post-conflict re-read.
+      'product_groups.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: null, error: null }
+          : { data: [groupRow({ id: 'grp-raced' })], error: null };
+      },
+      'product_groups.insert': {
+        data: null,
+        error: { message: 'duplicate key', code: '23505' },
+      },
+    });
+
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT);
+    expect(out.created).toBe(false);
+    expect(out.group.id).toBe('grp-raced');
+    expect(selectCall).toBe(2);
+  });
+
+  it('still throws when a 23505 leaves nothing readable behind', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': {
+        data: null,
+        error: { message: 'duplicate key', code: '23505' },
+      },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
+  it('derives DIFFERENT keys for two colorways of the same model', async () => {
+    const a = buildGroupKey({
+      subcategoryKey: 'shoes',
+      brand: 'Nike',
+      model: 'Pegasus 41',
+      styleNumber: 'FD2722',
+      colorway: 'Black/White',
+    });
+    const b = buildGroupKey({
+      subcategoryKey: 'shoes',
+      brand: 'Nike',
+      model: 'Pegasus 41',
+      styleNumber: 'FD2722',
+      colorway: 'Volt',
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('refuses to run at all when the sports module is off', async () => {
+    const stub = makeSupabaseStub({});
+    const ctx = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+
+  it('refuses a caller holding NEITHER items:create nor sports:manage', async () => {
+    const stub = makeSupabaseStub({});
+    const ctx = sportsCtx(stub.client, { role: 'viewer' });
+    await expect(
+      new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  // Task 18 review fix: the linking tool gates its WRITE on sports:manage, so
+  // a reviewer granted only that could open the tool, tick a family, and be
+  // refused at the "create the group to link into" step.
+  it('accepts a sports:manage reviewer who was never granted items:create', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: groupRow(), error: null },
+    });
+    const ctx = sportsCtx(stub.client, {
+      role: 'viewer',
+      permissions: new Set(['sports:manage']),
+    });
+    const out = await new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT);
+    expect(out.created).toBe(true);
+  });
+
+  it('still accepts an items:create caller with no sports:manage', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: groupRow(), error: null },
+    });
+    const ctx = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['items:create']),
+    });
+    const out = await new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT);
+    expect(out.created).toBe(true);
+  });
+});
+
+describe('ProductGroupsService.candidates', () => {
+  it('never returns a match on name alone', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const svc = new ProductGroupsService(sportsCtx(stub.client));
+
+    const byName = await svc.candidates({
+      subcategoryKey: 'shoes',
+      name: 'Nike Pegasus 41',
+    });
+    expect(byName).toEqual([]);
+    // Not one query was even issued — a name is not a probe.
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('probes on style number when one is present', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).candidates({
+      subcategoryKey: 'shoes',
+      styleNumber: 'FD2722',
+    });
+    expect(out).toHaveLength(1);
+    expect(stub.chains.get('product_groups.select')).toContain('ilike');
+  });
+
+  it('probes on brand + model only when BOTH are present', async () => {
+    const brandOnly = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    expect(
+      await new ProductGroupsService(sportsCtx(brandOnly.client)).candidates({
+        subcategoryKey: 'shoes',
+        brand: 'Nike',
+      }),
+    ).toEqual([]);
+    expect(brandOnly.fromCalls).toEqual([]);
+
+    const both = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    expect(
+      await new ProductGroupsService(sportsCtx(both.client)).candidates({
+        subcategoryKey: 'shoes',
+        brand: 'Nike',
+        model: 'Pegasus 41',
+      }),
+    ).toHaveLength(1);
+  });
+});
+
+describe('ProductGroupsService.rollups', () => {
+  it('reads the derived view, never a stored total', async () => {
+    const stub = makeSupabaseStub({
+      'product_group_rollups.select': {
+        data: [
+          { group_id: 'grp-1', variant_count: 3, total_quantity: 52, counting_unit: 'pair' },
+        ],
+        error: null,
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).rollups(['grp-1']);
+
+    expect(stub.fromCalls).toEqual(['product_group_rollups']);
+    expect(out.get('grp-1')).toEqual({
+      variantCount: 3,
+      totalQuantity: 52,
+      countingUnit: 'pair',
+    });
+  });
+
+  it('returns 0 / 0 for a group with no variants', async () => {
+    const stub = makeSupabaseStub({
+      'product_group_rollups.select': {
+        data: [
+          { group_id: 'grp-empty', variant_count: 0, total_quantity: 0, counting_unit: 'each' },
+        ],
+        error: null,
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).rollups(['grp-empty']);
+    expect(out.get('grp-empty')).toEqual({
+      variantCount: 0,
+      totalQuantity: 0,
+      countingUnit: 'each',
+    });
+  });
+
+  it('short-circuits on an empty id list without touching the DB', async () => {
+    const stub = makeSupabaseStub({});
+    expect((await new ProductGroupsService(sportsCtx(stub.client)).rollups([])).size).toBe(0);
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('scopes the view read to this organization', async () => {
+    // The view is security_invoker so RLS already scopes it, but a service-role
+    // context has no RLS at all — every other read here carries the predicate.
+    const stub = makeSupabaseStub({
+      'product_group_rollups.select': { data: [], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).rollups(['grp-1']);
+
+    const args = stub.chainArgs.get('product_group_rollups.select') ?? [];
+    expect(args).toContainEqual(['organization_id', 'org-test']);
+  });
+});
+
+describe('ProductGroupsService — sports module gate on the READ paths', () => {
+  const NO_SPORTS = new Set<ModuleId>(['inventory']);
+
+  it('refuses findByKey / rollups / variants / candidates with the module off', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new ProductGroupsService(
+      makeServiceContext(stub.client, { enabledModules: NO_SPORTS }),
+    );
+
+    await expect(svc.findByKey('shoes|nike|pegasus 41||')).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+    await expect(svc.rollups(['grp-1'])).rejects.toMatchObject({ code: 'module_disabled' });
+    await expect(svc.variants('grp-1')).rejects.toMatchObject({ code: 'module_disabled' });
+    await expect(svc.candidates({ subcategoryKey: 'shoes', styleNumber: 'FD2722' })).rejects.toMatchObject(
+      { code: 'module_disabled' },
+    );
+    // Refused BEFORE any query — an entitlement check that still reads is not
+    // a gate, it is a filter.
+    expect(stub.fromCalls).toEqual([]);
+  });
+});
+
+describe('ProductGroupsService.update', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('RECOMPUTES group_key from the merged row rather than patching it', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': {
+        data: [groupRow({ style_number: 'FD9999' })],
+        error: null,
+      },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', {
+      styleNumber: 'FD9999',
+    });
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch.group_key).toBe(
+      buildGroupKey({
+        subcategoryKey: 'shoes',
+        brand: 'Nike',
+        model: 'Pegasus 41',
+        styleNumber: 'FD9999',
+        colorway: 'Black/White',
+        name: 'Nike Pegasus 41',
+      }),
+    );
+    // organization_id is never in the patch — it is pinned by the DB trigger
+    // and must not be writable through the service either.
+    expect(patch).not.toHaveProperty('organization_id');
+  });
+
+  // `subcategoryKey` was merged with `??`, which cannot see the difference
+  // between "absent — keep the current one" and "explicitly null — clear it".
+  // A patch of `{ subcategoryKey: null }` wrote NULL to the column while
+  // computing group_key from the OLD subcategory, so the stored key described a
+  // shape the row no longer had — and the subcategory decides which SLOTS
+  // participate (jersey slots vs shoe slots), so the next findOrCreate for this
+  // identity missed the key entirely and minted a duplicate group.
+  it('computes group_key from the RESULTING state when the subcategory is explicitly cleared', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': { data: [groupRow({ subcategory_key: null })], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', {
+      subcategoryKey: null,
+    });
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch.subcategory_key).toBeNull();
+    expect(patch.group_key).toBe(
+      buildGroupKey({
+        subcategoryKey: '',
+        brand: 'Nike',
+        model: 'Pegasus 41',
+        styleNumber: 'FD2722',
+        colorway: 'Black/White',
+        name: 'Nike Pegasus 41',
+      }),
+    );
+    // The key must NOT still describe the subcategory the row just lost.
+    expect(patch.group_key).not.toBe(groupRow().group_key);
+  });
+
+  it('still keeps the current subcategory when the patch omits it', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': { data: [groupRow({ name: 'Renamed' })], error: null },
+    });
+    await new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', { name: 'Renamed' });
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).not.toHaveProperty('subcategory_key');
+    expect(patch.group_key).toBe(groupRow().group_key);
+  });
+
+  it('requires sports:manage, not merely items:create', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const staff = sportsCtx(stub.client, { role: 'staff' });
+    await expect(
+      new ProductGroupsService(staff).update('grp-1', { name: 'x' }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('does NOT fail open when RLS hides the row (no error, no row)', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+      'product_groups.update': { data: null, error: null },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).update('grp-1', { name: 'x' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('ProductGroupsService.variantsByKey', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('scopes the exact-key lookup to the org, the group and live rows', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', name: 'Pegasus 41 US10', sku: 'SKU-1' }],
+        error: null,
+      },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variantsByKey(
+      'grp-1',
+      'size=10|system=us_mens',
+    );
+    expect(rows).toEqual([{ id: 'item-1', name: 'Pegasus 41 US10', sku: 'SKU-1' }]);
+
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const flat = args.flat();
+    expect(flat).toContainEqual('org-test');
+    expect(flat).toContainEqual('grp-1');
+    expect(flat).toContainEqual('size=10|system=us_mens');
+    expect(stub.chains.get('inventory_items.select')).toContain('is');
+  });
+
+  it('returns every colliding row rather than picking a winner', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'a', name: 'A', sku: 'SKU-A' },
+          { id: 'b', name: 'B', sku: 'SKU-B' },
+        ],
+        error: null,
+      },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variantsByKey(
+      'grp-1',
+      'size=10',
+    );
+    expect(rows).toHaveLength(2);
+  });
+
+  it('is gated on the sports module', async () => {
+    const stub = makeSupabaseStub({ 'inventory_items.select': { data: [], error: null } });
+    const noSports = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new ProductGroupsService(noSports).variantsByKey('grp-1', 'size=10'),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+});
+
+describe('ProductGroupsService.displayByIds (Task 16 review fix: chunking)', () => {
+  it('chunks a >500 group-id list into batches instead of one un-bounded `.in()`', async () => {
+    const manyIds = Array.from({ length: 1200 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'product_groups.select': () => {
+        call += 1;
+        // Each batch returns ONE distinct row so the merged map's size proves
+        // every batch's result actually landed, not just the last one.
+        return { data: [groupRow({ id: `grp-batch-${call}` })], error: null };
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(manyIds);
+
+    // 1200 ids at 500/batch = 3 batches, merged into 3 map entries.
+    expect(out.size).toBe(3);
+    const chains = stub.chainsAll.get('product_groups.select') ?? [];
+    const argsAll = stub.chainArgsAll.get('product_groups.select') ?? [];
+    expect(chains).toHaveLength(3);
+    const batchSizes = chains.map((chain, q) => {
+      const idx = chain.indexOf('in');
+      const args = argsAll[q]?.[idx] as [string, string[]];
+      return args[1].length;
+    });
+    expect(batchSizes).toEqual([500, 500, 200]);
+  });
+
+  it('throws rather than swallowing a mid-batch error', async () => {
+    const manyIds = Array.from({ length: 1200 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'product_groups.select': () => {
+        call += 1;
+        if (call === 2) return { data: null, error: { message: 'boom' } };
+        return { data: [groupRow()], error: null };
+      },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).displayByIds(manyIds),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
+  it('a single small batch still works exactly as before', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(['grp-1']);
+    expect(out.get('grp-1')).toMatchObject({ name: 'Nike Pegasus 41', countingUnit: 'pair' });
+  });
+});
+
+describe('ProductGroupsService.variantsByGroupIds (Task 18 review fix: ROW-safe paging)', () => {
+  /** One variant row, only the columns the merge reads. */
+  function variantRow(id: string, groupId: string) {
+    return {
+      id,
+      sku: `SKU-${id}`,
+      name: `Variant ${id}`,
+      quantity_on_hand: 1,
+      variant_size: '9',
+      variant_size_original: null,
+      variant_size_system: null,
+      variant_width: null,
+      variant_fit: null,
+      variant_color: null,
+      jersey_number: null,
+      player_name: null,
+      variant_key: null,
+      unit_of_measure: 'pair',
+      tracking_type: 'none',
+      warehouse_id: null,
+      status: 'active',
+      group_id: groupId,
+    };
+  }
+
+  // The defect: the batch counted GROUPS (100 per `.in()`) while PostgREST caps
+  // the RESPONSE at max_rows = 1000. 100 groups x 13 sizes = 1300 rows, of
+  // which 1000 came back — silently, with no error — so an expansion showed
+  // fewer variants than the group holds while the header (which reads the
+  // roll-up VIEW) kept the true total. Paging by ROWS is the only fix.
+  it('keeps paging past a FULL 1000-row response instead of taking it as the whole answer', async () => {
+    const groupIds = Array.from({ length: 100 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        call += 1;
+        // First response is exactly the cap; the truth is 1300 rows.
+        if (call === 1) {
+          return {
+            data: Array.from({ length: 1000 }, (_, i) => variantRow(`a${i}`, 'grp-0')),
+            error: null,
+          };
+        }
+        return { data: [variantRow('b0', 'grp-1'), variantRow('b1', 'grp-1')], error: null };
+      },
+    });
+
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds(groupIds);
+
+    expect(call).toBeGreaterThan(1);
+    expect(out.get('grp-0')).toHaveLength(1000);
+    expect(out.get('grp-1')).toHaveLength(2);
+  });
+
+  it('stops at a short page and never loops forever', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [variantRow('v1', 'grp-1')], error: null },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds([
+      'grp-1',
+    ]);
+    expect(out.get('grp-1')).toHaveLength(1);
+    expect(stub.chainsAll.get('inventory_items.select')).toHaveLength(1);
+  });
+
+  it('throws rather than swallowing a read error', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: null, error: { message: 'boom' } },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).variantsByGroupIds(['grp-1']),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final-review wave C: three reads that were uncapped BY INTENT and therefore
+// silently clamped at PostgREST's `[api] max_rows` = 1000. "No .limit()" is not
+// "no cap" — the cap just moves somewhere that reports nothing.
+// ---------------------------------------------------------------------------
+
+/** One variant row, only the columns `variants()` selects. */
+function singleGroupVariant(id: string, size: string | null = '9') {
+  return {
+    id,
+    sku: `SKU-${id}`,
+    name: `Variant ${id}`,
+    quantity_on_hand: 1,
+    variant_size: size,
+    variant_size_original: null,
+    variant_size_system: null,
+    variant_width: null,
+    variant_fit: null,
+    variant_color: null,
+    jersey_number: null,
+    player_name: null,
+    variant_key: null,
+    unit_of_measure: 'pair',
+    tracking_type: 'none',
+    warehouse_id: null,
+    status: 'active',
+  };
+}
+
+describe('ProductGroupsService.variants — paged, not clamped', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('keeps paging past a FULL 1000-row response', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            data: Array.from({ length: 1000 }, (_, i) => singleGroupVariant(`a${i}`)),
+            error: null,
+          };
+        }
+        return { data: [singleGroupVariant('b0'), singleGroupVariant('b1')], error: null };
+      },
+    });
+
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variants('grp-1');
+
+    expect(call).toBeGreaterThan(1);
+    expect(rows).toHaveLength(1002);
+  });
+
+  it('stops at a short page and never loops forever', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [singleGroupVariant('v1')], error: null },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variants('grp-1');
+    expect(rows).toHaveLength(1);
+    expect(stub.chainsAll.get('inventory_items.select')).toHaveLength(1);
+  });
+
+  it('still returns size-then-sku order, with sizeless rows last', async () => {
+    // The query paged on `id` (the only stable key), so the display order is
+    // applied in JS — it must be the SAME order the clamped query produced.
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          singleGroupVariant('c', null),
+          singleGroupVariant('b', '10'),
+          singleGroupVariant('a', '10'),
+          singleGroupVariant('d', '09'),
+        ],
+        error: null,
+      },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variants('grp-1');
+    expect(rows.map((r) => r.id)).toEqual(['d', 'a', 'b', 'c']);
+  });
+
+  it('throws rather than swallowing a read error', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: null, error: { message: 'boom' } },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).variants('grp-1'),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+});
+
+describe('ProductGroupsService.countingUnits — whole-org, paged', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('keys every group to its own unit', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': {
+        data: [
+          { id: 'grp-1', default_counting_unit: 'pair' },
+          { id: 'grp-2', default_counting_unit: 'set' },
+        ],
+        error: null,
+      },
+    });
+    const units = await new ProductGroupsService(sportsCtx(stub.client)).countingUnits();
+    expect(units).toEqual({ 'grp-1': 'pair', 'grp-2': 'set' });
+  });
+
+  it('keeps paging past a FULL 1000-row response', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'product_groups.select': () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            data: Array.from({ length: 1000 }, (_, i) => ({
+              id: `g${i}`,
+              default_counting_unit: 'pair',
+            })),
+            error: null,
+          };
+        }
+        return { data: [{ id: 'last', default_counting_unit: 'set' }], error: null };
+      },
+    });
+    const units = await new ProductGroupsService(sportsCtx(stub.client)).countingUnits();
+    expect(call).toBeGreaterThan(1);
+    expect(Object.keys(units)).toHaveLength(1001);
+    expect(units.last).toBe('set');
+  });
+
+  it('is refused with the module off, before any query', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new ProductGroupsService(
+      makeServiceContext(stub.client, { enabledModules: new Set<ModuleId>(['inventory']) }),
+    );
+    await expect(svc.countingUnits()).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(stub.fromCalls).toEqual([]);
+  });
+});
+
+describe('ProductGroupsService.listForPicker — discloses its cap', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports truncated:false and name order for a small org', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': {
+        data: [
+          { id: 'b', name: 'Zephyr', brand: null, model: null },
+          { id: 'a', name: 'Apex', brand: 'Nike', model: 'A1' },
+        ],
+        error: null,
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).listForPicker();
+    expect(out.truncated).toBe(false);
+    expect(out.groups.map((g) => g.name)).toEqual(['Apex', 'Zephyr']);
+  });
+
+  it('reaches past the 200 `list()` clamp instead of silently stopping there', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': {
+        data: Array.from({ length: 500 }, (_, i) => ({
+          id: `g${i}`,
+          name: `Group ${String(i).padStart(3, '0')}`,
+          brand: null,
+          model: null,
+        })),
+        error: null,
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).listForPicker();
+    expect(out.groups).toHaveLength(500);
+    expect(out.truncated).toBe(false);
+  });
+
+  it('DISCLOSES a real cap rather than presenting a prefix as the whole list', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': {
+        data: Array.from({ length: 6 }, (_, i) => ({
+          id: `g${i}`,
+          name: `Group ${i}`,
+          brand: null,
+          model: null,
+        })),
+        error: null,
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).listForPicker(5);
+    expect(out.groups).toHaveLength(5);
+    expect(out.truncated).toBe(true);
+  });
+});

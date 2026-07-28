@@ -11,7 +11,16 @@
  * Pure functions, no platform imports — shared by the web + mobile inventory
  * lists and the "Add more sizes" button (which previously carried a private,
  * narrower copy of this regex that did NOT recognize `2XL`/`3XL`).
+ *
+ * SINCE TASK 18 the name regex is the FALLBACK, not the rule. An item that
+ * carries a stored `product_groups` id groups by that id and the regex is never
+ * consulted for it — see `SizeRunEntryMeta.groupId`. The regex still serves
+ * every ungrouped item in every org, which is all of them until a human opts a
+ * family in through the review tool (owner decision 2026-07-27: display
+ * heuristics remain as fallback, and there is NO name-heuristic backfill).
  */
+
+import { compareSizeValues } from '../sports/size-order';
 
 /** Recognized apparel size tokens, longest-first so the regex prefers the
  *  longer match (`XXXXXL` over `XXXXL`, `2XL` over a bare `L`, `XS` over `S`). */
@@ -86,11 +95,47 @@ export interface SizeRunEntryMeta {
   /** On-hand contributed by this entry, summed into the group's roll-up total. */
   quantity: number;
   /**
+   * Identity of the STOCK-HOLDING unit behind this entry — the item id, or the
+   * variant key. Several entries can share one, and when they do the run counts
+   * it ONCE.
+   *
+   * Why it has to exist: the web Items list renders one row per PLACEMENT of an
+   * item (the Chromebook in racks 1-A and 2-C is two rows) and every one of
+   * those rows carries the item's TOTAL on hand, not the rack's. Folding them
+   * into a run summed that total once per rack, so expanding a multi-placement
+   * SKU inside a size run inflated the run header — "3 variants · 72 pairs" for
+   * two variants holding 52. The unit of a size run is the VARIANT, not the row.
+   *
+   * Absent = the entry is its own unit (the mobile list, which has no placement
+   * split, and every pre-existing caller).
+   */
+  unitKey?: string | null;
+  /**
    * Whether this entry may be folded into a run. Pass false for entries that
    * must never collapse — e.g. a multi-placement SKU group header on web, whose
    * own children already expand. A non-groupable entry always renders `single`.
    */
   groupable: boolean;
+  /**
+   * The item's stored product_groups id. When present this is the ONLY
+   * grouping signal used — the name regex is never consulted, so renaming an
+   * item can no longer break or forge a family.
+   *
+   * NULL keeps the legacy name-suffix heuristic, which is the display-only
+   * fallback for every ungrouped item in every org (owner decision
+   * 2026-07-27: heuristics remain as fallback, and there is no backfill).
+   */
+  groupId?: string | null;
+  /** Stored variant size, shown on the member row instead of a parsed token. */
+  variantSize?: string | null;
+  /**
+   * The group's `default_counting_unit` ('pair', 'set', …) so the header can
+   * say "52 pairs total" rather than a bare number. PAIR is a display
+   * convention with no conversion behind it (requirements 5), so this is
+   * READ from the group and never inferred — an entry that does not know its
+   * unit passes null and the header falls back to a plain count.
+   */
+  countingUnit?: string | null;
 }
 
 /** A collapsed size run: the members plus the header's roll-up fields. */
@@ -98,10 +143,19 @@ export interface SizeRunGroup<T> {
   styleKey: string;
   /** Display base name (original casing) taken from the first member. */
   baseName: string;
-  /** Sum of member `quantity`. */
+  /** Sum of member `quantity`, counted once per distinct `unitKey`. */
   total: number;
-  /** Number of members (sizes) in the run. */
+  /** Number of distinct UNITS (sizes/variants) in the run — not of member rows,
+   *  which can exceed it when one variant is rendered per placement. */
   sizeCount: number;
+  /**
+   * The stored product-group id this run collapsed on, or null when the run
+   * came from the legacy name heuristic. A header can branch on it to say
+   * "variants" (real identity) instead of "sizes" (a guess from a name).
+   */
+  groupId: string | null;
+  /** The group's counting unit, when a member supplied one. Null otherwise. */
+  countingUnit: string | null;
   members: T[];
 }
 
@@ -111,31 +165,58 @@ export type SizeRunRenderEntry<T> =
   | { kind: 'single'; entry: T };
 
 /**
+ * The run key for one entry. Stored identity wins: a `group:` prefix keeps the
+ * two key spaces disjoint so a group id can never collide with a derived style
+ * key, and an item that HAS a group never touches the regex — its family
+ * survives a rename, and a coincidental name match cannot forge one.
+ */
+function runKey(m: SizeRunEntryMeta): string | null {
+  if (!m.groupable) return null;
+  return m.groupId ? `group:${m.groupId}` : sizeRunStyleKey(m.name);
+}
+
+/**
  * Group a list of entries into size runs. An entry joins a run only when it is
- * `groupable`, its name has a size suffix, and 2+ entries share the same style
- * base. A run is emitted at the position of its FIRST member (later members are
- * pulled up into it), so a run reads as one contiguous block; everything else
- * passes through in order as `single`. Pure — no mutation of the inputs.
+ * `groupable`, it has a stored group id OR a name with a size suffix, and 2+
+ * entries share the same key. A run is emitted at the position of its FIRST
+ * member (later members are pulled up into it), so a run reads as one
+ * contiguous block; everything else passes through in order as `single`. Pure —
+ * no mutation of the inputs.
+ *
+ * MEMBER ORDER differs by provenance, deliberately:
+ *   • A GROUP-keyed run is sorted by `variantSize` through `compareSizeValues`,
+ *     because a stored variant's size is data and "10 after 9, XL after L" is
+ *     the only readable order for a run.
+ *   • A NAME-keyed run keeps arrival order, byte-identically to before Task 18.
+ *     Its "size" is a token parsed out of a display string, and re-ordering
+ *     every legacy list on the strength of a regex is exactly the kind of
+ *     silent change the opt-in rule exists to avoid.
  */
 export function groupBySizeRun<T>(
   entries: readonly T[],
   meta: (entry: T) => SizeRunEntryMeta,
 ): SizeRunRenderEntry<T>[] {
-  // Pass 1: count groupable style keys so a lone sized item never collapses.
+  // Pass 1: count groupable keys so a lone sized item never collapses.
   const counts = new Map<string, number>();
   for (const e of entries) {
-    const m = meta(e);
-    if (!m.groupable) continue;
-    const key = sizeRunStyleKey(m.name);
+    const key = runKey(meta(e));
     if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
 
   // Pass 2: emit, folding run members into a group at the first occurrence.
   const out: SizeRunRenderEntry<T>[] = [];
   const groups = new Map<string, SizeRunGroup<T>>();
+  // Member sizes, parallel to each group's `members`, kept only so a
+  // group-keyed run can be size-ordered once at the end (sorting inside the
+  // loop would be O(n^2) and would still have to re-read every meta).
+  const memberSizes = new Map<string, Array<string | null>>();
+  // Units already counted into each group's roll-up. A row whose unit is
+  // already in here is still a MEMBER (it renders), it just does not add its
+  // quantity again — see SizeRunEntryMeta.unitKey.
+  const countedUnits = new Map<string, Set<string>>();
   for (const e of entries) {
     const m = meta(e);
-    const key = m.groupable ? sizeRunStyleKey(m.name) : null;
+    const key = runKey(m);
     if (key && (counts.get(key) ?? 0) >= 2) {
       let g = groups.get(key);
       if (!g) {
@@ -144,17 +225,42 @@ export function groupBySizeRun<T>(
           baseName: stripSizeSuffix(m.name),
           total: 0,
           sizeCount: 0,
+          groupId: m.groupId ?? null,
+          countingUnit: m.countingUnit ?? null,
           members: [],
         };
         groups.set(key, g);
+        memberSizes.set(key, []);
+        countedUnits.set(key, new Set<string>());
         out.push({ kind: 'size-run', group: g });
       }
+      // First member to KNOW the unit wins; a member that doesn't know it
+      // (an older caller that passes no unit at all) never blanks it.
+      if (g.countingUnit == null && m.countingUnit != null) g.countingUnit = m.countingUnit;
       g.members.push(e);
+      memberSizes.get(key)!.push(m.variantSize ?? null);
+      // ONE contribution per stock-holding unit. A second row for the same
+      // variant (its second placement) renders but does not re-add its total.
+      const seen = countedUnits.get(key)!;
+      if (m.unitKey != null && seen.has(m.unitKey)) continue;
+      if (m.unitKey != null) seen.add(m.unitKey);
       g.total += m.quantity;
       g.sizeCount += 1;
     } else {
       out.push({ kind: 'single', entry: e });
     }
+  }
+
+  // Size-order the STORED runs only (see the member-order note above). Sorting
+  // an index array keeps the entry and its size together without re-invoking
+  // `meta`, and Array#sort has been stable since ES2019 so equal sizes keep
+  // arrival order.
+  for (const [key, g] of groups) {
+    if (!g.groupId) continue;
+    const sizes = memberSizes.get(key)!;
+    const idx = g.members.map((_, i) => i);
+    idx.sort((a, b) => compareSizeValues(sizes[a], sizes[b]));
+    g.members = idx.map((i) => g.members[i]!);
   }
   return out;
 }

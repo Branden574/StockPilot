@@ -18,15 +18,23 @@ export const dynamic = 'force-dynamic';
  */
 const bodySchema = z
   .object({
-    scope: z.enum(['warehouse', 'selection']).default('selection'),
+    // 'group' counts a product group BY VARIANT: the service expands each
+    // group to its variant items and the count runs as a selection. A group
+    // never becomes a countable line of its own — it owns no quantity.
+    scope: z.enum(['warehouse', 'selection', 'group']).default('selection'),
     warehouseId: z.string().uuid().nullable().optional(),
     itemIds: z.array(z.string().uuid()).max(1000).optional(),
+    groupIds: z.array(z.string().uuid()).max(200).optional(),
     notes: z.string().max(2000).optional().nullable(),
     assignedTo: z.string().uuid().nullable().optional(),
   })
   .refine((v) => v.scope !== 'selection' || (v.itemIds?.length ?? 0) > 0, {
     message: 'Pick at least one item to count.',
     path: ['itemIds'],
+  })
+  .refine((v) => v.scope !== 'group' || (v.groupIds?.length ?? 0) > 0, {
+    message: 'Pick at least one product group to count.',
+    path: ['groupIds'],
   });
 
 export async function POST(req: NextRequest) {
@@ -48,6 +56,7 @@ export async function POST(req: NextRequest) {
       scope: parsed.data.scope,
       warehouseId: parsed.data.warehouseId ?? null,
       itemIds: parsed.data.itemIds,
+      groupIds: parsed.data.groupIds,
       notes: parsed.data.notes ?? null,
       assignedTo: parsed.data.assignedTo ?? null,
     });

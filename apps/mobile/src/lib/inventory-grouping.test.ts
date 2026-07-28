@@ -518,3 +518,93 @@ describe('firstCoverBySku — collapsed header thumbnail', () => {
     expect(m.get('B')).toBe('https://signed/b.jpg');
   });
 });
+
+describe('buildGroupedRows — stored product groups are the primary signal (Task 18)', () => {
+  const RUNS = {
+    expandedSizeRuns: new Set<string>(['group:grp-1']),
+    expandedSkuGroups: new Set<string>(),
+  } as const;
+
+  it('collapses variants that share a group_id even when their names do not match', () => {
+    const rows = buildGroupedRows(
+      [
+        item({ id: 'a', sku: 'A', name: 'Nike Pegasus 41', quantity_on_hand: 4, group_id: 'grp-1', variant_size: '9' }),
+        item({ id: 'b', sku: 'B', name: 'Pegasus (old label)', quantity_on_hand: 6, group_id: 'grp-1', variant_size: '10' }),
+      ],
+      RUNS,
+    );
+    const header = rows.find((r) => r.kind === 'header') as Extract<
+      GroupedRow<GroupableItem>,
+      { kind: 'header' }
+    >;
+    expect(header.styleKey).toBe('group:grp-1');
+    expect(header.groupId).toBe('grp-1');
+    expect(header.total).toBe(10);
+    expect(header.sizeCount).toBe(2);
+  });
+
+  it('carries the counting unit onto the header when the screen resolved one', () => {
+    const rows = buildGroupedRows(
+      [
+        item({ id: 'a', sku: 'A', name: 'Peg', group_id: 'grp-1', variant_size: '9', counting_unit: 'pair' }),
+        item({ id: 'b', sku: 'B', name: 'Peg', group_id: 'grp-1', variant_size: '10', counting_unit: 'pair' }),
+      ],
+      RUNS,
+    );
+    const header = rows.find((r) => r.kind === 'header') as Extract<
+      GroupedRow<GroupableItem>,
+      { kind: 'header' }
+    >;
+    expect(header.countingUnit).toBe('pair');
+  });
+
+  it('expands a grouped run in SIZE order, not arrival order', () => {
+    const rows = buildGroupedRows(
+      [
+        item({ id: 'ten', sku: 'T', name: 'Peg', group_id: 'grp-1', variant_size: '10' }),
+        item({ id: 'nine', sku: 'N', name: 'Peg', group_id: 'grp-1', variant_size: '9' }),
+      ],
+      RUNS,
+    );
+    const ids = rows.filter((r) => r.kind === 'row').map((r) => (r as { item: GroupableItem }).item.id);
+    expect(ids).toEqual(['nine', 'ten']);
+  });
+
+  it('does NOT fold two same-base names carrying DIFFERENT group ids together', () => {
+    const rows = buildGroupedRows(
+      [
+        item({ id: 'a', sku: 'A', name: 'Tee - L', group_id: 'grp-1', variant_size: 'L' }),
+        item({ id: 'b', sku: 'B', name: 'Tee - XL', group_id: 'grp-2', variant_size: 'XL' }),
+      ],
+      NONE,
+    );
+    expect(rows.every((r) => r.kind === 'row')).toBe(true);
+  });
+
+  it('leaves an ungrouped org byte-identical — the name heuristic still runs', () => {
+    const rows = buildGroupedRows(
+      [
+        item({ id: 'l', sku: 'L', name: 'Pink Shirt - L', quantity_on_hand: 5 }),
+        item({ id: 'xl', sku: 'X', name: 'Pink Shirt - XL', quantity_on_hand: 7 }),
+      ],
+      NONE,
+    );
+    const header = rows.find((r) => r.kind === 'header') as Extract<
+      GroupedRow<GroupableItem>,
+      { kind: 'header' }
+    >;
+    expect(header.styleKey).toBe('pink shirt');
+    expect(header.groupId).toBeNull();
+    expect(header.countingUnit).toBeNull();
+    expect(header.total).toBe(12);
+  });
+
+  it('keeps a grouped family whole on ONE page (buildGroupUnits agrees with the renderer)', () => {
+    const units = buildGroupUnits([
+      item({ id: 'a', sku: 'A', name: 'Peg', group_id: 'grp-1', variant_size: '9' }),
+      item({ id: 'other', sku: 'O', name: 'Unrelated' }),
+      item({ id: 'b', sku: 'B', name: 'Peg', group_id: 'grp-1', variant_size: '10' }),
+    ]);
+    expect(units.map((u) => u.map((r) => r.id))).toEqual([['a', 'b'], ['other']]);
+  });
+});

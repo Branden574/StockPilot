@@ -2002,3 +2002,156 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
     expect(barFillPct(header)).toBe(barFillPct(row));
   });
 });
+
+// Task 18 — stored product groups become the PRIMARY grouping signal for the
+// inventory list, with the name heuristic demoted to the fallback that still
+// serves every ungrouped org.
+describe('InventoryTable — size runs keyed on a stored product group', () => {
+  const bodyRows = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+
+  function renderGrouped({
+    items,
+    productGroupUnits,
+  }: {
+    items: InstantDatasetItem[];
+    productGroupUnits?: Record<string, string>;
+  }) {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    return render(
+      <InventoryTable
+        items={items}
+        lookups={EMPTY_LOOKUPS}
+        total={items.length}
+        pageSize={30}
+        instant={{ items, view: 'items' }}
+        productGroupUnits={productGroupUnits}
+      />,
+    );
+  }
+
+  // The exact case a name regex can never serve: three real variants of one
+  // shoe, identically named, differing only by variant_size.
+  const pegasus = (): InstantDatasetItem[] => [
+    item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10' }),
+    item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9' }),
+  ];
+
+  it('collapses identically-named variants that share a group_id, and says so in the group vocabulary', () => {
+    renderGrouped({ items: pegasus() });
+    expect(screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i })).toBeInTheDocument();
+    // "sizes" is the weaker, name-derived claim — never used for a real group.
+    expect(screen.queryByText(/2 sizes/)).not.toBeInTheDocument();
+  });
+
+  it('states the roll-up in the group counting unit when the page resolved one', () => {
+    renderGrouped({ items: pegasus(), productGroupUnits: { 'grp-1': 'pair' } });
+    // Rendered on the header chip AND in the hover-preview subtitle — both
+    // are the same claim, so assert it appears rather than that it is unique.
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+  });
+
+  it('expands a grouped run in SIZE order, not the list sort order', async () => {
+    const user = userEvent.setup();
+    const { container } = renderGrouped({ items: pegasus() });
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    const skus = bodyRows(container)
+      .slice(1)
+      .map((r) => r.textContent ?? '');
+    expect(skus[0]).toContain('PEG-9');
+    expect(skus[1]).toContain('PEG-10');
+  });
+
+  // Final-review wave C: a run's unit is the VARIANT, not the rendered row.
+  // Every placement row of an item carries the item's TOTAL on hand (the rack's
+  // own qty is `line_quantity`), so expanding a multi-placement SKU inside a run
+  // added that total once per rack.
+  it('counts a multi-placement variant ONCE in the run header total', async () => {
+    const user = userEvent.setup();
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = pegasus();
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={rows.length}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            // The size-10 shoe sits in two racks: two rendered rows, one
+            // variant, 20 on hand in total.
+            p10: [
+              { locationId: 'L1', label: '1-A', kind: 'rack', quantity: 12 },
+              { locationId: 'L2', label: '2-C', kind: 'rack', quantity: 8 },
+            ],
+          },
+        }}
+        productGroupUnits={{ 'grp-1': 'pair' }}
+      />,
+    );
+
+    // Expand the SKU group so both placement rows are rendered — the state in
+    // which the run used to read 3 variants / 72 pairs.
+    await user.click(screen.getByRole('button', { name: /expand .*PEG-10/i }));
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/3 variants/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/72 pairs/)).not.toBeInTheDocument();
+  });
+
+  it('does NOT fold two same-base names carrying DIFFERENT group ids together', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'a', name: 'Pink Shirt - L', sku: 'A', group_id: 'grp-1', variant_size: 'L' }),
+        item({ id: 'b', name: 'Pink Shirt - XL', sku: 'B', group_id: 'grp-2', variant_size: 'XL' }),
+      ],
+    });
+    expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
+    expect(bodyRows(container)).toHaveLength(2);
+  });
+
+  it('leaves an ungrouped org byte-identical — the legacy "N sizes" run is untouched', () => {
+    renderGrouped({
+      items: [
+        item({ id: 'l', name: 'Pink Shirt - L', sku: 'L' }),
+        item({ id: 'xl', name: 'Pink Shirt - XL', sku: 'X' }),
+      ],
+    });
+    expect(screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i })).toBeInTheDocument();
+    expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
+  });
+
+  // The pagination twin of the tests above. A group is the unit of DISPLAY, so
+  // it must be the unit of PAGINATION: with the family straddling a fixed
+  // 2-row slice, one member rendered flat on the next page and the header on
+  // this one summed 32 instead of 52.
+  it('keeps a group whose names defeat the size regex whole on one page, with the full total', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9', updated_at: '2026-01-09T00:00:00+00:00' }),
+      item({ id: 'x1', name: 'Stapler', sku: 'STP-1', quantity_on_hand: 1, updated_at: '2026-01-08T00:00:00+00:00' }),
+      item({ id: 'x2', name: 'Kettle', sku: 'KTL-1', quantity_on_hand: 1, updated_at: '2026-01-07T00:00:00+00:00' }),
+      item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10', updated_at: '2026-01-06T00:00:00+00:00' }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={rows.length}
+        pageSize={2}
+        instant={{ items: rows, view: 'items' }}
+        productGroupUnits={{ 'grp-1': 'pair' }}
+      />,
+    );
+
+    // ONE header, both variants behind it, and the roll-up is the whole
+    // family (32 + 20), never the page-slice 32.
+    expect(screen.getAllByRole('button', { name: /expand/i })).toHaveLength(1);
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Stapler')).not.toBeInTheDocument();
+  });
+});

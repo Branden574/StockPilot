@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { PoImportsService } from '@/server/services/po-imports';
 import {
@@ -14,11 +14,19 @@ import {
   findDuplicatesForPoLinesSchema,
   type DuplicateCandidate,
 } from '@/server/services/po-imports-lines';
+import type { LineResolution } from '@/server/services/po-imports-variants';
 import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
-import { approvePoImportSchema, err, ok, type ActionResult } from '@stockpilot/core';
+import {
+  approvePoImportSchema,
+  confirmLineMappingsSchema,
+  err,
+  ok,
+  type ActionResult,
+  type AmbiguousColumnMeaning,
+} from '@stockpilot/core';
 
 const ALLOWED_MIME = new Set(['application/pdf', 'text/csv', 'application/vnd.ms-excel']);
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -164,6 +172,12 @@ export async function createItemsFromPoLinesAction(input: {
   itemType?: 'product' | 'book';
   nameOverrides?: Record<string, string>;
   decisions?: Record<string, { mode: 'create' | 'use_existing' | 'skip'; itemId?: string }>;
+  categoryId?: string | null;
+  groupDecisions?: Record<string, { mode: 'new' | 'link'; groupId?: string }>;
+  variantOverrides?: Record<
+    string,
+    { size?: string | null; sizeSystem?: string | null; jerseyNumber?: string | null }
+  >;
 }): Promise<ActionResult<{ created: number; mapped: number; linked: number; skipped: number }>> {
   const parsed = createItemsFromPoLinesSchema.safeParse(input);
   if (!parsed.success) {
@@ -174,6 +188,10 @@ export async function createItemsFromPoLinesAction(input: {
     const supabase = await createClient();
     const inventorySvc = await InventoryService.forCurrentUser();
     const mappingsSvc = await VendorItemMappingsService.forCurrentUser();
+    // Request-cached, so this is the same context the two services above
+    // already built. Needed for the category tracking profile, the org's
+    // product groups and the `sports` module flag.
+    const serviceCtx = await withContext();
 
     // Implementation lives in po-imports-lines.ts, SHARED with the
     // /api/v1/po-imports/[id]/create-items Bearer route (via
@@ -181,7 +199,13 @@ export async function createItemsFromPoLinesAction(input: {
     // drift. This action keeps its historical auth posture: cookie org
     // context + RLS + InventoryService.create's internal permission gate.
     const result = await createItemsFromPoLines(
-      { supabase, organizationId: ctx.organizationId, inventorySvc, mappingsSvc },
+      {
+        supabase,
+        organizationId: ctx.organizationId,
+        inventorySvc,
+        mappingsSvc,
+        ctx: serviceCtx,
+      },
       parsed.data,
     );
 
@@ -219,6 +243,69 @@ export async function findDuplicatesForPoLinesAction(input: {
       parsed.data,
     );
     return ok({ matches });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+/**
+ * Record what an ambiguous column actually means, per line.
+ *
+ * This is the ONLY way a `mapping_review_required` line stops blocking. It
+ * never runs automatically and it never picks a meaning — the human does, and
+ * the choice is audited (`sports.import.mapping_confirmed`).
+ */
+export async function confirmPoImportMappingsAction(input: {
+  poImportId: string;
+  decisions: Record<string, AmbiguousColumnMeaning>;
+}): Promise<ActionResult<{ confirmed: number }>> {
+  const parsed = confirmLineMappingsSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await PoImportsService.forCurrentUser();
+    const result = await svc.confirmLineMappings(parsed.data);
+    revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
+    return ok(result);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+const resolveLineResultsSchema = z.object({
+  poImportId: z.string().uuid(),
+  /** The category the reviewer picked in the create-items modal, or null. */
+  categoryId: z.string().uuid().nullable().optional(),
+});
+
+/**
+ * Re-resolve every line's verdict against a chosen category.
+ *
+ * The page renders verdicts server-side, but a line that will CREATE an item
+ * has no `item_id` and therefore no category until the reviewer picks one in
+ * the create-items modal. Without this the modal showed 'ready' for every
+ * sports line and the reviewer met the real verdict as a server throw at
+ * create time. The category is a READ input here: nothing is written, linked
+ * or merged, so a wrong pick costs a re-render and nothing else.
+ */
+export async function resolvePoImportLineResultsAction(input: {
+  poImportId: string;
+  categoryId?: string | null;
+}): Promise<ActionResult<Record<string, LineResolution>>> {
+  const parsed = resolveLineResultsSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await PoImportsService.forCurrentUser();
+    return ok(
+      await svc.resolveLineResults(parsed.data.poImportId, {
+        categoryId: parsed.data.categoryId ?? null,
+      }),
+    );
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

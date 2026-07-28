@@ -133,4 +133,78 @@ describe('runAwarePages', () => {
     expect(pages[0]).toHaveLength(5); // all singletons, order preserved
     expect(pages[0]!.map((r) => r.id)).toEqual(['x', 'y', 'z0', 'z1', 'z2']);
   });
+
+  // ── Task 18: a STORED product group is the unit, ahead of the name regex ──
+  // The renderer keys a size run on `group:${group_id}` first and only falls
+  // back to the name (packages/core size-run.ts `runKey`). Pagination has to
+  // cluster on the SAME key or it hands the renderer a page holding one lone
+  // member of a family: no arrow, a flat row, and a header on another page
+  // whose total is short by whatever it could not see.
+
+  function groupRow(id: string, name: string, sku: string, groupId?: string) {
+    return { id, name, sku, group_id: groupId ?? null };
+  }
+
+  it('keeps a group whose names do NOT match the size regex on one page', () => {
+    // Shoe sizes: "Nike Pegasus 41" x2 differing only by variant_size. The
+    // name regex reads apparel tokens (S/M/L/XL…) and can never see this
+    // family, so before Task 18's key change a pageSize-2 slice cut it in
+    // half — [p9, x1] / [x2, p10].
+    const rows = [
+      groupRow('p9', 'Nike Pegasus 41', 'PEG-9', 'grp-1'),
+      groupRow('x1', 'Stapler', 'STP-1'),
+      groupRow('x2', 'Kettle', 'KTL-1'),
+      groupRow('p10', 'Nike Pegasus 41', 'PEG-10', 'grp-1'),
+    ];
+    const pages = runAwarePages(rows, 2);
+    const pageOf = (id: string) => pages.findIndex((p) => p.some((r) => r.id === id));
+    expect(pageOf('p9')).toBe(pageOf('p10'));
+    // Clustered at the family's best-ranked position, exactly like a SKU family.
+    expect(pages[0]!.map((r) => r.id)).toEqual(['p9', 'p10']);
+    expect(pages[1]!.map((r) => r.id)).toEqual(['x1', 'x2']);
+  });
+
+  it('does not co-page two same-base names carrying DIFFERENT group ids', () => {
+    // A name collision must never forge a family once identity is stored.
+    const rows = [
+      groupRow('a', 'Pink Shirt - L', 'A', 'grp-1'),
+      groupRow('b', 'Pink Shirt - XL', 'B', 'grp-2'),
+    ];
+    const pages = runAwarePages(rows, 1);
+    expect(pages.map((p) => p.map((r) => r.id))).toEqual([['a'], ['b']]);
+  });
+
+  it('a grouped row is never pulled into a name-keyed run of ungrouped rows', () => {
+    const rows = [
+      groupRow('g1', 'Pink Shirt - L', 'G1', 'grp-1'),
+      groupRow('u1', 'Pink Shirt - XL', 'U1'),
+      groupRow('u2', 'Pink Shirt - 2XL', 'U2'),
+    ];
+    const pages = runAwarePages(rows, 2);
+    // The two UNGROUPED rows still form the legacy run; the grouped row is a
+    // singleton of its own (its group has one member in this set).
+    expect(pages.map((p) => p.map((r) => r.id))).toEqual([['g1'], ['u1', 'u2']]);
+  });
+
+  it('a lone member of a group stays a singleton (2+ still required)', () => {
+    const rows = [
+      groupRow('solo', 'Nike Pegasus 41', 'PEG-9', 'grp-1'),
+      ...Array.from({ length: 4 }, (_, i) => groupRow(`w${i}`, `Widget ${i}`, `W-${i}`)),
+    ];
+    const pages = runAwarePages(rows, 2);
+    expect(pages.map((p) => p.length)).toEqual([2, 2, 1]);
+  });
+
+  it('group clustering is OFF for books, exactly as the name heuristic is', () => {
+    const rows = [
+      groupRow('b1', 'Reader One', 'R-1', 'grp-1'),
+      groupRow('f1', 'Filler', 'F-1'),
+      groupRow('b2', 'Reader Two', 'R-2', 'grp-1'),
+    ];
+    const pages = runAwarePages(rows, 2, { sizeRuns: false });
+    expect(pages.map((p) => p.map((r) => r.id))).toEqual([
+      ['b1', 'f1'],
+      ['b2'],
+    ]);
+  });
 });

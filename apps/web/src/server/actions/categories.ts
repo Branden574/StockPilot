@@ -74,3 +74,22 @@ export async function restoreCategoryAction(id: string): Promise<ActionResult<vo
     return toResult(e);
   }
 }
+
+/**
+ * "Set up Sports" (Task 12): creates the Sports root category plus the eight
+ * built-in subcategories. The service re-asserts `sports:manage` and the
+ * `sports` module — this action is not itself a gate, just the seam.
+ */
+export async function setupSportsCategoriesAction(): Promise<
+  ActionResult<{ rootId: string; created: string[]; skipped: string[] }>
+> {
+  try {
+    const svc = await CategoriesService.forCurrentUser();
+    const result = await svc.setupSportsDefaults();
+    revalidatePath('/dashboard/categories');
+    await revalidateInventoryListForCurrentOrg();
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}

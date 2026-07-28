@@ -19,6 +19,22 @@ export interface ItemLookupMatch {
   placementLabel: string | null;
   quantityOnHand: number;
   /**
+   * Sports (Task 9): present only when the matched row is a variant —
+   * `groupId` non-null means this item belongs to a product_groups family
+   * (e.g. one shoe style across sizes 9/10/11). `variantSize` and
+   * `jerseyNumber` are the raw TEXT columns (jersey_number keeps its
+   * leading zeroes, e.g. '07'). `unitOfMeasure` is the display convention
+   * (e.g. 'pair') — never used for any conversion. All four are null for a
+   * plain, non-sports item, so an existing scanner reading only the
+   * pre-existing fields is unaffected. Scanning a variant barcode resolves
+   * to THAT variant's own row, so these values are already scoped to the
+   * exact size/number that was scanned — no extra lookup needed.
+   */
+  groupId: string | null;
+  variantSize: string | null;
+  jerseyNumber: string | null;
+  unitOfMeasure: string | null;
+  /**
    * Rack/crate HOLDINGS (item_stock_levels) this item's stock actually
    * sits on, when it's split across more than one — empty when unsplit
    * or unplaced. `placementLabel` (bin_location) can be misleading for a
@@ -39,6 +55,10 @@ type LookupRow = {
   charter_id: string | null;
   bin_location: string | null;
   charter: { name: string | null } | { name: string | null }[] | null;
+  group_id: string | null;
+  variant_size: string | null;
+  jersey_number: string | null;
+  unit_of_measure: string | null;
 };
 
 /** PostgREST embeds a to-one relation as an object (or an array of one). */
@@ -77,6 +97,7 @@ export async function GET(req: NextRequest) {
     .from('inventory_items')
     .select(
       `id, sku, name, barcode, quantity_on_hand, charter_id, bin_location,
+       group_id, variant_size, jersey_number, unit_of_measure,
        charter:charters!charter_id(name)`,
     )
     .eq('organization_id', ctx.organizationId)
@@ -117,6 +138,10 @@ export async function GET(req: NextRequest) {
     placementLabel: (row.bin_location ?? '').trim() || null,
     quantityOnHand: Number(row.quantity_on_hand) || 0,
     rackHoldings: rackHoldingsByItemId.get(row.id) ?? [],
+    groupId: row.group_id ?? null,
+    variantSize: row.variant_size ?? null,
+    jerseyNumber: row.jersey_number ?? null,
+    unitOfMeasure: row.unit_of_measure ?? null,
   }));
 
   return NextResponse.json({ matches });

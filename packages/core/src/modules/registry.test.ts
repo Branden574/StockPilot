@@ -125,6 +125,35 @@ describe('MODULE_REGISTRY', () => {
       '/suppliers','/ai','/schedule',
     ]) expect(drawerHrefs).toContain(href);
   });
+  // The inverse of the test above, and the one that actually catches a dead
+  // link: the containment check only proves the KNOWN routes are placed, so a
+  // placement pointing at a route that does not exist passed it silently. The
+  // `sports` module shipped `mobile_drawer` → '/product-groups' with no Expo
+  // screen behind it, which is a tap that resolves nowhere for every
+  // sports-enabled phone user. This list mirrors apps/mobile/app — adding a
+  // drawer placement means adding the screen (or not adding the placement).
+  it('every mobile drawer href resolves to a real Expo route', () => {
+    const EXPO_ROUTES = new Set([
+      '/', '/inventory', '/staging', '/books', '/categories', '/tags', '/movements',
+      '/rentals', '/bundles', '/orders', '/customers', '/cycle-counts', '/procedures',
+      '/receive', '/purchase-orders', '/recurring-pos', '/po-imports', '/locations',
+      '/suppliers', '/reports', '/ai', '/schedule', '/notifications', '/team',
+      '/settings', '/support', '/scan', '/zendesk', '/size-count/new',
+      '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
+      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/reconciliation',
+      '/admin/audit',
+    ]);
+    for (const def of Object.values(MODULE_REGISTRY)) {
+      for (const p of def.placements) {
+        if (p.surface !== 'mobile_drawer') continue;
+        expect(
+          EXPO_ROUTES.has(p.href),
+          `module "${def.id}" places a mobile drawer entry at "${p.href}", which has no Expo screen`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it('each module permissions array is a superset of the requires it uses', () => {
     for (const def of Object.values(MODULE_REGISTRY)) {
       const perms = new Set(def.permissions);

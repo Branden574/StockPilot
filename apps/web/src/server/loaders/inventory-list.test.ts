@@ -466,6 +466,12 @@ function cachedRow(over: Partial<InventoryListCachedRow> = {}): InventoryListCac
     image_storage_path: null,
     image_thumb_path: null,
     image_lqip: null,
+    // Sports variant columns (0298) — null on an ungrouped row.
+    group_id: null,
+    variant_size: null,
+    variant_size_system: null,
+    jersey_number: null,
+    variant_key: null,
     ...over,
   };
 }
@@ -996,7 +1002,8 @@ describe('sub-loader cache wiring', () => {
     // Pin the version keys: a rename here silently orphans warm entries
     // (one-time cold recompute) — bump deliberately, never accidentally.
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
-      'inventory-list-v4',
+      // v5 = the row shape gained the five sports variant columns.
+      'inventory-list-v5',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.

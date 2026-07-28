@@ -7,6 +7,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
+import { loadSizeRunGroups } from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 
 import { can } from '@stockpilot/core';
@@ -35,6 +36,21 @@ export default async function NewPoPage() {
     chartersSvc.list(),
   ]);
 
+  // Size-run add mode (Task 16). No grouped items = no query, which is every
+  // catalog in every org that has not opted into product groups.
+  const groupIds = Array.from(
+    new Set(inventory.items.map((i) => i.group_id).filter((v): v is string => Boolean(v))),
+  );
+  // groupItems is the UNCAPPED, group-scoped read (review fix): `inventory`
+  // above is list()'s capped 1000-row page, so a >1000-item org could have a
+  // group whose 1001st+ variant never made it into `inventory.items`. The
+  // size-run picker sources its variants from here instead, so a group's size
+  // count is correct regardless of catalog size.
+  const [productGroups, groupItemRows] = await Promise.all([
+    loadSizeRunGroups(groupIds),
+    groupIds.length > 0 ? inventorySvc.listGroupVariants(groupIds) : Promise.resolve([]),
+  ]);
+
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -58,6 +74,17 @@ export default async function NewPoPage() {
               name: i.name,
               sku: i.sku,
               unit_cost: i.unit_cost,
+              groupId: i.group_id,
+              variantSize: i.variant_size,
+            }))}
+            productGroups={productGroups}
+            groupItems={groupItemRows.map((i) => ({
+              id: i.id,
+              name: i.name,
+              sku: i.sku,
+              unit_cost: i.unit_cost,
+              groupId: i.group_id,
+              variantSize: i.variant_size,
             }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             // Only warehouse-backed locations can be receiving destinations — a

@@ -237,3 +237,138 @@ describe('CountItemPicker', () => {
     expect(link).toHaveAttribute('href', '/dashboard/inventory');
   });
 });
+
+/**
+ * The Product groups tab: counting BY VARIANT with per-variant expansion.
+ *
+ * Ticking a group never creates a group-shaped selection entry — a group owns
+ * no quantity, so there is nothing at group level to count. It expands into
+ * the group's variant ITEMS, which is what a cycle_count_lines row FKs.
+ */
+describe('CountItemPicker — product groups', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCountSelection.getState().clear();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  function groupsResponse(groups: unknown[]) {
+    return { ok: true, json: async () => ({ groups }) } as Response;
+  }
+  function variantsResponse(variants: unknown[]) {
+    return { ok: true, json: async () => ({ variants }) } as Response;
+  }
+
+  const PEGASUS = {
+    id: 'g1',
+    name: 'Nike Pegasus 41',
+    brand: 'Nike',
+    model: 'Pegasus 41',
+    styleNumber: 'FD2722',
+    team: null,
+    countingUnit: 'pair',
+    variantCount: 3,
+    totalQuantity: 12,
+  };
+
+  it('is HIDDEN for an org without the sports module', () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [], total: 0 }) } as Response);
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    expect(screen.queryByRole('button', { name: 'Product groups' })).toBeNull();
+  });
+
+  it('lists groups with their DERIVED roll-up', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockImplementation(async (url: string) =>
+      String(url).includes('/api/v1/product-groups')
+        ? groupsResponse([PEGASUS])
+        : ({ ok: true, json: async () => ({ items: [], total: 0 }) } as Response),
+    );
+    render(<CountItemPicker warehouses={WAREHOUSES} sportsEnabled />);
+
+    await user.click(screen.getByRole('button', { name: 'Product groups' }));
+    expect(await screen.findByText('Nike Pegasus 41')).toBeInTheDocument();
+    expect(screen.getByText('3 variants · 12 pair')).toBeInTheDocument();
+  });
+
+  it('ticking a group adds EVERY variant as its own pick, named by variant', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('/variants')) {
+        return variantsResponse([
+          { id: 'v9', sku: 'PEG-9', name: 'Nike Pegasus 41', label: 'Size 9' },
+          { id: 'v10', sku: 'PEG-10', name: 'Nike Pegasus 41', label: 'Size 10' },
+        ]);
+      }
+      if (u.includes('/api/v1/product-groups')) return groupsResponse([PEGASUS]);
+      return { ok: true, json: async () => ({ items: [], total: 0 }) } as Response;
+    });
+    render(<CountItemPicker warehouses={WAREHOUSES} sportsEnabled />);
+    await user.click(screen.getByRole('button', { name: 'Product groups' }));
+    await screen.findByText('Nike Pegasus 41');
+
+    await user.click(
+      screen.getByRole('checkbox', { name: /count every variant of nike pegasus 41/i }),
+    );
+
+    await vi.waitFor(() => {
+      const picks = useCountSelection.getState().picks;
+      expect(Object.keys(picks).sort()).toEqual(['v10', 'v9']);
+      // The group id is NEVER a pick — it has no quantity to count.
+      expect(picks['g1']).toBeUndefined();
+      expect(picks['v9']!.name).toBe('Nike Pegasus 41 · Size 9');
+      expect(picks['v10']!.name).toBe('Nike Pegasus 41 · Size 10');
+    });
+  });
+
+  it('un-ticking a group takes its variants back out', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('/variants')) {
+        return variantsResponse([
+          { id: 'v9', sku: 'PEG-9', name: 'Nike Pegasus 41', label: 'Size 9' },
+        ]);
+      }
+      if (u.includes('/api/v1/product-groups')) return groupsResponse([PEGASUS]);
+      return { ok: true, json: async () => ({ items: [], total: 0 }) } as Response;
+    });
+    render(<CountItemPicker warehouses={WAREHOUSES} sportsEnabled />);
+    await user.click(screen.getByRole('button', { name: 'Product groups' }));
+    await screen.findByText('Nike Pegasus 41');
+    const box = screen.getByRole('checkbox', { name: /count every variant of nike pegasus 41/i });
+
+    await user.click(box);
+    await vi.waitFor(() => {
+      expect(Object.keys(useCountSelection.getState().picks)).toEqual(['v9']);
+    });
+    await user.click(box);
+    await vi.waitFor(() => {
+      expect(Object.keys(useCountSelection.getState().picks)).toEqual([]);
+    });
+  });
+
+  it('says so rather than silently ticking a group with no active variants', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('/variants')) return variantsResponse([]);
+      if (u.includes('/api/v1/product-groups')) return groupsResponse([PEGASUS]);
+      return { ok: true, json: async () => ({ items: [], total: 0 }) } as Response;
+    });
+    render(<CountItemPicker warehouses={WAREHOUSES} sportsEnabled />);
+    await user.click(screen.getByRole('button', { name: 'Product groups' }));
+    await screen.findByText('Nike Pegasus 41');
+
+    await user.click(
+      screen.getByRole('checkbox', { name: /count every variant of nike pegasus 41/i }),
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Nike Pegasus 41 has no active variants to count.',
+    );
+    expect(Object.keys(useCountSelection.getState().picks)).toEqual([]);
+  });
+});

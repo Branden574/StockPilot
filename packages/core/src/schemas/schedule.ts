@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { uuidSchema } from './common';
+import { emptyToUndefined, uuidSchema } from './common';
 
 /**
  * Schedule event = a team-visible calendar entry. Used for jobs,
@@ -18,9 +18,6 @@ export const scheduleStatusSchema = z.enum([
   'cancelled',
 ]);
 export type ScheduleStatus = z.infer<typeof scheduleStatusSchema>;
-
-const emptyToUndefined = (v: unknown) =>
-  typeof v === 'string' && v.trim().length === 0 ? undefined : v;
 
 // Base shape — no refines, so `.partial()` works directly off of it for
 // the update schema. Both create + update apply the same refines on top.

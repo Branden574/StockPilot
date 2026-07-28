@@ -155,10 +155,17 @@ export default async function EditItemPage({
               unitOfMeasure: item.unit_of_measure as string,
               binLocation: (item.bin_location as string | null) ?? '',
               trackingType:
-                ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ?? 'none') as
+                ((item.tracking_type as
                   | 'none'
                   | 'lot'
-                  | 'serial',
+                  | 'serial'
+                  | 'serial_optional'
+                  | null
+                  | undefined) ?? 'none') as
+                  | 'none'
+                  | 'lot'
+                  | 'serial'
+                  | 'serial_optional',
               shelfLifeDays: (item.shelf_life_days as number | null | undefined) ?? null,
               expiryPolicy:
                 ((item.expiry_policy as 'none' | 'warn' | 'block' | null | undefined) ?? 'warn') as
@@ -167,6 +174,18 @@ export default async function EditItemPage({
                   | 'block',
               status: item.status as 'active' | 'archived' | 'discontinued',
               customFields: (item.custom_fields as Record<string, unknown>) ?? {},
+              // The row's OWN size. Migration 0303 backfilled variant_size onto
+              // every historical sized item, and InventoryService.update()
+              // dual-writes variant_size + custom_fields.size and recomputes
+              // variant_key — but with this default missing the form seeded ''
+              // for every edit, zod's emptyToUndefined dropped it from the
+              // patch, and the whole dual-write was unreachable from the only
+              // web surface that edits one item. `variantSizeOriginal` is
+              // deliberately NOT threaded: it is the VERBATIM source record
+              // (0298), and update() only re-records it when the size actually
+              // moves, so re-submitting an unchanged size cannot normalize the
+              // audit trail away.
+              variantSize: (item.variant_size as string | null) ?? '',
               // Carry the row's actual item_type into the form so a
               // book that lands on the inventory edit URL still shows
               // the book-specific fields (ISBN label, grade, rack,

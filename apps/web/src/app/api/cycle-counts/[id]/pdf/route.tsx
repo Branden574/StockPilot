@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { can } from '@stockpilot/core';
+import { can, variantLabel } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -11,6 +11,7 @@ import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-coun
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
+import { ProductGroupsService } from '@/server/services/product-groups';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -131,6 +132,23 @@ export async function GET(
       binByItem.set(row.id, label);
     }
 
+    // Product-group NAMES for whatever groups this count touches, so the sheet
+    // can print "Nike Pegasus 41" over its size run instead of a uuid. Only
+    // resolved when the sports module is on AND at least one line is actually
+    // grouped — a non-sports count does no extra work and prints unchanged.
+    const groupIds = Array.from(
+      new Set(
+        lines
+          .map((l) => l.item?.group_id ?? null)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    const groupNameById = new Map<string, string>();
+    if (groupIds.length > 0 && ctx.enabledModules.has('sports')) {
+      const display = await new ProductGroupsService(ctx).displayByIds(groupIds);
+      for (const [gid, d] of display) groupNameById.set(gid, d.name);
+    }
+
     const lineRows: CycleCountPdfLine[] = lines.map((l) => ({
       sku: l.item?.sku ?? '',
       name: l.item?.name ?? 'Unknown item',
@@ -142,6 +160,22 @@ export async function GET(
       // based on cycle.status.
       countedQuantity:
         l.counted_quantity == null ? null : Number(l.counted_quantity),
+      // Both gated on the sports module (Task 17 review fix): groupId used to
+      // be set unconditionally, so a module-off org's non-null group_id (an
+      // item can carry one even after sports is disabled — the column isn't
+      // cleared) still reached the PDF. groupCountSheetLines() only checks
+      // `groupId` to decide whether to print group blocks at all, so it
+      // printed a "Product group" header (groupName was already null) over
+      // what should have been the flat, pre-sports sheet.
+      groupId: ctx.enabledModules.has('sports') ? (l.item?.group_id ?? null) : null,
+      groupName:
+        ctx.enabledModules.has('sports') && l.item?.group_id
+          ? (groupNameById.get(l.item.group_id) ?? null)
+          : null,
+      variantLabel: variantLabel({
+        jerseyNumber: l.item?.jersey_number ?? null,
+        size: l.item?.variant_size ?? null,
+      }),
     }));
 
     const { data: org } = await ctx.supabase

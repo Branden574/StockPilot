@@ -6,6 +6,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { variantLabel } from '@stockpilot/core';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -531,11 +533,22 @@ function CountRow({
   const effectiveCounted = Number.isFinite(draftNum) ? draftNum : null;
   const variance =
     effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
+  const variantText = variantLabel({
+    jerseyNumber: line.item?.jersey_number ?? null,
+    size: line.item?.variant_size ?? null,
+  });
 
   return (
     <TableRow>
       <TableCell className="max-w-[280px]">
         <div className="truncate font-medium">{line.item?.name ?? 'Unknown'}</div>
+        {/* WHICH VARIANT this row is. Six sizes of one shoe otherwise differ
+            only by SKU, and a counter matching hex strings to shoeboxes puts
+            the 10s in the 10.5 row. Renders nothing for an ungrouped item, so
+            a non-sports count looks exactly as it did before. */}
+        {variantText && (
+          <div className="text-muted-foreground truncate text-xs">{variantText}</div>
+        )}
         {line.item?.barcode && (
           <div className="text-muted-foreground truncate font-mono text-[10.5px]">
             {line.item.barcode}

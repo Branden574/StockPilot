@@ -97,7 +97,7 @@ export default function ZendeskWebScreen() {
           {hasError ? (
             <View style={[styles.center, { backgroundColor: c.paper }]}>
               <Body muted size={14} style={styles.errorText}>
-                Couldn't load Zendesk. Check your connection and try again.
+                Couldn&apos;t load Zendesk. Check your connection and try again.
               </Body>
               <View style={{ marginTop: 16, alignSelf: 'center' }}>
                 <Button variant="outline" size="sm" onPress={handleRetry}>

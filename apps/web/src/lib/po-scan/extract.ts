@@ -14,8 +14,12 @@ import { env } from '@/lib/env';
  *
  * If the schema changes here, update the corresponding zod parse on the
  * server route side too — they're paired.
+ *
+ * EXPORTED for the schema test: `required` is a correctness property (see
+ * `mappingConfidence` below), not an implementation detail, and a test that
+ * re-declared the list would prove nothing about this one.
  */
-const PO_SCHEMA = {
+export const PO_SCHEMA = {
   type: SchemaType.OBJECT,
   properties: {
     poNumber: {
@@ -108,6 +112,56 @@ const PO_SCHEMA = {
             description:
               'Your confidence (0.0 to 1.0) that THIS LINE was extracted correctly. Reduce for: ambiguous SKU characters (O/0, l/1), partially obscured text, faded ink, hand-written numbers.',
           },
+          // ── Sports variant fields (Task 13) ─────────────────────────────
+          // All OPTIONAL (absent from `required` below): a non-sports PO
+          // returns them empty and behaves exactly as it did before. Every
+          // description tells the model to leave a field EMPTY rather than
+          // guess — "missing stays missing".
+          size: {
+            type: SchemaType.STRING,
+            description:
+              'The size AS PRINTED for this line (e.g. "10", "10.5", "XL", "US 9"). Copy it exactly; do not convert between size systems. Empty string if the line has no size.',
+          },
+          sizeSystem: {
+            type: SchemaType.STRING,
+            description:
+              "The size system if the document states one: 'US_MENS', 'US_WOMENS', 'US_YOUTH', 'UK', 'EU', 'CM', or 'ALPHA' for letter sizes. Empty string if the document does not say — do NOT guess.",
+          },
+          width: {
+            type: SchemaType.STRING,
+            description:
+              'Shoe width if printed (N, M, W, 2E, 4E, Standard, Wide, Extra Wide). Empty string if not present.',
+          },
+          colorway: {
+            type: SchemaType.STRING,
+            description:
+              'Colour or colourway as printed ("Black/White"). Empty string if not present.',
+          },
+          jerseyNumber: {
+            type: SchemaType.STRING,
+            description:
+              'The UNIFORM/JERSEY number for this line, as text, KEEPING leading zeroes ("00", "07"). Only fill this when the document clearly labels it as a jersey/uniform/player number. A bare "Number" column is ambiguous — leave this empty and lower mappingConfidence instead. NEVER put a serial number or a quantity here.',
+          },
+          playerName: {
+            type: SchemaType.STRING,
+            description:
+              'Player or wearer name if the line names one. Empty string if not present. Never invent a name.',
+          },
+          groupHint: {
+            type: SchemaType.STRING,
+            description:
+              'The style/product identity this line belongs to, as printed ("Nike Pegasus 41 FD2722", "Falcons Home Jersey 2026"). This is what lets several size lines resolve to ONE product. Empty string if unclear.',
+          },
+          serialNumber: {
+            type: SchemaType.STRING,
+            description:
+              'The SERIAL NUMBER printed on this line, copied exactly (keep dashes, letters and leading zeroes). Only fill this when the document explicitly labels the value as a serial, IMEI, or asset serial. NEVER put a jersey/uniform number, a quantity, a SKU or a style number here, and NEVER invent one or write a placeholder like "N/A" or "0000" — return an empty string when the document prints no serial.',
+          },
+          mappingConfidence: {
+            type: SchemaType.NUMBER,
+            description:
+              'Your confidence (0.0-1.0) that you assigned each value to the RIGHT FIELD. Lower this sharply when a column header is ambiguous (a bare "Number" could be a jersey number, a quantity, a serial, a style number or a PO line number). This is separate from `confidence`, which is about reading the characters correctly.',
+          },
         },
         required: [
           'lineNumber',
@@ -117,6 +171,14 @@ const PO_SCHEMA = {
           'lineTotal',
           'lineType',
           'confidence',
+          // REQUIRED, unlike the sports value fields above it. Those are
+          // optional because an absent one means "the document said nothing",
+          // which is the correct answer. `mappingConfidence` is different: it is
+          // the GATE, and a model that simply omitted it produced `null`, which
+          // `lineNeedsMappingConfirmation` reads as "nothing to confirm" — so
+          // forgetting the field silently switched the confirmation step off for
+          // that line. Making it required means the model has to state it.
+          'mappingConfidence',
         ],
       },
     },
@@ -142,7 +204,13 @@ Other rules:
 - For each line, set \`confidence\` lower (0.6-0.8) when SKU characters are ambiguous, when ink is faded, or when fields are partially obscured. High confidence (0.9+) only when the row is crisp and unambiguous.
 - Set \`overallConfidence\` lower when the image is skewed, low-resolution, or in an unusual layout.
 - Return an empty \`lines\` array ONLY when the document genuinely lists no items at all (e.g. a random photo). A packing slip or price-less order is a valid document — extract its items.
-- If multiple pages/frames are provided, treat them as one document and merge the lines (but still keep each printed row separate).`;
+- If multiple pages/frames are provided, treat them as one document and merge the lines (but still keep each printed row separate).
+
+NEVER INVENT A VALUE:
+Never invent a serial number, jersey number, size, quantity, SKU, team or
+player. If a value is not printed on the document, return an empty string.
+A missing value must stay missing. If a column header is ambiguous, leave the
+specific field empty and lower mappingConfidence rather than guessing.`;
 
 export interface ExtractedPo {
   poNumber: string;
@@ -165,6 +233,31 @@ export interface ExtractedPo {
     lineTotal: number;
     lineType: 'inventory' | 'tax' | 'freight' | 'service' | 'fee' | 'discount' | 'unknown';
     confidence: number;
+    // ── Sports variant fields (Task 13) ───────────────────────────────────
+    // Always PRESENT after normalization, empty when the document said
+    // nothing. Empty string is the "missing" value at this layer; the
+    // po_import_lines mappers convert it to a real NULL.
+    /** The size exactly as printed. Never converted between systems. */
+    size: string;
+    /** US_MENS | US_WOMENS | US_YOUTH | UK | EU | CM | ALPHA, or '' if the document did not say. */
+    sizeSystem: string;
+    width: string;
+    colorway: string;
+    /** TEXT, with leading zeroes intact. NEVER a number — 7 and 07 are different uniforms. */
+    jerseyNumber: string;
+    playerName: string;
+    /** Free-text style/product identity used to resolve several size lines to ONE product. */
+    groupHint: string;
+    /** The serial the document PRINTED, verbatim, or '' — never invented, never a placeholder. */
+    serialNumber: string;
+    /**
+     * 0..1 confidence in the FIELD MAPPING (not the character reading).
+     *
+     * REQUIRED of the model, and 0 when it gave none anyway — an absent claim is
+     * not a confident one. Never null: null reads as "nothing to confirm" in
+     * `lineNeedsMappingConfirmation`, which is the gate switching itself off.
+     */
+    mappingConfidence: number;
   }>;
 }
 
@@ -220,7 +313,12 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
       // sonnet-5+ rejects the param, and the forced-tool + schema already
       // constrain the output.
       model: env.ANTHROPIC_PO_SCAN_MODEL,
-      maxTokens: 4096,
+      // Raised from 4096 with the Task 13 variant fields: each line now emits
+      // eight more keys, so the SAME 40-line book PO that fit before would
+      // otherwise truncate mid-JSON and surface as "AI returned non-JSON".
+      // Output tokens are billed as generated, so the extra ceiling costs
+      // nothing on the short documents that never approach it.
+      maxTokens: 8192,
     });
   } else {
     const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
@@ -287,6 +385,40 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
       ? l.lineType
       : 'inventory') as ExtractedPo['lines'][number]['lineType'],
     confidence: Number.isFinite(l.confidence) ? Math.max(0, Math.min(1, l.confidence)) : 0.5,
+    // ── Sports variant fields (Task 13) ───────────────────────────────────
+    // This mapper rebuilds each line from a WHITELIST, so a field missing
+    // here is silently dropped however well the model extracted it.
+    //
+    // The `typeof === 'string'` guards are load-bearing, not defensive
+    // noise: a model that returns 7 for jerseyNumber must lose the value
+    // rather than have it stringified into a WRONG one ("7" is not "07").
+    size: typeof l.size === 'string' ? l.size.trim() : '',
+    sizeSystem: typeof l.sizeSystem === 'string' ? l.sizeSystem.trim().toUpperCase() : '',
+    width: typeof l.width === 'string' ? l.width.trim() : '',
+    colorway: typeof l.colorway === 'string' ? l.colorway.trim() : '',
+    // Keep leading zeroes: never Number() this value.
+    jerseyNumber: typeof l.jerseyNumber === 'string' ? l.jerseyNumber.trim() : '',
+    playerName: typeof l.playerName === 'string' ? l.playerName.trim() : '',
+    groupHint: typeof l.groupHint === 'string' ? l.groupHint.trim() : '',
+    // A serial is a STRING and only ever a copy. Same guard as jerseyNumber:
+    // a model that returns 7 must LOSE the value rather than have it
+    // stringified into a serial the document never printed.
+    serialNumber: typeof l.serialNumber === 'string' ? l.serialNumber.trim() : '',
+    // MISSING READS AS NO CONFIDENCE AT ALL, not as "no opinion".
+    //
+    // The schema now requires this field, so a well-behaved model always states
+    // it — but a parse-time default still has to exist, and `null` was the wrong
+    // one: `lineNeedsMappingConfirmation` treats null as "nothing to confirm",
+    // so a model that dropped the field silently disabled its own gate for that
+    // line and an unverified mapping sailed through review. 0 is the
+    // conservative reading — an absent claim is not a confident one — and it
+    // only ever routes a line that CARRIES a sports value to the confirmation
+    // step (the predicate is scoped), so an ordinary non-sports scan still
+    // approves untouched.
+    mappingConfidence:
+      typeof l.mappingConfidence === 'number' && Number.isFinite(l.mappingConfidence)
+        ? Math.min(1, Math.max(0, l.mappingConfidence))
+        : 0,
   }));
 
   if (parsed.lines.length === 0 && parsed.overallConfidence < 0.3) {

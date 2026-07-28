@@ -10,6 +10,13 @@ import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
+import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import {
+  EMPTY_SPORTS_GROUP_FIELDS,
+  GROUP_LEVEL_COLOR_SUBCATEGORIES,
+  SportsFields,
+  type SportsGroupFieldValues,
+} from '@/components/inventory/sports-fields';
 // Dynamic import + conditional render: IsbnScanner pulls in the
 // Dialog tree and BarcodeDetector usage; only ships in the bundle
 // when the user actually opens the scanner. ssr:false because the
@@ -43,6 +50,7 @@ import { generateSku, cn } from '@/lib/utils';
 import {
   bulkCreateSizedVariantsAction,
   createItemAction,
+  findGroupCandidatesAction,
   updateItemAction,
 } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
@@ -54,16 +62,86 @@ import {
 import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
+  APPAREL_ALPHA_SIZES,
+  DEFAULT_SUBCATEGORY_PROFILES,
+  SPORTS_ERROR_META,
+  TRACKING_MODE_LABELS,
+  buildVariantKey,
   createItemSchema,
   formatRackLabel,
   normalizeRackFields,
+  type ApparelAlphaSize,
+  type CountingUnit,
   type CreateItemInput,
   type CustomFieldDefinition,
+  type SportsSubcategoryKey,
+  type TrackingMode,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
-type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
+// The nine canonical apparel letters now live in @stockpilot/core
+// (`inventory/apparel-sizes`) so this form, the "add sizes" dialog and the
+// native fallback all offer the SAME list. There used to be three private
+// copies; the native one had already drifted to the 14-row union of the
+// apparel_alpha scale, which offers XXL and 2XL as two chips for one shirt.
+//
+// This is now the FALLBACK vocabulary only (Sports Task 11): a category that
+// carries its own `size_scale_id` renders that scale's own ordered values
+// (`sizeScales` prop, from `size_scale_values`) instead — a shoe run is
+// '7'..'15' with halves and could never be expressed by this letter list.
+type SizeCode = ApparelAlphaSize;
+const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
+
+/**
+ * Sentinel for the tracking-mode override select's "no override" row. Radix
+ * Select cannot carry an empty-string value, and the field's real absent state
+ * is `undefined` — the same '__none' pattern the other optional selects in this
+ * tree use.
+ */
+const MODE_OVERRIDE_NONE = '__category_default';
+
+/** Display label for each slot buildVariantKey may emit (variant-keys.ts). */
+const VARIANT_KEY_SLOT_LABELS: Record<string, string> = {
+  number: '#',
+  player: 'Player',
+  size: 'Size',
+  system: 'System',
+  width: 'Width',
+  fit: 'Fit',
+  color: 'Color',
+};
+
+/**
+ * Inverse of `esc()` in variant-keys.ts — undoes the '\\' / '\|' / '\=' escape
+ * so a value that happened to contain a delimiter reads back correctly in the
+ * preview. DISPLAY ONLY: this never feeds back into anything persisted, so an
+ * exotic value (a size containing a literal '|') can at worst mis-render this
+ * one label for a moment — the server's own recomputed key is authoritative.
+ */
+function unescapeVariantKeySlot(v: string): string {
+  return v.replace(/\\=/g, '=').replace(/\\\|/g, '|').replace(/\\\\/g, '\\');
+}
+
+/**
+ * Turn a `buildVariantKey(...)` result into a human label for the grouping
+ * preview ("#07 · Size M"), so the preview is genuinely DERIVED from the core
+ * builder rather than a hand-rolled re-implementation that could drift from
+ * it. Returns null for the 'default' sentinel (no variant attributes at all).
+ */
+function humanizeVariantKey(key: string): string | null {
+  if (key === 'default') return null;
+  return key
+    .split('|')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq < 0) return pair;
+      const slotKey = pair.slice(0, eq);
+      const value = unescapeVariantKeySlot(pair.slice(eq + 1));
+      const label = VARIANT_KEY_SLOT_LABELS[slotKey];
+      return label === '#' ? `#${value}` : label ? `${label} ${value}` : value;
+    })
+    .join(' · ');
+}
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // HEIC + HEIF added so iPhone Safari (which ships HEIC by default
@@ -92,7 +170,29 @@ export interface ItemFormDefaults extends Partial<CreateItemInput> {
 
 interface ItemFormProps {
   defaults?: ItemFormDefaults;
-  categories: Array<{ id: string; name: string; supports_sizes?: boolean }>;
+  categories: Array<{
+    id: string;
+    name: string;
+    supports_sizes?: boolean;
+    /** Sports Task 11: resolve the tracking profile without a round trip. */
+    parent_id?: string | null;
+    tracking_mode?: TrackingMode | null;
+    sports_subcategory_key?: string | null;
+    default_unit_of_measure?: string | null;
+    size_scale_id?: string | null;
+  }>;
+  /** Ordered size values per scale id, from size_scale_values. */
+  sizeScales?: Record<string, Array<{ value: string; isHalf: boolean }>>;
+  /** True when the org has the sports module on. */
+  sportsEnabled?: boolean;
+  /**
+   * True when the viewer holds `sports:manage` (page passes
+   * `can(ctx, 'sports:manage')`, the same shape `canManagePublicVisibility`
+   * uses). Gates the tracking-mode override control ONLY — the server re-checks
+   * the permission and the subcategory's allowedModes on every save
+   * (`resolveModeOverride`), so the form is never the authority.
+   */
+  canManageSports?: boolean;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
   /** Every tag in the org. Empty array hides the Tags pill row entirely. */
@@ -161,6 +261,9 @@ interface ItemFormProps {
 export function ItemForm({
   defaults,
   categories,
+  sizeScales = {},
+  sportsEnabled = false,
+  canManageSports = false,
   locations,
   suppliers,
   tags = [],
@@ -249,6 +352,14 @@ export function ItemForm({
       quantityOnHand: defaults?.quantityOnHand ?? 0,
       reorderPoint: defaults?.reorderPoint ?? 0,
       reorderQuantity: defaults?.reorderQuantity ?? 0,
+      // 'unit' — the value every org saw before the sports branch. Task 8
+      // dropped `.default('unit')` from the SCHEMA so the server could apply a
+      // category's counting unit (PAIR for shoes), and this form followed by
+      // seeding '' — which left the field visibly BLANK for every org, sports
+      // or not. It is seeded here and then TRACKS the resolved counting unit
+      // until the user types in it (see the effect below), so the box always
+      // shows what will actually be stored and never sends an explicit 'unit'
+      // that beats a shoes category's 'pair'.
       unitOfMeasure: defaults?.unitOfMeasure ?? 'unit',
       binLocation: defaults?.binLocation ?? '',
       trackingType: defaults?.trackingType ?? 'none',
@@ -257,6 +368,18 @@ export function ItemForm({
       itemType: defaults?.itemType ?? itemType,
       status: defaults?.status ?? 'active',
       customFields: defaults?.customFields ?? {},
+      // Sports Task 11 variant attributes. All optional in the schema, so an
+      // omitted value here changes nothing for a non-sports item — these
+      // just seed an EDIT form's existing variant with its stored values.
+      groupId: defaults?.groupId ?? null,
+      variantSize: defaults?.variantSize ?? '',
+      variantSizeOriginal: defaults?.variantSizeOriginal ?? '',
+      variantSizeSystem: defaults?.variantSizeSystem ?? null,
+      variantWidth: defaults?.variantWidth ?? '',
+      variantFit: defaults?.variantFit ?? '',
+      variantColor: defaults?.variantColor ?? '',
+      jerseyNumber: defaults?.jerseyNumber ?? '',
+      playerName: defaults?.playerName ?? '',
     },
   });
 
@@ -331,10 +454,11 @@ export function ItemForm({
    * Size-variant selection. Only meaningful when the chosen category has
    * supports_sizes = true AND this is a create form (variants don't
    * apply when editing one existing row). Each entry holds the size
-   * code + on-hand qty for that variant.
+   * (free text — a shoe run needs '7'..'15' with halves, not just the nine
+   * apparel letters) + on-hand qty for that variant.
    */
   const [selectedSizes, setSelectedSizes] = React.useState<
-    Array<{ size: SizeCode; quantity: number }>
+    Array<{ size: string; quantity: number }>
   >([]);
   // Drop sized selections whenever the category changes. Avoids stale
   // picks sticking when the user toggles between a size-flagged
@@ -343,6 +467,205 @@ export function ItemForm({
   React.useEffect(() => {
     setSelectedSizes([]);
   }, [watchedCategoryId]);
+
+  // ── Sports tracking-profile resolution (Task 11) ──────────────────────────
+  // Client-side ONLY for rendering which fields to show and for the display
+  // preview below — the server independently re-resolves this from the
+  // category (resolveTrackingProfile, Task 8) and never trusts anything
+  // computed here (requirement 11).
+  const selectedCategory = React.useMemo(
+    () => categories.find((c) => c.id === watchedCategoryId) ?? null,
+    [categories, watchedCategoryId],
+  );
+  const parentCategory = React.useMemo(
+    () => categories.find((c) => c.id === selectedCategory?.parent_id) ?? null,
+    [categories, selectedCategory],
+  );
+  const subcategoryKey = selectedCategory?.sports_subcategory_key ?? null;
+  const profile = subcategoryKey
+    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
+    : null;
+  // The mode the CATEGORY resolves to on its own, before any override. Split
+  // out of `effectiveMode` so the override control can label its "no override"
+  // option with the value it would fall back to.
+  const categoryDefaultMode: TrackingMode =
+    selectedCategory?.tracking_mode ??
+    parentCategory?.tracking_mode ??
+    profile?.defaultMode ??
+    'QUANTITY';
+  const trackingModeOverride = watch('trackingModeOverride');
+  const effectiveMode: TrackingMode = trackingModeOverride ?? categoryDefaultMode;
+  const countingUnit = (selectedCategory?.default_unit_of_measure ??
+    parentCategory?.default_unit_of_measure ??
+    profile?.defaultCountingUnit ??
+    'unit') as CountingUnit;
+
+  // The Unit of measure box FOLLOWS the resolved counting unit until the user
+  // types in it. Two things have to be true at once: the field must never be
+  // blank (a visible regression for every org when the schema default was
+  // dropped), and a NEW item must not send an explicit 'unit' that beats the
+  // category's own unit on the server. Showing what the server would store
+  // satisfies both — a shoes category reads 'pair' before submit rather than
+  // silently becoming one afterwards. Every non-sports org resolves 'unit' from
+  // all three fallbacks, so nothing there changes.
+  //
+  // A ref, not `dirtyFields`: `setValue` here must not mark the form dirty (that
+  // drives the unsaved-changes guard), and the question is only ever "has the
+  // user touched this box".
+  const uomTouchedRef = React.useRef(Boolean(defaults?.unitOfMeasure));
+  React.useEffect(() => {
+    // EDIT never re-derives: the stored value is the item's own answer.
+    if (isEdit || uomTouchedRef.current) return;
+    setValue('unitOfMeasure', countingUnit);
+  }, [countingUnit, isEdit, setValue]);
+
+  // SPORTS_SUBCATEGORY_REQUIRED (fast, kind failure — the server enforces
+  // this too). True only when the SELECTED category is itself a Sports root:
+  // it carries no subcategory key of its own, but at least one of its
+  // children does.
+  //
+  // Module-gated like every other sports branch in this file: with `sports`
+  // off, the subcategory rows are inert data and blocking submit on them would
+  // be an unexplainable dead end in an org that has no sports UI at all.
+  const isSportsRootMissingSubcategory = React.useMemo(() => {
+    if (!sportsEnabled) return false;
+    if (!selectedCategory || selectedCategory.sports_subcategory_key) return false;
+    return categories.some(
+      (c) => c.parent_id === selectedCategory.id && Boolean(c.sports_subcategory_key),
+    );
+  }, [categories, selectedCategory, sportsEnabled]);
+
+  // Group-identity attributes (brand/model/team/season/...). Kept OUTSIDE
+  // react-hook-form — see sports-fields.tsx's header for why registering a
+  // `productGroup.*` path would make the resolver demand a `name` the user
+  // never had a field for. Merged into the submit payload manually below,
+  // the same pattern already used here for rack number/row and crate color.
+  const [sportsGroupFields, setSportsGroupFields] =
+    React.useState<SportsGroupFieldValues>(EMPTY_SPORTS_GROUP_FIELDS);
+  function updateSportsGroupField<K extends keyof SportsGroupFieldValues>(
+    key: K,
+    value: SportsGroupFieldValues[K],
+  ) {
+    setSportsGroupFields((prev) => ({ ...prev, [key]: value }));
+  }
+  // An existing group the user explicitly picked from the preview's
+  // candidate list (never automatic — requirement 6/13).
+  const [linkedGroup, setLinkedGroup] = React.useState<{ id: string; name: string } | null>(null);
+  const [groupCandidates, setGroupCandidates] = React.useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  React.useEffect(() => {
+    setSportsGroupFields(EMPTY_SPORTS_GROUP_FIELDS);
+    setLinkedGroup(null);
+    setGroupCandidates([]);
+    // Also drop the RHF-held group link and the mode override. `linkedGroup`
+    // alone was not enough: `groupId` lives on the form values, so switching
+    // from Shoes to Jerseys after clicking "Use this group" left the shoe
+    // group's id in the payload — and the server prefers `groupId` over the
+    // freshly-computed `productGroup`, so the jersey would have landed in the
+    // shoe group. Create-only: on edit these are the item's own stored values
+    // and must never be blanked by a render.
+    if (!isEdit) {
+      setValue('groupId', null);
+      setValue('trackingModeOverride', undefined);
+    }
+  }, [watchedCategoryId, isEdit, setValue]);
+
+  // Debounced advisory near-miss lookup. Deliberately quiet (no request) once
+  // enough of a signal exists: mirrors ProductGroupsService.candidates()'s own
+  // early-exit so we don't fire a request the server would just return [] for.
+  React.useEffect(() => {
+    if (!sportsEnabled || !profile || isEdit || linkedGroup) {
+      setGroupCandidates([]);
+      return;
+    }
+    const { brand, model, styleNumber, team } = sportsGroupFields;
+    const hasSignal =
+      styleNumber.trim().length > 0 ||
+      (brand.trim().length > 0 && model.trim().length > 0) ||
+      team.trim().length > 0;
+    if (!hasSignal) {
+      setGroupCandidates([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      // Promise.resolve(...) rather than calling .then() directly: this is
+      // advisory UI sugar, never load-bearing, so a rejected/failed lookup
+      // should quietly leave the candidate list empty rather than surface an
+      // unhandled rejection.
+      void Promise.resolve(
+        findGroupCandidatesAction({
+          subcategoryKey: profile.key,
+          brand: sportsGroupFields.brand.trim() || undefined,
+          model: sportsGroupFields.model.trim() || undefined,
+          styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
+          colorway: sportsGroupFields.colorway.trim() || undefined,
+          team: sportsGroupFields.team.trim() || undefined,
+          league: sportsGroupFields.league.trim() || undefined,
+          season: sportsGroupFields.season.trim() || undefined,
+          homeAway: sportsGroupFields.homeAway || undefined,
+          color: sportsGroupFields.color.trim() || undefined,
+        }),
+      )
+        .then((res) => {
+          if (res?.ok) setGroupCandidates(res.data);
+        })
+        .catch(() => {
+          setGroupCandidates([]);
+        });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [sportsEnabled, profile, isEdit, linkedGroup, sportsGroupFields]);
+
+  function handleUseGroupCandidate(id: string) {
+    const candidate = groupCandidates.find((c) => c.id === id);
+    setValue('groupId', id, { shouldDirty: true });
+    setLinkedGroup({ id, name: candidate?.name ?? 'Selected group' });
+    setGroupCandidates([]);
+  }
+
+  // Size chips (existing supports_sizes bulk flow): use the category's own
+  // size scale when it has one, falling back to the nine apparel letters —
+  // a shoe run is '7'..'15' with halves and could never be a letter list.
+  const sizeChipOptions: string[] = React.useMemo(() => {
+    const scaleId = selectedCategory?.size_scale_id ?? null;
+    const scaleValues = scaleId ? sizeScales[scaleId] : undefined;
+    return scaleValues && scaleValues.length > 0
+      ? scaleValues.map((v) => v.value)
+      : [...ALL_SIZES];
+  }, [selectedCategory, sizeScales]);
+
+  // Display-only variant-identity preview (requirement: computed via the core
+  // key builder, never re-implemented). The server independently recomputes
+  // this on save (buildVariantKey in InventoryService.create) — a stale or
+  // wrong preview here can never corrupt data.
+  const colorIsGroupLevel = profile ? GROUP_LEVEL_COLOR_SUBCATEGORIES.has(profile.key) : false;
+  const variantKeyPreview = profile
+    ? buildVariantKey({
+        size: watch('variantSize'),
+        sizeSystem: watch('variantSizeSystem'),
+        width: watch('variantWidth'),
+        fit: watch('variantFit'),
+        // Mirrors SportsFields' own mapping: for jerseys/uniforms the visible
+        // "Color" input writes to sportsGroupFields.color (a GROUP slot,
+        // per buildGroupKey), so variantColor never gets a value there and
+        // must not appear in the variant-key preview either.
+        color: colorIsGroupLevel ? null : watch('variantColor'),
+        jerseyNumber: watch('jerseyNumber'),
+        // playerName is deliberately ABSENT, mirroring the server: both
+        // InventoryService.create() and bulkCreateSizedVariants() build
+        // variant_key without it (buildVariantKey accepts the slot, but no
+        // write path fills it — grouping jerseys by player is an unresolved
+        // open question). The server is authoritative, so a preview that
+        // promised "Player Vega" as part of the identity was promising a
+        // variant split that never happens.
+      })
+    : 'default';
+  const variantLabel = variantKeyPreview === 'default' ? null : humanizeVariantKey(variantKeyPreview);
+  const watchedItemName = watch('name');
+  const groupNamePreview =
+    linkedGroup?.name ?? (watchedItemName?.trim() ? watchedItemName.trim() : null);
+
   const [lookingUp, setLookingUp] = React.useState(false);
 
   // Public-catalog visibility — independent of RHF (not part of the item
@@ -581,15 +904,68 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
+    // SPORTS_SUBCATEGORY_REQUIRED — fast, kind failure. The server enforces
+    // this too (resolveTrackingProfile throws on an unresolved subcategory
+    // key, and CategoriesService never assigns items to a bare Sports root),
+    // but catching it here avoids a round trip for the common mis-click.
+    if (!isEdit && isSportsRootMissingSubcategory) {
+      toast.error(SPORTS_ERROR_META.SPORTS_SUBCATEGORY_REQUIRED.title, {
+        description: SPORTS_ERROR_META.SPORTS_SUBCATEGORY_REQUIRED.explanation,
+      });
+      return;
+    }
+
+    // ── The sports payload, shared by BOTH create paths ──────────────────────
+    // Computed HERE, above the sized-variant branch, because that branch
+    // returns early: a sized sports category (shoes — the canonical case) used
+    // to leave through it before any of this ran, so the grouping preview
+    // promised a product group and nothing was ever saved.
+    //
+    // Create-only. Task 18's linking tool is where an EXISTING item's group
+    // changes. `productGroup.name` defaults to the item's own name: there is no
+    // separate "product group name" input in Add Item, so the first variant
+    // created names its group after itself; renaming/merging groups is the
+    // product-groups admin surface.
+    const sportsActive = !isEdit && sportsEnabled && profile != null;
+    const sportsGroupPayload = sportsActive
+      ? linkedGroup
+        ? // The user explicitly clicked "Use this group".
+          { groupId: linkedGroup.id }
+        : {
+            productGroup: {
+              name: values.name,
+              categoryId: values.categoryId ?? null,
+              brand: sportsGroupFields.brand.trim() || undefined,
+              model: sportsGroupFields.model.trim() || undefined,
+              styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
+              colorway: sportsGroupFields.colorway.trim() || undefined,
+              team: sportsGroupFields.team.trim() || undefined,
+              league: sportsGroupFields.league.trim() || undefined,
+              season: sportsGroupFields.season.trim() || undefined,
+              homeAway: sportsGroupFields.homeAway || undefined,
+              color: sportsGroupFields.color.trim() || undefined,
+              defaultCountingUnit: countingUnit,
+            },
+          }
+      : {};
+    // The override is a plain form value on the single-item path (it is a
+    // `createItemSchema` field), so it only has to be forwarded explicitly on
+    // the sized path. Gated on `sportsActive` for the same reason the control
+    // is: the server refuses it anyway, this just never sends it.
+    const sportsModeOverridePayload =
+      sportsActive && values.trackingModeOverride
+        ? { trackingModeOverride: values.trackingModeOverride }
+        : {};
+
     // Sized-variant create path. Triggered only when the chosen
     // category has supports_sizes = true AND the user picked at least
     // one size on a new item. Bulk inserts one row per size, then
     // routes back to the Inventory list (each variant gets its own
     // detail page so a single-item redirect would be wrong).
-    const selectedCategory = categories.find((c) => c.id === values.categoryId);
+    const selectedCategoryAtSubmit = categories.find((c) => c.id === values.categoryId);
     if (
       !isEdit &&
-      selectedCategory?.supports_sizes &&
+      selectedCategoryAtSubmit?.supports_sizes &&
       selectedSizes.length > 0
     ) {
       if (!values.categoryId || !values.warehouseId) {
@@ -619,7 +995,7 @@ export function ItemForm({
         unitCost: values.unitCost,
         reorderPoint: values.reorderPoint,
         reorderQuantity: values.reorderQuantity,
-        unitOfMeasure: values.unitOfMeasure,
+        unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
         // Per-org custom fields entered in the "Additional fields" section apply
         // to every variant. The service strips reserved keys + runs the
         // authoritative required-field gate, so this path no longer silently
@@ -627,6 +1003,23 @@ export function ItemForm({
         customFields:
           Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
         variants: selectedSizes,
+        // Sports: the group the preview promised, plus the attributes that are
+        // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
+        // sent — the size is per-row (`variants[].size`) and the system is
+        // derived server-side from the category's size scale, so a client
+        // cannot choose which physical stock these rows merge with.
+        ...sportsGroupPayload,
+        ...sportsModeOverridePayload,
+        ...(sportsActive
+          ? {
+              // One jersey number across M and XL is the point (regression R3).
+              jerseyNumber: values.jerseyNumber || undefined,
+              playerName: values.playerName || undefined,
+              variantWidth: values.variantWidth || undefined,
+              variantFit: values.variantFit || undefined,
+              variantColor: values.variantColor || undefined,
+            }
+          : {}),
       } as Parameters<typeof bulkCreateSizedVariantsAction>[0]);
       if (!res.ok) {
         toast.error(res.error.message);
@@ -755,9 +1148,10 @@ export function ItemForm({
         })();
     // When isRentalFixed is true, inject is_rental=true into the payload
     // so the item is classified as a rental asset regardless of form state.
-    const finalValues = isRentalFixed
-      ? { ...mergedValues, isRental: true }
-      : mergedValues;
+    const rentalValues = isRentalFixed ? { ...mergedValues, isRental: true } : mergedValues;
+    // `trackingModeOverride` already rides `values` here (it is a
+    // createItemSchema field); only the group needs merging in.
+    const finalValues = { ...rentalValues, ...sportsGroupPayload };
     const action =
       isEdit && defaults?.id
         ? updateItemAction(defaults.id, finalValues as UpdateItemInput)
@@ -1100,19 +1494,30 @@ export function ItemForm({
             optional
           />
           {(() => {
-            const selectedCategory = categories.find(
-              (c) => c.id === watch('categoryId'),
-            );
-            const categorySupportsSizes = Boolean(
-              selectedCategory?.supports_sizes,
-            );
-            // Hide while editing — variants only apply at create-time. Each
-            // existing variant edits as a normal single row.
-            if (!categorySupportsSizes || isEdit) return <div />;
+            const categorySupportsSizes = Boolean(selectedCategory?.supports_sizes);
+            // Editing ONE existing row. The size CHIPS below are a create-only
+            // bulk flow (each variant edits as a normal single row), but that
+            // row's own size still has to be visible and editable: migration
+            // 0303 backfilled variant_size onto every historical sized item and
+            // InventoryService.update() dual-writes it with custom_fields.size,
+            // and until this input existed there was no web surface that could
+            // reach either. Shown only for a row that ALREADY carries a size, so
+            // no plain widget's or book's edit form gains a field, and the
+            // create form is byte-unchanged. Clearing it is still a no-op rather
+            // than a clear (emptyToUndefined; repo-wide zod convention).
+            if (isEdit) {
+              if (!defaults?.variantSize) return <div />;
+              return (
+                <Field label="Size" optional error={errors.variantSize?.message}>
+                  <Input placeholder="10.5" {...register('variantSize')} />
+                </Field>
+              );
+            }
+            if (!categorySupportsSizes) return <div />;
             return (
               <Field label="Sizes" optional>
                 <div className="flex flex-wrap gap-1.5">
-                  {ALL_SIZES.map((s) => {
+                  {sizeChipOptions.map((s) => {
                     const picked = selectedSizes.some((x) => x.size === s);
                     return (
                       <button
@@ -1167,6 +1572,66 @@ export function ItemForm({
             );
           })()}
         </div>
+        {/*
+          CREATE-ONLY. These inputs write `productGroup` / variant fields that
+          only the create path merges into its payload, so rendering them on
+          edit silently discarded everything typed into them — and the preview
+          below showed the item's own name as its "product group". Changing an
+          existing item's group/variant identity is Task 18's linking tool.
+        */}
+        {!isEdit && sportsEnabled && profile && (
+          <>
+            <SportsFields
+              profile={profile}
+              register={register}
+              watch={watch}
+              setValue={setValue}
+              errors={errors}
+              groupFields={sportsGroupFields}
+              onGroupFieldChange={updateSportsGroupField}
+            />
+            {/*
+              The authorized mode override. Rendered only for a viewer holding
+              `sports:manage` (same prop-gating pattern as the public-visibility
+              select), and offering ONLY the modes this subcategory allows. The
+              server re-checks both on save via resolveModeOverride — this
+              control is convenience, never authority.
+            */}
+            {canManageSports && (
+              <div className="space-y-1.5">
+                <Label htmlFor="tracking-mode-override">Tracking mode</Label>
+                <Select
+                  value={trackingModeOverride ?? MODE_OVERRIDE_NONE}
+                  onValueChange={(v) =>
+                    setValue(
+                      'trackingModeOverride',
+                      v === MODE_OVERRIDE_NONE ? undefined : (v as TrackingMode),
+                      { shouldDirty: true },
+                    )
+                  }
+                >
+                  <SelectTrigger id="tracking-mode-override" className="sm:max-w-[280px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={MODE_OVERRIDE_NONE}>
+                      {`Category default (${TRACKING_MODE_LABELS[categoryDefaultMode]})`}
+                    </SelectItem>
+                    {profile.allowedModes.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {TRACKING_MODE_LABELS[m]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-[11px]">
+                  Only the modes this subcategory allows. The mode decides whether a unit
+                  needs a serial, so the server re-checks it on save.
+                </p>
+              </div>
+            )}
+          </>
+        )}
         {showPublicVisibility && (
           <>
             <div className="space-y-1.5">
@@ -1442,9 +1907,6 @@ export function ItemForm({
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(() => {
-            const selectedCategory = categories.find(
-              (c) => c.id === watch('categoryId'),
-            );
             const sizedFlowActive =
               !isEdit &&
               Boolean(selectedCategory?.supports_sizes) &&
@@ -1538,7 +2000,16 @@ export function ItemForm({
           </Field>
         </div>
         <Field label="Unit of measure">
-          <Input placeholder="unit, kg, lb, hr…" {...register('unitOfMeasure')} />
+          <Input
+            placeholder="unit, kg, lb, hr…"
+            {...register('unitOfMeasure', {
+              // Once typed in, the box is the user's — the category effect above
+              // stops writing to it.
+              onChange: () => {
+                uomTouchedRef.current = true;
+              },
+            })}
+          />
         </Field>
         {/*
           Tracking radio (None / Lot / Serial) removed per user request.
@@ -1554,14 +2025,25 @@ export function ItemForm({
               <Select
                 value={watch('trackingType') ?? 'none'}
                 onValueChange={(v) =>
-                  setValue('trackingType', v as 'none' | 'lot' | 'serial', { shouldDirty: true })
+                  setValue('trackingType', v as 'none' | 'lot' | 'serial' | 'serial_optional', {
+                    shouldDirty: true,
+                  })
                 }
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
-                  <SelectItem value="serial">Serial</SelectItem>
+                  <SelectItem value="serial">Serial (one per unit, required)</SelectItem>
+                  {/* serial_optional is DELIBERATELY not offered here, and that is now
+                      permanent rather than pending. The value exists end-to-end (schema,
+                      RPC, enumerators) as of mig 0295/0296, but it is reached ONLY by
+                      category-driven stamping: InventoryService.create() resolves the
+                      category's tracking mode server-side and stamps the tracking_type
+                      itself, gating a sports subcategory's serial modes on the `sports`
+                      module rather than lot_serial. Adding it back to this free-pick
+                      would let a lot_serial org mint one with no category behind it,
+                      which is exactly what the server-side authority rule forbids. */}
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">
@@ -1660,9 +2142,6 @@ export function ItemForm({
 
       {(() => {
         if (!isEdit) return null;
-        const selectedCategory = categories.find(
-          (c) => c.id === watch('categoryId'),
-        );
         if (!selectedCategory?.supports_sizes) return null;
         if (
           !defaults?.categoryId ||
@@ -1694,7 +2173,7 @@ export function ItemForm({
                 unitCost: Number(watch('unitCost') ?? 0),
                 reorderPoint: Number(watch('reorderPoint') ?? 0),
                 reorderQuantity: Number(watch('reorderQuantity') ?? 0),
-                unitOfMeasure: watch('unitOfMeasure') ?? 'unit',
+                unitOfMeasure: watch('unitOfMeasure')?.trim() || undefined,
                 itemType: (watch('itemType') ?? itemType) as
                   | 'product'
                   | 'book'
@@ -1705,6 +2184,18 @@ export function ItemForm({
           </div>
         );
       })()}
+
+      {/* Create-only, for the same reason the fields above are. */}
+      {!isEdit && sportsEnabled && profile && (
+        <GroupingPreview
+          groupName={groupNamePreview}
+          variantLabel={variantLabel}
+          mode={effectiveMode}
+          countingUnit={countingUnit}
+          candidates={linkedGroup ? [] : groupCandidates}
+          onUseCandidate={handleUseGroupCandidate}
+        />
+      )}
 
       <div className="flex justify-end gap-2">
         {(onDone || returnHref) && (

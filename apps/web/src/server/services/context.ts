@@ -182,6 +182,29 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
   }
 }
 
+/**
+ * Pass when the caller holds ANY ONE of `permissions`.
+ *
+ * For an action two different roles legitimately reach by two different
+ * routes — e.g. creating a product group, which an item creator does from the
+ * item form and a sports reviewer does from the linking tool. Demanding a
+ * single permission there would gate a user out of a screen their OTHER
+ * permission already let them open. The MFA step-up runs first, exactly as in
+ * `assertPermission`; this widens WHICH permission satisfies the gate, never
+ * whether a gate applies.
+ */
+export function assertAnyPermission(ctx: ServiceContext, permissions: readonly Permission[]) {
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    throw new ServiceError(
+      'forbidden',
+      'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      { reason: 'mfa_required' },
+    );
+  }
+  if (permissions.some((p) => can(ctx, p))) return;
+  throw new ServiceError('forbidden', `Missing permission: ${permissions.join(' or ')}`);
+}
+
 export function assertModuleEnabled(ctx: ServiceContext, moduleId: ModuleId): void {
   if (ctx.enabledModules.has(moduleId)) return;
   // Core modules are never gated — always available even if a row is missing.

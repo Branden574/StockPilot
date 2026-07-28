@@ -5,7 +5,12 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { stripSizeSuffix, stripSkuSuffix } from '@stockpilot/core';
+import {
+  APPAREL_ALPHA_SIZES,
+  stripSizeSuffix,
+  stripSkuSuffix,
+  type ApparelAlphaSize,
+} from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -23,18 +28,11 @@ import { resolveListReturnHref } from '@/lib/last-list-url';
 import { cn } from '@/lib/utils';
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
-type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = [
-  'XS',
-  'S',
-  'M',
-  'L',
-  'XL',
-  'XXL',
-  'XXXL',
-  'XXXXL',
-  'XXXXXL',
-];
+// One list, in @stockpilot/core (`inventory/apparel-sizes`), shared with the
+// item form and the native size run. See that file for why the nine canonical
+// letters are offered and the apparel_alpha scale's 14-row alias union is not.
+type SizeCode = ApparelAlphaSize;
+const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
 
 // Size parsing (stripSizeSuffix / stripSkuSuffix) now lives in @stockpilot/core
 // (`inventory/size-run`), shared with the inventory-list size-run grouping. That
@@ -57,7 +55,8 @@ export interface AddSizedVariantsButtonProps {
     unitCost: number;
     reorderPoint: number;
     reorderQuantity: number;
-    unitOfMeasure: string;
+    /** Omit to let the server take the category's counting unit. */
+    unitOfMeasure?: string;
     /**
      * Item type of the source row. Drives post-submit routing so the
      * user lands back on the same tab they started on — books go to

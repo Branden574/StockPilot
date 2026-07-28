@@ -82,6 +82,12 @@ export interface InstantModeRow {
    *  which shows ONLY these rows (the "Expected" chip). Optional —
    *  missing means unflagged, so lighter callers are unaffected. */
   awaiting_first_receipt?: boolean;
+  /** The item's stored `product_groups` id (migration 0298). Read ONLY by
+   *  `runAwarePages`, which clusters a stored group before it consults the
+   *  name regex — the same precedence the renderer uses. Optional: null/absent
+   *  is every row in every non-sports org, which keeps the legacy name
+   *  fallback and pages byte-identically to before. */
+  group_id?: string | null;
 }
 
 /** One holding line, structurally identical to the loader's
@@ -468,30 +474,53 @@ export function sortInstantRows<T extends InstantModeRow>(
  * size-run grouping is gated off for them), but they DO have Model B SKU
  * families, so they need the same never-split-a-SKU guarantee without
  * inheriting a name-based run grouping the list doesn't render.
+ *
+ * SINCE TASK 18 the run key is the STORED `group_id` when a row has one, with
+ * the name regex demoted to the fallback — the SAME precedence
+ * `groupBySizeRun` renders with (`runKey` in packages/core size-run.ts). The
+ * two must agree or pagination hands the renderer a page holding ONE member of
+ * a family: it renders flat, with no arrow, while the header on the page that
+ * holds the rest sums only what it can see. Shoe sizes are the case that
+ * proves it — "Nike Pegasus 41" x2 differing only by `variant_size` carries no
+ * token the regex recognizes, so nothing but the group id can cluster them.
  */
-export function runAwarePages<T extends { id: string; name: string; sku?: string | null }>(
+export function runAwarePages<
+  T extends { id: string; name: string; sku?: string | null; group_id?: string | null },
+>(
   sorted: readonly T[],
   pageSize: number,
   options?: { sizeRuns?: boolean },
 ): T[][] {
   const withSizeRuns = options?.sizeRuns !== false;
+  /** Stored identity first, name regex second — mirrors `runKey`. The
+   *  `group:` prefix keeps the two key spaces disjoint so a group id can never
+   *  collide with a derived style key. */
+  const runKeyOf = (r: T): string | null => {
+    const gid = (r.group_id ?? '').trim();
+    if (gid) return `group:${gid}`;
+    return sizeRunStyleKey(r.name);
+  };
   // Count keys over the whole set so lone members stay singletons.
   const runCounts = new Map<string, number>();
   const skuCounts = new Map<string, number>();
   for (const r of sorted) {
     if (withSizeRuns) {
-      const k = sizeRunStyleKey(r.name);
+      const k = runKeyOf(r);
       if (k) runCounts.set(k, (runCounts.get(k) ?? 0) + 1);
     }
     const s = (r.sku ?? '').trim();
     if (s) skuCounts.set(s, (skuCounts.get(s) ?? 0) + 1);
   }
-  // Unit key per row: SKU family first, then size run, else singleton.
+  // Unit key per row: SKU family first, then size run, else singleton. SKU
+  // still wins over a stored group for the same reason it wins over a name
+  // run — the renderer collapses same-SKU placements FIRST and marks that
+  // header non-groupable, so a unit keyed on the group would cluster rows the
+  // renderer never folds together.
   const unitKeyOf = (r: T): string | null => {
     const s = (r.sku ?? '').trim();
     if (s && (skuCounts.get(s) ?? 0) >= 2) return `sku:${s}`;
     if (!withSizeRuns) return null;
-    const k = sizeRunStyleKey(r.name);
+    const k = runKeyOf(r);
     if (k && (runCounts.get(k) ?? 0) >= 2) return `run:${k}`;
     return null;
   };

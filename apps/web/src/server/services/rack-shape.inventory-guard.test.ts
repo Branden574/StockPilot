@@ -30,8 +30,11 @@ const WRITERS = [
   'apps/web/src/components/inventory/book-custom-fields.ts',
   // the item edit form's non-book rack keys + sized-variant payload
   'apps/web/src/components/inventory/item-form.tsx',
-  // mobile "new item" screen writes custom_fields directly
-  'apps/mobile/app/item/new.tsx',
+  // the native create seam. The rack derivation moved OUT of
+  // apps/mobile/app/item/new.tsx here (Task 10): the screen now only collects
+  // strings, and this module decomposes them and composes bin_location before
+  // the payload reaches POST /api/v1/items.
+  'apps/mobile/src/lib/item-create.ts',
   // the rack's display NAME, composed from the same pair
   'apps/web/src/lib/locations/rack-name.ts',
 ] as const;

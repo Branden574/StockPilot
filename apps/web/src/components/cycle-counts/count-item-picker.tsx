@@ -30,7 +30,21 @@ interface PickerRow {
   custom_fields: Record<string, unknown> | null;
 }
 
-type PickerTab = 'product' | 'book';
+/** A product group as the picker lists it. Carries a DERIVED roll-up only —
+ *  a group owns no quantity, so nothing here is ever counted directly. */
+interface GroupRow {
+  id: string;
+  name: string;
+  brand: string | null;
+  model: string | null;
+  styleNumber: string | null;
+  team: string | null;
+  countingUnit: string;
+  variantCount: number;
+  totalQuantity: number;
+}
+
+type PickerTab = 'product' | 'book' | 'group';
 
 /**
  * Embedded item picker for "cycle count by selection" — lives INSIDE the
@@ -47,8 +61,12 @@ type PickerTab = 'product' | 'book';
  */
 export function CountItemPicker({
   warehouses,
+  sportsEnabled = false,
 }: {
   warehouses: Array<{ id: string; name: string }>;
+  /** Whether the org has the sports module. Gates the Product groups tab —
+   *  an org with no groups must see the picker exactly as it was. */
+  sportsEnabled?: boolean;
 }) {
   const picks = useCountSelection((s) => s.picks);
   const add = useCountSelection((s) => s.add);
@@ -69,6 +87,18 @@ export function CountItemPicker({
   // Aborted by the page-1 effect's cleanup so a late load-more response
   // from a PREVIOUS tab/query/warehouse can never append stale rows.
   const loadMoreAbortRef = React.useRef<AbortController | null>(null);
+
+  // ── Product groups ────────────────────────────────────────────────────────
+  // Counting BY VARIANT with per-variant expansion: ticking a group adds every
+  // one of its variant ITEMS to the same selection the other tabs write to.
+  // The group itself is never a countable row — it owns no quantity.
+  const [groups, setGroups] = React.useState<GroupRow[]>([]);
+  const [groupStatus, setGroupStatus] = React.useState<'loading' | 'ready' | 'failed'>('loading');
+  const [expandingGroup, setExpandingGroup] = React.useState<string | null>(null);
+  const [groupError, setGroupError] = React.useState<string | null>(null);
+  // groupId -> the variant item ids this picker added for it. Lets a second
+  // click take the whole group back out again, and drives the checkbox.
+  const [groupVariantIds, setGroupVariantIds] = React.useState<Record<string, string[]>>({});
 
   const buildUrl = React.useCallback(
     (offset: number): string => {
@@ -92,6 +122,7 @@ export function CountItemPicker({
   // cancels the in-flight request on rapid typing; the trailing 250ms
   // collapses a burst of keystrokes into one request.
   React.useEffect(() => {
+    if (tab === 'group') return;
     const ac = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle: mark the list stale the instant a filter changes
     setStatus('loading');
@@ -118,7 +149,79 @@ export function CountItemPicker({
       // it so its stale rows can never append onto the fresh list.
       loadMoreAbortRef.current?.abort();
     };
-  }, [buildUrl]);
+  }, [buildUrl, tab]);
+
+  // Group list. Same debounce + abort discipline as the item list.
+  React.useEffect(() => {
+    if (tab !== 'group') return;
+    const ac = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle: mark the list stale the instant the query changes
+    setGroupStatus('loading');
+    const t = setTimeout(async () => {
+      try {
+        const p = new URLSearchParams({ limit: String(PAGE_SIZE) });
+        const needle = q.trim();
+        if (needle) p.set('q', needle);
+        const res = await fetch(`/api/v1/product-groups?${p.toString()}`, { signal: ac.signal });
+        if (!res.ok) throw new Error(`groups failed (${res.status})`);
+        const body = (await res.json()) as { groups: GroupRow[] };
+        setGroups(body.groups ?? []);
+        setGroupStatus('ready');
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setGroups([]);
+        setGroupStatus('failed');
+      }
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [tab, q]);
+
+  async function toggleGroup(group: GroupRow) {
+    const already = groupVariantIds[group.id];
+    if (already) {
+      for (const id of already) remove(id);
+      setGroupVariantIds((m) => {
+        const next = { ...m };
+        delete next[group.id];
+        return next;
+      });
+      return;
+    }
+    setExpandingGroup(group.id);
+    setGroupError(null);
+    try {
+      const res = await fetch(`/api/v1/product-groups/${group.id}/variants`);
+      if (!res.ok) throw new Error(`variants failed (${res.status})`);
+      const body = (await res.json()) as {
+        variants: Array<{ id: string; sku: string; name: string; label: string | null }>;
+      };
+      const variants = body.variants ?? [];
+      if (variants.length === 0) {
+        // Never silently tick a group that would add nothing — a group with
+        // no active variants is a real state and the counter has to see it.
+        setGroupError(`${group.name} has no active variants to count.`);
+        return;
+      }
+      add(
+        variants.map((v) => ({
+          id: v.id,
+          sku: v.sku,
+          // Name the VARIANT in the confirm list, so six identical-looking
+          // rows are distinguishable before the count is even started.
+          name: v.label ? `${v.name} · ${v.label}` : v.name,
+          itemType: 'product' as const,
+        })),
+      );
+      setGroupVariantIds((m) => ({ ...m, [group.id]: variants.map((v) => v.id) }));
+    } catch {
+      setGroupError(`Couldn't load the variants for ${group.name}. Try again.`);
+    } finally {
+      setExpandingGroup(null);
+    }
+  }
 
   async function loadMore() {
     if (loadingMore || status !== 'ready') return;
@@ -177,6 +280,11 @@ export function CountItemPicker({
         <PickerTabButton active={tab === 'book'} onClick={() => setTab('book')}>
           Books
         </PickerTabButton>
+        {sportsEnabled && (
+          <PickerTabButton active={tab === 'group'} onClick={() => setTab('group')}>
+            Product groups
+          </PickerTabButton>
+        )}
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -188,13 +296,15 @@ export function CountItemPicker({
             placeholder={
               tab === 'book'
                 ? 'Search books by title, SKU, barcode…'
-                : 'Search items by name, SKU, barcode…'
+                : tab === 'group'
+                  ? 'Search groups by name, brand, model, style, team…'
+                  : 'Search items by name, SKU, barcode…'
             }
             className="pl-8"
             aria-label="Search items to count"
           />
         </div>
-        {warehouses.length > 0 && (
+        {warehouses.length > 0 && tab !== 'group' && (
           <Select value={warehouseId} onValueChange={setWarehouseId}>
             <SelectTrigger className="sm:w-44" aria-label="Filter by warehouse">
               <SelectValue />
@@ -211,6 +321,17 @@ export function CountItemPicker({
         )}
       </div>
 
+      {tab === 'group' ? (
+        <GroupList
+          groups={groups}
+          status={groupStatus}
+          query={q}
+          expandedIds={groupVariantIds}
+          expanding={expandingGroup}
+          error={groupError}
+          onToggle={toggleGroup}
+        />
+      ) : (
       <div className="border-border overflow-hidden rounded-md border">
         {status === 'loading' ? (
           <div className="text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm">
@@ -297,6 +418,7 @@ export function CountItemPicker({
           </ul>
         )}
       </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="text-muted-foreground tabular-nums" data-testid="picker-selected-bar">
@@ -321,6 +443,110 @@ export function CountItemPicker({
           or pick from the full Inventory page
         </Link>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Product groups tab.
+ *
+ * Ticking a group does NOT create a group-shaped count line — it expands the
+ * group into its variants and adds those items to the same selection every
+ * other tab writes to. That is the whole design: `cycle_count_lines` FKs an
+ * item, a variant IS an item, and a group owns no quantity to count.
+ */
+function GroupList({
+  groups,
+  status,
+  query,
+  expandedIds,
+  expanding,
+  error,
+  onToggle,
+}: {
+  groups: GroupRow[];
+  status: 'loading' | 'ready' | 'failed';
+  query: string;
+  expandedIds: Record<string, string[]>;
+  expanding: string | null;
+  error: string | null;
+  onToggle: (g: GroupRow) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="border-border overflow-hidden rounded-md border">
+        {status === 'loading' ? (
+          <div className="text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading product groups…
+          </div>
+        ) : status === 'failed' ? (
+          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
+            Couldn&apos;t load product groups. Check your connection and try again.
+          </p>
+        ) : groups.length === 0 ? (
+          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
+            {query.trim()
+              ? `No product groups match “${query.trim()}”.`
+              : 'No product groups yet.'}
+          </p>
+        ) : (
+          <ul className="divide-border max-h-80 divide-y overflow-y-auto">
+            {groups.map((g) => {
+              const checked = Boolean(expandedIds[g.id]);
+              const busy = expanding === g.id;
+              const detail = [g.brand, g.model, g.styleNumber, g.team]
+                .filter(Boolean)
+                .join(' · ');
+              return (
+                <li key={g.id}>
+                  <label
+                    className={cn(
+                      'hover:bg-muted/40 flex cursor-pointer items-center gap-3 px-3 py-2',
+                      checked && 'bg-muted/30',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={busy}
+                      onChange={() => onToggle(g)}
+                      aria-label={`Count every variant of ${g.name}`}
+                      className="border-border text-primary focus:ring-primary h-4 w-4 shrink-0 rounded"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{g.name}</span>
+                      {detail ? (
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {detail}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                      {busy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        // The roll-up is DERIVED at read time. The group holds
+                        // no stored total and never will.
+                        `${g.variantCount} variant${g.variantCount === 1 ? '' : 's'} · ${g.totalQuantity} ${g.countingUnit}`
+                      )}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      {error ? (
+        <p className="text-destructive text-xs" role="alert">
+          {error}
+        </p>
+      ) : (
+        <p className="text-muted-foreground text-xs">
+          Ticking a group adds every one of its variants as its own count line —
+          each size is counted separately.
+        </p>
+      )}
     </div>
   );
 }

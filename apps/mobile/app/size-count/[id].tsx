@@ -14,17 +14,26 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { api } from '@/lib/api';
 import { enqueue } from '@/lib/queue';
+import { resolveSizeChips } from '@/lib/size-count-chips';
 import { syncNow } from '@/lib/sync';
 import { radius, space, theme } from '@/lib/theme';
-
-// The nine sizes the feature targets (feature spec vocabulary).
-const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'] as const;
 
 interface SessionInfo {
   id: string;
   status: string;
   style_key: string | null;
+  product_group_id: string | null;
   box_id: string | null;
+}
+
+/** The counted product group, when the session names one (migration 0302).
+ *  `sizes` is the group's own size scale — the chips come from here, so a
+ *  shoe run can tally 9, 9.5 and 10 instead of nine hardcoded garment sizes. */
+interface GroupInfo {
+  id: string;
+  name: string;
+  countingUnit: string;
+  sizes: string[];
 }
 
 type Tally = Record<string, number>;
@@ -33,6 +42,7 @@ export default function SizeCountScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [session, setSession] = React.useState<SessionInfo | null>(null);
+  const [group, setGroup] = React.useState<GroupInfo | null>(null);
   const [tally, setTally] = React.useState<Tally>({});
   const [loading, setLoading] = React.useState(true);
   const [completing, setCompleting] = React.useState(false);
@@ -48,9 +58,11 @@ export default function SizeCountScreen() {
         const res = await api<{
           session: SessionInfo;
           tally: Array<{ size: string; quantity: number }>;
+          group: GroupInfo | null;
         }>(`/api/v1/size-counts/${id}`);
         if (cancelled) return;
         setSession(res.session);
+        setGroup(res.group ?? null);
         const seeded: Tally = {};
         for (const t of res.tally) seeded[t.size] = t.quantity;
         setTally(seeded);
@@ -70,6 +82,19 @@ export default function SizeCountScreen() {
   const total = React.useMemo(
     () => Object.values(tally).reduce((a, b) => a + b, 0),
     [tally],
+  );
+  // Chips come from the counted group's size scale; an ungrouped session keeps
+  // the legacy nine, and any size already carrying a tally is always shown.
+  //
+  // NOT filtered on qty !== 0 (Task 17 review fix): `tally` keys are never
+  // deleted (count() always spreads `{ ...t, [size]: next }`, even when
+  // `next` is 0), so a key's mere presence means "tapped at least once this
+  // session". Filtering on qty !== 0 made an off-scale chip vanish the moment
+  // it was decremented back to zero — a session-scoped miscount recoverable
+  // only by re-adding a chip that no longer existed to tap.
+  const sizes = React.useMemo(
+    () => resolveSizeChips({ groupSizes: group?.sizes, talliedSizes: Object.keys(tally) }),
+    [group?.sizes, tally],
   );
 
   const count = React.useCallback(
@@ -145,9 +170,10 @@ export default function SizeCountScreen() {
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Size count</Text>
-            <Text style={styles.subtitle}>
+            <Text style={styles.subtitle} numberOfLines={2}>
+              {group?.name ? `${group.name} · ` : ''}
               {session?.box_id ? `${session.box_id} · ` : ''}
-              {total} counted
+              {total} counted{group?.countingUnit ? ` ${group.countingUnit}` : ''}
               {isOpen ? '' : ' · completed'}
             </Text>
           </View>
@@ -157,7 +183,7 @@ export default function SizeCountScreen() {
 
       <ScrollView contentContainerStyle={styles.body}>
         <View style={styles.grid}>
-          {SIZES.map((size) => (
+          {sizes.map((size) => (
             <Pressable
               key={size}
               onPress={() => count(size, 1)}

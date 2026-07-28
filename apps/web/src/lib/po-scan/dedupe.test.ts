@@ -15,6 +15,19 @@ const line = (p: Partial<Line>): Line => ({
   lineTotal: 0,
   lineType: 'inventory',
   confidence: 0.9,
+  // Sports variant fields (Task 13). Empty is the "the document said
+  // nothing" value — a book PO exercises the dedupe with all of them blank.
+  size: '',
+  sizeSystem: '',
+  width: '',
+  colorway: '',
+  jerseyNumber: '',
+  playerName: '',
+  groupHint: '',
+  serialNumber: '',
+  // 0 = the model stated no field-mapping confidence. Never null: null reads
+  // as "nothing to confirm" and switches the confirmation gate off.
+  mappingConfidence: 0,
   ...p,
 });
 

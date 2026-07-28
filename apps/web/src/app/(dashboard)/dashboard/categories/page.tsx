@@ -3,9 +3,10 @@ import { Suspense } from 'react';
 import { CategoriesManager } from '@/components/categories/categories-manager';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { CategoriesService } from '@/server/services/categories';
 
-import { can } from '@stockpilot/core';
+import { can, type SubcategoryTrackingProfile, type TrackingMode } from '@stockpilot/core';
 
 interface CategoriesPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -47,13 +48,22 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
   // Public-catalog visibility (P3): the per-category Public / Internal-only
   // toggle is gated on public_links:manage (the server action re-asserts).
   const canManagePublicVisibility = can(ctx, 'public_links:manage');
-  const rows = await svc.list({ includeArchived: isArchivedView });
+  // Sports Task 12: subcategory + tracking-profile administration is gated on
+  // the sports module AND sports:manage. The server re-asserts both on every
+  // write (CategoriesService.assertSportsWriteAllowed / setupSportsDefaults).
+  const [{ enabled: sportsEnabled }, rows] = await Promise.all([
+    checkModuleAccess('sports'),
+    svc.list({ includeArchived: isArchivedView }),
+  ]);
+  const canManageSports = can(ctx, 'sports:manage');
 
   return (
     <CategoriesManager
       view={isArchivedView ? 'archived' : 'active'}
       canManage={canManage}
       canManagePublicVisibility={canManagePublicVisibility}
+      sportsEnabled={sportsEnabled}
+      canManageSports={canManageSports}
       initial={rows.map((r) => ({
         id: r.id as string,
         name: r.name as string,
@@ -64,6 +74,10 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
           ((r.public_visibility as string | null) ?? 'public') === 'internal_only'
             ? ('internal_only' as const)
             : ('public' as const),
+        parent_id: (r.parent_id as string | null) ?? null,
+        tracking_mode: (r.tracking_mode as TrackingMode | null) ?? null,
+        sports_subcategory_key: (r.sports_subcategory_key as string | null) ?? null,
+        tracking_profile: (r.tracking_profile as SubcategoryTrackingProfile | null) ?? null,
       }))}
     />
   );

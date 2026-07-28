@@ -26,6 +26,7 @@ import { PoAccessDenied } from '@/components/po/po-access-denied';
 import { requireOrgContext } from '@/lib/auth/session';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { loadSizeRunGroups } from '@/server/services/size-run-display';
 import { LocationsService } from '@/server/services/locations';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
@@ -116,11 +117,25 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       quantityReceived: l.quantity_received as number,
       unitCost: l.unit_cost as number,
       lineTotal: l.line_total as number,
-      trackingType: (item?.tracking_type ?? 'none') as 'none' | 'lot' | 'serial',
+      trackingType: (item?.tracking_type ?? 'none') as
+        | 'none'
+        | 'lot'
+        | 'serial'
+        | 'serial_optional',
+      // Sports variant identity (0298) — NULL on every line in every
+      // non-sports org, which keeps the receive dialog's flat renderer the
+      // default path.
+      groupId: item?.group_id ?? null,
+      variantSize: item?.variant_size ?? null,
       imageUrl: (l.imageUrl as string | null | undefined) ?? null,
       previewUrl: (l.previewUrl as string | null | undefined) ?? null,
     };
   });
+
+  // Size-run receiving (Task 16): resolve the product groups this PO's lines
+  // belong to, so the receive dialog can lay a run out as one block with
+  // per-size ordered/received. No group ids (every non-sports PO) = no query.
+  const receiveGroups = await loadSizeRunGroups(lineRows.map((l) => l.groupId));
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -204,6 +219,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 poNumber={po.po_number as string}
                 warehouseId={warehouseId}
                 lines={lineRows}
+                groups={receiveGroups}
               />
             )}
           </CardHeader>

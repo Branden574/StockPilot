@@ -19,6 +19,7 @@ vi.mock('@/server/actions/po-imports', () => ({
   parsePoImportAction: vi.fn(),
   createItemsFromPoLinesAction: vi.fn(),
   findDuplicatesForPoLinesAction: vi.fn(),
+  resolvePoImportLineResultsAction: vi.fn(async () => ({ ok: true, data: {} })),
 }));
 
 import { PoImportDetail, type LineWithSuggestion } from './po-import-detail';
@@ -73,6 +74,20 @@ const SUGGESTED_LINE: LineWithSuggestion = {
   match_confidence: null,
   extraction_confidence: null,
   exception_reason: null,
+  // Sports variant columns (0301) — null on a non-sports import, which is
+  // every line these tests exercise.
+  variant_size: null,
+  variant_size_original: null,
+  variant_size_system: null,
+  variant_width: null,
+  variant_fit: null,
+  variant_color: null,
+  jersey_number: null,
+  player_name: null,
+  group_hint: null,
+  serial_hint: null,
+  suggested_group_id: null,
+  mapping_confidence: null,
 };
 
 type DetailItems = ComponentProps<typeof PoImportDetail>['items'];

@@ -18,7 +18,7 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { can, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology, type TrackingMode } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { NEW_ITEM_TOUR } from '@/lib/onboarding/tours';
 
@@ -76,6 +76,7 @@ export default async function NewItemPage() {
     warehouseCharters,
     recent,
     customFieldDefs,
+    sizeScaleValueRows,
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
@@ -90,9 +91,27 @@ export default async function NewItemPage() {
     // has its own page + scoped lookup).
     inventorySvc.getRecentDefaults('product'),
     customFieldsSvc.listDefinitions('item'),
+    // Sports Task 11: every size_scale_values row this user can see (system
+    // scales + this org's own, per RLS) — a small, cheap read (a few hundred
+    // rows at most) grouped client-side into the form's `sizeScales` prop.
+    supabase
+      .from('size_scale_values')
+      .select('size_scale_id, value, is_half')
+      .order('size_scale_id', { ascending: true })
+      .order('sort_order', { ascending: true }),
   ]);
 
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  const { enabled: sportsEnabled } = await checkModuleAccess('sports');
+
+  const sizeScales: Record<string, Array<{ value: string; isHalf: boolean }>> = {};
+  for (const row of sizeScaleValueRows.data ?? []) {
+    const key = row.size_scale_id as string;
+    (sizeScales[key] ??= []).push({
+      value: row.value as string,
+      isHalf: Boolean(row.is_half),
+    });
+  }
 
   // Resolve effective defaults. Precedence:
   //   1. forcedWarehouseId — warehouse-scoped users are locked here.
@@ -155,7 +174,17 @@ export default async function NewItemPage() {
               id: c.id as string,
               name: c.name as string,
               supports_sizes: Boolean(c.supports_sizes),
+              parent_id: (c.parent_id as string | null) ?? null,
+              tracking_mode: (c.tracking_mode as TrackingMode | null) ?? null,
+              sports_subcategory_key: (c.sports_subcategory_key as string | null) ?? null,
+              default_unit_of_measure: (c.default_unit_of_measure as string | null) ?? null,
+              size_scale_id: (c.size_scale_id as string | null) ?? null,
             }))}
+            sizeScales={sizeScales}
+            sportsEnabled={sportsEnabled}
+            // Gates the tracking-mode override control only. The server
+            // re-checks `sports:manage` on every save (resolveModeOverride).
+            canManageSports={can(ctx, 'sports:manage')}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}

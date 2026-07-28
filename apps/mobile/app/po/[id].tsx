@@ -14,8 +14,19 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import type { CountingUnit, SizeScaleValueOrder } from '@stockpilot/core';
+
 import { PoAttachments } from '@/components/po-attachments';
 import { useAuth } from '@/lib/auth-context';
+import { useEnabledModules } from '@/lib/enabled-modules';
+import {
+  buildPoBlocks,
+  poOutstanding,
+  poRunSubtotal,
+  poRunSubtotalLabel,
+  poSizeLabel,
+  type PoRunGroup,
+} from '@/lib/po-size-run';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
@@ -26,6 +37,9 @@ interface PoLine {
   quantity_ordered: number;
   quantity_received: number;
   unit_cost: number;
+  /** Sports variant identity (0298). NULL on every line in every non-sports org. */
+  groupId: string | null;
+  variantSize: string | null;
   item: {
     id: string;
     sku: string;
@@ -66,9 +80,13 @@ export default function PoReceiveScreen() {
   const { orgId } = useOrg();
   const [header, setHeader] = React.useState<PoHeader | null>(null);
   const [lines, setLines] = React.useState<PoLine[]>([]);
+  const [groups, setGroups] = React.useState<Record<string, PoRunGroup>>({});
   const [receipts, setReceipts] = React.useState<ReceiptHistoryItem[]>([]);
   const [draft, setDraft] = React.useState<Record<string, DraftLine>>({});
   const [loading, setLoading] = React.useState(true);
+  /** A READ that failed, surfaced in place of the screen. Never a silent empty
+   *  list — see the fail-loud note in `load`. */
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [posting, setPosting] = React.useState(false);
   // Synchronous re-entry guard: blocks a double-tap from firing a second
   // post before React re-renders the disabled button (each post would
@@ -83,10 +101,23 @@ export default function PoReceiveScreen() {
   const [highlightLineId, setHighlightLineId] = React.useState<string | null>(null);
 
 
+  const enabledModules = useEnabledModules();
+  const sportsEnabled = enabledModules.has('sports');
+  // Read via a ref inside `load`, not as a useCallback dependency (review
+  // fix). `useEnabledModules()` starts with an empty set and flips this
+  // boolean once its async fetch resolves — depending on the VALUE gave
+  // `load` a new identity on that flip alone, re-ran the mount effect below,
+  // and reseeded `draft`, wiping any receiving quantity the user had already
+  // typed while modules were still loading. The ref always reads current
+  // without making a module-list refresh a reason to reload.
+  const sportsEnabledRef = React.useRef(sportsEnabled);
+  sportsEnabledRef.current = sportsEnabled;
+
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
     setLoading(true);
-    const [{ data: po }, { data: lineRows }] = await Promise.all([
+    setLoadError(null);
+    const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
         .select(
@@ -101,10 +132,27 @@ export default function PoReceiveScreen() {
         .from('purchase_order_items')
         .select(
           `id, item_id, quantity_ordered, quantity_received, unit_cost,
-           item:inventory_items!item_id (id, sku, name, barcode)`,
+           item:inventory_items!item_id (id, sku, name, barcode, group_id, variant_size)`,
         )
         .eq('purchase_order_id', id),
     ]);
+
+    // FAIL LOUD (release-order rule). Both reads were destructured for `data`
+    // alone, so any error rendered an EMPTY receiving screen that said "No lines
+    // on this PO." — indistinguishable from a PO that genuinely has none. That
+    // is not hypothetical: this branch WIDENED the line read with 0298's
+    // `group_id` / `variant_size`, and against a database that has not taken
+    // 0294+ yet PostgREST refuses the whole select. A receiving screen showing
+    // nothing is how stock goes uncounted, so it must say what happened instead.
+    if (poErr || linesErr) {
+      setLoadError(
+        `${(poErr ?? linesErr)!.message}. If the app was just updated, the server may still be catching up — pull to retry.`,
+      );
+      setLines([]);
+      setGroups({});
+      setLoading(false);
+      return;
+    }
 
     if (po) {
       const r = po as Record<string, unknown>;
@@ -121,12 +169,17 @@ export default function PoReceiveScreen() {
       });
     }
 
+    type ItemEmbed = {
+      id: string;
+      sku: string;
+      name: string;
+      barcode: string | null;
+      group_id?: string | null;
+      variant_size?: string | null;
+    };
     const flatLines: PoLine[] = (lineRows ?? []).map((row) => {
       const r = row as Record<string, unknown>;
-      const itemField = r.item as
-        | { id: string; sku: string; name: string; barcode: string | null }
-        | { id: string; sku: string; name: string; barcode: string | null }[]
-        | null;
+      const itemField = r.item as ItemEmbed | ItemEmbed[] | null;
       const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
       return {
         id: r.id as string,
@@ -134,10 +187,77 @@ export default function PoReceiveScreen() {
         quantity_ordered: Number(r.quantity_ordered) || 0,
         quantity_received: Number(r.quantity_received) || 0,
         unit_cost: Number(r.unit_cost) || 0,
-        item,
+        groupId: item?.group_id ?? null,
+        variantSize: item?.variant_size ?? null,
+        item: item
+          ? { id: item.id, sku: item.sku, name: item.name, barcode: item.barcode }
+          : null,
       };
     });
     setLines(flatLines);
+
+    // Size-run grouping (Task 16), mirroring the web receive dialog. Only when
+    // the org has the sports module AND a line actually carries a group — for
+    // every other PO this is zero extra queries and the flat cards below stay
+    // exactly as they are.
+    const groupIds = Array.from(
+      new Set(flatLines.map((l) => l.groupId).filter((v): v is string => Boolean(v))),
+    );
+    if (groupIds.length > 0 && sportsEnabledRef.current) {
+      const { data: groupRows, error: groupErr } = await supabase
+        .from('product_groups')
+        .select('id, name, default_counting_unit, size_scale_id')
+        .eq('organization_id', orgId)
+        .in('id', groupIds)
+        .is('deleted_at', null);
+
+      // Degrade to flat cards on a read failure rather than blocking receiving
+      // — the grouping is presentation, the receipt is the job.
+      if (groupErr) {
+        console.warn('[po] size-run group lookup failed', groupErr.message);
+        setGroups({});
+      } else {
+        const rows = (groupRows ?? []) as Record<string, unknown>[];
+        const scaleIds = Array.from(
+          new Set(
+            rows
+              .map((g) => g.size_scale_id as string | null)
+              .filter((v): v is string => Boolean(v)),
+          ),
+        );
+        const valuesByScale = new Map<string, SizeScaleValueOrder[]>();
+        if (scaleIds.length > 0) {
+          const { data: valueRows } = await supabase
+            .from('size_scale_values')
+            .select('size_scale_id, value, normalized, sort_order')
+            .in('size_scale_id', scaleIds)
+            .order('sort_order', { ascending: true });
+          for (const v of (valueRows ?? []) as Record<string, unknown>[]) {
+            const key = v.size_scale_id as string;
+            const entry: SizeScaleValueOrder = {
+              value: v.value as string,
+              normalized: (v.normalized as string | null) ?? null,
+              sortOrder: Number(v.sort_order),
+            };
+            const arr = valuesByScale.get(key);
+            if (arr) arr.push(entry);
+            else valuesByScale.set(key, [entry]);
+          }
+        }
+        const next: Record<string, PoRunGroup> = {};
+        for (const g of rows) {
+          const scaleId = g.size_scale_id as string | null;
+          next[g.id as string] = {
+            name: g.name as string,
+            countingUnit: g.default_counting_unit as CountingUnit,
+            sizeValues: scaleId ? (valuesByScale.get(scaleId) ?? []) : [],
+          };
+        }
+        setGroups(next);
+      }
+    } else {
+      setGroups({});
+    }
 
     // Seed draft with empty values; user fills in only the lines they
     // actually receive in this session.
@@ -213,11 +333,18 @@ export default function PoReceiveScreen() {
     );
 
     setLoading(false);
+    // sportsEnabled deliberately excluded — see sportsEnabledRef above. Only
+    // the PO id / org context re-key the draft.
   }, [id, orgId]);
 
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  // Runs + loose rows, through the SAME core rule the web dialog uses. With no
+  // groups (every non-sports PO) every block is loose and the flat cards below
+  // render exactly as they always have.
+  const blocks = React.useMemo(() => buildPoBlocks(lines, groups), [lines, groups]);
 
   function setField(lineId: string, field: keyof DraftLine, value: string) {
     setDraft((m) => ({
@@ -269,10 +396,12 @@ export default function PoReceiveScreen() {
       return;
     }
 
-    // App-side over-receive guard: the post_receipt_v2 RPC also hard-blocks this
-    // (raises over_receive_blocked) and refuses an already-'received' PO, but we
-    // catch it here to show a clear message instead of a raw DB error — so you
-    // can't over-receive chromebooks you've already fully received.
+    // App-side over-receive guard. NOTE: the RPC no longer blocks over-receipt
+    // — migration 0285 (owner decision 2026-07-21) removed the
+    // over_receive_blocked guard because vendors legitimately over-ship, and
+    // the web receive dialog allows it. This check is therefore MOBILE-ONLY
+    // policy, not a mirror of a server rule. The RPC still refuses an
+    // already-'received' PO (po_already_closed).
     for (const l of lines) {
       const entered = Number((draft[l.id] ?? { received: '' }).received) || 0;
       const remaining = Math.max(0, l.quantity_ordered - l.quantity_received);
@@ -358,6 +487,17 @@ export default function PoReceiveScreen() {
         <View style={styles.center}>
           <ActivityIndicator color={theme.primary} />
         </View>
+      ) : loadError ? (
+        <View style={styles.center}>
+          <Text style={styles.errorTitle}>Could not load this PO</Text>
+          <Text style={styles.errorBody}>{loadError}</Text>
+          <Pressable
+            onPress={() => void load()}
+            style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.scanBtnText}>Try again</Text>
+          </Pressable>
+        </View>
       ) : (
         <>
           <View style={styles.headerBar}>
@@ -382,7 +522,29 @@ export default function PoReceiveScreen() {
             {lines.length === 0 ? (
               <Text style={styles.muted}>No lines on this PO.</Text>
             ) : (
-              lines.map((l) => {
+              blocks.map((block) => {
+                if (block.kind === 'run') {
+                  const group = groups[block.groupId];
+                  if (group) {
+                    return (
+                      <SizeRunCard
+                        key={block.groupId}
+                        group={group}
+                        lines={block.lines}
+                        draft={draft}
+                        highlightLineId={highlightLineId}
+                        onChangeReceived={(lineId, v) => setField(lineId, 'received', v)}
+                        onReceiveAll={() => {
+                          for (const l of block.lines) {
+                            setField(l.id, 'received', String(poOutstanding(l)));
+                            setField(l.id, 'rejected', '0');
+                          }
+                        }}
+                      />
+                    );
+                  }
+                }
+                return block.lines.map((l) => {
                 const remaining = Math.max(
                   0,
                   l.quantity_ordered - l.quantity_received,
@@ -446,6 +608,7 @@ export default function PoReceiveScreen() {
                     )}
                   </View>
                 );
+                });
               })
             )}
 
@@ -532,6 +695,101 @@ export default function PoReceiveScreen() {
   );
 }
 
+/**
+ * One size run: a heading, one row per size in scale order, and a subtotal in
+ * the group's own counting unit — the native mirror of the web
+ * `SizeRunReceiveGrid`.
+ *
+ * Each size still posts as its own `p_lines` entry, so `post_receipt_v2` sees
+ * exactly what it sees today. Mobile never sends `lots` or `serials`, which is
+ * fine for quantity variants and now also for `serial_optional` (0295/0296);
+ * an item that is strictly `serial` still has to be received on the web, and
+ * that is unchanged by this layout.
+ */
+function SizeRunCard({
+  group,
+  lines,
+  draft,
+  highlightLineId,
+  onChangeReceived,
+  onReceiveAll,
+}: {
+  group: PoRunGroup;
+  lines: PoLine[];
+  draft: Record<string, DraftLine>;
+  highlightLineId: string | null;
+  onChangeReceived: (lineId: string, value: string) => void;
+  onReceiveAll: () => void;
+}) {
+  const received = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const l of lines) m[l.id] = draft[l.id]?.received ?? '';
+    return m;
+  }, [lines, draft]);
+  const subtotal = poRunSubtotal(lines, received);
+  const totalOrdered = lines.reduce((s, l) => s + l.quantity_ordered, 0);
+  const anyOutstanding = lines.some((l) => poOutstanding(l) > 0);
+
+  return (
+    <View style={styles.runCard}>
+      <View style={styles.runHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.runName} numberOfLines={2}>
+            {group.name}
+          </Text>
+          <Text style={styles.runMeta}>
+            Size run · {lines.length} sizes · {totalOrdered} ordered
+          </Text>
+        </View>
+        {anyOutstanding && (
+          <Pressable
+            onPress={onReceiveAll}
+            style={({ pressed }) => [styles.allBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.allBtnText}>All</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {lines.map((l) => {
+        const outstanding = poOutstanding(l);
+        const value = draft[l.id]?.received ?? '';
+        return (
+          <View
+            key={l.id}
+            style={[
+              styles.runRow,
+              highlightLineId === l.id && { borderColor: theme.success, borderWidth: 1 },
+            ]}
+          >
+            <Text style={styles.runSize}>{poSizeLabel(l.variantSize)}</Text>
+            <Text style={styles.runOrdered}>
+              {l.quantity_ordered} ord · {l.quantity_received} rec
+            </Text>
+            {outstanding === 0 ? (
+              <Text style={styles.runDone}>✓ Full</Text>
+            ) : (
+              <TextInput
+                value={value}
+                onChangeText={(v) => onChangeReceived(l.id, v)}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                placeholderTextColor={theme.textMuted}
+                style={styles.runInput}
+                accessibilityLabel={`Receiving size ${poSizeLabel(l.variantSize)}`}
+              />
+            )}
+          </View>
+        );
+      })}
+
+      <Text style={styles.runSubtotal}>
+        {poRunSubtotalLabel(subtotal, group.countingUnit)}
+      </Text>
+    </View>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -590,6 +848,20 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 20, fontWeight: '700', fontFamily: 'Menlo' },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   muted: { color: theme.textMuted, padding: space.lg, textAlign: 'center' },
+  errorTitle: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: space.xs,
+    textAlign: 'center',
+  },
+  errorBody: {
+    color: theme.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: space.lg,
+    marginBottom: space.md,
+  },
   fullyReceived: {
     color: theme.success,
     fontSize: 13,
@@ -618,6 +890,60 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     padding: space.md,
     marginBottom: space.sm,
+  },
+  runCard: {
+    backgroundColor: theme.card,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    padding: space.md,
+    marginBottom: space.sm,
+  },
+  runHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginBottom: space.sm,
+  },
+  runName: { color: theme.text, fontSize: 15, fontWeight: '700' },
+  runMeta: { color: theme.textMuted, fontSize: 11, marginTop: 2 },
+  runRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: space.xs,
+    borderRadius: radius.sm,
+  },
+  runSize: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    width: 64,
+  },
+  runOrdered: { color: theme.textMuted, fontSize: 11, flex: 1 },
+  runDone: { color: theme.success, fontSize: 12, fontWeight: '700', width: 96, textAlign: 'right' },
+  runInput: {
+    backgroundColor: theme.bgElevated,
+    color: theme.text,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    fontSize: 16,
+    fontVariant: ['tabular-nums'],
+    width: 96,
+    textAlign: 'right',
+  },
+  runSubtotal: {
+    color: theme.text,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: space.sm,
+    paddingTop: space.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
   },
   lineName: { color: theme.text, fontSize: 15, fontWeight: '600' },
   lineMeta: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo', marginTop: 2 },

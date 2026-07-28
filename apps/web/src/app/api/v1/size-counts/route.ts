@@ -14,7 +14,11 @@ const bodySchema = z.object({
   warehouseId: z.string().uuid().nullable().optional(),
   purchaseOrderId: z.string().uuid().nullable().optional(),
   supplierId: z.string().uuid().nullable().optional(),
+  // styleKey is the pre-0302 display-only key, kept for orgs with no sports
+  // module. productGroupId is the durable identity that replaces it — a rename
+  // cannot detach the count from the product it counted.
   styleKey: z.string().max(200).nullable().optional(),
+  productGroupId: z.string().uuid().nullable().optional(),
   boxId: z.string().max(200).nullable().optional(),
   expectedQuantity: z.coerce.number().int().min(0).max(1_000_000).nullable().optional(),
   deviceId: z.string().max(200).nullable().optional(),

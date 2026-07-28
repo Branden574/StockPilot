@@ -273,7 +273,7 @@ interface InventoryListRowBase {
   primary_location_id: string | null;
   warehouse_id: string | null;
   charter_id: string | null;
-  tracking_type: 'none' | 'lot' | 'serial';
+  tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
   item_type: 'product' | 'book' | 'asset' | 'consumable';
   /** True only when the SYSTEM auto-archived this item on zero stock
    *  (migration 0266) — backs the Archived view's "Auto-archived"
@@ -285,6 +285,15 @@ interface InventoryListRowBase {
    *  client-side "Expected" chip view + count derive locally. */
   awaiting_first_receipt: boolean;
   custom_fields: Record<string, unknown> | null;
+  /** Sports (0298). NULL for every ungrouped item, which is every item in
+   *  every org until an opt-in link is made — no heuristic backfill writes
+   *  these. Carried on the list row so a grouped view can badge variants
+   *  without a second round trip. */
+  group_id: string | null;
+  variant_size: string | null;
+  variant_size_system: string | null;
+  jersey_number: string | null;
+  variant_key: string | null;
   created_at: string;
   updated_at: string;
   staged_quantity: number;
@@ -419,12 +428,13 @@ async function loadInventoryRows(
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryListRowsPayload> {
-  // v4: rows now EXCLUDE items awaiting first receipt (migration 0277)
-  // and the payload gained expectedCount — bumped so a stale v3 entry
-  // (flagged rows included, no count) can't serve for a TTL post-deploy.
-  // (v3: rows+placement split out of the bundled v2 payload.) One-time
+  // v5: the row shape gained the five variant columns (group_id, variant_size,
+  // variant_size_system, variant_key, jersey_number) — a stale v4 entry would
+  // serve rows missing them for a whole TTL after deploy.
+  // (v4: rows EXCLUDE items awaiting first receipt (0277) + expectedCount.
+  //  v3: rows+placement split out of the bundled v2 payload.) One-time
   // cold recompute per org — the */30 prewarm cron covers hot orgs.
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v4'], {
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v5'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -453,7 +463,7 @@ function adminReadContext(organizationId: string): ServiceContext {
 // Verbatim copy of InventoryService.list()'s select list so cached rows
 // carry exactly the columns the live path ships.
 const ITEM_SELECT_COLUMNS =
-  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, created_at, updated_at, created_by, updated_by';
+  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by';
 
 async function loadInventoryRowsUncached(
   organizationId: string,

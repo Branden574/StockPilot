@@ -24,14 +24,35 @@ import {
   type CreateItemsFromPoLinesInput,
   type DuplicateCandidate,
 } from './po-imports-lines';
+import {
+  asSizeSystem,
+  resolveLinesForReview,
+  toVariantLine,
+  type LineResolution,
+  type PoImportVariantLine,
+  type ResolveLineVariantDeps,
+} from './po-imports-variants';
+import { ProductGroupsService } from './product-groups';
+import {
+  resolveTrackingProfile,
+  type ResolvedTrackingProfile,
+  type TrackingProfileCache,
+} from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import {
+  flaggedSportsMappings,
+  lineNeedsMappingConfirmation,
+  meaningKeepsFlaggedValues,
+} from '@stockpilot/core';
+
 import type {
   ApprovePoImportInput,
   CanonicalPo,
+  ConfirmLineMappingsInput,
   PoImportLineType,
   PoImportMatchStatus,
   PoImportStatus,
@@ -92,6 +113,22 @@ export interface PoImportLineage {
   successors: PoImportLineageRef[];
 }
 
+/**
+ * Normalizes ONE extracted/parsed source string for a po_import_lines column.
+ *
+ * '' is how both the AI extractor and an empty CSV cell say "the document did
+ * not print this". Writing that through would store a blank value that reads
+ * as a real, deliberate empty — and the requirement is that MISSING STAYS
+ * MISSING. Whitespace is trimmed; the characters themselves are never altered
+ * (no case folding, no size conversion, no leading-zero stripping), because
+ * these columns are the record of what the document said.
+ */
+function sourceValue(v: string | null | undefined): string | null {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 export interface PoImportLineRow {
   id: string;
   po_import_id: string;
@@ -117,6 +154,31 @@ export interface PoImportLineRow {
       null for deterministic-parsed CSV/PDF imports (those are 100%). */
   extraction_confidence: number | null;
   exception_reason: string | null;
+
+  // ── Sports variant fields (migration 0301) ────────────────────────────────
+  // What the DOCUMENT said, verbatim. Null means the document said nothing —
+  // never an empty string, and never a guess.
+  variant_size: string | null;
+  /** The size string exactly as printed. Never overwritten by a normalized form. */
+  variant_size_original: string | null;
+  variant_size_system: string | null;
+  variant_width: string | null;
+  variant_fit: string | null;
+  variant_color: string | null;
+  /** TEXT with leading zeroes intact. NEVER a serial, never an identity key. */
+  jersey_number: string | null;
+  player_name: string | null;
+  /** Free-text style/product identity, used to resolve a size run to ONE product. */
+  group_hint: string | null;
+  /** The serial the DOCUMENT printed, verbatim, or null. Never invented, never
+      a placeholder, and never the jersey number. Settles the `serial_required`
+      verdict at review; post_receipt_v2 still enforces serials at receipt. */
+  serial_hint: string | null;
+  /** Advisory "possible existing product group" — mirrors suggested_item_id;
+      never auto-linked, the user must accept it in review. */
+  suggested_group_id: string | null;
+  /** Confidence in the FIELD MAPPING (0-1), distinct from extraction_confidence. */
+  mapping_confidence: number | null;
 }
 
 export class PoImportsService {
@@ -869,6 +931,31 @@ export class PoImportsService {
         match_confidence: null,
         extraction_confidence: l.confidence,
         exception_reason,
+        // ── Sports variant fields (0301) ────────────────────────────────
+        // The extractor returns '' for "the document did not print this";
+        // sourceValue turns that into a real NULL so a blank never reads as
+        // a value the vendor actually printed. Nothing is inferred here:
+        // variant_fit and suggested_group_id have no extractor input at all
+        // and stay null rather than being guessed from the description.
+        variant_size: sourceValue(l.size),
+        // No separate "original" comes off a scan — the extracted size IS
+        // what was printed, so both columns carry it and Task 14's
+        // normalization has an untouched copy to fall back to.
+        variant_size_original: sourceValue(l.size),
+        variant_size_system: sourceValue(l.sizeSystem),
+        variant_width: sourceValue(l.width),
+        variant_fit: null,
+        variant_color: sourceValue(l.colorway),
+        jersey_number: sourceValue(l.jerseyNumber),
+        player_name: sourceValue(l.playerName),
+        group_hint: sourceValue(l.groupHint),
+        // COPIED off the document or NULL. The extractor is instructed to
+        // return '' rather than guess, and sourceValue turns that into a real
+        // NULL — a serialized line with no printed serial then blocks in
+        // review instead of importing a fabricated one.
+        serial_hint: sourceValue(l.serialNumber),
+        suggested_group_id: null,
+        mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
       };
     });
@@ -1018,6 +1105,24 @@ export class PoImportsService {
         suggested_item_id,
         match_status,
         exception_reason,
+        // ── Sports variant fields (0301) ────────────────────────────────
+        // Same columns as the scan path, so a document uploaded as CSV/PDF
+        // and the same document photographed produce the same line. The
+        // deterministic parsers do not emit these yet (every value is
+        // undefined → NULL), which is exactly the "missing stays missing"
+        // behaviour a non-sports import needs.
+        variant_size: sourceValue(l.variantSize),
+        variant_size_original: sourceValue(l.variantSizeOriginal ?? l.variantSize),
+        variant_size_system: sourceValue(l.variantSizeSystem),
+        variant_width: sourceValue(l.variantWidth),
+        variant_fit: sourceValue(l.variantFit),
+        variant_color: sourceValue(l.variantColor),
+        jersey_number: sourceValue(l.jerseyNumber),
+        player_name: sourceValue(l.playerName),
+        group_hint: sourceValue(l.groupHint),
+        serial_hint: sourceValue(l.serialHint),
+        suggested_group_id: null,
+        mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
       };
     });
@@ -1108,6 +1213,31 @@ export class PoImportsService {
       );
     }
 
+    // An unconfirmed COLUMN MAPPING blocks approval, server-side (Task 14).
+    //
+    // The web review table already refuses this, but a UI-only gate is not a
+    // gate: the Bearer /api/v1 approve route and the mobile screen funnel
+    // through here, and this is the last point every path shares. The other
+    // blocking verdicts are enforced where they can do damage — at item
+    // CREATION, in createItemsFromPoLines — but a mis-mapped column is a
+    // property of the LINE, so it has to be caught before the PO exists.
+    //
+    // SCOPED (review fix). The predicate is the shared
+    // `lineNeedsMappingConfirmation`, not a bare confidence test: the
+    // extractor emits mappingConfidence on EVERY scanned line, so testing
+    // confidence alone made an ordinary non-sports PO with one awkward column
+    // header unapprovable — a regression on a chassis that shipped long before
+    // sports. A line that carries no sports field mapping has nothing to
+    // confirm and approves exactly as it always did.
+    const unconfirmed = finalLines.find((l) => lineNeedsMappingConfirmation(l));
+    if (unconfirmed) {
+      throw new ServiceError(
+        'validation_error',
+        `Line ${unconfirmed.line_number} has an ambiguous column mapping. Confirm what it means in review, or skip the line.`,
+        { code: 'IMPORT_MAPPING_REVIEW_REQUIRED' },
+      );
+    }
+
     // TWO CHARTERS, TWO JOBS — never one value aliased into both.
     //
     // billToCharterId is BILLING metadata: it lands on purchase_orders.charter_id
@@ -1145,8 +1275,12 @@ export class PoImportsService {
       if (linkedIds.length > 0) {
         const { data: linkedItems, error: liErr } = await this.ctx.supabase
           .from('inventory_items')
+          // Same reason as the createItemsFromPoLines sibling branch: an
+          // ownership-charter sibling is the SAME product, so its group and
+          // variant attributes must travel with it or the copy lands ungrouped
+          // and the next import creates a second variant for the same size.
           .select(
-            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type',
+            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
           )
           .eq('organization_id', this.ctx.organizationId)
           .in('id', linkedIds)
@@ -1166,6 +1300,15 @@ export class PoImportsService {
           unit_of_measure: string | null;
           item_type: string | null;
           tracking_type: string | null;
+          group_id: string | null;
+          variant_size: string | null;
+          variant_size_original: string | null;
+          variant_size_system: string | null;
+          variant_width: string | null;
+          variant_fit: string | null;
+          variant_color: string | null;
+          jersey_number: string | null;
+          player_name: string | null;
         };
         const byId = new Map(
           ((linkedItems ?? []) as LinkedItem[]).map((i) => [i.id, i]),
@@ -1240,11 +1383,23 @@ export class PoImportsService {
               charterId: ownershipCharterId,
               categoryId: it.category_id ?? null,
               primaryLocationId: null,
-              trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
+              trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | 'serial_optional' | null) ?? 'none',
               itemType:
                 (it.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ?? 'product',
               customFields: {},
               status: 'active',
+              // Identity travels with the sibling. `variant_key` is NOT copied
+              // — create() recomputes it from these attributes, so the key
+              // stays server-derived on every path.
+              groupId: it.group_id ?? null,
+              variantSize: it.variant_size ?? null,
+              variantSizeOriginal: it.variant_size_original ?? null,
+              variantSizeSystem: asSizeSystem(it.variant_size_system),
+              variantWidth: it.variant_width ?? null,
+              variantFit: it.variant_fit ?? null,
+              variantColor: it.variant_color ?? null,
+              jerseyNumber: it.jersey_number ?? null,
+              playerName: it.player_name ?? null,
               // Born FROM this PO at qty 0 — mark it Expected (awaiting first
               // receipt) like every other PO-driven creation path
               // (createItemsFromPoLines, purchase-orders.create). Without this
@@ -1539,9 +1694,209 @@ export class PoImportsService {
         organizationId: this.ctx.organizationId,
         inventorySvc: new InventoryService(this.ctx),
         mappingsSvc: new VendorItemMappingsService(this.ctx),
+        ctx: this.ctx,
       },
       input,
     );
+  }
+
+  /**
+   * The review-table verdict for every line of an import.
+   *
+   * The tracking profile is per LINE, not per import. Which category a line is
+   * read against, in priority order:
+   *
+   *   1. The line's own internal item — once a line points at one, that item's
+   *      category is the authority on how the line should be read.
+   *   2. `options.categoryId` — the category the reviewer picked in the
+   *      create-items modal, for the lines that will CREATE items.
+   *   3. The line's SUGGESTED item's category — advisory only, and used here
+   *      only to decide how to READ the line. It never links anything (0233).
+   *
+   * Step 2 and 3 are the review fix. A create-mode line has `item_id = null`
+   * by definition, so deriving the profile from `item_id` alone meant every
+   * sports line resolved 'ready': the Group and Result columns rendered
+   * nothing, the reviewer saw no verdict to answer, and the first sign of
+   * trouble was a raw server throw from `createItemsFromPoLines`. The whole
+   * point of the review table is that the verdict is visible BEFORE approval.
+   *
+   * Read-only. Nothing here writes, links or merges.
+   */
+  async resolveLineResults(
+    poImportId: string,
+    options: { categoryId?: string | null } = {},
+  ): Promise<Record<string, LineResolution>> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    const { lines } = await this.get(poImportId);
+
+    // One query for every mapped OR suggested line's category, rather than one
+    // per line.
+    const itemIds = [
+      ...new Set(
+        lines
+          .flatMap((l) => [l.item_id, l.suggested_item_id])
+          .filter((v): v is string => !!v),
+      ),
+    ];
+    const categoryByItem = new Map<string, string | null>();
+    if (itemIds.length > 0) {
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, category_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', itemIds)
+        .is('deleted_at', null);
+      if (error) throw new ServiceError('internal_error', error.message);
+      for (const r of (data ?? []) as Array<{ id: string; category_id: string | null }>) {
+        categoryByItem.set(r.id, r.category_id);
+      }
+    }
+
+    const cache: TrackingProfileCache = new Map();
+    const deps: ResolveLineVariantDeps = {
+      groups: new ProductGroupsService(this.ctx),
+      supabase: this.ctx.supabase,
+      organizationId: this.ctx.organizationId,
+      sportsEnabled: this.ctx.enabledModules.has('sports'),
+    };
+
+    const withProfiles: Array<{
+      line: PoImportVariantLine;
+      profile: ResolvedTrackingProfile;
+    }> = [];
+    for (const line of lines) {
+      const categoryId = line.item_id
+        ? (categoryByItem.get(line.item_id) ?? null)
+        : (options.categoryId ??
+          (line.suggested_item_id ? (categoryByItem.get(line.suggested_item_id) ?? null) : null));
+      withProfiles.push({
+        // Normalized through the SAME mapper the create path uses, so a
+        // document that printed "us mens" cannot read as having a size system
+        // here and as missing one at creation.
+        line: toVariantLine(line as unknown as Record<string, unknown>),
+        profile: await resolveTrackingProfile(this.ctx, categoryId, cache),
+      });
+    }
+    return resolveLinesForReview(deps, withProfiles);
+  }
+
+  /**
+   * Record the reviewer's answer to an ambiguous COLUMN mapping.
+   *
+   * The AI never resolves this itself: a bare "Number" column could be a jersey
+   * number, a quantity, a serial, a style number or a line number, and the
+   * requirements forbid a silent guess. Confirming here does three things and
+   * nothing else — it applies the stated meaning to the line's own fields, it
+   * lifts `mapping_confidence` to 1 so the gate stops firing, and it writes an
+   * audit event naming the value that was reinterpreted.
+   *
+   * SOURCE VALUES ARE NEVER DESTROYED SILENTLY. The pre-confirmation values are
+   * written into the audit `before` block, so a wrong confirmation is always
+   * recoverable from the log.
+   *
+   * THE DECISION COVERS EVERY FLAGGED FIELD (final-review fix). This used to
+   * move or clear `jersey_number` and nothing else, while
+   * `lineNeedsMappingConfirmation` flags a line on ANY of the ten sports
+   * fields — so a low-confidence size, colour or style hint was invisible in the
+   * modal and then survived an explicit "Ignore" with `mapping_confidence` set
+   * to 1, i.e. was silently applied to the created item. Now:
+   *   • `ignore` CLEARS every flagged value on the line — an unconfirmed AI
+   *     mapping is never applied, and missing stays missing (a field the
+   *     document said nothing about is not touched, not written as '');
+   *   • every other meaning KEEPS them, because the modal lists each flagged
+   *     value beside the choice, so keeping them is a human decision;
+   *   • the number column's value is still only ever MOVED to a field that
+   *     means the same thing (style number, or the serial the reviewer says it
+   *     is), never rewritten into a quantity.
+   */
+  async confirmLineMappings(input: ConfirmLineMappingsInput): Promise<{ confirmed: number }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const { header, lines } = await this.get(input.poImportId);
+    if (header.status === 'approved' || header.status === 'canceled') {
+      throw new ServiceError(
+        'conflict',
+        `This import is ${header.status} and its column mappings can no longer be changed.`,
+      );
+    }
+
+    const byId = new Map(lines.map((l) => [l.id, l]));
+    let confirmed = 0;
+    for (const [lineId, meaning] of Object.entries(input.decisions)) {
+      const line = byId.get(lineId);
+      if (!line) throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
+
+      const sourceValue = line.jersey_number;
+      // EVERY field the extractor mapped on this line — the exact set the modal
+      // renders, from the one shared helper, so a value the reviewer never saw
+      // can never be the one that survives.
+      const flagged = flaggedSportsMappings(line);
+      // 'jersey_number' / 'confirm' confirm what was read; every other meaning
+      // says the value is NOT a number, so it leaves the number field. It is
+      // only ever MOVED to a field that means the same thing — the style
+      // number, or the serial the reviewer says it is — never rewritten into a
+      // quantity. Inventing a quantity is exactly what the requirements forbid.
+      const patch: Record<string, unknown> = { mapping_confidence: 1 };
+      if (!meaningKeepsFlaggedValues(meaning)) {
+        // IGNORE: drop every flagged value. Only the fields that actually
+        // CARRY a value are written, so a field the document said nothing
+        // about stays untouched rather than being re-asserted as null.
+        for (const f of flagged) patch[f.field] = null;
+      } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
+        patch.jersey_number = null;
+      }
+      if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
+        patch.vendor_product_number = sourceValue;
+      }
+      // A reviewer declaring the column to BE a serial is one of the three
+      // ways serial_hint is populated, and the one that makes the
+      // `serial_required` verdict settleable from the review screen. The value
+      // still comes from the DOCUMENT — this only says which field it belongs
+      // in. Nothing is fabricated when there was no value to move.
+      if (meaning === 'serial' && sourceValue && !line.serial_hint) {
+        patch.serial_hint = sourceValue;
+      }
+
+      const { data: updated, error } = await this.ctx.supabase
+        .from('po_import_lines')
+        .update(patch)
+        .eq('po_import_id', input.poImportId)
+        .eq('id', lineId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
+      // rows, so ignoring the result meant a confirmation that RLS refused —
+      // or that raced a cancel — still counted as confirmed, told the reviewer
+      // so, and wrote an audit entry for a change that never happened. The
+      // line would then hit the approval gate again with no explanation.
+      if (!updated) {
+        throw new ServiceError(
+          'conflict',
+          `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
+        );
+      }
+
+      await audit(
+        {
+          event: 'sports.import.mapping_confirmed',
+          entityType: 'po_import_line',
+          entityId: lineId,
+          before: {
+            jerseyNumber: sourceValue,
+            mappingConfidence: line.mapping_confidence,
+            // Every value the decision was made about, not just the number —
+            // this block is what a wrong confirmation is recovered from.
+            flagged: Object.fromEntries(flagged.map((f) => [f.field, f.value])),
+          },
+          after: { meaning, appliedTo: patch },
+        },
+        this.ctx,
+      );
+      confirmed++;
+    }
+    return { confirmed };
   }
 
   async cancel(id: string): Promise<void> {

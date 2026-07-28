@@ -37,6 +37,10 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
+import {
+  loadCountingUnits,
+  loadCountingUnitsForOrg,
+} from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -452,6 +456,12 @@ async function InventoryTableSection({
   if (instantData) {
     const savedViews = await savedViewsPromise;
     const { items: instantItems, lookups } = instantData;
+    // Sports counting units for whatever groups this dataset touches — ONE
+    // batched, module-gated lookup that costs an org with no grouped rows
+    // nothing at all (no group ids → no queries). Resolved over the WHOLE
+    // dataset, not the current page, because instant mode paginates on the
+    // client and any page can render.
+    const productGroupUnits = await loadCountingUnits(instantItems.map((i) => i.group_id));
     // Server-side run of the client's exact derivation: keeps the rich
     // EmptyState branches (and the table's SSR HTML) identical to what
     // the server path would have shown for this URL.
@@ -497,6 +507,7 @@ async function InventoryTableSection({
         activeWarehouseId={warehouseFilter}
         currentUserId={sessionCtx.userId}
         instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
+        productGroupUnits={productGroupUnits}
       />
     );
   }
@@ -781,6 +792,19 @@ async function InventoryTableSection({
         )
       : undefined;
 
+  // WHOLE-DATASET counting units, exactly like the instant branch above — by
+  // ORG rather than by row id, because this branch does not hold the dataset.
+  //
+  // Server mode renders 30 rows, but this view also STREAMS the full dataset
+  // (instantPromise) and the client then paginates it locally, so units derived
+  // from these 30 rows went missing on every page after the first: a size-run
+  // header that should read "52 pairs total" fell back to a bare count as soon
+  // as the user paged. Resolving what the ORG's groups define cannot be wrong
+  // for any page the client renders, and it keeps the instant branch's cost
+  // posture — a non-sports org pays nothing (module set off the request-cached
+  // context, no round trip), a sports org pays one column-only read.
+  const productGroupUnits = await loadCountingUnitsForOrg();
+
   return (
     <InventoryTable
       items={placementRows}
@@ -804,6 +828,7 @@ async function InventoryTableSection({
       currentUserId={sessionCtx.userId}
       instantPromise={instantPromise}
       expectedCount={data.expectedCount}
+      productGroupUnits={productGroupUnits}
     />
   );
 }

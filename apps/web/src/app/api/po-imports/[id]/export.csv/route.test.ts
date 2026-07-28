@@ -83,6 +83,20 @@ function line(overrides: Partial<PoImportLineRow>): PoImportLineRow {
     match_confidence: null,
     extraction_confidence: null,
     exception_reason: null,
+    // Sports variant columns (0301). Null is the shape a non-sports import
+    // has, which is exactly what this export test exercises.
+    variant_size: null,
+    variant_size_original: null,
+    variant_size_system: null,
+    variant_width: null,
+    variant_fit: null,
+    variant_color: null,
+    jersey_number: null,
+    player_name: null,
+    group_hint: null,
+    serial_hint: null,
+    suggested_group_id: null,
+    mapping_confidence: null,
     ...overrides,
   };
 }

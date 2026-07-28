@@ -1,0 +1,296 @@
+-- supabase/tests/0301_po_import_line_variants.test.sql
+--
+-- Proves 0301: po_import_lines carries the sports variant fields, and that
+-- adding them changed NOTHING about the prod-hardened import chassis.
+--
+-- Assertion index (33):
+--    1-12  all twelve new columns exist
+--   13     every one of them is NULLABLE (an existing import path that has
+--          never heard of them must keep inserting)
+--   14-16  the types that matter: jersey_number is TEXT (never numeric),
+--          suggested_group_id is uuid, mapping_confidence is numeric(4,3)
+--   17     serial_hint is TEXT (a serial is a string: leading zeroes, dashes)
+--   18     suggested_group_id FKs product_groups
+--   19     ...with ON DELETE SET NULL (a suggestion never blocks a delete)
+--   20     the partial index on suggested_group_id exists
+--   21     ANTI-VACUITY / backward compatibility: a line inserted with only
+--          the pre-0301 columns still succeeds
+--   22     ...and every new column reads back NULL on it (missing stays
+--          missing — no default back-filled a value nobody supplied)
+--   23-25  LEADING ZEROES: '07', '00' and '0' round-trip byte-for-byte.
+--          A numeric column would return 7, 0 and 0.
+--   26     a long, unbounded source string survives verbatim
+--          (variant_size_original is "exactly as printed", never truncated)
+--   27     mapping_confidence keeps its three decimals
+--   28     serial_hint round-trips VERBATIM, punctuation and case intact —
+--          it is the document's own string, never normalized
+--   29     serial_hint is NULL on a line whose document printed no serial
+--          (never a placeholder: no 'N/A', no '0000')
+--   30-32  ORG CONSISTENCY on suggested_group_id, as a real authenticated
+--          caller: my own org's group is accepted (positive control), ANOTHER
+--          org's group is refused with 42501, and NULL is still accepted (every
+--          pre-0301 line is unaffected)
+--   33     deleting the suggested group nulls the suggestion and LEAVES THE
+--          LINE (the 0233 suggestion-not-link discipline, group edition)
+--
+-- Namespace: b0300000. Wrapped in begin/rollback - nothing leaks.
+
+begin;
+
+select plan(33);
+
+\set org   '\'b0300000-0000-0000-0000-000000000001\''
+\set usr   '\'b0300000-0000-0000-0000-000000000002\''
+\set wh    '\'b0300000-0000-0000-0000-000000000003\''
+\set imp   '\'b0300000-0000-0000-0000-000000000004\''
+\set grp   '\'b0300000-0000-0000-0000-000000000005\''
+\set grpB  '\'b0300000-0000-0000-0000-000000000006\''
+\set orgB  '\'b0300000-0000-0000-0000-000000000007\''
+\set ln_a  '\'b0300000-0000-0000-0000-00000000000a\''
+\set ln_b  '\'b0300000-0000-0000-0000-00000000000b\''
+\set ln_c  '\'b0300000-0000-0000-0000-00000000000c\''
+\set ln_d  '\'b0300000-0000-0000-0000-00000000000d\''
+\set ln_e  '\'b0300000-0000-0000-0000-00000000000e\''
+
+-- ── 1-12. The columns exist ────────────────────────────────────────────────
+select has_column('public', 'po_import_lines', 'variant_size',
+  'po_import_lines has variant_size');
+select has_column('public', 'po_import_lines', 'variant_size_original',
+  'po_import_lines has variant_size_original');
+select has_column('public', 'po_import_lines', 'variant_size_system',
+  'po_import_lines has variant_size_system');
+select has_column('public', 'po_import_lines', 'variant_width',
+  'po_import_lines has variant_width');
+select has_column('public', 'po_import_lines', 'variant_fit',
+  'po_import_lines has variant_fit');
+select has_column('public', 'po_import_lines', 'variant_color',
+  'po_import_lines has variant_color');
+select has_column('public', 'po_import_lines', 'jersey_number',
+  'po_import_lines has jersey_number');
+select has_column('public', 'po_import_lines', 'player_name',
+  'po_import_lines has player_name');
+select has_column('public', 'po_import_lines', 'group_hint',
+  'po_import_lines has group_hint');
+select has_column('public', 'po_import_lines', 'suggested_group_id',
+  'po_import_lines has suggested_group_id');
+select has_column('public', 'po_import_lines', 'mapping_confidence',
+  'po_import_lines has mapping_confidence');
+select has_column('public', 'po_import_lines', 'serial_hint',
+  'po_import_lines has serial_hint');
+
+-- ── 13. Every new column is nullable ───────────────────────────────────────
+select is(
+  (select count(*)::int
+     from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'po_import_lines'
+      and is_nullable  = 'NO'
+      and column_name in (
+        'variant_size','variant_size_original','variant_size_system',
+        'variant_width','variant_fit','variant_color','jersey_number',
+        'player_name','group_hint','suggested_group_id','mapping_confidence',
+        'serial_hint')),
+  0,
+  'none of the twelve new columns is NOT NULL');
+
+-- ── 14-17. Types ───────────────────────────────────────────────────────────
+-- TEXT, deliberately: a numeric jersey number loses '07' and '00'.
+select col_type_is('public', 'po_import_lines', 'jersey_number', 'text',
+  'jersey_number is text, never a number type');
+select col_type_is('public', 'po_import_lines', 'suggested_group_id', 'uuid',
+  'suggested_group_id is uuid');
+select col_type_is('public', 'po_import_lines', 'mapping_confidence', 'numeric(4,3)',
+  'mapping_confidence is numeric(4,3), matching match_confidence');
+-- A serial is a STRING. 'SN-0007' and '0007' are not numbers, and the column
+-- must never coerce one into 7 the way jersey_number must not.
+select col_type_is('public', 'po_import_lines', 'serial_hint', 'text',
+  'serial_hint is text, never a number type');
+
+-- ── 18-19. The advisory FK ─────────────────────────────────────────────────
+select fk_ok('public', 'po_import_lines', 'suggested_group_id',
+             'public', 'product_groups', 'id',
+  'suggested_group_id references product_groups(id)');
+select is(
+  (select confdeltype::text from pg_constraint
+    where conrelid = 'public.po_import_lines'::regclass
+      and contype  = 'f'
+      and conkey   = array[(select attnum from pg_attribute
+                             where attrelid = 'public.po_import_lines'::regclass
+                               and attname  = 'suggested_group_id')]),
+  'n',
+  'the suggested_group_id FK is ON DELETE SET NULL');
+
+-- ── 20. The lookup index ───────────────────────────────────────────────────
+select has_index('public', 'po_import_lines', 'po_import_lines_suggested_group_idx',
+  'po_import_lines_suggested_group_idx exists');
+
+-- ── Fixtures ───────────────────────────────────────────────────────────────
+insert into auth.users (id, email) values (:usr, 'u-0301@example.test')
+  on conflict (id) do nothing;
+insert into public.organizations (id, name, slug) values
+  (:org, 'Sports 0301 Org', 'sports-0301-org')
+  on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:org, :usr, 'manager', now())
+  on conflict do nothing;
+insert into public.warehouses (id, organization_id, name, code) values
+  (:wh, :org, 'WH 0301', 'WH0301')
+  on conflict (id) do nothing;
+insert into public.po_imports
+  (id, organization_id, uploaded_by, source_type, file_name, file_mime_type,
+   file_size, storage_path, sha256)
+  values (:imp, :org, :usr, 'pdf', 'po-0301.pdf', 'application/pdf', 100,
+          'b0300000/po-imports/po-0301.pdf', repeat('b', 64));
+insert into public.product_groups
+  (id, organization_id, subcategory_key, name, brand, model, group_key,
+   default_counting_unit)
+  values (:grp, :org, 'shoes', 'Nike Pegasus 41', 'Nike', 'Pegasus 41',
+          'shoes|nike|pegasus 41||', 'pair');
+
+-- ── 21-22. Backward compatibility: the pre-0301 insert shape still works ───
+select lives_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description,
+        qty_ordered_original, unit_cost)
+     values ('b0300000-0000-0000-0000-00000000000a',
+             'b0300000-0000-0000-0000-000000000004', 1, 'inventory',
+             'Legacy line, no variant data', 3, 9.99) $$,
+  'a line inserted with only the pre-0301 columns still succeeds');
+
+select is(
+  (select num_nonnulls(variant_size, variant_size_original, variant_size_system,
+                       variant_width, variant_fit, variant_color, jersey_number,
+                       player_name, group_hint, suggested_group_id,
+                       mapping_confidence, serial_hint)
+     from public.po_import_lines where id = :ln_a),
+  0,
+  'a legacy line reads back NULL in all twelve columns (no back-filled default)');
+
+-- ── 23-25. Leading zeroes survive ──────────────────────────────────────────
+insert into public.po_import_lines
+  (id, po_import_id, line_number, line_type, description, jersey_number,
+   variant_size, variant_size_original, variant_size_system, variant_width,
+   variant_fit, variant_color, player_name, group_hint, suggested_group_id,
+   mapping_confidence, serial_hint)
+  values
+  (:ln_b, :imp, 2, 'inventory', 'Falcons Home Jersey - M', '07',
+   'M', 'Medium', 'ALPHA', null, 'mens', 'Red/Black', 'A. Rosas',
+   'Falcons Home Jersey 2026', :grp, 0.875, 'sn-00A7/b'),
+  (:ln_c, :imp, 3, 'inventory', 'Falcons Home Jersey - L', '00',
+   'L', 'Large', 'ALPHA', null, 'mens', 'Red/Black', null, null, null, null, null),
+  (:ln_d, :imp, 4, 'inventory', 'Falcons Home Jersey - XL', '0',
+   'XL', 'X-Large', 'ALPHA', null, null, null, null, null, null, null, null);
+
+select is(
+  (select jersey_number from public.po_import_lines where id = :ln_b),
+  '07',
+  E'jersey number \'07\' round-trips with its leading zero intact');
+select is(
+  (select jersey_number from public.po_import_lines where id = :ln_c),
+  '00',
+  E'jersey number \'00\' round-trips as two characters, not 0');
+select is(
+  (select jersey_number from public.po_import_lines where id = :ln_d),
+  '0',
+  E'jersey number \'0\' round-trips as the string 0');
+
+-- ── 26. A long source string is preserved verbatim ─────────────────────────
+-- variant_size_original is deliberately unbounded: it is what the DOCUMENT
+-- printed, and a vendor is free to print something absurd. Truncating it
+-- would break "preserve source values".
+insert into public.po_import_lines
+  (id, po_import_id, line_number, line_type, description,
+   variant_size_original, group_hint, player_name)
+  values (:ln_e, :imp, 5, 'inventory', 'Absurd source row',
+          repeat('SIZE 10.5 WIDE ', 200), repeat('g', 5000), repeat('p', 1000));
+
+select is(
+  (select length(variant_size_original) from public.po_import_lines where id = :ln_e),
+  3000,
+  'a 3000-character variant_size_original is stored untruncated');
+
+-- ── 27. mapping_confidence keeps three decimals ────────────────────────────
+select is(
+  (select mapping_confidence from public.po_import_lines where id = :ln_b),
+  0.875::numeric(4,3),
+  'mapping_confidence keeps its three decimal places');
+
+-- ── 28-29. serial_hint is the document's own string, or nothing ────────────
+-- Verbatim: no upper-casing, no stripping of punctuation. The import stores
+-- what was printed and the receipt is where a serial is actually enforced.
+select is(
+  (select serial_hint from public.po_import_lines where id = :ln_b),
+  'sn-00A7/b',
+  'serial_hint round-trips verbatim, case and punctuation intact');
+
+-- Missing stays missing. A line whose document printed no serial must read
+-- back NULL, never a fabricated placeholder.
+select is(
+  (select serial_hint from public.po_import_lines where id = :ln_c),
+  null,
+  'a line with no printed serial reads back NULL, never a placeholder');
+
+-- ── 30-32. Org consistency on suggested_group_id ───────────────────────────
+-- Everything above ran as superuser, so RLS never applied. suggested_group_id is
+-- CLIENT-WRITABLE (the review UI sets it, and the scan pipeline writes it through
+-- the same authenticated path), and a plain FK cannot say "and it must belong to
+-- the SAME org" - so without the policy arm 0301 adds, org A's manager could
+-- point their line at ANOTHER org's group and pull its name, brand, team and
+-- style number into their own review screen the moment the suggestion is
+-- rendered joined. po_import_lines carries no organization_id of its own, so the
+-- org comes from the parent po_imports row the policy already joins.
+insert into public.organizations (id, name, slug) values
+  (:orgB, 'Rival 0301 Org', 'rival-0301-org') on conflict (id) do nothing;
+insert into public.product_groups
+  (id, organization_id, subcategory_key, name, brand, model, group_key,
+   default_counting_unit)
+  values (:grpB, :orgB, 'shoes', 'Rival Runner 9', 'Rival', 'Runner 9',
+          'shoes|rival|runner 9||', 'pair');
+
+set local "request.jwt.claim.sub" to 'b0300000-0000-0000-0000-000000000002';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Positive control FIRST, so the refusal below is a real refusal and not "this
+-- manager cannot write po_import_lines at all".
+select lives_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description, suggested_group_id)
+     values ('b0300000-0000-0000-0000-00000000000f',
+             'b0300000-0000-0000-0000-000000000004', 6, 'inventory',
+             'Own-org suggestion', 'b0300000-0000-0000-0000-000000000005') $$,
+  'a manager CAN suggest a group from their OWN org');
+
+select throws_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description, suggested_group_id)
+     values ('b0300000-0000-0000-0000-000000000010',
+             'b0300000-0000-0000-0000-000000000004', 7, 'inventory',
+             'Cross-org suggestion', 'b0300000-0000-0000-0000-000000000006') $$,
+  '42501',
+  null,
+  'a cross-org suggested_group_id is REFUSED (product_group_in_org arm)');
+
+-- NULL is still fine: product_group_in_org returns true for a null id, so every
+-- line the import chassis has ever written keeps inserting unchanged.
+select lives_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description)
+     values ('b0300000-0000-0000-0000-000000000011',
+             'b0300000-0000-0000-0000-000000000004', 8, 'inventory',
+             'No suggestion at all') $$,
+  'a line with NO suggestion still inserts (the arm is null-tolerant)');
+
+reset role;
+
+-- ── 33. Deleting the suggested group nulls the hint, never the line ────────
+delete from public.product_groups where id = :grp;
+
+select is(
+  (select coalesce(suggested_group_id::text, 'NULL') || '/' || description
+     from public.po_import_lines where id = :ln_b),
+  'NULL/Falcons Home Jersey - M',
+  'deleting the suggested group nulls suggested_group_id and keeps the line');
+
+select * from finish();
+rollback;

@@ -143,7 +143,7 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
       Record<string, unknown>,
       Record<string, unknown>,
     ];
-    expect(createOpts).toEqual({ awaitingFirstReceipt: true });
+    expect(createOpts).toEqual({ awaitingFirstReceipt: true, source: 'import' });
     // And the item itself is born at zero stock, so the flag is valid.
     expect(createInput.quantityOnHand).toBe(0);
   });

@@ -7,10 +7,12 @@ import { deriveLocationName } from '@/lib/locations/rack-name';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService, type PlaceDest } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
+import { ProductGroupsService } from '@/server/services/product-groups';
 import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   adjustStockSchema,
+  bulkCreateSizedVariantsSchema,
   createItemSchema,
   err,
   ok,
@@ -19,6 +21,7 @@ import {
   type ActionResult,
   type AdjustStockInput,
   type CreateItemInput,
+  type GroupKeyParts,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
@@ -135,42 +138,16 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
   }
 }
 
-const bulkCreateSizedSchema = z.object({
-  baseName: z.string().min(1).max(200),
-  baseSku: z.string().max(120).nullable(),
-  baseBarcode: z.string().max(120).nullable(),
-  description: z.string().max(2000).nullable(),
-  categoryId: z.string().uuid(),
-  supplierId: z.string().uuid().nullable(),
-  warehouseId: z.string().uuid(),
-  charterId: z.string().uuid().nullable(),
-  primaryLocationId: z.string().uuid().nullable(),
-  binLocation: z.string().max(120).nullable(),
-  retailPrice: z.coerce.number().min(0),
-  unitCost: z.coerce.number().min(0),
-  reorderPoint: z.coerce.number().int().min(0),
-  reorderQuantity: z.coerce.number().int().min(0),
-  unitOfMeasure: z.string().min(1).max(40),
-  rackNumber: z.string().max(50).nullable().optional(),
-  rackRow: z.string().max(10).nullable().optional(),
-  // Per-org custom field values applied to every created variant. The service
-  // strips reserved keys and runs the authoritative validator (assertCustomFieldsValid).
-  customFields: z.record(z.string(), z.unknown()).nullable().optional(),
-  variants: z
-    .array(
-      z.object({
-        size: z.enum(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL']),
-        quantity: z.coerce.number().int().min(0),
-      }),
-    )
-    .min(1)
-    .max(7),
-});
-
+/**
+ * The request shape moved to `@stockpilot/core` (Task 10). It is no longer a
+ * web-only contract: `POST /api/v1/items/sized-variants` and Expo's Add Item
+ * screen parse the SAME object, so a size run valid on one surface is valid on
+ * every surface. Nothing about this action's behaviour changed.
+ */
 export async function bulkCreateSizedVariantsAction(
-  input: z.input<typeof bulkCreateSizedSchema>,
+  input: z.input<typeof bulkCreateSizedVariantsSchema>,
 ): Promise<ActionResult<{ created: number; ids: string[] }>> {
-  const parsed = bulkCreateSizedSchema.safeParse(input);
+  const parsed = bulkCreateSizedVariantsSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
@@ -182,6 +159,47 @@ export async function bulkCreateSizedVariantsAction(
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard');
     return ok({ created: rows.length, ids: rows.map((r) => r.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Advisory near-miss lookup for the Add Item grouping preview (Task 11).
+ * Wraps `ProductGroupsService.candidates` — matching itself stays entirely
+ * server-side and deterministic (see that method's header); this action is
+ * just the seam. `name` is deliberately NOT a field on this schema: the
+ * requirements are explicit that matching is "never name-string-only", and a
+ * name probe is exactly the heuristic that would bake a wrong grouping into
+ * persistent identity, so there is nothing here for a client to pass one as.
+ */
+const groupCandidatesActionSchema = z.object({
+  subcategoryKey: z.string().min(1).max(64),
+  brand: z.string().max(120).optional().nullable(),
+  model: z.string().max(120).optional().nullable(),
+  styleNumber: z.string().max(64).optional().nullable(),
+  colorway: z.string().max(64).optional().nullable(),
+  team: z.string().max(120).optional().nullable(),
+  league: z.string().max(120).optional().nullable(),
+  season: z.string().max(32).optional().nullable(),
+  homeAway: z.string().max(16).optional().nullable(),
+  manufacturer: z.string().max(120).optional().nullable(),
+  color: z.string().max(64).optional().nullable(),
+});
+
+export async function findGroupCandidatesAction(
+  input: z.input<typeof groupCandidatesActionSchema>,
+): Promise<ActionResult<Array<{ id: string; name: string }>>> {
+  const parsed = groupCandidatesActionSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await ProductGroupsService.forCurrentUser();
+    const rows = await svc.candidates(parsed.data as GroupKeyParts);
+    // Advisory only — the caller decides whether to link via a separate,
+    // explicit click (onUseCandidate). Nothing here writes anything.
+    return ok(rows.map((r) => ({ id: r.id, name: r.name })));
   } catch (e) {
     return toResult(e);
   }

@@ -120,3 +120,58 @@ describe('CycleCountDetail counting mode (canAdjust=true)', () => {
     expect(screen.getAllByPlaceholderText('—')).toHaveLength(2);
   });
 });
+
+/**
+ * Counting BY VARIANT. A size run is several rows whose only real difference
+ * is a hex SKU, so the row has to say which variant it is or the counter is
+ * matching strings to shoeboxes.
+ */
+describe('CycleCountDetail — variant identity', () => {
+  const variantLines = [
+    {
+      id: 'line-9',
+      counted_quantity: null,
+      expected_quantity: 4,
+      item: {
+        name: 'Nike Pegasus 41',
+        sku: 'PEG-9',
+        barcode: null,
+        group_id: 'g1',
+        variant_size: '9.5',
+        jersey_number: null,
+      },
+    },
+    {
+      id: 'line-j',
+      counted_quantity: null,
+      expected_quantity: 2,
+      item: {
+        name: 'Falcons Home Jersey',
+        sku: 'FAL-12-XL',
+        barcode: null,
+        group_id: 'g2',
+        variant_size: 'XL',
+        jersey_number: '12',
+      },
+    },
+  ] as unknown as CycleCountLineWithItem[];
+
+  it('names the size on a shoe line, half sizes included', () => {
+    render(<CycleCountDetail {...baseProps} lines={variantLines} canAdjust />);
+    expect(screen.getByText('Size 9.5')).toBeInTheDocument();
+  });
+
+  it('renders a jersey NUMBER as a number, never as a serial', () => {
+    render(<CycleCountDetail {...baseProps} lines={variantLines} canAdjust />);
+    expect(screen.getByText('#12 · Size XL')).toBeInTheDocument();
+    // The word "serial" must appear nowhere near a uniform number.
+    expect(screen.queryByText(/serial/i)).toBeNull();
+  });
+
+  it('renders an ungrouped count with no variant line at all', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+    expect(screen.getByText('Widget')).toBeInTheDocument();
+    expect(screen.queryByText(/^Size /)).toBeNull();
+    expect(screen.queryByText(/^#/)).toBeNull();
+  });
+});

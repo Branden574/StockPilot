@@ -138,6 +138,79 @@ describe('SizeCountsService.getSession', () => {
     const bySize = Object.fromEntries(tally.map((t) => [t.size, t.quantity]));
     expect(bySize).toEqual({ M: 2 }); // L netted to 0 and is filtered out
   });
+
+  // Same landmine as getTrainingStats, on the read whose ONLY output is a
+  // number: one event per tap, PostgREST clamping at max_rows = 1000 with no
+  // error, so a long session silently under-counted itself.
+  it('counts EVERY event, not just the first server page', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': () => {
+        const from = call * 1000;
+        call += 1;
+        const remaining = Math.max(0, 2171 - from);
+        const size = Math.min(1000, remaining);
+        return {
+          data: Array.from({ length: size }, (_, i) => ({
+            id: `e-${from + i}`,
+            size: (from + i) % 2 === 0 ? 'M' : 'L',
+            quantity_delta: 1,
+          })),
+          error: null,
+        };
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const { tally } = await svc.getSession('sess-1');
+    const total = tally.reduce((a, t) => a + t.quantity, 0);
+    expect(total).toBe(2171);
+    expect(call).toBeGreaterThan(1);
+  });
+
+  it('stops on the page boundary: exactly 1000 events is not the start of a second page', async () => {
+    // The other half of the clamp: a full page must be followed by one more
+    // request (which comes back empty), and the totals must not double-count.
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': () => {
+        const from = call * 1000;
+        call += 1;
+        const size = from === 0 ? 1000 : 0;
+        return {
+          data: Array.from({ length: size }, (_, i) => ({
+            id: `e-${from + i}`,
+            size: 'M',
+            quantity_delta: 1,
+          })),
+          error: null,
+        };
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const { tally } = await svc.getSession('sess-1');
+    expect(tally).toEqual([{ size: 'M', quantity: 1000 }]);
+    expect(call).toBe(2);
+  });
+
+  it('throws rather than reporting a short tally on a read error', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': { data: null, error: { message: 'boom' } },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await expect(svc.getSession('sess-1')).rejects.toMatchObject({ code: 'internal_error' });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -192,5 +265,132 @@ describe('SizeCountsService.getTrainingStats', () => {
     const res = await svc(pagedStub(0)).getTrainingStats();
     expect(res.total).toBe(0);
     expect(res.counts).toEqual({});
+  });
+});
+
+/**
+ * Re-keying Instant Size Count from the display-only style_key to a real
+ * product group (migration 0302).
+ */
+describe('SizeCountsService.createSession — product group identity', () => {
+  it('persists the chosen product group', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.insert': {
+        data: { id: 'sess-g', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await svc.createSession({ productGroupId: 'grp-pegasus' });
+    const args = (stub.chainArgs.get('size_count_sessions.insert') ?? []).flat();
+    const row = args[0] as Record<string, unknown>;
+    expect(row.product_group_id).toBe('grp-pegasus');
+  });
+
+  it('writes NULL, never a placeholder, when no group is named', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.insert': {
+        data: { id: 'sess-u', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await svc.createSession({ boxId: 'BOX-7' });
+    const args = (stub.chainArgs.get('size_count_sessions.insert') ?? []).flat();
+    const row = args[0] as Record<string, unknown>;
+    expect(row.product_group_id).toBeNull();
+    // The pre-0302 shape still goes in untouched.
+    expect(row.style_key).toBeNull();
+    expect(row.box_id).toBe('BOX-7');
+  });
+
+  it('still accepts the legacy styleKey for an org with no groups', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.insert': {
+        data: { id: 'sess-l', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await svc.createSession({ styleKey: 'nike pegasus 41' });
+    const args = (stub.chainArgs.get('size_count_sessions.insert') ?? []).flat();
+    const row = args[0] as Record<string, unknown>;
+    expect(row.style_key).toBe('nike pegasus 41');
+    expect(row.product_group_id).toBeNull();
+  });
+});
+
+describe('SizeCountsService.getSession — group context for the tally screen', () => {
+  const withIscAndSports = new Set<ModuleId>([
+    ...DEFAULT_MODULE_IDS,
+    'instant_size_count',
+    'sports',
+  ]);
+
+  it('returns no group for an ungrouped session, so the chips stay legacy', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 's1', status: 'active', product_group_id: null, style_key: 'tee' },
+        error: null,
+      },
+      'size_count_events.select': { data: [{ size: 'M', quantity_delta: 2 }], error: null },
+    });
+    const svc = new SizeCountsService(
+      makeServiceContext(stub.client, { enabledModules: withIscAndSports }),
+    );
+    const res = await svc.getSession('s1');
+    expect(res.group).toBeNull();
+    expect(res.tally).toEqual([{ size: 'M', quantity: 2 }]);
+  });
+
+  it('returns the group name, counting unit and its size scale IN SCALE ORDER', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 's2', status: 'active', product_group_id: 'grp-1', style_key: null },
+        error: null,
+      },
+      'size_count_events.select': { data: [], error: null },
+      'product_groups.select': {
+        data: [
+          { id: 'grp-1', name: 'Nike Pegasus 41', default_counting_unit: 'pair', size_scale_id: 'sc-1' },
+        ],
+        error: null,
+      },
+      'size_scale_values.select': {
+        data: [
+          // Deliberately out of order — the sort_order decides, not the read.
+          { size_scale_id: 'sc-1', value: '10', normalized: '10', sort_order: 3 },
+          { size_scale_id: 'sc-1', value: '9', normalized: '9', sort_order: 1 },
+          { size_scale_id: 'sc-1', value: '9.5', normalized: '9.5', sort_order: 2 },
+        ],
+        error: null,
+      },
+    });
+    const svc = new SizeCountsService(
+      makeServiceContext(stub.client, { enabledModules: withIscAndSports }),
+    );
+    const res = await svc.getSession('s2');
+    expect(res.group).toMatchObject({
+      id: 'grp-1',
+      name: 'Nike Pegasus 41',
+      countingUnit: 'pair',
+    });
+    // Half sizes the hardcoded nine could never tally.
+    expect(res.group?.sizes).toEqual(['9', '9.5', '10']);
+  });
+
+  it('does NOT 403 a grouped session after the org turns the sports module off', async () => {
+    // Reading back a count list you already made must never start failing.
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 's3', status: 'completed', product_group_id: 'grp-1', style_key: null },
+        error: null,
+      },
+      'size_count_events.select': { data: [{ size: '10', quantity_delta: 4 }], error: null },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const res = await svc.getSession('s3');
+    expect(res.group).toBeNull();
+    expect(res.tally).toEqual([{ size: '10', quantity: 4 }]);
   });
 });

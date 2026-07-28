@@ -1,6 +1,6 @@
 'use client';
 
-import { History, Loader2, Plus, RotateCcw, Tag, Trash2 } from 'lucide-react';
+import { History, Loader2, Plus, RotateCcw, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -32,12 +32,31 @@ import {
   archiveCategoryAction,
   createCategoryAction,
   restoreCategoryAction,
+  setupSportsCategoriesAction,
   updateCategoryAction,
 } from '@/server/actions/categories';
 import {
   setCategoryPublicVisibilityAction,
   type CategoryPublicVisibility,
 } from '@/server/actions/item-visibility';
+
+import {
+  DEFAULT_SUBCATEGORY_PROFILES,
+  SPORTS_SUBCATEGORIES,
+  TRACKING_MODE_LABELS,
+  type SportsSubcategoryKey,
+  type SubcategoryTrackingProfile,
+  type TrackingMode,
+} from '@stockpilot/core';
+
+import {
+  EMPTY_TRACKING_PROFILE_DRAFT,
+  isTrackingProfileComplete,
+  TrackingProfileEditor,
+} from './tracking-profile-editor';
+
+const CUSTOM_SUBCATEGORY = '__custom';
+const NO_SUBCATEGORY = '__none';
 
 interface CategoryRow {
   id: string;
@@ -46,6 +65,10 @@ interface CategoryRow {
   color: string | null;
   supports_sizes: boolean;
   public_visibility: CategoryPublicVisibility;
+  parent_id: string | null;
+  tracking_mode: TrackingMode | null;
+  sports_subcategory_key: string | null;
+  tracking_profile: SubcategoryTrackingProfile | null;
 }
 
 interface FormValues {
@@ -53,15 +76,42 @@ interface FormValues {
   description: string;
   color: string;
   supportsSizes: boolean;
+  isSportsSubcategory: boolean;
+  subcategoryKey: string;
+  trackingModeOverride: string;
 }
 
 const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#ec4899', '#64748b', '#eab308'];
+
+/**
+ * Resolves what the Tracking column shows for a row (Task 12). Returns null
+ * for a category with nothing sports-related at all — the regression
+ * requirement that a plain category "must render with no sports affordances".
+ */
+function resolveTrackingDisplay(
+  row: CategoryRow,
+  parent: CategoryRow | null,
+): { label: string; inherited: boolean } | null {
+  const builtIn = row.sports_subcategory_key
+    ? DEFAULT_SUBCATEGORY_PROFILES[row.sports_subcategory_key as SportsSubcategoryKey]
+    : undefined;
+  const profile = builtIn ?? row.tracking_profile ?? null;
+  const explicitMode = row.tracking_mode ?? parent?.tracking_mode ?? null;
+  const mode = explicitMode ?? profile?.defaultMode ?? null;
+  if (!mode) return null;
+  return {
+    label: TRACKING_MODE_LABELS[mode],
+    inherited: row.tracking_mode == null && parent?.tracking_mode != null,
+  };
+}
 
 export function CategoriesManager({
   initial,
   view = 'active',
   canManage = true,
   canManagePublicVisibility = false,
+  sportsEnabled = false,
+  canManageSports = false,
 }: {
   initial: CategoryRow[];
   view?: 'active' | 'archived';
@@ -77,22 +127,70 @@ export function CategoriesManager({
    * the server action re-asserts.
    */
   canManagePublicVisibility?: boolean;
+  /** Sports module on for this org (Task 12). Gates "Set up Sports" and the
+   *  per-category tracking-profile controls; the server re-asserts both. */
+  sportsEnabled?: boolean;
+  /** can(ctx, 'sports:manage'). Same prop-gating pattern as canManagePublicVisibility. */
+  canManageSports?: boolean;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<CategoryRow | null>(null);
+  const [presetParent, setPresetParent] = React.useState<CategoryRow | null>(null);
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<CategoryRow | null>(null);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreTarget, setRestoreTarget] = React.useState<CategoryRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  const [setupBusy, setSetupBusy] = React.useState(false);
 
-  function openNew() {
+  const byId = React.useMemo(() => new Map(initial.map((c) => [c.id, c])), [initial]);
+  /**
+   * A row is rendered under its parent only when that parent is in THIS list.
+   * `CategoriesService.archive()` refuses to archive a category that still has
+   * live children, but that check is not atomic (two admins, one archiving the
+   * parent while the other adds a child), and this list is also filtered. A
+   * child whose parent is absent is therefore promoted to a root rather than
+   * dropped: every row renders exactly once, whatever the data does.
+   */
+  const isRoot = React.useCallback(
+    (c: CategoryRow) => !c.parent_id || !byId.has(c.parent_id),
+    [byId],
+  );
+  const childrenByParent = React.useMemo(() => {
+    const map = new Map<string, CategoryRow[]>();
+    for (const c of initial) {
+      if (isRoot(c)) continue;
+      const list = map.get(c.parent_id as string) ?? [];
+      list.push(c);
+      map.set(c.parent_id as string, list);
+    }
+    for (const list of map.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+    return map;
+  }, [initial, isRoot]);
+  const roots = React.useMemo(
+    () => initial.filter(isRoot).sort((a, b) => a.name.localeCompare(b.name)),
+    [initial, isRoot],
+  );
+  // The whole hierarchy layout is opt-in per org, by DATA: an org that has
+  // never created a subcategory has zero rows with parent_id set, so this is
+  // false for every pre-Task-12 org and the render below falls through to the
+  // exact old flat grid — "no sports affordances at all" by construction.
+  const hasHierarchy = initial.some((c) => c.parent_id != null);
+
+  function openNewRoot() {
     setEditing(null);
+    setPresetParent(null);
+    setOpen(true);
+  }
+  function openNewSubcategory(root: CategoryRow) {
+    setEditing(null);
+    setPresetParent(root);
     setOpen(true);
   }
   function openEdit(row: CategoryRow) {
     setEditing(row);
+    setPresetParent(null);
     setOpen(true);
   }
 
@@ -124,15 +222,97 @@ export function CategoriesManager({
     router.refresh();
   }
 
+  async function handleSetupSports() {
+    setSetupBusy(true);
+    const res = await setupSportsCategoriesAction();
+    setSetupBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(
+      res.data.created.length === 0
+        ? 'Sports categories are already set up.'
+        : `Created ${res.data.created.length} Sports subcategor${res.data.created.length === 1 ? 'y' : 'ies'}.`,
+    );
+    router.refresh();
+  }
+
+  function renderCard(row: CategoryRow, parent: CategoryRow | null) {
+    const tracking = sportsEnabled ? resolveTrackingDisplay(row, parent) : null;
+    return (
+      <div
+        key={row.id}
+        className="group flex items-start gap-3 rounded-xl border bg-card p-4 transition-shadow hover:shadow-md"
+      >
+        <span
+          aria-hidden
+          className="mt-1 h-3 w-3 shrink-0 rounded-full"
+          style={{ backgroundColor: row.color ?? '#94a3b8' }}
+        />
+        <div className="flex-1 min-w-0">
+          {isArchivedView || !canManage ? (
+            <span className="block text-left font-medium">{row.name}</span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => openEdit(row)}
+              className="block text-left font-medium transition-colors hover:text-primary"
+            >
+              {row.name}
+            </button>
+          )}
+          {row.description && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{row.description}</p>
+          )}
+          {tracking && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Tracking: <span className="font-medium text-foreground">{tracking.label}</span>
+              {tracking.inherited && ' (inherited)'}
+            </p>
+          )}
+          {canManagePublicVisibility && <CategoryVisibilityControl category={row} />}
+        </div>
+        {canManage &&
+          (isArchivedView ? (
+            <Button variant="outline" size="sm" onClick={() => setRestoreTarget(row)}>
+              <RotateCcw className="h-3.5 w-3.5" /> Restore
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="opacity-0 transition-opacity group-hover:opacity-100"
+              onClick={() => setArchiveTarget(row)}
+              aria-label={`Archive ${row.name}`}
+            >
+              <Trash2 className="h-4 w-4 text-muted-foreground" />
+            </Button>
+          ))}
+      </div>
+    );
+  }
+
+  const parentId = editing?.parent_id ?? presetParent?.id ?? null;
+  const parentRow = parentId ? (byId.get(parentId) ?? presetParent) : null;
+
   return (
     <>
       <div className="mb-5 flex items-center justify-between gap-2">
         <ArchiveViewToggle view={view} />
-        {canManage && !isArchivedView && (
-          <Button variant="gradient" onClick={openNew}>
-            <Plus className="h-4 w-4" /> New category
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {sportsEnabled && canManageSports && !isArchivedView && (
+            <Button variant="outline" onClick={handleSetupSports} disabled={setupBusy}>
+              {setupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Set up Sports
+            </Button>
+          )}
+          {canManage && !isArchivedView && (
+            <Button variant="gradient" onClick={openNewRoot}>
+              <Plus className="h-4 w-4" /> New category
+            </Button>
+          )}
+        </div>
       </div>
 
       {canManagePublicVisibility && initial.length > 0 && (
@@ -159,59 +339,45 @@ export function CategoriesManager({
             description="Group items by type so reports, filters, and dashboards stay readable. Use the New category button above to add one."
           />
         )
-      ) : (
+      ) : isArchivedView || !hasHierarchy ? (
+        // Flat grid — byte-identical to the pre-Task-12 layout. This is what
+        // every org that has never created a subcategory (i.e. every org
+        // today) continues to see, and what the archived view always shows.
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {initial.map((cat) => (
-            <div key={cat.id} className="group flex items-start gap-3 rounded-xl border bg-card p-4 transition-shadow hover:shadow-md">
-              <span
-                aria-hidden
-                className="mt-1 h-3 w-3 shrink-0 rounded-full"
-                style={{ backgroundColor: cat.color ?? '#94a3b8' }}
-              />
-              <div className="flex-1 min-w-0">
-                {isArchivedView || !canManage ? (
-                  <span className="block text-left font-medium">{cat.name}</span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => openEdit(cat)}
-                    className="block text-left font-medium transition-colors hover:text-primary"
-                  >
-                    {cat.name}
-                  </button>
-                )}
-                {cat.description && (
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{cat.description}</p>
-                )}
-                {canManagePublicVisibility && (
-                  <CategoryVisibilityControl category={cat} />
+          {initial.map((row) => renderCard(row, null))}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {roots.map((root) => {
+            const children = childrenByParent.get(root.id) ?? [];
+            return (
+              <div key={root.id} className="rounded-xl border bg-card p-4">
+                {renderCard(root, null)}
+                <div className="mt-3 space-y-2 border-l border-border pl-4">
+                  {children.map((child) => renderCard(child, root))}
+                </div>
+                {canManage && (
+                  <div className="mt-2 pl-4">
+                    <Button variant="outline" size="sm" onClick={() => openNewSubcategory(root)}>
+                      <Plus className="h-3.5 w-3.5" /> Add subcategory
+                    </Button>
+                  </div>
                 )}
               </div>
-              {canManage && (isArchivedView ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setRestoreTarget(cat)}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" /> Restore
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-0 transition-opacity group-hover:opacity-100"
-                  onClick={() => setArchiveTarget(cat)}
-                  aria-label={`Archive ${cat.name}`}
-                >
-                  <Trash2 className="h-4 w-4 text-muted-foreground" />
-                </Button>
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      <CategoryDialog open={open} onOpenChange={setOpen} editing={editing} />
+      <CategoryDialog
+        open={open}
+        onOpenChange={setOpen}
+        editing={editing}
+        parentId={parentId}
+        parentRow={parentRow}
+        sportsEnabled={sportsEnabled}
+        canManageSports={canManageSports}
+      />
 
       <DestructiveConfirm
         open={archiveTarget !== null}
@@ -251,10 +417,19 @@ function CategoryDialog({
   open,
   onOpenChange,
   editing,
+  parentId,
+  parentRow,
+  sportsEnabled,
+  canManageSports,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   editing: CategoryRow | null;
+  /** Set when creating a subcategory (via "Add subcategory") or editing one. */
+  parentId: string | null;
+  parentRow: CategoryRow | null;
+  sportsEnabled: boolean;
+  canManageSports: boolean;
 }) {
   const router = useRouter();
   const {
@@ -272,26 +447,80 @@ function CategoryDialog({
       description: '',
       color: '#6366f1',
       supportsSizes: false,
+      isSportsSubcategory: false,
+      subcategoryKey: NO_SUBCATEGORY,
+      trackingModeOverride: '',
     },
   });
+  // The custom subcategory's full profile. Plain state (not react-hook-form) —
+  // same reasoning as the group-identity fields in sports-fields.tsx: RHF
+  // would validate the whole nested object on every keystroke.
+  const [profileDraft, setProfileDraft] = React.useState<SubcategoryTrackingProfile>(
+    EMPTY_TRACKING_PROFILE_DRAFT,
+  );
+
+  const showSportsSection = sportsEnabled && canManageSports && parentId != null;
 
   React.useEffect(() => {
-    if (open) {
-      reset({
-        name: editing?.name ?? '',
-        description: editing?.description ?? '',
-        color: editing?.color ?? '#6366f1',
-        supportsSizes: editing?.supports_sizes ?? false,
-      });
-    }
+    if (!open) return;
+    const builtInKey =
+      editing?.sports_subcategory_key &&
+      (SPORTS_SUBCATEGORIES as readonly string[]).includes(editing.sports_subcategory_key)
+        ? editing.sports_subcategory_key
+        : null;
+    const isCustom = Boolean(editing?.sports_subcategory_key) && !builtInKey;
+    reset({
+      name: editing?.name ?? '',
+      description: editing?.description ?? '',
+      color: editing?.color ?? '#6366f1',
+      supportsSizes: editing?.supports_sizes ?? false,
+      isSportsSubcategory: Boolean(editing?.sports_subcategory_key),
+      subcategoryKey: builtInKey ?? (isCustom ? CUSTOM_SUBCATEGORY : NO_SUBCATEGORY),
+      trackingModeOverride: editing?.tracking_mode ?? '',
+    });
+    setProfileDraft(
+      isCustom && editing?.tracking_profile ? editing.tracking_profile : EMPTY_TRACKING_PROFILE_DRAFT,
+    );
   }, [open, editing, reset]);
 
+  const subcategoryKey = watch('subcategoryKey');
+  const isSportsSubcategory = watch('isSportsSubcategory');
+  const isCustomSubcategory = subcategoryKey === CUSTOM_SUBCATEGORY;
+  const builtInProfile =
+    subcategoryKey !== CUSTOM_SUBCATEGORY && subcategoryKey !== NO_SUBCATEGORY
+      ? DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey]
+      : null;
+
+  const canSubmitSports =
+    !showSportsSection ||
+    !isSportsSubcategory ||
+    (isCustomSubcategory ? isTrackingProfileComplete(profileDraft) : subcategoryKey !== NO_SUBCATEGORY);
+
   const onSubmit = handleSubmit(async (values) => {
+    const sportsFields =
+      showSportsSection && values.isSportsSubcategory
+        ? isCustomSubcategory
+          ? {
+              sportsSubcategoryKey: profileDraft.key,
+              trackingMode: profileDraft.defaultMode,
+              trackingProfile: profileDraft,
+            }
+          : {
+              sportsSubcategoryKey: values.subcategoryKey,
+              trackingMode: (values.trackingModeOverride || undefined) as TrackingMode | undefined,
+              trackingProfile: null,
+            }
+        : showSportsSection
+          ? { sportsSubcategoryKey: null, trackingMode: null, trackingProfile: null }
+          : {};
+
     const payload = {
       name: values.name,
       description: values.description || undefined,
       color: values.color || undefined,
       supportsSizes: values.supportsSizes,
+      parentId,
+      ...sportsFields,
     };
     const res = editing
       ? await updateCategoryAction(editing.id, payload)
@@ -309,9 +538,16 @@ function CategoryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{editing ? 'Edit category' : 'New category'}</DialogTitle>
+          <DialogTitle>
+            {editing ? 'Edit category' : parentId ? 'New subcategory' : 'New category'}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
+          {parentRow && (
+            <p className="text-xs text-muted-foreground">
+              Under: <span className="font-medium text-foreground">{parentRow.name}</span>
+            </p>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" placeholder="Electronics" {...register('name', { required: true })} />
@@ -360,11 +596,94 @@ function CategoryDialog({
               </p>
             </div>
           </label>
+
+          {showSportsSection && (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <label
+                htmlFor="is-sports-subcategory"
+                className="flex items-start gap-3 cursor-pointer"
+              >
+                <input
+                  id="is-sports-subcategory"
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  {...register('isSportsSubcategory')}
+                />
+                <div className="space-y-0.5">
+                  <span className="block text-sm font-medium">This is a Sports subcategory</span>
+                  <p className="text-muted-foreground text-xs">
+                    Sports subcategories carry a tracking profile — how items under them are
+                    counted, what attributes they take, and whether a serial is required.
+                  </p>
+                </div>
+              </label>
+
+              {isSportsSubcategory && (
+                <div className="space-y-3 pl-7">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="subcategory-key">Subcategory type</Label>
+                    <Select
+                      value={subcategoryKey}
+                      onValueChange={(v) => {
+                        setValue('subcategoryKey', v);
+                        setValue('trackingModeOverride', '');
+                      }}
+                    >
+                      <SelectTrigger id="subcategory-key">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_SUBCATEGORY}>Choose a type…</SelectItem>
+                        {SPORTS_SUBCATEGORIES.map((key) => (
+                          <SelectItem key={key} value={key}>
+                            {DEFAULT_SUBCATEGORY_PROFILES[key].label}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={CUSTOM_SUBCATEGORY}>Custom…</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {builtInProfile && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="tracking-mode-override">
+                        Tracking mode
+                        <span className="ml-1 font-normal text-muted-foreground">
+                          (default: {TRACKING_MODE_LABELS[builtInProfile.defaultMode]})
+                        </span>
+                      </Label>
+                      <Select
+                        value={watch('trackingModeOverride') || '__default'}
+                        onValueChange={(v) => setValue('trackingModeOverride', v === '__default' ? '' : v)}
+                      >
+                        <SelectTrigger id="tracking-mode-override">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__default">Use the default</SelectItem>
+                          {builtInProfile.allowedModes.map((m) => (
+                            <SelectItem key={m} value={m}>
+                              {TRACKING_MODE_LABELS[m]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {isCustomSubcategory && (
+                    <TrackingProfileEditor value={profileDraft} onChange={setProfileDraft} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" variant="gradient" disabled={isSubmitting}>
+            <Button type="submit" variant="gradient" disabled={isSubmitting || !canSubmitSports}>
               {isSubmitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : editing ? (
