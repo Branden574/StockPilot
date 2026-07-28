@@ -190,12 +190,28 @@ there, `custom_fields.size` is the only copy of the data.
 
 ---
 
-## 3. Ambiguous rows — PENDING prod counts (owner-gated)
+## 3. Ambiguous rows — production counts (run 2026-07-28)
 
-**No production numbers exist. Nothing in this section has been run against
-`xizpqmhhslgzbuqtjubv`.** The push is owner-gated; run these three queries
-immediately after `supabase db push --linked` completes and paste the real
-numbers back into this section, replacing this notice.
+Migrations 0294-0303 were applied to `xizpqmhhslgzbuqtjubv` on 2026-07-28
+(early-morning low-traffic window; zero lock timeouts, zero errors — every
+NOTICE was an expected `if exists` skip). The three queries below were run
+immediately after the push. Real numbers:
+
+- **Per-flag counts:** one org carries flags — L4L North Region:
+  `sized_but_ungrouped` 100, `name_size_conflict` 1. No other org has any
+  flagged row.
+- **Backfill movement:** `sized_rows` 101, `linking_candidates` 101,
+  `already_grouped` **0** (the anti-inference invariant held in production:
+  the backfill grouped nothing), `size_stored_but_not_copied` **0** — which
+  equals the `ambiguous_size` count of 0, satisfying the consistency rule
+  below.
+- **The human queue:** a single `name_size_conflict` row — an L4L sweater
+  whose name and SKU say "L" while `custom_fields.size` says `XL`. The
+  backfill copied the stored `XL` into `variant_size` (source of truth) and
+  flagged the disagreement for review. This is the flag working as designed
+  on real data.
+
+The original queries are preserved below for re-runs.
 
 ```sql
 -- Per-flag counts, per org.
