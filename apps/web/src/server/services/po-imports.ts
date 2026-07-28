@@ -92,6 +92,22 @@ export interface PoImportLineage {
   successors: PoImportLineageRef[];
 }
 
+/**
+ * Normalizes ONE extracted/parsed source string for a po_import_lines column.
+ *
+ * '' is how both the AI extractor and an empty CSV cell say "the document did
+ * not print this". Writing that through would store a blank value that reads
+ * as a real, deliberate empty — and the requirement is that MISSING STAYS
+ * MISSING. Whitespace is trimmed; the characters themselves are never altered
+ * (no case folding, no size conversion, no leading-zero stripping), because
+ * these columns are the record of what the document said.
+ */
+function sourceValue(v: string | null | undefined): string | null {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 export interface PoImportLineRow {
   id: string;
   po_import_id: string;
@@ -117,6 +133,27 @@ export interface PoImportLineRow {
       null for deterministic-parsed CSV/PDF imports (those are 100%). */
   extraction_confidence: number | null;
   exception_reason: string | null;
+
+  // ── Sports variant fields (migration 0301) ────────────────────────────────
+  // What the DOCUMENT said, verbatim. Null means the document said nothing —
+  // never an empty string, and never a guess.
+  variant_size: string | null;
+  /** The size string exactly as printed. Never overwritten by a normalized form. */
+  variant_size_original: string | null;
+  variant_size_system: string | null;
+  variant_width: string | null;
+  variant_fit: string | null;
+  variant_color: string | null;
+  /** TEXT with leading zeroes intact. NEVER a serial, never an identity key. */
+  jersey_number: string | null;
+  player_name: string | null;
+  /** Free-text style/product identity, used to resolve a size run to ONE product. */
+  group_hint: string | null;
+  /** Advisory "possible existing product group" — mirrors suggested_item_id;
+      never auto-linked, the user must accept it in review. */
+  suggested_group_id: string | null;
+  /** Confidence in the FIELD MAPPING (0-1), distinct from extraction_confidence. */
+  mapping_confidence: number | null;
 }
 
 export class PoImportsService {
@@ -869,6 +906,26 @@ export class PoImportsService {
         match_confidence: null,
         extraction_confidence: l.confidence,
         exception_reason,
+        // ── Sports variant fields (0301) ────────────────────────────────
+        // The extractor returns '' for "the document did not print this";
+        // sourceValue turns that into a real NULL so a blank never reads as
+        // a value the vendor actually printed. Nothing is inferred here:
+        // variant_fit and suggested_group_id have no extractor input at all
+        // and stay null rather than being guessed from the description.
+        variant_size: sourceValue(l.size),
+        // No separate "original" comes off a scan — the extracted size IS
+        // what was printed, so both columns carry it and Task 14's
+        // normalization has an untouched copy to fall back to.
+        variant_size_original: sourceValue(l.size),
+        variant_size_system: sourceValue(l.sizeSystem),
+        variant_width: sourceValue(l.width),
+        variant_fit: null,
+        variant_color: sourceValue(l.colorway),
+        jersey_number: sourceValue(l.jerseyNumber),
+        player_name: sourceValue(l.playerName),
+        group_hint: sourceValue(l.groupHint),
+        suggested_group_id: null,
+        mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
       };
     });
@@ -1018,6 +1075,23 @@ export class PoImportsService {
         suggested_item_id,
         match_status,
         exception_reason,
+        // ── Sports variant fields (0301) ────────────────────────────────
+        // Same columns as the scan path, so a document uploaded as CSV/PDF
+        // and the same document photographed produce the same line. The
+        // deterministic parsers do not emit these yet (every value is
+        // undefined → NULL), which is exactly the "missing stays missing"
+        // behaviour a non-sports import needs.
+        variant_size: sourceValue(l.variantSize),
+        variant_size_original: sourceValue(l.variantSizeOriginal ?? l.variantSize),
+        variant_size_system: sourceValue(l.variantSizeSystem),
+        variant_width: sourceValue(l.variantWidth),
+        variant_fit: sourceValue(l.variantFit),
+        variant_color: sourceValue(l.variantColor),
+        jersey_number: sourceValue(l.jerseyNumber),
+        player_name: sourceValue(l.playerName),
+        group_hint: sourceValue(l.groupHint),
+        suggested_group_id: null,
+        mapping_confidence: l.mappingConfidence ?? null,
         parsed_json: l,
       };
     });

@@ -299,8 +299,12 @@ export async function createItemsFromPoLines(
   // import belongs to the caller's org.
   const { data: lines, error: lErr } = await supabase
     .from('po_import_lines')
+    // Hand-written column list: the create path cannot see a column that is
+    // not named here, so the 0301 variant columns are added even though this
+    // task does not consume them yet — Task 14's group-first matching reads
+    // them off exactly this row, and a missing name would fail silently.
     .select(
-      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id',
+      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, suggested_group_id',
     )
     .eq('po_import_id', input.poImportId)
     .in('id', input.lineIds);

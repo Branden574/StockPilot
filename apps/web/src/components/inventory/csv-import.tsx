@@ -11,17 +11,38 @@ import { parseCsv, rowsToObjects, toCsv } from '@/lib/csv';
 import { importItemsAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
 
+/**
+ * The template columns. The sports block (Task 13) is what lets a size run
+ * arrive as a size run instead of N unrelated rows.
+ *
+ * Two tiers, and the difference is visible to the user in APPLIED_NOTE below
+ * rather than hidden here: `size`…`player_name` are applied to the created
+ * item today, while the group-identity columns (brand, model, style_number,
+ * colorway, team, season, home_away) plus counting_unit / tracking_mode /
+ * serial / asset_tag / *_name lookups are accepted and validated but not yet
+ * applied — creating product groups or serial units from a bulk CSV is
+ * identity creation, and the owner decision routes that through the review
+ * tool, never a heuristic import.
+ */
 const TEMPLATE_HEADER = [
-  'name',
-  'sku',
-  'barcode',
-  'description',
-  'unit_cost',
-  'retail_price',
-  'quantity_on_hand',
-  'reorder_point',
-  'reorder_quantity',
-  'unit_of_measure',
+  'name', 'sku', 'barcode', 'description',
+  'unit_cost', 'retail_price', 'quantity_on_hand',
+  'reorder_point', 'reorder_quantity', 'unit_of_measure',
+  'category_name', 'subcategory_name',
+  'brand', 'model', 'style_number', 'colorway',
+  'team', 'season', 'home_away', 'jersey_number', 'player_name',
+  'size', 'size_system', 'width', 'fit', 'color',
+  'counting_unit', 'tracking_mode',
+  'serial', 'asset_tag', 'warehouse_name', 'location_name',
+];
+
+/** The columns a row's value actually reaches the created item through. */
+const APPLIED_COLUMNS = [
+  'name', 'sku', 'barcode', 'description',
+  'unit_cost', 'retail_price', 'quantity_on_hand',
+  'reorder_point', 'reorder_quantity', 'unit_of_measure',
+  'size', 'size_system', 'width', 'fit', 'color',
+  'jersey_number', 'player_name',
 ];
 
 const TEMPLATE_SAMPLE = [
@@ -36,6 +57,30 @@ const TEMPLATE_SAMPLE = [
     reorder_point: 10,
     reorder_quantity: 25,
     unit_of_measure: 'unit',
+  },
+  {
+    name: 'Falcons Home Jersey - M',
+    sku: 'FALC-HOME-M-07',
+    description: 'Home jersey, number 07',
+    unit_cost: 42,
+    retail_price: 0,
+    quantity_on_hand: 3,
+    reorder_point: 0,
+    reorder_quantity: 0,
+    unit_of_measure: 'each',
+    brand: 'Nike',
+    team: 'Falcons',
+    season: '2026',
+    home_away: 'home',
+    // Leading zeroes are kept: 07 and 7 are different uniforms. Type this
+    // column as TEXT in your spreadsheet, or Excel will drop the zero.
+    jersey_number: '07',
+    player_name: 'A. Rosas',
+    size: 'M',
+    size_system: 'ALPHA',
+    fit: 'mens',
+    color: 'Red/Black',
+    counting_unit: 'each',
   },
 ];
 
@@ -102,13 +147,24 @@ export function CsvImport() {
             Step 1 — download the template
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <p className="text-sm text-muted-foreground">
-            Required columns: <code className="rounded bg-muted px-1 py-0.5 text-xs">name</code>. Everything else is optional.
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-muted-foreground">
+              Required columns: <code className="rounded bg-muted px-1 py-0.5 text-xs">name</code>. Everything else is optional.
+            </p>
+            <Button variant="outline" size="sm" onClick={downloadTemplate}>
+              <Download className="h-4 w-4" /> Download CSV template
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Applied on import: {APPLIED_COLUMNS.join(', ')}. The remaining
+            template columns (product group identity, counting unit, tracking
+            mode, serial, asset tag, and the category / warehouse / location
+            lookups) are accepted and checked, but are set through the item
+            and product-group screens rather than a bulk import. Keep{' '}
+            <code className="rounded bg-muted px-1 py-0.5">jersey_number</code>{' '}
+            formatted as text so leading zeroes survive.
           </p>
-          <Button variant="outline" size="sm" onClick={downloadTemplate}>
-            <Download className="h-4 w-4" /> Download CSV template
-          </Button>
         </CardContent>
       </Card>
 

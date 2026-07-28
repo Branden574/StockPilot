@@ -15,6 +15,16 @@ const line = (p: Partial<Line>): Line => ({
   lineTotal: 0,
   lineType: 'inventory',
   confidence: 0.9,
+  // Sports variant fields (Task 13). Empty is the "the document said
+  // nothing" value — a book PO exercises the dedupe with all of them blank.
+  size: '',
+  sizeSystem: '',
+  width: '',
+  colorway: '',
+  jerseyNumber: '',
+  playerName: '',
+  groupHint: '',
+  mappingConfidence: null,
   ...p,
 });
 

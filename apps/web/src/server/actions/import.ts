@@ -7,7 +7,14 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import {
+  emptyToUndefined,
+  err,
+  jerseyNumberSchema,
+  ok,
+  sizeSystemSchema,
+  type ActionResult,
+} from '@stockpilot/core';
 
 const csvRowSchema = z.object({
   name: z.string().min(1).max(200),
@@ -21,8 +28,49 @@ const csvRowSchema = z.object({
   reorder_quantity: z.coerce.number().nonnegative().default(0),
   unit_of_measure: z.string().max(32).optional(),
   category_name: z.string().max(120).optional(),
+  subcategory_name: z.string().max(120).optional(),
   location_name: z.string().max(120).optional(),
+  warehouse_name: z.string().max(120).optional(),
   supplier_name: z.string().max(120).optional(),
+
+  // ── Sports columns (Task 13) ──────────────────────────────────────────────
+  // The VARIANT block below is applied to the created item. It reuses the
+  // shared core schemas rather than re-declaring the rules, so a CSV, the web
+  // form and Expo all accept exactly the same values — including
+  // jerseyNumberSchema's leading-zero preservation ('07' stays '07', and a
+  // '12A' is REJECTED with a row error rather than imported wrong).
+  size: z.preprocess(emptyToUndefined, z.string().max(24).optional()),
+  // Case-folded before the shared enum sees it: a spreadsheet cell reading
+  // "us_mens" is unambiguous, and failing the row over its case would be a
+  // pointless rejection. The VALUE set is still the shared one — this widens
+  // nothing, it only normalizes the way the AI extractor already does.
+  size_system: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    sizeSystemSchema,
+  ),
+  width: z.preprocess(emptyToUndefined, z.string().max(16).optional()),
+  fit: z.preprocess(emptyToUndefined, z.string().max(32).optional()),
+  color: z.preprocess(emptyToUndefined, z.string().max(64).optional()),
+  jersey_number: jerseyNumberSchema,
+  player_name: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
+
+  // The GROUP-IDENTITY block. Accepted and bounded here so a template row
+  // carrying them is not a validation failure, but deliberately NOT applied:
+  // creating product groups from a CSV is bulk identity creation, and the
+  // owner decision is that families link through the review tool, never a
+  // heuristic import ("NO name-heuristic auto-backfill"). Task 18's linking
+  // tool is what consumes these.
+  brand: z.string().max(120).optional(),
+  model: z.string().max(120).optional(),
+  style_number: z.string().max(64).optional(),
+  colorway: z.string().max(64).optional(),
+  team: z.string().max(120).optional(),
+  season: z.string().max(32).optional(),
+  home_away: z.string().max(16).optional(),
+  counting_unit: z.string().max(32).optional(),
+  tracking_mode: z.string().max(32).optional(),
+  serial: z.string().max(128).optional(),
+  asset_tag: z.string().max(128).optional(),
 });
 
 const importSchema = z.object({
@@ -73,6 +121,19 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
           itemType: 'product',
           customFields: {},
           status: 'active',
+          // Sports variant attributes (Task 13). Passed straight to the
+          // service, which is where the category's tracking profile decides
+          // whether they are allowed — the CSV is never the authority. A
+          // non-sports row leaves every one undefined and creates exactly the
+          // item it created before.
+          variantSize: validated.data.size,
+          variantSizeOriginal: validated.data.size,
+          variantSizeSystem: validated.data.size_system,
+          variantWidth: validated.data.width,
+          variantFit: validated.data.fit,
+          variantColor: validated.data.color,
+          jerseyNumber: validated.data.jersey_number,
+          playerName: validated.data.player_name,
         });
         summary.created++;
       } catch (e) {
