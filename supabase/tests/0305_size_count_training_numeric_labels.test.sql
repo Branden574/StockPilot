@@ -74,7 +74,7 @@ select lives_ok(
   format('the numeric label %s inserts', lbl))
 from unnest(array['1','9','10.5','20']) as lbl;
 
--- ── 17-20. Garbage is refused as a CHECK violation ─────────────────────────
+-- ── 17-24. Garbage is refused as a CHECK violation ─────────────────────────
 -- 23514 specifically: a `size_label::numeric` guard could raise 22P02 instead
 -- (Postgres does not guarantee AND short-circuits), which the API would surface
 -- as a 500. Asserting the SQLSTATE is what pins that down.

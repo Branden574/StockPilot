@@ -271,7 +271,16 @@ export default function TrainingCaptureScreen() {
         </View>
 
         <View style={styles.panel} pointerEvents="auto">
-          <View style={styles.toolRow}>
+          {/* Horizontally scrollable, like the size row below it. This row used
+              to hold two buttons and fit; the size-set toggle makes three, and
+              at large Dynamic Type the third (Import photos) ran off the right
+              edge and became completely untappable. Scrolling keeps every tool
+              reachable at any text size. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.toolRow}
+          >
             <Pressable
               // Cycles 1 → 5 → 20 → 50 → 1 so one tap-and-frame can produce a
               // whole batch of training frames.
@@ -309,7 +318,7 @@ export default function TrainingCaptureScreen() {
             <Pressable onPress={pickPhotos} style={styles.toolBtn}>
               <Text style={styles.toolLabel}>Import photos</Text>
             </Pressable>
-          </View>
+          </ScrollView>
 
           <ScrollView
             // Remounted per set so switching Apparel → Shoes starts the row at
@@ -347,19 +356,31 @@ export default function TrainingCaptureScreen() {
           <Pressable style={styles.sheet} onPress={() => undefined}>
             <Text style={styles.sheetTitle}>Label {importUris.length} photo{importUris.length === 1 ? '' : 's'}</Text>
             <Text style={styles.sheetBody}>What size are these? They&apos;ll all upload with this label.</Text>
-            {/* Bounded + scrollable: the shoe set is 35 chips, and an
-                unconstrained wrapping grid grew the sheet past the bottom of a
-                small screen, pushing Cancel off. The title and Cancel stay
-                pinned; only the chips scroll. */}
-            <ScrollView style={styles.sheetGridScroll} contentContainerStyle={styles.sheetGrid}>
-              {labelSet.labels.map((l) => (
-                <Pressable key={l} onPress={() => labelImport(l, false)} style={styles.sheetChip}>
-                  <Text style={styles.sheetChipText}>{l}</Text>
+            {/* The 35-chip shoe set does not fit, so the chips scroll while the
+                title and Cancel stay pinned.
+
+                The wrap MUST live on an inner View, never on the ScrollView's
+                own contentContainerStyle. A wrapping row set as the content
+                container gets measured against the ScrollView's bounded height,
+                so contentSize comes back equal to the frame and scrolling never
+                engages — the grid silently dead-ends (it stranded the run at 17,
+                putting 17.5, 18 and the "Not a sticker" hard negative out of
+                reach entirely). As a plain child the wrap is measured on its own
+                and the default column content container grows to fit it.
+
+                Height is bounded on the SHEET, not here: this view only needs to
+                shrink out of the way of the pinned rows. */}
+            <ScrollView style={styles.sheetGridScroll}>
+              <View style={styles.sheetGrid}>
+                {labelSet.labels.map((l) => (
+                  <Pressable key={l} onPress={() => labelImport(l, false)} style={styles.sheetChip}>
+                    <Text style={styles.sheetChipText}>{l}</Text>
+                  </Pressable>
+                ))}
+                <Pressable onPress={() => labelImport('NONE', true)} style={[styles.sheetChip, styles.sheetChipNeg]}>
+                  <Text style={styles.sheetChipText}>Not a sticker</Text>
                 </Pressable>
-              ))}
-              <Pressable onPress={() => labelImport('NONE', true)} style={[styles.sheetChip, styles.sheetChipNeg]}>
-                <Text style={styles.sheetChipText}>Not a sticker</Text>
-              </Pressable>
+              </View>
             </ScrollView>
             <Pressable onPress={() => setImportUris([])} style={styles.sheetCancel}>
               <Text style={styles.sheetCancelText}>Cancel</Text>
@@ -430,10 +451,17 @@ const styles = StyleSheet.create({
   negLabel: { color: '#fff', fontSize: 14, fontWeight: '600' },
   dim: { opacity: 0.5 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: theme.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 22, paddingBottom: 36 },
+  // Bounded HERE so the sheet can never grow past the screen and push Cancel
+  // off. The chip scroller inside shrinks to whatever is left over.
+  sheet: {
+    backgroundColor: theme.card, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 22, paddingBottom: 36, maxHeight: '85%',
+  },
   sheetTitle: { color: theme.text, fontSize: 18, fontWeight: '700' },
   sheetBody: { color: theme.textMuted, fontSize: 13, marginTop: 6 },
-  sheetGridScroll: { maxHeight: 280, marginTop: 16 },
+  // No fixed height: it shrinks out of the way of the pinned title and Cancel,
+  // and stays content-sized when the set is small enough to fit (Apparel).
+  sheetGridScroll: { flexShrink: 1, marginTop: 16 },
   sheetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
   sheetChip: {
     minHeight: 44, paddingHorizontal: 16, borderRadius: radius.md, borderWidth: 1, borderColor: theme.border,
