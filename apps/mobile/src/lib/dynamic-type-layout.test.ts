@@ -31,6 +31,23 @@ describe('shouldStackRow', () => {
     expect(shouldStackRow(ROW_STACK_FONT_SCALE)).toBe(false);
   });
 
+  it('sits between the last non-accessibility size and AX1, so ONE threshold serves every screen', () => {
+    // Follow-ups 1-2 (viewfinder chrome, and long item names breaking per
+    // character) both reuse this single threshold rather than adding a second
+    // breakpoint. That only holds while it stays in the gap: raise it past
+    // 1.643 and the Items/Books rows silently stop stacking at AX1-AX2, which
+    // is exactly where `Sunglasse/s` was reported.
+    expect(ROW_STACK_FONT_SCALE).toBeGreaterThan(1.35);
+    expect(ROW_STACK_FONT_SCALE).toBeLessThan(1.643);
+  });
+
+  it('stacks at both reported repro sizes', () => {
+    // AX3 — the Items/Books row where `Sunglasses` broke mid-word.
+    expect(shouldStackRow(2.286)).toBe(true);
+    // AX5 — the size-count viewfinder chrome that overlapped its hint copy.
+    expect(shouldStackRow(3.571)).toBe(true);
+  });
+
   it('honours a caller-supplied threshold', () => {
     expect(shouldStackRow(1.2, 1.1)).toBe(true);
     expect(shouldStackRow(1.2, 1.3)).toBe(false);

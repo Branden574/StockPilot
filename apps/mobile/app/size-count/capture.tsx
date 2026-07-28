@@ -12,10 +12,12 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api, API_BASE } from '@/lib/api';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 /** Apparel letters and US shoe sizes (halves included) resolve through the ONE
  *  shared vocabulary in @stockpilot/core, which the API route and migration
  *  0305's CHECK also derive from — so a label this screen offers can never be
@@ -51,6 +53,10 @@ const BURST_YIELD_ABOVE = 5;
  */
 export default function TrainingCaptureScreen() {
   const router = useRouter();
+  // Live scale (re-renders when the user changes Larger Text mid-session); the
+  // threshold itself is the shared, unit-tested helper, not a second breakpoint.
+  const { fontScale } = useWindowDimensions();
+  const stackedBar = shouldStackRow(fontScale);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = React.useRef<CameraView>(null);
   const [busy, setBusy] = React.useState(false); // capturing (blocks the shutter briefly)
@@ -240,45 +246,98 @@ export default function TrainingCaptureScreen() {
     (inFlight > 0 ? ` · ${inFlight} uploading` : '') +
     (failed > 0 ? ` · ${failed} failed` : '');
 
+  // Built once and ARRANGED twice, so the stacked bar cannot drift from the
+  // row one: same nodes, same caps, same handlers — only the order changes.
+  const doneBtn = (
+    <Pressable onPress={() => router.back()} style={styles.closeBtn}>
+      <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+        Done
+      </Text>
+    </Pressable>
+  );
+  const reviewBtn = (
+    <Pressable onPress={() => router.push('/size-count/review' as never)} style={styles.reviewBtn}>
+      <Text style={styles.reviewText} numberOfLines={1} maxFontSizeMultiplier={REVIEW_CAP}>
+        Review
+      </Text>
+    </Pressable>
+  );
+  const titleCol = (
+    <View style={stackedBar ? styles.titleColStacked : styles.titleCol}>
+      <Text style={styles.title}>Training capture</Text>
+      <Text style={styles.subtitle}>{status}</Text>
+    </View>
+  );
+
   return (
     <View style={styles.root}>
       <Stack.Screen options={{ headerShown: false }} />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
       <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
-        {/* THE reported Dynamic Type bug. Neither Done nor Review can shrink,
-            so at 2x they squeezed the `flex: 1` title column to ~93pt and
-            "Training capture" — 42pt glyphs — broke into "Train / ing / capt /
-            ure". Camera chrome sits over a live viewfinder: it cannot scroll
-            and it cannot push the frame down, so the two buttons are capped at
-            the chrome ceiling and the title keeps the width it needs. */}
-        <View style={styles.topBar} pointerEvents="auto">
-          <Pressable onPress={() => router.back()} style={styles.closeBtn}>
-            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
-              Done
-            </Text>
-          </Pressable>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.title}>Training capture</Text>
-            <Text style={styles.subtitle}>{status}</Text>
+        {/* Dynamic Type, AX5: the chrome above the controls is now ONE flex
+            column that can grow and scroll, not two fixed blocks that collide.
+            The viewfinder is full-bleed behind it, so nothing here can push the
+            frame down: at AX5 the bar reaches ~290pt and the hint copy ~400pt
+            against ~760pt of usable height, and with the controls pinned the
+            hint had nowhere to go — it painted straight through both bars.
+            Inside the scroll region the layout is unchanged whenever it fits
+            (`flexGrow: 1` on the content container keeps the hint centred
+            between bar and panel, pixel-identical at every non-accessibility
+            size) and it scrolls instead of overlapping when it does not. So NO
+            copy is dropped: the secondary hint is one swipe away at AX5 rather
+            than hidden, which is the better half of the trade the brief allows.
+            The controls panel stays PINNED and never shrinks — tap-to-shoot is
+            untouched at every text size. */}
+        <ScrollView
+          style={styles.chromeScroll}
+          contentContainerStyle={styles.chromeContent}
+          // No rubber-band. Chrome that jiggles over a live viewfinder reads as
+          // broken, and this region must look and behave EXACTLY as it did at
+          // every size that already fits. `bounces={false}` suppresses only the
+          // overscroll; real scrolling still happens once the content overflows.
+          bounces={false}
+        >
+          {/* THE originally reported bug was the title fracturing into "Train /
+              ing / capt / ure", and it is a WIDTH problem: Done and Review
+              cannot shrink, so the title column fell to ~93pt while a 16pt
+              title reaches 57pt of glyph. Capping the two buttons at the chrome
+              ceiling bought it back to AX3; past the shared stack threshold the
+              bar becomes a column instead, and the title gets the FULL width —
+              369pt of a 393pt screen, less the bar's 12pt padding a side, where
+              the longest word ("Training", ~250pt at AX5) fits whole. Buttons
+              keep their familiar top-left / top-right corners. */}
+          <View style={[styles.topBar, stackedBar && styles.topBarStacked]} pointerEvents="auto">
+            {stackedBar ? (
+              <>
+                <View style={styles.topBarActions}>
+                  {doneBtn}
+                  {reviewBtn}
+                </View>
+                {titleCol}
+              </>
+            ) : (
+              <>
+                {doneBtn}
+                {titleCol}
+                {reviewBtn}
+              </>
+            )}
           </View>
-          <Pressable onPress={() => router.push('/size-count/review' as never)} style={styles.reviewBtn}>
-            <Text style={styles.reviewText} numberOfLines={1} maxFontSizeMultiplier={REVIEW_CAP}>
-              Review
-            </Text>
-          </Pressable>
-        </View>
 
-        <View style={styles.hintWrap} pointerEvents="none">
-          <Text style={styles.hint}>Frame one sticker, then tap its size</Text>
-          {/* The single most confusing thing about this screen: photographing
-              stickers TRAINS the detector, it does not tally a count. The owner
-              shot 2,171 photos and then found their count session reading zero
-              (2026-07-22). Nothing on screen said the two were different, so
-              say it here, next to the action itself. */}
-          <Text style={styles.hintSub}>
-            Photos train the size detector. They do not add to a count.
-          </Text>
-        </View>
+          {/* pointerEvents="none" so the drag belongs to the scroll region
+              above it — the hint is copy, never a target. */}
+          <View style={styles.hintWrap} pointerEvents="none">
+            <Text style={styles.hint}>Frame one sticker, then tap its size</Text>
+            {/* The single most confusing thing about this screen: photographing
+                stickers TRAINS the detector, it does not tally a count. The owner
+                shot 2,171 photos and then found their count session reading zero
+                (2026-07-22). Nothing on screen said the two were different, so
+                say it here, next to the action itself. */}
+            <Text style={styles.hintSub}>
+              Photos train the size detector. They do not add to a count.
+            </Text>
+          </View>
+        </ScrollView>
 
         <View style={styles.panel} pointerEvents="auto">
           {/* Horizontally scrollable, like the size row below it. This row used
@@ -418,10 +477,27 @@ const styles = StyleSheet.create({
   primaryLabel: { color: '#fff', fontSize: 15, fontWeight: '700' },
   importOnly: { marginTop: 18, paddingVertical: 8 },
   importOnlyText: { color: theme.primary, fontSize: 14, fontWeight: '600' },
+  // The scrolling half of the overlay: bar + hint. `flex: 1` (shrink 1, basis
+  // 0) makes it the ONLY child that yields, so the pinned panel below can never
+  // be squeezed or pushed off the bottom of a small screen at AX5.
+  chromeScroll: { flex: 1, minHeight: 0 },
+  // flexGrow: 1 → the content is at least a viewport tall, so hintWrap still
+  // centres the hint exactly as before whenever it all fits, and grows past the
+  // viewport (i.e. scrolls) only when it does not.
+  chromeContent: { flexGrow: 1 },
   topBar: {
     flexDirection: 'row', alignItems: 'center', gap: space.md,
     paddingHorizontal: space.md, paddingVertical: space.sm, backgroundColor: 'rgba(0,0,0,0.45)',
   },
+  // Past the shared stack threshold: actions on their own row, title beneath at
+  // full width. `alignItems: 'stretch'` is what hands the title that width.
+  topBarStacked: { flexDirection: 'column', alignItems: 'stretch', gap: space.sm },
+  topBarActions: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md,
+  },
+  titleCol: { flex: 1, minWidth: 0 },
+  // No flex: in a column parent `flex: 1` would divide HEIGHT, not width.
+  titleColStacked: { minWidth: 0 },
   closeBtn: { paddingVertical: 6, paddingHorizontal: 4, flexShrink: 0 },
   closeText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   reviewBtn: {
@@ -431,7 +507,16 @@ const styles = StyleSheet.create({
   reviewText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   title: { color: '#fff', fontSize: 16, fontWeight: '700' },
   subtitle: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 1 },
-  hintWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // `flexGrow: 1`, deliberately NOT `flex: 1`. Both fill the leftover space
+  // identically when the chrome fits — one growing child, same result — but
+  // `flex: 1` also means `flexShrink: 1, flexBasis: 0`, and a shrinkable child
+  // inside a scroll container is how you turn an overlap bug into a CLIPPING
+  // bug: at AX5 the hint would be squeezed to whatever was left rather than
+  // overflowing into scrollable content. RN defaults `flexShrink` to 0, so
+  // growing without shrinking is exactly what this needs.
+  hintWrap: {
+    flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.md,
+  },
   hint: {
     color: '#fff', fontSize: 14, fontWeight: '600',
     backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
@@ -442,7 +527,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
   },
-  panel: { paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm },
+  // flexShrink: 0 is load-bearing, not decoration: the shutter (the size chips)
+  // and the hard-negative button must keep their full height at AX5 — the
+  // scroll region above absorbs every deficit instead.
+  panel: {
+    paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm, flexShrink: 0,
+  },
   toolRow: { flexDirection: 'row', gap: space.xs },
   toolBtn: {
     minHeight: 40, paddingHorizontal: 14, borderRadius: radius.md, justifyContent: 'center',

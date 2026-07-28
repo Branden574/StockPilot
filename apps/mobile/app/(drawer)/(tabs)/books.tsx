@@ -22,6 +22,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -45,6 +46,7 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
   listStatusPredicate,
   stockPill,
@@ -157,6 +159,12 @@ export default function BooksScreen() {
   // Bottom tab bar is absolute-positioned and overlays content — use
   // the navigator-reported height so the last book row clears the blur.
   const tabBarHeight = useBottomTabBarHeight();
+  // Dynamic Type: read ONCE here and pass down, rather than subscribing every
+  // memoised card to window dimensions — this list is a do-not-regress perf
+  // surface. A boolean prop is memo-stable, so nothing re-renders until the
+  // user actually changes Larger Text.
+  const { fontScale } = useWindowDimensions();
+  const stackRows = shouldStackRow(fontScale);
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   // The WHOLE filtered set, not a page of it (one request, capped at
   // POSTGREST_MAX_ROWS). Pagination happens below, over GROUPS, so a title's
@@ -600,6 +608,7 @@ export default function BooksScreen() {
             expected={row.expected}
             expanded={expandedSkuGroups.has(row.sku)}
             onToggle={() => toggleSkuGroup(row.sku)}
+            stacked={stackRows}
           />
         );
       }
@@ -613,6 +622,7 @@ export default function BooksScreen() {
           onBookPress={onBookPress}
           selectMode={selectMode}
           onToggleSelect={onToggleSelect}
+          stacked={stackRows}
         />
       );
     },
@@ -623,6 +633,7 @@ export default function BooksScreen() {
       expandedSkuGroups,
       toggleSkuGroup,
       firstImageBySku,
+      stackRows,
     ],
   );
 
@@ -785,6 +796,7 @@ const BookCard = React.memo(function BookCard({
   onBookPress,
   selectMode,
   onToggleSelect,
+  stacked,
 }: {
   book: BookRow;
   /** Set only when this row is an expanded placement of a multi-row SKU —
@@ -794,6 +806,9 @@ const BookCard = React.memo(function BookCard({
   onBookPress: (id: string) => void;
   selectMode: boolean;
   onToggleSelect: (book: BookRow) => void;
+  /** Dynamic Type: past the shared stack threshold the title takes its own
+   *  full-width line above the quantity + pill. See `styles.bodyStacked`. */
+  stacked: boolean;
 }) {
   const { c } = useTheme();
   const picked = useIsPicked(book.id);
@@ -814,37 +829,39 @@ const BookCard = React.memo(function BookCard({
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <Thumb size={56} icon={BookMarked} imageUrl={book.imageUrl} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Body
-              size={15.5}
-              color={c.ink}
-              style={{ fontFamily: FONT.display }}
-              numberOfLines={2}
-            >
-              {book.name}
-            </Body>
-            {author ? (
-              <Mono size={11.5} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
-                {author}
+          <View style={stacked ? styles.bodyStacked : styles.bodyRow}>
+            <View style={stacked ? styles.nameColStacked : styles.nameCol}>
+              <Body
+                size={15.5}
+                color={c.ink}
+                style={{ fontFamily: FONT.display }}
+                numberOfLines={2}
+              >
+                {book.name}
+              </Body>
+              {author ? (
+                <Mono size={11.5} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+                  {author}
+                </Mono>
+              ) : null}
+              {isbn ? (
+                <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                  {isbn}
+                  {book.grade ? ` · Grade ${book.grade}` : ''}
+                </Mono>
+              ) : null}
+              {placementLabel ? (
+                <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                  {placementLabel}
+                </Mono>
+              ) : null}
+            </View>
+            <View style={[styles.trailingCol, stacked && styles.trailingColStacked]}>
+              <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
+                {book.quantity_on_hand}
               </Mono>
-            ) : null}
-            {isbn ? (
-              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
-                {isbn}
-                {book.grade ? ` · Grade ${book.grade}` : ''}
-              </Mono>
-            ) : null}
-            {placementLabel ? (
-              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
-                {placementLabel}
-              </Mono>
-            ) : null}
-          </View>
-          <View style={styles.trailingCol}>
-            <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
-              {book.quantity_on_hand}
-            </Mono>
-            <Pill status={pill.status}>{pill.label}</Pill>
+              <Pill status={pill.status}>{pill.label}</Pill>
+            </View>
           </View>
           {/* Trailing slot, ALWAYS reserved — the collapsed header spends the
               same width on its chevron, and a column that only exists on one
@@ -890,6 +907,7 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
   expected,
   expanded,
   onToggle,
+  stacked,
 }: {
   name: string;
   total: number;
@@ -904,6 +922,9 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
   expected: boolean;
   expanded: boolean;
   onToggle: () => void;
+  /** Dynamic Type: stacks with BookCard, or the header's title would fracture
+   *  while the placement rows it expands to read whole. */
+  stacked: boolean;
 }) {
   const { c } = useTheme();
   // Same ladder the rows below run (lib/expected-items.ts) — the header's
@@ -939,26 +960,28 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
             not cost the alignment of the numbers being compared. */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <Thumb size={56} icon={BookMarked} imageUrl={imageUrl} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Body
-              size={15.5}
-              color={c.ink}
-              style={{ fontFamily: FONT.display }}
-              numberOfLines={2}
-            >
-              {name}
-            </Body>
-            <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
-              {placements}
-            </Mono>
-          </View>
-          <View style={styles.trailingCol}>
-            <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
-              {/* A page-only sum is marked with a leading ≥ rather than
-                  presented as the title's stock. */}
-              {partial ? `≥${total}` : total}
-            </Mono>
-            <Pill status={badge.status}>{badge.label}</Pill>
+          <View style={stacked ? styles.bodyStacked : styles.bodyRow}>
+            <View style={stacked ? styles.nameColStacked : styles.nameCol}>
+              <Body
+                size={15.5}
+                color={c.ink}
+                style={{ fontFamily: FONT.display }}
+                numberOfLines={2}
+              >
+                {name}
+              </Body>
+              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+                {placements}
+              </Mono>
+            </View>
+            <View style={[styles.trailingCol, stacked && styles.trailingColStacked]}>
+              <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
+                {/* A page-only sum is marked with a leading ≥ rather than
+                    presented as the title's stock. */}
+                {partial ? `≥${total}` : total}
+              </Mono>
+              <Pill status={badge.status}>{badge.label}</Pill>
+            </View>
           </View>
           <View style={{ width: TRAILING_SLOT, alignItems: 'center' }}>
             <ChevronRight
@@ -1018,5 +1041,52 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: '40%',
     flexShrink: 1,
+  },
+  /**
+   * Dynamic Type: the title and the trailing column, side by side then stacked.
+   * The twin of `rowStyles.bodyRow` in (tabs)/inventory.tsx — same threshold,
+   * same shape; keep the two in step.
+   *
+   * `Sunglasse/s` is a WIDTH defect, not a text one: iOS breaks inside a word
+   * only when the word cannot fit its container at any break opportunity, and
+   * React Native exposes no `overflow-wrap`. Measured on a 393pt screen, this
+   * list is tighter than the Items one — 20pt of list padding a side leaves a
+   * 353pt card, whose 1pt border and 14pt padding leave 323pt of interior, and
+   * the 56pt thumb, the 22pt trailing slot and two 14pt gaps take 106pt of
+   * that. So the title and the trailing column share 217pt, and with the pill
+   * column at its 40% ceiling (~87pt) plus the gap the title is left ~116pt —
+   * against the ~177pt a 10-character title needs at 15.5 x 2.286. It cannot
+   * fit, so iOS breaks the glyph run.
+   *
+   * Past the shared `shouldStackRow` threshold the two become a column and the
+   * title gets the whole 217pt. No cap, no truncation, and no soft hyphens or
+   * zero-width spaces in the name — those would corrupt the very string users
+   * search and copy. Just the width the word needs.
+   */
+  bodyRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  bodyStacked: {
+    flex: 1,
+    minWidth: 0,
+    gap: 8,
+  },
+  nameCol: { flex: 1, minWidth: 0 },
+  // No flex: in a column parent `flex: 1` divides HEIGHT, not width. The
+  // default `alignItems: 'stretch'` on bodyStacked is what hands over the width.
+  nameColStacked: { minWidth: 0 },
+  // Once stacked, the quantity + pill read left-to-right on their own line and
+  // must NOT keep the 40% ceiling (they own the full width now). `flexWrap`
+  // lets a long pill label drop below the quantity rather than squeeze it.
+  trailingColStacked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+    maxWidth: '100%',
   },
 });

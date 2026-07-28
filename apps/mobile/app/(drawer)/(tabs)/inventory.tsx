@@ -26,6 +26,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -49,6 +50,7 @@ import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import {
@@ -160,6 +162,12 @@ export default function Inventory() {
   // factor — and add breathing room so the last row never feels glued
   // to the blur edge.
   const tabBarHeight = useBottomTabBarHeight();
+  // Dynamic Type: read ONCE here and pass down, rather than subscribing every
+  // memoised row to window dimensions — this list is a do-not-regress perf
+  // surface (50 rows a page). A boolean prop is memo-stable, so nothing
+  // re-renders until the user actually changes Larger Text.
+  const { fontScale } = useWindowDimensions();
+  const stackRows = shouldStackRow(fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const { activeOrgId, activeWarehouseId } = useWorkspace();
@@ -716,6 +724,7 @@ export default function Inventory() {
             onToggle={() => toggleSkuGroup(row.sku)}
             index={index}
             isLast={index === groupedRows.length - 1}
+            stacked={stackRows}
           />
         );
       }
@@ -728,6 +737,7 @@ export default function Inventory() {
           onItemPress={onItemPress}
           selectMode={selectMode}
           onToggleSelect={onToggleSelect}
+          stacked={stackRows}
         />
       );
       // First visible row doubles as the tour's "tap an item" spotlight.
@@ -746,6 +756,7 @@ export default function Inventory() {
       onItemPress,
       selectMode,
       onToggleSelect,
+      stackRows,
     ],
   );
 
@@ -1040,6 +1051,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   onToggle,
   index,
   isLast,
+  stacked,
 }: {
   name: string;
   total: number;
@@ -1057,6 +1069,9 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   onToggle: () => void;
   index: number;
   isLast: boolean;
+  /** Dynamic Type: past the shared stack threshold the name takes its own
+   *  full-width line above the quantity + pill. See `rowStyles.bodyStacked`. */
+  stacked: boolean;
 }) {
   const { c } = useTheme();
   // The SAME ladder the rows below run (lib/expected-items.ts, shared with the
@@ -1096,29 +1111,31 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         strokeWidth={2}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
-      <View style={{ flex: 1, minWidth: 0 }}>
-        {/* Dynamic Type: two lines, not one — same padding-based row as the
-            size-run header above. */}
-        <Mono
-          color={c.ink}
-          size={15.5}
-          numberOfLines={2}
-          style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
-        >
-          {name}
-        </Mono>
-        <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
-          {placementCount} placement{placementCount === 1 ? '' : 's'}
-          {partial ? ' shown' : ''}
-        </Mono>
-      </View>
-      <View style={rowStyles.trailingCol}>
-        <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display, letterSpacing: -0.31 }}>
-          {/* A sum over the loaded rows only is marked with a leading ≥
-              rather than presented as the SKU's stock. */}
-          {partial ? `≥${total}` : total}
-        </Mono>
-        <Pill status={badge.status}>{badge.label}</Pill>
+      <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
+        <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
+          {/* Dynamic Type: two lines, not one — same padding-based row as the
+              size-run header above. */}
+          <Mono
+            color={c.ink}
+            size={15.5}
+            numberOfLines={2}
+            style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+          >
+            {name}
+          </Mono>
+          <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+            {placementCount} placement{placementCount === 1 ? '' : 's'}
+            {partial ? ' shown' : ''}
+          </Mono>
+        </View>
+        <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
+          <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display, letterSpacing: -0.31 }}>
+            {/* A sum over the loaded rows only is marked with a leading ≥
+                rather than presented as the SKU's stock. */}
+            {partial ? `≥${total}` : total}
+          </Mono>
+          <Pill status={badge.status}>{badge.label}</Pill>
+        </View>
       </View>
     </Pressable>
   );
@@ -1132,6 +1149,7 @@ const ItemRow = React.memo(function ItemRow({
   onItemPress,
   selectMode,
   onToggleSelect,
+  stacked,
 }: {
   item: Item;
   /** When set (an expanded SKU-group placement), replaces the SKU secondary
@@ -1142,6 +1160,9 @@ const ItemRow = React.memo(function ItemRow({
   onItemPress: (id: string) => void;
   selectMode: boolean;
   onToggleSelect: (item: Item) => void;
+  /** Dynamic Type: past the shared stack threshold the name takes its own
+   *  full-width line above the quantity + pill. See `rowStyles.bodyStacked`. */
+  stacked: boolean;
 }) {
   const { c } = useTheme();
   const picked = useIsPicked(item.id);
@@ -1177,28 +1198,30 @@ const ItemRow = React.memo(function ItemRow({
           imageUrl={item.imageUrl ?? null}
           recyclingKey={item.id}
         />
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono
-            color={c.ink}
-            size={15.5}
-            tracking={0}
-            style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
-          >
-            {item.name}
-          </Mono>
-          <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
-            {placementLabel ?? item.sku}
-          </Mono>
-        </View>
-        <View style={rowStyles.trailingCol}>
-          <Mono
-            size={17}
-            tracking={0}
-            style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
-          >
-            {item.quantity_on_hand}
-          </Mono>
-          <Pill status={pill.status}>{pill.label}</Pill>
+        <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
+          <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
+            <Mono
+              color={c.ink}
+              size={15.5}
+              tracking={0}
+              style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+            >
+              {item.name}
+            </Mono>
+            <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
+              {placementLabel ?? item.sku}
+            </Mono>
+          </View>
+          <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
+            <Mono
+              size={17}
+              tracking={0}
+              style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
+            >
+              {item.quantity_on_hand}
+            </Mono>
+            <Pill status={pill.status}>{pill.label}</Pill>
+          </View>
         </View>
         {selectMode ? (
           <View style={{ marginLeft: 2 }}>
@@ -1277,6 +1300,49 @@ const rowStyles = StyleSheet.create({
     maxWidth: '40%',
     flexShrink: 1,
   },
+  /**
+   * Dynamic Type: the name and the trailing column, side by side then stacked.
+   *
+   * `Sunglasse/s` and `Perfum/e` are a WIDTH defect, not a text one — iOS only
+   * breaks inside a word when the word cannot fit its container at any break
+   * opportunity, and RN exposes no `overflow-wrap`. Measured on a 393pt screen:
+   * the row spends 32pt of padding, a 56pt thumb and two 14pt gaps, so the name
+   * and the trailing column share 277pt; at AX3 a capped `IN STOCK` pill needs
+   * ~116pt of it (a 12-character pill takes the full 40% = 144pt), leaving the
+   * name ~161pt against the ~177pt that `Sunglasses` needs at 15.5 × 2.286.
+   * It cannot fit, so iOS breaks the glyph run. Select mode takes 36pt more.
+   *
+   * Past the shared `shouldStackRow` threshold the two become a column: the
+   * name gets the whole 291pt (255pt in select mode) and the quantity + pill
+   * move to their own line under it. No cap, no truncation, no soft hyphens in
+   * the data — just the width the word needs. Same threshold as every other
+   * stacking decision in this pass; deliberately NOT a second breakpoint.
+   */
+  bodyRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  bodyStacked: {
+    flex: 1,
+    minWidth: 0,
+    gap: 8,
+  },
+  nameCol: { flex: 1, minWidth: 0 },
+  // In a column parent `flex: 1` would divide HEIGHT; stretch gives the width.
+  nameColStacked: { minWidth: 0 },
+  // Once stacked, the quantity + pill read left-to-right on their own line and
+  // must NOT keep the 40% ceiling (they own the full width now). `flexWrap`
+  // lets a long pill label drop below the quantity rather than squeeze it.
+  trailingColStacked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+    maxWidth: '100%',
+  },
 });
 
 /**
@@ -1302,6 +1368,11 @@ function TourRowAnchor({ children }: { children: React.ReactNode }) {
 function SampleItemRow() {
   const { c } = useTheme();
   const ref = useTourTarget('inventory-first-row');
+  // Rendered once, off the list, so it reads the scale directly — but it is a
+  // visual clone of ItemRow and has to stack with it, or the tour spotlights
+  // the very fracture this pass fixed.
+  const { fontScale } = useWindowDimensions();
+  const stacked = shouldStackRow(fontScale);
   return (
     <View ref={ref} collapsable={false}>
       <View
@@ -1314,28 +1385,30 @@ function SampleItemRow() {
       >
         <View style={rowStyles.row}>
           <Thumb size={56} icon={Box} pip={ACCENT.pipTeal} imageUrl={null} recyclingKey="sample" />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Mono
-              color={c.ink}
-              size={15.5}
-              tracking={0}
-              style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
-            >
-              Acer Chromebook 511
-            </Mono>
-            <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
-              SAMPLE-001 · example item
-            </Mono>
-          </View>
-          <View style={rowStyles.trailingCol}>
-            <Mono
-              size={17}
-              tracking={0}
-              style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
-            >
-              25
-            </Mono>
-            <Pill status="ok">SAMPLE</Pill>
+          <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
+            <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
+              <Mono
+                color={c.ink}
+                size={15.5}
+                tracking={0}
+                style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+              >
+                Acer Chromebook 511
+              </Mono>
+              <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
+                SAMPLE-001 · example item
+              </Mono>
+            </View>
+            <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
+              <Mono
+                size={17}
+                tracking={0}
+                style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
+              >
+                25
+              </Mono>
+              <Pill status="ok">SAMPLE</Pill>
+            </View>
           </View>
         </View>
       </View>
