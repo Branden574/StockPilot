@@ -63,6 +63,11 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
+import {
+  countingUnitLabel,
+  groupRollupLabel,
+  type CountingUnit,
+} from '@stockpilot/core';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
@@ -94,6 +99,25 @@ interface Item {
    *  filter sheet's Expected option, where they wear an EXPECTED pill
    *  instead of the misleading OUT. */
   awaiting_first_receipt: boolean;
+  /** Sports (0298). Stored product-group id — the primary grouping signal. */
+  group_id: string | null;
+  /** Sports (0298). Stored size, used to order a grouped run's members. */
+  variant_size: string | null;
+  /** The group's counting unit, read from the embedded product_groups row. */
+  counting_unit: string | null;
+}
+
+/**
+ * The counting unit off a to-one `product_groups` embed. PostgREST types a
+ * to-one embed as an array but returns a single object at runtime, and it is
+ * simply absent for an ungrouped item — handle all three shapes rather than
+ * indexing blind.
+ */
+function readCountingUnit(embed: unknown): string | null {
+  const row = Array.isArray(embed) ? embed[0] : embed;
+  const unit = (row as { default_counting_unit?: unknown } | null | undefined)
+    ?.default_counting_unit;
+  return typeof unit === 'string' ? unit : null;
 }
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
@@ -113,10 +137,18 @@ const listHeader = <View style={{ height: 6 }} />;
 /** Columns the list read selects — deliberately lean: exactly what a row
  *  renders (plus the fields a collapsed header rolls up), because this read now
  *  returns the whole filtered set rather than a 50-row window. */
+// `group_id` / `variant_size` (mig 0298) ride along so the size-run collapse
+// uses STORED identity where it exists instead of a regex over the name — the
+// same rule web applies, out of the same shared `groupBySizeRun`. Both are
+// NULL for every ungrouped item in every org (there is no backfill), so a
+// non-sports org's list is unchanged. The embedded product_groups row supplies
+// the counting unit for the header; a to-one embed costs no extra round trip
+// and resolves to nothing when group_id is null.
 const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
            primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
-           awaiting_first_receipt,
-           category:categories!category_id (name)`;
+           awaiting_first_receipt, group_id, variant_size,
+           category:categories!category_id (name),
+           product_group:product_groups!group_id (default_counting_unit)`;
 
 export default function Inventory() {
   const router = useRouter();
@@ -393,6 +425,9 @@ export default function Inventory() {
           updated_at: (r.updated_at as string | null) ?? null,
           auto_archived: Boolean(r.auto_archived),
           awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
+          group_id: (r.group_id as string | null) ?? null,
+          variant_size: (r.variant_size as string | null) ?? null,
+          counting_unit: readCountingUnit(r.product_group),
           imageUrl: null,
         } as Item;
       });
@@ -641,6 +676,8 @@ export default function Inventory() {
             baseName={row.baseName}
             total={row.total}
             sizeCount={row.sizeCount}
+            groupId={row.groupId}
+            countingUnit={row.countingUnit}
             expanded={expandedGroups.has(row.styleKey)}
             onToggle={() => toggleGroup(row.styleKey)}
             index={index}
@@ -881,6 +918,8 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
   baseName,
   total,
   sizeCount,
+  groupId,
+  countingUnit,
   expanded,
   onToggle,
   index,
@@ -889,17 +928,28 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
   baseName: string;
   total: number;
   sizeCount: number;
+  groupId: string | null;
+  countingUnit: string | null;
   expanded: boolean;
   onToggle: () => void;
   index: number;
   isLast: boolean;
 }) {
   const { c } = useTheme();
+  // A STORED group knows what it is and what it counts in: "3 variants · 18
+  // pairs total". A name-derived run knows neither, so it keeps the weaker
+  // "3 sizes" claim — every ungrouped org reads exactly as before.
+  const subtitle =
+    groupId && countingUnit
+      ? groupRollupLabel(sizeCount, total, countingUnitLabel(countingUnit as CountingUnit, total))
+      : groupId
+        ? `${sizeCount} variant${sizeCount === 1 ? '' : 's'}`
+        : `${sizeCount} size${sizeCount === 1 ? '' : 's'}`;
   return (
     <Pressable
       onPress={onToggle}
       accessibilityRole="button"
-      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${baseName}, ${sizeCount} sizes`}
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${baseName}, ${subtitle}`}
       style={({ pressed }) => ({
         // Same continuous-card border model as ItemRow so headers sit flush in
         // the list (a distinct paper2 fill + chevron mark them as a group).
@@ -937,7 +987,7 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
           {baseName}
         </Mono>
         <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
-          {sizeCount} size{sizeCount === 1 ? '' : 's'}
+          {subtitle}
         </Mono>
       </View>
       <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display }}>

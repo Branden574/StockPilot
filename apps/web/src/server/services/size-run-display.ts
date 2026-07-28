@@ -22,6 +22,21 @@ import { ProductGroupsService, type ProductGroupDisplay } from './product-groups
  *    prod-hardened seam in the app and must not go down over a cosmetic
  *    grouping lookup.
  */
+/**
+ * Just the counting units, keyed by group id — what a LIST needs and no more.
+ *
+ * The full display map carries each group's size-order Map, which a list never
+ * consults (its runs are ordered from the stored `variant_size` through the
+ * fallback ladders) and which would be dead weight in the RSC payload. Same
+ * gate, same zero cost for an org with no grouped rows.
+ */
+export async function loadCountingUnits(
+  groupIds: Array<string | null | undefined>,
+): Promise<Record<string, string>> {
+  const display = await loadSizeRunGroups(groupIds);
+  return Object.fromEntries(Object.entries(display).map(([id, d]) => [id, d.countingUnit]));
+}
+
 export async function loadSizeRunGroups(
   groupIds: Array<string | null | undefined>,
 ): Promise<Record<string, ProductGroupDisplay>> {

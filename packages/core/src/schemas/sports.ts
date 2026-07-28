@@ -155,3 +155,48 @@ export type CreateProductGroupInput = z.infer<typeof createProductGroupSchema>;
 
 export const updateProductGroupSchema = createProductGroupSchema.partial();
 export type UpdateProductGroupInput = z.infer<typeof updateProductGroupSchema>;
+
+/* ---- the opt-in group-linking review tool (Task 18) -------------------- */
+
+/**
+ * ONE member of an explicit link — an item id a human confirmed, plus the
+ * variant attributes they confirmed for it.
+ *
+ * There is deliberately no "style key", "name pattern" or "match everything
+ * like this" field anywhere in this schema. The write path can only ever be
+ * handed item ids, so no client — web, phone or API — can ask the server to
+ * apply a heuristic (owner decision 2026-07-27: NO name-heuristic backfill).
+ */
+export const linkFamilyMemberSchema = z.object({
+  itemId: uuidSchema,
+  variantSize: z.preprocess(emptyToUndefined, z.string().max(32).nullable().optional()),
+  variantSizeOriginal: z.preprocess(emptyToUndefined, z.string().max(64).nullable().optional()),
+  variantSizeSystem: sizeSystemSchema,
+  jerseyNumber: jerseyNumberSchema,
+});
+export type LinkFamilyMemberInput = z.infer<typeof linkFamilyMemberSchema>;
+
+/** Cap on one link/unlink call — mirrors the service's own ceiling. */
+export const MAX_LINK_FAMILY_MEMBERS = 200;
+
+export const linkFamilySchema = z
+  .object({
+    groupId: uuidSchema.optional(),
+    group: createProductGroupSchema.extend({ subcategoryKey: z.string().min(1).max(64) }).optional(),
+    members: z.array(linkFamilyMemberSchema).min(1).max(MAX_LINK_FAMILY_MEMBERS),
+    // REQUIRED, and it lands on every per-item audit event. A link is a
+    // human's assertion about identity; an unattributed one is not reviewable.
+    reason: z.string().trim().min(1, 'Say why these items are one product.').max(500),
+    force: z.boolean().optional(),
+  })
+  .refine((v) => Boolean(v.groupId) !== Boolean(v.group), {
+    message: 'Pick an existing product group, or supply exactly one to create.',
+    path: ['groupId'],
+  });
+export type LinkFamilyRequest = z.infer<typeof linkFamilySchema>;
+
+export const unlinkItemsSchema = z.object({
+  itemIds: z.array(uuidSchema).min(1).max(MAX_LINK_FAMILY_MEMBERS),
+  reason: z.string().trim().min(1, 'Say why this grouping was wrong.').max(500),
+});
+export type UnlinkItemsRequest = z.infer<typeof unlinkItemsSchema>;

@@ -37,6 +37,7 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
+import { loadCountingUnits } from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -452,6 +453,12 @@ async function InventoryTableSection({
   if (instantData) {
     const savedViews = await savedViewsPromise;
     const { items: instantItems, lookups } = instantData;
+    // Sports counting units for whatever groups this dataset touches — ONE
+    // batched, module-gated lookup that costs an org with no grouped rows
+    // nothing at all (no group ids → no queries). Resolved over the WHOLE
+    // dataset, not the current page, because instant mode paginates on the
+    // client and any page can render.
+    const productGroupUnits = await loadCountingUnits(instantItems.map((i) => i.group_id));
     // Server-side run of the client's exact derivation: keeps the rich
     // EmptyState branches (and the table's SSR HTML) identical to what
     // the server path would have shown for this URL.
@@ -497,6 +504,7 @@ async function InventoryTableSection({
         activeWarehouseId={warehouseFilter}
         currentUserId={sessionCtx.userId}
         instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
+        productGroupUnits={productGroupUnits}
       />
     );
   }
@@ -781,6 +789,10 @@ async function InventoryTableSection({
         )
       : undefined;
 
+  // Same batched, module-gated counting-unit lookup as the instant branch —
+  // over this page's rows, which is all server mode ever renders.
+  const productGroupUnits = await loadCountingUnits(placementRows.map((r) => r.group_id));
+
   return (
     <InventoryTable
       items={placementRows}
@@ -804,6 +816,7 @@ async function InventoryTableSection({
       currentUserId={sessionCtx.userId}
       instantPromise={instantPromise}
       expectedCount={data.expectedCount}
+      productGroupUnits={productGroupUnits}
     />
   );
 }

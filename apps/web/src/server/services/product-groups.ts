@@ -465,6 +465,44 @@ export class ProductGroupsService {
   }
 
   /**
+   * The variants for MANY groups at once, size-ordered within each group.
+   *
+   * This exists so a list of groups can render its per-variant expansion
+   * without one query per group. The roll-up VIEW already aggregates counts
+   * and totals server-side; this is the same discipline for the rows behind
+   * them — the list page must never become N+1 (app-wide nav perf note).
+   *
+   * Chunked for the same reason `displayByIds` is: PostgREST silently
+   * truncates a single `.in()` past its max_rows with no error, and a
+   * truncated read here would show a group with fewer variants than it has.
+   */
+  async variantsByGroupIds(groupIds: string[]): Promise<Map<string, VariantRow[]>> {
+    assertModuleEnabled(this.ctx, 'sports');
+    const unique = Array.from(new Set(groupIds.filter(Boolean)));
+    const out = new Map<string, VariantRow[]>();
+    if (unique.length === 0) return out;
+
+    const GROUP_BATCH_SIZE = 100;
+    for (let i = 0; i < unique.length; i += GROUP_BATCH_SIZE) {
+      const batch = unique.slice(i, i + GROUP_BATCH_SIZE);
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select(`${VARIANT_COLUMNS}, group_id`)
+        .eq('organization_id', this.ctx.organizationId)
+        .in('group_id', batch)
+        .is('deleted_at', null)
+        .order('sku', { ascending: true });
+      if (error) throw new ServiceError('internal_error', error.message);
+      for (const row of (data ?? []) as unknown as Array<VariantRow & { group_id: string }>) {
+        const arr = out.get(row.group_id);
+        if (arr) arr.push(row);
+        else out.set(row.group_id, [row]);
+      }
+    }
+    return out;
+  }
+
+  /**
    * The variants under one group whose identity key EXACTLY equals `variantKey`.
    *
    * Exact-equality only — this is the deterministic half of matching, and the

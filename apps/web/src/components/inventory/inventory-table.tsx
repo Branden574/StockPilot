@@ -20,7 +20,13 @@ import * as React from 'react';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
-import { groupBySizeRun, type SizeRunGroup } from '@stockpilot/core';
+import {
+  countingUnitLabel,
+  groupBySizeRun,
+  groupRollupLabel,
+  type CountingUnit,
+  type SizeRunGroup,
+} from '@stockpilot/core';
 import {
   groupPlacementsBySku,
   rollupStatus,
@@ -89,6 +95,15 @@ interface Item {
   /** Needed by the created_asc/created_desc local sorts in instant mode. */
   created_at?: string;
   custom_fields?: Record<string, unknown> | null;
+  /** Sports (0298). The item's STORED product-group id. When present it is
+   *  the only signal size-run grouping uses — a rename can no longer break
+   *  the family and a name collision can no longer forge one. NULL for every
+   *  ungrouped item in every org (there is no backfill), which keeps the
+   *  legacy name heuristic serving them exactly as before. */
+  group_id?: string | null;
+  /** Sports (0298). The stored size, used to order a grouped run's members
+   *  ("10 after 9") instead of a token parsed out of the display name. */
+  variant_size?: string | null;
   /** Signed URL to the master (2048px) image. Used by hover-preview
    * prefetch + the lightbox. Falls back to a custom_fields.thumbnail_url
    * stash for legacy bulk-imported books. */
@@ -358,6 +373,18 @@ export interface InventoryTableProps {
       dataset (always fresh with realtime refreshes). Absent → 0, chip
       hidden unless the Expected view is already active. */
   expectedCount?: number;
+  /**
+   * Sports (Task 18): `product_groups.id` → `default_counting_unit`, for the
+   * groups the rendered rows belong to. Resolved server-side in ONE batched
+   * lookup (`loadSizeRunGroups`), never per row — the size-run header uses it
+   * to say "52 pairs total" instead of a bare number.
+   *
+   * Absent (and empty for every non-sports org, which is every org that has
+   * opted nothing in) leaves the header exactly as it was. PAIR is a display
+   * convention with no conversion behind it, so the unit is always READ from
+   * the group and never inferred from the item.
+   */
+  productGroupUnits?: Record<string, string>;
 }
 
 interface SavedViewSummary {
@@ -592,6 +619,7 @@ export function InventoryTable({
   instant,
   instantPromise,
   expectedCount = 0,
+  productGroupUnits,
 }: InventoryTableProps) {
   // ── Streamed-dataset adoption (React 19 use()) ──────────────────────
   // The default manager+ view mounts in server mode over the fast 30-row
@@ -1444,6 +1472,13 @@ export function InventoryTable({
             name: entry.item.name,
             quantity: Number(entry.item.quantity_on_hand) || 0,
             groupable: true,
+            // Stored identity when the item has one; null keeps the legacy
+            // name heuristic, which is every ungrouped row in every org.
+            groupId: entry.item.group_id ?? null,
+            variantSize: entry.item.variant_size ?? null,
+            countingUnit: entry.item.group_id
+              ? (productGroupUnits?.[entry.item.group_id] ?? null)
+              : null,
           }
         : { key: `sku:${entry.group.sku}`, name: entry.group.name, quantity: 0, groupable: false },
     );
@@ -1460,7 +1495,7 @@ export function InventoryTable({
       }
     }
     return out;
-  }, [renderItems, expandedStyleGroups, showBookFields]);
+  }, [renderItems, expandedStyleGroups, showBookFields, productGroupUnits]);
 
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
@@ -3113,7 +3148,20 @@ function StyleGroupHeaderRow({
   const rowThumbSrc = first.image_thumb_url ?? first.image_url;
   // Status is per-member and can differ; roll up conservatively (see group-by-sku).
   const rolledUpStatus = rollupStatus(items.map((it) => it.status));
-  const sizeLabel = `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
+  // A STORED group knows what it is and what it counts in, so its header reads
+  // "3 variants · 18 pairs total". A name-derived run knows neither — its
+  // "sizes" are tokens parsed out of a display string — so it keeps the older,
+  // weaker claim. Byte-identical for every ungrouped org.
+  const sizeLabel =
+    group.groupId && group.countingUnit
+      ? groupRollupLabel(
+          group.sizeCount,
+          group.total,
+          countingUnitLabel(group.countingUnit as CountingUnit, group.total),
+        )
+      : group.groupId
+        ? `${group.sizeCount} variant${group.sizeCount === 1 ? '' : 's'}`
+        : `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
 
   return (
     <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">

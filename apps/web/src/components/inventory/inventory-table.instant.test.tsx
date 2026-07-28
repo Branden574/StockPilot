@@ -2002,3 +2002,86 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
     expect(barFillPct(header)).toBe(barFillPct(row));
   });
 });
+
+// Task 18 — stored product groups become the PRIMARY grouping signal for the
+// inventory list, with the name heuristic demoted to the fallback that still
+// serves every ungrouped org.
+describe('InventoryTable — size runs keyed on a stored product group', () => {
+  const bodyRows = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+
+  function renderGrouped({
+    items,
+    productGroupUnits,
+  }: {
+    items: InstantDatasetItem[];
+    productGroupUnits?: Record<string, string>;
+  }) {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    return render(
+      <InventoryTable
+        items={items}
+        lookups={EMPTY_LOOKUPS}
+        total={items.length}
+        pageSize={30}
+        instant={{ items, view: 'items' }}
+        productGroupUnits={productGroupUnits}
+      />,
+    );
+  }
+
+  // The exact case a name regex can never serve: three real variants of one
+  // shoe, identically named, differing only by variant_size.
+  const pegasus = (): InstantDatasetItem[] => [
+    item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10' }),
+    item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9' }),
+  ];
+
+  it('collapses identically-named variants that share a group_id, and says so in the group vocabulary', () => {
+    renderGrouped({ items: pegasus() });
+    expect(screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i })).toBeInTheDocument();
+    // "sizes" is the weaker, name-derived claim — never used for a real group.
+    expect(screen.queryByText(/2 sizes/)).not.toBeInTheDocument();
+  });
+
+  it('states the roll-up in the group counting unit when the page resolved one', () => {
+    renderGrouped({ items: pegasus(), productGroupUnits: { 'grp-1': 'pair' } });
+    // Rendered on the header chip AND in the hover-preview subtitle — both
+    // are the same claim, so assert it appears rather than that it is unique.
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+  });
+
+  it('expands a grouped run in SIZE order, not the list sort order', async () => {
+    const user = userEvent.setup();
+    const { container } = renderGrouped({ items: pegasus() });
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    const skus = bodyRows(container)
+      .slice(1)
+      .map((r) => r.textContent ?? '');
+    expect(skus[0]).toContain('PEG-9');
+    expect(skus[1]).toContain('PEG-10');
+  });
+
+  it('does NOT fold two same-base names carrying DIFFERENT group ids together', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'a', name: 'Pink Shirt - L', sku: 'A', group_id: 'grp-1', variant_size: 'L' }),
+        item({ id: 'b', name: 'Pink Shirt - XL', sku: 'B', group_id: 'grp-2', variant_size: 'XL' }),
+      ],
+    });
+    expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
+    expect(bodyRows(container)).toHaveLength(2);
+  });
+
+  it('leaves an ungrouped org byte-identical — the legacy "N sizes" run is untouched', () => {
+    renderGrouped({
+      items: [
+        item({ id: 'l', name: 'Pink Shirt - L', sku: 'L' }),
+        item({ id: 'xl', name: 'Pink Shirt - XL', sku: 'X' }),
+      ],
+    });
+    expect(screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i })).toBeInTheDocument();
+    expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
+  });
+});

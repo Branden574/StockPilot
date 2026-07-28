@@ -72,6 +72,22 @@ export interface GroupableItem {
    * switch, i.e. a header contradicting its own children.
    */
   awaiting_first_receipt: boolean;
+  /**
+   * Sports (0298). The item's STORED product-group id. When present it is the
+   * ONLY signal size-run grouping uses on this list — same rule as web, out of
+   * the same shared `groupBySizeRun`. Optional so every existing caller (and
+   * the Books list, which never reads it) compiles and behaves unchanged;
+   * absent/null keeps the legacy name heuristic, which is every ungrouped item
+   * in every org because there is no backfill.
+   */
+  group_id?: string | null;
+  /** Sports (0298). Stored size, used to order a grouped run's members. */
+  variant_size?: string | null;
+  /**
+   * The group's counting unit ('pair', 'set', …) when the screen has resolved
+   * it. Display only — PAIR is a convention with no conversion behind it.
+   */
+  counting_unit?: string | null;
 }
 
 /** A single flattened FlatList entry. */
@@ -84,6 +100,14 @@ export type GroupedRow<T extends GroupableItem> =
       baseName: string;
       total: number;
       sizeCount: number;
+      /**
+       * The stored product-group id this run collapsed on, or null when the
+       * run came from the legacy name heuristic. The card branches on it to
+       * say "variants" (real identity) instead of "sizes" (a guess).
+       */
+      groupId: string | null;
+      /** The group's counting unit, when the screen resolved one. */
+      countingUnit: string | null;
     }
   // Model B same-SKU collapse header (new). `reorderPoint` is the SUM of the
   // group's placements' reorder points (see `emitEntry` for why), so the
@@ -237,6 +261,10 @@ function entrySizeRunMeta<T extends GroupableItem>(e: Entry<T>) {
         name: e.item.name,
         quantity: Number(e.item.quantity_on_hand) || 0,
         groupable: true,
+        // Stored identity wins over the name regex — see GroupableItem.
+        groupId: e.item.group_id ?? null,
+        variantSize: e.item.variant_size ?? null,
+        countingUnit: e.item.counting_unit ?? null,
       }
     : { key: `sku:${e.sku}`, name: e.name, quantity: 0, groupable: false };
 }
@@ -365,6 +393,8 @@ export function buildGroupedRows<T extends GroupableItem>(
       baseName: g.baseName,
       total: g.total,
       sizeCount: g.sizeCount,
+      groupId: g.groupId,
+      countingUnit: g.countingUnit,
     });
     if (expandedSizeRuns.has(g.styleKey)) {
       for (const m of g.members) {

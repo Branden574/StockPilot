@@ -40,6 +40,12 @@ export type AuditEvent =
   | 'sports.variant.imported'
   | 'sports.import.mapping_confirmed'
   | 'sports.import.match_overridden'
+  // The opt-in group-linking review tool (Task 18). One event PER ITEM, with
+  // the actor, the before/after group + variant fields and the reviewer's
+  // reason — because the whole point of refusing a name-heuristic backfill is
+  // that every link is attributable to a person who looked at it.
+  | 'sports.item.group_matched'
+  | 'sports.item.group_unlinked'
   | 'stock.adjusted'
   | 'stock.received'
   | 'stock.transferred'

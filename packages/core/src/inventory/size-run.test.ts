@@ -179,4 +179,152 @@ describe('groupBySizeRun', () => {
     // Only one sized+groupable member → no run; both stay single.
     expect(out.map((e) => e.kind)).toEqual(['single', 'single']);
   });
+
+  it('reports groupId null and countingUnit null for a legacy name-keyed run', () => {
+    const out = groupBySizeRun(
+      [
+        { id: 'l', name: 'Pink Shirt - L', qty: 1 },
+        { id: 'xl', name: 'Pink Shirt - XL', qty: 1 },
+      ],
+      meta,
+    );
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.groupId).toBeNull();
+    expect(out[0].group.countingUnit).toBeNull();
+  });
+});
+
+describe('groupBySizeRun — stored group_id is the only signal when present', () => {
+  interface GRow {
+    id: string;
+    name: string;
+    qty: number;
+    groupId?: string | null;
+    variantSize?: string | null;
+    countingUnit?: string | null;
+  }
+  const gmeta = (r: GRow): SizeRunEntryMeta => ({
+    key: r.id,
+    name: r.name,
+    quantity: r.qty,
+    groupable: true,
+    groupId: r.groupId ?? null,
+    variantSize: r.variantSize ?? null,
+    countingUnit: r.countingUnit ?? null,
+  });
+
+  it('groups two items with the SAME groupId but unrelated names (a rename cannot break a family)', () => {
+    const rows: GRow[] = [
+      { id: 'a', name: 'Nike Pegasus 41', qty: 4, groupId: 'grp-1', variantSize: '9' },
+      { id: 'b', name: 'Totally Different Label', qty: 6, groupId: 'grp-1', variantSize: '10' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    expect(out).toHaveLength(1);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.styleKey).toBe('group:grp-1');
+    expect(out[0].group.groupId).toBe('grp-1');
+    expect(out[0].group.total).toBe(10);
+    expect(out[0].group.sizeCount).toBe(2);
+  });
+
+  it('does NOT group a same-base name pair carrying DIFFERENT groupIds (a name cannot forge a family)', () => {
+    const rows: GRow[] = [
+      { id: 'a', name: 'Pink Shirt - L', qty: 1, groupId: 'grp-1', variantSize: 'L' },
+      { id: 'b', name: 'Pink Shirt - XL', qty: 1, groupId: 'grp-2', variantSize: 'XL' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    expect(out.map((e) => e.kind)).toEqual(['single', 'single']);
+  });
+
+  it('never lets a grouped item fall back into a name-keyed run with its ungrouped lookalikes', () => {
+    const rows: GRow[] = [
+      { id: 'g', name: 'Pink Shirt - L', qty: 1, groupId: 'grp-1', variantSize: 'L' },
+      { id: 'u1', name: 'Pink Shirt - XL', qty: 2 },
+      { id: 'u2', name: 'Pink Shirt - 2XL', qty: 3 },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    // The grouped item is alone in its group → single. The two ungrouped
+    // lookalikes still collapse on the legacy heuristic.
+    expect(out.map((e) => e.kind)).toEqual(['single', 'size-run']);
+    if (out[1]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[1].group.members.map((m) => m.id)).toEqual(['u1', 'u2']);
+  });
+
+  it('size-orders a group-keyed run (10 after 9, XL after L) whatever order the rows arrive in', () => {
+    const numeric = groupBySizeRun(
+      [
+        { id: 'ten', name: 'Peg', qty: 1, groupId: 'g', variantSize: '10' },
+        { id: 'nine', name: 'Peg', qty: 1, groupId: 'g', variantSize: '9' },
+        { id: 'elevenhalf', name: 'Peg', qty: 1, groupId: 'g', variantSize: '11.5' },
+      ] satisfies GRow[],
+      gmeta,
+    );
+    if (numeric[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(numeric[0].group.members.map((m) => m.id)).toEqual(['nine', 'ten', 'elevenhalf']);
+
+    const alpha = groupBySizeRun(
+      [
+        { id: 'xl', name: 'Tee', qty: 1, groupId: 'g', variantSize: 'XL' },
+        { id: 's', name: 'Tee', qty: 1, groupId: 'g', variantSize: 'S' },
+        { id: 'l', name: 'Tee', qty: 1, groupId: 'g', variantSize: 'L' },
+      ] satisfies GRow[],
+      gmeta,
+    );
+    if (alpha[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(alpha[0].group.members.map((m) => m.id)).toEqual(['s', 'l', 'xl']);
+  });
+
+  it('carries the counting unit onto the header so it can say "pairs" not just a number', () => {
+    const out = groupBySizeRun(
+      [
+        { id: 'a', name: 'Peg', qty: 20, groupId: 'g', variantSize: '9', countingUnit: 'pair' },
+        { id: 'b', name: 'Peg', qty: 32, groupId: 'g', variantSize: '10', countingUnit: 'pair' },
+      ] satisfies GRow[],
+      gmeta,
+    );
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.countingUnit).toBe('pair');
+    expect(out[0].group.total).toBe(52);
+  });
+
+  it('groups a run of stored variants that carry NO size suffix in their names at all', () => {
+    // The exact case the name regex can never serve: real sports variants are
+    // named "Nike Pegasus 41" three times over and differ only by variant_size.
+    const rows: GRow[] = [
+      { id: 'a', name: 'Nike Pegasus 41', qty: 2, groupId: 'g', variantSize: '9' },
+      { id: 'b', name: 'Nike Pegasus 41', qty: 3, groupId: 'g', variantSize: '10' },
+      { id: 'c', name: 'Nike Pegasus 41', qty: 4, groupId: 'g', variantSize: '11' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    expect(out).toHaveLength(1);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.baseName).toBe('Nike Pegasus 41');
+    expect(out[0].group.total).toBe(9);
+  });
+
+  it('leaves the legacy path untouched when every groupId is null', () => {
+    // Same rows as the ungrouped suite above, run through the group-aware meta:
+    // identical output, so an org that has opted nothing in sees no change.
+    const rows: GRow[] = [
+      { id: 'l', name: 'L4L - Pink Shirt - L', qty: 6 },
+      { id: 'xl', name: 'L4L - Pink Shirt - XL', qty: 6 },
+      { id: '2xl', name: 'L4L - Pink Shirt - 2XL', qty: 6 },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.styleKey).toBe('l4l - pink shirt');
+    expect(out[0].group.total).toBe(18);
+    // Arrival order preserved — NOT re-sorted by a parsed token.
+    expect(out[0].group.members.map((m) => m.id)).toEqual(['l', 'xl', '2xl']);
+  });
+
+  it('keeps a name-keyed run in ARRIVAL order even when its parsed sizes are backwards', () => {
+    const rows: GRow[] = [
+      { id: '2xl', name: 'Tee - 2XL', qty: 1 },
+      { id: 's', name: 'Tee - S', qty: 1 },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    expect(out[0].group.members.map((m) => m.id)).toEqual(['2xl', 's']);
+  });
 });
