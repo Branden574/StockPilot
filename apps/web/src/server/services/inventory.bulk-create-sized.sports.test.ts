@@ -135,6 +135,61 @@ describe('InventoryService.bulkCreateSizedVariants — sports parity with create
     >;
     expect(groupInsert.group_key).toBe('shoes|nike|pegasus 41||');
     expect(groupInsert.subcategory_key).toBe('shoes');
+    // The group INHERITS the category's size scale. Nothing ever sent
+    // `sizeScaleId`, so every group in production was created with
+    // size_scale_id = NULL — and a group-scoped size count with no scale falls
+    // back to the built-in apparel letters, offering XS..5XL to count a NUMERIC
+    // shoe run. Verified live on 2026-07-28.
+    expect(groupInsert.size_scale_id).toBe('scale-1');
+  });
+
+  it('lets an explicit productGroup.sizeScaleId win over the category default', async () => {
+    const stub = buildStub({
+      'categories.select': { data: shoesCategory(), error: null },
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: { id: 'grp-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await new InventoryService(ctx).bulkCreateSizedVariants({
+      ...BASE,
+      productGroup: {
+        name: 'Nike Pegasus 41',
+        brand: 'Nike',
+        defaultCountingUnit: 'pair',
+        sizeScaleId: '99999999-9999-4999-8999-999999999999',
+      },
+    });
+
+    const groupInsert = stub.chainArgs.get('product_groups.insert')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(groupInsert.size_scale_id).toBe('99999999-9999-4999-8999-999999999999');
+  });
+
+  it('leaves size_scale_id NULL when the sports category carries no scale at all', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'jerseys', size_scale_id: null }),
+        error: null,
+      },
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: { id: 'grp-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await new InventoryService(ctx).bulkCreateSizedVariants({
+      ...BASE,
+      variants: [{ size: 'M', quantity: 1 }],
+      productGroup: { name: 'Wildcats home', team: 'Wildcats', defaultCountingUnit: 'each' },
+    });
+
+    const groupInsert = stub.chainArgs.get('product_groups.insert')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(groupInsert.size_scale_id).toBeNull();
   });
 
   it('ignores productGroup entirely for a non-sports category (nothing is grouped by accident)', async () => {

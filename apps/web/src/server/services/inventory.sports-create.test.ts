@@ -266,6 +266,40 @@ describe('InventoryService.create — sports categories', () => {
     >;
     expect(groupInsert.group_key).toBe('shoes|nike|pegasus 41||');
     expect(groupInsert.subcategory_key).toBe('shoes');
+    // This category carries no scale of its own, so the group gets none either.
+    expect(groupInsert.size_scale_id).toBeNull();
+  });
+
+  it("stamps the CATEGORY's size scale onto a group it creates", async () => {
+    // Every product group in production was created with size_scale_id = NULL,
+    // because no caller ever sent one. A group-scoped size count then has no
+    // vocabulary and falls back to the built-in apparel letters — offering
+    // XS..5XL to count a NUMERIC shoe run (observed in prod 2026-07-28). The
+    // group inherits the category's scale exactly as it inherits the unit.
+    const stub = buildStub({
+      'categories.select': {
+        data: { ...shoesCategory(), size_scale_id: 'scale-1' },
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: 'US_MENS' }, error: null },
+      'size_scale_values.select': { data: [], error: null },
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: { id: 'grp-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({
+      ...BASE,
+      categoryId: 'cat-1',
+      variantSize: '10',
+      variantSizeSystem: 'US_MENS',
+      productGroup: { name: 'Nike Pegasus 41', brand: 'Nike', defaultCountingUnit: 'pair' },
+    });
+
+    const groupInsert = stub.chainArgs.get('product_groups.insert')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(groupInsert.size_scale_id).toBe('scale-1');
   });
 
   it('refuses a supplied groupId when the sports module is off, whatever the category says', async () => {
