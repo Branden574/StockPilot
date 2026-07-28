@@ -78,6 +78,7 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
         tracking_mode: (r.tracking_mode as TrackingMode | null) ?? null,
         sports_subcategory_key: (r.sports_subcategory_key as string | null) ?? null,
         tracking_profile: (r.tracking_profile as SubcategoryTrackingProfile | null) ?? null,
+        default_unit_of_measure: (r.default_unit_of_measure as string | null) ?? null,
       }))}
     />
   );

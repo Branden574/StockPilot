@@ -8,6 +8,8 @@ vi.mock('next/navigation', () => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/server/actions/import', () => ({ importItemsAction: vi.fn() }));
 
+import { importItemsAction } from '@/server/actions/import';
+
 import { CsvImport } from './csv-import';
 
 /**
@@ -105,5 +107,69 @@ describe('CsvImport — the template is module-gated', () => {
     expect(screen.getAllByText(/Applied on import:/).at(-1)?.textContent).toMatch(
       /jersey_number/,
     );
+  });
+});
+
+/**
+ * The destination picker. `InventoryService.create()` demands a warehouse and
+ * this screen never offered one, so every CSV row died on
+ * "A warehouse must be selected before creating an item." — verified live in
+ * Demo Co at 0 imported / 4 failed, twice.
+ *
+ * The picker names the DEFAULT for the file; the template's `warehouse_name`
+ * column overrides it per row on the server.
+ */
+describe('CsvImport — the destination warehouse', () => {
+  const WAREHOUSES = [
+    { id: 'wh-main', name: 'Main Warehouse' },
+    { id: 'wh-demo', name: 'Demo Distribution Center' },
+  ];
+
+  async function uploadOneRow(user: ReturnType<typeof userEvent.setup>) {
+    const file = new File(['name,sku\nWireless Mouse,SP-MOUSE-001\n'], 'items.csv', {
+      type: 'text/csv',
+    });
+    // happy-dom's File has no text(); the component awaits it.
+    Object.defineProperty(file, 'text', {
+      value: async () => 'name,sku\nWireless Mouse,SP-MOUSE-001\n',
+    });
+    await user.upload(document.getElementById('csv-upload') as HTMLInputElement, file);
+  }
+
+  it('sends the chosen warehouse with the import', async () => {
+    vi.mocked(importItemsAction).mockResolvedValue({
+      ok: true,
+      data: { total: 1, created: 1, failed: 0, errors: [] },
+    } as never);
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WAREHOUSES} forcedWarehouseId={null} />);
+    await uploadOneRow(user);
+    await user.click(screen.getByRole('button', { name: /import 1 item/i }));
+
+    expect(importItemsAction).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseId: 'wh-main' }),
+    );
+  });
+
+  it('locks the picker to the assignment of a warehouse-scoped user', () => {
+    render(
+      <CsvImport sportsEnabled={false} warehouses={WAREHOUSES} forcedWarehouseId="wh-demo" />,
+    );
+    expect(screen.getByRole('combobox').getAttribute('data-disabled')).not.toBeNull();
+  });
+
+  it('says the warehouse_name column is applied, because it now is', () => {
+    render(<CsvImport sportsEnabled={false} warehouses={WAREHOUSES} forcedWarehouseId={null} />);
+    expect(screen.getByText(/Applied on import:/).textContent).toMatch(/warehouse_name/);
+  });
+
+  it('an org with no warehouses cannot start an import it could only fail', async () => {
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={[]} forcedWarehouseId={null} />);
+    await uploadOneRow(user);
+    expect(
+      screen.getByRole('button', { name: /import 1 item/i }).hasAttribute('disabled'),
+    ).toBe(true);
+    expect(importItemsAction).not.toHaveBeenCalled();
   });
 });

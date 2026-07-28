@@ -7,6 +7,14 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { parseCsv, rowsToObjects, toCsv } from '@/lib/csv';
 import { importItemsAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
@@ -65,6 +73,11 @@ const BASE_APPLIED_COLUMNS = [
   'name', 'sku', 'barcode', 'description',
   'unit_cost', 'retail_price', 'quantity_on_hand',
   'reorder_point', 'reorder_quantity', 'unit_of_measure',
+  // Applied since the live-verification fix: it resolves ORG-SCOPED by name and
+  // overrides the destination picked below, per row. It sat in this template
+  // being validated and then ignored while every row failed for want of a
+  // warehouse, so naming it here is part of the fix, not decoration.
+  'warehouse_name',
 ];
 
 const SPORTS_APPLIED_COLUMNS = [
@@ -117,8 +130,30 @@ const SPORTS_SAMPLE = [
   },
 ];
 
-export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }) {
+export function CsvImport({
+  sportsEnabled = false,
+  warehouses = [],
+  forcedWarehouseId = null,
+  warehouseLabel = 'Warehouse',
+}: {
+  sportsEnabled?: boolean;
+  /**
+   * The org's active warehouses. Every created item must belong to one
+   * (`InventoryService.create()` has refused otherwise since d4550449), and
+   * this screen never asked — so every CSV row failed with
+   * "A warehouse must be selected before creating an item." until now.
+   */
+  warehouses?: Array<{ id: string; name: string }>;
+  /** A warehouse-scoped user's assignment. The server forces it regardless, so
+   *  the picker shows it locked rather than pretending there is a choice. */
+  forcedWarehouseId?: string | null;
+  /** Org terminology for "warehouse" (some orgs call them sites/campuses). */
+  warehouseLabel?: string;
+}) {
   const router = useRouter();
+  const [warehouseId, setWarehouseId] = React.useState<string>(
+    forcedWarehouseId ?? warehouses[0]?.id ?? '',
+  );
   const header = React.useMemo(() => templateHeader(sportsEnabled), [sportsEnabled]);
   const sample = React.useMemo(
     () => (sportsEnabled ? [...BASE_SAMPLE, ...SPORTS_SAMPLE] : BASE_SAMPLE),
@@ -167,8 +202,12 @@ export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }
 
   async function runImport() {
     if (!parsed) return;
+    if (!warehouseId) {
+      toast.error(`Pick a ${warehouseLabel.toLowerCase()} before importing items.`);
+      return;
+    }
     setImporting(true);
-    const res = await importItemsAction({ rows: parsed.rows });
+    const res = await importItemsAction({ rows: parsed.rows, warehouseId });
     setImporting(false);
     setSummary(res);
     if (res.ok) {
@@ -198,11 +237,14 @@ export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Applied on import: {appliedColumns.join(', ')}. The remaining
+            Applied on import: {appliedColumns.join(', ')}. Leave{' '}
+            <code className="rounded bg-muted px-1 py-0.5">warehouse_name</code> blank to
+            use the {warehouseLabel.toLowerCase()} chosen below, or name one exactly as it
+            appears in {warehouseLabel}s to send that row somewhere else. The remaining
             template columns
             {sportsEnabled
-              ? ' (product group identity, counting unit, tracking mode, serial, asset tag, and the category / warehouse / location lookups)'
-              : ' (the category / warehouse / location lookups)'}{' '}
+              ? ' (product group identity, counting unit, tracking mode, serial, asset tag, and the category / location lookups)'
+              : ' (the category / location lookups)'}{' '}
             are accepted and checked, but are set through the item
             {sportsEnabled ? ' and product-group screens' : ' screens'} rather than a bulk
             import.
@@ -222,7 +264,31 @@ export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }
         <CardHeader>
           <CardTitle className="text-base">Step 2 — upload your CSV</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="csv-warehouse">Destination {warehouseLabel.toLowerCase()}</Label>
+            <Select
+              value={warehouseId}
+              onValueChange={setWarehouseId}
+              disabled={Boolean(forcedWarehouseId) || warehouses.length === 0}
+            >
+              <SelectTrigger id="csv-warehouse" className="sm:max-w-sm">
+                <SelectValue placeholder={`Pick a ${warehouseLabel.toLowerCase()}`} />
+              </SelectTrigger>
+              <SelectContent>
+                {warehouses.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {warehouses.length === 0
+                ? `Create a ${warehouseLabel.toLowerCase()} first — every item has to live somewhere.`
+                : `Where these items land unless a row names its own ${warehouseLabel.toLowerCase()}.`}
+            </p>
+          </div>
           <label
             htmlFor="csv-upload"
             className={cn(
@@ -294,7 +360,7 @@ export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }
               )}
             </div>
             <div className="flex justify-end">
-              <Button variant="gradient" onClick={runImport} disabled={importing}>
+              <Button variant="gradient" onClick={runImport} disabled={importing || !warehouseId}>
                 {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : `Import ${parsed.rows.length} items`}
               </Button>
             </div>

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { WarehousesService } from '@/server/services/warehouses';
 
 import {
   emptyToUndefined,
@@ -75,7 +76,41 @@ const csvRowSchema = z.object({
 
 const importSchema = z.object({
   rows: z.array(z.record(z.string(), z.string())).min(1).max(5000),
+  /**
+   * The import screen's destination picker — the whole file's default
+   * warehouse. `InventoryService.create()` has refused to create an item
+   * without a warehouse since d4550449 and this action never sent one, so every
+   * CSV row failed with "A warehouse must be selected before creating an item."
+   * for any user who was not warehouse-SCOPED (a scoped user's
+   * `forcedWarehouseId` supplies one inside create() regardless of input, which
+   * is why this survived unnoticed).
+   *
+   * Optional, not required: leaving it out must keep deferring to
+   * `forcedWarehouseId`, so a scoped user's import is unchanged and the action
+   * never invents an id of its own.
+   */
+  warehouseId: z.string().uuid().optional(),
 });
+
+/**
+ * Case- and whitespace-insensitive lookup of the template's own
+ * `warehouse_name` column against the org's ACTIVE warehouses. Built once per
+ * file, and only when a row actually names one.
+ *
+ * A name that matches two warehouses maps to `null` rather than to either of
+ * them: picking one would silently put stock in the wrong building, and that is
+ * exactly the kind of quiet mis-write the row error below exists to prevent.
+ */
+function indexWarehousesByName(
+  warehouses: ReadonlyArray<{ id: string; name: string }>,
+): Map<string, string | null> {
+  const index = new Map<string, string | null>();
+  for (const w of warehouses) {
+    const key = w.name.trim().toLowerCase();
+    index.set(key, index.has(key) ? null : w.id);
+  }
+  return index;
+}
 
 interface ImportSummary {
   total: number;
@@ -94,6 +129,14 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     const svc = new InventoryService(ctx);
     const summary: ImportSummary = { total: parsed.data.rows.length, created: 0, failed: 0, errors: [] };
 
+    // Hoisted out of the row loop: the (user, org) tuple is fixed for the whole
+    // file, so one read serves 5,000 rows. Skipped entirely when no row names a
+    // warehouse, which is the ordinary case — the screen's picker covers it.
+    const namesWanted = parsed.data.rows.some((r) => (r?.warehouse_name ?? '').trim() !== '');
+    const warehouseIdByName = namesWanted
+      ? indexWarehousesByName(await new WarehousesService(ctx).listNames())
+      : new Map<string, string | null>();
+
     for (let i = 0; i < parsed.data.rows.length; i++) {
       const raw = parsed.data.rows[i] ?? {};
       const validated = csvRowSchema.safeParse(raw);
@@ -101,6 +144,32 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
         summary.failed++;
         summary.errors.push({ row: i + 2, message: validated.error.issues[0]?.message ?? 'Invalid row' });
         continue;
+      }
+      // Per-row override, org-scoped by construction: the index only ever holds
+      // warehouses this org can see, so a name from another tenant simply does
+      // not resolve. A row that names one and gets it wrong fails ON ITS OWN —
+      // the rest of the file still imports.
+      const namedWarehouse = validated.data.warehouse_name?.trim();
+      let rowWarehouseId = parsed.data.warehouseId;
+      if (namedWarehouse) {
+        if (!warehouseIdByName.has(namedWarehouse.toLowerCase())) {
+          summary.failed++;
+          summary.errors.push({
+            row: i + 2,
+            message: `No active warehouse named "${namedWarehouse}" in this organization. Use the exact name from Warehouses, or clear the warehouse_name cell to use the destination picked above.`,
+          });
+          continue;
+        }
+        const match = warehouseIdByName.get(namedWarehouse.toLowerCase()) ?? null;
+        if (!match) {
+          summary.failed++;
+          summary.errors.push({
+            row: i + 2,
+            message: `More than one active warehouse is named "${namedWarehouse}", so this row could go to either. Rename one of them, or clear the warehouse_name cell to use the destination picked above.`,
+          });
+          continue;
+        }
+        rowWarehouseId = match;
       }
       try {
         await svc.create({
@@ -117,6 +186,11 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
           categoryId: null,
           supplierId: null,
           primaryLocationId: null,
+          // Undefined, never null, when nothing resolved: create() reads
+          // `forced ?? input.warehouseId ?? null`, so a warehouse-scoped user's
+          // assignment still wins and an unscoped user still gets the original
+          // "A warehouse must be selected" error rather than a silent write.
+          warehouseId: rowWarehouseId,
           trackingType: 'none',
           itemType: 'product',
           customFields: {},
