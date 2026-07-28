@@ -59,3 +59,40 @@ comment on column public.po_import_lines.serial_hint is
 create index if not exists po_import_lines_suggested_group_idx
   on public.po_import_lines (suggested_group_id)
   where suggested_group_id is not null;
+
+-- ── Org consistency on the advisory FK ──────────────────────────────────────
+-- suggested_group_id is CLIENT-WRITABLE (the review UI sets it, and the scan
+-- pipeline writes it through the same authenticated path), and a plain FK cannot
+-- express "and it must belong to the SAME org". Without this arm a manager in
+-- org B could point their import line at org A's product group: the group id is
+-- just a uuid on the request body and nothing else on the write path checks its
+-- org. Accepting one would surface a foreign group's name, brand, team and style
+-- number in org B's review screen the moment the line is rendered with its
+-- suggestion joined — the advisory-only discipline limits what a BAD suggestion
+-- can LINK, not what it can DISCLOSE.
+--
+-- Same shape and lineage as the charter_in_org / supplier_in_org /
+-- product_group_in_org arms added by 0201-0206, 0298 and 0302. The one
+-- difference: po_import_lines carries no organization_id of its own, so the org
+-- comes from the parent po_imports row the policy already joins — which is also
+-- what makes the arm safe to nest INSIDE the existing exists() rather than
+-- bolting a second lookup onto it.
+--
+-- product_group_in_org returns TRUE for a NULL id, so every line that carries no
+-- suggestion — which is every line the chassis has ever written — is unaffected.
+--
+-- `alter policy ... with check` REPLACES the whole expression, so the CURRENT
+-- predicate is reproduced verbatim below (captured from pg_policy at 0208, the
+-- last migration to touch it) and the new arm is appended. USING is left
+-- untouched by this form: the org boundary belongs on what is being WRITTEN, and
+-- narrowing USING would change which existing lines a reviewer may edit.
+alter policy po_import_lines_write on public.po_import_lines
+  with check (
+    exists (
+      select 1 from public.po_imports pi
+      where pi.id = po_import_lines.po_import_id
+        and ( ( select public.has_org_role(pi.organization_id, 'manager') )
+              or ( select public.has_permission(pi.organization_id, 'purchase_orders:manage') ) )
+        and (select public.product_group_in_org(po_import_lines.suggested_group_id, pi.organization_id))
+    )
+  );

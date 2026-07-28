@@ -4,7 +4,7 @@
 -- requirements scenarios, and the regression anchors that keep the most
 -- shared table in the app intact.
 --
--- Assertion index (51):
+-- Assertion index (53):
 --    1-13  schema shape: the table exists, all ten variant columns exist,
 --          product_groups owns NO quantity column, group_id is NULLABLE with
 --          NO default (the "no backfill" structural anchor)
@@ -34,12 +34,16 @@
 --          (positive control), a category-restricted viewer reads ZERO rows
 --          for a group outside their whitelist, reads EXACTLY the whitelisted
 --          one, and the roll-up view hides the same group
+--   52-53  both new CHECKs end up VALIDATED: 0298 adds them NOT VALID (to keep
+--          the 1.2 M-row scan off the ACCESS EXCLUSIVE window) and then
+--          VALIDATEs them, so dropping the second statement would silently
+--          leave constraints Postgres will not trust for planning
 --
 -- Namespace: 9e298000. Wrapped in begin/rollback - nothing leaks.
 
 begin;
 
-select plan(51);
+select plan(53);
 
 \set org    '\'9e298000-0000-0000-0000-000000000001\''
 \set usr    '\'9e298000-0000-0000-0000-000000000002\''
@@ -534,5 +538,27 @@ select is(
   'the roll-up view hides the same group - security_invoker means product_groups RLS is the caller''s');
 
 reset role;
+
+-- ── 52-53. Both length guards end up VALIDATED ─────────────────────────────
+-- 0298 adds each CHECK as NOT VALID and then VALIDATEs it, so the full-table
+-- scan runs under SHARE UPDATE EXCLUSIVE rather than inside the ADD's ACCESS
+-- EXCLUSIVE window (see the PROD PUSH NOTE at the head of the migration). The
+-- END state must still be a VALIDATED constraint: a NOT VALID one enforces new
+-- writes but is not trusted for planning, so losing the VALIDATE would be a
+-- regression assertions 28-35 cannot see - they only ever test new writes.
+select is(
+  (select convalidated from pg_constraint
+    where conrelid = 'public.inventory_items'::regclass
+      and conname  = 'inventory_items_jersey_number_check'),
+  true,
+  'inventory_items_jersey_number_check ends up VALIDATED (the VALIDATE step was not dropped)');
+
+select is(
+  (select convalidated from pg_constraint
+    where conrelid = 'public.inventory_items'::regclass
+      and conname  = 'inventory_items_variant_size_check'),
+  true,
+  'inventory_items_variant_size_check ends up VALIDATED (the VALIDATE step was not dropped)');
+
 select * from finish();
 rollback;

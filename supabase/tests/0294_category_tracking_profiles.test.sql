@@ -12,25 +12,31 @@
 -- Anti-vacuity: assertion 6 proves the child really has a NULL tracking_mode,
 -- so the inheritance assertions are not passing on a stamped value.
 --
--- Assertion map (31):
+-- Assertion map (39):
 --    1-5   the five new categories columns exist
 --    6     fixture check: the child's tracking_mode really is NULL
 --    7-9   the tracking-mode inheritance resolver (own / inherited / default)
 --   10-11  the counting-unit resolver (inherited / default)
 --   12-13  neither SECURITY DEFINER resolver is callable by anon
---   14-15  the two CHECK constraints reject nonsense
---   16-25  the seeded system scales: exact row counts AND exact printed labels
+--   14-16  the resolvers' TENANT GUARD: a member of another org reads NULL from
+--          both, and the org's own member still resolves (the guard refuses
+--          strangers, not everyone)
+--   17-18  the two CHECK constraints reject nonsense
+--   19-28  the seeded system scales: exact row counts AND exact printed labels
 --          at pinned sort_orders, so a regression in the label expression
 --          cannot slide past a >= check
---   26-31  RLS (system scale readable, its values readable through the
+--   29-34  RLS (system scale readable, its values readable through the
 --          composed policy, cross-org invisible, only a manager+ may write,
 --          and nobody may forge a system scale)
+--   35-39  size_scale_values WRITE is the SAME predicate as size_scales:
+--          refused without sports:manage, allowed with it (insert AND update),
+--          and still refused on a built-in SYSTEM scale
 --
 -- Namespace: 5c294000. Wrapped in begin/rollback — nothing leaks.
 
 begin;
 
-select plan(31);
+select plan(39);
 
 \set org    '\'5c294000-0000-0000-0000-000000000001\''
 \set admin  '\'5c294000-0000-0000-0000-000000000002\''
@@ -41,6 +47,8 @@ select plan(31);
 \set mgrB   '\'5c294000-0000-0000-0000-000000000007\''
 \set stf    '\'5c294000-0000-0000-0000-000000000008\''
 \set scaleB '\'5c294000-0000-0000-0000-000000000009\''
+\set scaleA '\'5c294000-0000-0000-0000-00000000000a\''
+\set sysAp  '\'5ca1e000-0000-0000-0000-000000000001\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:admin, 'admin-0294@test.local', '{}'::jsonb),
@@ -71,6 +79,13 @@ insert into public.size_scales (id, organization_id, key, name, kind)
   values (:scaleB, :orgB, 'orgb_private', 'Org B private scale', 'custom')
   on conflict (id) do nothing;
 
+-- An org-A scale with a KNOWN id, so the size_scale_values write block can aim
+-- at it. Seeded as superuser: the point under test is who may put VALUES in a
+-- scale, not who may create the scale (that is assertions 32-34).
+insert into public.size_scales (id, organization_id, key, name, kind)
+  values (:scaleA, :org, 'org_a_values', 'Org A values scale', 'apparel_alpha')
+  on conflict (id) do nothing;
+
 -- ── Schema shape ────────────────────────────────────────────────────────────
 select has_column('public', 'categories', 'tracking_mode', 'categories.tracking_mode exists');
 select has_column('public', 'categories', 'size_scale_id', 'categories.size_scale_id exists');
@@ -85,6 +100,14 @@ select is(
   'fixture check: the child category has a NULL tracking_mode (inheritance is really under test)');
 
 -- ── Inheritance resolver ────────────────────────────────────────────────────
+-- Both resolvers now carry a tenant guard (`is_org_member(c.organization_id)`),
+-- so they need a real identity to resolve anything at all — a claim-less caller
+-- reads NULL, by design. Adopt the org-A admin for the rest of the file; the
+-- blocks below override the claim where they need a different actor. The DB role
+-- stays superuser here: the guard is inside the function body, not an RLS
+-- policy, so it binds regardless of role and this block is testing the body.
+set local "request.jwt.claim.sub" to '5c294000-0000-0000-0000-000000000002';
+
 select is(
   public.category_tracking_mode(:parent),
   'QUANTITY_BY_VARIANT',
@@ -124,6 +147,39 @@ select ok(
 select ok(
   not has_function_privilege('anon', 'public.category_default_uom(uuid)', 'execute'),
   'anon holds no EXECUTE on category_default_uom (SECURITY DEFINER not exposed as a public RPC)');
+
+-- ── 14-16. The resolvers' TENANT GUARD ──────────────────────────────────────
+-- The revoke proved above stops an UNAUTHENTICATED caller. It does nothing about
+-- an authenticated one: `authenticated` is ONE shared database role for every
+-- tenant in the system, and PostgREST publishes both functions as RPCs, so org
+-- B's manager can POST /rest/v1/rpc/category_tracking_mode with a guessed uuid.
+-- SECURITY DEFINER means the RLS on `categories` that would normally stop that
+-- read is bypassed, so the org boundary has to live inside the function body.
+--
+-- A stranger gets NULL — byte-identical to a nonexistent or soft-deleted
+-- category — so nothing about org A's category is disclosed, not even that it
+-- exists.
+set local "request.jwt.claim.sub" to '5c294000-0000-0000-0000-000000000007'; -- org B's manager
+
+select is(
+  public.category_tracking_mode(:parent),
+  null,
+  'a member of ANOTHER org reads NULL from category_tracking_mode (no foreign tracking policy)');
+
+select is(
+  public.category_default_uom(:parent),
+  null,
+  'a member of ANOTHER org reads NULL from category_default_uom (no foreign counting unit)');
+
+-- Anti-vacuity for the two above: the guard refuses STRANGERS, not everyone. If
+-- it were simply broken (always NULL) this assertion fails and the pair above
+-- would have been passing for the wrong reason.
+set local "request.jwt.claim.sub" to '5c294000-0000-0000-0000-000000000002'; -- back to org A
+
+select is(
+  public.category_tracking_mode(:parent),
+  'QUANTITY_BY_VARIANT',
+  'the org''s OWN member still resolves the mode (the tenant guard is not a blanket refusal)');
 
 -- ── CHECK constraints reject nonsense ───────────────────────────────────────
 select throws_ok(
@@ -267,6 +323,62 @@ select throws_ok(
   '42501',
   null,
   'a staff member cannot create a size scale');
+
+-- ── 35-39. size_scale_values WRITE uses the SAME predicate as size_scales ────
+-- The defect this block pins: size_scales_insert / size_scales_update accept
+-- `manager OR sports:manage`, but size_scale_values_write required manager. A
+-- sports:manage grantee could therefore CREATE a size scale and never put a
+-- single value in it — and a scale with no values is not a scale (the size
+-- pickers read size_scale_values, not size_scales).
+--
+-- 35 is the baseline: plain staff, no sports:manage yet, refused.
+select throws_ok(
+  $$ insert into public.size_scale_values (size_scale_id, value, normalized, sort_order)
+     values ('5c294000-0000-0000-0000-00000000000a', 'XS', 'XS', 10) $$,
+  '42501',
+  null,
+  'plain staff cannot add a value to an org scale (the write gate is real)');
+
+-- Grant sports:manage to the STAFF role in org A. Written as superuser because
+-- role_permission_overrides_insert is admin+ and the actor here is staff — the
+-- grant is the setup, not the thing under test.
+reset role;
+insert into public.role_permission_overrides (organization_id, role, permission, granted)
+  values (:org, 'staff', 'sports:manage', true);
+
+set local "request.jwt.claim.sub" to '5c294000-0000-0000-0000-000000000008';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- 36. Anti-vacuity for the whole block: the grant really took effect, proved on
+-- the size_scales side that already accepted sports:manage before this fix.
+select lives_ok(
+  $$ insert into public.size_scales (organization_id, key, name, kind)
+     values ('5c294000-0000-0000-0000-000000000001', 'sports_mgr_scale', 'Sports manager scale', 'custom') $$,
+  'a sports:manage grantee can create a size scale (unchanged behaviour)');
+
+-- 37. THE FIX: the same grantee can now populate one.
+select lives_ok(
+  $$ insert into public.size_scale_values (size_scale_id, value, normalized, sort_order)
+     values ('5c294000-0000-0000-0000-00000000000a', 'XS', 'XS', 10) $$,
+  'a sports:manage grantee can add a value to their org''s scale (create AND populate)');
+
+-- 38. FOR ALL means UPDATE too — fixing a mistyped size is part of populating.
+select lives_ok(
+  $$ update public.size_scale_values set sort_order = 5
+     where size_scale_id = '5c294000-0000-0000-0000-00000000000a' and normalized = 'XS' $$,
+  'a sports:manage grantee can correct a value they own');
+
+-- 39. The org boundary is UNCHANGED by the widening: no rank and no permission
+-- writes a value onto a built-in SYSTEM scale (organization_id is null). '7XL' is
+-- deliberately outside the seeded apparel set so a pass cannot come from the
+-- (size_scale_id, normalized) unique index instead of RLS.
+select throws_ok(
+  $$ insert into public.size_scale_values (size_scale_id, value, normalized, sort_order)
+     values ('5ca1e000-0000-0000-0000-000000000001', '7XL', '7XL', 110) $$,
+  '42501',
+  null,
+  'not even a sports:manage grantee can add a value to a built-in SYSTEM scale');
 
 reset role;
 select * from finish();

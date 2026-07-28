@@ -3,7 +3,7 @@
 -- Proves 0301: po_import_lines carries the sports variant fields, and that
 -- adding them changed NOTHING about the prod-hardened import chassis.
 --
--- Assertion index (30):
+-- Assertion index (33):
 --    1-12  all twelve new columns exist
 --   13     every one of them is NULLABLE (an existing import path that has
 --          never heard of them must keep inserting)
@@ -26,20 +26,26 @@
 --          it is the document's own string, never normalized
 --   29     serial_hint is NULL on a line whose document printed no serial
 --          (never a placeholder: no 'N/A', no '0000')
---   30     deleting the suggested group nulls the suggestion and LEAVES THE
+--   30-32  ORG CONSISTENCY on suggested_group_id, as a real authenticated
+--          caller: my own org's group is accepted (positive control), ANOTHER
+--          org's group is refused with 42501, and NULL is still accepted (every
+--          pre-0301 line is unaffected)
+--   33     deleting the suggested group nulls the suggestion and LEAVES THE
 --          LINE (the 0233 suggestion-not-link discipline, group edition)
 --
 -- Namespace: b0300000. Wrapped in begin/rollback - nothing leaks.
 
 begin;
 
-select plan(30);
+select plan(33);
 
 \set org   '\'b0300000-0000-0000-0000-000000000001\''
 \set usr   '\'b0300000-0000-0000-0000-000000000002\''
 \set wh    '\'b0300000-0000-0000-0000-000000000003\''
 \set imp   '\'b0300000-0000-0000-0000-000000000004\''
 \set grp   '\'b0300000-0000-0000-0000-000000000005\''
+\set grpB  '\'b0300000-0000-0000-0000-000000000006\''
+\set orgB  '\'b0300000-0000-0000-0000-000000000007\''
 \set ln_a  '\'b0300000-0000-0000-0000-00000000000a\''
 \set ln_b  '\'b0300000-0000-0000-0000-00000000000b\''
 \set ln_c  '\'b0300000-0000-0000-0000-00000000000c\''
@@ -224,7 +230,60 @@ select is(
   null,
   'a line with no printed serial reads back NULL, never a placeholder');
 
--- ── 30. Deleting the suggested group nulls the hint, never the line ────────
+-- ── 30-32. Org consistency on suggested_group_id ───────────────────────────
+-- Everything above ran as superuser, so RLS never applied. suggested_group_id is
+-- CLIENT-WRITABLE (the review UI sets it, and the scan pipeline writes it through
+-- the same authenticated path), and a plain FK cannot say "and it must belong to
+-- the SAME org" - so without the policy arm 0301 adds, org A's manager could
+-- point their line at ANOTHER org's group and pull its name, brand, team and
+-- style number into their own review screen the moment the suggestion is
+-- rendered joined. po_import_lines carries no organization_id of its own, so the
+-- org comes from the parent po_imports row the policy already joins.
+insert into public.organizations (id, name, slug) values
+  (:orgB, 'Rival 0301 Org', 'rival-0301-org') on conflict (id) do nothing;
+insert into public.product_groups
+  (id, organization_id, subcategory_key, name, brand, model, group_key,
+   default_counting_unit)
+  values (:grpB, :orgB, 'shoes', 'Rival Runner 9', 'Rival', 'Runner 9',
+          'shoes|rival|runner 9||', 'pair');
+
+set local "request.jwt.claim.sub" to 'b0300000-0000-0000-0000-000000000002';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Positive control FIRST, so the refusal below is a real refusal and not "this
+-- manager cannot write po_import_lines at all".
+select lives_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description, suggested_group_id)
+     values ('b0300000-0000-0000-0000-00000000000f',
+             'b0300000-0000-0000-0000-000000000004', 6, 'inventory',
+             'Own-org suggestion', 'b0300000-0000-0000-0000-000000000005') $$,
+  'a manager CAN suggest a group from their OWN org');
+
+select throws_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description, suggested_group_id)
+     values ('b0300000-0000-0000-0000-000000000010',
+             'b0300000-0000-0000-0000-000000000004', 7, 'inventory',
+             'Cross-org suggestion', 'b0300000-0000-0000-0000-000000000006') $$,
+  '42501',
+  null,
+  'a cross-org suggested_group_id is REFUSED (product_group_in_org arm)');
+
+-- NULL is still fine: product_group_in_org returns true for a null id, so every
+-- line the import chassis has ever written keeps inserting unchanged.
+select lives_ok(
+  $$ insert into public.po_import_lines
+       (id, po_import_id, line_number, line_type, description)
+     values ('b0300000-0000-0000-0000-000000000011',
+             'b0300000-0000-0000-0000-000000000004', 8, 'inventory',
+             'No suggestion at all') $$,
+  'a line with NO suggestion still inserts (the arm is null-tolerant)');
+
+reset role;
+
+-- ── 33. Deleting the suggested group nulls the hint, never the line ────────
 delete from public.product_groups where id = :grp;
 
 select is(

@@ -1,5 +1,54 @@
 -- 0298_product_groups_and_variants.sql
 --
+-- ============================================================================
+-- PROD PUSH NOTE — PUSH THIS FILE IN A SCHEDULED LOW-TRAFFIC WINDOW.
+-- Same hazard, same window, same remedy as 0295 and 0303 (whose header carries
+-- the long-form explanation and the retry procedure). Read all three as one
+-- push.
+--
+-- Section 2 is the expensive part: ten `add column`s, two CHECK swaps and two
+-- NON-CONCURRENT index builds on inventory_items, plus two `alter policy`
+-- statements, all in ONE transaction. The first ADD COLUMN takes ACCESS
+-- EXCLUSIVE on inventory_items and a migration file does not COMMIT until its
+-- last statement, so that lock is held through both index builds. For that whole
+-- window inventory_items answers nobody — READS INCLUDED. Do not read the
+-- statement-level notes below as a promise of concurrency: individually a
+-- nullable ADD COLUMN is rewrite-free and a VALIDATE takes only SHARE UPDATE
+-- EXCLUSIVE, but every one of them runs while that first lock is still held.
+--
+-- COST: dominated by the two index builds over 1.2 M rows (inventory_items_
+-- group_idx is non-partial and therefore indexes every row). Budget tens of
+-- seconds of full table unavailability, not milliseconds. `create index
+-- concurrently` is NOT an option — it cannot run inside a transaction block, and
+-- a migration file is one.
+--
+-- Without `set lock_timeout` the first ADD COLUMN's lock REQUEST queues AHEAD of
+-- every new reader, so one slow analytics query holding a read lock takes the
+-- whole table offline for as long as it runs and this migration waits behind it.
+-- Prod statement_timeout is 120s, which bounds that to roughly a two-minute full
+-- inventory_items outage per attempt. 5s converts it into "the push failed,
+-- retry it".
+--
+-- ON lock_timeout FAILURE ("canceling statement due to lock timeout", SQLSTATE
+-- 55P03): nothing was applied — the transaction rolled back whole — so RETRY,
+-- ideally once whatever holds inventory_items has finished (`select pid, state,
+-- xact_start, query from pg_stat_activity where state <> 'idle' order by
+-- xact_start`). The section-2 statements are idempotent (`if not exists`,
+-- `drop constraint if exists`); section 1's `create table` / `create index` are
+-- not, but they are also inside the same all-or-nothing transaction, so a
+-- rolled-back attempt leaves nothing behind to collide with.
+--
+-- DEPLOY-ORDER COUPLING — MIGRATIONS FIRST, WEB DEPLOY SECOND.
+-- Two web paths select the columns this file adds UNCONDITIONALLY, with no
+-- feature flag and no fallback, so shipping the web deploy first 500s them:
+--   * apps/web/src/app/api/v1/items/lookup/route.ts — its select list names
+--     group_id, variant_size and jersey_number (route.ts:100).
+--   * apps/web/src/server/services/size-counts.ts (SizeCountsService) — reads
+--     and writes size_count_sessions.product_group_id, added by 0302.
+-- 0302 depends on product_groups existing here, so the whole 0294-0303 run must
+-- land BEFORE the deploy that ships those two paths.
+-- ============================================================================
+--
 -- Phase 3 of the Sports program: the GROUP overlay and first-class VARIANT
 -- attributes.
 --
@@ -28,6 +77,21 @@
 -- uniqueness key (organization_id, sku, charter_id, bin_location) from 0234 is
 -- NOT touched by this migration — no index here shares its column list and
 -- none of the new columns join it.
+
+-- Bound the lock wait for EVERY statement in this transaction. See the PROD
+-- PUSH NOTE above. Set here, before section 1, rather than immediately above
+-- section 2 — a GUC set mid-file only covers what follows it, and the two
+-- `alter policy` statements in section 3 take ACCESS EXCLUSIVE on
+-- inventory_items too.
+--
+-- PLAIN `set`, NOT `set local` — deliberately, for the reason 0303:72-81
+-- documents at length: the Supabase CLI applies a migration file as one
+-- pipelined pgx batch that is atomic but is not a transaction BLOCK, so `set
+-- local` emits "WARNING (25P01): SET LOCAL can only be used in transaction
+-- blocks" and is DISCARDED — the timeout would silently not exist. A plain
+-- `set` takes effect for the rest of the batch and is `reset` at the end of
+-- this file so it cannot leak into a LATER migration in the same push.
+set lock_timeout = '5s';
 
 -- ── 1) product_groups ───────────────────────────────────────────────────────
 create table public.product_groups (
@@ -124,6 +188,20 @@ alter table public.inventory_items
   add column if not exists variant_key text;
 
 -- Length guards. These are the constraints custom_fields could never give us.
+--
+-- NOT VALID + VALIDATE, the split 0303:85-92 establishes. A validated CHECK
+-- added inline makes Postgres verify it against all 1.2 M existing rows before
+-- the ALTER can return, and that scan runs under the ACCESS EXCLUSIVE lock the
+-- ADD COLUMNs above already hold. Added NOT VALID the constraint is catalog-only
+-- and instant, and it still enforces every subsequent insert/update; VALIDATE's
+-- one scan takes only SHARE UPDATE EXCLUSIVE. Both predicates are trivially true
+-- of every existing row — the columns were created NULL two statements ago and
+-- nothing in this file writes them — so neither VALIDATE can fail on legacy
+-- data.
+--
+-- The end state is identical to a validated add (convalidated = true), which is
+-- why the pgTAP file needs no change: an out-of-range value is still rejected
+-- with 23514.
 alter table public.inventory_items
   drop constraint if exists inventory_items_jersey_number_check;
 alter table public.inventory_items
@@ -131,13 +209,17 @@ alter table public.inventory_items
   check (
     jersey_number is null
     or (length(jersey_number) between 1 and 4 and jersey_number ~ '^[0-9]+$')
-  );
+  ) not valid;
+alter table public.inventory_items
+  validate constraint inventory_items_jersey_number_check;
 
 alter table public.inventory_items
   drop constraint if exists inventory_items_variant_size_check;
 alter table public.inventory_items
   add constraint inventory_items_variant_size_check
-  check (variant_size is null or length(variant_size) between 1 and 24);
+  check (variant_size is null or length(variant_size) between 1 and 24) not valid;
+alter table public.inventory_items
+  validate constraint inventory_items_variant_size_check;
 
 comment on column public.inventory_items.jersey_number is
   'Uniform number as normalized TEXT, preserving meaningful leading zeroes '
@@ -371,3 +453,10 @@ comment on view public.product_group_rollups is
   'caller''s, not the view owner''s.';
 
 grant select on public.product_group_rollups to authenticated;
+
+-- Hand the lock timeout back — the `set` at the top is plain, not LOCAL (see the
+-- note there), so it would otherwise outlive this migration on the apply
+-- connection and quietly impose 5s on every LATER migration in the same push. On
+-- a failed push the abort unwinds it instead, so this line only matters on the
+-- success path.
+reset lock_timeout;

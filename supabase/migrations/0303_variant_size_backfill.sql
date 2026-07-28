@@ -30,6 +30,27 @@
 -- idempotent (`if not exists`, `create or replace`, and backfill WHERE clauses
 -- that re-match zero rows), so a retry after ANY failure is safe and cannot
 -- double-write. The pgTAP file asserts the idempotence directly.
+--
+-- THIS FILE IS NOT THE ONLY ONE IN THE WINDOW. 0295 and 0298 take the same
+-- ACCESS EXCLUSIVE lock on inventory_items for the same reason (0295 swaps the
+-- tracking_type CHECK; 0298 adds ten columns, two CHECKs and two NON-CONCURRENT
+-- index builds), and both now carry the same `set lock_timeout = '5s'` +
+-- trailing `reset lock_timeout` and their own copy of this note. Schedule
+-- 0294-0303 as ONE low-traffic window, not three: the push applies them in file
+-- order in a single run, and 0298's index builds are the most expensive
+-- statements in it. A 55P03 on any one of them rolls back only that file, so
+-- retry from the failed migration onward.
+--
+-- DEPLOY-ORDER COUPLING — MIGRATIONS FIRST, WEB DEPLOY SECOND.
+-- Two web paths select columns this run adds UNCONDITIONALLY, with no feature
+-- flag and no fallback, so shipping the web deploy first 500s them:
+--   * apps/web/src/app/api/v1/items/lookup/route.ts — its select list names
+--     group_id, variant_size and jersey_number (route.ts:100), all added by 0298.
+--   * apps/web/src/server/services/size-counts.ts (SizeCountsService) — reads
+--     and writes size_count_sessions.product_group_id, added by 0302.
+-- Neither path reads a column this file adds, so the ordering constraint is
+-- satisfied as soon as 0302 has landed — but the whole run is one window
+-- anyway, so treat "all migrations pushed" as the gate for the deploy.
 -- ============================================================================
 --
 -- Copies the STORED size out of custom_fields into the indexed column, and

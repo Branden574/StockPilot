@@ -127,6 +127,26 @@ comment on column public.categories.default_unit_of_measure is
 -- categories cannot make a child silently resolve differently per caller
 -- (a viewer with restricted category access might not see the PARENT row, and
 -- a per-caller tracking policy would be a correctness hole, not a feature).
+--
+-- TENANT GUARD (`is_org_member(c.organization_id)`) — LOAD-BEARING, DO NOT DROP.
+-- Definer rights are what let the walk read a PARENT row the caller cannot see;
+-- they equally bypass the org boundary, and PostgREST publishes both functions
+-- as RPCs. Without this arm ANY authenticated user of ANY org could POST
+-- /rest/v1/rpc/category_tracking_mode with a guessed uuid and read a foreign
+-- org's tracking policy and counting unit. The `revoke ... from public, anon`
+-- below closes the unauthenticated hole only; this closes the authenticated one.
+--
+-- The guard is deliberately spelled on the CHILD row's org, not the parent's:
+-- the parent is only ever consulted for a value, and categories.parent_id is
+-- same-org by construction (0002), so a cross-org parent cannot be reached
+-- through a category the caller legitimately owns.
+--
+-- A non-member gets NULL — byte-identical to what a nonexistent or soft-deleted
+-- category already returns — so the guard leaks no existence signal either. It
+-- deliberately does NOT raise: these resolvers are read helpers, and returning
+-- the same "nothing here" for "not yours" and "not there" is the whole point.
+-- (`is_org_member` is itself the impersonation-aware 0177 version, so an expired
+-- impersonation grant does not resolve a foreign policy.)
 create or replace function public.category_tracking_mode(p_category_id uuid)
 returns text
 language sql
@@ -141,12 +161,14 @@ as $$
   )
   from public.categories c
   left join public.categories p on p.id = c.parent_id and p.deleted_at is null
-  where c.id = p_category_id and c.deleted_at is null;
+  where c.id = p_category_id
+    and c.deleted_at is null
+    and public.is_org_member(c.organization_id);
 $$;
 
 grant execute on function public.category_tracking_mode(uuid) to authenticated;
 
--- Same shape for the counting unit.
+-- Same shape for the counting unit, same tenant guard.
 create or replace function public.category_default_uom(p_category_id uuid)
 returns text
 language sql
@@ -161,7 +183,9 @@ as $$
   )
   from public.categories c
   left join public.categories p on p.id = c.parent_id and p.deleted_at is null
-  where c.id = p_category_id and c.deleted_at is null;
+  where c.id = p_category_id
+    and c.deleted_at is null
+    and public.is_org_member(c.organization_id);
 $$;
 
 grant execute on function public.category_default_uom(uuid) to authenticated;
@@ -174,6 +198,11 @@ grant execute on function public.category_default_uom(uuid) to authenticated;
 -- rights bypass the RLS on `categories` that would otherwise stop it. Revoking
 -- PUBLIC (and anon explicitly, so the intent survives a future re-grant to
 -- PUBLIC) leaves the grants to `authenticated` above as the only way in.
+--
+-- The revoke alone is NOT sufficient: `authenticated` is one shared database
+-- role for every tenant, so the org boundary has to live INSIDE the function
+-- body. That is the is_org_member arm above. Both halves are asserted in the
+-- pgTAP file.
 revoke execute on function
   public.category_tracking_mode(uuid),
   public.category_default_uom(uuid)
@@ -237,6 +266,22 @@ create policy size_scale_values_select on public.size_scale_values
     )
   );
 
+-- The WRITE predicate must be the SAME predicate as size_scales_insert /
+-- size_scales_update, not a stricter one. The first cut required manager here
+-- while accepting `manager OR sports:manage` on the scale itself, which made a
+-- sports:manage grantee able to CREATE a scale and then unable to put a single
+-- value in it — a half-usable feature, and exactly the kind of split the
+-- configurable-permissions design exists to avoid. A size scale with no values
+-- is not a size scale.
+--
+-- FOR ALL, so this covers DELETE of a VALUE too: fixing a mistyped size means
+-- removing it, and that is part of populating a scale. Deleting the SCALE stays
+-- manager-only (size_scales_delete above) deliberately — it cascades every value
+-- and every categories.size_scale_id reference, so it is the heavier action and
+-- keeps the heavier gate.
+--
+-- The org boundary is unchanged: `s.organization_id is not null` still means no
+-- caller of any rank can write a value onto a built-in SYSTEM scale.
 create policy size_scale_values_write on public.size_scale_values
   for all to authenticated
   using (
@@ -244,7 +289,10 @@ create policy size_scale_values_write on public.size_scale_values
       select 1 from public.size_scales s
       where s.id = size_scale_values.size_scale_id
         and s.organization_id is not null
-        and (select public.has_org_role(s.organization_id, 'manager'))
+        and (
+          (select public.has_org_role(s.organization_id, 'manager'))
+          or (select public.has_permission(s.organization_id, 'sports:manage'))
+        )
     )
   )
   with check (
@@ -252,7 +300,10 @@ create policy size_scale_values_write on public.size_scale_values
       select 1 from public.size_scales s
       where s.id = size_scale_values.size_scale_id
         and s.organization_id is not null
-        and (select public.has_org_role(s.organization_id, 'manager'))
+        and (
+          (select public.has_org_role(s.organization_id, 'manager'))
+          or (select public.has_permission(s.organization_id, 'sports:manage'))
+        )
     )
   );
 

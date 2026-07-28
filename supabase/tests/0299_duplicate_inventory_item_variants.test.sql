@@ -6,7 +6,7 @@
 -- untouched, and every 0125 behaviour (Model B placement uniqueness, the
 -- ledger row, the two error codes, cross-org RLS) is intact.
 --
--- Assertion index (40):
+-- Assertion index (51):
 --    1-2   grants survive the re-body: authenticated keeps EXECUTE, anon has none
 --    3-19  duplicate INHERITING everything: group membership, all nine variant
 --          columns, the four pre-existing gaps now closed, the dual-write
@@ -17,20 +17,27 @@
 --   29-31  the group roll-up after four placements: derived, never stored
 --   32-36  an UNGROUPED LEGACY item duplicates to an all-NULL variant row and
 --          keeps its custom_fields.size / model_number / is_rental
---   37-39  Model B (0234) unchanged: same SKU at the same placement still
+--   38-40  Model B (0234) unchanged: same SKU at the same placement still
 --          23505s, at a different bin_location still inserts - and THAT
 --          placement duplicate is still inside the product group
---   40-43  0125 behaviours: the ledger row and its invariant, sku_required,
+--   41-44  0125 behaviours: the ledger row and its invariant, sku_required,
 --          original_not_found
---   44-46  cross-org RLS: a foreign manager cannot duplicate my item (with a
+--   45-47  cross-org RLS: a foreign manager cannot duplicate my item (with a
 --          positive control), and no row leaked into their org
---   47     not_authenticated still fires when auth.uid() is absent
+--   48     not_authenticated still fires when auth.uid() is absent
+--   49-51  LEDGER GUARD: a negative p_overrides.quantity is REFUSED, leaves no
+--          row behind, and zero is still accepted (the guard refuses negative,
+--          not falsy)
+--
+-- (The 1-37 spans above are the original author's grouping and were already
+-- approximate; the 38-51 spans were re-pinned against the real numbering when
+-- 49-51 were added.)
 --
 -- Namespace: d0299000. Wrapped in begin/rollback - nothing leaks.
 
 begin;
 
-select plan(48);
+select plan(51);
 
 \set org   '\'d0299000-0000-0000-0000-000000000001\''
 \set usr   '\'d0299000-0000-0000-0000-000000000002\''
@@ -470,6 +477,41 @@ select throws_ok(
   '28000',
   'not_authenticated',
   'a context with no auth.uid() is still refused (0125 behaviour intact)');
+
+-- ── 48-50. LEDGER GUARD: a negative quantity is refused ─────────────────────
+-- This RPC is granted to `authenticated`, so it is reachable directly at
+-- POST /rest/v1/rpc/duplicate_inventory_item with a hand-written p_overrides -
+-- the service layer is the only SANCTIONED caller, not the only possible one.
+--
+-- The function writes quantity_on_hand = v_qty unconditionally but only writes
+-- the stock_movements row `if v_qty > 0`, so {"quantity": -5} used to produce an
+-- item at -5 on hand with an EMPTY ledger:
+-- SUM(stock_movements.quantity_change) = 0 <> quantity_on_hand = -5. Nothing
+-- else catches it - quantity_on_hand is numeric(14,4) not null default 0 with no
+-- CHECK (0002:95).
+set local "request.jwt.claim.sub" to 'd0299000-0000-0000-0000-000000000002';
+
+select throws_ok(
+  $$ select public.duplicate_inventory_item(
+       'd0299000-0000-0000-0000-000000000005'::uuid,
+       jsonb_build_object('sku', 'NEG-1', 'quantity', -5)) $$,
+  '22023',
+  'quantity_must_not_be_negative',
+  'a negative p_overrides.quantity is REFUSED (it would desync sum(movements) from quantity_on_hand)');
+
+select is(
+  (select count(*)::int from public.inventory_items where sku = 'NEG-1'),
+  0,
+  'the refused duplicate left NO row behind - no item at -5 on hand with an empty ledger');
+
+-- Anti-vacuity: the guard refuses NEGATIVE, not falsy. A zero-quantity duplicate
+-- is the normal "copy the definition, count it later" case; it writes no movement
+-- row and 0 = 0, so the invariant holds and it must still be allowed.
+select lives_ok(
+  $$ select public.duplicate_inventory_item(
+       'd0299000-0000-0000-0000-000000000005'::uuid,
+       jsonb_build_object('sku', 'ZERO-QTY-1', 'quantity', 0)) $$,
+  'a ZERO-quantity duplicate is still allowed (the guard refuses negative, not falsy)');
 
 select * from finish();
 rollback;

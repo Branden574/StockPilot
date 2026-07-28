@@ -7,18 +7,22 @@
 -- 'none', so assertion 3 ("the new value persists") cannot pass by accident on
 -- a row that was already 'serial_optional'.
 --
--- Assertion map (8):
+-- Assertion map (9):
 --   1    fixture check: the item starts on 'none'
 --   2-3  'serial_optional' is accepted and persists
 --   4-6  'serial' / 'lot' / 'none' still accepted (the CHECK was WIDENED)
 --   7    an unknown value is still rejected with 23514 (it was not DROPPED)
 --   8    the 0015 partial index survived the constraint swap
+--   9    the CHECK is VALIDATED — 0295 adds it NOT VALID (to keep the scan off
+--        the ACCESS EXCLUSIVE window) and then VALIDATEs it, so dropping the
+--        second statement would silently leave a constraint Postgres will not
+--        trust for planning or for future partition/inheritance work
 --
 -- Namespace: d0295000. Wrapped in begin/rollback — nothing leaks.
 
 begin;
 
-select plan(8);
+select plan(9);
 
 \set org   '\'d0295000-0000-0000-0000-000000000001\''
 \set user1 '\'d0295000-0000-0000-0000-000000000002\''
@@ -89,6 +93,18 @@ select ok(
       and indexname = 'inventory_items_tracking_type_idx'
   ),
   'the 0015 partial tracking_type index survives the constraint swap');
+
+-- The CHECK is added NOT VALID and then VALIDATEd, so the full-table scan runs
+-- under SHARE UPDATE EXCLUSIVE instead of inside the ADD's ACCESS EXCLUSIVE. The
+-- end state must still be a VALIDATED constraint: a NOT VALID one enforces new
+-- writes but is not trusted for planning, so losing the VALIDATE would be a
+-- silent, invisible regression that assertion 7 cannot see.
+select is(
+  (select convalidated from pg_constraint
+    where conrelid = 'public.inventory_items'::regclass
+      and conname  = 'inventory_items_tracking_type_check'),
+  true,
+  'the widened tracking_type CHECK ends up VALIDATED (the VALIDATE step was not dropped)');
 
 select * from finish();
 rollback;

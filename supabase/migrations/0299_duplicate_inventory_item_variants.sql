@@ -90,6 +90,27 @@ begin
     raise exception 'sku_required' using errcode = '22023';
   end if;
 
+  -- LEDGER GUARD (added in the final whole-branch review). This RPC is granted
+  -- to `authenticated`, so it is reachable DIRECTLY at
+  -- POST /rest/v1/rpc/duplicate_inventory_item with a hand-written p_overrides —
+  -- the service layer is the only SANCTIONED caller, not the only POSSIBLE one
+  -- (see the note under the grants at the foot of this file).
+  --
+  -- A negative quantity breaks the app's central invariant. The INSERT below
+  -- writes quantity_on_hand = v_qty unconditionally, but the stock_movements row
+  -- is only written `if v_qty > 0`, so p_overrides = {"quantity": -5} produces an
+  -- item at -5 on hand with an EMPTY ledger:
+  -- SUM(stock_movements.quantity_change) = 0 <> quantity_on_hand = -5. Nothing
+  -- else stops it — quantity_on_hand is `numeric(14,4) not null default 0` with
+  -- no CHECK (0002:95), and the 0125 original had the same hole.
+  --
+  -- Refuse rather than clamp: silently turning -5 into 0 would hand back an id
+  -- for a row the caller did not ask for. Zero is still allowed — a duplicate
+  -- with no stock is the normal case and writes no movement row, which balances.
+  if v_qty < 0 then
+    raise exception 'quantity_must_not_be_negative' using errcode = '22023';
+  end if;
+
   -- Variant attributes: an override wins, otherwise inherit the original.
   -- Keyed on `p_overrides ? 'key'` rather than coalesce so an explicit JSON
   -- null CLEARS the field instead of silently inheriting it.
@@ -222,3 +243,40 @@ $$;
 revoke all on function public.duplicate_inventory_item(uuid, jsonb) from public;
 revoke all on function public.duplicate_inventory_item(uuid, jsonb) from anon;
 grant execute on function public.duplicate_inventory_item(uuid, jsonb) to authenticated;
+
+-- ── WHY `authenticated` KEEPS EXECUTE, and what that costs ──────────────────
+-- Reviewed in the final whole-branch review. The RPC is reachable directly at
+-- POST /rest/v1/rpc/duplicate_inventory_item, and InventoryService.duplicate
+-- (apps/web/src/server/services/inventory.ts) is the only SANCTIONED caller.
+-- Locking it to a service-only path was considered and REJECTED, because it
+-- would be a net security REGRESSION, not a hardening:
+--
+--   * This function is SECURITY INVOKER on purpose. Every read and write in it
+--     is scoped by the caller's own RLS — that is what makes the `for share`
+--     load return not-found for an item outside the caller's warehouses, and
+--     what makes the INSERT obey inventory_items_insert (including 0298's
+--     product_group_in_org arm).
+--   * The service calls it through `this.ctx.supabase`, the USER-authed client,
+--     precisely so that stays true. So `revoke execute ... from authenticated`
+--     does not separate the service from a direct caller — it breaks the
+--     feature for both.
+--   * Re-pointing the service at createAdminClient() to restore it would run the
+--     whole duplicate as service_role, i.e. with RLS off, replacing a footgun on
+--     an unsupported path with a real privilege hole on the supported one.
+--
+-- What the ledger guard above DOES close is the one direct-call defect that
+-- corrupts shared state: a negative quantity desynchronizing
+-- SUM(stock_movements) from quantity_on_hand.
+--
+-- RESIDUAL, ACCEPTED: a direct caller who passes variant overrides gets a row
+-- with variant_key = NULL, because clearing the key is the design (the TS
+-- normalizers in packages/core/src/sports/variant-keys.ts are the single source
+-- of truth and are deliberately not reimplemented in SQL) and the recompute
+-- lives in the service. That is NOT hardened away, and should not be: refusing
+-- overrides outright would refuse the sanctioned path, which depends on exactly
+-- this clear-then-recompute handoff. The blast radius is one unidentified
+-- variant in the caller's OWN org — the same state every pre-0298 row is in —
+-- which product_group_rollups already filters out
+-- (`count(distinct variant_key) filter (where variant_key is not null)`) and the
+-- import matcher simply does not match. No cross-tenant reach, no ledger break,
+-- and repairable by re-saving the item through the app.
