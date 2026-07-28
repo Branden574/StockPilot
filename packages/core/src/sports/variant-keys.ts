@@ -117,6 +117,23 @@ export function normalizeSizeValue(
   return s.toUpperCase();
 }
 
+/**
+ * The subcategories whose GROUP key carries a `color` slot (the jerseys/uniforms
+ * branch of `buildGroupKey` below). For every other subcategory `color` is a
+ * per-item VARIANT slot instead (`buildVariantKey` accepts it unconditionally).
+ *
+ * Exported from HERE, beside the branch it describes, because it decides which
+ * of two different `color` fields a form is collecting — and both the web item
+ * form and the Expo Add Item screen have to reach the same answer or the same
+ * jersey lands under two group keys.
+ */
+export const GROUP_KEY_COLOR_SUBCATEGORIES: ReadonlySet<string> = new Set(['jerseys', 'uniforms']);
+
+/** Whether this subcategory's GROUP identity includes a colour. */
+export function groupKeyUsesColor(subcategoryKey: string | null | undefined): boolean {
+  return GROUP_KEY_COLOR_SUBCATEGORIES.has(norm(subcategoryKey));
+}
+
 /** Attributes that identify a GROUP. Every field is optional; the key is the join. */
 export interface GroupKeyParts {
   subcategoryKey: SportsSubcategoryKey | string;
@@ -154,24 +171,18 @@ export function buildGroupKey(parts: GroupKeyParts): string {
   // The subcategory decides the SHAPE, so it is matched on the normalized
   // value and only escaped on the way into the key.
   const sub = norm(parts.subcategoryKey);
-  const slots: string[] =
-    sub === 'jerseys' || sub === 'uniforms'
-      ? [
-          slot(parts.team),
-          slot(parts.league),
-          slot(parts.season),
-          slot(parts.homeAway),
-          slot(parts.manufacturer),
-          slot(parts.brand),
-          slot(parts.styleNumber),
-          slot(parts.color),
-        ]
-      : [
-          slot(parts.brand),
-          slot(parts.model),
-          slot(parts.styleNumber),
-          slot(parts.colorway),
-        ];
+  const slots: string[] = GROUP_KEY_COLOR_SUBCATEGORIES.has(sub)
+    ? [
+        slot(parts.team),
+        slot(parts.league),
+        slot(parts.season),
+        slot(parts.homeAway),
+        slot(parts.manufacturer),
+        slot(parts.brand),
+        slot(parts.styleNumber),
+        slot(parts.color),
+      ]
+    : [slot(parts.brand), slot(parts.model), slot(parts.styleNumber), slot(parts.colorway)];
 
   const identifying = slots.filter((s) => s.length > 0);
   if (identifying.length === 0) {
@@ -277,10 +288,7 @@ export function variantLabel(parts: VariantLabelParts): string | null {
  * Falls back to the bare name when there is no variant data, so this is safe
  * to call unconditionally on every row of every count.
  */
-export function variantDisplayName(
-  name: string,
-  parts: VariantLabelParts,
-): string {
+export function variantDisplayName(name: string, parts: VariantLabelParts): string {
   const label = variantLabel(parts);
   return label ? `${name} · ${label}` : name;
 }

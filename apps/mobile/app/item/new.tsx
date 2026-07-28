@@ -25,8 +25,14 @@ import {
   apparelFallbackSizeOptions,
   buildCreateItemInput,
   buildSizedVariantsInput,
+  buildSportsGroupPayload,
   collectSizedVariants,
   describeFailure,
+  sportsGroupFieldsFor,
+  sportsProfileLabelFor,
+  sportsShowsHomeAway,
+  EMPTY_SPORTS_GROUP_FIELDS,
+  type SportsGroupFieldValues,
   sizeOptionsFromScale,
   submitCreateItem,
   submitSizedVariants,
@@ -36,6 +42,18 @@ import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+
+/**
+ * The home/away choices, matching the web select. `''` is the explicit "no
+ * answer" chip: home_away is a GROUP-key slot, so leaving it blank and picking
+ * 'home' are two different identities and the user needs a way back to blank.
+ */
+const HOME_AWAY_OPTIONS: { value: SportsGroupFieldValues['homeAway']; label: string }[] = [
+  { value: '', label: 'Unset' },
+  { value: 'home', label: 'Home' },
+  { value: 'away', label: 'Away' },
+  { value: 'alternate', label: 'Alternate' },
+];
 
 /** Maps a file extension to an image MIME type for storage uploads. */
 function mimeForExt(ext: string): string {
@@ -244,7 +262,16 @@ export default function NewItem() {
 
   // Classification + location lookups
   const [categories, setCategories] = React.useState<
-    Array<{ id: string; name: string; supports_sizes: boolean; size_scale_id: string | null }>
+    Array<{
+      id: string;
+      name: string;
+      supports_sizes: boolean;
+      size_scale_id: string | null;
+      parent_id: string | null;
+      /** 0294. Non-null is what makes a create SPORTS-shaped; null everywhere else. */
+      sports_subcategory_key: string | null;
+      default_unit_of_measure: string | null;
+    }>
   >([]);
   const [suppliers, setSuppliers] = React.useState<Array<{ id: string; name: string }>>([]);
   const [locations, setLocations] = React.useState<Array<{ id: string; name: string }>>([]);
@@ -280,6 +307,15 @@ export default function NewItem() {
   const [sizesLoading, setSizesLoading] = React.useState(false);
   const [sizeQty, setSizeQty] = React.useState<Record<string, string>>({});
 
+  // Group-identity attributes (brand/model/team/season/...). Held as plain
+  // state, exactly as the web form holds them outside react-hook-form, and
+  // merged into the submit payload by buildSportsGroupPayload. They are NOT
+  // cleared when the category changes — neither does web, and a user who typed
+  // "Nike" then corrected Shoes -> Running Shoes should not have to retype it.
+  const [sportsGroupFields, setSportsGroupFields] = React.useState<SportsGroupFieldValues>(
+    EMPTY_SPORTS_GROUP_FIELDS,
+  );
+
   // Photos staged in-memory. Each entry holds the local URI + extension;
   // they upload after the inventory_items row is created (the storage
   // path needs the new item id).
@@ -291,6 +327,26 @@ export default function NewItem() {
     () => categories.find((c) => c.id === categoryId) ?? null,
     [categories, categoryId],
   );
+  // ── Sports group identity ────────────────────────────────────────────────
+  // Which inputs render is the shared decision (sportsGroupFieldsFor), bound to
+  // the subcategory's supportedAttributes exactly as the web form binds them —
+  // never a hardcoded per-subcategory branch in this screen.
+  const sportsSubcategoryKey = isBook
+    ? null
+    : (selectedCategory?.sports_subcategory_key ?? null);
+  const sportsGroupFieldDefs = React.useMemo(
+    () => sportsGroupFieldsFor(sportsSubcategoryKey),
+    [sportsSubcategoryKey],
+  );
+  const sportsHomeAway = React.useMemo(
+    () => sportsShowsHomeAway(sportsSubcategoryKey),
+    [sportsSubcategoryKey],
+  );
+  const sportsProfileLabel = React.useMemo(
+    () => sportsProfileLabelFor(sportsSubcategoryKey).toUpperCase(),
+    [sportsSubcategoryKey],
+  );
+
   const sizesEnabled = !isBook && (selectedCategory?.supports_sizes ?? false);
   // The size run needs an actual vocabulary. When a sized category resolves no
   // scale at all, the screen degrades to a normal single-item create (with the
@@ -315,6 +371,9 @@ export default function NewItem() {
       name: string;
       supports_sizes: boolean | null;
       size_scale_id?: string | null;
+      parent_id?: string | null;
+      sports_subcategory_key?: string | null;
+      default_unit_of_measure?: string | null;
     };
     const run = (columns: string) =>
       supabase
@@ -323,13 +382,21 @@ export default function NewItem() {
         .eq('organization_id', org)
         .is('deleted_at', null)
         .order('name', { ascending: true });
-    let resp = await run('id, name, supports_sizes, size_scale_id');
+    // `sports_subcategory_key` and `default_unit_of_measure` arrive with 0294
+    // alongside `size_scale_id`, so they ride the SAME widened select and the
+    // SAME fallback — one extra column set, not a second round trip.
+    let resp = await run(
+      'id, name, supports_sizes, size_scale_id, parent_id, sports_subcategory_key, default_unit_of_measure',
+    );
     if (resp.error) resp = await run('id, name, supports_sizes');
     return ((resp.data ?? []) as unknown as Row[]).map((r) => ({
       id: r.id,
       name: r.name,
       supports_sizes: !!r.supports_sizes,
       size_scale_id: r.size_scale_id ?? null,
+      parent_id: r.parent_id ?? null,
+      sports_subcategory_key: r.sports_subcategory_key ?? null,
+      default_unit_of_measure: r.default_unit_of_measure ?? null,
     }));
   }, []);
 
@@ -484,9 +551,33 @@ export default function NewItem() {
     }
   }
 
-  /** The screen's raw strings, exactly as typed. No rules, no coercion. */
+  /**
+   * The screen's raw strings, exactly as typed. No rules, no coercion.
+   *
+   * The one derivation is the SPORTS group, and it is not a rule either: it
+   * mirrors what the web item form puts in the same payload
+   * (`sportsGroupPayload`), and every key it implies is still computed
+   * server-side. Without it a shoe style added from a phone saved three loose
+   * variants and no product group at all, so it never rolled up, never showed
+   * in the size-count picker, and could never be size-run ordered.
+   */
   function currentForm(): ItemFormState {
+    const sportsGroup = buildSportsGroupPayload({
+      itemName: name,
+      categoryId,
+      groupFields: sportsGroupFields,
+      category: selectedCategory
+        ? {
+            subcategoryKey: selectedCategory.sports_subcategory_key,
+            defaultUnitOfMeasure: selectedCategory.default_unit_of_measure,
+            parentDefaultUnitOfMeasure:
+              categories.find((c) => c.id === selectedCategory.parent_id)
+                ?.default_unit_of_measure ?? null,
+          }
+        : null,
+    });
     return {
+      ...sportsGroup,
       name,
       sku,
       barcode,
@@ -791,6 +882,69 @@ export default function NewItem() {
               />
             </Field>
           </Row>
+
+          {/*
+            GROUP IDENTITY. These are the slots `buildGroupKey` reads, not
+            decoration: without them a phone-created shoe style keys as
+            `shoes|name:...` while the same style on web keys as
+            `shoes|nike|pegasus 41||`, and exact-key findOrCreate never matches
+            the two — one product silently becomes two groups with its stock
+            split between them. Which inputs appear is bound to the
+            subcategory's supportedAttributes, exactly as web's SportsFields
+            binds them.
+          */}
+          {sportsGroupFieldDefs.length > 0 || sportsHomeAway ? (
+            <>
+              <SectionLabel>{sportsProfileLabel} DETAILS</SectionLabel>
+              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                Optional, but they are what group this style with the same style
+                added anywhere else.
+              </Mono>
+              {sportsGroupFieldDefs.map((f) => (
+                <Field key={f.key} label={f.label}>
+                  <TextInput
+                    value={sportsGroupFields[f.key]}
+                    onChangeText={(v) =>
+                      setSportsGroupFields((prev) => ({ ...prev, [f.key]: v }))
+                    }
+                    placeholder={f.placeholder}
+                    placeholderTextColor={c.ink4}
+                    autoCapitalize="words"
+                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  />
+                </Field>
+              ))}
+              {sportsHomeAway ? (
+                <Field label="HOME / AWAY">
+                  <View style={styles.chipRow}>
+                    {HOME_AWAY_OPTIONS.map((opt) => {
+                      const selected = sportsGroupFields.homeAway === opt.value;
+                      return (
+                        <Pressable
+                          key={opt.value || 'none'}
+                          onPress={() =>
+                            setSportsGroupFields((prev) => ({ ...prev, homeAway: opt.value }))
+                          }
+                          style={({ pressed }) => [
+                            styles.chip,
+                            {
+                              borderColor: selected ? c.ink : c.hair,
+                              backgroundColor: selected ? c.card : 'transparent',
+                              opacity: pressed ? 0.8 : 1,
+                            },
+                          ]}
+                        >
+                          <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
+                            {opt.label}
+                          </Body>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </Field>
+              ) : null}
+            </>
+          ) : null}
 
           {sizesEnabled ? (
             <>

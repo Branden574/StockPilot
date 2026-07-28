@@ -21,13 +21,44 @@ export const movementTypeSchema = z.enum([
 ]);
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
-const numericMoney = z.coerce.number().nonnegative().max(1_000_000_000);
-const numericQty = z.coerce.number().max(1_000_000_000);
+/**
+ * Every message below is deliberate PRODUCT copy, not decoration.
+ *
+ * These schemas are the ONE validator behind the web item form, the native Add
+ * Item screen and `POST /api/v1/items*`, so zod's defaults were reaching real
+ * users: submitting an empty form on the phone showed "Name: String must
+ * contain at least 1 character(s)" (verified on device, 2026-07-28), and a
+ * blank price showed "Number must be greater than or equal to 0". Only the
+ * `message` argument changes here — every bound, every code and every parse
+ * result stays exactly as it was.
+ */
+const numericMoney = z.coerce
+  .number({ invalid_type_error: 'Enter a number.' })
+  .nonnegative('Enter 0 or more.')
+  .max(1_000_000_000, 'That amount is too large.');
+const numericQty = z.coerce
+  .number({ invalid_type_error: 'Enter a number.' })
+  .max(1_000_000_000, 'That quantity is too large.');
 
 export const createItemSchema = z
   .object({
-    name: z.string().min(1).max(200).trim(),
-    sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().nullable().optional()),
+    name: z
+      .string({ invalid_type_error: 'Name is required.' })
+      .min(1, 'Name is required.')
+      .max(200, 'Name must be 200 characters or less.')
+      .trim(),
+    sku: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        // An EMPTY sku is mapped to undefined above and means "auto-generate",
+        // so this only ever fires on whitespace the user meant as a value.
+        .min(1, 'SKU is required.')
+        .max(64, 'SKU must be 64 characters or less.')
+        .trim()
+        .nullable()
+        .optional(),
+    ),
     barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
     modelNumber: z.preprocess(
       emptyToUndefined,
@@ -147,9 +178,12 @@ export type UpdateItemInput = z.infer<typeof updateItemSchema>;
  * client that picks them picks which physical stock its rows merge with.
  */
 export const bulkCreateSizedVariantsSchema = z.object({
-  baseName: z.string().min(1).max(200),
-  baseSku: z.string().max(120).nullable(),
-  baseBarcode: z.string().max(120).nullable(),
+  baseName: z
+    .string({ invalid_type_error: 'Name is required.' })
+    .min(1, 'Name is required.')
+    .max(200, 'Name must be 200 characters or less.'),
+  baseSku: z.string().max(120, 'SKU must be 120 characters or less.').nullable(),
+  baseBarcode: z.string().max(120, 'Barcode must be 120 characters or less.').nullable(),
   description: z.string().max(2000).nullable(),
   categoryId: uuidSchema,
   supplierId: uuidSchema.nullable(),
@@ -163,10 +197,16 @@ export const bulkCreateSizedVariantsSchema = z.object({
   // every value this path can produce: bin_location is composed by
   // `formatRackLabel` from rackNumber (max 50) + '-' + rackRow (max 10) = 61.
   binLocation: z.string().max(64).nullable(),
-  retailPrice: z.coerce.number().min(0),
-  unitCost: z.coerce.number().min(0),
-  reorderPoint: z.coerce.number().int().min(0),
-  reorderQuantity: z.coerce.number().int().min(0),
+  retailPrice: z.coerce.number({ invalid_type_error: 'Enter a number.' }).min(0, 'Enter 0 or more.'),
+  unitCost: z.coerce.number({ invalid_type_error: 'Enter a number.' }).min(0, 'Enter 0 or more.'),
+  reorderPoint: z.coerce
+    .number({ invalid_type_error: 'Enter a number.' })
+    .int('Enter a whole number.')
+    .min(0, 'Enter 0 or more.'),
+  reorderQuantity: z.coerce
+    .number({ invalid_type_error: 'Enter a number.' })
+    .int('Enter a whole number.')
+    .min(0, 'Enter 0 or more.'),
   // Optional: omitted means "take the category's counting unit", the same
   // contract createItemSchema uses. An explicit value still wins.
   unitOfMeasure: z.string().min(1).max(40).optional(),
@@ -185,14 +225,17 @@ export const bulkCreateSizedVariantsSchema = z.object({
         // Free text, validated server-side against the category's size scale.
         // It was a nine-value enum, which could not express a shoe run at all.
         // 24 is the inventory_items_variant_size_check bound (0298).
-        size: z.string().min(1).max(24),
-        quantity: z.coerce.number().int().min(0),
+        size: z.string().min(1, 'Every size needs a value.').max(24, 'A size can be at most 24 characters.'),
+        quantity: z.coerce
+          .number({ invalid_type_error: 'Enter a number.' })
+          .int('Enter a whole number.')
+          .min(0, 'Enter 0 or more.'),
       }),
     )
-    .min(1)
+    .min(1, 'Pick at least one size.')
     // Was .max(7), which silently rejected valid input: the form already
     // offered NINE apparel sizes, and a shoe run is routinely 20+.
-    .max(60),
+    .max(60, 'A size run can cover at most 60 sizes.'),
 })
   /**
    * The variant attributes SHARED by every row in one size run — a jersey

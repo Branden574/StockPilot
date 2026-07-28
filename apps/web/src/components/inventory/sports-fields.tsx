@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { sizeSystemEnum } from '@stockpilot/core';
+import { GROUP_KEY_COLOR_SUBCATEGORIES, sizeSystemEnum } from '@stockpilot/core';
 import type {
   CreateItemInput,
   SizeSystem,
@@ -62,14 +62,12 @@ export const EMPTY_SPORTS_GROUP_FIELDS: SportsGroupFieldValues = {
 };
 
 /**
- * Subcategories whose GROUP key carries a `color` slot (buildGroupKey's
- * jerseys/uniforms branch in variant-keys.ts). Every other subcategory's
- * `color` attribute is a per-item VARIANT slot instead (buildVariantKey
- * accepts `color` unconditionally). Kept here as the single place that
- * decides which of the two `color` fields a given subcategory means, so the
- * mapping cannot drift from the key builders it mirrors.
+ * Subcategories whose GROUP key carries a `color` slot. Re-exported from
+ * `@stockpilot/core`, where it lives beside the `buildGroupKey` branch it
+ * describes — the Expo Add Item screen collects the same field and has to
+ * reach the same answer, so the set cannot be owned by a web component.
  */
-export const GROUP_LEVEL_COLOR_SUBCATEGORIES = new Set(['jerseys', 'uniforms']);
+export const GROUP_LEVEL_COLOR_SUBCATEGORIES = GROUP_KEY_COLOR_SUBCATEGORIES;
 
 /**
  * Display copy only. The VOCABULARY comes from `sizeSystemEnum.options` below,

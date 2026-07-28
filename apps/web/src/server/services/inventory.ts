@@ -1601,6 +1601,17 @@ export class InventoryService {
           categoryId: input.categoryId ?? null,
           defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
             profile.countingUnit) as CountingUnit,
+          // The group INHERITS the category's size scale, exactly as it inherits
+          // the counting unit on the line above. No caller ever sent
+          // `sizeScaleId`, so `product_groups.size_scale_id` was NULL on EVERY
+          // group ever created — and a group-scoped size count with no scale
+          // falls back to the built-in apparel letters, offering XS..5XL to
+          // count a numeric shoe run (observed in prod 2026-07-28).
+          // `profile.sizeScaleId` is the category's own scale with the parent's
+          // inherited (resolveTrackingProfile) — the same scale the size
+          // validation below runs against, so the group and its variants can
+          // never disagree about the vocabulary.
+          sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
         });
         resolvedGroupId = group.id;
       }
@@ -2231,6 +2242,10 @@ export class InventoryService {
         categoryId: input.categoryId,
         defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
           profile.countingUnit) as CountingUnit,
+        // Same inheritance create() applies — see the comment there. This is the
+        // path a SHOE run takes, which is exactly the group whose size count was
+        // rendering XS..5XL instead of 9 / 9.5 / 10.
+        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
       });
       resolvedGroupId = group.id;
     }

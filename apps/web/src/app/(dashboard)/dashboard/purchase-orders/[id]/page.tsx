@@ -70,7 +70,20 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       throw e;
     }),
     suppliersSvc.list(),
-    locationsSvc.list({ excludeSystem: true }),
+    // UNFILTERED, deliberately. This list is not a picker — it exists only to
+    // look the PO's own `destination_location_id` back up (below) so the page
+    // can read its name and derive the receiving warehouse. With
+    // `excludeSystem: true`, `isUserFacingLocation` dropped kind 'staging' and
+    // 'unplaced', so a PO destined for a warehouse's STAGING bucket resolved to
+    // undefined: Destination rendered as an em-dash, the Receive button vanished
+    // (it needs `warehouseId`), and the "destination isn't linked to a
+    // warehouse" card appeared — whose own picker resolves back to staging, so
+    // the offered fix looped. The database was correct the whole time.
+    //
+    // The pickers that OFFER a destination still filter; staging must never be
+    // an operator's choice. Reading one back is a different question from
+    // offering it, and `isUserFacingLocation` stays untouched.
+    locationsSvc.list(),
     receivingSvc.listForPurchaseOrder(id),
     warehousesSvc.listNames(),
     poAttachSvc.list(id),
