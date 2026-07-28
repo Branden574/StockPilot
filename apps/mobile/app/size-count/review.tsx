@@ -15,9 +15,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api } from '@/lib/api';
+import { buildTrainingFilters } from '@/lib/size-count-training-labels';
 import { radius, space, theme } from '@/lib/theme';
 
-const FILTERS = ['ALL', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL', 'NONE'] as const;
+/**
+ * Derived from the SHARED label vocabulary, not hand-listed.
+ *
+ * This row used to carry its own copy of the nine apparel letters. Once capture
+ * could log numeric shoe sizes, a hand-listed row would have left every '9.5'
+ * reachable only under ALL — captured, stored, and invisible to the person
+ * reviewing the dataset.
+ */
+const FILTERS = buildTrainingFilters();
 
 interface Sample {
   id: string;
@@ -47,14 +56,16 @@ export default function TrainingReviewScreen() {
   const cellSize = Math.floor(
     (width - GRID_PAD * 2 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS,
   );
-  const [filter, setFilter] = React.useState<(typeof FILTERS)[number]>('ALL');
+  const [filter, setFilter] = React.useState<string>('ALL');
   const [samples, setSamples] = React.useState<Sample[]>([]);
   const [loading, setLoading] = React.useState(true);
 
   const load = React.useCallback(async (f: string) => {
     setLoading(true);
     try {
-      const q = f === 'ALL' ? '' : `?size=${f}`;
+      // Encoded: a numeric label carries a '.', and the filter value goes
+      // straight into the query string.
+      const q = f === 'ALL' ? '' : `?size=${encodeURIComponent(f)}`;
       const res = await api<{ samples: Sample[] }>(`/api/v1/size-counts/training/samples${q}`);
       setSamples(res.samples ?? []);
     } catch {

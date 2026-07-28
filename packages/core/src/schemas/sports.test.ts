@@ -6,8 +6,39 @@ import {
   linkFamilyMemberSchema,
   serverVariantAttributesSchema,
   sizeSystemSchema,
+  trainingSizeLabelSchema,
   variantAttributesSchema,
 } from './sports';
+
+describe('trainingSizeLabelSchema', () => {
+  it.each(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL', 'NONE'])(
+    'keeps accepting the alpha label %s that shipped with 0284',
+    (l) => expect(trainingSizeLabelSchema.parse(l)).toBe(l),
+  );
+
+  it.each(['1', '4.5', '9', '9.5', '10', '10.5', '18'])(
+    'accepts the numeric shoe label %s',
+    (l) => expect(trainingSizeLabelSchema.parse(l)).toBe(l),
+  );
+
+  it('canonicalises before validating, so the wire may be sloppy', () => {
+    expect(trainingSizeLabelSchema.parse(' xl ')).toBe('XL');
+    expect(trainingSizeLabelSchema.parse('none')).toBe('NONE');
+    expect(trainingSizeLabelSchema.parse('9.0')).toBe('9');
+    expect(trainingSizeLabelSchema.parse('09')).toBe('9');
+  });
+
+  it.each(['9.55', '9.', 'abc', '', '0', '21', 'XXXXXXL'])(
+    'refuses the garbage label %j',
+    (l) => expect(trainingSizeLabelSchema.safeParse(l).success).toBe(false),
+  );
+
+  it('refuses a non-string', () => {
+    expect(trainingSizeLabelSchema.safeParse(9.5).success).toBe(false);
+    expect(trainingSizeLabelSchema.safeParse(null).success).toBe(false);
+    expect(trainingSizeLabelSchema.safeParse(undefined).success).toBe(false);
+  });
+});
 
 describe('jerseyNumberSchema', () => {
   it('parses a valid number and preserves leading zeroes', () => {

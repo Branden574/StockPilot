@@ -16,10 +16,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api, API_BASE } from '@/lib/api';
+/** Apparel letters and US shoe sizes (halves included) resolve through the ONE
+ *  shared vocabulary in @stockpilot/core, which the API route and migration
+ *  0305's CHECK also derive from — so a label this screen offers can never be
+ *  one the server refuses. */
+import {
+  DEFAULT_TRAINING_LABEL_SET_KEY,
+  nextTrainingLabelSetKey,
+  resolveTrainingLabelSet,
+  type TrainingLabelSetKey,
+} from '@/lib/size-count-training-labels';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
-const LABELS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'] as const;
 const COMPRESS_MAX = 1280;
 const COMPRESS_QUALITY = 0.85;
 /** Burst sizes the shutter cycles through. 1 = burst off (single shot).
@@ -49,6 +58,13 @@ export default function TrainingCaptureScreen() {
   const [inFlight, setInFlight] = React.useState(0); // uploads still in progress
   const [failed, setFailed] = React.useState(0);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
+  // Which vocabulary the size chips offer. Defaults to the FIRST set (Apparel),
+  // which is exactly the row this screen showed before shoes existed — an
+  // existing capturer sees no change until they choose to switch.
+  const [labelSetKey, setLabelSetKey] = React.useState<TrainingLabelSetKey>(
+    DEFAULT_TRAINING_LABEL_SET_KEY,
+  );
+  const labelSet = React.useMemo(() => resolveTrainingLabelSet(labelSetKey), [labelSetKey]);
   // Photos picked from the library, waiting for a size label.
   const [importUris, setImportUris] = React.useState<string[]>([]);
 
@@ -271,13 +287,39 @@ export default function TrainingCaptureScreen() {
                 {burstCount > 1 ? `Burst ×${burstCount}` : 'Burst off'}
               </Text>
             </Pressable>
+            <Pressable
+              // Cycles through the label vocabularies (Apparel → Shoes → …),
+              // the same tool-button idiom as Burst beside it. Lit whenever the
+              // set is not the default, so it is obvious which chips are live.
+              onPress={() => setLabelSetKey(nextTrainingLabelSetKey)}
+              style={[
+                styles.toolBtn,
+                labelSetKey !== DEFAULT_TRAINING_LABEL_SET_KEY && styles.toolBtnOn,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.toolLabel,
+                  labelSetKey !== DEFAULT_TRAINING_LABEL_SET_KEY && styles.toolLabelOn,
+                ]}
+              >
+                Sizes: {labelSet.name}
+              </Text>
+            </Pressable>
             <Pressable onPress={pickPhotos} style={styles.toolBtn}>
               <Text style={styles.toolLabel}>Import photos</Text>
             </Pressable>
           </View>
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sizeRow}>
-            {LABELS.map((l) => (
+          <ScrollView
+            // Remounted per set so switching Apparel → Shoes starts the row at
+            // the first size instead of stranding the user mid-scroll.
+            key={labelSet.key}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.sizeRow}
+          >
+            {labelSet.labels.map((l) => (
               <Pressable
                 key={l}
                 disabled={busy}
@@ -305,8 +347,12 @@ export default function TrainingCaptureScreen() {
           <Pressable style={styles.sheet} onPress={() => undefined}>
             <Text style={styles.sheetTitle}>Label {importUris.length} photo{importUris.length === 1 ? '' : 's'}</Text>
             <Text style={styles.sheetBody}>What size are these? They&apos;ll all upload with this label.</Text>
-            <View style={styles.sheetGrid}>
-              {LABELS.map((l) => (
+            {/* Bounded + scrollable: the shoe set is 35 chips, and an
+                unconstrained wrapping grid grew the sheet past the bottom of a
+                small screen, pushing Cancel off. The title and Cancel stay
+                pinned; only the chips scroll. */}
+            <ScrollView style={styles.sheetGridScroll} contentContainerStyle={styles.sheetGrid}>
+              {labelSet.labels.map((l) => (
                 <Pressable key={l} onPress={() => labelImport(l, false)} style={styles.sheetChip}>
                   <Text style={styles.sheetChipText}>{l}</Text>
                 </Pressable>
@@ -314,7 +360,7 @@ export default function TrainingCaptureScreen() {
               <Pressable onPress={() => labelImport('NONE', true)} style={[styles.sheetChip, styles.sheetChipNeg]}>
                 <Text style={styles.sheetChipText}>Not a sticker</Text>
               </Pressable>
-            </View>
+            </ScrollView>
             <Pressable onPress={() => setImportUris([])} style={styles.sheetCancel}>
               <Text style={styles.sheetCancelText}>Cancel</Text>
             </Pressable>
@@ -387,7 +433,8 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: theme.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 22, paddingBottom: 36 },
   sheetTitle: { color: theme.text, fontSize: 18, fontWeight: '700' },
   sheetBody: { color: theme.textMuted, fontSize: 13, marginTop: 6 },
-  sheetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs, marginTop: 16 },
+  sheetGridScroll: { maxHeight: 280, marginTop: 16 },
+  sheetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
   sheetChip: {
     minHeight: 44, paddingHorizontal: 16, borderRadius: radius.md, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center',

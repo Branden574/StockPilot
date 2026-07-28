@@ -1,7 +1,25 @@
 import { z } from 'zod';
 
+import { normalizeTrainingSizeLabel } from '../sports/size-count-labels';
 import { COUNTING_UNITS, SPORTS_ATTRIBUTES, TRACKING_MODES } from '../sports/tracking-modes';
 import { emptyToUndefined, uuidSchema } from './common';
+
+/**
+ * The ground-truth label on one Instant Size Count training photo: an apparel
+ * letter, a US shoe size (halves included), or NONE for a hard negative.
+ *
+ * Canonicalises FIRST and validates the canonical form, so a sloppy wire value
+ * ('9.0', ' xl ') is stored in the one shape the counts map buckets by instead
+ * of splitting one physical size across two training classes. The accepted set
+ * is the JS twin of migration 0305's CHECK — see `../sports/size-count-labels`
+ * for why this is a format rule and not a lookup against `size_scale_values`.
+ */
+export const trainingSizeLabelSchema = z
+  .string({ message: 'A training sample needs a size label.' })
+  .transform((v) => normalizeTrainingSizeLabel(v))
+  .refine((v): v is string => v !== null, {
+    message: 'Not a size label. Use an apparel letter, a US shoe size, or NONE.',
+  });
 
 /** 1-4 digits, digits only, leading zeroes preserved. Never an integer. */
 export const jerseyNumberSchema = z.preprocess(

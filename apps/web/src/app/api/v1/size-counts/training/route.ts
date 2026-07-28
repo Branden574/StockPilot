@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { TRAINING_NEGATIVE_LABEL, trainingSizeLabelSchema } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { SizeCountsService } from '@/server/services/size-counts';
@@ -23,9 +25,6 @@ export async function GET(req: NextRequest) {
 }
 
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
-const VALID_LABELS = new Set([
-  'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL', 'NONE',
-]);
 
 /**
  * Upload one opt-in labeled training sample for the Instant Size Count
@@ -64,11 +63,16 @@ export async function POST(req: NextRequest) {
     if (file.size > PHOTO_MAX_BYTES) {
       return NextResponse.json({ error: 'image too large' }, { status: 413 });
     }
-    sizeLabel = String(form.get('sizeLabel') ?? '').toUpperCase();
-    if (!VALID_LABELS.has(sizeLabel)) {
+    // The SHARED contract (packages/core), so the Expo capture screen, this
+    // route and migration 0305's CHECK cannot drift. It canonicalises as well
+    // as validates — '9.0' and ' xl ' land as '9' and 'XL' — so one physical
+    // size never becomes two buckets in the training-stats counts map.
+    const parsedLabel = trainingSizeLabelSchema.safeParse(form.get('sizeLabel') ?? '');
+    if (!parsedLabel.success) {
       return NextResponse.json({ error: 'invalid sizeLabel' }, { status: 400 });
     }
-    isNegative = sizeLabel === 'NONE' || form.get('isNegative') === 'true';
+    sizeLabel = parsedLabel.data;
+    isNegative = sizeLabel === TRAINING_NEGATIVE_LABEL || form.get('isNegative') === 'true';
     deviceId = form.get('deviceId') ? String(form.get('deviceId')) : null;
     const rawMeta = form.get('metadata');
     if (rawMeta) {

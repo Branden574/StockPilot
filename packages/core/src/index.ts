@@ -25,6 +25,7 @@ export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
 export * from './inventory/items-csv-import';
 export * from './sports/import-results';
+export * from './sports/size-count-labels';
 export * from './sports/size-order';
 export * from './sports/tracking-modes';
 export * from './sports/variant-keys';
