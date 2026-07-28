@@ -58,13 +58,16 @@ re-reviews of 13 and 15).
 
 ## 2. Final local gate
 
-```
-[PENDING — full-gate run in progress, filled by controller]
+Final run 2026-07-28, at branch head `040993ae` (after the whole-branch review
+fix waves A/B/C and the compensation follow-up):
 
-  supabase db reset && pnpm db:test   -> (output)
-  pnpm test                            -> (output)
-  pnpm typecheck                       -> (output)
-  pnpm lint                            -> (output)
+```
+  supabase db reset && pnpm db:test   -> Files=100, Tests=1302, Result: PASS
+  pnpm test                            -> core 526/35 files, mobile 726/36,
+                                          web 3873/377 — all passed, Tasks 3/3
+  pnpm typecheck                       -> Tasks: 3 successful, 3 total (clean)
+  pnpm lint                            -> 0 errors (28 pre-existing warnings),
+                                          Tasks: 3 successful, 3 total
 ```
 
 `pnpm typecheck` is the only thing that proves no `tracking_type` enumerator
@@ -73,10 +76,27 @@ site was missed, because `apps/web/src/types/database.ts` is `any`.
 `pnpm db:test` must be preceded by `supabase db reset` — a bare run executes
 against a stale schema and reports false failures.
 
-Known pre-existing lint state, confirmed NOT introduced by this branch:
-`apps/mobile/app/size-count/capture.tsx` carries errors that predate it. The one
-in `apps/mobile/app/zendesk/web.tsx` WAS fixed here (an unescaped apostrophe), so
-that file appears in the diff for a one-character reason.
+Lint note: the two `react/no-unescaped-entities` errors this branch inherited
+from main (`apps/mobile/app/size-count/capture.tsx`,
+`apps/mobile/app/zendesk/web.tsx`) were fixed here in `0bb9455d` so the gate
+reads clean; both are one-character escapes in files the branch otherwise
+never touched.
+
+### Whole-branch review (final quality gate)
+
+Run 2026-07-28 as a 40-agent workflow: 7 dimension reviewers over the full
+`09dfb52a..0bb9455d` range, cross-dimension dedup, 2 adversarial refuters per
+serious finding, and a completeness critic. Result: 16 serious findings, all
+32 refuter verdicts UPHELD (zero refuted), 23 minors. All 16 serious findings
+plus the actionable minors were fixed in three area-scoped commits
+(`1b22ad6f` migrations, `4cc2c551` inventory/identity, `32f39f2e`
+imports/UI/mobile) plus one follow-up (`040993ae`) closing a defect the
+fix-wave re-review itself caught (failure-path compensation now zeroes seeded
+`item_stock_levels` alongside `quantity_on_hand`). Every fix carried
+red-first tests; the full gate above was re-run at the end. Deferred with
+reasons (documented in `.superpowers/sdd/progress.md`): restore-point variant
+identity, `vendor_product_number` in the import group key (owner question),
+mobile group-scoped count start.
 
 ### GitHub CI
 
