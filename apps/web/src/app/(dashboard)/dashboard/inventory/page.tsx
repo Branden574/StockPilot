@@ -37,7 +37,10 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
-import { loadCountingUnits } from '@/server/services/size-run-display';
+import {
+  loadCountingUnits,
+  loadCountingUnitsForOrg,
+} from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -789,9 +792,18 @@ async function InventoryTableSection({
         )
       : undefined;
 
-  // Same batched, module-gated counting-unit lookup as the instant branch —
-  // over this page's rows, which is all server mode ever renders.
-  const productGroupUnits = await loadCountingUnits(placementRows.map((r) => r.group_id));
+  // WHOLE-DATASET counting units, exactly like the instant branch above — by
+  // ORG rather than by row id, because this branch does not hold the dataset.
+  //
+  // Server mode renders 30 rows, but this view also STREAMS the full dataset
+  // (instantPromise) and the client then paginates it locally, so units derived
+  // from these 30 rows went missing on every page after the first: a size-run
+  // header that should read "52 pairs total" fell back to a bare count as soon
+  // as the user paged. Resolving what the ORG's groups define cannot be wrong
+  // for any page the client renders, and it keeps the instant branch's cost
+  // posture — a non-sports org pays nothing (module set off the request-cached
+  // context, no round trip), a sports org pays one column-only read.
+  const productGroupUnits = await loadCountingUnitsForOrg();
 
   return (
     <InventoryTable

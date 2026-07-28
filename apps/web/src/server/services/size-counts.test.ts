@@ -138,6 +138,79 @@ describe('SizeCountsService.getSession', () => {
     const bySize = Object.fromEntries(tally.map((t) => [t.size, t.quantity]));
     expect(bySize).toEqual({ M: 2 }); // L netted to 0 and is filtered out
   });
+
+  // Same landmine as getTrainingStats, on the read whose ONLY output is a
+  // number: one event per tap, PostgREST clamping at max_rows = 1000 with no
+  // error, so a long session silently under-counted itself.
+  it('counts EVERY event, not just the first server page', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': () => {
+        const from = call * 1000;
+        call += 1;
+        const remaining = Math.max(0, 2171 - from);
+        const size = Math.min(1000, remaining);
+        return {
+          data: Array.from({ length: size }, (_, i) => ({
+            id: `e-${from + i}`,
+            size: (from + i) % 2 === 0 ? 'M' : 'L',
+            quantity_delta: 1,
+          })),
+          error: null,
+        };
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const { tally } = await svc.getSession('sess-1');
+    const total = tally.reduce((a, t) => a + t.quantity, 0);
+    expect(total).toBe(2171);
+    expect(call).toBeGreaterThan(1);
+  });
+
+  it('stops on the page boundary: exactly 1000 events is not the start of a second page', async () => {
+    // The other half of the clamp: a full page must be followed by one more
+    // request (which comes back empty), and the totals must not double-count.
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': () => {
+        const from = call * 1000;
+        call += 1;
+        const size = from === 0 ? 1000 : 0;
+        return {
+          data: Array.from({ length: size }, (_, i) => ({
+            id: `e-${from + i}`,
+            size: 'M',
+            quantity_delta: 1,
+          })),
+          error: null,
+        };
+      },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    const { tally } = await svc.getSession('sess-1');
+    expect(tally).toEqual([{ size: 'M', quantity: 1000 }]);
+    expect(call).toBe(2);
+  });
+
+  it('throws rather than reporting a short tally on a read error', async () => {
+    const stub = makeSupabaseStub({
+      'size_count_sessions.select': {
+        data: { id: 'sess-1', organization_id: 'org-test', status: 'active' },
+        error: null,
+      },
+      'size_count_events.select': { data: null, error: { message: 'boom' } },
+    });
+    const svc = new SizeCountsService(makeServiceContext(stub.client, { enabledModules: withIsc }));
+    await expect(svc.getSession('sess-1')).rejects.toMatchObject({ code: 'internal_error' });
+  });
 });
 
 // ---------------------------------------------------------------------------

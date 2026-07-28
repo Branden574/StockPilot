@@ -41,9 +41,14 @@ export default async function ProductGroupLinkPage() {
   const svcCtx = await withContext();
 
   const svc = new ProductGroupsService(svcCtx);
-  const [suggestions, existingGroups] = await Promise.all([
+  // The destination dropdown used `list({ limit: 200 })`, whose own clamp IS 200
+  // — so an org past that offered the first 200 groups alphabetically and gave a
+  // reviewer no way to reach group 201, with nothing on screen saying so. This
+  // read is paged and reports its (much higher) cap, and the picker discloses it
+  // when it is ever hit (recurring bug pattern #18).
+  const [suggestions, picker] = await Promise.all([
     suggestFamilies({ supabase: svcCtx.supabase, organizationId: svcCtx.organizationId }),
-    svc.list({ limit: 200 }),
+    svc.listForPicker(),
   ]);
 
   return (
@@ -75,12 +80,8 @@ export default async function ProductGroupLinkPage() {
       ) : (
         <GroupLinkingReview
           suggestions={suggestions}
-          existingGroups={existingGroups.map((g) => ({
-            id: g.id,
-            name: g.name,
-            brand: g.brand,
-            model: g.model,
-          }))}
+          existingGroups={picker.groups}
+          groupsTruncated={picker.truncated}
           subcategoryKeys={[...SPORTS_SUBCATEGORIES]}
         />
       )}

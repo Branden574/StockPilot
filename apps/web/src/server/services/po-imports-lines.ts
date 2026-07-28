@@ -813,17 +813,35 @@ export async function createItemsFromPoLines(
         // a way to link an existing group — that still requires an explicit
         // decision through settleGroupDecision above.
         ...(newGroupInput ? { productGroup: newGroupInput } : {}),
-        variantSize: variantLine.variant_size,
-        variantSizeOriginal:
-          (l.variant_size_original as string | null) ??
-          (l.variant_size as string | null) ??
-          variantLine.variant_size,
-        variantSizeSystem: asSizeSystem(variantLine.variant_size_system),
-        variantWidth: variantLine.variant_width,
-        variantFit: variantLine.variant_fit,
-        variantColor: variantLine.variant_color,
-        jerseyNumber: variantLine.jersey_number,
-        playerName: variantLine.player_name,
+        // VARIANT COLUMNS ARE SPORTS COLUMNS — module-gated (final-review fix).
+        //
+        // The scan extractor reads a size or a colour off ANY document, so
+        // persisting these unconditionally stamped sports variant identity onto
+        // `inventory_items` rows in orgs that have no sports module: no screen
+        // shows the values, no screen edits them, and nothing there can unwind
+        // them — while `create()` computes a `variant_key` from exactly these
+        // fields the moment a `groupId` ever appears. With the module off a
+        // created row is byte-identical to what it was before the branch (every
+        // column NULL, as `sourceValue` already leaves them on the line).
+        //
+        // The line KEEPS what the document said either way — this is about what
+        // reaches the item, not about discarding source values — so enabling
+        // the module and re-importing picks the identity back up.
+        ...(sportsEnabled
+          ? {
+              variantSize: variantLine.variant_size,
+              variantSizeOriginal:
+                (l.variant_size_original as string | null) ??
+                (l.variant_size as string | null) ??
+                variantLine.variant_size,
+              variantSizeSystem: asSizeSystem(variantLine.variant_size_system),
+              variantWidth: variantLine.variant_width,
+              variantFit: variantLine.variant_fit,
+              variantColor: variantLine.variant_color,
+              jerseyNumber: variantLine.jersey_number,
+              playerName: variantLine.player_name,
+            }
+          : {}),
         },
         // Born from an inbound PO at qty 0 → hidden ("Expected") until
         // the first receipt clears the flag (migration 0277 trigger).

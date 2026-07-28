@@ -425,3 +425,68 @@ describe('createItemsFromPoLines — "new" never discards an exact group match',
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('productGroup');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Final-review wave C: variant columns are SPORTS columns. The scan extractor
+// reads a size or a colour off any document, so persisting them unconditionally
+// stamped sports identity onto inventory_items rows in orgs with no sports
+// module — no screen to show them, none to edit them, none to unwind them.
+// ---------------------------------------------------------------------------
+
+describe('createItemsFromPoLines — variant persistence is module-gated', () => {
+  /** The same deps, with the sports module OFF. */
+  function nonSportsDeps(stub: ReturnType<typeof makeSupabaseStub>) {
+    const create = vi.fn(async (_input: Record<string, unknown>) => ({ id: 'item-new' }));
+    return {
+      create,
+      deps: {
+        supabase: stub.client,
+        organizationId: 'org-test',
+        inventorySvc: { create } as never,
+        mappingsSvc: { upsert: vi.fn(async () => {}) } as never,
+        ctx: makeServiceContext(stub.client, {
+          organizationId: 'org-test',
+          role: 'admin',
+          enabledModules: new Set<ModuleId>(['inventory', 'po_imports']),
+        }),
+      },
+    };
+  }
+
+  it('sends NO variant field to create() when the module is off', async () => {
+    // The line carries a full scanned variant — size, system, colour, number —
+    // exactly what an AI scan of a jersey PO produces in any org.
+    const stub = stubFor({ sportsCategory: false });
+    const { create, deps } = nonSportsDeps(stub);
+
+    await createItemsFromPoLines(deps, BASE_INPUT);
+
+    const arg = create.mock.calls[0]?.[0] as Record<string, unknown>;
+    for (const k of [
+      'variantSize',
+      'variantSizeOriginal',
+      'variantSizeSystem',
+      'variantWidth',
+      'variantFit',
+      'variantColor',
+      'jerseyNumber',
+      'playerName',
+    ]) {
+      expect(arg, k).not.toHaveProperty(k);
+    }
+    // Everything else about the created row is untouched.
+    expect(arg.sku).toBeTruthy();
+    expect(arg.warehouseId).toBe(WAREHOUSE_ID);
+  });
+
+  it('still sends them the moment the module is on', async () => {
+    const stub = stubFor({ sportsCategory: true, groupHit: true });
+    const { create, deps } = depsFor(stub);
+
+    await createItemsFromPoLines(deps, { ...BASE_INPUT, categoryId: CATEGORY_ID });
+
+    const arg = create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg.variantSize).toBe('10');
+    expect(arg.variantSizeSystem).toBe('US_MENS');
+  });
+});

@@ -4,12 +4,15 @@ import {
   AMBIGUOUS_COLUMN_MEANINGS,
   AMBIGUOUS_COLUMN_MEANING_LABELS,
   BLOCKING_LINE_RESULTS,
+  flaggedSportsMappings,
   IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
   LINE_RESULTS,
   LINE_RESULT_LABELS,
   lineCarriesSportsMapping,
   lineNeedsMappingConfirmation,
   lineResultBlocksApproval,
+  meaningKeepsFlaggedValues,
+  SPORTS_MAPPED_LINE_FIELD_LABELS,
   SPORTS_MAPPED_LINE_FIELDS,
 } from './import-results';
 
@@ -58,18 +61,69 @@ describe('import review vocabulary', () => {
     expect(IMPORT_MAPPING_CONFIDENCE_THRESHOLD).toBe(0.7);
   });
 
-  it('offers every meaning a bare "Number" column could carry, plus ignore', () => {
+  it('offers every meaning a bare "Number" column could carry, plus confirm/ignore', () => {
     expect(AMBIGUOUS_COLUMN_MEANINGS).toEqual([
       'jersey_number',
       'quantity',
       'serial',
       'style_number',
       'line_number',
+      'confirm',
       'ignore',
     ]);
     for (const m of AMBIGUOUS_COLUMN_MEANINGS) {
       expect(AMBIGUOUS_COLUMN_MEANING_LABELS[m], m).toBeTruthy();
     }
+  });
+
+  it('keeps the flagged values on every meaning except ignore', () => {
+    for (const m of AMBIGUOUS_COLUMN_MEANINGS) {
+      expect(meaningKeepsFlaggedValues(m), m).toBe(m !== 'ignore');
+    }
+  });
+});
+
+// ── Every flagged field is nameable, not just the jersey number ─────────────
+// The gap this closes: the predicate flags a line on ANY of the ten mapped
+// fields, while the modal showed `jersey_number` alone and the write touched
+// `jersey_number` alone. A flagged size / colour / style-hint was therefore
+// invisible to the reviewer AND survived "Ignore" at confidence 1.
+
+describe('flaggedSportsMappings', () => {
+  it('labels every mapped field, so a modal can never print a bare column name', () => {
+    for (const f of SPORTS_MAPPED_LINE_FIELDS) {
+      expect(SPORTS_MAPPED_LINE_FIELD_LABELS[f], f).toBeTruthy();
+    }
+    expect(Object.keys(SPORTS_MAPPED_LINE_FIELD_LABELS)).toHaveLength(
+      SPORTS_MAPPED_LINE_FIELDS.length,
+    );
+  });
+
+  it('returns every field the extractor put a value in, in registry order', () => {
+    const out = flaggedSportsMappings({
+      jersey_number: '12',
+      variant_size: 'M',
+      variant_color: 'Red/Black',
+    });
+    expect(out.map((f) => f.field)).toEqual([
+      'variant_size',
+      'variant_color',
+      'jersey_number',
+    ]);
+    expect(out.map((f) => f.value)).toEqual(['M', 'Red/Black', '12']);
+    expect(out[0]?.label).toBe('Size');
+  });
+
+  it('flags a line that carries NO jersey number at all', () => {
+    // The invisible case: the whole reason the step needed more than one field.
+    const line = { mapping_confidence: 0.3, variant_color: 'Red' };
+    expect(lineNeedsMappingConfirmation(line)).toBe(true);
+    expect(flaggedSportsMappings(line).map((f) => f.field)).toEqual(['variant_color']);
+  });
+
+  it('treats blank and missing identically — nothing to confirm, nothing to clear', () => {
+    expect(flaggedSportsMappings({ jersey_number: '', variant_size: '   ' })).toEqual([]);
+    expect(flaggedSportsMappings({})).toEqual([]);
   });
 });
 

@@ -2063,6 +2063,45 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     expect(skus[1]).toContain('PEG-10');
   });
 
+  // Final-review wave C: a run's unit is the VARIANT, not the rendered row.
+  // Every placement row of an item carries the item's TOTAL on hand (the rack's
+  // own qty is `line_quantity`), so expanding a multi-placement SKU inside a run
+  // added that total once per rack.
+  it('counts a multi-placement variant ONCE in the run header total', async () => {
+    const user = userEvent.setup();
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = pegasus();
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={rows.length}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            // The size-10 shoe sits in two racks: two rendered rows, one
+            // variant, 20 on hand in total.
+            p10: [
+              { locationId: 'L1', label: '1-A', kind: 'rack', quantity: 12 },
+              { locationId: 'L2', label: '2-C', kind: 'rack', quantity: 8 },
+            ],
+          },
+        }}
+        productGroupUnits={{ 'grp-1': 'pair' }}
+      />,
+    );
+
+    // Expand the SKU group so both placement rows are rendered — the state in
+    // which the run used to read 3 variants / 72 pairs.
+    await user.click(screen.getByRole('button', { name: /expand .*PEG-10/i }));
+    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/3 variants/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/72 pairs/)).not.toBeInTheDocument();
+  });
+
   it('does NOT fold two same-base names carrying DIFFERENT group ids together', () => {
     const { container } = renderGrouped({
       items: [

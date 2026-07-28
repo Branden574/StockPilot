@@ -748,21 +748,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     minPlan: 'business',
     // Off by default everywhere — enabled per-org for sports customers.
     defaultOnFor: [],
+    // WEB ONLY, deliberately. There is no Expo route at `/product-groups`, so a
+    // `mobile_drawer` placement pointing at one was a dead entry in the drawer of
+    // every sports-enabled mobile user — a tap that resolves nowhere is worse
+    // than an absent link. Mobile is NOT missing the capability: the Items list
+    // rolls a group's variants up into one card off the stored `group_id` (Task
+    // 18, `buildGroupUnits`), which is what a phone actually needs. A dedicated
+    // groups screen can add its placement back the day the route exists.
     placements: [
       {
         surface: 'web_sidebar',
         section: 'inventory',
         label: 'Product groups',
         href: '/dashboard/product-groups',
-        iconName: 'Layers',
-        defaultSortOrder: 25,
-        requires: 'sports:manage',
-      },
-      {
-        surface: 'mobile_drawer',
-        section: 'inventory',
-        label: 'Product groups',
-        href: '/product-groups',
         iconName: 'Layers',
         defaultSortOrder: 25,
         requires: 'sports:manage',

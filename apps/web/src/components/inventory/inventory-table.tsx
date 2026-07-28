@@ -1471,6 +1471,12 @@ export function InventoryTable({
             key: entry.item.rowKey ?? entry.item.id,
             name: entry.item.name,
             quantity: Number(entry.item.quantity_on_hand) || 0,
+            // The ITEM is the unit, not the row. `quantity_on_hand` is the
+            // item TOTAL on every one of its placement rows (the rack's own
+            // qty is `line_quantity`), so without this an expanded
+            // multi-placement SKU inside a run added its whole total once per
+            // rack — a header claiming 72 for two variants holding 52.
+            unitKey: entry.item.id,
             groupable: true,
             // Stored identity when the item has one; null keeps the legacy
             // name heuristic, which is every ungrouped row in every org.

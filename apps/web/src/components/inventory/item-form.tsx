@@ -352,10 +352,15 @@ export function ItemForm({
       quantityOnHand: defaults?.quantityOnHand ?? 0,
       reorderPoint: defaults?.reorderPoint ?? 0,
       reorderQuantity: defaults?.reorderQuantity ?? 0,
-      // Blank on a NEW item so the server can apply the category's counting
-      // unit (PAIR for shoes). Pre-filling 'unit' made every form submission
-      // an EXPLICIT 'unit', which now wins over the category default.
-      unitOfMeasure: defaults?.unitOfMeasure ?? '',
+      // 'unit' — the value every org saw before the sports branch. Task 8
+      // dropped `.default('unit')` from the SCHEMA so the server could apply a
+      // category's counting unit (PAIR for shoes), and this form followed by
+      // seeding '' — which left the field visibly BLANK for every org, sports
+      // or not. It is seeded here and then TRACKS the resolved counting unit
+      // until the user types in it (see the effect below), so the box always
+      // shows what will actually be stored and never sends an explicit 'unit'
+      // that beats a shoes category's 'pair'.
+      unitOfMeasure: defaults?.unitOfMeasure ?? 'unit',
       binLocation: defaults?.binLocation ?? '',
       trackingType: defaults?.trackingType ?? 'none',
       shelfLifeDays: defaults?.shelfLifeDays ?? null,
@@ -494,6 +499,25 @@ export function ItemForm({
     parentCategory?.default_unit_of_measure ??
     profile?.defaultCountingUnit ??
     'unit') as CountingUnit;
+
+  // The Unit of measure box FOLLOWS the resolved counting unit until the user
+  // types in it. Two things have to be true at once: the field must never be
+  // blank (a visible regression for every org when the schema default was
+  // dropped), and a NEW item must not send an explicit 'unit' that beats the
+  // category's own unit on the server. Showing what the server would store
+  // satisfies both — a shoes category reads 'pair' before submit rather than
+  // silently becoming one afterwards. Every non-sports org resolves 'unit' from
+  // all three fallbacks, so nothing there changes.
+  //
+  // A ref, not `dirtyFields`: `setValue` here must not mark the form dirty (that
+  // drives the unsaved-changes guard), and the question is only ever "has the
+  // user touched this box".
+  const uomTouchedRef = React.useRef(Boolean(defaults?.unitOfMeasure));
+  React.useEffect(() => {
+    // EDIT never re-derives: the stored value is the item's own answer.
+    if (isEdit || uomTouchedRef.current) return;
+    setValue('unitOfMeasure', countingUnit);
+  }, [countingUnit, isEdit, setValue]);
 
   // SPORTS_SUBCATEGORY_REQUIRED (fast, kind failure — the server enforces
   // this too). True only when the SELECTED category is itself a Sports root:
@@ -1976,7 +2000,16 @@ export function ItemForm({
           </Field>
         </div>
         <Field label="Unit of measure">
-          <Input placeholder="unit, kg, lb, hr…" {...register('unitOfMeasure')} />
+          <Input
+            placeholder="unit, kg, lb, hr…"
+            {...register('unitOfMeasure', {
+              // Once typed in, the box is the user's — the category effect above
+              // stops writing to it.
+              onChange: () => {
+                uomTouchedRef.current = true;
+              },
+            })}
+          />
         </Field>
         {/*
           Tracking radio (None / Lot / Serial) removed per user request.

@@ -43,7 +43,11 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-import { lineNeedsMappingConfirmation } from '@stockpilot/core';
+import {
+  flaggedSportsMappings,
+  lineNeedsMappingConfirmation,
+  meaningKeepsFlaggedValues,
+} from '@stockpilot/core';
 
 import type {
   ApprovePoImportInput,
@@ -1786,9 +1790,24 @@ export class PoImportsService {
    * lifts `mapping_confidence` to 1 so the gate stops firing, and it writes an
    * audit event naming the value that was reinterpreted.
    *
-   * SOURCE VALUES ARE NEVER DESTROYED SILENTLY. The pre-confirmation value is
+   * SOURCE VALUES ARE NEVER DESTROYED SILENTLY. The pre-confirmation values are
    * written into the audit `before` block, so a wrong confirmation is always
    * recoverable from the log.
+   *
+   * THE DECISION COVERS EVERY FLAGGED FIELD (final-review fix). This used to
+   * move or clear `jersey_number` and nothing else, while
+   * `lineNeedsMappingConfirmation` flags a line on ANY of the ten sports
+   * fields — so a low-confidence size, colour or style hint was invisible in the
+   * modal and then survived an explicit "Ignore" with `mapping_confidence` set
+   * to 1, i.e. was silently applied to the created item. Now:
+   *   • `ignore` CLEARS every flagged value on the line — an unconfirmed AI
+   *     mapping is never applied, and missing stays missing (a field the
+   *     document said nothing about is not touched, not written as '');
+   *   • every other meaning KEEPS them, because the modal lists each flagged
+   *     value beside the choice, so keeping them is a human decision;
+   *   • the number column's value is still only ever MOVED to a field that
+   *     means the same thing (style number, or the serial the reviewer says it
+   *     is), never rewritten into a quantity.
    */
   async confirmLineMappings(input: ConfirmLineMappingsInput): Promise<{ confirmed: number }> {
     assertModuleEnabled(this.ctx, 'po_imports');
@@ -1809,13 +1828,24 @@ export class PoImportsService {
       if (!line) throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
 
       const sourceValue = line.jersey_number;
-      // 'jersey_number' confirms what was read; every other meaning says the
-      // value is NOT a number, so it leaves the number field. It is only ever
-      // MOVED to a field that means the same thing — the style number, or the
-      // serial the reviewer says it is — never rewritten into a quantity.
-      // Inventing a quantity is exactly what the requirements forbid.
+      // EVERY field the extractor mapped on this line — the exact set the modal
+      // renders, from the one shared helper, so a value the reviewer never saw
+      // can never be the one that survives.
+      const flagged = flaggedSportsMappings(line);
+      // 'jersey_number' / 'confirm' confirm what was read; every other meaning
+      // says the value is NOT a number, so it leaves the number field. It is
+      // only ever MOVED to a field that means the same thing — the style
+      // number, or the serial the reviewer says it is — never rewritten into a
+      // quantity. Inventing a quantity is exactly what the requirements forbid.
       const patch: Record<string, unknown> = { mapping_confidence: 1 };
-      if (meaning !== 'jersey_number') patch.jersey_number = null;
+      if (!meaningKeepsFlaggedValues(meaning)) {
+        // IGNORE: drop every flagged value. Only the fields that actually
+        // CARRY a value are written, so a field the document said nothing
+        // about stays untouched rather than being re-asserted as null.
+        for (const f of flagged) patch[f.field] = null;
+      } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
+        patch.jersey_number = null;
+      }
       if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
         patch.vendor_product_number = sourceValue;
       }
@@ -1853,7 +1883,13 @@ export class PoImportsService {
           event: 'sports.import.mapping_confirmed',
           entityType: 'po_import_line',
           entityId: lineId,
-          before: { jerseyNumber: sourceValue, mappingConfidence: line.mapping_confidence },
+          before: {
+            jerseyNumber: sourceValue,
+            mappingConfidence: line.mapping_confidence,
+            // Every value the decision was made about, not just the number —
+            // this block is what a wrong confirmation is recovered from.
+            flagged: Object.fromEntries(flagged.map((f) => [f.field, f.value])),
+          },
           after: { meaning, appliedTo: patch },
         },
         this.ctx,

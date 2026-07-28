@@ -92,9 +92,54 @@ export const SPORTS_MAPPED_LINE_FIELDS = [
   'serial_hint',
 ] as const;
 
+export type SportsMappedLineField = (typeof SPORTS_MAPPED_LINE_FIELDS)[number];
+
+/** Human label per mapped field, so a review screen can NAME what it is
+ *  showing instead of printing a column identifier. Display only. */
+export const SPORTS_MAPPED_LINE_FIELD_LABELS: Record<SportsMappedLineField, string> = {
+  variant_size: 'Size',
+  variant_size_original: 'Size as printed',
+  variant_size_system: 'Size system',
+  variant_width: 'Width',
+  variant_fit: 'Fit',
+  variant_color: 'Colour',
+  jersey_number: 'Jersey / uniform number',
+  player_name: 'Player name',
+  group_hint: 'Style / product',
+  serial_hint: 'Serial number',
+};
+
+/**
+ * The sports values the extractor actually put on this line, field by field.
+ *
+ * ONE definition of "what is on the table in the confirmation step", shared by
+ * the modal that RENDERS the values and the service that CLEARS them. They used
+ * to disagree: the predicate below flags a line on ANY of the ten fields while
+ * the modal showed `jersey_number` alone and the write touched `jersey_number`
+ * alone — so a low-confidence size, colour or style-hint was invisible to the
+ * reviewer AND survived an explicit "Ignore this column" at mapping_confidence
+ * 1, i.e. was silently applied. A decision has to be able to name everything it
+ * decides about.
+ *
+ * Order follows SPORTS_MAPPED_LINE_FIELDS so the modal reads the same way every
+ * time. Blank strings are not values (see `lineCarriesSportsMapping`).
+ */
+export function flaggedSportsMappings(
+  line: Partial<Record<SportsMappedLineField, string | null>>,
+): Array<{ field: SportsMappedLineField; label: string; value: string }> {
+  const out: Array<{ field: SportsMappedLineField; label: string; value: string }> = [];
+  for (const field of SPORTS_MAPPED_LINE_FIELDS) {
+    const v = line[field];
+    if (typeof v === 'string' && v.trim().length > 0) {
+      out.push({ field, label: SPORTS_MAPPED_LINE_FIELD_LABELS[field], value: v });
+    }
+  }
+  return out;
+}
+
 /** True when the extractor actually put a value in a sports field on this line. */
 export function lineCarriesSportsMapping(
-  line: Partial<Record<(typeof SPORTS_MAPPED_LINE_FIELDS)[number], string | null>>,
+  line: Partial<Record<SportsMappedLineField, string | null>>,
 ): boolean {
   return SPORTS_MAPPED_LINE_FIELDS.some((f) => {
     const v = line[f];
@@ -137,6 +182,13 @@ export function lineNeedsMappingConfirmation(
  * A bare "Number" column is the canonical case — it could be a jersey number,
  * a quantity, a serial, a style number, or a PO line number. The human picks;
  * nothing here is ever chosen automatically.
+ *
+ * `confirm` and `ignore` are the two answers that apply to the WHOLE line
+ * rather than to a number column: a line flagged only on its size or colour has
+ * no "Number" to reinterpret, and before `confirm` existed the step offered it
+ * nothing truthful to say. `ignore` CLEARS every flagged value on the line
+ * (`flaggedSportsMappings`); `confirm` keeps them. Neither ever writes a value
+ * the document did not print.
  */
 export const AMBIGUOUS_COLUMN_MEANINGS = [
   'jersey_number',
@@ -144,6 +196,7 @@ export const AMBIGUOUS_COLUMN_MEANINGS = [
   'serial',
   'style_number',
   'line_number',
+  'confirm',
   'ignore',
 ] as const;
 export type AmbiguousColumnMeaning = (typeof AMBIGUOUS_COLUMN_MEANINGS)[number];
@@ -154,5 +207,15 @@ export const AMBIGUOUS_COLUMN_MEANING_LABELS: Record<AmbiguousColumnMeaning, str
   serial: 'Serial number',
   style_number: 'Style / model number',
   line_number: 'PO line number',
-  ignore: 'Ignore this column',
+  confirm: 'These values are right as read',
+  ignore: 'Ignore — clear these values',
 };
+
+/**
+ * The meanings that KEEP the line's flagged values. Everything not in here
+ * clears them, which is what makes "never silently apply an unconfirmed AI
+ * mapping" enforceable in one place instead of at three call sites.
+ */
+export function meaningKeepsFlaggedValues(meaning: AmbiguousColumnMeaning): boolean {
+  return meaning !== 'ignore';
+}

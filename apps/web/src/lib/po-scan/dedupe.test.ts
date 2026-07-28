@@ -25,7 +25,9 @@ const line = (p: Partial<Line>): Line => ({
   playerName: '',
   groupHint: '',
   serialNumber: '',
-  mappingConfidence: null,
+  // 0 = the model stated no field-mapping confidence. Never null: null reads
+  // as "nothing to confirm" and switches the confirmation gate off.
+  mappingConfidence: 0,
   ...p,
 });
 

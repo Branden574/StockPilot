@@ -84,6 +84,9 @@ export default function PoReceiveScreen() {
   const [receipts, setReceipts] = React.useState<ReceiptHistoryItem[]>([]);
   const [draft, setDraft] = React.useState<Record<string, DraftLine>>({});
   const [loading, setLoading] = React.useState(true);
+  /** A READ that failed, surfaced in place of the screen. Never a silent empty
+   *  list — see the fail-loud note in `load`. */
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [posting, setPosting] = React.useState(false);
   // Synchronous re-entry guard: blocks a double-tap from firing a second
   // post before React re-renders the disabled button (each post would
@@ -113,7 +116,8 @@ export default function PoReceiveScreen() {
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
     setLoading(true);
-    const [{ data: po }, { data: lineRows }] = await Promise.all([
+    setLoadError(null);
+    const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
         .select(
@@ -132,6 +136,23 @@ export default function PoReceiveScreen() {
         )
         .eq('purchase_order_id', id),
     ]);
+
+    // FAIL LOUD (release-order rule). Both reads were destructured for `data`
+    // alone, so any error rendered an EMPTY receiving screen that said "No lines
+    // on this PO." — indistinguishable from a PO that genuinely has none. That
+    // is not hypothetical: this branch WIDENED the line read with 0298's
+    // `group_id` / `variant_size`, and against a database that has not taken
+    // 0294+ yet PostgREST refuses the whole select. A receiving screen showing
+    // nothing is how stock goes uncounted, so it must say what happened instead.
+    if (poErr || linesErr) {
+      setLoadError(
+        `${(poErr ?? linesErr)!.message}. If the app was just updated, the server may still be catching up — pull to retry.`,
+      );
+      setLines([]);
+      setGroups({});
+      setLoading(false);
+      return;
+    }
 
     if (po) {
       const r = po as Record<string, unknown>;
@@ -465,6 +486,17 @@ export default function PoReceiveScreen() {
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={theme.primary} />
+        </View>
+      ) : loadError ? (
+        <View style={styles.center}>
+          <Text style={styles.errorTitle}>Could not load this PO</Text>
+          <Text style={styles.errorBody}>{loadError}</Text>
+          <Pressable
+            onPress={() => void load()}
+            style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.scanBtnText}>Try again</Text>
+          </Pressable>
         </View>
       ) : (
         <>
@@ -816,6 +848,20 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 20, fontWeight: '700', fontFamily: 'Menlo' },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   muted: { color: theme.textMuted, padding: space.lg, textAlign: 'center' },
+  errorTitle: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: space.xs,
+    textAlign: 'center',
+  },
+  errorBody: {
+    color: theme.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: space.lg,
+    marginBottom: space.md,
+  },
   fullyReceived: {
     color: theme.success,
     fontSize: 13,

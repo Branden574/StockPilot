@@ -450,14 +450,28 @@ export class SizeCountsService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!session) throw new ServiceError('not_found', 'Size count not found.');
 
-    const { data: events, error: eErr } = await this.ctx.supabase
-      .from('size_count_events')
-      .select('size, quantity_delta')
-      .eq('session_id', sessionId);
-    if (eErr) throw new ServiceError('internal_error', eErr.message);
+    // PAGED TO EXHAUSTION, for the same reason `getTrainingStats` in this file
+    // is: PostgREST clamps every response to [api] max_rows = 1000
+    // (supabase/config.toml) and a bare .select() gives no hint that it
+    // truncated. A tally is one EVENT PER TAP — the whole point of the counter
+    // is that a person taps it hundreds of times — so a long session (or one
+    // where undos double the row count) silently under-reported its own totals
+    // once past 1000 events, which reads as "the count is wrong" on the one
+    // screen whose only output is that number. The owner hit this exact clamp on
+    // the sibling read at 2,171 rows.
+    const events = await fetchAllRows<{ size: string; quantity_delta: number }>((from, to) =>
+      this.ctx.supabase
+        .from('size_count_events')
+        .select('id, size, quantity_delta')
+        .eq('session_id', sessionId)
+        // Stable paging key (fetchAllRows header): without it the same event
+        // can land on two windows and be counted twice.
+        .order('id')
+        .range(from, to),
+    );
 
     const bySize = new Map<string, number>();
-    for (const row of (events ?? []) as Array<{ size: string; quantity_delta: number }>) {
+    for (const row of events) {
       bySize.set(row.size, (bySize.get(row.size) ?? 0) + row.quantity_delta);
     }
     const tally = Array.from(bySize.entries())

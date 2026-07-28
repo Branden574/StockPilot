@@ -94,7 +94,12 @@ export default function CycleCountDetail() {
   const [reassignOpen, setReassignOpen] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [pendingForThis, setPendingForThis] = React.useState(0);
-  const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached'>('none');
+  const [emptyState, setEmptyState] = React.useState<
+    'none' | 'offline-uncached' | 'read-failed'
+  >('none');
+  /** The server's own message for a refused read, shown instead of an empty
+   *  count. Only ever set when there is no cached snapshot to fall back to. */
+  const [readError, setReadError] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
 
   const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -112,6 +117,7 @@ export default function CycleCountDetail() {
     if (!id) return;
     setLoading(true);
     setEmptyState('none');
+    setReadError(null);
 
     const cached = await getCycleCount(id);
     if (cached) {
@@ -158,8 +164,19 @@ export default function CycleCountDetail() {
     ]);
 
     if (ccErr || lErr || !cc) {
-      // Couldn't fetch — if we already have a cache hit, just show it.
+      // Couldn't fetch — if we already have a cache hit, just show it (the
+      // offline-first contract: cached data is real data, not a false claim).
+      //
+      // With NO cache this used to stop loading and render an empty count, so a
+      // REFUSED read looked like a count with no lines. This read was widened by
+      // the sports branch with 0298's `variant_size` / `jersey_number` on the
+      // item embed, so a build running ahead of the database gets the whole
+      // select refused — and a counter would have started tallying nothing.
+      // Fail loud instead (release-order rule).
       if (!cached) {
+        const message = (ccErr ?? lErr)?.message ?? null;
+        setReadError(message);
+        setEmptyState(message ? 'read-failed' : 'none');
         setLoading(false);
       }
       return;
@@ -363,6 +380,36 @@ export default function CycleCountDetail() {
   // canceled counts are opened from history read-only.
   const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
   const postDisabled = posting || countedCount === 0 || offline || hasPending;
+
+  if (emptyState === 'read-failed') {
+    return (
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+            <Text style={styles.backText}>← Back</Text>
+          </Pressable>
+        </View>
+        <View style={styles.center}>
+          <Text style={styles.emptyTitle}>Could not load this count</Text>
+          <Text style={styles.emptyBody}>
+            {readError}
+            {'\n\n'}If the app was just updated, the server may still be catching up.
+          </Text>
+          <Pressable
+            style={styles.retryBtn}
+            onPress={() => {
+              setReadError(null);
+              setEmptyState('none');
+              void load();
+            }}
+          >
+            <Text style={styles.retryLabel}>Retry</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (emptyState === 'offline-uncached') {
     return (

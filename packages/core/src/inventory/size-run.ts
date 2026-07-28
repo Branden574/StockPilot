@@ -95,6 +95,22 @@ export interface SizeRunEntryMeta {
   /** On-hand contributed by this entry, summed into the group's roll-up total. */
   quantity: number;
   /**
+   * Identity of the STOCK-HOLDING unit behind this entry — the item id, or the
+   * variant key. Several entries can share one, and when they do the run counts
+   * it ONCE.
+   *
+   * Why it has to exist: the web Items list renders one row per PLACEMENT of an
+   * item (the Chromebook in racks 1-A and 2-C is two rows) and every one of
+   * those rows carries the item's TOTAL on hand, not the rack's. Folding them
+   * into a run summed that total once per rack, so expanding a multi-placement
+   * SKU inside a size run inflated the run header — "3 variants · 72 pairs" for
+   * two variants holding 52. The unit of a size run is the VARIANT, not the row.
+   *
+   * Absent = the entry is its own unit (the mobile list, which has no placement
+   * split, and every pre-existing caller).
+   */
+  unitKey?: string | null;
+  /**
    * Whether this entry may be folded into a run. Pass false for entries that
    * must never collapse — e.g. a multi-placement SKU group header on web, whose
    * own children already expand. A non-groupable entry always renders `single`.
@@ -127,9 +143,10 @@ export interface SizeRunGroup<T> {
   styleKey: string;
   /** Display base name (original casing) taken from the first member. */
   baseName: string;
-  /** Sum of member `quantity`. */
+  /** Sum of member `quantity`, counted once per distinct `unitKey`. */
   total: number;
-  /** Number of members (sizes) in the run. */
+  /** Number of distinct UNITS (sizes/variants) in the run — not of member rows,
+   *  which can exceed it when one variant is rendered per placement. */
   sizeCount: number;
   /**
    * The stored product-group id this run collapsed on, or null when the run
@@ -193,6 +210,10 @@ export function groupBySizeRun<T>(
   // group-keyed run can be size-ordered once at the end (sorting inside the
   // loop would be O(n^2) and would still have to re-read every meta).
   const memberSizes = new Map<string, Array<string | null>>();
+  // Units already counted into each group's roll-up. A row whose unit is
+  // already in here is still a MEMBER (it renders), it just does not add its
+  // quantity again — see SizeRunEntryMeta.unitKey.
+  const countedUnits = new Map<string, Set<string>>();
   for (const e of entries) {
     const m = meta(e);
     const key = runKey(m);
@@ -210,6 +231,7 @@ export function groupBySizeRun<T>(
         };
         groups.set(key, g);
         memberSizes.set(key, []);
+        countedUnits.set(key, new Set<string>());
         out.push({ kind: 'size-run', group: g });
       }
       // First member to KNOW the unit wins; a member that doesn't know it
@@ -217,6 +239,11 @@ export function groupBySizeRun<T>(
       if (g.countingUnit == null && m.countingUnit != null) g.countingUnit = m.countingUnit;
       g.members.push(e);
       memberSizes.get(key)!.push(m.variantSize ?? null);
+      // ONE contribution per stock-holding unit. A second row for the same
+      // variant (its second placement) renders but does not re-add its total.
+      const seen = countedUnits.get(key)!;
+      if (m.unitKey != null && seen.has(m.unitKey)) continue;
+      if (m.unitKey != null) seen.add(m.unitKey);
       g.total += m.quantity;
       g.sizeCount += 1;
     } else {

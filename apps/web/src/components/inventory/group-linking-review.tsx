@@ -64,10 +64,18 @@ const CONFIDENCE_COPY: Record<ReviewSuggestion['confidence'], string> = {
 export function GroupLinkingReview({
   suggestions,
   existingGroups,
+  groupsTruncated = false,
   subcategoryKeys,
 }: {
   suggestions: ReviewSuggestion[];
   existingGroups: ReviewExistingGroup[];
+  /**
+   * True when the destination list is a PREFIX of the org's groups (the read
+   * hit its cap). Disclosed on every card that offers the dropdown rather than
+   * presenting a truncated list as the whole one — a cap nobody is told about
+   * is the bug, not the cap.
+   */
+  groupsTruncated?: boolean;
   subcategoryKeys: string[];
 }) {
   // Dismissals are LOCAL to this visit. Persisting them would need a table
@@ -94,6 +102,7 @@ export function GroupLinkingReview({
             key={s.styleKey}
             suggestion={s}
             existingGroups={existingGroups}
+            groupsTruncated={groupsTruncated}
             subcategoryKeys={subcategoryKeys}
             onDismiss={() =>
               setDismissed((prev) => new Set(prev).add(s.styleKey))
@@ -109,12 +118,14 @@ export function GroupLinkingReview({
 function FamilyCard({
   suggestion,
   existingGroups,
+  groupsTruncated,
   subcategoryKeys,
   onDismiss,
   onLinked,
 }: {
   suggestion: ReviewSuggestion;
   existingGroups: ReviewExistingGroup[];
+  groupsTruncated: boolean;
   subcategoryKeys: string[];
   onDismiss: () => void;
   onLinked: () => void;
@@ -314,6 +325,12 @@ function FamilyCard({
                 </option>
               ))}
             </select>
+            {groupsTruncated ? (
+              <span className="text-[10.5px] text-[var(--ed-ink-4)]">
+                Showing the first {existingGroups.length.toLocaleString()} groups. Rename or
+                archive groups you no longer use, or link into a new group instead.
+              </span>
+            ) : null}
           </label>
 
           {destination === 'new' && (

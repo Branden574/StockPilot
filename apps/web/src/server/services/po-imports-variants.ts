@@ -179,8 +179,9 @@ export interface ResolveLineVariantDeps {
  * ORDER MATTERS and is deliberate:
  *   1. Mapping confidence gate — an ambiguous column blocks before anything
  *      is matched, so a mis-mapped "Number" never becomes a jersey number.
- *   2. Serial sanity, on `tracking_type` alone, so it also covers the
- *      non-sports categories R1 protects (Electronics stays serial-required).
+ *   2. Serial sanity, on `tracking_type`, inside a SPORTS-ENABLED org — so it
+ *      still covers the non-sports categories R1 protects (Electronics stays
+ *      serial-required) without wedging an org that never opted in.
  *   3. GROUP FIRST, by exact deterministic key. Several size lines sharing a
  *      groupHint collapse onto one group here — that is the whole point.
  *   4. If the exact key misses, look for CANDIDATES. Zero -> create new. One
@@ -223,19 +224,31 @@ export async function resolveLineVariant(
   // serialized product must never arrive without one. Refuse rather than
   // dropping it silently, so a mis-mapped serial column is visible.
   //
-  // This sits BEFORE the sports gate on purpose: `tracking_type` is the one
-  // enforcement seam every category shares, so an Electronics category that is
-  // explicitly SERIALIZED blocks here exactly as a serialized sports category
-  // does (R1, at import time). Categories with no tracking mode — which is
-  // every category in every org today — resolve to 'none' with no serial, so
-  // neither branch can fire and nothing regresses.
+  // SCOPED TO SPORTS-ENABLED ORGS (final-review fix). Both verdicts used to run
+  // BEFORE the sports gate on `tracking_type` alone — the reasoning being that
+  // tracking_type is the one seam every category shares. In practice that
+  // wedged the CHASSIS: the scan extractor maps a serial column on ANY
+  // document, and a category with no tracking mode resolves to 'none', which is
+  // every category in every org that never opted into sports. Such an org's
+  // import became unapprovable on a verdict whose own error code says
+  // "…FOR_GROUPED_IMPORT" — with no grouped import, no sports UI, and nothing
+  // to settle it with. With the module OFF neither branch fires and a line
+  // behaves exactly as it did before the sports program existed.
+  //
+  // R1 is intact. Inside a sports-enabled org an explicitly SERIALIZED
+  // category still blocks a line that printed no serial, sports subcategory or
+  // not (Electronics stays serial-required). The "serial on a counted product"
+  // verdict is scoped one step further — to a sports PROFILE — because that is
+  // exactly what a GROUPED import is, and a printed serial on an ordinary
+  // counted line is not something this resolver has any business refusing.
   //
   // BOTH branches are SETTLEABLE, which is what makes blocking legitimate
   // rather than a dead end: `serial_hint` is a real 0301 column fed by the
   // scan extractor, the CSV path and the mapping-confirmation step, and the
   // line's category can be changed in review. Receipt-time enforcement in
   // post_receipt_v2 is untouched and remains the authority on what arrives.
-  if (line.serial_hint && profile.trackingType === 'none') {
+  const sportsLine = profile.isSports && deps.sportsEnabled;
+  if (sportsLine && line.serial_hint && profile.trackingType === 'none') {
     return {
       ...empty,
       result: 'serial_required',
@@ -245,6 +258,7 @@ export async function resolveLineVariant(
     };
   }
   if (
+    deps.sportsEnabled &&
     !line.serial_hint &&
     profile.trackingType === 'serial' &&
     Number(line.qty_ordered_original ?? 0) > 0

@@ -187,6 +187,9 @@ export default function Inventory() {
   // org, cap 1000) this never fires; when it does it is disclosed above the
   // list AND on every collapsed header, never silently.
   const [truncated, setTruncated] = React.useState(false);
+  /** A refused list read, disclosed above the list. Never a silent empty state
+   *  — an error is not the same claim as "this org has no items". */
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   // Signed thumbnail URLs, resolved for the CURRENT PAGE's rows only and kept
   // across page flips. Keyed by item id; a null value means "resolved, has no
   // image", so a photoless item is never re-queried.
@@ -404,8 +407,17 @@ export default function Inventory() {
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
         .limit(POSTGREST_MAX_ROWS);
+      // FAIL LOUD (release-order rule). A console.warn is invisible on a phone,
+      // so a refused read rendered "No items match." — a claim about the org's
+      // inventory, made from an error. This read was WIDENED by the sports
+      // branch with 0298's `group_id` / `variant_size` and a `product_groups`
+      // embed, so against a database that has not taken 0294+ yet PostgREST
+      // refuses the whole select and every item disappears. Say so instead.
       if (error) {
         console.warn('inventory list', error);
+        setLoadError(error.message);
+      } else {
+        setLoadError(null);
       }
       let rows = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -834,6 +846,16 @@ export default function Inventory() {
           {truncated ? (
             <Body muted size={11.5} style={{ marginTop: 8 }}>
               {`Showing the first ${loadedRowCount.toLocaleString()} of ${(serverRowCount ?? loadedRowCount).toLocaleString()} items. Search or filter to narrow — grouped totals below cover only the loaded rows.`}
+            </Body>
+          ) : null}
+
+          {/* A READ that failed is not an empty inventory. Shown here rather
+              than left to the list's own "No items match." so a refused
+              select — the shape a mobile build takes when it is ahead of the
+              database — is visible instead of looking like a clean org. */}
+          {loadError ? (
+            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+              {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>
           ) : null}
         </View>

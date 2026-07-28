@@ -613,3 +613,61 @@ describe('ItemForm — the Sports-root block is module-gated (review finding 6)'
     await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(1));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Final-review wave C: Unit of measure initialized BLANK for every org after
+// Task 8 dropped the schema's `.default('unit')` and this form's '' leaked out
+// with it — a visible non-sports regression on the most-used create form.
+// ---------------------------------------------------------------------------
+
+describe('ItemForm — Unit of measure', () => {
+  const uom = () => screen.getByPlaceholderText('unit, kg, lb, hr…') as HTMLInputElement;
+
+  it("seeds 'unit' for a plain org, exactly as it did before the sports branch", () => {
+    renderForm({ categories: [PLAIN_CATEGORY] });
+    expect(uom().value).toBe('unit');
+  });
+
+  it("still reads 'unit' with a plain category selected", () => {
+    renderForm({ categories: [PLAIN_CATEGORY], defaults: { categoryId: PLAIN_CATEGORY_ID } });
+    expect(uom().value).toBe('unit');
+  });
+
+  it("shows the category's own counting unit rather than sending an explicit 'unit'", async () => {
+    // The reason the blank existed: an explicit 'unit' WINS over the category
+    // default on the server, so a shoes item would have been counted in units.
+    // Showing 'pair' makes the stored value visible before submit instead.
+    renderForm({
+      categories: [SHOES_CATEGORY],
+      sportsEnabled: true,
+      defaults: { categoryId: SHOES_CATEGORY_ID },
+    });
+    await waitFor(() => expect(uom().value).toBe('pair'));
+  });
+
+  it('stops following the category once the user types a unit', async () => {
+    const user = userEvent.setup();
+    renderForm({ categories: [SHOES_CATEGORY], sportsEnabled: true });
+    await user.clear(uom());
+    await user.type(uom(), 'kg');
+    // Selecting a category must not overwrite what the user typed.
+    const categoryTrigger = screen
+      .getAllByRole('combobox')
+      .find((el) => el.textContent?.includes('Uncategorized'));
+    await pickFromSelect(user, categoryTrigger!, /shoes/i);
+    await waitFor(() => expect(uom().value).toBe('kg'));
+  });
+
+  it("keeps an EDIT form's stored unit untouched", () => {
+    renderForm({
+      categories: [SHOES_CATEGORY],
+      sportsEnabled: true,
+      defaults: {
+        id: '77777777-7777-7777-7777-777777777777',
+        categoryId: SHOES_CATEGORY_ID,
+        unitOfMeasure: 'each',
+      },
+    });
+    expect(uom().value).toBe('each');
+  });
+});

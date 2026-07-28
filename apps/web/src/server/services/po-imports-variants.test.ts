@@ -342,6 +342,47 @@ describe('serial guards', () => {
     expect(r.errorCode).toBe('SERIAL_NUMBER_REQUIRED');
   });
 
+  // ── The chassis regression the scoping exists to prevent ─────────────────
+  // A NON-sports org (module off) whose PO scan mapped a serial column: every
+  // category in that org resolves to 'none' tracking, so the "serial on a
+  // counted product" verdict fired on an ordinary import and left it
+  // unapprovable — with no grouped import, no sports UI, and nothing to settle
+  // it with. Pre-sports behaviour is: import it.
+  it('APPROVES a pre-sports line carrying a serial when the org has no sports module', async () => {
+    const { deps, findByKey } = makeDeps({ sportsEnabled: false });
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: 'SN-0001' }),
+      profileFor(null),
+    );
+    expect(r.result).toBe('ready');
+    expect(r.errorCode).toBeNull();
+    expect(findByKey).not.toHaveBeenCalled();
+  });
+
+  it('never demands a serial at all when the sports module is off', async () => {
+    const { deps } = makeDeps({ sportsEnabled: false });
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: null, qty_ordered_original: 4 }),
+      profileFor(null, { trackingType: 'serial', mode: 'SERIALIZED', modeIsExplicit: true }),
+    );
+    expect(r.result).toBe('ready');
+  });
+
+  it('lets a serial ride on a NON-sports counted line inside a sports org', async () => {
+    // SERIAL_NUMBER_NOT_ALLOWED_FOR_GROUPED_IMPORT means what its name says:
+    // it is a grouped-import verdict, so it needs a sports profile. A printed
+    // serial on an ordinary counted line is not this resolver's business.
+    const { deps } = makeDeps();
+    const r = await resolveLineVariant(
+      deps,
+      line({ serial_hint: 'SN-0001' }),
+      profileFor(null, { trackingType: 'none' }),
+    );
+    expect(r.result).toBe('ready');
+  });
+
   it('does not demand a serial for a zero-quantity serialized line', async () => {
     const { deps } = makeDeps();
     const r = await resolveLineVariant(

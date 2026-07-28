@@ -12,40 +12,68 @@ import { importItemsAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
 
 /**
- * The template columns. The sports block (Task 13) is what lets a size run
- * arrive as a size run instead of N unrelated rows.
+ * The template columns.
  *
- * Two tiers, and the difference is visible to the user in APPLIED_NOTE below
- * rather than hidden here: `size`…`player_name` are applied to the created
- * item today, while the group-identity columns (brand, model, style_number,
- * colorway, team, season, home_away) plus counting_unit / tracking_mode /
- * serial / asset_tag / *_name lookups are accepted and validated but not yet
- * applied — creating product groups or serial units from a bulk CSV is
- * identity creation, and the owner decision routes that through the review
- * tool, never a heuristic import.
+ * MODULE-GATED (final-review fix). The sports block (Task 13) is what lets a
+ * size run arrive as a size run instead of N unrelated rows — but it was in the
+ * template, and in the "Applied on import" note, for EVERY org. An org with no
+ * sports module downloaded a 32-column template naming jerseys, colorways and
+ * size systems it has no screens for, and read a paragraph about product-group
+ * identity that means nothing to it. Same gate as every other sports surface:
+ * the columns appear when the module is on, and the base template is the exact
+ * pre-branch one when it is off.
+ *
+ * Two tiers within the sports block, and the difference is visible to the user
+ * in the note below rather than hidden here: `size`…`player_name` are applied to
+ * the created item today, while the group-identity columns (brand, model,
+ * style_number, colorway, team, season, home_away) plus counting_unit /
+ * tracking_mode / serial / asset_tag are accepted and validated but not yet
+ * applied — creating product groups or serial units from a bulk CSV is identity
+ * creation, and the owner decision routes that through the review tool, never a
+ * heuristic import.
+ *
+ * The SERVER is unchanged either way: `importItemsAction` accepts and validates
+ * the same columns for every org, so a hand-built CSV carrying them behaves
+ * exactly as it did. This is what the template OFFERS, not what is allowed.
  */
-const TEMPLATE_HEADER = [
+const BASE_HEADER = [
   'name', 'sku', 'barcode', 'description',
   'unit_cost', 'retail_price', 'quantity_on_hand',
   'reorder_point', 'reorder_quantity', 'unit_of_measure',
   'category_name', 'subcategory_name',
+  'warehouse_name', 'location_name',
+];
+
+const SPORTS_HEADER = [
   'brand', 'model', 'style_number', 'colorway',
   'team', 'season', 'home_away', 'jersey_number', 'player_name',
   'size', 'size_system', 'width', 'fit', 'color',
   'counting_unit', 'tracking_mode',
-  'serial', 'asset_tag', 'warehouse_name', 'location_name',
+  'serial', 'asset_tag',
 ];
 
+/** Column order, sports block spliced in front of the location lookups so a
+ *  sports org's template is byte-identical to the one that shipped. */
+function templateHeader(sportsEnabled: boolean): string[] {
+  if (!sportsEnabled) return BASE_HEADER;
+  const tail = ['warehouse_name', 'location_name'];
+  return [...BASE_HEADER.filter((c) => !tail.includes(c)), ...SPORTS_HEADER, ...tail];
+}
+
 /** The columns a row's value actually reaches the created item through. */
-const APPLIED_COLUMNS = [
+const BASE_APPLIED_COLUMNS = [
   'name', 'sku', 'barcode', 'description',
   'unit_cost', 'retail_price', 'quantity_on_hand',
   'reorder_point', 'reorder_quantity', 'unit_of_measure',
+];
+
+const SPORTS_APPLIED_COLUMNS = [
   'size', 'size_system', 'width', 'fit', 'color',
   'jersey_number', 'player_name',
 ];
 
-const TEMPLATE_SAMPLE = [
+/** The plain sample row every org gets. */
+const BASE_SAMPLE = [
   {
     name: 'Wireless Mouse',
     sku: 'SP-MOUSE-001',
@@ -58,6 +86,11 @@ const TEMPLATE_SAMPLE = [
     reorder_quantity: 25,
     unit_of_measure: 'unit',
   },
+];
+
+/** The second sample row exists to demonstrate the sports columns, so it ships
+ *  only when they do. */
+const SPORTS_SAMPLE = [
   {
     name: 'Falcons Home Jersey - M',
     sku: 'FALC-HOME-M-07',
@@ -84,8 +117,16 @@ const TEMPLATE_SAMPLE = [
   },
 ];
 
-export function CsvImport() {
+export function CsvImport({ sportsEnabled = false }: { sportsEnabled?: boolean }) {
   const router = useRouter();
+  const header = React.useMemo(() => templateHeader(sportsEnabled), [sportsEnabled]);
+  const sample = React.useMemo(
+    () => (sportsEnabled ? [...BASE_SAMPLE, ...SPORTS_SAMPLE] : BASE_SAMPLE),
+    [sportsEnabled],
+  );
+  const appliedColumns = sportsEnabled
+    ? [...BASE_APPLIED_COLUMNS, ...SPORTS_APPLIED_COLUMNS]
+    : BASE_APPLIED_COLUMNS;
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [parsing, setParsing] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
@@ -93,7 +134,7 @@ export function CsvImport() {
   const [summary, setSummary] = React.useState<Awaited<ReturnType<typeof importItemsAction>> | null>(null);
 
   function downloadTemplate() {
-    const csv = toCsv(TEMPLATE_HEADER, TEMPLATE_SAMPLE);
+    const csv = toCsv(header, sample);
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -157,13 +198,22 @@ export function CsvImport() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Applied on import: {APPLIED_COLUMNS.join(', ')}. The remaining
-            template columns (product group identity, counting unit, tracking
-            mode, serial, asset tag, and the category / warehouse / location
-            lookups) are accepted and checked, but are set through the item
-            and product-group screens rather than a bulk import. Keep{' '}
-            <code className="rounded bg-muted px-1 py-0.5">jersey_number</code>{' '}
-            formatted as text so leading zeroes survive.
+            Applied on import: {appliedColumns.join(', ')}. The remaining
+            template columns
+            {sportsEnabled
+              ? ' (product group identity, counting unit, tracking mode, serial, asset tag, and the category / warehouse / location lookups)'
+              : ' (the category / warehouse / location lookups)'}{' '}
+            are accepted and checked, but are set through the item
+            {sportsEnabled ? ' and product-group screens' : ' screens'} rather than a bulk
+            import.
+            {sportsEnabled ? (
+              <>
+                {' '}
+                Keep{' '}
+                <code className="rounded bg-muted px-1 py-0.5">jersey_number</code> formatted
+                as text so leading zeroes survive.
+              </>
+            ) : null}
           </p>
         </CardContent>
       </Card>

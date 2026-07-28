@@ -355,6 +355,145 @@ describe('confirmLineMappings — the write is checked, and serial is settleable
     expect(patch.jersey_number).toBeNull();
   });
 
+  // ── The decision covers EVERY flagged field, not just the number ─────────
+  // `lineNeedsMappingConfirmation` flags on any of the ten sports fields, so a
+  // decision that only touched `jersey_number` left a flagged size / colour /
+  // style hint invisible in the modal AND alive at mapping_confidence 1 — an
+  // unconfirmed AI mapping, silently applied to the created item.
+
+  it('IGNORE clears every flagged value on the line, not just the number', async () => {
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': {
+        data: [line({ variant_color: 'Red/Black', serial_hint: 'SN-9' })],
+        error: null,
+      },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'ignore' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    // The fixture carries size / size-as-printed / colour / number / style hint
+    // / serial. Every one of them was flagged, so every one of them is dropped.
+    expect(patch.jersey_number).toBeNull();
+    expect(patch.variant_size).toBeNull();
+    expect(patch.variant_size_original).toBeNull();
+    expect(patch.variant_color).toBeNull();
+    expect(patch.group_hint).toBeNull();
+    expect(patch.serial_hint).toBeNull();
+    expect(patch.mapping_confidence).toBe(1);
+  });
+
+  it('MISSING STAYS MISSING — ignore never writes a field the document left empty', async () => {
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line()], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'ignore' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    // The fixture's width / fit / player name / serial are all null — absent
+    // from the patch entirely, not re-asserted as null.
+    for (const k of ['variant_width', 'variant_fit', 'player_name', 'serial_hint']) {
+      expect(patch, k).not.toHaveProperty(k);
+    }
+  });
+
+  it('CONFIRM keeps every flagged value and only lifts the confidence', async () => {
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line({ variant_color: 'Red/Black' })], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'confirm' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toEqual({ mapping_confidence: 1 });
+  });
+
+  it('answers a line flagged with NO jersey number at all', async () => {
+    // Nothing to reinterpret as a column meaning here — this is the case the
+    // jersey-only step could not express, and where the value used to survive.
+    const colourOnly = line({
+      jersey_number: null,
+      variant_size: null,
+      variant_size_original: null,
+      group_hint: null,
+      variant_color: 'Red/Black',
+    });
+    const { svc, stub } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [colourOnly], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'ignore' },
+    });
+
+    const patch = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch.variant_color).toBeNull();
+    expect(patch).not.toHaveProperty('jersey_number');
+  });
+
+  it('audits every value the decision was made about', async () => {
+    const { svc } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': { data: [line({ variant_color: 'Red/Black' })], error: null },
+      'po_import_lines.update': { data: { id: LINE_ID }, error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await svc.confirmLineMappings({
+      poImportId: IMPORT_ID,
+      decisions: { [LINE_ID]: 'ignore' },
+    });
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'sports.import.mapping_confirmed',
+        before: expect.objectContaining({
+          flagged: expect.objectContaining({
+            jersey_number: '12',
+            variant_size: 'M',
+            variant_color: 'Red/Black',
+          }),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('never overwrites a serial the document already printed', async () => {
     const { svc, stub } = svcFor({
       'po_imports.select': HEADER,

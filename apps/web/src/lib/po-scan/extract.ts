@@ -14,8 +14,12 @@ import { env } from '@/lib/env';
  *
  * If the schema changes here, update the corresponding zod parse on the
  * server route side too — they're paired.
+ *
+ * EXPORTED for the schema test: `required` is a correctness property (see
+ * `mappingConfidence` below), not an implementation detail, and a test that
+ * re-declared the list would prove nothing about this one.
  */
-const PO_SCHEMA = {
+export const PO_SCHEMA = {
   type: SchemaType.OBJECT,
   properties: {
     poNumber: {
@@ -167,6 +171,14 @@ const PO_SCHEMA = {
           'lineTotal',
           'lineType',
           'confidence',
+          // REQUIRED, unlike the sports value fields above it. Those are
+          // optional because an absent one means "the document said nothing",
+          // which is the correct answer. `mappingConfidence` is different: it is
+          // the GATE, and a model that simply omitted it produced `null`, which
+          // `lineNeedsMappingConfirmation` reads as "nothing to confirm" — so
+          // forgetting the field silently switched the confirmation step off for
+          // that line. Making it required means the model has to state it.
+          'mappingConfidence',
         ],
       },
     },
@@ -238,8 +250,14 @@ export interface ExtractedPo {
     groupHint: string;
     /** The serial the document PRINTED, verbatim, or '' — never invented, never a placeholder. */
     serialNumber: string;
-    /** 0..1 confidence in the FIELD MAPPING (not the character reading). Null when the model gave none. */
-    mappingConfidence: number | null;
+    /**
+     * 0..1 confidence in the FIELD MAPPING (not the character reading).
+     *
+     * REQUIRED of the model, and 0 when it gave none anyway — an absent claim is
+     * not a confident one. Never null: null reads as "nothing to confirm" in
+     * `lineNeedsMappingConfirmation`, which is the gate switching itself off.
+     */
+    mappingConfidence: number;
   }>;
 }
 
@@ -386,10 +404,21 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
     // a model that returns 7 must LOSE the value rather than have it
     // stringified into a serial the document never printed.
     serialNumber: typeof l.serialNumber === 'string' ? l.serialNumber.trim() : '',
+    // MISSING READS AS NO CONFIDENCE AT ALL, not as "no opinion".
+    //
+    // The schema now requires this field, so a well-behaved model always states
+    // it — but a parse-time default still has to exist, and `null` was the wrong
+    // one: `lineNeedsMappingConfirmation` treats null as "nothing to confirm",
+    // so a model that dropped the field silently disabled its own gate for that
+    // line and an unverified mapping sailed through review. 0 is the
+    // conservative reading — an absent claim is not a confident one — and it
+    // only ever routes a line that CARRIES a sports value to the confirmation
+    // step (the predicate is scoped), so an ordinary non-sports scan still
+    // approves untouched.
     mappingConfidence:
       typeof l.mappingConfidence === 'number' && Number.isFinite(l.mappingConfidence)
         ? Math.min(1, Math.max(0, l.mappingConfidence))
-        : null,
+        : 0,
   }));
 
   if (parsed.lines.length === 0 && parsed.overallConfidence < 0.3) {

@@ -362,3 +362,60 @@ describe('groupBySizeRun — stored group_id is the only signal when present', (
     expect(out[0].group.members.map((m) => m.id)).toEqual(['2xl', 's']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Final-review wave C: a run's unit is the VARIANT, not the rendered row. The
+// web Items list renders one row per PLACEMENT and every one carries the item's
+// TOTAL on hand, so folding them summed that total once per rack.
+// ---------------------------------------------------------------------------
+
+describe('groupBySizeRun — one contribution per stock-holding unit', () => {
+  const row = (id: string, name: string, quantity: number, over: Record<string, unknown> = {}) => ({
+    key: `${id}:${String(over.rack ?? 'a')}`,
+    name,
+    quantity,
+    groupable: true,
+    ...over,
+  });
+
+  it('counts a variant ONCE however many placement rows it renders as', () => {
+    const entries = [
+      // One shoe in two racks: two rows, each carrying the item total of 20.
+      row('p10', 'Nike Pegasus 41', 20, { groupId: 'grp-1', variantSize: '10', unitKey: 'p10', rack: '1-A' }),
+      row('p10', 'Nike Pegasus 41', 20, { groupId: 'grp-1', variantSize: '10', unitKey: 'p10', rack: '2-C' }),
+      row('p9', 'Nike Pegasus 41', 32, { groupId: 'grp-1', variantSize: '9', unitKey: 'p9' }),
+    ];
+    const out = groupBySizeRun(entries, (e) => e as never);
+    const run = out.find((o) => o.kind === 'size-run');
+    expect(run?.kind).toBe('size-run');
+    if (run?.kind !== 'size-run') throw new Error('no run');
+    expect(run.group.total).toBe(52);
+    expect(run.group.sizeCount).toBe(2);
+    // Every ROW is still a member — the rows render, they just do not re-count.
+    expect(run.group.members).toHaveLength(3);
+  });
+
+  it('is unchanged for a caller that passes no unitKey at all', () => {
+    const entries = [
+      row('a', 'Pink Shirt - L', 4, { rack: 'a' }),
+      row('b', 'Pink Shirt - XL', 6, { rack: 'b' }),
+    ];
+    const out = groupBySizeRun(entries, (e) => e as never);
+    const run = out.find((o) => o.kind === 'size-run');
+    if (run?.kind !== 'size-run') throw new Error('no run');
+    expect(run.group.total).toBe(10);
+    expect(run.group.sizeCount).toBe(2);
+  });
+
+  it('keeps two DIFFERENT variants that happen to share a size', () => {
+    const entries = [
+      row('a', 'Tee', 4, { groupId: 'g', variantSize: 'L', unitKey: 'a' }),
+      row('b', 'Tee', 6, { groupId: 'g', variantSize: 'L', unitKey: 'b' }),
+    ];
+    const out = groupBySizeRun(entries, (e) => e as never);
+    const run = out.find((o) => o.kind === 'size-run');
+    if (run?.kind !== 'size-run') throw new Error('no run');
+    expect(run.group.total).toBe(10);
+    expect(run.group.sizeCount).toBe(2);
+  });
+});

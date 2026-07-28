@@ -23,7 +23,12 @@ vi.mock('@/lib/env', () => ({
   },
 }));
 
-import { extractPoFromMedia } from './extract';
+import {
+  IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
+  lineNeedsMappingConfirmation,
+} from '@stockpilot/core';
+
+import { extractPoFromMedia, PO_SCHEMA } from './extract';
 
 const MEDIA = [{ base64: 'AAAA', mimeType: 'image/jpeg' }];
 
@@ -136,7 +141,10 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
     expect(l.jerseyNumber).toBe('');
     expect(l.playerName).toBe('');
     expect(l.groupHint).toBe('');
-    expect(l.mappingConfidence).toBeNull();
+    // The GATE is not a "missing value" — an absent mapping confidence is no
+    // confidence at all, never "no opinion" (which read as nothing-to-confirm
+    // and switched the confirmation step off for the line).
+    expect(l.mappingConfidence).toBe(0);
   });
 
   it('trims whitespace but preserves the printed size characters', async () => {
@@ -148,7 +156,7 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
     expect(out.lines[0]!.playerName).toBe('A. Rosas');
   });
 
-  it('clamps mappingConfidence to 0..1 and nulls a non-numeric one', async () => {
+  it('clamps mappingConfidence to 0..1 and reads a non-numeric one as ZERO', async () => {
     respond(
       po([
         baseLine({ lineNumber: 1, mappingConfidence: 1.4 }),
@@ -160,7 +168,7 @@ describe('extractPoFromMedia — variant fields survive the normalizer', () => {
 
     const out = await extractPoFromMedia(MEDIA);
 
-    expect(out.lines.map((l) => l.mappingConfidence)).toEqual([1, 0, null, null]);
+    expect(out.lines.map((l) => l.mappingConfidence)).toEqual([1, 0, 0, 0]);
   });
 
   it('does not regress the (NEW)+ISBN $0 dedupe when variant fields are present', async () => {
@@ -241,5 +249,40 @@ describe('PO extraction prompt — anti-invention discipline', () => {
     // for "07" before our normalizer ever sees it.
     expect(props.jerseyNumber!.type).toBe('string');
     expect(props.mappingConfidence!.type).toBe('number');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final-review wave C: mappingConfidence is the GATE, so a model that simply
+// omits it must not be able to switch the gate off.
+// ---------------------------------------------------------------------------
+
+describe('mappingConfidence is required of the model', () => {
+  it('is in the line schema’s required list', () => {
+    const required = (
+      PO_SCHEMA.properties.lines.items as { required: readonly string[] }
+    ).required;
+    expect(required).toContain('mappingConfidence');
+  });
+
+  it('defaults conservative LOW, so an omitted value still routes a sports line to review', async () => {
+    respond(po([baseLine({ jerseyNumber: '12' })]));
+    const out = await extractPoFromMedia(MEDIA);
+    const l = out.lines[0]!;
+    expect(l.mappingConfidence).toBe(0);
+    expect(l.mappingConfidence).toBeLessThan(IMPORT_MAPPING_CONFIDENCE_THRESHOLD);
+    expect(lineNeedsMappingConfirmation({
+      mapping_confidence: l.mappingConfidence,
+      jersey_number: l.jerseyNumber,
+    })).toBe(true);
+  });
+
+  it('leaves an ordinary non-sports line approvable at the same default', async () => {
+    respond(po([baseLine()]));
+    const out = await extractPoFromMedia(MEDIA);
+    const l = out.lines[0]!;
+    expect(
+      lineNeedsMappingConfirmation({ mapping_confidence: l.mappingConfidence }),
+    ).toBe(false);
   });
 });

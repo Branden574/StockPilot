@@ -153,6 +153,48 @@ export class ProductGroupsService {
     return (data ?? []) as unknown as ProductGroupRow[];
   }
 
+  /**
+   * The lean (id, name, brand, model) rows a DESTINATION PICKER offers, paged.
+   *
+   * `list()` clamps its own limit at 200 (its callers are pages that render
+   * cards), so a picker built on it silently offered the first 200 groups
+   * alphabetically and gave a reviewer no way to reach group 201 — a cap with no
+   * disclosure, which is recurring bug pattern #18. This reads only what an
+   * `<option>` shows, pages past PostgREST's `max_rows`, and reports whether it
+   * hit `cap` so the UI can say so instead of quietly truncating.
+   */
+  async listForPicker(
+    cap = 2000,
+  ): Promise<{
+    groups: Array<{ id: string; name: string; brand: string | null; model: string | null }>;
+    truncated: boolean;
+  }> {
+    assertModuleEnabled(this.ctx, 'sports');
+    const rows = await fetchAllRows<{
+      id: string;
+      name: string;
+      brand: string | null;
+      model: string | null;
+    }>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('product_groups')
+          .select('id, name, brand, model')
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          // Stable paging key; the display order is applied below.
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: cap + 1 },
+    );
+    const truncated = rows.length > cap;
+    const groups = (truncated ? rows.slice(0, cap) : rows).sort((a, b) =>
+      a.name.localeCompare(b.name, 'en'),
+    );
+    return { groups, truncated };
+  }
+
   async get(id: string): Promise<ProductGroupRow> {
     assertModuleEnabled(this.ctx, 'sports');
     const { data, error } = await this.ctx.supabase
@@ -471,19 +513,87 @@ export class ProductGroupsService {
     return out;
   }
 
-  /** The variants (inventory_items rows) under one group. */
+  /**
+   * Every counting unit the org's groups define, keyed by group id.
+   *
+   * For a surface that paginates on the CLIENT: units resolved from the rows
+   * the SERVER happened to send go missing the moment the client renders a page
+   * the server never built (the Items list's default view — see the page's
+   * note). A superset cannot be wrong for any page, and it is one column-only
+   * read for the whole org.
+   *
+   * ARCHIVED GROUPS INCLUDED, deliberately. A variant can point at a group
+   * whose status was later changed, and its header still has to be able to say
+   * "52 pairs" rather than falling back to a bare count.
+   *
+   * PAGED, because `product_groups` has no ceiling of its own and PostgREST
+   * clamps every response at `max_rows` = 1000 with no error (the same landmine
+   * fixed in `variantsByGroupIds` and `getTrainingStats`).
+   */
+  async countingUnits(): Promise<Record<string, CountingUnit>> {
+    assertModuleEnabled(this.ctx, 'sports');
+    const rows = await fetchAllRows<{ id: string; default_counting_unit: CountingUnit }>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('product_groups')
+          .select('id, default_counting_unit')
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          // Stable paging key (fetchAllRows header): an unstable sort lands the
+          // same row on two windows or on none.
+          .order('id', { ascending: true })
+          .range(from, to),
+    );
+    const out: Record<string, CountingUnit> = {};
+    for (const r of rows) out[r.id] = r.default_counting_unit;
+    return out;
+  }
+
+  /**
+   * The variants (inventory_items rows) under one group.
+   *
+   * PAGED (review fix). This read is uncapped BY INTENT — a group's variant
+   * panel shows the whole run — but "no `.limit()`" is not "no cap":
+   * PostgREST clamps every response at `max_rows` = 1000 and reports nothing,
+   * so a group past that silently rendered a prefix while its header (read from
+   * the roll-up VIEW, which counts in the database) kept the true total. Same
+   * landmine, same fix as `variantsByGroupIds`.
+   *
+   * The paging order MUST be the stable one, so the display sort (size, then
+   * sku) is applied after the fact rather than in the query.
+   */
   async variants(groupId: string): Promise<VariantRow[]> {
     assertModuleEnabled(this.ctx, 'sports');
-    const { data, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(VARIANT_COLUMNS)
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('group_id', groupId)
-      .is('deleted_at', null)
-      .order('variant_size', { ascending: true })
-      .order('sku', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as unknown as VariantRow[];
+    const rows = await fetchAllRows<VariantRow>(
+      (from, to) =>
+        // `VARIANT_COLUMNS` is a concatenated const, so PostgREST's type parser
+        // cannot resolve it to a row type — the same reason every other read of
+        // it in this file casts. The shape is asserted here rather than after
+        // the loop so the accumulator is typed.
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(VARIANT_COLUMNS)
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('group_id', groupId)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: VariantRow[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+    // Byte-identical ordering to the query this replaced: variant_size ASC then
+    // sku ASC, with PostgREST's NULLS-LAST convention for a sizeless row.
+    return rows.sort((a, b) => {
+      const as = a.variant_size;
+      const bs = b.variant_size;
+      if (as !== bs) {
+        if (as == null) return 1;
+        if (bs == null) return -1;
+        return as.localeCompare(bs, 'en');
+      }
+      return (a.sku ?? '').localeCompare(b.sku ?? '', 'en');
+    });
   }
 
   /**
