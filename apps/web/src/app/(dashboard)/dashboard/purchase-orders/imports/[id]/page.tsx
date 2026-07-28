@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
+import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -27,15 +28,20 @@ export default async function PoImportDetailPage({
     throw e;
   }
 
-  const [suppliers, warehouses, items, charters, locations] = await Promise.all([
-    (await SuppliersService.forCurrentUser()).list(),
-    (await WarehousesService.forCurrentUser()).listNames(),
-    // Uncapped lean listing — list({ limit: 500 }) silently truncated the
-    // match dropdown for >500-item orgs.
-    (await InventoryService.forCurrentUser()).listForMatching(),
-    (await ChartersService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),
-  ]);
+  const [suppliers, warehouses, items, charters, locations, categories, resolutions] =
+    await Promise.all([
+      (await SuppliersService.forCurrentUser()).list(),
+      (await WarehousesService.forCurrentUser()).listNames(),
+      // Uncapped lean listing — list({ limit: 500 }) silently truncated the
+      // match dropdown for >500-item orgs.
+      (await InventoryService.forCurrentUser()).listForMatching(),
+      (await ChartersService.forCurrentUser()).list(),
+      (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),
+      (await CategoriesService.forCurrentUser()).list(),
+      // Task 14: the group/variant verdict per line. Read-only — it resolves
+      // identity, it never links or merges anything.
+      svc.resolveLineResults(id),
+    ]);
 
   // Prefill the expected-delivery picker from the AI-extracted ship/delivery
   // date stored in parsed_json (scan imports only). Only a clean YYYY-MM-DD is
@@ -105,6 +111,12 @@ export default async function PoImportDetailPage({
           createdAt: i.created_at,
         }))}
         defaultExpectedAt={defaultExpectedAt}
+        categories={categories.map((c) => ({
+          id: c.id as string,
+          name: c.name as string,
+          sportsSubcategoryKey: (c.sports_subcategory_key as string | null) ?? null,
+        }))}
+        resolutions={resolutions}
       />
     </div>
   );

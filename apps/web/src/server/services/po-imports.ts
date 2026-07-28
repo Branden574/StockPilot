@@ -24,14 +24,29 @@ import {
   type CreateItemsFromPoLinesInput,
   type DuplicateCandidate,
 } from './po-imports-lines';
+import {
+  asSizeSystem,
+  resolveLinesForReview,
+  type LineResolution,
+  type ResolveLineVariantDeps,
+} from './po-imports-variants';
+import { ProductGroupsService } from './product-groups';
+import {
+  resolveTrackingProfile,
+  type ResolvedTrackingProfile,
+  type TrackingProfileCache,
+} from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { IMPORT_MAPPING_CONFIDENCE_THRESHOLD } from '@stockpilot/core';
+
 import type {
   ApprovePoImportInput,
   CanonicalPo,
+  ConfirmLineMappingsInput,
   PoImportLineType,
   PoImportMatchStatus,
   PoImportStatus,
@@ -1182,6 +1197,27 @@ export class PoImportsService {
       );
     }
 
+    // An unconfirmed COLUMN MAPPING blocks approval, server-side (Task 14).
+    //
+    // The web review table already refuses this, but a UI-only gate is not a
+    // gate: the Bearer /api/v1 approve route and the mobile screen funnel
+    // through here, and this is the last point every path shares. The other
+    // blocking verdicts are enforced where they can do damage — at item
+    // CREATION, in createItemsFromPoLines — but a mis-mapped column is a
+    // property of the LINE, so it has to be caught before the PO exists.
+    const unconfirmed = finalLines.find(
+      (l) =>
+        l.mapping_confidence != null &&
+        l.mapping_confidence < IMPORT_MAPPING_CONFIDENCE_THRESHOLD,
+    );
+    if (unconfirmed) {
+      throw new ServiceError(
+        'validation_error',
+        `Line ${unconfirmed.line_number} has an ambiguous column mapping. Confirm what it means in review, or skip the line.`,
+        { code: 'IMPORT_MAPPING_REVIEW_REQUIRED' },
+      );
+    }
+
     // TWO CHARTERS, TWO JOBS — never one value aliased into both.
     //
     // billToCharterId is BILLING metadata: it lands on purchase_orders.charter_id
@@ -1219,8 +1255,12 @@ export class PoImportsService {
       if (linkedIds.length > 0) {
         const { data: linkedItems, error: liErr } = await this.ctx.supabase
           .from('inventory_items')
+          // Same reason as the createItemsFromPoLines sibling branch: an
+          // ownership-charter sibling is the SAME product, so its group and
+          // variant attributes must travel with it or the copy lands ungrouped
+          // and the next import creates a second variant for the same size.
           .select(
-            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type',
+            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
           )
           .eq('organization_id', this.ctx.organizationId)
           .in('id', linkedIds)
@@ -1240,6 +1280,15 @@ export class PoImportsService {
           unit_of_measure: string | null;
           item_type: string | null;
           tracking_type: string | null;
+          group_id: string | null;
+          variant_size: string | null;
+          variant_size_original: string | null;
+          variant_size_system: string | null;
+          variant_width: string | null;
+          variant_fit: string | null;
+          variant_color: string | null;
+          jersey_number: string | null;
+          player_name: string | null;
         };
         const byId = new Map(
           ((linkedItems ?? []) as LinkedItem[]).map((i) => [i.id, i]),
@@ -1319,6 +1368,18 @@ export class PoImportsService {
                 (it.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ?? 'product',
               customFields: {},
               status: 'active',
+              // Identity travels with the sibling. `variant_key` is NOT copied
+              // — create() recomputes it from these attributes, so the key
+              // stays server-derived on every path.
+              groupId: it.group_id ?? null,
+              variantSize: it.variant_size ?? null,
+              variantSizeOriginal: it.variant_size_original ?? null,
+              variantSizeSystem: asSizeSystem(it.variant_size_system),
+              variantWidth: it.variant_width ?? null,
+              variantFit: it.variant_fit ?? null,
+              variantColor: it.variant_color ?? null,
+              jerseyNumber: it.jersey_number ?? null,
+              playerName: it.player_name ?? null,
               // Born FROM this PO at qty 0 — mark it Expected (awaiting first
               // receipt) like every other PO-driven creation path
               // (createItemsFromPoLines, purchase-orders.create). Without this
@@ -1613,9 +1674,128 @@ export class PoImportsService {
         organizationId: this.ctx.organizationId,
         inventorySvc: new InventoryService(this.ctx),
         mappingsSvc: new VendorItemMappingsService(this.ctx),
+        ctx: this.ctx,
       },
       input,
     );
+  }
+
+  /**
+   * The review-table verdict for every line of an import.
+   *
+   * The tracking profile is per LINE, not per import: once a line points at an
+   * internal item, that item's category is the authority on how the line should
+   * be read. An unmapped line has no category yet, so it resolves against the
+   * non-sports default — which still runs the mapping-confidence gate, the one
+   * check that must fire before anything is matched.
+   *
+   * Read-only. Nothing here writes, links or merges.
+   */
+  async resolveLineResults(poImportId: string): Promise<Record<string, LineResolution>> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    const { lines } = await this.get(poImportId);
+
+    // One query for every mapped line's category, rather than one per line.
+    const itemIds = [...new Set(lines.map((l) => l.item_id).filter((v): v is string => !!v))];
+    const categoryByItem = new Map<string, string | null>();
+    if (itemIds.length > 0) {
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, category_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', itemIds)
+        .is('deleted_at', null);
+      if (error) throw new ServiceError('internal_error', error.message);
+      for (const r of (data ?? []) as Array<{ id: string; category_id: string | null }>) {
+        categoryByItem.set(r.id, r.category_id);
+      }
+    }
+
+    const cache: TrackingProfileCache = new Map();
+    const deps: ResolveLineVariantDeps = {
+      groups: new ProductGroupsService(this.ctx),
+      supabase: this.ctx.supabase,
+      organizationId: this.ctx.organizationId,
+      sportsEnabled: this.ctx.enabledModules.has('sports'),
+    };
+
+    const withProfiles: Array<{ line: PoImportLineRow; profile: ResolvedTrackingProfile }> = [];
+    for (const line of lines) {
+      const categoryId = line.item_id ? (categoryByItem.get(line.item_id) ?? null) : null;
+      withProfiles.push({
+        line,
+        profile: await resolveTrackingProfile(this.ctx, categoryId, cache),
+      });
+    }
+    return resolveLinesForReview(deps, withProfiles);
+  }
+
+  /**
+   * Record the reviewer's answer to an ambiguous COLUMN mapping.
+   *
+   * The AI never resolves this itself: a bare "Number" column could be a jersey
+   * number, a quantity, a serial, a style number or a line number, and the
+   * requirements forbid a silent guess. Confirming here does three things and
+   * nothing else — it applies the stated meaning to the line's own fields, it
+   * lifts `mapping_confidence` to 1 so the gate stops firing, and it writes an
+   * audit event naming the value that was reinterpreted.
+   *
+   * SOURCE VALUES ARE NEVER DESTROYED SILENTLY. The pre-confirmation value is
+   * written into the audit `before` block, so a wrong confirmation is always
+   * recoverable from the log.
+   */
+  async confirmLineMappings(input: ConfirmLineMappingsInput): Promise<{ confirmed: number }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const { header, lines } = await this.get(input.poImportId);
+    if (header.status === 'approved' || header.status === 'canceled') {
+      throw new ServiceError(
+        'conflict',
+        `This import is ${header.status} and its column mappings can no longer be changed.`,
+      );
+    }
+
+    const byId = new Map(lines.map((l) => [l.id, l]));
+    let confirmed = 0;
+    for (const [lineId, meaning] of Object.entries(input.decisions)) {
+      const line = byId.get(lineId);
+      if (!line) throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
+
+      const sourceValue = line.jersey_number;
+      // 'jersey_number' confirms what was read; every other meaning says the
+      // value is NOT a number, so it leaves the number field. It is only ever
+      // MOVED to a field that means the same thing (style number), never
+      // rewritten into a quantity or a serial — inventing either is exactly
+      // what the requirements forbid.
+      const patch: Record<string, unknown> = { mapping_confidence: 1 };
+      if (meaning !== 'jersey_number') patch.jersey_number = null;
+      if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
+        patch.vendor_product_number = sourceValue;
+      }
+
+      const { error } = await this.ctx.supabase
+        .from('po_import_lines')
+        .update(patch)
+        .eq('po_import_id', input.poImportId)
+        .eq('id', lineId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+
+      await audit(
+        {
+          event: 'sports.import.mapping_confirmed',
+          entityType: 'po_import_line',
+          entityId: lineId,
+          before: { jerseyNumber: sourceValue, mappingConfidence: line.mapping_confidence },
+          after: { meaning, appliedTo: patch },
+        },
+        this.ctx,
+      );
+      confirmed++;
+    }
+    return { confirmed };
   }
 
   async cancel(id: string): Promise<void> {

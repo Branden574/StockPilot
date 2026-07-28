@@ -57,6 +57,7 @@ function renderModal() {
       locationId={null}
       itemType="product"
       lines={[LINE]}
+      categories={[]}
       onSuccess={onSuccess}
     />,
   );

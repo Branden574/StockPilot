@@ -2,8 +2,20 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { lineResultBlocksApproval } from '@stockpilot/core';
+
+import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
 import type { InventoryService } from './inventory';
+import {
+  asSizeSystem,
+  resolveLineVariant,
+  type LineResolution,
+  type PoImportVariantLine,
+  type ResolveLineVariantDeps,
+} from './po-imports-variants';
+import { ProductGroupsService } from './product-groups';
+import { resolveTrackingProfile, type TrackingProfileCache } from './sports-profiles';
 import type { VendorItemMappingsService } from './vendor-item-mappings';
 import { extractIsbnsFromText } from '@/lib/books/isbn-extract';
 import { isbnVariants } from '@/lib/books/isbn-variants';
@@ -40,12 +52,34 @@ export interface PoImportLinesDeps {
 export interface CreateItemsFromPoLinesDeps extends PoImportLinesDeps {
   inventorySvc: Pick<InventoryService, 'create'>;
   mappingsSvc: Pick<VendorItemMappingsService, 'upsert'>;
+  /**
+   * The caller's service context. REQUIRED rather than optional so the web
+   * action and the Bearer route cannot drift into one resolving sports
+   * identity and the other not — the whole reason this module exists.
+   * Used to resolve the category's tracking profile, to read the org's
+   * product groups, and to read whether the `sports` module is on at all.
+   */
+  ctx: ServiceContext;
 }
 
 const lineDecisionSchema = z.object({
   mode: z.enum(['create', 'use_existing', 'skip']),
   /** Required when mode === 'use_existing'. */
   itemId: z.string().uuid().optional(),
+});
+
+/**
+ * The human's answer to an ambiguous or suggested group match.
+ *
+ * 'new' confirms a brand-new group despite the suggestion; 'link' accepts one
+ * specific candidate. There is no third option and no default — the 0233
+ * discipline extended to groups: a suggestion never becomes a link without
+ * this.
+ */
+const groupDecisionSchema = z.object({
+  mode: z.enum(['new', 'link']),
+  /** Required when mode === 'link'. Verified to belong to the caller's org. */
+  groupId: z.string().uuid().optional(),
 });
 
 export const createItemsFromPoLinesSchema = z.object({
@@ -81,6 +115,35 @@ export const createItemsFromPoLinesSchema = z.object({
    * uses these when a duplicate match is detected.
    */
   decisions: z.record(z.string().uuid(), lineDecisionSchema).optional(),
+  /**
+   * Category the new items are filed under. This is what decides the tracking
+   * profile, and therefore whether a line resolves to a sports group/variant
+   * at all — a category with no Sports subcategory behaves exactly as before.
+   */
+  categoryId: z.string().uuid().nullable().optional(),
+  /**
+   * Per-line answers to a `possible_duplicate` / `ambiguous_variant_match`
+   * verdict. Keyed by line id. A blocking line with no answer here is REFUSED,
+   * never auto-resolved.
+   */
+  groupDecisions: z.record(z.string().uuid(), groupDecisionSchema).optional(),
+  /**
+   * Per-line variant attributes the reviewer supplied on the spot, so a
+   * missing required attribute can be fixed without leaving the screen. These
+   * do NOT overwrite the line's stored source values — they are applied to the
+   * item being created and to the identity key, and the document's own text
+   * stays in `variant_size_original`.
+   */
+  variantOverrides: z
+    .record(
+      z.string().uuid(),
+      z.object({
+        size: z.string().max(40).nullable().optional(),
+        sizeSystem: z.string().max(40).nullable().optional(),
+        jerseyNumber: z.string().max(4).nullable().optional(),
+      }),
+    )
+    .optional(),
 });
 export type CreateItemsFromPoLinesInput = z.infer<typeof createItemsFromPoLinesSchema>;
 
@@ -203,6 +266,77 @@ export async function findDuplicatesForPoLines(
 }
 
 /**
+ * The two verdicts a human can settle by choosing a product group. The other
+ * blocking verdicts — a confidence gate, a missing size, a serial mismatch —
+ * are NOT group questions and can never be waved through with one.
+ */
+const GROUP_RESOLVABLE_RESULTS = new Set(['possible_duplicate', 'ambiguous_variant_match']);
+
+/**
+ * Apply the reviewer's answer to a blocked line, or refuse the line.
+ *
+ * This is where "AI suggests, the human links" is enforced for GROUPS. A
+ * `possible_duplicate` is a suggestion and stays one until an explicit
+ * decision arrives here; an unanswered blocking verdict throws, so an import
+ * can never quietly merge two products or invent a missing attribute.
+ *
+ * Returns the group id the line should be created under (null = a brand-new
+ * group, which `InventoryService.create` derives from the category profile).
+ */
+async function settleGroupDecision(
+  ctx: ServiceContext,
+  resolution: LineResolution,
+  line: PoImportVariantLine,
+  decision: { mode: 'new' | 'link'; groupId?: string } | undefined,
+): Promise<string | null> {
+  if (!lineResultBlocksApproval(resolution.result)) return resolution.groupId;
+
+  const settleable = GROUP_RESOLVABLE_RESULTS.has(resolution.result);
+  if (!settleable || !decision) {
+    throw new ServiceError(
+      'validation_error',
+      `Line ${line.line_number}: ${resolution.message ?? 'This line needs review before it can be imported.'}`,
+      resolution.errorCode ? { code: resolution.errorCode } : undefined,
+    );
+  }
+
+  let chosen: string | null = null;
+  if (decision.mode === 'link') {
+    if (!decision.groupId) {
+      throw new ServiceError(
+        'validation_error',
+        `Line ${line.line_number} was set to link an existing product group, but none was picked.`,
+      );
+    }
+    // Only a group the resolver actually offered may be linked. The candidate
+    // list came from an org-scoped read, so this also pins the group to the
+    // caller's organization without a second query.
+    if (!resolution.groupCandidates.some((c) => c.id === decision.groupId)) {
+      throw new ServiceError(
+        'validation_error',
+        `Line ${line.line_number}: that product group was not one of this line's candidates.`,
+      );
+    }
+    chosen = decision.groupId;
+  }
+
+  await audit(
+    {
+      event: 'sports.import.match_overridden',
+      entityType: 'po_import_line',
+      entityId: line.id,
+      before: {
+        result: resolution.result,
+        candidates: resolution.groupCandidates.map((c) => c.id),
+      },
+      after: { linkedGroupId: chosen, mode: decision.mode },
+    },
+    ctx,
+  );
+  return chosen;
+}
+
+/**
  * Creates (or links) inventory items for the given PO-import lines and maps
  * each line + saves vendor_item_mappings. Moved verbatim from
  * `createItemsFromPoLinesAction`; see that action for the calling web UI.
@@ -213,7 +347,25 @@ export async function createItemsFromPoLines(
   deps: CreateItemsFromPoLinesDeps,
   input: CreateItemsFromPoLinesInput,
 ): Promise<{ created: number; mapped: number; linked: number; skipped: number }> {
-  const { supabase, organizationId, inventorySvc, mappingsSvc } = deps;
+  const { supabase, organizationId, inventorySvc, mappingsSvc, ctx } = deps;
+
+  // ── Sports identity resolution (Task 14) ──────────────────────────────────
+  // Resolved ONCE per import: the category is import-wide, so the tracking
+  // profile is too. For every org that has never configured a Sports
+  // subcategory this is QUANTITY / 'none' and every branch below is inert.
+  const sportsEnabled = ctx.enabledModules.has('sports');
+  const profileCache: TrackingProfileCache = new Map();
+  const importProfile = await resolveTrackingProfile(
+    ctx,
+    input.categoryId ?? null,
+    profileCache,
+  );
+  const variantDeps: ResolveLineVariantDeps = {
+    groups: new ProductGroupsService(ctx),
+    supabase,
+    organizationId,
+    sportsEnabled,
+  };
 
   // Resolve a primary_location_id for the new items. Prefer the location the
   // user explicitly chose (verified to belong to this org + the destination
@@ -300,11 +452,13 @@ export async function createItemsFromPoLines(
   const { data: lines, error: lErr } = await supabase
     .from('po_import_lines')
     // Hand-written column list: the create path cannot see a column that is
-    // not named here, so the 0301 variant columns are added even though this
-    // task does not consume them yet — Task 14's group-first matching reads
-    // them off exactly this row, and a missing name would fail silently.
+    // not named here, so the 0301 variant columns are named explicitly —
+    // Task 14's group-first matching reads them off exactly this row, and a
+    // missing name would fail silently. `mapping_confidence` was the one 0301
+    // column Task 13 left out; without it the confidence gate below reads
+    // undefined and never fires.
     .select(
-      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, suggested_group_id',
+      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, suggested_group_id, mapping_confidence',
     )
     .eq('po_import_id', input.poImportId)
     .in('id', input.lineIds);
@@ -326,11 +480,65 @@ export async function createItemsFromPoLines(
     const vendorProductNumber = (l.vendor_product_number as string | null) ?? null;
     const auxiliaryNumber = (l.auxiliary_number as string | null) ?? null;
 
-    const decision = input.decisions?.[l.id as string] ?? { mode: 'create' };
+    let decision: { mode: 'create' | 'use_existing' | 'skip'; itemId?: string } =
+      input.decisions?.[l.id as string] ?? { mode: 'create' };
 
     if (decision.mode === 'skip') {
       skipped++;
       continue;
+    }
+
+    // ── Group-first, deterministic identity resolution ──────────────────────
+    // Only for lines that will CREATE an item. A `use_existing` line points at
+    // an item whose identity a human already settled, and resolving it against
+    // THIS import's category would block a perfectly good link on an attribute
+    // the existing item already carries. An unconfirmed column mapping on such
+    // a line is still refused — by approve(), which every path funnels through.
+    // Non-sports lines resolve to 'ready' and change nothing either way.
+    const overrides = input.variantOverrides?.[l.id as string];
+    const variantLine: PoImportVariantLine = {
+      id: l.id as string,
+      line_number: l.line_number as number,
+      description: (l.description as string | null) ?? null,
+      qty_ordered_original: (l.qty_ordered_original as number | null) ?? null,
+      vendor_product_number: vendorProductNumber,
+      // The reviewer's on-screen fix wins over what the document said; the
+      // document's own text is preserved in variant_size_original below.
+      variant_size: overrides?.size ?? (l.variant_size as string | null) ?? null,
+      // Normalized at the point of USE, never at the point of storage: the
+      // column keeps whatever the document said (requirements: "preserve
+      // source values"), and an unrecognized system reads as MISSING here so
+      // the size-system gate below fires instead of a junk value riding into
+      // the identity key.
+      variant_size_system: asSizeSystem(
+        overrides?.sizeSystem ?? (l.variant_size_system as string | null),
+      ),
+      variant_width: (l.variant_width as string | null) ?? null,
+      variant_fit: (l.variant_fit as string | null) ?? null,
+      variant_color: (l.variant_color as string | null) ?? null,
+      jersey_number: overrides?.jerseyNumber ?? (l.jersey_number as string | null) ?? null,
+      player_name: (l.player_name as string | null) ?? null,
+      group_hint: (l.group_hint as string | null) ?? null,
+      mapping_confidence: (l.mapping_confidence as number | null) ?? null,
+    };
+    let resolvedGroupId: string | null = null;
+    if (decision.mode === 'create') {
+      const resolution = await resolveLineVariant(variantDeps, variantLine, importProfile);
+      resolvedGroupId = await settleGroupDecision(
+        ctx,
+        resolution,
+        variantLine,
+        input.groupDecisions?.[l.id as string],
+      );
+
+      // An EXACT variant-key hit inside an already-resolved group is not a
+      // guess — it is the same product, and creating a second row for it would
+      // leave two variants sharing one key (the ambiguity the resolver refuses
+      // later). Route it through the use_existing branch so the charter rules
+      // still apply.
+      if (resolution.result === 'receive_into_existing_variant' && resolution.variantItemId) {
+        decision = { mode: 'use_existing', itemId: resolution.variantItemId };
+      }
     }
 
     let resolvedItemId: string;
@@ -423,8 +631,13 @@ export async function createItemsFromPoLines(
       // charter + identity so we can honor the SELECTED charter (below).
       const { data: existing, error: chkErr } = await supabase
         .from('inventory_items')
+        // A charter sibling is the SAME product under a different owner, so it
+        // must carry the same identity: the group and variant columns are named
+        // here too, or the copy reads undefined and the sibling lands ungrouped
+        // — invisible to the roll-up and to the next import's matcher. One
+        // literal, never a concatenation: PostgREST's typing reads the string.
         .select(
-          'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type',
+          'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
         )
         .eq('organization_id', organizationId)
         .eq('id', decision.itemId)
@@ -492,6 +705,18 @@ export async function createItemsFromPoLines(
               'product',
             customFields: {},
             status: 'active',
+            // Identity travels with the sibling. `variant_key` is deliberately
+            // NOT copied — InventoryService.create recomputes it from these
+            // attributes, so the key can only ever be server-derived.
+            groupId: (existing.group_id as string | null) ?? null,
+            variantSize: (existing.variant_size as string | null) ?? null,
+            variantSizeOriginal: (existing.variant_size_original as string | null) ?? null,
+            variantSizeSystem: asSizeSystem(existing.variant_size_system as string | null),
+            variantWidth: (existing.variant_width as string | null) ?? null,
+            variantFit: (existing.variant_fit as string | null) ?? null,
+            variantColor: (existing.variant_color as string | null) ?? null,
+            jerseyNumber: (existing.jersey_number as string | null) ?? null,
+            playerName: (existing.player_name as string | null) ?? null,
             },
             // Born from an inbound PO at qty 0 → hidden ("Expected") until
             // the first receipt clears the flag (migration 0277 trigger).
@@ -535,12 +760,29 @@ export async function createItemsFromPoLines(
         supplierId: input.vendorId,
         warehouseId: input.warehouseId,
         charterId,
-        categoryId: null,
+        categoryId: input.categoryId ?? null,
         primaryLocationId,
+        // The category profile stamps the real value server-side; 'none' is
+        // only the pre-sports default for a category with no mode.
         trackingType: 'none',
         itemType: input.itemType ?? 'product',
         customFields: {},
         status: 'active',
+        // Phase 5: variant identity resolved above. groupId is only ever set
+        // from an EXACT key hit or an explicitly accepted candidate, and
+        // variant_key is recomputed inside create() — never passed in.
+        groupId: resolvedGroupId,
+        variantSize: variantLine.variant_size,
+        variantSizeOriginal:
+          (l.variant_size_original as string | null) ??
+          (l.variant_size as string | null) ??
+          variantLine.variant_size,
+        variantSizeSystem: asSizeSystem(variantLine.variant_size_system),
+        variantWidth: variantLine.variant_width,
+        variantFit: variantLine.variant_fit,
+        variantColor: variantLine.variant_color,
+        jerseyNumber: variantLine.jersey_number,
+        playerName: variantLine.player_name,
         },
         // Born from an inbound PO at qty 0 → hidden ("Expected") until
         // the first receipt clears the flag (migration 0277 trigger).

@@ -44,9 +44,18 @@ import {
   type PreviewItem,
 } from '@/components/po-imports/stock-impact-preview';
 
+import { MappingConfirmation } from '@/components/po-imports/mapping-confirmation';
+
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
+import {
+  BLOCKING_LINE_RESULTS,
+  LINE_RESULT_LABELS,
+  type LineResult,
+} from '@stockpilot/core';
+
 import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports';
+import type { LineResolution } from '@/server/services/po-imports-variants';
 import { HelpTip } from '@/components/onboarding/help-tip';
 
 // createdAt drives the match dropdown's SKU-dedupe (oldest row wins); the
@@ -71,6 +80,19 @@ interface Props {
   items: Item[];
   /** AI-extracted expected delivery date (YYYY-MM-DD) prefilled into the picker. */
   defaultExpectedAt?: string | null;
+  /**
+   * Server-resolved review verdict per line id (Task 14). Optional so the
+   * component still renders for callers that predate it — an absent entry
+   * reads as 'ready', which is exactly what every non-sports line resolves to.
+   */
+  resolutions?: Record<string, LineResolution>;
+  /**
+   * Categories the new items may be filed under. The category is what decides
+   * the tracking profile — and therefore whether a line becomes a sports
+   * group/variant at all — so it is chosen in the create-items modal, never
+   * inferred.
+   */
+  categories?: Array<{ id: string; name: string; sportsSubcategoryKey: string | null }>;
 }
 
 /**
@@ -84,6 +106,27 @@ interface Props {
 const CHARTER_KEEP = '__keep';
 const CHARTER_GENERIC = '__none';
 
+/**
+ * Human-readable variant attributes for the review table's Variant cell.
+ *
+ * Reads the LINE's own columns, not the resolution: what the document said is
+ * what a reviewer needs to see, whether or not it matched anything. The
+ * uniform number is labelled "#", never "Serial" — the requirements forbid
+ * that field ever being presented as a serial.
+ */
+function variantLabel(l: PoImportLineRow): string {
+  const parts = [
+    l.jersey_number ? `#${l.jersey_number}` : null,
+    l.variant_size
+      ? [l.variant_size, l.variant_size_system].filter(Boolean).join(' ')
+      : null,
+    l.variant_width,
+    l.variant_fit,
+    l.variant_color,
+  ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
 export function PoImportDetail({
   header,
   lines,
@@ -93,6 +136,8 @@ export function PoImportDetail({
   locations,
   items,
   defaultExpectedAt,
+  resolutions,
+  categories,
 }: Props) {
   const router = useRouter();
   const [vendorId, setVendorId] = React.useState<string>(header.vendor_id ?? '');
@@ -243,6 +288,16 @@ export function PoImportDetail({
   }
 
   function openConfirm() {
+    // An unresolved LINE is checked before the shipment fields: a line whose
+    // identity is ambiguous cannot be imported at any warehouse, so telling
+    // the user to pick a location first would be busywork ahead of the real
+    // blocker. Requirements: "ambiguous -> review, never auto-merge".
+    if (blockedLines.length > 0) {
+      toast.error(
+        `${blockedLines.length} line(s) need a decision first — see the Result column. Nothing is merged automatically.`,
+      );
+      return;
+    }
     // Inline field validation (pattern #20). The location is REQUIRED: when
     // the chosen warehouse has sites, one must be picked; when it has none,
     // approve stays blocked until a site is added — no silent fallback.
@@ -317,6 +372,17 @@ export function PoImportDetail({
 
   const canApprove =
     header.status === 'parsed' || header.status === 'needs_review';
+
+  // Lines whose verdict is an OPEN QUESTION — an ambiguous match, a possible
+  // duplicate, a missing required attribute, a serial mismatch, or an
+  // unconfirmed column mapping. Requirements: "ambiguous -> review, never
+  // auto-merge"; approval stays blocked until each one is resolved. A skipped
+  // line is not imported, so it cannot block.
+  const blockedLines = lines.filter((l) => {
+    if (overrides[l.id]?.skip === true) return false;
+    const r = resolutions?.[l.id]?.result;
+    return r != null && BLOCKING_LINE_RESULTS.has(r);
+  });
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const preview = React.useMemo(
@@ -668,6 +734,22 @@ export function PoImportDetail({
         );
       })()}
 
+      <MappingConfirmation
+        poImportId={header.id}
+        lines={lines}
+        editable={canApprove}
+        onConfirmed={() => router.refresh()}
+      />
+
+      {blockedLines.length > 0 && canApprove && (
+        <div className="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs">
+          <strong>{blockedLines.length}</strong>{' '}
+          {`${
+            blockedLines.length === 1 ? 'line needs' : 'lines need'
+          } a decision before this import can be approved — see the Result column. Nothing is merged or linked automatically.`}
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
           <TableHeader>
@@ -675,9 +757,12 @@ export function PoImportDetail({
               <TableHead className="w-12">#</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Vendor #</TableHead>
+              <TableHead>Group</TableHead>
+              <TableHead>Variant</TableHead>
               <TableHead>Qty / UOM</TableHead>
               <TableHead>Cost</TableHead>
               <TableHead>Type</TableHead>
+              <TableHead>Result</TableHead>
               <TableHead>Internal item</TableHead>
               <TableHead className="w-20 text-right">Skip</TableHead>
             </TableRow>
@@ -706,8 +791,16 @@ export function PoImportDetail({
                     : conf < 0.85
                       ? 'bg-warning/5'
                       : '';
+              // Task 14 verdict. Absent = a caller that predates the resolver;
+              // 'ready' is what every non-sports line resolves to anyway.
+              const resolution = resolutions?.[l.id];
+              const result: LineResult = resolution?.result ?? 'ready';
+              const isBlocked = o.skip !== true && BLOCKING_LINE_RESULTS.has(result);
               return (
-                <TableRow key={l.id} className={confClass}>
+                <TableRow
+                  key={l.id}
+                  className={isBlocked ? 'bg-destructive/5' : confClass}
+                >
                   <TableCell className="tabular-nums">{l.line_number}</TableCell>
                   <TableCell className="max-w-[280px] truncate">
                     {l.description}
@@ -728,6 +821,15 @@ export function PoImportDetail({
                   <TableCell className="font-mono text-xs">
                     {l.vendor_item_number ?? '—'}
                   </TableCell>
+                  <TableCell className="max-w-[180px] truncate text-xs">
+                    {resolution?.groupName ??
+                      (resolution && resolution.groupCandidates.length > 0
+                        ? `${resolution.groupCandidates.length} candidate${
+                            resolution.groupCandidates.length === 1 ? '' : 's'
+                          }`
+                        : (l.group_hint ?? '—'))}
+                  </TableCell>
+                  <TableCell className="text-xs">{variantLabel(l)}</TableCell>
                   <TableCell className="tabular-nums">
                     {l.qty_ordered_original} {l.uom_original}
                   </TableCell>
@@ -738,6 +840,35 @@ export function PoImportDetail({
                     <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide">
                       {l.line_type}
                     </span>
+                  </TableCell>
+                  <TableCell className="max-w-[200px]">
+                    {/* Never a bare Valid/Invalid — the cell says what will
+                        happen, or what question is still open. */}
+                    <span
+                      className={
+                        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ' +
+                        (isBlocked
+                          ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                          : 'border-border text-muted-foreground')
+                      }
+                      title={resolution?.message ?? undefined}
+                    >
+                      {LINE_RESULT_LABELS[result]}
+                    </span>
+                    {isBlocked && resolution?.message && (
+                      <p className="text-muted-foreground mt-1 text-[10.5px] leading-snug">
+                        {resolution.message}
+                      </p>
+                    )}
+                    {isBlocked && resolution && resolution.groupCandidates.length > 0 && (
+                      <ul className="text-muted-foreground mt-1 space-y-0.5 text-[10.5px]">
+                        {resolution.groupCandidates.map((c) => (
+                          <li key={c.id} className="truncate">
+                            · {c.name}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </TableCell>
                   <TableCell>
                     {l.line_type === 'inventory' ? (
@@ -909,6 +1040,8 @@ export function PoImportDetail({
         locationId={locationId || null}
         itemType={createItemType}
         lines={createLines}
+        categories={categories ?? []}
+        resolutions={resolutions}
         onSuccess={(counts) => {
           const parts: string[] = [];
           if (counts.created > 0)

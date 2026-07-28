@@ -367,6 +367,35 @@ export class ProductGroupsService {
   }
 
   /**
+   * The variants under one group whose identity key EXACTLY equals `variantKey`.
+   *
+   * Exact-equality only — this is the deterministic half of matching, and the
+   * caller branches on the COUNT: zero means a new variant, one means receive
+   * into it, and more than one is an ambiguity a human has to settle. It can
+   * legitimately return more than one row because `variant_key` carries no
+   * uniqueness constraint (a pre-sports item hand-linked to a group, or two
+   * rows created before 0298, can collide), which is exactly why nothing here
+   * picks a winner.
+   */
+  async variantsByKey(
+    groupId: string,
+    variantKey: string,
+  ): Promise<Array<{ id: string; name: string; sku: string }>> {
+    assertModuleEnabled(this.ctx, 'sports');
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, name, sku')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('group_id', groupId)
+      .eq('variant_key', variantKey)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(10);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data ?? []) as unknown as Array<{ id: string; name: string; sku: string }>;
+  }
+
+  /**
    * Advisory near-miss candidates for the review UI. Suggestion, never a link
    * (the 0233 discipline). Returns at most 5, ordered by how many identifying
    * attributes agree.

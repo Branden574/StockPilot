@@ -352,3 +352,55 @@ describe('ProductGroupsService.update', () => {
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 });
+
+describe('ProductGroupsService.variantsByKey', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('scopes the exact-key lookup to the org, the group and live rows', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', name: 'Pegasus 41 US10', sku: 'SKU-1' }],
+        error: null,
+      },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variantsByKey(
+      'grp-1',
+      'size=10|system=us_mens',
+    );
+    expect(rows).toEqual([{ id: 'item-1', name: 'Pegasus 41 US10', sku: 'SKU-1' }]);
+
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const flat = args.flat();
+    expect(flat).toContainEqual('org-test');
+    expect(flat).toContainEqual('grp-1');
+    expect(flat).toContainEqual('size=10|system=us_mens');
+    expect(stub.chains.get('inventory_items.select')).toContain('is');
+  });
+
+  it('returns every colliding row rather than picking a winner', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'a', name: 'A', sku: 'SKU-A' },
+          { id: 'b', name: 'B', sku: 'SKU-B' },
+        ],
+        error: null,
+      },
+    });
+    const rows = await new ProductGroupsService(sportsCtx(stub.client)).variantsByKey(
+      'grp-1',
+      'size=10',
+    );
+    expect(rows).toHaveLength(2);
+  });
+
+  it('is gated on the sports module', async () => {
+    const stub = makeSupabaseStub({ 'inventory_items.select': { data: [], error: null } });
+    const noSports = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new ProductGroupsService(noSports).variantsByKey('grp-1', 'size=10'),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+});

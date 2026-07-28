@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { AMBIGUOUS_COLUMN_MEANINGS } from '../sports/import-results';
+
 export const poImportLineTypeSchema = z.enum([
   'inventory',
   'tax',
@@ -175,3 +177,22 @@ export const approvePoImportSchema = z.object({
     .default([]),
 });
 export type ApprovePoImportInput = z.infer<typeof approvePoImportSchema>;
+
+/**
+ * The reviewer's answer to an ambiguous COLUMN mapping (Task 14).
+ *
+ * Shared, not server-only, because the confirmation step ships on web and
+ * Expo: both must offer exactly the meanings the server will accept, and a
+ * picker that offers a seventh option the server rejects is the drift this
+ * package exists to prevent.
+ *
+ * Every flagged line needs an EXPLICIT meaning. There is no default and no
+ * "leave it as the AI guessed" — that is the whole point of the step.
+ */
+export const confirmLineMappingsSchema = z.object({
+  poImportId: z.string().uuid(),
+  decisions: z
+    .record(z.string().uuid(), z.enum(AMBIGUOUS_COLUMN_MEANINGS))
+    .refine((d) => Object.keys(d).length > 0, 'Confirm at least one column mapping.'),
+});
+export type ConfirmLineMappingsInput = z.infer<typeof confirmLineMappingsSchema>;
