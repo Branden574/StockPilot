@@ -92,6 +92,8 @@ export function FilterSheet({
   showGenericCharter = true,
 }: Props) {
   const { c, mode } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const headerStacked = shouldStackRow(fontScale);
 
   function toggleIn(list: string[], id: string): string[] {
     return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
@@ -142,17 +144,28 @@ export function FilterSheet({
             </View>
           ) : null}
 
-          <View style={styles.header}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          {/* Title and action are two non-shrinking mono runs on one
+              `space-between` row: at accessibility sizes they meet in the
+              middle and CLEAR ALL — the only way to reset the filters — walks
+              off the right edge ("FILTERSCLEAR A"). Past the shared threshold
+              the action drops to its own line, where it always fits. Neither
+              label is capped: both are chrome, but they are also the sheet's
+              only labels, and the box fix alone is enough. */}
+          <View style={[styles.header, headerStacked && styles.headerStacked]}>
+            <View style={styles.headerTitle}>
               <SlidersHorizontal size={16} color={c.ink} strokeWidth={1.6} />
-              <Mono size={13} tracking={0.08} style={{ fontFamily: FONT.display, color: c.ink }}>
+              <Mono
+                size={13}
+                tracking={0.08}
+                style={{ fontFamily: FONT.display, color: c.ink, flexShrink: 1, minWidth: 0 }}
+              >
                 FILTERS
               </Mono>
             </View>
             <Pressable
               onPress={() => onChange(EMPTY_FILTER_STATE)}
               hitSlop={8}
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, flexShrink: 1, minWidth: 0 })}
             >
               <Mono size={11.5} tracking={0.06} color={c.ink4}>
                 CLEAR ALL
@@ -481,6 +494,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+  // Stacked, CLEAR ALL sits under FILTERS on its own full-width line.
+  // `flex-start` keeps its tap target on the label rather than the whole row.
+  headerStacked: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  headerTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 1,
+    minWidth: 0,
   },
 });
 

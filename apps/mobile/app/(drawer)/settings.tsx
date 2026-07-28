@@ -84,6 +84,13 @@ export default function Settings() {
   const enabledModules = useEnabledModules();
   const showIntegrations = enabledModules.has('integrations') && isAdmin;
   const navigation = useNavigation();
+  const { fontScale } = useWindowDimensions();
+  // The identity Card is a fixed three-up row — Avatar, name/email column,
+  // OWNER Pill — and the name is the only shrinkable part, so past the shared
+  // threshold it starves and iOS breaks the glyph run ("StockPil / ot").
+  // Stacking hands the name the card's full interior; same threshold as
+  // SettingRow below and every other stacking decision in this pass.
+  const identityStacked = shouldStackRow(fontScale);
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [pending, setPending] = React.useState(false);
@@ -184,9 +191,12 @@ export default function Settings() {
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
         showsVerticalScrollIndicator={false}
       >
-        <Card padding={16} style={styles.identity}>
+        <Card
+          padding={16}
+          style={identityStacked ? [styles.identity, styles.identityStacked] : styles.identity}
+        >
           <Avatar size={52} />
-          <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={identityStacked ? styles.identityColStacked : styles.identityCol}>
             <Body size={16} style={{ fontFamily: FONT.display }}>
               {fullName}
             </Body>
@@ -194,10 +204,15 @@ export default function Settings() {
               {profile.email ?? ''}
             </Mono>
           </View>
-          {/* flexShrink: the role badge is a fixed string beside a name and an
-              email that both need width; without it the Pill claims its full
-              intrinsic width and starves the identity column beside it. */}
-          <Pill status="ok" style={{ flexShrink: 1 }}>OWNER</Pill>
+          {/* Below the threshold the badge sits beside the name and needs
+              flexShrink, or it claims its full intrinsic width and starves the
+              identity column. Past it the badge owns its own line, where
+              shrinking it would only wrap a label that already fits. */}
+          {identityStacked ? (
+            <Pill status="ok">OWNER</Pill>
+          ) : (
+            <Pill status="ok" style={{ flexShrink: 1 }}>OWNER</Pill>
+          )}
         </Card>
 
         <Section label="ACCOUNT">
@@ -636,6 +651,18 @@ const styles = StyleSheet.create({
     gap: 14,
     marginTop: 14,
   },
+  // Stacked, the Avatar, the name/email column and the OWNER badge each take a
+  // line of their own, so the name is measured against the card's full
+  // interior rather than what the badge leaves behind. `flex-start` keeps the
+  // 52pt Avatar circular and the badge pill-width instead of stretching both.
+  identityStacked: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  identityCol: { flex: 1, minWidth: 0 },
+  // In a column parent `flex: 1` would divide HEIGHT; `stretch` gives the
+  // width. Same correction as inventory.tsx's `nameColStacked`.
+  identityColStacked: { alignSelf: 'stretch', minWidth: 0 },
   signoutBar: {
     marginTop: 22,
     paddingHorizontal: 4,

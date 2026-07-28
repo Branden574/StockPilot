@@ -1,7 +1,15 @@
 import * as React from 'react';
-import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+  type ViewStyle,
+} from 'react-native';
 import { ChevronRight, type LucideIcon } from 'lucide-react-native';
 
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -14,6 +22,14 @@ import { useTheme } from '@/lib/use-theme';
  * row grows and the text column yields correctly at any text size. The only
  * defect was the hardcoded `numberOfLines={1}`, which threw the content away
  * instead of wrapping it, so the default is now 2.
+ *
+ * The `trailing` slot is the one part that does NOT yield: it holds badges
+ * like the Home screen's Bundles Pill, which have no break opportunity and so
+ * take their full intrinsic width out of the body's share. Measured on a 402pt
+ * device, that leaves the Bundles subtitle ~150pt at AX3 — under the width
+ * "Distribute" needs, so iOS breaks the glyph run ("Distribu / te kits…").
+ * Past the shared `shouldStackRow` threshold the badge moves under the
+ * subtitle and the body reclaims it. No cap: the subtitle is body copy.
  */
 export function Row({
   leading,
@@ -36,8 +52,10 @@ export function Row({
   numberOfLines?: number;
 }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stacked = shouldStackRow(fontScale) && !!trailing;
   const inner = (
-    <View style={[styles.row, style]}>
+    <View style={[styles.row, stacked && styles.rowStacked, style]}>
       {leading}
       <View style={styles.body}>
         <Text style={[styles.title, { color: c.ink }]} numberOfLines={numberOfLines}>
@@ -51,8 +69,9 @@ export function Row({
             {subtitle}
           </Text>
         ) : null}
+        {stacked ? <View style={styles.trailingStacked}>{trailing}</View> : null}
       </View>
-      {trailing}
+      {stacked ? null : trailing}
       {chevron ? (
         <ChevronRight size={16} color={c.ink4} strokeWidth={1.5} />
       ) : null}
@@ -133,9 +152,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     minHeight: 56,
   },
+  // Once the trailing badge sits inside the body the row is tall, and centring
+  // pins a 40pt thumb and the chevron to the middle of a three-line block.
+  // Top-align them so they read against the title, as they do at every other
+  // text size.
+  rowStacked: { alignItems: 'flex-start' },
   body: {
     flex: 1,
     minWidth: 0,
+  },
+  // `flexWrap` so a badge wider than the reclaimed column drops rather than
+  // squeezes; `flex-start` keeps it badge-width, not column-width.
+  trailingStacked: {
+    marginTop: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
   },
   title: {
     fontFamily: FONT.display,

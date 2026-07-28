@@ -20,6 +20,7 @@ import {
   recordAnnouncementsSeen,
   type AnnouncementItem,
 } from '@/lib/announcements';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import {
   isAnyTourVisible,
@@ -53,7 +54,11 @@ let shownForUserId: string | null = null;
 export function WhatsNew() {
   const { c } = useTheme();
   const insets = useSafeAreaInsets();
-  const { height: winH } = useWindowDimensions();
+  const { height: winH, fontScale } = useWindowDimensions();
+  // The CTA pill and Done/Next are chrome and capped, but even capped they
+  // outgrow one line together — and the dots have to keep a line they own
+  // rather than sharing one the buttons have already claimed.
+  const actionsStacked = shouldStackRow(fontScale);
   const router = useRouter();
   const { user } = useAuth();
   const uid = user?.id ?? null;
@@ -188,7 +193,11 @@ export function WhatsNew() {
             <View style={styles.head}>
               <View style={styles.eyebrow}>
                 <Gift size={14} color={c.ink} />
-                <Body size={12} color={c.ink3}>
+                {/* The eyebrow BOX already yields (`flex: 1, minWidth: 0`), but
+                    an RN Text defaults to `flexShrink: 0`, so the label kept
+                    its full intrinsic width and ran out under the X. Shrinking
+                    the Text is what makes the box's yield reach the glyphs. */}
+                <Body size={12} color={c.ink3} style={styles.eyebrowLabel}>
                   What&apos;s new · {item.date}
                 </Body>
               </View>
@@ -211,7 +220,7 @@ export function WhatsNew() {
               </Body>
             </ScrollView>
 
-            <View style={styles.actions}>
+            <View style={[styles.actions, actionsStacked && styles.actionsStackedStyle]}>
               {items.length > 1 ? (
                 <View style={styles.dots}>
                   {items.map((_, i) => (
@@ -224,7 +233,7 @@ export function WhatsNew() {
                     />
                   ))}
                 </View>
-              ) : (
+              ) : actionsStacked ? null : (
                 <View style={styles.spacer} />
               )}
               {showCta && cta ? (
@@ -276,6 +285,7 @@ const styles = StyleSheet.create({
   // Done/Next stay reachable however long the announcement is.
   head: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
   eyebrow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  eyebrowLabel: { flexShrink: 1, minWidth: 0 },
   scroll: { flexShrink: 1 },
   title: { marginTop: 10 },
   // lineHeight stays PINNED at 19, deliberately — see the twin in
@@ -292,8 +302,35 @@ const styles = StyleSheet.create({
     marginTop: 16,
     flexShrink: 0,
   },
+  // Stacked, the dots take the first line and each button the next, so nothing
+  // is painted over anything else. `stretch` would make the pills full-width
+  // blocks with left-hugging labels, so hold them at their natural width.
+  //
+  // `flexWrap: 'nowrap'` is load-bearing: `actions` sets `wrap` for the ROW
+  // case, and once the direction is column that same `wrap` flows the children
+  // down and then into a SECOND COLUMN against the sheet's bounded height —
+  // which put Next back alongside the dots, the exact overlap this fixes.
+  actionsStackedStyle: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    flexWrap: 'nowrap',
+    gap: 10,
+  },
   spacer: { flex: 1 },
-  dots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  // `flexGrow`/`flexBasis: 'auto'`, NOT `flex: 1`. RN's `flex: 1` shorthand
+  // sets `flexBasis: 0`, so this box measured as zero-width during line
+  // breaking while its fixed-width dot children rendered anyway — which is why
+  // the dots painted UNDER the CTA pill instead of pushing it right. An `auto`
+  // basis measures the dots, so they claim their own width and still grow to
+  // push the buttons to the far edge.
+  dots: {
+    flexGrow: 1,
+    flexShrink: 0,
+    flexBasis: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   dot: { height: 5, borderRadius: 999 },
   cta: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   btn: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
