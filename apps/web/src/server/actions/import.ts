@@ -481,12 +481,14 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
     // this one becomes visible within one batch instead of never.
     //
     // RESIDUAL, stated rather than hidden: within a single batch, up to
-    // `CONCURRENCY - 1` rows can be reserved against a count that a concurrent
-    // request is already invalidating, so two simultaneous imports can still
-    // overshoot by that in-flight window (~5 items) before the next refresh
-    // sees it. That is the same check-then-insert class the shipped serial code
-    // had — its window was one row instead of five — and closing it properly
-    // needs DB-level enforcement, which does not exist for plan limits today.
+    // `CONCURRENCY` rows can be reserved against a count that a concurrent
+    // request is already invalidating — two imports that both refresh at the
+    // same count with headroom equal to the batch width each write a full
+    // batch, so the worst-case joint overshoot is one batch (6 items) before
+    // the next refresh sees it. That is the same check-then-insert class the
+    // shipped serial code had — its window was one row instead of a batch —
+    // and closing it properly needs DB-level enforcement, which does not
+    // exist for plan limits today.
     for (let start = 0; start < planned.length; start += CONCURRENCY) {
       // Between batches only, and with nothing in flight — `refresh()` rebases
       // on a count that already includes this request's own inserts, so an

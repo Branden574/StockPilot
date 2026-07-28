@@ -841,7 +841,9 @@ describe('importItemsAction — the plan limit survives concurrency', () => {
     // same check-then-insert class the shipped SERIAL code had (its window was
     // one row); closing it fully needs DB-level enforcement, which plan limits
     // do not have.
-    const IN_FLIGHT_WINDOW = 5;
+    // Worst case is one full batch: two imports refreshing at the same count
+    // with batch-width headroom each write a whole batch of 6.
+    const IN_FLIGHT_WINDOW = 6;
     expect(landed).toBeGreaterThanOrEqual(20);
     expect(landed).toBeLessThanOrEqual(20 + IN_FLIGHT_WINDOW);
 
