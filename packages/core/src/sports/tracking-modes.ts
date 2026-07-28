@@ -43,6 +43,21 @@ export function trackingTypeForMode(mode: TrackingMode): TrackingTypeValue {
   return MODE_TO_TRACKING_TYPE[mode];
 }
 
+/**
+ * Human display label for a tracking mode. UI-only — never used for a
+ * decision, so a copy tweak here can never change enforcement (that lives in
+ * `MODE_TO_TRACKING_TYPE` / `trackingTypeForMode` above).
+ */
+export const TRACKING_MODE_LABELS: Record<TrackingMode, string> = {
+  QUANTITY: 'Quantity',
+  QUANTITY_BY_VARIANT: 'Quantity by variant',
+  NUMBERED_VARIANT: 'Numbered variant',
+  SERIALIZED: 'Serialized',
+  OPTIONAL_SERIALIZED: 'Optional serial',
+  INDIVIDUALLY_TAGGED: 'Individually tagged',
+  LOT_TRACKED: 'Lot tracked',
+};
+
 /** True when the mode expects more than one variant row under one group. */
 export function modeHasVariants(mode: TrackingMode): boolean {
   return mode === 'QUANTITY_BY_VARIANT' || mode === 'NUMBERED_VARIANT';

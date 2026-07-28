@@ -10,6 +10,13 @@ import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
+import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import {
+  EMPTY_SPORTS_GROUP_FIELDS,
+  GROUP_LEVEL_COLOR_SUBCATEGORIES,
+  SportsFields,
+  type SportsGroupFieldValues,
+} from '@/components/inventory/sports-fields';
 // Dynamic import + conditional render: IsbnScanner pulls in the
 // Dialog tree and BarcodeDetector usage; only ships in the bundle
 // when the user actually opens the scanner. ssr:false because the
@@ -43,6 +50,7 @@ import { generateSku, cn } from '@/lib/utils';
 import {
   bulkCreateSizedVariantsAction,
   createItemAction,
+  findGroupCandidatesAction,
   updateItemAction,
 } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
@@ -55,12 +63,18 @@ import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
   APPAREL_ALPHA_SIZES,
+  DEFAULT_SUBCATEGORY_PROFILES,
+  SPORTS_ERROR_META,
+  buildVariantKey,
   createItemSchema,
   formatRackLabel,
   normalizeRackFields,
   type ApparelAlphaSize,
+  type CountingUnit,
   type CreateItemInput,
   type CustomFieldDefinition,
+  type SportsSubcategoryKey,
+  type TrackingMode,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
@@ -69,8 +83,56 @@ import {
 // native fallback all offer the SAME list. There used to be three private
 // copies; the native one had already drifted to the 14-row union of the
 // apparel_alpha scale, which offers XXL and 2XL as two chips for one shirt.
+//
+// This is now the FALLBACK vocabulary only (Sports Task 11): a category that
+// carries its own `size_scale_id` renders that scale's own ordered values
+// (`sizeScales` prop, from `size_scale_values`) instead — a shoe run is
+// '7'..'15' with halves and could never be expressed by this letter list.
 type SizeCode = ApparelAlphaSize;
 const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
+
+/** Display label for each slot buildVariantKey may emit (variant-keys.ts). */
+const VARIANT_KEY_SLOT_LABELS: Record<string, string> = {
+  number: '#',
+  player: 'Player',
+  size: 'Size',
+  system: 'System',
+  width: 'Width',
+  fit: 'Fit',
+  color: 'Color',
+};
+
+/**
+ * Inverse of `esc()` in variant-keys.ts — undoes the '\\' / '\|' / '\=' escape
+ * so a value that happened to contain a delimiter reads back correctly in the
+ * preview. DISPLAY ONLY: this never feeds back into anything persisted, so an
+ * exotic value (a size containing a literal '|') can at worst mis-render this
+ * one label for a moment — the server's own recomputed key is authoritative.
+ */
+function unescapeVariantKeySlot(v: string): string {
+  return v.replace(/\\=/g, '=').replace(/\\\|/g, '|').replace(/\\\\/g, '\\');
+}
+
+/**
+ * Turn a `buildVariantKey(...)` result into a human label for the grouping
+ * preview ("#07 · Size M"), so the preview is genuinely DERIVED from the core
+ * builder rather than a hand-rolled re-implementation that could drift from
+ * it. Returns null for the 'default' sentinel (no variant attributes at all).
+ */
+function humanizeVariantKey(key: string): string | null {
+  if (key === 'default') return null;
+  return key
+    .split('|')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq < 0) return pair;
+      const slotKey = pair.slice(0, eq);
+      const value = unescapeVariantKeySlot(pair.slice(eq + 1));
+      const label = VARIANT_KEY_SLOT_LABELS[slotKey];
+      return label === '#' ? `#${value}` : label ? `${label} ${value}` : value;
+    })
+    .join(' · ');
+}
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 // HEIC + HEIF added so iPhone Safari (which ships HEIC by default
@@ -99,7 +161,21 @@ export interface ItemFormDefaults extends Partial<CreateItemInput> {
 
 interface ItemFormProps {
   defaults?: ItemFormDefaults;
-  categories: Array<{ id: string; name: string; supports_sizes?: boolean }>;
+  categories: Array<{
+    id: string;
+    name: string;
+    supports_sizes?: boolean;
+    /** Sports Task 11: resolve the tracking profile without a round trip. */
+    parent_id?: string | null;
+    tracking_mode?: TrackingMode | null;
+    sports_subcategory_key?: string | null;
+    default_unit_of_measure?: string | null;
+    size_scale_id?: string | null;
+  }>;
+  /** Ordered size values per scale id, from size_scale_values. */
+  sizeScales?: Record<string, Array<{ value: string; isHalf: boolean }>>;
+  /** True when the org has the sports module on. */
+  sportsEnabled?: boolean;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
   /** Every tag in the org. Empty array hides the Tags pill row entirely. */
@@ -168,6 +244,8 @@ interface ItemFormProps {
 export function ItemForm({
   defaults,
   categories,
+  sizeScales = {},
+  sportsEnabled = false,
   locations,
   suppliers,
   tags = [],
@@ -267,6 +345,18 @@ export function ItemForm({
       itemType: defaults?.itemType ?? itemType,
       status: defaults?.status ?? 'active',
       customFields: defaults?.customFields ?? {},
+      // Sports Task 11 variant attributes. All optional in the schema, so an
+      // omitted value here changes nothing for a non-sports item — these
+      // just seed an EDIT form's existing variant with its stored values.
+      groupId: defaults?.groupId ?? null,
+      variantSize: defaults?.variantSize ?? '',
+      variantSizeOriginal: defaults?.variantSizeOriginal ?? '',
+      variantSizeSystem: defaults?.variantSizeSystem ?? null,
+      variantWidth: defaults?.variantWidth ?? '',
+      variantFit: defaults?.variantFit ?? '',
+      variantColor: defaults?.variantColor ?? '',
+      jerseyNumber: defaults?.jerseyNumber ?? '',
+      playerName: defaults?.playerName ?? '',
     },
   });
 
@@ -341,10 +431,11 @@ export function ItemForm({
    * Size-variant selection. Only meaningful when the chosen category has
    * supports_sizes = true AND this is a create form (variants don't
    * apply when editing one existing row). Each entry holds the size
-   * code + on-hand qty for that variant.
+   * (free text — a shoe run needs '7'..'15' with halves, not just the nine
+   * apparel letters) + on-hand qty for that variant.
    */
   const [selectedSizes, setSelectedSizes] = React.useState<
-    Array<{ size: SizeCode; quantity: number }>
+    Array<{ size: string; quantity: number }>
   >([]);
   // Drop sized selections whenever the category changes. Avoids stale
   // picks sticking when the user toggles between a size-flagged
@@ -353,6 +444,160 @@ export function ItemForm({
   React.useEffect(() => {
     setSelectedSizes([]);
   }, [watchedCategoryId]);
+
+  // ── Sports tracking-profile resolution (Task 11) ──────────────────────────
+  // Client-side ONLY for rendering which fields to show and for the display
+  // preview below — the server independently re-resolves this from the
+  // category (resolveTrackingProfile, Task 8) and never trusts anything
+  // computed here (requirement 11).
+  const selectedCategory = React.useMemo(
+    () => categories.find((c) => c.id === watchedCategoryId) ?? null,
+    [categories, watchedCategoryId],
+  );
+  const parentCategory = React.useMemo(
+    () => categories.find((c) => c.id === selectedCategory?.parent_id) ?? null,
+    [categories, selectedCategory],
+  );
+  const subcategoryKey = selectedCategory?.sports_subcategory_key ?? null;
+  const profile = subcategoryKey
+    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
+    : null;
+  const effectiveMode: TrackingMode =
+    watch('trackingModeOverride') ??
+    selectedCategory?.tracking_mode ??
+    parentCategory?.tracking_mode ??
+    profile?.defaultMode ??
+    'QUANTITY';
+  const countingUnit = (selectedCategory?.default_unit_of_measure ??
+    parentCategory?.default_unit_of_measure ??
+    profile?.defaultCountingUnit ??
+    'unit') as CountingUnit;
+
+  // SPORTS_SUBCATEGORY_REQUIRED (fast, kind failure — the server enforces
+  // this too). True only when the SELECTED category is itself a Sports root:
+  // it carries no subcategory key of its own, but at least one of its
+  // children does.
+  const isSportsRootMissingSubcategory = React.useMemo(() => {
+    if (!selectedCategory || selectedCategory.sports_subcategory_key) return false;
+    return categories.some(
+      (c) => c.parent_id === selectedCategory.id && Boolean(c.sports_subcategory_key),
+    );
+  }, [categories, selectedCategory]);
+
+  // Group-identity attributes (brand/model/team/season/...). Kept OUTSIDE
+  // react-hook-form — see sports-fields.tsx's header for why registering a
+  // `productGroup.*` path would make the resolver demand a `name` the user
+  // never had a field for. Merged into the submit payload manually below,
+  // the same pattern already used here for rack number/row and crate color.
+  const [sportsGroupFields, setSportsGroupFields] =
+    React.useState<SportsGroupFieldValues>(EMPTY_SPORTS_GROUP_FIELDS);
+  function updateSportsGroupField<K extends keyof SportsGroupFieldValues>(
+    key: K,
+    value: SportsGroupFieldValues[K],
+  ) {
+    setSportsGroupFields((prev) => ({ ...prev, [key]: value }));
+  }
+  // An existing group the user explicitly picked from the preview's
+  // candidate list (never automatic — requirement 6/13).
+  const [linkedGroup, setLinkedGroup] = React.useState<{ id: string; name: string } | null>(null);
+  const [groupCandidates, setGroupCandidates] = React.useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  React.useEffect(() => {
+    setSportsGroupFields(EMPTY_SPORTS_GROUP_FIELDS);
+    setLinkedGroup(null);
+    setGroupCandidates([]);
+  }, [watchedCategoryId]);
+
+  // Debounced advisory near-miss lookup. Deliberately quiet (no request) once
+  // enough of a signal exists: mirrors ProductGroupsService.candidates()'s own
+  // early-exit so we don't fire a request the server would just return [] for.
+  React.useEffect(() => {
+    if (!sportsEnabled || !profile || isEdit || linkedGroup) {
+      setGroupCandidates([]);
+      return;
+    }
+    const { brand, model, styleNumber, team } = sportsGroupFields;
+    const hasSignal =
+      styleNumber.trim().length > 0 ||
+      (brand.trim().length > 0 && model.trim().length > 0) ||
+      team.trim().length > 0;
+    if (!hasSignal) {
+      setGroupCandidates([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      // Promise.resolve(...) rather than calling .then() directly: this is
+      // advisory UI sugar, never load-bearing, so a rejected/failed lookup
+      // should quietly leave the candidate list empty rather than surface an
+      // unhandled rejection.
+      void Promise.resolve(
+        findGroupCandidatesAction({
+          subcategoryKey: profile.key,
+          brand: sportsGroupFields.brand.trim() || undefined,
+          model: sportsGroupFields.model.trim() || undefined,
+          styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
+          colorway: sportsGroupFields.colorway.trim() || undefined,
+          team: sportsGroupFields.team.trim() || undefined,
+          league: sportsGroupFields.league.trim() || undefined,
+          season: sportsGroupFields.season.trim() || undefined,
+          homeAway: sportsGroupFields.homeAway || undefined,
+          color: sportsGroupFields.color.trim() || undefined,
+        }),
+      )
+        .then((res) => {
+          if (res?.ok) setGroupCandidates(res.data);
+        })
+        .catch(() => {
+          setGroupCandidates([]);
+        });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [sportsEnabled, profile, isEdit, linkedGroup, sportsGroupFields]);
+
+  function handleUseGroupCandidate(id: string) {
+    const candidate = groupCandidates.find((c) => c.id === id);
+    setValue('groupId', id, { shouldDirty: true });
+    setLinkedGroup({ id, name: candidate?.name ?? 'Selected group' });
+    setGroupCandidates([]);
+  }
+
+  // Size chips (existing supports_sizes bulk flow): use the category's own
+  // size scale when it has one, falling back to the nine apparel letters —
+  // a shoe run is '7'..'15' with halves and could never be a letter list.
+  const sizeChipOptions: string[] = React.useMemo(() => {
+    const scaleId = selectedCategory?.size_scale_id ?? null;
+    const scaleValues = scaleId ? sizeScales[scaleId] : undefined;
+    return scaleValues && scaleValues.length > 0
+      ? scaleValues.map((v) => v.value)
+      : [...ALL_SIZES];
+  }, [selectedCategory, sizeScales]);
+
+  // Display-only variant-identity preview (requirement: computed via the core
+  // key builder, never re-implemented). The server independently recomputes
+  // this on save (buildVariantKey in InventoryService.create) — a stale or
+  // wrong preview here can never corrupt data.
+  const colorIsGroupLevel = profile ? GROUP_LEVEL_COLOR_SUBCATEGORIES.has(profile.key) : false;
+  const variantKeyPreview = profile
+    ? buildVariantKey({
+        size: watch('variantSize'),
+        sizeSystem: watch('variantSizeSystem'),
+        width: watch('variantWidth'),
+        fit: watch('variantFit'),
+        // Mirrors SportsFields' own mapping: for jerseys/uniforms the visible
+        // "Color" input writes to sportsGroupFields.color (a GROUP slot,
+        // per buildGroupKey), so variantColor never gets a value there and
+        // must not appear in the variant-key preview either.
+        color: colorIsGroupLevel ? null : watch('variantColor'),
+        jerseyNumber: watch('jerseyNumber'),
+        playerName: watch('playerName'),
+      })
+    : 'default';
+  const variantLabel = variantKeyPreview === 'default' ? null : humanizeVariantKey(variantKeyPreview);
+  const watchedItemName = watch('name');
+  const groupNamePreview =
+    linkedGroup?.name ?? (watchedItemName?.trim() ? watchedItemName.trim() : null);
+
   const [lookingUp, setLookingUp] = React.useState(false);
 
   // Public-catalog visibility — independent of RHF (not part of the item
@@ -591,15 +836,26 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
+    // SPORTS_SUBCATEGORY_REQUIRED — fast, kind failure. The server enforces
+    // this too (resolveTrackingProfile throws on an unresolved subcategory
+    // key, and CategoriesService never assigns items to a bare Sports root),
+    // but catching it here avoids a round trip for the common mis-click.
+    if (!isEdit && isSportsRootMissingSubcategory) {
+      toast.error(SPORTS_ERROR_META.SPORTS_SUBCATEGORY_REQUIRED.title, {
+        description: SPORTS_ERROR_META.SPORTS_SUBCATEGORY_REQUIRED.explanation,
+      });
+      return;
+    }
+
     // Sized-variant create path. Triggered only when the chosen
     // category has supports_sizes = true AND the user picked at least
     // one size on a new item. Bulk inserts one row per size, then
     // routes back to the Inventory list (each variant gets its own
     // detail page so a single-item redirect would be wrong).
-    const selectedCategory = categories.find((c) => c.id === values.categoryId);
+    const selectedCategoryAtSubmit = categories.find((c) => c.id === values.categoryId);
     if (
       !isEdit &&
-      selectedCategory?.supports_sizes &&
+      selectedCategoryAtSubmit?.supports_sizes &&
       selectedSizes.length > 0
     ) {
       if (!values.categoryId || !values.warehouseId) {
@@ -765,9 +1021,36 @@ export function ItemForm({
         })();
     // When isRentalFixed is true, inject is_rental=true into the payload
     // so the item is classified as a rental asset regardless of form state.
-    const finalValues = isRentalFixed
-      ? { ...mergedValues, isRental: true }
-      : mergedValues;
+    const rentalValues = isRentalFixed ? { ...mergedValues, isRental: true } : mergedValues;
+    // Sports Task 11: attach to the group the user picked from the preview's
+    // candidate list, or ask the server to find-or-create one from the
+    // group-identity fields. Create-only — Task 18's linking tool is where an
+    // EXISTING item's group changes. `productGroup.name` defaults to the
+    // item's own name: there is no separate "product group name" input in
+    // Add Item, so the first variant created names its group after itself;
+    // renaming/merging groups is the product-groups admin surface.
+    const sportsValues =
+      !isEdit && sportsEnabled && profile
+        ? linkedGroup
+          ? { groupId: linkedGroup.id }
+          : {
+              productGroup: {
+                name: values.name,
+                categoryId: values.categoryId ?? null,
+                brand: sportsGroupFields.brand.trim() || undefined,
+                model: sportsGroupFields.model.trim() || undefined,
+                styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
+                colorway: sportsGroupFields.colorway.trim() || undefined,
+                team: sportsGroupFields.team.trim() || undefined,
+                league: sportsGroupFields.league.trim() || undefined,
+                season: sportsGroupFields.season.trim() || undefined,
+                homeAway: sportsGroupFields.homeAway || undefined,
+                color: sportsGroupFields.color.trim() || undefined,
+                defaultCountingUnit: countingUnit,
+              },
+            }
+        : {};
+    const finalValues = { ...rentalValues, ...sportsValues };
     const action =
       isEdit && defaults?.id
         ? updateItemAction(defaults.id, finalValues as UpdateItemInput)
@@ -1110,19 +1393,14 @@ export function ItemForm({
             optional
           />
           {(() => {
-            const selectedCategory = categories.find(
-              (c) => c.id === watch('categoryId'),
-            );
-            const categorySupportsSizes = Boolean(
-              selectedCategory?.supports_sizes,
-            );
+            const categorySupportsSizes = Boolean(selectedCategory?.supports_sizes);
             // Hide while editing — variants only apply at create-time. Each
             // existing variant edits as a normal single row.
             if (!categorySupportsSizes || isEdit) return <div />;
             return (
               <Field label="Sizes" optional>
                 <div className="flex flex-wrap gap-1.5">
-                  {ALL_SIZES.map((s) => {
+                  {sizeChipOptions.map((s) => {
                     const picked = selectedSizes.some((x) => x.size === s);
                     return (
                       <button
@@ -1177,6 +1455,17 @@ export function ItemForm({
             );
           })()}
         </div>
+        {sportsEnabled && profile && (
+          <SportsFields
+            profile={profile}
+            register={register}
+            watch={watch}
+            setValue={setValue}
+            errors={errors}
+            groupFields={sportsGroupFields}
+            onGroupFieldChange={updateSportsGroupField}
+          />
+        )}
         {showPublicVisibility && (
           <>
             <div className="space-y-1.5">
@@ -1452,9 +1741,6 @@ export function ItemForm({
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(() => {
-            const selectedCategory = categories.find(
-              (c) => c.id === watch('categoryId'),
-            );
             const sizedFlowActive =
               !isEdit &&
               Boolean(selectedCategory?.supports_sizes) &&
@@ -1681,9 +1967,6 @@ export function ItemForm({
 
       {(() => {
         if (!isEdit) return null;
-        const selectedCategory = categories.find(
-          (c) => c.id === watch('categoryId'),
-        );
         if (!selectedCategory?.supports_sizes) return null;
         if (
           !defaults?.categoryId ||
@@ -1726,6 +2009,17 @@ export function ItemForm({
           </div>
         );
       })()}
+
+      {sportsEnabled && profile && (
+        <GroupingPreview
+          groupName={groupNamePreview}
+          variantLabel={variantLabel}
+          mode={effectiveMode}
+          countingUnit={countingUnit}
+          candidates={linkedGroup ? [] : groupCandidates}
+          onUseCandidate={handleUseGroupCandidate}
+        />
+      )}
 
       <div className="flex justify-end gap-2">
         {(onDone || returnHref) && (

@@ -5,6 +5,7 @@ import {
   SPORTS_ERROR_CODES,
   SPORTS_ERROR_META,
   SPORTS_SUBCATEGORIES,
+  TRACKING_MODE_LABELS,
   TRACKING_MODES,
   countingUnitLabel,
   modeHasVariants,
@@ -74,6 +75,14 @@ describe('DEFAULT_SUBCATEGORY_PROFILES', () => {
       if (!p.individualTrackingAllowed) {
         expect(p.allowedModes).not.toContain('INDIVIDUALLY_TAGGED');
       }
+    }
+  });
+});
+
+describe('TRACKING_MODE_LABELS', () => {
+  it('covers every tracking mode with a non-empty label', () => {
+    for (const m of TRACKING_MODES) {
+      expect(TRACKING_MODE_LABELS[m]).toBeTruthy();
     }
   });
 });

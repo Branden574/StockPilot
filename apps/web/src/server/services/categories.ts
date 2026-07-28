@@ -34,7 +34,15 @@ export class CategoriesService {
   async list(opts: { includeArchived?: boolean } = {}) {
     let query = this.ctx.supabase
       .from('categories')
-      .select('id, parent_id, name, description, color, icon, supports_sizes, public_visibility, deleted_at, created_at, updated_at')
+      // A single string literal, deliberately not built via `+` concatenation:
+      // postgrest-js's select-string parser needs a literal type to resolve
+      // column-by-column, and splitting this across `+` widens it to plain
+      // `string` — which the parser can't narrow, so it falls back to
+      // `GenericStringError` for the whole row type (surfaced everywhere this
+      // service's return value is destructured, not just here).
+      .select(
+        'id, parent_id, name, description, color, icon, supports_sizes, public_visibility, tracking_mode, size_scale_id, default_unit_of_measure, sports_subcategory_key, deleted_at, created_at, updated_at',
+      )
       .eq('organization_id', this.ctx.organizationId)
       .order('name', { ascending: true });
     query = opts.includeArchived
