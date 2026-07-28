@@ -840,7 +840,7 @@ const BookCard = React.memo(function BookCard({
               </Mono>
             ) : null}
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+          <View style={styles.trailingCol}>
             <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
               {book.quantity_on_hand}
             </Mono>
@@ -952,7 +952,7 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
               {placements}
             </Mono>
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+          <View style={styles.trailingCol}>
             <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
               {/* A page-only sum is marked with a leading ≥ rather than
                   presented as the title's stock. */}
@@ -987,9 +987,13 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 4,
   },
+  // Dynamic Type: minHeight, not height, and no `height: '100%'` on the input
+  // — see the identical twin in (tabs)/inventory.tsx. The fixed height plus a
+  // 100%-tall input guillotines the typed text and the caret at AX sizes.
   searchBox: {
-    height: 44,
+    minHeight: 44,
     paddingHorizontal: 14,
+    paddingVertical: 4,
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
@@ -998,9 +1002,21 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14.5,
-    height: '100%',
+    minHeight: 36,
     letterSpacing: -0.17,
   },
   empty: { padding: 32, alignItems: 'center' },
+  /**
+   * Dynamic Type: trailing quantity + status-pill column. RN's default
+   * `flexShrink: 0` lets it claim full intrinsic width, collapsing the
+   * `flex: 1, minWidth: 0` title column beside it to a few characters a line.
+   */
+  trailingCol: {
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: '40%',
+    flexShrink: 1,
+  },
 });

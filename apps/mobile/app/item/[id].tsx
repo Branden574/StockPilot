@@ -28,6 +28,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -87,8 +88,9 @@ import {
   serialStatusColor,
   validateSerialInput,
 } from '@/lib/serials';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
@@ -1318,10 +1320,14 @@ export default function ItemDetail() {
             <Card hero style={{ padding: 20 }}>
               <Eyebrow>ON HAND</Eyebrow>
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
+                {/* capTo(56, 48) resolves to exactly 1 — no growth, by design.
+                    56pt is already ~4x body; doubling it evicts the unit of
+                    measure and the status pill from the hero card entirely. */}
                 <Mono
                   size={56}
                   tracking={-0.025}
                   color={c.ink}
+                  maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}
                   style={{ fontFamily: FONT.display }}
                 >
                   {item.quantity_on_hand}
@@ -1658,10 +1664,15 @@ function TabButton({
           borderBottomColor: active ? c.ink : 'transparent',
         }}
       >
+        {/* Chrome cap: three equal `flex: 1` columns with no break opportunity
+            inside a word — uncapped, MOVEMENTS breaks mid-word at 2x. The
+            control ceiling is the segmented-control policy from lib/theme. */}
         <Mono
           size={11}
           tracking={0.12}
           upper
+          numberOfLines={1}
+          maxFontSizeMultiplier={capTo(11, TYPE_CEILING.control)}
           color={active ? c.ink : c.ink4}
           style={{ fontFamily: FONT.mono }}
         >
@@ -1697,11 +1708,16 @@ function QuickBtn({
         },
       ]}
     >
+      {/* Three fixed `flex: 1` columns of pinned chrome — capped at the control
+          ceiling, and allowed to ellipsize inside its own button rather than
+          shove the neighbouring one off the strip. */}
       <Mono
         size={15}
         tracking={-0.012}
+        numberOfLines={1}
+        maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}
         color={primary ? c.paper : c.ink}
-        style={{ fontFamily: FONT.display }}
+        style={{ fontFamily: FONT.display, flexShrink: 1 }}
       >
         {label}
       </Mono>
@@ -1711,20 +1727,27 @@ function QuickBtn({
 
 function MetaRow({ label, value, dot }: { label: string; value: string; dot?: string | null }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  // Reflow, not a cap: label and value are both content (LOCATION / a rack
+  // name, SUPPLIER / a vendor name) and `justify: space-between` gives neither
+  // of them room to shrink into. Past the threshold the row becomes a
+  // label-over-value stack, which is unbounded in the direction that is free.
+  const stacked = shouldStackRow(fontScale);
   return (
     <View
       style={{
-        flexDirection: 'row',
+        flexDirection: stacked ? 'column' : 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
+        alignItems: stacked ? 'flex-start' : 'center',
+        gap: stacked ? 4 : 0,
         paddingVertical: 14,
         paddingHorizontal: 16,
       }}
     >
-      <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10.5} tracking={0.12} upper color={c.ink4} style={{ flexShrink: 1 }}>
         {label}
       </Mono>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
         {dot ? (
           <View
             style={{
@@ -2297,11 +2320,15 @@ function AdjustModal({
                   placeholderTextColor={c.ink5}
                   keyboardType="numbers-and-punctuation"
                   autoFocus
+                  // Dynamic Type: minHeight + padding, not a hard 52pt frame —
+                  // this is the box the user types the adjustment INTO, and a
+                  // clipped value or caret here is a stock error.
                   style={{
                     fontFamily: FONT.display,
                     fontSize: 18,
-                    height: 52,
+                    minHeight: 52,
                     paddingHorizontal: 14,
+                    paddingVertical: 12,
                     borderWidth: 1,
                     borderColor: c.hair,
                     borderRadius: 8,
@@ -2319,11 +2346,13 @@ function AdjustModal({
                   onChangeText={setReason}
                   placeholder="Cycle count variance, damage, etc."
                   placeholderTextColor={c.ink5}
+                  // minHeight for the same reason as the CHANGE box above.
                   style={{
                     fontFamily: FONT.displayRegular,
                     fontSize: 15,
-                    height: 50,
+                    minHeight: 50,
                     paddingHorizontal: 14,
+                    paddingVertical: 12,
                     borderWidth: 1,
                     borderColor: c.hair,
                     borderRadius: 8,
@@ -2715,30 +2744,23 @@ function SerialsCard({
   );
 }
 
-/** Colored status pill — tones from serialStatusColor (theme tokens). */
+/**
+ * Colored status pill — tones from serialStatusColor (theme tokens).
+ *
+ * Delegates to the shared `Pill` rather than re-rolling it. The hand-rolled
+ * copy this replaces had the same `height: 22` frame the shared Pill was fixed
+ * out of, so at larger text sizes it painted its label straight through its own
+ * border; a duplicate primitive is exactly how a fix fails to reach a screen.
+ */
 function SerialStatusPill({ status }: { status: SerialStatus }) {
   const { mode } = useTheme();
-  const tone = serialStatusColor(status, mode);
   return (
-    <View
-      style={{
-        height: 22,
-        paddingHorizontal: 9,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: tone.border,
-        backgroundColor: tone.bg,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        alignSelf: 'flex-start',
-      }}
-    >
-      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tone.fg }} />
-      <Mono size={10.5} tracking={0.04} upper color={tone.fg}>
-        {SERIAL_STATUS_LABELS[status]}
-      </Mono>
-    </View>
+    // Uppercased at the call site: the shared Pill takes its children verbatim
+    // (every other call site passes OK / LOW / OUT), and the copy this replaces
+    // rendered these labels through Mono's `upper`.
+    <Pill tone={serialStatusColor(status, mode)}>
+      {SERIAL_STATUS_LABELS[status].toUpperCase()}
+    </Pill>
   );
 }
 
@@ -3139,9 +3161,15 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 16,
   },
+  // Dynamic Type: minHeight so the strip grows with its labels (+1 / −1 /
+  // Adjust) instead of clipping them; the labels themselves are capped at the
+  // control ceiling in QuickBtn.
   quickBtn: {
     flex: 1,
-    height: 44,
+    minWidth: 0,
+    minHeight: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
     borderRadius: 10,
     borderWidth: 1,
     alignItems: 'center',

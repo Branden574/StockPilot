@@ -1000,10 +1000,12 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
       <View style={{ flex: 1, minWidth: 0 }}>
+        {/* Dynamic Type: two lines, not one. The row is paddingVertical-based,
+            so it grows for free — a single line here is pure loss. */}
         <Mono
           color={c.ink}
           size={15.5}
-          numberOfLines={1}
+          numberOfLines={2}
           style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
         >
           {baseName}
@@ -1095,10 +1097,12 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
       <View style={{ flex: 1, minWidth: 0 }}>
+        {/* Dynamic Type: two lines, not one — same padding-based row as the
+            size-run header above. */}
         <Mono
           color={c.ink}
           size={15.5}
-          numberOfLines={1}
+          numberOfLines={2}
           style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
         >
           {name}
@@ -1108,7 +1112,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
           {partial ? ' shown' : ''}
         </Mono>
       </View>
-      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+      <View style={rowStyles.trailingCol}>
         <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display, letterSpacing: -0.31 }}>
           {/* A sum over the loaded rows only is marked with a leading ≥
               rather than presented as the SKU's stock. */}
@@ -1186,7 +1190,7 @@ const ItemRow = React.memo(function ItemRow({
             {placementLabel ?? item.sku}
           </Mono>
         </View>
-        <View style={{ alignItems: 'flex-end', gap: 6 }}>
+        <View style={rowStyles.trailingCol}>
           <Mono
             size={17}
             tracking={0}
@@ -1225,9 +1229,14 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 4,
   },
+  // Dynamic Type: minHeight, not height — the box has to be able to grow with
+  // the typed text. `height: '100%'` on the input is deliberately absent: it
+  // pins the text frame to the (now growing) box and clips the glyphs and the
+  // caret with no way to recover. minHeight keeps the 44pt tap target.
   searchBox: {
-    height: 44,
+    minHeight: 44,
     paddingHorizontal: 14,
+    paddingVertical: 4,
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
@@ -1236,8 +1245,9 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14.5,
-    height: '100%',
+    minHeight: 36,
     letterSpacing: -0.17,
   },
   empty: {
@@ -1253,6 +1263,19 @@ const rowStyles = StyleSheet.create({
     gap: 14,
     paddingVertical: 14,
     paddingHorizontal: 16,
+  },
+  /**
+   * Dynamic Type: the trailing quantity + status-pill column. RN defaults to
+   * `flexShrink: 0`, so at AX sizes this column claims its full intrinsic
+   * width and the `flex: 1, minWidth: 0` name column beside it collapses to a
+   * few characters per line. Capping it at 40% and letting it shrink keeps the
+   * item name — the thing the picker is actually reading — over half the row.
+   */
+  trailingCol: {
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: '40%',
+    flexShrink: 1,
   },
 });
 
@@ -1304,7 +1327,7 @@ function SampleItemRow() {
               SAMPLE-001 · example item
             </Mono>
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+          <View style={rowStyles.trailingCol}>
             <Mono
               size={17}
               tracking={0}

@@ -27,7 +27,7 @@ import {
   type TrainingLabelSetKey,
 } from '@/lib/size-count-training-labels';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 const COMPRESS_MAX = 1280;
 const COMPRESS_QUALITY = 0.85;
@@ -245,16 +245,26 @@ export default function TrainingCaptureScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
       <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
+        {/* THE reported Dynamic Type bug. Neither Done nor Review can shrink,
+            so at 2x they squeezed the `flex: 1` title column to ~93pt and
+            "Training capture" — 42pt glyphs — broke into "Train / ing / capt /
+            ure". Camera chrome sits over a live viewfinder: it cannot scroll
+            and it cannot push the frame down, so the two buttons are capped at
+            the chrome ceiling and the title keeps the width it needs. */}
         <View style={styles.topBar} pointerEvents="auto">
           <Pressable onPress={() => router.back()} style={styles.closeBtn}>
-            <Text style={styles.closeText}>Done</Text>
+            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+              Done
+            </Text>
           </Pressable>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.title}>Training capture</Text>
             <Text style={styles.subtitle}>{status}</Text>
           </View>
           <Pressable onPress={() => router.push('/size-count/review' as never)} style={styles.reviewBtn}>
-            <Text style={styles.reviewText}>Review</Text>
+            <Text style={styles.reviewText} numberOfLines={1} maxFontSizeMultiplier={REVIEW_CAP}>
+              Review
+            </Text>
           </Pressable>
         </View>
 
@@ -392,6 +402,10 @@ export default function TrainingCaptureScreen() {
   );
 }
 
+/** Chrome caps for the two pinned viewfinder buttons (15pt Done, 14pt Review). */
+const CLOSE_CAP = capTo(15, TYPE_CEILING.chrome);
+const REVIEW_CAP = capTo(14, TYPE_CEILING.chrome);
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl, backgroundColor: theme.bg },
@@ -408,11 +422,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: space.md,
     paddingHorizontal: space.md, paddingVertical: space.sm, backgroundColor: 'rgba(0,0,0,0.45)',
   },
-  closeBtn: { paddingVertical: 6, paddingHorizontal: 4 },
+  closeBtn: { paddingVertical: 6, paddingHorizontal: 4, flexShrink: 0 },
   closeText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   reviewBtn: {
     paddingVertical: 6, paddingHorizontal: 12, borderRadius: radius.md,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)', flexShrink: 0,
   },
   reviewText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   title: { color: '#fff', fontSize: 16, fontWeight: '700' },

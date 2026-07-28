@@ -13,6 +13,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -38,6 +39,7 @@ import {
   submitSizedVariants,
   type ItemFormState,
 } from '@/lib/item-create';
+import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -322,6 +324,10 @@ export default function NewItem() {
   const [photos, setPhotos] = React.useState<Array<{ uri: string; ext: string }>>([]);
 
   const [busy, setBusy] = React.useState(false);
+  // Measured height of the pinned Save footer. It grows with Dynamic Type
+  // because the button label wraps, so the ScrollView's bottom reservation has
+  // to follow it rather than sit on a constant. null until the first layout.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
   const selectedCategory = React.useMemo(
     () => categories.find((c) => c.id === categoryId) ?? null,
@@ -695,7 +701,14 @@ export default function NewItem() {
         style={{ flex: 1 }}
       >
         <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 140 }}
+          // Dynamic Type: the reservation under the pinned footer is MEASURED,
+          // not the old hand-tuned 140 (matched to a ~95pt footer). The Create
+          // button's label wraps at accessibility sizes and the footer reaches
+          // ~135pt, which buried the last field under it. 140 stays the floor.
+          contentContainerStyle={{
+            paddingHorizontal: 20,
+            paddingBottom: footerReservation(footerHeight, 140),
+          }}
           keyboardShouldPersistTaps="handled"
         >
           <SectionLabel>PHOTOS</SectionLabel>
@@ -966,10 +979,13 @@ export default function NewItem() {
                     {sizeOptions.map((sz) => (
                       <View key={sz} style={styles.sizeRow}>
                         <View style={[styles.sizeBadge, { borderColor: c.hair }]}>
+                          {/* One line, always — see styles.sizeBadge. The badge
+                              grows to fit rather than breaking the size. */}
                           <Mono
                             size={12}
                             tracking={0.06}
                             color={c.ink}
+                            numberOfLines={1}
                             style={{ fontFamily: FONT.display }}
                           >
                             {sz}
@@ -1066,7 +1082,10 @@ export default function NewItem() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <View style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}>
+      <View
+        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+      >
         <Pressable
           onPress={save}
           disabled={busy}
@@ -1096,6 +1115,19 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Whether this screen's multi-column control rows have to stack.
+ *
+ * Reads the LIVE scale off `useWindowDimensions()` (it re-renders when the
+ * user changes Larger Text mid-session, which `PixelRatio.getFontScale()`
+ * read once at module scope does not) and defers the actual threshold to the
+ * pure, unit-tested helper.
+ */
+function useStackedRow(): boolean {
+  const { fontScale } = useWindowDimensions();
+  return shouldStackRow(fontScale);
+}
+
 function Field({
   label,
   trailing,
@@ -1107,8 +1139,12 @@ function Field({
   children: React.ReactNode;
   flex?: boolean;
 }) {
+  const stacked = useStackedRow();
   return (
-    <View style={{ marginTop: 14, flex: flex ? 1 : undefined }}>
+    // `flex` means "share this ROW's width". Once the row stacks it would
+    // instead be dividing an auto-height column, so it is dropped; marginTop
+    // already supplies the vertical rhythm.
+    <View style={{ marginTop: 14, flex: flex && !stacked ? 1 : undefined }}>
       <View style={styles.fieldHead}>
         <Eyebrow>{label}</Eyebrow>
         {trailing}
@@ -1118,8 +1154,17 @@ function Field({
   );
 }
 
+/**
+ * Two- and three-up field rows (UNIT COST / RETAIL PRICE, and ON HAND /
+ * REORDER AT / REORDER QTY). Three columns on a 353pt screen leave each label
+ * ~111pt, which an 11pt uppercase eyebrow outgrows at the first accessibility
+ * size — "REORDER QTY" clips to "REORDER…" and the user cannot tell which box
+ * they are typing into. Past the threshold the row becomes one column, which
+ * reflows instead of clamping.
+ */
 function Row({ children }: { children: React.ReactNode }) {
-  return <View style={{ flexDirection: 'row', gap: 10 }}>{children}</View>;
+  const stacked = useStackedRow();
+  return <View style={{ flexDirection: stacked ? 'column' : 'row', gap: 10 }}>{children}</View>;
 }
 
 function ChipPickerField({
@@ -1244,6 +1289,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  // Dynamic Type: flexWrap on chipRow saves the ROW, but not a single chip
+  // whose own label outgrows the screen — that one runs off the right edge and
+  // its tap target with it. maxWidth + flexShrink keep it inside the gutter and
+  // let the label wrap within the pill.
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1251,6 +1300,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderWidth: 1,
     borderRadius: 999,
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   footer: {
     position: 'absolute',
@@ -1272,9 +1323,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
+  // Dynamic Type: minWidth, NOT width. The badge is the only thing telling the
+  // user which size's quantity box they are typing into, and a hard 60pt frame
+  // fractures 4-character sizes — `10.5` wraps to `10.` / `5`, `XXXL` to
+  // `XXX` / `L` — which is a live miscount risk, not a cosmetic one. flexShrink
+  // stays 0 so the badge keeps its intrinsic width and the qty input yields.
   sizeBadge: {
-    width: 60,
+    minWidth: 60,
+    flexShrink: 0,
     paddingVertical: 12,
+    paddingHorizontal: 8,
     borderWidth: 1,
     borderRadius: 10,
     alignItems: 'center',

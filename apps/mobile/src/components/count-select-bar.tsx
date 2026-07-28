@@ -32,10 +32,19 @@ export function CountSelectBar({
         { bottom: bottomInset + 12, backgroundColor: c.card, borderColor: c.hair },
       ]}
     >
-      <Mono size={13} color={c.ink} style={{ fontVariant: ['tabular-nums'] }}>
+      {/* Dynamic Type: the bar is absolutely positioned with left/right pinned,
+          so it cannot grow sideways. The count label is the one thing here that
+          can give, so it shrinks and wraps; without that, Review was pushed off
+          the right edge and the whole selection flow dead-ended with no way to
+          submit the count. */}
+      <Mono
+        size={13}
+        color={c.ink}
+        style={{ fontVariant: ['tabular-nums'], flexShrink: 1, minWidth: 0 }}
+      >
         {count} selected
       </Mono>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, flexShrink: 0 }}>
         <Pressable onPress={() => countSelection.clear()} hitSlop={8} disabled={count === 0}>
           <Mono size={12.5} color={count === 0 ? c.ink4 : c.ink3}>
             Clear
@@ -68,8 +77,10 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 12,

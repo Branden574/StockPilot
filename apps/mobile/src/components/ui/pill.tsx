@@ -16,11 +16,19 @@ export function Pill({
   status = 'default',
   dot = true,
   style,
+  tone,
 }: {
   children: React.ReactNode;
   status?: Status;
   dot?: boolean;
   style?: ViewStyle;
+  /**
+   * Explicit colours, overriding `status`. For palettes the four-status union
+   * cannot express — today the six serial-number statuses, which used to be a
+   * hand-rolled copy of this component on item/[id].tsx and therefore missed
+   * every box and Dynamic Type fix made here.
+   */
+  tone?: { fg: string; bg: string; border: string };
 }) {
   const { c, mode } = useTheme();
 
@@ -28,7 +36,12 @@ export function Pill({
   let bg = c.card;
   let border = c.hair;
 
-  if (status === 'ok') {
+  if (tone) {
+    // Caller supplied the palette outright — `status` is not consulted.
+    fg = tone.fg;
+    bg = tone.bg;
+    border = tone.border;
+  } else if (status === 'ok') {
     fg = mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk;
     bg = ACCENT.mintSoft;
     border = 'hsla(165, 38%, 56%, 0.4)';

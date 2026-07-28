@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
-import { radius, space, theme } from '@/lib/theme';
+import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 /**
  * Header pill that reflects the sync engine's state. Tap to force a
@@ -60,12 +60,19 @@ export function SyncStatusBadge() {
       ) : (
         <View style={[styles.dot, { backgroundColor: dotColor }]} />
       )}
-      <Text style={styles.label} numberOfLines={1}>
+      {/* Chrome cap + a bounded pill: this badge shares a `space-between` row
+          with the Release / Reassign buttons in the cycle-count header, where
+          nothing else can shrink, so an uncapped "Offline · 12 queued" pushes
+          them off-screen. */}
+      <Text style={styles.label} numberOfLines={1} maxFontSizeMultiplier={LABEL_CAP}>
         {label}
       </Text>
     </Pressable>
   );
 }
+
+/** 11pt badge label against the chrome ceiling. */
+const LABEL_CAP = capTo(11, TYPE_CEILING.chrome);
 
 const styles = StyleSheet.create({
   pill: {
@@ -80,6 +87,8 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     alignSelf: 'flex-start',
     marginRight: space.xs,
+    maxWidth: '60%',
+    flexShrink: 1,
   },
   dot: {
     width: 8,
@@ -90,5 +99,6 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 11,
     fontWeight: '600',
+    flexShrink: 1,
   },
 });

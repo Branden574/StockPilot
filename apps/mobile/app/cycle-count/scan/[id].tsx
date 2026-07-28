@@ -21,7 +21,7 @@ import {
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
-import { radius, space, theme } from '@/lib/theme';
+import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 interface SheetState {
   line: CachedCycleCountLine;
@@ -227,11 +227,18 @@ function CycleCountScanScreenInner() {
       ) : null}
 
       <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
+        {/* Dynamic Type: camera chrome over a LIVE viewfinder cannot grow the
+            bar or scroll it, and the `flex: 1` tally column is the only
+            shrinkable child — so uncapped Done and Burst eat the whole deficit
+            and the live count (the reason the bar exists) disappears. Cap the
+            two buttons at the chrome ceiling; the tally itself keeps scaling. */}
         <View style={styles.topBar} pointerEvents="auto">
           <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeText}>Done</Text>
+            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+              Done
+            </Text>
           </Pressable>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.headerLabel}>Counting</Text>
             <Text style={styles.headerSub}>
               {counted} of {total} done
@@ -242,7 +249,11 @@ function CycleCountScanScreenInner() {
             style={[styles.burstBtn, burstMode && styles.burstBtnOn]}
             onPress={() => setBurstMode((v) => !v)}
           >
-            <Text style={[styles.burstLabel, burstMode && styles.burstLabelOn]}>
+            <Text
+              style={[styles.burstLabel, burstMode && styles.burstLabelOn]}
+              numberOfLines={1}
+              maxFontSizeMultiplier={BURST_CAP}
+            >
               {burstMode ? 'Burst' : 'Burst off'}
             </Text>
           </Pressable>
@@ -306,17 +317,22 @@ function CycleCountScanScreenInner() {
   );
 }
 
+/** Chrome caps for the two pinned viewfinder buttons (13pt Done, 12pt Burst). */
+const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
+const BURST_CAP = capTo(12, TYPE_CEILING.chrome);
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
   topBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: space.sm,
     padding: space.md,
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)' },
+  closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)', flexShrink: 0 },
   closeText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   headerLabel: { color: '#fff', fontSize: 12, opacity: 0.7 },
   headerSub: { color: '#fff', fontSize: 14, fontWeight: '700' },
@@ -325,6 +341,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: radius.sm,
     backgroundColor: 'rgba(255,255,255,0.12)',
+    flexShrink: 0,
   },
   burstBtnOn: { backgroundColor: theme.primary },
   burstLabel: { color: '#fff', fontWeight: '700', fontSize: 12 },

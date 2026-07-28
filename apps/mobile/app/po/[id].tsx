@@ -914,15 +914,26 @@ const styles = StyleSheet.create({
     paddingVertical: space.xs,
     borderRadius: radius.sm,
   },
+  // Dynamic Type: all three of these were HARD widths. At 2x a 15pt size label
+  // is ~39pt, so `XXXL` fractured inside the 64pt cell, and `runOrdered`
+  // (flex: 1) was the only shrinkable child in the row, so it absorbed the
+  // whole deficit and collapsed to nothing. minWidth lets each cell grow to its
+  // own content while still column-aligning at default size.
   runSize: {
     color: theme.text,
     fontSize: 15,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
-    width: 64,
+    minWidth: 64,
   },
-  runOrdered: { color: theme.textMuted, fontSize: 11, flex: 1 },
-  runDone: { color: theme.success, fontSize: 12, fontWeight: '700', width: 96, textAlign: 'right' },
+  runOrdered: { color: theme.textMuted, fontSize: 11, flex: 1, minWidth: 0 },
+  runDone: {
+    color: theme.success,
+    fontSize: 12,
+    fontWeight: '700',
+    minWidth: 96,
+    textAlign: 'right',
+  },
   runInput: {
     backgroundColor: theme.bgElevated,
     color: theme.text,
@@ -933,7 +944,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     fontSize: 16,
     fontVariant: ['tabular-nums'],
-    width: 96,
+    minWidth: 96,
     textAlign: 'right',
   },
   runSubtotal: {
@@ -947,8 +958,12 @@ const styles = StyleSheet.create({
   },
   lineName: { color: theme.text, fontSize: 15, fontWeight: '600' },
   lineMeta: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo', marginTop: 2 },
+  // Dynamic Type: Ordered / Already / Variance. The three uppercase labels need
+  // ~336pt at 2x against ~345pt of card interior and overflow just past that,
+  // and nothing in the row is shrinkable — so it wraps instead.
   lineMetricsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     marginTop: space.sm,
     gap: space.md,
   },

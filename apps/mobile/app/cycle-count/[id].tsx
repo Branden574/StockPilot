@@ -20,6 +20,7 @@ import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
@@ -32,7 +33,7 @@ import {
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
-import { radius, space, theme } from '@/lib/theme';
+import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 /** The joined item columns the variant label is built from. */
 interface VariantItemRow {
@@ -93,6 +94,9 @@ export default function CycleCountDetail() {
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [reassignOpen, setReassignOpen] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
+  // Measured height of the pinned post footer — its label wraps to three lines
+  // at accessibility text sizes, so the list's bottom reservation follows it.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
   const [pendingForThis, setPendingForThis] = React.useState(0);
   const [emptyState, setEmptyState] = React.useState<
     'none' | 'offline-uncached' | 'read-failed'
@@ -459,13 +463,13 @@ export default function CycleCountDetail() {
                 onPress={() => router.push(`/cycle-count/ai-scan/${header.id}`)}
                 style={[styles.scanBtn, styles.aiScanBtn]}
               >
-                <Text style={styles.scanBtnLabel}>AI Scan</Text>
+                <Text style={styles.scanBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>AI Scan</Text>
               </Pressable>
               <Pressable
                 onPress={() => router.push(`/cycle-count/scan/${header.id}`)}
                 style={styles.scanBtn}
               >
-                <Text style={styles.scanBtnLabel}>Scan</Text>
+                <Text style={styles.scanBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Scan</Text>
               </Pressable>
             </View>
           ) : header && isOpen && !isAssignee && !canManage ? (
@@ -481,7 +485,7 @@ export default function CycleCountDetail() {
                 style={styles.releaseBtn}
                 hitSlop={8}
               >
-                <Text style={styles.releaseBtnLabel}>Release</Text>
+                <Text style={styles.releaseBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Release</Text>
               </Pressable>
             ) : null}
             {isOpen && canManage ? (
@@ -490,7 +494,7 @@ export default function CycleCountDetail() {
                 style={styles.releaseBtn}
                 hitSlop={8}
               >
-                <Text style={styles.releaseBtnLabel}>Reassign</Text>
+                <Text style={styles.releaseBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Reassign</Text>
               </Pressable>
             ) : null}
           </View>
@@ -511,7 +515,16 @@ export default function CycleCountDetail() {
           <ActivityIndicator color={theme.primary} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: space.md, paddingBottom: 140 }}>
+        // Dynamic Type: MEASURED footer reservation, not a constant. The post
+        // button's label reads "Sync pending edits to post" and wraps to three
+        // lines (~170pt) at accessibility sizes, well past the old 140pt
+        // reservation, and covered the last count input. 140 stays the floor.
+        <ScrollView
+          contentContainerStyle={{
+            padding: space.md,
+            paddingBottom: footerReservation(footerHeight, 140),
+          }}
+        >
           {lines.map((l) => {
             const draftVal = draft[l.id];
             const isDrafting = draftVal !== undefined;
@@ -594,7 +607,10 @@ export default function CycleCountDetail() {
       )}
 
       {!loading && lines.length > 0 && isOpen && canAdjust && (
-        <View style={styles.footer}>
+        <View
+          style={styles.footer}
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        >
           <Pressable
             onPress={postCount}
             disabled={postDisabled}
@@ -646,6 +662,14 @@ export default function CycleCountDetail() {
     </SafeAreaView>
   );
 }
+
+/**
+ * Chrome cap for the header's 13pt action labels (AI Scan / Scan / Release /
+ * Reassign). They sit in a pinned header row beside a `flex: 1` title column,
+ * so they cannot wrap or scroll and every point they grow is taken straight
+ * out of the title.
+ */
+const SCAN_LABEL_CAP = capTo(13, TYPE_CEILING.chrome);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
