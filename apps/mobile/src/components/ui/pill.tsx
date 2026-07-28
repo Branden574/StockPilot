@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { ACCENT, FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 type Status = 'default' | 'ok' | 'warn' | 'crit';
@@ -56,14 +56,29 @@ export function Pill({
       {dot ? (
         <View style={[styles.dot, { backgroundColor: fg }]} />
       ) : null}
-      <Text style={[styles.label, { color: fg }]}>{children}</Text>
+      <Text
+        style={[styles.label, { color: fg }]}
+        // Chrome cap: a 10.5pt label uncapped paints 21pt of glyph through a
+        // 22pt border. Paired with the minHeight box below — the cap keeps
+        // the pill from ballooning, the minHeight keeps the label inside it.
+        maxFontSizeMultiplier={LABEL_CAP}
+      >
+        {children}
+      </Text>
     </View>
   );
 }
 
+/** 10.5pt label against the 20pt chrome ceiling. */
+const LABEL_CAP = capTo(10.5, TYPE_CEILING.chrome);
+
 const styles = StyleSheet.create({
   base: {
-    height: 22,
+    // minHeight, not height: Pill is the stock-status badge on every Items and
+    // Books row, so at larger text sizes the box has to grow with its label
+    // rather than clip it.
+    minHeight: 22,
+    paddingVertical: 3,
     paddingHorizontal: 9,
     borderRadius: RADIUS.pill,
     borderWidth: 1,

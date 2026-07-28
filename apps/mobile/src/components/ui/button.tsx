@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { ACCENT, FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 type Variant = 'primary' | 'ghost' | 'destructive' | 'outline';
@@ -55,7 +55,7 @@ export function Button({
         ? c.ink
         : 'transparent';
 
-  const height = size === 'sm' ? 36 : 52;
+  const minHeight = size === 'sm' ? 36 : 52;
   const padH = size === 'sm' ? 14 : 20;
   const fontSize = size === 'sm' ? 13 : 15.5;
 
@@ -66,7 +66,10 @@ export function Button({
       style={({ pressed }) => [
         styles.base,
         {
-          height,
+          // minHeight, not height: the label is allowed to grow to the 22pt
+          // control ceiling, and the pill grows with it instead of clipping.
+          minHeight,
+          paddingVertical: 6,
           paddingHorizontal: padH,
           backgroundColor: bg,
           borderColor: border,
@@ -87,6 +90,7 @@ export function Button({
           },
         ]}
         numberOfLines={1}
+        maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.control)}
       >
         {children}
       </Text>
@@ -112,5 +116,10 @@ const styles = StyleSheet.create({
     fontFamily: FONT.display,
     fontWeight: '500',
     letterSpacing: -0.15,
+    // Paired with the cap: RN defaults text to flexShrink 0, so without this a
+    // numberOfLines={1} label refuses to yield and shoves its sibling out of a
+    // two-button footer row instead of ellipsizing inside its own pill.
+    flexShrink: 1,
+    minWidth: 0,
   },
 });

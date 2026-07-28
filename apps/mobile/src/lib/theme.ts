@@ -76,6 +76,53 @@ export const FONT = {
   monoRegular: 'JetBrainsMono_400Regular',
 };
 
+/**
+ * Dynamic Type ceilings, in POINTS — the largest a given class of chrome is
+ * allowed to render at, no matter how far the user has pushed
+ * Settings → Accessibility → Larger Text (iOS goes to ~3.57x at AX5).
+ *
+ * Content text (Body, Mono, item names, SKUs, quantities) is NOT in this
+ * table on purpose: it lives in ScrollViews and must scale all the way. Only
+ * fixed-frame chrome opts in.
+ */
+export const TYPE_CEILING = {
+  display: 48, // headings, call sites 18–40pt
+  eyebrow: 16, // 11pt tracked uppercase mono section labels
+  control: 22, // button + segmented-control labels, 13–15.5pt
+  input: 24, // TextInput inside a bordered box
+  chrome: 20, // pill / page-number / micro-marker labels, 9–13pt
+};
+
+/**
+ * A cap is a CEILING IN POINTS, not a taste multiplier — a 34pt title and an
+ * 11pt eyebrow need very different multipliers to land in the same physical
+ * space. Never returns < 1, so a cap can only limit growth, never shrink.
+ *
+ * Mirrors Apple's own ramp, which caps Large Title 34→44pt (1.29x) while
+ * letting Body 17→53pt (3.1x): the larger the base, the smaller the cap. We
+ * use 48 rather than Apple's 44 because Inter Tight 500 at -0.028em tracking
+ * is narrower than SF Pro.
+ */
+export const capTo = (size: number, ceiling: number) => Math.max(1, ceiling / size);
+
+/**
+ * Resolves a call site's `maxFontSizeMultiplier` against a primitive's policy
+ * default.
+ *
+ * The override contract: pass a number to tighten or loosen the cap, pass `0`
+ * — React Native's documented "no limit" sentinel — to opt out of capping
+ * entirely, or pass `null` to inherit whatever the parent Text set. `0` is
+ * falsy and `null` is nullish, so both `explicit || fallback` and
+ * `explicit ?? fallback` would silently re-apply the very cap the call site
+ * just disabled; only an explicit `undefined` check gets this right.
+ */
+export function resolveFontCap(
+  explicit: number | null | undefined,
+  policyDefault: number | null | undefined,
+): number | null | undefined {
+  return explicit === undefined ? policyDefault : explicit;
+}
+
 export const RADIUS = {
   tile: 8,
   card: 10,

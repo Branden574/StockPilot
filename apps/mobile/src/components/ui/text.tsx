@@ -1,20 +1,47 @@
 import * as React from 'react';
 import { StyleSheet, Text, View, type TextProps, type ViewStyle } from 'react-native';
 
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, resolveFontCap } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * Dynamic Type policy for the four text primitives.
+ *
+ * CHROME CAPS (Display, Eyebrow) are ceilings in points — see `capTo` in
+ * lib/theme.ts. CONTENT (Body, Mono) has NO default cap: those two carry the
+ * paragraphs, SKUs, barcodes, quantities and ETAs a warehouse user actually
+ * reads, they live in ScrollViews, and letting them grow all the way is the
+ * entire accessibility win. The `maxFontSizeMultiplier` prop exists on them
+ * only so the handful of fixed-height-chrome call sites can opt in.
+ *
+ * OVERRIDE CONTRACT (all four): pass `maxFontSizeMultiplier={n}` to tighten or
+ * loosen, and `maxFontSizeMultiplier={0}` — RN's documented "no limit"
+ * sentinel — to opt out entirely. Resolution goes through `resolveFontCap` so
+ * a falsy-check can never silently re-apply the default over that 0.
+ */
+
+/** Props every primitive forwards to its underlying <Text>. */
+type SharedTextProps = Omit<TextProps, 'style' | 'children'>;
 
 /**
  * Eyebrow — JetBrains Mono, 11pt, uppercase, 0.18em tracking, prefixed
  * with an em-dash. This is the brand signature line that sits above
  * every section title and on auth/empty states.
+ *
+ * Two lines by default, not one: eyebrows carry live counts
+ * ("INVENTORY · 1,234 ITEMS", "RENTALS · 3 OUT · 1 OVERDUE") and it is
+ * exactly that suffix which gets ellipsized away at larger text sizes. The
+ * cap alone does not save it; the second line does.
  */
 export function Eyebrow({
   children,
   style,
   prefix = '— ',
   color,
-}: {
+  maxFontSizeMultiplier,
+  numberOfLines = 2,
+  ...rest
+}: SharedTextProps & {
   children: React.ReactNode;
   style?: ViewStyle;
   prefix?: string;
@@ -24,11 +51,16 @@ export function Eyebrow({
   return (
     <View style={[styles.eyebrowWrap, style]}>
       <Text
+        {...rest}
         style={[
           styles.eyebrow,
           { color: color ?? c.ink4 },
         ]}
-        numberOfLines={1}
+        numberOfLines={numberOfLines}
+        maxFontSizeMultiplier={resolveFontCap(
+          maxFontSizeMultiplier,
+          capTo(11, TYPE_CEILING.eyebrow),
+        )}
       >
         {prefix}
         {children}
@@ -40,13 +72,20 @@ export function Eyebrow({
 /**
  * Display heading — Inter Tight 500, tracking -0.028em. Children can
  * embed <Em> for serif-italic emphasis spans (the brand signature).
+ *
+ * Capped to a 48pt ceiling by default. Because the cap is a ceiling and not a
+ * multiplier, all 49 call sites (18–40pt) land in the same physical space:
+ * 34pt grows 1.41x, 18pt grows 2.67x, and a 56pt hero grows not at all.
  */
 export function Display({
   children,
   size = 32,
   style,
   color,
-}: {
+  maxFontSizeMultiplier,
+  numberOfLines,
+  ...rest
+}: SharedTextProps & {
   children: React.ReactNode;
   size?: number;
   style?: TextProps['style'];
@@ -55,6 +94,12 @@ export function Display({
   const { c } = useTheme();
   return (
     <Text
+      {...rest}
+      numberOfLines={numberOfLines}
+      maxFontSizeMultiplier={resolveFontCap(
+        maxFontSizeMultiplier,
+        capTo(size, TYPE_CEILING.display),
+      )}
       style={[
         {
           fontFamily: FONT.display,
@@ -75,7 +120,7 @@ export function Display({
  * Em — italic emphasis span. Renders inline inside <Display> using
  * Instrument Serif Italic (weight 400) at the parent's size. RN
  * concatenates nested Text elements seamlessly so this acts like
- * an HTML <em>.
+ * an HTML <em>. Inherits the parent Display's cap.
  */
 export function Em({ children, size }: { children: React.ReactNode; size?: number }) {
   return (
@@ -94,6 +139,11 @@ export function Em({ children, size }: { children: React.ReactNode; size?: numbe
 
 /**
  * Body — Inter Tight 400, 14.5pt, 1.5 line height, ink-3 muted.
+ *
+ * UNCAPPED BY DEFAULT, and it must stay that way: `lineHeight: size * 1.5` is
+ * relative, so paragraphs simply get taller as they grow. If body copy ever
+ * stops looking bigger at accessibility sizes, something here has been
+ * over-clamped.
  */
 export function Body({
   children,
@@ -102,18 +152,22 @@ export function Body({
   style,
   color,
   numberOfLines,
-}: {
+  maxFontSizeMultiplier,
+  ...rest
+}: SharedTextProps & {
   children: React.ReactNode;
   size?: number;
   muted?: boolean;
   style?: TextProps['style'];
   color?: string;
-  numberOfLines?: number;
 }) {
   const { c } = useTheme();
   return (
     <Text
+      {...rest}
       numberOfLines={numberOfLines}
+      // No policy default — see the module note. Chrome opts in per site.
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[
         {
           fontFamily: FONT.displayRegular,
@@ -132,6 +186,10 @@ export function Body({
 
 /**
  * Mono — JetBrains Mono for SKUs, barcodes, numeric codes, ETAs.
+ *
+ * UNCAPPED BY DEFAULT: everything in that list is content, not chrome. The
+ * chrome uses of Mono (pills, page numbers, micro-markers) opt in per site
+ * with `capTo(size, TYPE_CEILING.chrome)`.
  */
 export function Mono({
   children,
@@ -141,19 +199,23 @@ export function Mono({
   tracking = 0.04,
   upper = false,
   numberOfLines,
-}: {
+  maxFontSizeMultiplier,
+  ...rest
+}: SharedTextProps & {
   children: React.ReactNode;
   size?: number;
   style?: TextProps['style'];
   color?: string;
   tracking?: number;
   upper?: boolean;
-  numberOfLines?: number;
 }) {
   const { c } = useTheme();
   return (
     <Text
+      {...rest}
       numberOfLines={numberOfLines}
+      // No policy default — see the module note. Chrome opts in per site.
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[
         {
           fontFamily: FONT.mono,
@@ -173,6 +235,9 @@ export function Mono({
 const styles = StyleSheet.create({
   eyebrowWrap: {
     alignSelf: 'flex-start',
+    // Paired with numberOfLines={2}: without this the wrap refuses to yield
+    // width to its row siblings and the second line never gets a chance.
+    flexShrink: 1,
   },
   eyebrow: {
     fontFamily: FONT.mono,

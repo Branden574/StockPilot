@@ -7,7 +7,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { FONT, RADIUS } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo, resolveFontCap } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Mono } from './text';
 
@@ -45,6 +45,14 @@ export function Field({
       >
         <TextInput
           {...inputProps}
+          // 16pt against the 24pt input ceiling. Paired with the minHeight box
+          // below and with dropping `height: '100%'` on the input itself —
+          // that line is what made the clipping unrecoverable, because it
+          // pinned the text frame to a box that could not grow.
+          maxFontSizeMultiplier={resolveFontCap(
+            inputProps.maxFontSizeMultiplier,
+            capTo(16, TYPE_CEILING.input),
+          )}
           onFocus={(e) => {
             setFocused(true);
             inputProps.onFocus?.(e);
@@ -75,7 +83,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   inputBox: {
-    height: 50,
+    minHeight: 50,
+    paddingVertical: 3,
     borderRadius: RADIUS.tile,
     borderWidth: 1,
     justifyContent: 'center',
@@ -86,7 +95,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     letterSpacing: -0.19,
     paddingHorizontal: 14,
-    height: '100%',
+    // minHeight, NOT `height: '100%'`. The old fixed height pinned the text
+    // frame to a box that could not grow, which is what clipped the glyphs and
+    // the caret. minHeight keeps the same 50pt tap target at default size
+    // (44 + the box's 6pt of padding) while letting the input take its own
+    // intrinsic height once the text outgrows it.
+    minHeight: 44,
   },
   trailing: {
     position: 'absolute',

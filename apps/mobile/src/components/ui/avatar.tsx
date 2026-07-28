@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { useProfile } from '@/lib/use-profile';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Mono } from './text';
 
@@ -50,7 +50,19 @@ export function Avatar({
         },
       ]}
     >
-      <Mono size={fontSize} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.mono }}>
+      {/*
+        The monogram is decoration sized to its container: the circle is a
+        fixed `size` prop set by the caller and cannot reflow, so the initials
+        are capped to the chrome ceiling. Nothing is lost — this is a fallback
+        for a missing photo, and the user's name is on the screen it opens.
+      */}
+      <Mono
+        size={fontSize}
+        tracking={0.04}
+        color={c.ink}
+        maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.chrome)}
+        style={{ fontFamily: FONT.mono }}
+      >
         {profile.initials}
       </Mono>
     </View>

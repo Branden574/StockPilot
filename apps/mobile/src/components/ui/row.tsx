@@ -8,6 +8,12 @@ import { useTheme } from '@/lib/use-theme';
 /**
  * Generic list row (settings, inventory, drawer). Hairline divider is
  * rendered by the parent (so you can `inset` it past the leading slot).
+ *
+ * Dynamic Type: no cap here, deliberately. The box model is already right —
+ * `minHeight: 56` on the row and `flex: 1, minWidth: 0` on the body mean the
+ * row grows and the text column yields correctly at any text size. The only
+ * defect was the hardcoded `numberOfLines={1}`, which threw the content away
+ * instead of wrapping it, so the default is now 2.
  */
 export function Row({
   leading,
@@ -17,6 +23,7 @@ export function Row({
   chevron = false,
   onPress,
   style,
+  numberOfLines = 2,
 }: {
   leading?: React.ReactNode;
   title: React.ReactNode;
@@ -25,17 +32,22 @@ export function Row({
   chevron?: boolean;
   onPress?: () => void;
   style?: ViewStyle;
+  /** Lines allowed for the title and subtitle. Defaults to 2. */
+  numberOfLines?: number;
 }) {
   const { c } = useTheme();
   const inner = (
     <View style={[styles.row, style]}>
       {leading}
       <View style={styles.body}>
-        <Text style={[styles.title, { color: c.ink }]} numberOfLines={1}>
+        <Text style={[styles.title, { color: c.ink }]} numberOfLines={numberOfLines}>
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: c.ink4 }]} numberOfLines={1}>
+          <Text
+            style={[styles.subtitle, { color: c.ink4 }]}
+            numberOfLines={numberOfLines}
+          >
             {subtitle}
           </Text>
         ) : null}
@@ -93,7 +105,17 @@ export function IconChip({
       <Icon size={18} color={c.ink} strokeWidth={1.5} />
       {showBadge ? (
         <View style={[styles.badge, { borderColor: c.paper }]}>
-          <Text style={styles.badgeText} numberOfLines={1}>
+          {/*
+            The one place in the shared primitives that opts out of Dynamic
+            Type entirely, same reasoning as the tab bar
+            (app/(drawer)/(tabs)/_layout.tsx:133-142): this is a count inside a
+            fixed 18pt circle, absolutely positioned at top:-6/right:-6, so any
+            growth overflows onto the NEIGHBOURING header chips rather than
+            into its own frame. Capping cannot fix that geometry. The count is
+            also duplicated on the destination screen, so pinning it here costs
+            the user no information.
+          */}
+          <Text style={styles.badgeText} numberOfLines={1} allowFontScaling={false}>
             {badge > 99 ? '99+' : String(badge)}
           </Text>
         </View>

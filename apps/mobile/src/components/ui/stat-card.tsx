@@ -2,7 +2,7 @@ import * as React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Card } from './card';
 
@@ -110,7 +110,12 @@ export function StatCard({
         ) : null}
       </View>
       <View style={styles.valueRow}>
-        <Text style={[styles.value, { color: c.ink }]}>{value}</Text>
+        <Text
+          style={[styles.value, { color: c.ink }]}
+          maxFontSizeMultiplier={capTo(28, TYPE_CEILING.display)}
+        >
+          {value}
+        </Text>
         {unit ? (
           <Text style={[styles.unit, { color: c.ink4 }]}>{unit}</Text>
         ) : null}
@@ -132,12 +137,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    gap: 8,
   },
   label: {
     fontFamily: FONT.mono,
     fontSize: 9.5,
     letterSpacing: 9.5 * 0.18,
     textTransform: 'uppercase',
+    // The label keeps scaling — it just has to wrap rather than shoulder the
+    // fixed 84pt sparkline beside it. RN text defaults to flexShrink 0, so
+    // without these it claims its full intrinsic width and pushes the chart
+    // off the card.
+    flex: 1,
+    flexShrink: 1,
   },
   valueRow: {
     flexDirection: 'row',

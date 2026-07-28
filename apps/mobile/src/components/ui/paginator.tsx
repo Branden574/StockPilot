@@ -3,7 +3,7 @@ import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
 import { Mono } from '@/components/ui/text';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -73,10 +73,31 @@ export function Paginator({
 
   return (
     <View style={{ paddingVertical: 18, alignItems: 'center', gap: 12 }}>
-      <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+      <Mono
+        size={10.5}
+        tracking={0.12}
+        upper
+        color={c.ink4}
+        maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
+      >
         SHOWING {start.toLocaleString()}–{end.toLocaleString()} OF {total.toLocaleString()}
       </Mono>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      {/*
+        flexWrap + centering is the box fix that pairs with the caps below.
+        Nine 52pt buttons on a 353pt screen walked the Next arrow clean off the
+        right edge — unreachable, which stranded the user on page 1 of the two
+        hottest tabs in the app. Wrapping to a second row keeps every control
+        on screen at any text size.
+      */}
+      <View
+        style={{
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+        }}
+      >
         <PaginatorArrow
           direction="prev"
           onPress={() => onPageChange(page - 1)}
@@ -88,7 +109,11 @@ export function Paginator({
               key={`e${i}`}
               style={{ width: 22, alignItems: 'center', justifyContent: 'center' }}
             >
-              <Mono size={14} color={c.ink4}>
+              <Mono
+                size={14}
+                color={c.ink4}
+                maxFontSizeMultiplier={capTo(14, TYPE_CEILING.chrome)}
+              >
                 ·
               </Mono>
             </View>
@@ -127,8 +152,11 @@ function PageButton({
       hitSlop={4}
       style={({ pressed }) => ({
         minWidth: 36,
-        height: 36,
+        // minHeight pairs with the chrome cap on the number below: the button
+        // grows with its digits rather than clipping them.
+        minHeight: 36,
         paddingHorizontal: 9,
+        paddingVertical: 6,
         borderRadius: 8,
         backgroundColor: active ? c.ink : 'transparent',
         borderWidth: active ? 0 : 1,
@@ -142,6 +170,7 @@ function PageButton({
         size={13}
         tracking={-0.012}
         color={active ? c.paper : c.ink}
+        maxFontSizeMultiplier={capTo(13, TYPE_CEILING.chrome)}
         style={{ fontFamily: FONT.display }}
       >
         {num}
