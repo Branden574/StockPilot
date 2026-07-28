@@ -50,7 +50,7 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
   const canManagePublicVisibility = can(ctx, 'public_links:manage');
   // Sports Task 12: subcategory + tracking-profile administration is gated on
   // the sports module AND sports:manage. The server re-asserts both on every
-  // write (CategoriesService.assertSportsInputValid / setupSportsDefaults).
+  // write (CategoriesService.assertSportsWriteAllowed / setupSportsDefaults).
   const [{ enabled: sportsEnabled }, rows] = await Promise.all([
     checkModuleAccess('sports'),
     svc.list({ includeArchived: isArchivedView }),

@@ -17,6 +17,8 @@ import {
   SPORTS_ATTRIBUTES,
   TRACKING_MODES,
   TRACKING_MODE_LABELS,
+  trackingProfileConsistencyError,
+  trackingProfileSchema,
   type CountingUnit,
   type SportsAttribute,
   type SubcategoryTrackingProfile,
@@ -62,21 +64,28 @@ export const EMPTY_TRACKING_PROFILE_DRAFT: SubcategoryTrackingProfile = {
 };
 
 /**
- * True only when the draft is a complete, internally-consistent profile — the
- * same two rules the server enforces (`categories.ts` service, Task 12):
- * every required attribute must be supported, and the default mode must be
- * one of the allowed modes. The caller (CategoryDialog) keeps Save disabled
- * until this is true, so a half-filled custom subcategory can never reach the
- * server at all.
+ * True only when the draft is a complete, internally-consistent profile — by
+ * EXACTLY the rules the server applies, because both sides read the same two
+ * shared definitions: `trackingProfileSchema` (the shape: every field present
+ * and in-vocabulary, `allowedModes` non-empty, key/label within their bounds)
+ * and `trackingProfileConsistencyError` (required ⊆ supported; defaultMode ∈
+ * allowedModes). The hand-written field list this replaced silently skipped
+ * `defaultCountingUnit`, the four booleans and both length caps, so a draft the
+ * dialog called complete could still be refused by the server action's zod.
+ *
+ * The caller (CategoryDialog) keeps Save disabled until this is true; the
+ * server re-validates regardless — this is a usability gate, never the
+ * enforcement.
  */
 export function isTrackingProfileComplete(p: SubcategoryTrackingProfile): boolean {
-  return (
-    p.key.trim().length > 0 &&
-    p.label.trim().length > 0 &&
-    p.allowedModes.length > 0 &&
-    p.allowedModes.includes(p.defaultMode) &&
-    p.requiredAttributes.every((a) => p.supportedAttributes.includes(a))
-  );
+  // Key and label are trimmed here for the same reason the key input trims on
+  // change: whitespace is not a value the admin meant to type.
+  const parsed = trackingProfileSchema.safeParse({
+    ...p,
+    key: p.key.trim(),
+    label: p.label.trim(),
+  });
+  return parsed.success && trackingProfileConsistencyError(parsed.data) === null;
 }
 
 export interface TrackingProfileEditorProps {

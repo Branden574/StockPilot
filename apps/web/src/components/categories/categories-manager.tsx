@@ -145,20 +145,32 @@ export function CategoriesManager({
   const [setupBusy, setSetupBusy] = React.useState(false);
 
   const byId = React.useMemo(() => new Map(initial.map((c) => [c.id, c])), [initial]);
+  /**
+   * A row is rendered under its parent only when that parent is in THIS list.
+   * `CategoriesService.archive()` refuses to archive a category that still has
+   * live children, but that check is not atomic (two admins, one archiving the
+   * parent while the other adds a child), and this list is also filtered. A
+   * child whose parent is absent is therefore promoted to a root rather than
+   * dropped: every row renders exactly once, whatever the data does.
+   */
+  const isRoot = React.useCallback(
+    (c: CategoryRow) => !c.parent_id || !byId.has(c.parent_id),
+    [byId],
+  );
   const childrenByParent = React.useMemo(() => {
     const map = new Map<string, CategoryRow[]>();
     for (const c of initial) {
-      if (!c.parent_id) continue;
-      const list = map.get(c.parent_id) ?? [];
+      if (isRoot(c)) continue;
+      const list = map.get(c.parent_id as string) ?? [];
       list.push(c);
-      map.set(c.parent_id, list);
+      map.set(c.parent_id as string, list);
     }
     for (const list of map.values()) list.sort((a, b) => a.name.localeCompare(b.name));
     return map;
-  }, [initial]);
+  }, [initial, isRoot]);
   const roots = React.useMemo(
-    () => initial.filter((c) => !c.parent_id).sort((a, b) => a.name.localeCompare(b.name)),
-    [initial],
+    () => initial.filter(isRoot).sort((a, b) => a.name.localeCompare(b.name)),
+    [initial, isRoot],
   );
   // The whole hierarchy layout is opt-in per org, by DATA: an org that has
   // never created a subcategory has zero rows with parent_id set, so this is

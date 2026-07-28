@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { COUNTING_UNITS, TRACKING_MODES } from '../sports/tracking-modes';
+import { COUNTING_UNITS, SPORTS_ATTRIBUTES, TRACKING_MODES } from '../sports/tracking-modes';
 import { emptyToUndefined, uuidSchema } from './common';
 
 /** 1-4 digits, digits only, leading zeroes preserved. Never an integer. */
@@ -43,6 +43,52 @@ export const sizeSystemSchema = z.preprocess(
 
 export const countingUnitSchema = z.enum(COUNTING_UNITS);
 export const trackingModeSchema = z.enum(TRACKING_MODES);
+
+/**
+ * Full profile for a CUSTOM Sports subcategory (Task 12). Mirrors
+ * `SubcategoryTrackingProfile` in ../sports/tracking-modes.ts field-for-field —
+ * every field is REQUIRED here (no `.optional()` anywhere), because a partial
+ * profile would leave items under it with no rules at all (requirements: "custom
+ * subcategory MUST carry a full tracking profile").
+ *
+ * SHARED, not server-only, on purpose: the web dialog gates its Save button on
+ * `isTrackingProfileComplete()` and the server gates the write on this schema.
+ * Two hand-written field lists drifted (the UI's ignored `defaultCountingUnit`
+ * and the four booleans), so the UI now derives its predicate from this object
+ * and the drift cannot come back.
+ */
+export const trackingProfileSchema = z.object({
+  key: z.string().min(1).max(64),
+  label: z.string().min(1).max(120),
+  defaultMode: trackingModeSchema,
+  allowedModes: z.array(trackingModeSchema).min(1),
+  supportedAttributes: z.array(z.enum(SPORTS_ATTRIBUTES)),
+  requiredAttributes: z.array(z.enum(SPORTS_ATTRIBUTES)),
+  defaultCountingUnit: countingUnitSchema,
+  supportsNumbers: z.boolean(),
+  supportsSizes: z.boolean(),
+  supportsColors: z.boolean(),
+  individualTrackingAllowed: z.boolean(),
+});
+export type TrackingProfileInput = z.infer<typeof trackingProfileSchema>;
+
+/**
+ * The two CROSS-FIELD rules a profile must satisfy, on top of the shape above.
+ * Shared for the same reason the schema is: `CategoriesService` refuses a write
+ * that fails either, and the dialog keeps Save disabled until both hold.
+ * Returns the offending message, or null when the profile is consistent.
+ */
+export function trackingProfileConsistencyError(p: TrackingProfileInput): string | null {
+  for (const a of p.requiredAttributes) {
+    if (!p.supportedAttributes.includes(a)) {
+      return `"${a}" is required but not supported by this profile.`;
+    }
+  }
+  if (!p.allowedModes.includes(p.defaultMode)) {
+    return 'The default tracking mode must be one of the allowed modes.';
+  }
+  return null;
+}
 
 /**
  * The variant attributes an item may carry. Every one is optional.

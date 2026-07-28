@@ -36,6 +36,19 @@ function categoryRow(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Sequences the single-row reads (`maybeSingle()`) one service call makes, in
+ * order: the current-row load, then the parent-category load. The last entry
+ * repeats, so a test only has to spell out the reads it cares about.
+ */
+function queuedReads(...results: Array<{ data: unknown; error: null }>) {
+  let i = 0;
+  return () => results[Math.min(i++, results.length - 1)]!;
+}
+
+/** A live top-level category, as the parent-org-consistency read sees it. */
+const ROOT_PARENT_READ = { data: { id: 'cat-sports-root', parent_id: null }, error: null } as const;
+
 const VALID_CUSTOM_PROFILE: SubcategoryTrackingProfile = {
   key: 'custom_pads',
   label: 'Custom pads',
@@ -108,6 +121,8 @@ describe('CategoriesService — custom Sports subcategory profile (Task 12)', ()
 
   it('accepts a valid custom profile from an admin (sports:manage) and stores it', async () => {
     const stub = makeSupabaseStub({
+      // The parent-org-consistency read (review fix) resolves the root first.
+      'categories.select': ROOT_PARENT_READ,
       'categories.insert': {
         data: categoryRow({ tracking_mode: 'QUANTITY', tracking_profile: VALID_CUSTOM_PROFILE }),
         error: null,
@@ -129,6 +144,7 @@ describe('CategoriesService — custom Sports subcategory profile (Task 12)', ()
 
   it('needs no tracking profile for a built-in subcategory key', async () => {
     const stub = makeSupabaseStub({
+      'categories.select': ROOT_PARENT_READ,
       'categories.insert': {
         data: categoryRow({
           name: 'Shoes',
@@ -199,7 +215,18 @@ describe('CategoriesService — custom Sports subcategory profile (Task 12)', ()
 
   describe('update()', () => {
     it('re-validates the same custom-subcategory rule on edit', async () => {
-      const stub = makeSupabaseStub({});
+      const stub = makeSupabaseStub({
+        // The resulting-state merge (review fix) reads the row as it stands.
+        'categories.select': {
+          data: {
+            id: 'cat-new',
+            sports_subcategory_key: null,
+            tracking_mode: null,
+            tracking_profile: null,
+          },
+          error: null,
+        },
+      });
       const svc = new CategoriesService(sportsCtx(stub.client));
       await expect(
         svc.update('cat-new', {
@@ -225,6 +252,290 @@ describe('CategoriesService — custom Sports subcategory profile (Task 12)', ()
       ).rejects.toMatchObject({ code: 'forbidden' });
       expect(stub.chains.has('categories.update')).toBe(false);
     });
+  });
+});
+
+/**
+ * Task 12 review fixes. Each `it` below started life as a PROBE that passed
+ * against the shipped guard — the four bypasses are grouped first, then the
+ * gaps the same review found around them.
+ *
+ * The shipped guard read the INPUT (`if (input.parentId && input.sportsSubcategoryKey
+ * && !input.trackingProfile)`, `if (input.trackingMode != null || ...)`), so a
+ * holder of only `categories:manage` could reach a row state the guard exists
+ * to make unreachable: a `sports_subcategory_key` with no resolvable profile.
+ * `resolveTrackingProfile` throws SPORTS_SUBCATEGORY_REQUIRED on such a row, so
+ * the row blocks EVERY item create and receipt in that category — a denial of
+ * service written by someone who was never allowed to touch sports at all.
+ */
+describe('CategoriesService — sports guard operates on the RESULTING row state', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('BYPASS 1: refuses a custom subcategory with no profile even with NO parentId', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Custom pads', sportsSubcategoryKey: 'custom_pads' }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' },
+    });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('BYPASS 2: explicit nulls on create still require sports:manage', async () => {
+    const stub = makeSupabaseStub({ 'categories.select': ROOT_PARENT_READ });
+    const categoriesOnly = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['categories:manage']),
+    });
+    await expect(
+      new CategoriesService(categoriesOnly).create({
+        name: 'Shoes',
+        parentId: 'cat-sports-root',
+        // A BUILT-IN key skipped the completeness guard, and `!= null` skipped
+        // the permission gate, so this whole write used to land unchallenged.
+        sportsSubcategoryKey: 'shoes',
+        trackingMode: null,
+        trackingProfile: null,
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('BYPASS 3: nulling trackingProfile on an existing custom subcategory is refused', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': queuedReads({
+        data: {
+          id: 'cat-custom',
+          parent_id: 'cat-sports-root',
+          sports_subcategory_key: 'custom_pads',
+          tracking_mode: 'QUANTITY',
+          tracking_profile: VALID_CUSTOM_PROFILE,
+        },
+        error: null,
+      }),
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.update('cat-custom', { trackingProfile: null })).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' },
+    });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('BYPASS 4: nulling trackingMode/trackingProfile still requires sports:manage', async () => {
+    const stub = makeSupabaseStub({});
+    const categoriesOnly = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['categories:manage']),
+    });
+    await expect(
+      new CategoriesService(categoriesOnly).update('cat-custom', {
+        trackingMode: null,
+        trackingProfile: null,
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('also gates sportsSubcategoryKey and sizeScaleId on sports:manage', async () => {
+    const stub = makeSupabaseStub({});
+    const categoriesOnly = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['categories:manage']),
+    });
+    await expect(
+      new CategoriesService(categoriesOnly).update('cat-1', { sportsSubcategoryKey: null }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(
+      new CategoriesService(categoriesOnly).update('cat-1', {
+        sizeScaleId: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('leaves a rename of a sports category alone (no sports field touched)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.update': { data: categoryRow({ name: 'Renamed' }), error: null },
+    });
+    const categoriesOnly = sportsCtx(stub.client, {
+      role: 'staff',
+      permissions: new Set(['categories:manage']),
+    });
+    const row = await new CategoriesService(categoriesOnly).update('cat-custom', {
+      name: 'Renamed',
+    });
+    expect(row.id).toBe('cat-new');
+    // No current-row read either: nothing sports-related can change.
+    expect(stub.chains.has('categories.select')).toBe(false);
+  });
+
+  it('requires the sports module for a sports-field write', async () => {
+    const stub = makeSupabaseStub({});
+    const noSports = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new CategoriesService(noSports).create({
+        name: 'Shoes',
+        sportsSubcategoryKey: 'shoes',
+      }),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('refuses a tracking mode the subcategory profile does not allow', async () => {
+    const stub = makeSupabaseStub({ 'categories.select': ROOT_PARENT_READ });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    // DEFAULT_SUBCATEGORY_PROFILES.shoes.allowedModes has no SERIALIZED.
+    await expect(
+      svc.create({
+        name: 'Shoes',
+        parentId: 'cat-sports-root',
+        sportsSubcategoryKey: 'shoes',
+        trackingMode: 'SERIALIZED',
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'TRACKING_MODE_NOT_ALLOWED' },
+    });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('refuses a mode outside a CUSTOM profile allowedModes on update', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': queuedReads({
+        data: {
+          id: 'cat-custom',
+          parent_id: 'cat-sports-root',
+          sports_subcategory_key: 'custom_pads',
+          tracking_mode: 'QUANTITY',
+          tracking_profile: VALID_CUSTOM_PROFILE,
+        },
+        error: null,
+      }),
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.update('cat-custom', { trackingMode: 'LOT_TRACKED' }),
+    ).rejects.toMatchObject({ details: { code: 'TRACKING_MODE_NOT_ALLOWED' } });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('accepts a mode the profile allows', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': queuedReads({
+        data: {
+          id: 'cat-shoes',
+          parent_id: 'cat-sports-root',
+          sports_subcategory_key: 'shoes',
+          tracking_mode: 'QUANTITY_BY_VARIANT',
+          tracking_profile: null,
+        },
+        error: null,
+      }),
+      'categories.update': { data: categoryRow({ tracking_mode: 'QUANTITY' }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.update('cat-shoes', { trackingMode: 'QUANTITY' })).resolves.toBeTruthy();
+    expect(stub.chains.has('categories.update')).toBe(true);
+  });
+});
+
+describe('CategoriesService — parent and size-scale org consistency', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("refuses a parentId that is not in the caller's org", async () => {
+    // The read is org-scoped, so another org's category id reads back NOTHING.
+    const stub = makeSupabaseStub({ 'categories.select': { data: null, error: null } });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Smuggled', parentId: '22222222-2222-4222-8222-222222222222' }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('refuses a parent that is itself a subcategory (categories are one level deep)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': { data: { id: 'cat-child', parent_id: 'cat-sports-root' }, error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Grandchild', parentId: 'cat-child' }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('refuses a category becoming its own parent', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.update('cat-1', { parentId: 'cat-1' })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it("refuses a sizeScaleId the org cannot see", async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': ROOT_PARENT_READ,
+      // RLS (0294) hides another org's private scale, so the read is empty.
+      'size_scales.select': { data: null, error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({
+        name: 'Shoes',
+        parentId: 'cat-sports-root',
+        sportsSubcategoryKey: 'shoes',
+        sizeScaleId: '33333333-3333-4333-8333-333333333333',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('accepts a system size scale (organization_id IS NULL)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': ROOT_PARENT_READ,
+      'size_scales.select': { data: { id: 'scale-shoe' }, error: null },
+      'categories.insert': { data: categoryRow({ sports_subcategory_key: 'shoes' }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({
+        name: 'Shoes',
+        parentId: 'cat-sports-root',
+        sportsSubcategoryKey: 'shoes',
+        sizeScaleId: '33333333-3333-4333-8333-333333333333',
+      }),
+    ).resolves.toBeTruthy();
+  });
+});
+
+describe('CategoriesService.archive — a parent with live children', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('refuses to archive a category that still has live children', async () => {
+    // Archiving the Sports root would strand its eight subcategories: every
+    // surface renders children under a LIVE parent (web groups by root, mobile
+    // walks down from null), so they would vanish with no way back.
+    const stub = makeSupabaseStub({
+      'categories.select': { data: [{ id: 'cat-shoes' }], error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.archive('cat-sports-root')).rejects.toMatchObject({ code: 'conflict' });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('archives a childless category exactly as before', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select': { data: [], error: null },
+      'categories.update': { data: { id: 'cat-1' }, error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.archive('cat-1')).resolves.toBeUndefined();
+    expect(stub.chains.has('categories.update')).toBe(true);
   });
 });
 

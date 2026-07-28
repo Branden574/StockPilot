@@ -35,9 +35,14 @@ interface HierarchyRow extends Category {
  * what "render the hierarchy" means on a plain FlatList.
  */
 function buildHierarchy(rows: Category[]): HierarchyRow[] {
+  // A child is nested under its parent only when that parent is in THIS list.
+  // The walk starts at null, so a child whose parent is missing (archived, or
+  // filtered out) would never be reached at all — it is promoted to a root
+  // instead, so no category can silently disappear from the screen.
+  const ids = new Set(rows.map((r) => r.id));
   const byParent = new Map<string | null, Category[]>();
   for (const r of rows) {
-    const key = r.parent_id;
+    const key = r.parent_id && ids.has(r.parent_id) ? r.parent_id : null;
     const list = byParent.get(key) ?? [];
     list.push(r);
     byParent.set(key, list);
