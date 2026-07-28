@@ -66,9 +66,9 @@ Next free number is **0294** (highest existing is `0293_b2b_portal_pricing_mode_
 | `0297_sports_module.sql` | Grandfather + seed `sports`; `sports:manage` permission rows | 4 |
 | `0298_product_groups_and_variants.sql` | `product_groups`; `inventory_items` variant columns | 5 |
 | `0299_duplicate_inventory_item_variants.sql` | `duplicate_inventory_item` carries the new columns | 6 |
-| `0300_po_import_line_variants.sql` | `po_import_lines` variant columns | 13 |
-| `0301_size_count_product_group.sql` | `size_count_sessions.product_group_id` | 17 |
-| `0302_variant_size_backfill.sql` | Dual-write backfill from `custom_fields.size` + ambiguity flags | 19 |
+| `0301_po_import_line_variants.sql` | `po_import_lines` variant columns | 13 |
+| `0302_size_count_product_group.sql` | `size_count_sessions.product_group_id` | 17 |
+| `0303_variant_size_backfill.sql` | Dual-write backfill from `custom_fields.size` + ambiguity flags | 19 |
 
 ---
 
@@ -2580,7 +2580,7 @@ begin
   end if;
 
   -- Keep custom_fields.size in step with the first-class column during the
-  -- dual-write window (see migration 0302).
+  -- dual-write window (see migration 0303).
   if v_variant_size is not null then
     v_new_cf := v_new_cf || jsonb_build_object('size', v_variant_size);
   end if;
@@ -4355,13 +4355,13 @@ export function GroupingPreview({
 
 # Phase 5 — CSV and AI import
 
-## Task 13: Variant columns on import lines and in the extraction schema (migration 0300)
+## Task 13: Variant columns on import lines and in the extraction schema (migration 0301)
 
 The PO-imports chassis is prod-hardened but extracts a FLAT line schema with no size/variant/group fields. This threads variant data through every layer of it. The audit enumerated eight places a new `po_import_lines` column must reach — miss one and the value is silently dropped.
 
 **Files:**
-- Create: `supabase/migrations/0300_po_import_line_variants.sql`
-- Create: `supabase/tests/0300_po_import_line_variants.test.sql`
+- Create: `supabase/migrations/0301_po_import_line_variants.sql`
+- Create: `supabase/tests/0301_po_import_line_variants.test.sql`
 - Modify: `apps/web/src/lib/po-scan/extract.ts` (`PO_SCHEMA`, `ExtractedPo`, the normalization mapper)
 - Modify: `packages/core/src/schemas/po-imports.ts` (`canonicalPoLineSchema`)
 - Modify: `apps/web/src/server/services/po-imports.ts` (`PoImportLineRow`, both line-payload mappers)
@@ -4375,10 +4375,10 @@ The PO-imports chassis is prod-hardened but extracts a FLAT line schema with no 
 
 **Steps:**
 
-- [ ] Create `supabase/migrations/0300_po_import_line_variants.sql`:
+- [ ] Create `supabase/migrations/0301_po_import_line_variants.sql`:
 
 ```sql
--- 0300_po_import_line_variants.sql
+-- 0301_po_import_line_variants.sql
 --
 -- Extends the PO-imports chassis with variant fields so a size run arrives as
 -- a size run instead of N unrelated lines.
@@ -4425,7 +4425,7 @@ create index if not exists po_import_lines_suggested_group_idx
   where suggested_group_id is not null;
 ```
 
-- [ ] Create `supabase/tests/0300_po_import_line_variants.test.sql`. Namespace `b0300000`. Assert: all eleven columns exist; `suggested_group_id` FKs `product_groups` with `on delete set null` (delete a group and confirm the line survives with a null); a jersey number of `'07'` round-trips; the columns are all nullable so an existing import path inserting without them still works (insert a line with only the pre-existing columns and assert it succeeds).
+- [ ] Create `supabase/tests/0301_po_import_line_variants.test.sql`. Namespace `b0300000`. Assert: all eleven columns exist; `suggested_group_id` FKs `product_groups` with `on delete set null` (delete a group and confirm the line survives with a null); a jersey number of `'07'` round-trips; the columns are all nullable so an existing import path inserting without them still works (insert a line with only the pre-existing columns and assert it succeeds).
 - [ ] Extend `PO_SCHEMA` in `apps/web/src/lib/po-scan/extract.ts`, inside `lines.items.properties`. Every description must instruct the model NOT to invent:
 
 ```ts
@@ -4523,7 +4523,7 @@ const TEMPLATE_HEADER = [
 ];
 ```
 
-- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0300|Result:"`, then `pnpm test` and `pnpm typecheck`.
+- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0301|Result:"`, then `pnpm test` and `pnpm typecheck`.
 - [ ] **Regression (the PO-import create path is a shared surface):** re-run the existing po-imports tests. Then upload a real, NON-sports PO in Demo Co end to end (scan, review, approve) and confirm nothing about the flow changed. Every new column is nullable and every new extraction field is optional, so a PO with no sizes must behave identically.
 
 ---
@@ -4929,8 +4929,8 @@ const runs = React.useMemo(() => {
 Two things. Counts must be countable per variant with no serial scan for ordinary pairs and jerseys. And Instant Size Count's `style_key` must re-key to `group_id`, or sports counts detach from the products they counted — named as a migration risk in the Phase 1 report.
 
 **Files:**
-- Create: `supabase/migrations/0301_size_count_product_group.sql`
-- Create: `supabase/tests/0301_size_count_product_group.test.sql`
+- Create: `supabase/migrations/0302_size_count_product_group.sql`
+- Create: `supabase/tests/0302_size_count_product_group.test.sql`
 - Modify: `apps/web/src/server/services/size-counts.ts`
 - Modify: `apps/web/src/app/api/v1/size-counts/route.ts`
 - Modify: `apps/mobile/app/size-count/new.tsx`, `apps/mobile/app/size-count/[id].tsx`
@@ -4944,10 +4944,10 @@ Two things. Counts must be countable per variant with no serial scan for ordinar
 
 **Steps:**
 
-- [ ] Create `supabase/migrations/0301_size_count_product_group.sql`:
+- [ ] Create `supabase/migrations/0302_size_count_product_group.sql`:
 
 ```sql
--- 0301_size_count_product_group.sql
+-- 0302_size_count_product_group.sql
 --
 -- Re-keys Instant Size Count from the display-only style_key to a real
 -- product_group_id.
@@ -4982,7 +4982,7 @@ create index if not exists size_count_sessions_group_idx
 -- sessions keep their style_key and no group.
 ```
 
-- [ ] Create `supabase/tests/0301_size_count_product_group.test.sql`. Namespace `51301000`. Assert: the column and index exist; `on delete set null` holds (delete the group, the session survives with a null); `style_key` still exists and is still nullable; and — the anti-regression — a session inserted with only the pre-0301 columns still succeeds.
+- [ ] Create `supabase/tests/0302_size_count_product_group.test.sql`. Namespace `51301000`. Assert: the column and index exist; `on delete set null` holds (delete the group, the session survives with a null); `style_key` still exists and is still nullable; and — the anti-regression — a session inserted with only the pre-0302 columns still succeeds.
 - [ ] Add `productGroupId` to `createSession` in `apps/web/src/server/services/size-counts.ts` and to the zod in `apps/web/src/app/api/v1/size-counts/route.ts` (alongside the existing `styleKey`).
 - [ ] Make `apps/mobile/app/size-count/new.tsx` actually send an identity. It currently posts `{ mode: 'rapid_pass', boxId }` only. Add a product-group picker (searchable, group name + variant count) and post `productGroupId`. Keep `styleKey` optional for orgs without the sports module.
 - [ ] Drive the size chips in `apps/mobile/app/size-count/[id].tsx` and `capture.tsx` from the group's size scale rather than the hardcoded nine (`SIZES` at `[id].tsx:20-21`, `LABELS` at `capture.tsx:22`, `FILTERS` at `review.tsx:20`). A shoe count must be able to tally 9, 9.5 and 10.
@@ -5004,7 +5004,7 @@ export interface CycleCountLineWithItem extends CycleCountLineRow {
 - [ ] Add a "count by product group" scope to `CycleCountsService.start`. The existing `scope: 'selection'` path already takes `selectionItemIds`; a group scope resolves to every variant's item ids, which keeps the atomic snapshot RPC untouched.
 - [ ] Ensure NO serial scan is demanded for ordinary pairs and jerseys. Audit `apps/mobile/app/cycle-count/scan/[id].tsx`: scanning a variant barcode must resolve to that variant and increment its count. The barcode scope is explicit — group barcodes are not scannable for counting, variant barcodes are.
 - [ ] Group the count sheet by product group in `apps/web/src/lib/pdf/cycle-count.tsx` with a per-group subtotal, and print the counting unit.
-- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0301|Result:"`, `pnpm test`, `pnpm typecheck`.
+- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0302|Result:"`, `pnpm test`, `pnpm typecheck`.
 - [ ] Simulator-test both mobile flows: start a size count against a group, tally numeric sizes, review; and start a cycle count scoped to a group and scan a variant barcode.
 - [ ] **Regression (cycle counts are assignee-locked since 0282):** confirm the assignee lock, release and force-reassign still behave, and that a count over ungrouped items renders exactly as before with no group headers.
 
@@ -5135,13 +5135,13 @@ export async function unlinkItems(
 
 # Phase 7 — Migration and verification
 
-## Task 19: `variant_size` dual-write backfill and ambiguity flags (migration 0302)
+## Task 19: `variant_size` dual-write backfill and ambiguity flags (migration 0303)
 
 The ONE backfill in this plan, and it is deliberately narrow. `custom_fields.size` is a value the app itself wrote at create time from an explicit user choice — it is stored data, not a guess. Copying it into the indexed column is safe. Deriving a GROUP from an item name is not, and this migration does none of that.
 
 **Files:**
-- Create: `supabase/migrations/0302_variant_size_backfill.sql`
-- Create: `supabase/tests/0302_variant_size_backfill.test.sql`
+- Create: `supabase/migrations/0303_variant_size_backfill.sql`
+- Create: `supabase/tests/0303_variant_size_backfill.test.sql`
 - Modify: `apps/web/src/server/services/inventory.ts` (`update()` dual-write)
 - Create: `apps/web/src/server/services/inventory.dual-write.test.ts`
 - Create: `docs/superpowers/reports/2026-07-27-sports-migration-report.md`
@@ -5152,10 +5152,10 @@ The ONE backfill in this plan, and it is deliberately narrow. `custom_fields.siz
 
 **Steps:**
 
-- [ ] Create `supabase/migrations/0302_variant_size_backfill.sql`:
+- [ ] Create `supabase/migrations/0303_variant_size_backfill.sql`:
 
 ```sql
--- 0302_variant_size_backfill.sql
+-- 0303_variant_size_backfill.sql
 --
 -- Copies the STORED size out of custom_fields into the indexed column, and
 -- flags what a human must look at.
@@ -5192,7 +5192,7 @@ alter table public.inventory_items
     ));
 
 comment on column public.inventory_items.sports_review_flag is
-  'Set by the 0302 backfill to mark rows a human should look at. Never blocks '
+  'Set by the 0303 backfill to mark rows a human should look at. Never blocks '
   'anything and never changes behaviour — it only populates the review queue '
   'in /dashboard/product-groups/link.';
 
@@ -5245,11 +5245,11 @@ where i.deleted_at is null
 -- every touched item.
 ```
 
-- [ ] Create `supabase/tests/0302_variant_size_backfill.test.sql`. Namespace `bf302000`. Assert: an item with `custom_fields.size = 'XL'` gets `variant_size = 'XL'` and `variant_size_original = 'XL'`; `custom_fields` is UNCHANGED (select it back and compare); an item with no `custom_fields.size` gets a null `variant_size`; **`group_id` is still NULL for every backfilled row** (the headline anti-inference assertion); a sized ungrouped item is flagged `sized_but_ungrouped`; `quantity_on_hand` is unchanged; no `stock_movements` row was created; and re-running the UPDATE statements is a no-op.
+- [ ] Create `supabase/tests/0303_variant_size_backfill.test.sql`. Namespace `bf302000`. Assert: an item with `custom_fields.size = 'XL'` gets `variant_size = 'XL'` and `variant_size_original = 'XL'`; `custom_fields` is UNCHANGED (select it back and compare); an item with no `custom_fields.size` gets a null `variant_size`; **`group_id` is still NULL for every backfilled row** (the headline anti-inference assertion); a sized ungrouped item is flagged `sized_but_ungrouped`; `quantity_on_hand` is unchanged; no `stock_movements` row was created; and re-running the UPDATE statements is a no-op.
 - [ ] Add the dual-write to `InventoryService.update()`. During the transition both places must agree, or a size edited on the item form drifts from the size the list groups by:
 
 ```ts
-    // DUAL-WRITE (transition window, migration 0302). variant_size is the
+    // DUAL-WRITE (transition window, migration 0303). variant_size is the
     // durable column; custom_fields.size is what five older surfaces still
     // read. Writing one without the other lets them disagree, so update()
     // always writes both. Remove the custom_fields half only when every
@@ -5265,8 +5265,8 @@ where i.deleted_at is null
 ```
 
 - [ ] Write `inventory.dual-write.test.ts`: updating `variantSize` writes both places; updating other fields leaves both alone; clearing `variantSize` to null removes neither silently but nulls the column and leaves `custom_fields.size` for the reader migration to handle.
-- [ ] Write `docs/superpowers/reports/2026-07-27-sports-migration-report.md` with the four sections the deliverables require: **schema** (every table and column added, 0294-0302), **backfills** (exactly what 0302 wrote and what it deliberately did not), **ambiguous rows** (the counts per `sports_review_flag` from prod after the push), and **rollback** (the exact statements, per migration, and the note that `custom_fields` is never mutated so the source survives).
-- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0302|Result:"`.
+- [ ] Write `docs/superpowers/reports/2026-07-27-sports-migration-report.md` with the four sections the deliverables require: **schema** (every table and column added, 0294-0303), **backfills** (exactly what 0303 wrote and what it deliberately did not), **ambiguous rows** (the counts per `sports_review_flag` from prod after the push), and **rollback** (the exact statements, per migration, and the note that `custom_fields` is never mutated so the source survives).
+- [ ] Run `supabase db reset && pnpm db:test 2>&1 | grep -E "0303|Result:"`.
 - [ ] **Regression:** run the FULL pgTAP suite and the FULL vitest suite. Then confirm the existing size-run display grouping still works for a backfilled-but-ungrouped family — that is the fallback path the owner decision depends on.
 
 ---
@@ -5293,7 +5293,7 @@ Nothing ships until this task's evidence exists. Never claim untested.
   - `pnpm typecheck` — clean. This is the only thing that proves no `tracking_type` enumerator site was missed, because `database.ts` is `any`.
   - `pnpm lint` — clean.
 - [ ] Confirm the GitHub CI rollup is green on the branch. CI has been a real gate since 2026-07-20; check the branch's own rollup, not a neighbouring one.
-- [ ] **Push migrations to production FIRST, then deploy.** `supabase db push --linked` against `xizpqmhhslgzbuqtjubv`, applying 0294 through 0302 in order. Pending migrations crash pages, so the web deploy must follow, never lead. Deploy by pushing to `main` only — the GitHub integration auto-deploys; do NOT also POST `/v13/deployments`.
+- [ ] **Push migrations to production FIRST, then deploy.** `supabase db push --linked` against `xizpqmhhslgzbuqtjubv`, applying 0294 through 0303 in order. Pending migrations crash pages, so the web deploy must follow, never lead. Deploy by pushing to `main` only — the GitHub integration auto-deploys; do NOT also POST `/v13/deployments`.
 - [ ] Fill in the migration report's ambiguous-row counts from production:
 
 ```sql
@@ -5329,7 +5329,7 @@ group by 1, 2 order by 3 desc;
   7. Confirm every notification link produced by these flows resolves on mobile.
 - [ ] Ship the mobile build: `pnpm release:ota` from `apps/mobile`. Never a raw `eas update`. Confirm `runtimeVersion` matches `appVersion`; a native dependency change (the `zod` direct dependency in Task 10) needs a decision on whether OTA is sufficient — `zod` is pure JS, so OTA is sufficient, but state that explicitly in the verification report.
 - [ ] Write `docs/superpowers/specs/2026-07-27-sports-inventory-model.md` — the final inventory model doc: the group/variant/unit mapping onto real tables, why `inventory_items` remains the sole quantity owner, and the tracking-mode-to-`tracking_type` table.
-- [ ] Write `docs/superpowers/specs/2026-07-27-sports-field-dictionary.md` — one row per field with meaning, type, required-when, normalization rule, accepted aliases, whether it participates in the group key or the variant key, and its display label. Cover every column added in 0294-0302 plus every `PO_SCHEMA` field added in Task 13.
+- [ ] Write `docs/superpowers/specs/2026-07-27-sports-field-dictionary.md` — one row per field with meaning, type, required-when, normalization rule, accepted aliases, whether it participates in the group key or the variant key, and its display label. Cover every column added in 0294-0303 plus every `PO_SCHEMA` field added in Task 13.
 - [ ] Write `docs/superpowers/reports/2026-07-27-sports-verification.md` — the real results of every line above, with the files-changed list and the actual test output. If a line failed, record the failure; do not omit it.
 - [ ] Update `docs/superpowers/reports/2026-07-27-sports-migration-report.md` to final.
 
