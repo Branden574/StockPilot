@@ -125,3 +125,48 @@ describe('ItemForm — shared vs per-placement field grouping (Task 4)', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Migration 0303 backfilled `variant_size` onto every historical sized item,
+// and InventoryService.update() dual-writes variant_size + custom_fields.size
+// and recomputes variant_key. None of that was reachable from the web: the
+// edit page never threaded the stored size into the form, so the field seeded
+// '' and zod's emptyToUndefined dropped it from every patch. These pin the
+// round trip — and that a row with no size gains no field.
+// ---------------------------------------------------------------------------
+describe('ItemForm — the row\'s own size on edit (0303)', () => {
+  it('shows the stored size for a sized row being edited', () => {
+    renderForm({ id: 'item-1', quantityOnHand: 5, variantSize: 'XL' });
+
+    expect(screen.getByPlaceholderText('10.5')).toHaveValue('XL');
+    expect(screen.getByText('Size')).toBeInTheDocument();
+  });
+
+  it('sends the edited size to the update action, so the dual-write is reachable', async () => {
+    const { updateItemAction } = await import('@/server/actions/inventory');
+    vi.mocked(updateItemAction).mockResolvedValue({ ok: true, data: { id: 'item-1' } } as never);
+
+    renderForm({ id: 'item-1', name: 'Team Shirt', quantityOnHand: 5, variantSize: 'XL' });
+
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const sizeInput = screen.getByPlaceholderText('10.5');
+    await user.clear(sizeInput);
+    await user.type(sizeInput, 'L');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(updateItemAction).toHaveBeenCalledWith(
+      'item-1',
+      expect.objectContaining({ variantSize: 'L' }),
+    );
+  });
+
+  it('adds no Size field to a row that has no size, or to the create form', () => {
+    const { unmount } = renderForm({ id: 'item-1', quantityOnHand: 5 });
+    expect(screen.queryByPlaceholderText('10.5')).not.toBeInTheDocument();
+    unmount();
+
+    renderForm();
+    expect(screen.queryByPlaceholderText('10.5')).not.toBeInTheDocument();
+  });
+});

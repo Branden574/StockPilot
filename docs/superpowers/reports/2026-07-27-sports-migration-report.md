@@ -269,6 +269,6 @@ display heuristic — but the groupings are gone. Export
 
 | File | Coverage |
 |---|---|
-| `supabase/tests/0303_variant_size_backfill.test.sql` | 30 assertions: the copy, verbatim original, `custom_fields` untouched, group_id untouched (the headline, asserted twice), all three flags, pre-set sizes not overwritten, soft-deleted rows skipped, quantity untouched, zero movements, `updated_at` preserved, a real edit still bumps, idempotent re-run, closed flag vocabulary |
+| `supabase/tests/0303_variant_size_backfill.test.sql` | 31 assertions: the copy, verbatim original, `custom_fields` untouched, group_id untouched (the headline, asserted twice), all three flags, pre-set sizes not overwritten, soft-deleted rows skipped, quantity untouched, zero movements, `updated_at` preserved, a real edit still bumps, idempotent re-run, closed flag vocabulary, a case-only name/size difference not flagged as a conflict |
 | `apps/web/src/server/services/inventory.dual-write.test.ts` | 12 assertions on `update()`: both places written, sibling `custom_fields` keys kept, same-patch merge, clearing semantics, `variant_key` recompute, `group_id`/quantity never touched |
 | `packages/core/src/inventory/size-run.test.ts` | The post-backfill state (`variantSize` set, `groupId` null) still collapses on the name heuristic, in arrival order, and two different styles carrying the same size do not fold together |

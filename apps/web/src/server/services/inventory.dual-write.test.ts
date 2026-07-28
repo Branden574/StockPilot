@@ -218,6 +218,33 @@ describe('InventoryService.update — variant_size / custom_fields.size dual-wri
     expect(updates.some((u) => 'variant_key' in u)).toBe(false);
   });
 
+  it('does NOT re-record variant_size_original when the submitted size is unchanged', async () => {
+    // The edit form now seeds the row's stored size, so EVERY save re-submits
+    // it — including saves that only meant to move the item's rack.
+    // variant_size_original is the VERBATIM source 0303 copied out of
+    // custom_fields ('  xl  '), and rewriting it with the normalized column
+    // value would destroy the audit trail the rollback statement reads.
+    // (binLocation, not a SHARED_ITEM_FIELD — see the test below.)
+    const verbatim = { ...ITEM, variant_size: 'XL', variant_size_original: '  xl  ' };
+    const { ctx, updates } = makeCtx(verbatim);
+    await new InventoryService(ctx).update('itm-1', { variantSize: 'XL', binLocation: 'A-1' });
+
+    const w = rowWrite(updates);
+    expect(w.variant_size).toBe('XL');
+    expect('variant_size_original' in w).toBe(false);
+    expect(w.bin_location).toBe('A-1');
+  });
+
+  it('DOES re-record variant_size_original when the size moves', async () => {
+    // The other half: the original tracks the source of the CURRENT size, so a
+    // real size edit must not leave the previous row's verbatim value behind.
+    const verbatim = { ...ITEM, variant_size: 'XL', variant_size_original: '  xl  ' };
+    const { ctx, updates } = makeCtx(verbatim);
+    await new InventoryService(ctx).update('itm-1', { variantSize: 'L' });
+
+    expect(rowWrite(updates).variant_size_original).toBe('L');
+  });
+
   it('back-fills the column for a legacy row that only ever had custom_fields.size', async () => {
     // The row 0303 exists for: created before the variant columns did. An edit
     // must bring it fully forward, not half.

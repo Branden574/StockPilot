@@ -2660,7 +2660,17 @@ export class InventoryService {
       const nextSize = patch.variantSize ?? null;
       variantSizeChanged = nextSize !== currentVariantSize;
       updates.variant_size = nextSize;
-      updates.variant_size_original = patch.variantSizeOriginal ?? nextSize;
+      // Re-record the ORIGINAL only when the size actually moved. The item form
+      // submits every field on every save and now seeds the row's stored size,
+      // so an unrelated edit (a reorder point, a rack) re-sends the SAME size —
+      // and rewriting the original on that would replace 0303's verbatim source
+      // record ('  xl  ') with the normalized column value ('XL'), destroying
+      // the audit trail against custom_fields.size that the rollback statement
+      // and the migration's own assertion depend on. The original is the source
+      // of the size, so it changes only when the size does.
+      if (variantSizeChanged) {
+        updates.variant_size_original = patch.variantSizeOriginal ?? nextSize;
+      }
       if (nextSize) {
         // Merge onto whatever custom_fields THIS patch is already writing.
         // Reading the stored object instead would revert a custom-field edit

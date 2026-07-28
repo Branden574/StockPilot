@@ -1,5 +1,37 @@
 -- 0303_variant_size_backfill.sql
 --
+-- ============================================================================
+-- PROD PUSH NOTE — PUSH THIS FILE IN A SCHEDULED LOW-TRAFFIC WINDOW.
+--
+-- A migration file runs inside ONE transaction, so the ACCESS EXCLUSIVE lock
+-- the first `alter table ... add column` takes on inventory_items is held until
+-- this file COMMITS. For that whole window the table is completely unavailable
+-- — READS INCLUDED. Every dashboard query, every /api/v1 call and every mobile
+-- sync that touches inventory_items queues behind it. Do not read the
+-- statement-level notes below as a promise of concurrency: individually the
+-- ADD COLUMN is rewrite-free, the VALIDATE takes only SHARE UPDATE EXCLUSIVE
+-- and the UPDATEs take only ROW EXCLUSIVE, but every one of them runs while
+-- that first lock is still held.
+--
+-- COST: ~4s warm on 1.2 M rows for the scans, plus index maintenance on the
+-- rows the backfill actually updates. Budget tens of seconds of full table
+-- unavailability, not milliseconds.
+--
+-- `set lock_timeout = '5s'` below bounds the blast radius. Without it the ADD
+-- COLUMN's lock REQUEST queues ahead of every new reader, so one slow
+-- analytics query holding a read lock would take the whole table offline for
+-- as long as it ran, and the migration would wait behind it indefinitely.
+--
+-- ON lock_timeout FAILURE ("canceling statement due to lock timeout", SQLSTATE
+-- 55P03): nothing was applied — the transaction rolled back whole — so RETRY.
+-- Ideally a few minutes later, or once whatever holds inventory_items has
+-- finished (`select pid, state, xact_start, query from pg_stat_activity where
+-- state <> 'idle' order by xact_start`). Every statement in this file is
+-- idempotent (`if not exists`, `create or replace`, and backfill WHERE clauses
+-- that re-match zero rows), so a retry after ANY failure is safe and cannot
+-- double-write. The pgTAP file asserts the idempotence directly.
+-- ============================================================================
+--
 -- Copies the STORED size out of custom_fields into the indexed column, and
 -- flags what a human must look at.
 --
@@ -28,15 +60,44 @@
 --
 -- Proof: supabase/tests/0303_variant_size_backfill.test.sql
 
+-- Bound the lock wait for EVERY statement in this transaction. See the PROD
+-- PUSH NOTE above: this is what turns "the whole table is offline until some
+-- unrelated long read finishes" into "the push failed, retry it". 5s is long
+-- enough to win an uncontended lock on a busy table and short enough that a
+-- failed push is an inconvenience rather than an outage. It applies to the
+-- backfill UPDATEs too — a row lock held by an app transaction for more than
+-- 5s aborts the migration instead of stalling behind it, which is the same
+-- trade and the same remedy (retry).
+--
+-- PLAIN `set`, NOT `set local` — deliberately, and verified against the CLI.
+-- The Supabase CLI applies a migration file as one pipelined pgx batch. That
+-- IS atomic (a mid-file error rolls the whole file back — probed directly), but
+-- the statements never enter a transaction BLOCK in the sense
+-- `IsTransactionBlock()` means, so `set local` emits "WARNING (25P01): SET
+-- LOCAL can only be used in transaction blocks" and is DISCARDED: the timeout
+-- would silently not exist, which is worse than not writing it. A plain `set`
+-- takes effect immediately for the rest of the batch. Its one side effect is
+-- session scope, so the file `reset`s it at the end — and if any statement
+-- fails, the abort unwinds the GUC anyway.
+set lock_timeout = '5s';
+
 -- ── 1) Review flag ──────────────────────────────────────────────────────────
 -- Column first, CHECK second, as NOT VALID + VALIDATE. Spelling the CHECK
 -- inline on the ADD COLUMN would make Postgres verify it against all 1.2 M
--- existing rows while holding ACCESS EXCLUSIVE — a full-table scan that blocks
--- reads as well as writes. Added NOT VALID the constraint is catalog-only and
--- instant (it still enforces every subsequent insert/update, which is all the
--- backfill below needs), and VALIDATE then does its one scan under SHARE
--- UPDATE EXCLUSIVE, which blocks neither. The ADD COLUMN itself is metadata-
--- only: a nullable column with no default has been rewrite-free since PG 11.
+-- existing rows before the ALTER could return, so the split still buys
+-- something real: added NOT VALID the constraint is catalog-only and instant
+-- (it still enforces every subsequent insert/update, which is all the backfill
+-- below needs), and VALIDATE's one scan takes only SHARE UPDATE EXCLUSIVE.
+-- The ADD COLUMN itself is metadata-only: a nullable column with no default
+-- has been rewrite-free since PG 11.
+--
+-- What the split does NOT buy is concurrency, and it would be wrong to read it
+-- that way. The ADD COLUMN takes ACCESS EXCLUSIVE on inventory_items, and a
+-- migration file is one transaction, so that lock is held through the VALIDATE,
+-- through the backfill, through the index build, until COMMIT. Read the whole
+-- file as a single window in which inventory_items answers nobody — reads
+-- included. That every individual statement below is cheap or weakly-locking is
+-- true and still does not help. Hence the PROD PUSH NOTE at the top.
 alter table public.inventory_items
   add column if not exists sports_review_flag text;
 
@@ -57,18 +118,8 @@ comment on column public.inventory_items.sports_review_flag is
   'anything and never changes behaviour — it only populates the review queue '
   'in /dashboard/product-groups/link.';
 
--- Created BEFORE the backfill, so it is built over zero matching rows and then
--- maintained incrementally as the flags land. Partial on both predicates: the
--- review queue always reads one org's flagged, live rows, and an equality test
--- on the flag implies `is not null` for the planner, so the index stays usable
--- from `where organization_id = ? and sports_review_flag = ? and deleted_at is
--- null`. (Contrast inventory_items_group_idx in 0298, which had to be widened
--- to non-partial because the FK referential-integrity probe behind it cannot
--- see a deleted_at predicate at all. There is no FK on this column, so no such
--- probe exists and the partial form is safe here.)
-create index if not exists inventory_items_sports_review_idx
-  on public.inventory_items (organization_id, sports_review_flag)
-  where sports_review_flag is not null and deleted_at is null;
+-- The index on this column is created in section 4, AFTER the backfill. See the
+-- rationale there.
 
 -- ── 2) A backfill must not look like a human edit ───────────────────────────
 -- Migration 0242 stopped background embedding writes from bumping updated_at,
@@ -128,8 +179,12 @@ $$;
 -- actually bounds the cost is the WHERE clauses: every row the app has ever
 -- created without a custom_fields.size is filtered out by an index-free but
 -- cheap jsonb key test, and only matched rows are locked and re-versioned.
--- No statement here rewrites the table and none takes a lock stronger than the
--- ROW EXCLUSIVE an ordinary UPDATE takes.
+-- No statement here rewrites the table, and an UPDATE on its own would take
+-- nothing stronger than ROW EXCLUSIVE — but that is not the lock that decides
+-- anything here. Section 1's ADD COLUMN is still holding ACCESS EXCLUSIVE for
+-- the rest of this transaction, so the backfill runs with the table already
+-- closed to every other session, and its duration is added to that window
+-- rather than overlapped with anything. See the PROD PUSH NOTE at the top.
 create or replace function public._backfill_variant_size()
 returns void
 language plpgsql
@@ -218,7 +273,37 @@ revoke all on function public._backfill_variant_size() from public, anon, authen
 
 select public._backfill_variant_size();
 
--- ── 4) The ledger is untouched ──────────────────────────────────────────────
+-- ── 4) The review-queue index, built AFTER the flags ────────────────────────
+-- Order matters, and it is the opposite of what it looks like. With the index
+-- already in place the backfill's UPDATEs would each have to maintain it, and
+-- because 3b/3c/3d write sports_review_flag itself — an indexed column — not
+-- one of those updates could take the HOT path: every touched row would pay a
+-- fresh index tuple as well as its heap tuple. Building once over the finished
+-- flag set is a single pass instead (106 ms measured), and nothing can read the
+-- index in the meantime: its only reader is the review queue behind
+-- /dashboard/product-groups/link, and this whole file is one transaction that
+-- has not committed yet.
+--
+-- Partial on both predicates: the review queue always reads one org's flagged,
+-- live rows, and an equality test on the flag implies `is not null` for the
+-- planner, so the index stays usable from `where organization_id = ? and
+-- sports_review_flag = ? and deleted_at is null`. (Contrast
+-- inventory_items_group_idx in 0298, which had to be widened to non-partial
+-- because the FK referential-integrity probe behind it cannot see a deleted_at
+-- predicate at all. There is no FK on this column, so no such probe exists and
+-- the partial form is safe here.)
+create index if not exists inventory_items_sports_review_idx
+  on public.inventory_items (organization_id, sports_review_flag)
+  where sports_review_flag is not null and deleted_at is null;
+
+-- ── 5) The ledger is untouched ──────────────────────────────────────────────
 -- This migration writes NO quantity column and NO stock_movements row, so
 -- SUM(stock_movements.quantity_change) = inventory_items.quantity_on_hand
 -- still holds for every touched item. The pgTAP file asserts both halves.
+
+-- Hand the lock timeout back. The `set` at the top of the file is plain, not
+-- LOCAL (see the note there), so it would otherwise outlive this migration on
+-- the apply connection and quietly impose 5s on every LATER migration in the
+-- same push. On a failed push the abort unwinds it instead, so this line only
+-- matters on the success path.
+reset lock_timeout;

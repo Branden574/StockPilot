@@ -1471,9 +1471,25 @@ export function ItemForm({
           />
           {(() => {
             const categorySupportsSizes = Boolean(selectedCategory?.supports_sizes);
-            // Hide while editing — variants only apply at create-time. Each
-            // existing variant edits as a normal single row.
-            if (!categorySupportsSizes || isEdit) return <div />;
+            // Editing ONE existing row. The size CHIPS below are a create-only
+            // bulk flow (each variant edits as a normal single row), but that
+            // row's own size still has to be visible and editable: migration
+            // 0303 backfilled variant_size onto every historical sized item and
+            // InventoryService.update() dual-writes it with custom_fields.size,
+            // and until this input existed there was no web surface that could
+            // reach either. Shown only for a row that ALREADY carries a size, so
+            // no plain widget's or book's edit form gains a field, and the
+            // create form is byte-unchanged. Clearing it is still a no-op rather
+            // than a clear (emptyToUndefined; repo-wide zod convention).
+            if (isEdit) {
+              if (!defaults?.variantSize) return <div />;
+              return (
+                <Field label="Size" optional error={errors.variantSize?.message}>
+                  <Input placeholder="10.5" {...register('variantSize')} />
+                </Field>
+              );
+            }
+            if (!categorySupportsSizes) return <div />;
             return (
               <Field label="Sizes" optional>
                 <div className="flex flex-wrap gap-1.5">
