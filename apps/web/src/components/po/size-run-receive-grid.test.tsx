@@ -234,6 +234,22 @@ describe('SizeRunReceiveGrid', () => {
     expect(screen.getByTestId('extras-a')).toBeInTheDocument();
   });
 
+  it('shows the outstanding variance per size (review fix: restored Variance cell)', () => {
+    // a: ordered 4, already 0, entering 4 -> fully received (variance 0).
+    // b: ordered 8, already 2, entering 0 -> 6 still outstanding.
+    renderGrid({ entries: { a: { received: 4 } } });
+    const rows = screen.getAllByTestId('size-run-row');
+    expect(within(nth(rows, 0)).getByTestId('size-run-variance')).toHaveTextContent('0');
+    expect(within(nth(rows, 1)).getByTestId('size-run-variance')).toHaveTextContent('6');
+  });
+
+  it('shows a NEGATIVE variance — over-receipt still gives a signal on a run row', () => {
+    // a: ordered 4, already 0, entering 7 -> over-received by 3.
+    renderGrid({ entries: { a: { received: 7 } } });
+    const row = nth(screen.getAllByTestId('size-run-row'), 0);
+    expect(within(row).getByTestId('size-run-variance')).toHaveTextContent('-3');
+  });
+
   it('labels a size-less variant rather than rendering a blank cell, and sorts it last', () => {
     // Through the real path: splitIntoRuns owns the ordering, the grid renders
     // what it is handed.

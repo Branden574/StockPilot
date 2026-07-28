@@ -100,6 +100,15 @@ export default function PoReceiveScreen() {
 
   const enabledModules = useEnabledModules();
   const sportsEnabled = enabledModules.has('sports');
+  // Read via a ref inside `load`, not as a useCallback dependency (review
+  // fix). `useEnabledModules()` starts with an empty set and flips this
+  // boolean once its async fetch resolves — depending on the VALUE gave
+  // `load` a new identity on that flip alone, re-ran the mount effect below,
+  // and reseeded `draft`, wiping any receiving quantity the user had already
+  // typed while modules were still loading. The ref always reads current
+  // without making a module-list refresh a reason to reload.
+  const sportsEnabledRef = React.useRef(sportsEnabled);
+  sportsEnabledRef.current = sportsEnabled;
 
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
@@ -173,7 +182,7 @@ export default function PoReceiveScreen() {
     const groupIds = Array.from(
       new Set(flatLines.map((l) => l.groupId).filter((v): v is string => Boolean(v))),
     );
-    if (groupIds.length > 0 && sportsEnabled) {
+    if (groupIds.length > 0 && sportsEnabledRef.current) {
       const { data: groupRows, error: groupErr } = await supabase
         .from('product_groups')
         .select('id, name, default_counting_unit, size_scale_id')
@@ -303,7 +312,9 @@ export default function PoReceiveScreen() {
     );
 
     setLoading(false);
-  }, [id, orgId, sportsEnabled]);
+    // sportsEnabled deliberately excluded — see sportsEnabledRef above. Only
+    // the PO id / org context re-key the draft.
+  }, [id, orgId]);
 
   React.useEffect(() => {
     void load();

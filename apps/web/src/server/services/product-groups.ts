@@ -385,20 +385,32 @@ export class ProductGroupsService {
     const unique = Array.from(new Set(groupIds.filter(Boolean)));
     if (unique.length === 0) return new Map();
 
-    const { data: groupRows, error: groupErr } = await this.ctx.supabase
-      .from('product_groups')
-      .select('id, name, default_counting_unit, size_scale_id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', unique)
-      .is('deleted_at', null);
-    if (groupErr) throw new ServiceError('internal_error', groupErr.message);
-
-    const groups = (groupRows ?? []) as Array<{
+    // Chunked, not one `.in(...)`: `unique` can carry every product group id a
+    // caller collected across a whole catalog (up to ~1000 — the PO create/edit
+    // pages' page-level cap), and PostgREST's max_rows silently truncates a
+    // single `.in()` past 1000 rows with NO error — the same failure mode
+    // fixed in the portal catalog (23e319f6). A batch error is NOT swallowed:
+    // this map decides which groups the size-run picker can even offer, so a
+    // partial read must fail loud rather than quietly hiding a group.
+    type GroupMetaRow = {
       id: string;
       name: string;
       default_counting_unit: CountingUnit;
       size_scale_id: string | null;
-    }>;
+    };
+    const GROUP_BATCH_SIZE = 500;
+    const groups: GroupMetaRow[] = [];
+    for (let i = 0; i < unique.length; i += GROUP_BATCH_SIZE) {
+      const batch = unique.slice(i, i + GROUP_BATCH_SIZE);
+      const { data: groupRows, error: groupErr } = await this.ctx.supabase
+        .from('product_groups')
+        .select('id, name, default_counting_unit, size_scale_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null);
+      if (groupErr) throw new ServiceError('internal_error', groupErr.message);
+      groups.push(...((groupRows ?? []) as GroupMetaRow[]));
+    }
 
     const scaleIds = Array.from(
       new Set(groups.map((g) => g.size_scale_id).filter((v): v is string => Boolean(v))),

@@ -1153,6 +1153,86 @@ export class InventoryService {
   }
 
   /**
+   * Uncapped, group-scoped item read for the "Add size run" picker (Task 16
+   * review fix).
+   *
+   * The PO create/edit pages built the picker's variant grouping out of
+   * `list({ limit: 1000 })` — the SAME capped read used for the plain item
+   * picker. In an org with more than 1000 items, a group whose 1001st+
+   * variant fell past that cap simply never appeared, so the size run looked
+   * complete but silently under-counted, and the buyer ordered an incomplete
+   * run. This method takes the group ids the caller already resolved and
+   * reads EVERY variant under them via `fetchAllRows`, so a group's size
+   * count is correct no matter how large the rest of the catalog is.
+   *
+   * Read posture mirrors `listForMatching()`: org-scoped, non-deleted,
+   * active, non-rental, warehouse-scoped for non-all-access roles, viewer
+   * category restriction. `group_id` is sent in `chunkIdsForInFilter`
+   * batches rather than one `.in()` — the same batching precedent as the
+   * portal catalog fix (23e319f6): a large sports catalog can carry hundreds
+   * of product groups, and a single `.in()` risks the same URL-length /
+   * row-cap failure mode chunking already guards elsewhere in this file.
+   */
+  async listGroupVariants(groupIds: string[]): Promise<
+    Array<{
+      id: string;
+      sku: string;
+      name: string;
+      unit_cost: number;
+      group_id: string | null;
+      variant_size: string | null;
+    }>
+  > {
+    const uniqueGroupIds = Array.from(new Set(groupIds.filter(Boolean)));
+    if (uniqueGroupIds.length === 0) return [];
+
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return [];
+
+    let accessibleCats: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        accessibleCats = await new UserCategoriesService(this.ctx)
+          .getAccessibleCategoryIds(this.ctx.userId);
+        if (accessibleCats !== null && accessibleCats.size === 0) return [];
+      } catch {
+        // Defense in depth: the DB RLS policy still enforces visibility.
+      }
+    }
+
+    type Row = {
+      id: string;
+      sku: string;
+      name: string;
+      unit_cost: number;
+      group_id: string | null;
+      variant_size: string | null;
+    };
+    const out: Row[] = [];
+    for (const idChunk of chunkIdsForInFilter(uniqueGroupIds)) {
+      const rows = await fetchAllRows<Row>((from, to) => {
+        let query = this.ctx.supabase
+          .from('inventory_items')
+          .select('id, sku, name, unit_cost, group_id, variant_size')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('group_id', idChunk)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_rental', false);
+        if (!access.hasAllAccess) {
+          query = query.in('warehouse_id', access.readableIds);
+        }
+        if (accessibleCats !== null) {
+          query = query.in('category_id', [...accessibleCats]);
+        }
+        return query.order('id', { ascending: true }).range(from, to);
+      });
+      out.push(...rows);
+    }
+    return out;
+  }
+
+  /**
    * Distinct rack labels for the rack-filter dropdown. Reads JSONB
    * custom_fields directly (per-scope key set):
    *   - 'items' → {rack_number}{-rack_row?} from non-book items

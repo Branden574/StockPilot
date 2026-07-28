@@ -74,6 +74,24 @@ function outstanding(l: ReceiveRunLine): number {
   return Math.max(0, l.quantityOrdered - l.quantityReceived);
 }
 
+/**
+ * Variance for one size: what's left after THIS receipt is posted. Positive =
+ * still outstanding, zero = fully received, negative = over-received. Unlike
+ * `outstanding`, this is NOT clamped — a negative value is the signal that
+ * over-receipt happened (mig 0285 allows it) and the run rows must show it
+ * exactly like the flat renderer does.
+ */
+function variance(l: ReceiveRunLine, entered: number): number {
+  return l.quantityOrdered - l.quantityReceived - entered;
+}
+
+/** Same tone convention as the flat renderer's Variance cell. */
+function varianceTone(v: number): string {
+  if (v > 0) return 'text-amber-600 dark:text-amber-400';
+  if (v < 0) return 'text-destructive';
+  return 'text-emerald-600 dark:text-emerald-400';
+}
+
 export interface SizeRunReceiveGridProps {
   groupId: string;
   group: SizeRunGroup;
@@ -151,16 +169,18 @@ export function SizeRunReceiveGrid({
 
       <div className="text-muted-foreground grid grid-cols-12 gap-2 px-3 pt-2 text-[11px] font-medium">
         <div className="col-span-2">Size</div>
-        <div className="col-span-2 text-right">Ordered</div>
-        <div className="col-span-2 text-right">Already</div>
+        <div className="col-span-1 text-right">Ordered</div>
+        <div className="col-span-1 text-right">Already</div>
         <div className="col-span-3">Receiving</div>
-        <div className="col-span-2 text-right">Accepted</div>
+        <div className="col-span-1 text-right">Accepted</div>
         <div className="col-span-1 text-right">Rejected</div>
+        <div className="col-span-3 text-right">Variance</div>
       </div>
 
       <div className="divide-y">
         {lines.map((l) => {
           const received = receivedOf(l.id);
+          const lineVariance = variance(l, received);
           return (
             <div key={l.id} className="px-3 py-2" data-testid="size-run-row">
               <div className="grid grid-cols-12 items-center gap-2">
@@ -170,10 +190,10 @@ export function SizeRunReceiveGrid({
                   </p>
                   <p className="text-muted-foreground truncate font-mono text-[11px]">{l.sku}</p>
                 </div>
-                <div className="col-span-2 text-right tabular-nums" data-testid="size-run-ordered">
+                <div className="col-span-1 text-right tabular-nums" data-testid="size-run-ordered">
                   {l.quantityOrdered}
                 </div>
-                <div className="col-span-2 text-right tabular-nums" data-testid="size-run-already">
+                <div className="col-span-1 text-right tabular-nums" data-testid="size-run-already">
                   {l.quantityReceived}
                 </div>
                 <div className="col-span-3">
@@ -186,7 +206,7 @@ export function SizeRunReceiveGrid({
                   />
                 </div>
                 <div
-                  className="col-span-2 text-right tabular-nums"
+                  className="col-span-1 text-right tabular-nums"
                   data-testid="size-run-accepted"
                 >
                   {received}
@@ -196,6 +216,12 @@ export function SizeRunReceiveGrid({
                   data-testid="size-run-rejected"
                 >
                   0
+                </div>
+                <div
+                  className={`col-span-3 text-right tabular-nums ${varianceTone(lineVariance)}`}
+                  data-testid="size-run-variance"
+                >
+                  {lineVariance}
                 </div>
               </div>
               {renderExtras?.(l)}

@@ -404,3 +404,54 @@ describe('ProductGroupsService.variantsByKey', () => {
     ).rejects.toMatchObject({ code: 'module_disabled' });
   });
 });
+
+describe('ProductGroupsService.displayByIds (Task 16 review fix: chunking)', () => {
+  it('chunks a >500 group-id list into batches instead of one un-bounded `.in()`', async () => {
+    const manyIds = Array.from({ length: 1200 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'product_groups.select': () => {
+        call += 1;
+        // Each batch returns ONE distinct row so the merged map's size proves
+        // every batch's result actually landed, not just the last one.
+        return { data: [groupRow({ id: `grp-batch-${call}` })], error: null };
+      },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(manyIds);
+
+    // 1200 ids at 500/batch = 3 batches, merged into 3 map entries.
+    expect(out.size).toBe(3);
+    const chains = stub.chainsAll.get('product_groups.select') ?? [];
+    const argsAll = stub.chainArgsAll.get('product_groups.select') ?? [];
+    expect(chains).toHaveLength(3);
+    const batchSizes = chains.map((chain, q) => {
+      const idx = chain.indexOf('in');
+      const args = argsAll[q]?.[idx] as [string, string[]];
+      return args[1].length;
+    });
+    expect(batchSizes).toEqual([500, 500, 200]);
+  });
+
+  it('throws rather than swallowing a mid-batch error', async () => {
+    const manyIds = Array.from({ length: 1200 }, (_, i) => `grp-${i}`);
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'product_groups.select': () => {
+        call += 1;
+        if (call === 2) return { data: null, error: { message: 'boom' } };
+        return { data: [groupRow()], error: null };
+      },
+    });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).displayByIds(manyIds),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
+  it('a single small batch still works exactly as before', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow()], error: null },
+    });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(['grp-1']);
+    expect(out.get('grp-1')).toMatchObject({ name: 'Nike Pegasus 41', countingUnit: 'pair' });
+  });
+});

@@ -77,6 +77,16 @@ interface PoFormProps {
    * hides the "Add size run" mode entirely.
    */
   productGroups?: Record<string, SizeRunGroup>;
+  /**
+   * Uncapped item rows for the groups in `productGroups`, used ONLY to build
+   * the "Add size run" picker's variants (review fix, Task 16). `items` is
+   * page-level list()'s capped 1000-row result — in a >1000-item org a
+   * group's 1001st+ variant can fall past that cap and never reach `items`,
+   * silently under-counting a size run. Falls back to `items` when omitted,
+   * so a caller that hasn't wired the uncapped read yet keeps prior (capped)
+   * behavior instead of losing the feature outright.
+   */
+  groupItems?: ItemOption[];
 }
 
 /** One orderable size run: a product group and the variants under it. */
@@ -112,14 +122,31 @@ interface ItemPickerProps {
   newItemName: string | undefined;
   onPickExisting: (item: ItemOption) => void;
   onPickNew: (name: string) => void;
+  /**
+   * Extra items consulted ONLY to resolve the currently-selected item's
+   * label — never merged into the searchable list. A line added via "Add
+   * size run" may point at an item past `items`' page-level cap; without
+   * this fallback that line would render as unselected even though it has a
+   * real itemId.
+   */
+  extraItems?: ItemOption[];
 }
 
-function ItemPicker({ items, itemId, newItemName, onPickExisting, onPickNew }: ItemPickerProps) {
+function ItemPicker({
+  items,
+  itemId,
+  newItemName,
+  onPickExisting,
+  onPickNew,
+  extraItems,
+}: ItemPickerProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
 
-  // Derive the label shown in the trigger.
-  const selectedItem = items.find((i) => i.id === itemId) ?? null;
+  // Derive the label shown in the trigger. `extraItems` is a fallback ONLY —
+  // it never affects search results below, just this lookup.
+  const selectedItem =
+    items.find((i) => i.id === itemId) ?? extraItems?.find((i) => i.id === itemId) ?? null;
   const triggerLabel = selectedItem
     ? `${selectedItem.sku} · ${selectedItem.name}`
     : newItemName
@@ -379,6 +406,7 @@ export function PoForm({
   poId,
   initial,
   productGroups = {},
+  groupItems,
 }: PoFormProps) {
   const router = useRouter();
   const [supplierId, setSupplierId] = React.useState<string>(initial?.supplierId ?? '');
@@ -397,9 +425,16 @@ export function PoForm({
   // The orderable size runs: product groups this org's catalog actually has
   // two or more variants for. A one-variant group is not a run and offering it
   // here would just be a slower item picker.
+  //
+  // Sourced from `groupItems` (the uncapped, group-scoped read), NOT `items`
+  // (page-level list()'s capped 1000-row result) — review fix, Task 16. Using
+  // `items` here silently under-counted a size run for any group whose
+  // 1001st+ variant fell past the cap. Falls back to `items` only when the
+  // caller has not wired the uncapped read at all.
   const sizeRuns = React.useMemo<SizeRunOption[]>(() => {
+    const source = groupItems ?? items;
     const byGroup = new Map<string, ItemOption[]>();
-    for (const i of items) {
+    for (const i of source) {
       if (!i.groupId || !productGroups[i.groupId]) continue;
       const arr = byGroup.get(i.groupId);
       if (arr) arr.push(i);
@@ -417,7 +452,7 @@ export function PoForm({
       });
     }
     return out.sort((a, b) => a.group.name.localeCompare(b.group.name));
-  }, [items, productGroups]);
+  }, [groupItems, items, productGroups]);
 
   function addLine() {
     setLines((prev) => [...prev, { quantityOrdered: 1, unitCost: 0 }]);
@@ -432,31 +467,34 @@ export function PoForm({
    * tell which one to fill.
    */
   function addSizeRun(picked: Array<{ item: ItemOption; quantity: number }>) {
-    setLines((prev) => {
-      const next = [...prev];
-      let added = 0;
-      for (const { item, quantity } of picked) {
-        const existing = next.findIndex((l) => l.itemId === item.id);
-        if (existing >= 0) {
-          const current = next[existing];
-          if (!current) continue;
-          next[existing] = {
-            ...current,
-            quantityOrdered: current.quantityOrdered + quantity,
-          };
-          continue;
-        }
-        next.push({ itemId: item.id, quantityOrdered: quantity, unitCost: item.unit_cost });
-        added += 1;
+    // Merge computed against the CURRENT `lines` (read once here, not via a
+    // functional setLines updater) so the toast below is a plain side effect
+    // that runs exactly once — the previous version fired it INSIDE the
+    // updater, which React's Strict Mode double-invokes to catch impurities
+    // like this, doubling the toast in dev.
+    const next = [...lines];
+    let added = 0;
+    for (const { item, quantity } of picked) {
+      const existing = next.findIndex((l) => l.itemId === item.id);
+      if (existing >= 0) {
+        const current = next[existing];
+        if (!current) continue;
+        next[existing] = {
+          ...current,
+          quantityOrdered: current.quantityOrdered + quantity,
+        };
+        continue;
       }
-      const merged = picked.length - added;
-      toast.success(
-        merged > 0
-          ? `Added ${added} line${added === 1 ? '' : 's'}; topped up ${merged} already on this PO.`
-          : `Added ${added} line${added === 1 ? '' : 's'}.`,
-      );
-      return next;
-    });
+      next.push({ itemId: item.id, quantityOrdered: quantity, unitCost: item.unit_cost });
+      added += 1;
+    }
+    const merged = picked.length - added;
+    setLines(next);
+    toast.success(
+      merged > 0
+        ? `Added ${added} line${added === 1 ? '' : 's'}; topped up ${merged} already on this PO.`
+        : `Added ${added} line${added === 1 ? '' : 's'}.`,
+    );
   }
 
   function removeLine(idx: number) {
@@ -646,6 +684,7 @@ export function PoForm({
                       items={items}
                       itemId={line.itemId}
                       newItemName={line.newItemName}
+                      extraItems={groupItems}
                       onPickExisting={(item) =>
                         updateLine(idx, {
                           itemId: item.id,
