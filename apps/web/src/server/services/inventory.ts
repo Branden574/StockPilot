@@ -2459,6 +2459,25 @@ export class InventoryService {
     // back instead would be a hard DELETE on a table whose whole convention is
     // soft-delete, and a fail-open .delete().eq() under RLS would leave the
     // worst of both.
+    //
+    // TWO INVARIANTS, NOT ONE (re-review). `trg_seed_initial_level` (0199) is an
+    // AFTER INSERT trigger on inventory_items: by the time this movement insert
+    // is even attempted, it has ALREADY written one `item_stock_levels` row per
+    // stocked variant, at the same quantity. Nothing syncs levels on UPDATE, so
+    // zeroing only `quantity_on_hand` left Σlevels = N against on_hand = 0 —
+    // PHANTOM PLACED STOCK. That is not a cosmetic mismatch: the archive
+    // stock-guard takes max(on_hand, Σholdings) and would refuse to archive the
+    // variant forever, and the placed draw-down would happily pick those units,
+    // driving on_hand NEGATIVE against a ledger that says nothing ever arrived.
+    // The compensation therefore restores BOTH: levels 0 = on_hand 0 = no
+    // movements.
+    //
+    // ORDER: levels FIRST. If the second write then fails, the intermediate is
+    // "stock on the row, not placed" — the pre-0199 shape, which blocks picking
+    // and is caught by the same max() the guard uses. The reverse order's
+    // intermediate is the phantom-placed one, which is the state that picks
+    // negative. Either way this throws, but the worse intermediate is not worth
+    // choosing.
     const movementRows = inserted
       .filter((r) => r.quantity_on_hand > 0)
       .map((r) => ({
@@ -2477,6 +2496,15 @@ export class InventoryService {
         .insert(movementRows);
       if (movementErr) {
         const stockedIds = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
+
+        // (a) The PLACEMENTS the 0199 trigger seeded.
+        const { error: levelErr } = await this.ctx.supabase
+          .from('item_stock_levels')
+          .update({ quantity: 0 })
+          .eq('organization_id', this.ctx.organizationId)
+          .in('item_id', stockedIds);
+
+        // (b) The row quantity.
         const { data: zeroed, error: zeroErr } = await this.ctx.supabase
           .from('inventory_items')
           .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
@@ -2486,18 +2514,47 @@ export class InventoryService {
         // .update().eq() is FAIL-OPEN under RLS: no error, no row. A partial
         // compensation is still a broken ledger, so it is treated as a failure.
         const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
-        if (zeroErr || compensated !== stockedIds.length) {
+
+        // (c) PROVE the placements are gone. Both writes above are filtered
+        // updates, so "no error" is not evidence that anything was matched —
+        // and the level write cannot even use the returned-row trick, because
+        // zero level rows is a LEGITIMATE outcome (the 0199 trigger swallows
+        // its own failures by design). A re-read is the only unambiguous
+        // answer, and it is the answer that matters: any surviving placement is
+        // exactly the phantom-stock state this compensation exists to prevent.
+        const { data: leftovers, error: verifyErr } = await this.ctx.supabase
+          .from('item_stock_levels')
+          .select('id')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('item_id', stockedIds)
+          .gt('quantity', 0);
+        const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
+
+        if (
+          levelErr ||
+          zeroErr ||
+          verifyErr ||
+          compensated !== stockedIds.length ||
+          survivingPlacements > 0
+        ) {
           console.error(
-            '[bulkCreateSizedVariants] opening movements failed AND the on-hand rollback failed',
-            { movementError: movementErr.message, rollbackError: zeroErr?.message, stockedIds },
+            '[bulkCreateSizedVariants] opening movements failed AND the rollback failed',
+            {
+              movementError: movementErr.message,
+              levelError: levelErr?.message,
+              rollbackError: zeroErr?.message,
+              verifyError: verifyErr?.message,
+              survivingPlacements,
+              stockedIds,
+            },
           );
           throw new ServiceError(
             'internal_error',
-            'These variants were created, but their opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving or counting against them.',
+            'These variants were created, but their opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving, picking or counting against them.',
           );
         }
         console.error(
-          '[bulkCreateSizedVariants] opening movements failed; on-hand rolled back to 0',
+          '[bulkCreateSizedVariants] opening movements failed; on-hand and placements rolled back to 0',
           { movementError: movementErr.message, stockedIds },
         );
         throw new ServiceError(

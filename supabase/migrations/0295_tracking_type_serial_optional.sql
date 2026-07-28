@@ -65,12 +65,21 @@ alter table public.inventory_items
 
 -- NOT VALID + VALIDATE, the split 0303:85-92 establishes. A validated CHECK
 -- added inline makes Postgres verify it against all 1.2 M existing rows before
--- the ALTER can return, and that scan runs under the ACCESS EXCLUSIVE lock the
--- DROP above already holds. Added NOT VALID the constraint is catalog-only and
--- instant, and it still enforces every subsequent insert/update; VALIDATE's one
--- scan takes only SHARE UPDATE EXCLUSIVE. Every existing row already satisfies
--- this predicate by construction — the new list is a strict SUPERSET of the
--- 0015 one — so the VALIDATE cannot fail on legacy data.
+-- the ALTER can return. Added NOT VALID the constraint is catalog-only and
+-- instant, and it still enforces every subsequent insert/update, so the
+-- verification scan is moved out of the ADD and into its own statement.
+--
+-- DO NOT READ THAT AS A PROMISE OF CONCURRENCY (0298:15-17 makes the same
+-- concession about its own statement-level notes). Taken alone, VALIDATE
+-- requests only SHARE UPDATE EXCLUSIVE — but it runs in THIS transaction, and
+-- the DROP CONSTRAINT above already took ACCESS EXCLUSIVE on inventory_items
+-- and holds it until this file COMMITS. So the scan does not leave the outage
+-- window; it happens inside it. What the split buys here is a shorter, more
+-- predictable scan and a retry story, not a readable table.
+--
+-- Every existing row already satisfies this predicate by construction — the new
+-- list is a strict SUPERSET of the 0015 one — so the VALIDATE cannot fail on
+-- legacy data.
 --
 -- The end state is identical to a validated add (convalidated = true), which is
 -- why the pgTAP file needs no change: an out-of-list value is still rejected

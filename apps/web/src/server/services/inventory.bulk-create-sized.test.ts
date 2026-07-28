@@ -70,15 +70,20 @@ function buildStub(
   failure: {
     movements?: { message: string; code?: string };
     compensation?: { message: string; code?: string };
+    levelCompensation?: { message: string; code?: string };
+    /** Simulate a fail-open RLS level write: no error, but the rows survive. */
+    levelsSurviveCompensation?: boolean;
   } = {},
 ) {
   const insertedItems: Array<Record<string, unknown>> = [];
   const insertedMovements: Array<Record<string, unknown>> = [];
   const itemUpdates: Array<Record<string, unknown>> = [];
+  const levelUpdates: Array<{ payload: Record<string, unknown>; itemIds: string[] }> = [];
   return {
     insertedItems,
     insertedMovements,
     itemUpdates,
+    levelUpdates,
 
     from(table: string): any {
       if (table === 'categories' || table === 'size_scales' || table === 'size_scale_values') {
@@ -156,6 +161,48 @@ function buildStub(
             return Promise.resolve({ error: failure.movements ?? null });
           },
         };
+      }
+      // trg_seed_initial_level (mig 0199, AFTER INSERT) has already seeded one
+      // level row per stocked item by the time the movement insert runs, and
+      // NOTHING syncs levels on UPDATE — so the compensation has to zero these
+      // too or the failure path leaves phantom PLACED stock.
+      if (table === 'item_stock_levels') {
+        const builder: any = {
+          update: (payload: Record<string, unknown>) => {
+            const w: any = {
+              eq: () => w,
+              in: (_col: string, ids: string[]) => {
+                levelUpdates.push({ payload, itemIds: ids });
+                return w;
+              },
+              select: () => w,
+              then: (cb: any) =>
+                cb(
+                  failure.levelCompensation
+                    ? { data: null, error: failure.levelCompensation }
+                    : { data: [], error: null },
+                ),
+            };
+            return w;
+          },
+          // The verification re-read: rows still carrying stock after the
+          // compensation. Empty unless the test asks for a fail-open write.
+          select: () => {
+            const survivors = failure.levelsSurviveCompensation
+              ? [{ id: 'lvl-1' }]
+              : levelUpdates.length > 0
+                ? []
+                : [{ id: 'lvl-1' }];
+            const r: any = {
+              eq: () => r,
+              in: () => r,
+              gt: () => r,
+              then: (cb: any) => cb({ data: survivors, error: null }),
+            };
+            return r;
+          },
+        };
+        return builder;
       }
       if (table === 'warehouse_charters') {
         return {
@@ -564,6 +611,68 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
 
     expect(stub.itemUpdates).toHaveLength(1);
     expect(stub.itemUpdates[0]?.quantity_on_hand).toBe(0);
+  });
+
+  // trg_seed_initial_level (0199) fires AFTER INSERT on inventory_items and has
+  // ALREADY written one item_stock_levels row per stocked variant by the time
+  // the movement insert is attempted. Nothing syncs levels on UPDATE, so zeroing
+  // only quantity_on_hand left SUM(levels) = N against on_hand = 0: phantom
+  // PLACED stock that blocks the archive stock-guard (which takes
+  // max(on_hand, Σholdings)) and is pickable straight into negative on-hand.
+  it('also zeroes the item_stock_levels rows the 0199 trigger already seeded', async () => {
+    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
+    await makeSvc(stub)
+      .bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'S', quantity: 3 },
+          { size: 'M', quantity: 0 },
+        ],
+      })
+      .catch(() => undefined);
+
+    expect(stub.levelUpdates).toHaveLength(1);
+    expect(stub.levelUpdates[0]?.payload.quantity).toBe(0);
+    // Scoped to exactly the variants that were seeded — the zero-quantity one
+    // never got a level row and must not be touched.
+    expect(stub.levelUpdates[0]?.itemIds).toEqual(['i-0']);
+  });
+
+  it('fails loudly when the seeded placements could not be zeroed', async () => {
+    const stub = buildStub([], undefined, [], {
+      movements: { message: 'ledger down' },
+      levelCompensation: { message: 'levels down' },
+    });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
+      .catch((e: unknown) => e)) as { code: string; message: string };
+
+    expect(err.code).toBe('internal_error');
+    expect(err.message).toMatch(/support/i);
+  });
+
+  it('VERIFIES the placements are gone — a fail-open RLS write is not success', async () => {
+    // .update().eq() reports success when RLS matched nothing, so the
+    // compensation is proven by a re-read, not by the absence of an error.
+    const stub = buildStub([], undefined, [], {
+      movements: { message: 'ledger down' },
+      levelsSurviveCompensation: true,
+    });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
+      .catch((e: unknown) => e)) as { code: string; message: string };
+
+    expect(err.code).toBe('internal_error');
+    expect(err.message).toMatch(/support/i);
+  });
+
+  it('never touches item_stock_levels when the movements DID land', async () => {
+    const stub = buildStub();
+    await makeSvc(stub).bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [{ size: 'S', quantity: 3 }],
+    });
+    expect(stub.levelUpdates).toHaveLength(0);
   });
 
   it('says so loudly when even the rollback fails, instead of swallowing both', async () => {
