@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   countingUnitSchema,
   DEFAULT_SUBCATEGORY_PROFILES,
+  SPORTS_ERROR_META,
   SPORTS_SUBCATEGORIES,
   trackingModeSchema,
   trackingProfileConsistencyError,
@@ -181,26 +182,94 @@ export class CategoriesService {
     }
   }
 
+  /**
+   * The rule the live verification found missing: "Category Sports REQUIRES a
+   * Sports subcategory". `assertResolvedSportsStateValid` only ever fires on
+   * `sportsSubcategoryKey != null`, so the whole rule was skippable by simply
+   * not claiming to be a subcategory — leaving "This is a Sports subcategory"
+   * unticked saved a profile-less child under the Sports root silently, and the
+   * row then appeared in the Add-Item picker beside the eight real ones with no
+   * tracking line at all.
+   *
+   * The rule is a statement about the PARENT, so it is checked against the
+   * parent, not against whatever the caller volunteered.
+   *
+   * "Sports root" is the same STRUCTURAL predicate `item-form.tsx` already uses
+   * for `isSportsRootMissingSubcategory`: a category with at least one live
+   * child carrying a `sports_subcategory_key`. Sharing the predicate (rather
+   * than, say, matching the name "Sports") is what keeps the form's client-side
+   * refusal and this server-side one from ever disagreeing, and it leaves an
+   * org whose unrelated category happens to be named Sports completely alone.
+   *
+   * `childId` is passed on the UPDATE path so the row being edited is excluded
+   * from its own scan: the question is whether the parent is a Sports root
+   * ASIDE from this row, which is what makes converting the last sports child
+   * back to a plain category legal rather than a dead end.
+   */
+  private async assertSportsRootChildValid(
+    parentId: string,
+    next: {
+      sportsSubcategoryKey: string | null;
+      trackingProfile: SubcategoryTrackingProfile | null;
+    },
+    childId?: string,
+  ): Promise<void> {
+    // Module-gated like every other sports surface. With `sports` off there is
+    // no sports UI to repair the row from and the subcategory rows are inert,
+    // so refusing would be an unexplainable dead end — the same gate
+    // `item-form.tsx` applies before it blocks submit.
+    if (!this.ctx.enabledModules.has('sports')) return;
+    const profile = isBuiltInSubcategoryKey(next.sportsSubcategoryKey)
+      ? DEFAULT_SUBCATEGORY_PROFILES[next.sportsSubcategoryKey]
+      : next.trackingProfile;
+    // A row that resolves to a real profile satisfies the rule outright, so the
+    // common case (creating a built-in subcategory) costs no extra read.
+    if (next.sportsSubcategoryKey != null && profile != null) return;
+
+    let query = this.ctx.supabase
+      .from('categories')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('parent_id', parentId)
+      .is('deleted_at', null)
+      .not('sports_subcategory_key', 'is', null);
+    if (childId) query = query.neq('id', childId);
+    const { data, error } = await query.limit(1);
+    if (error) throw new ServiceError('internal_error', error.message);
+    const siblings = (data as Array<{ id: string }> | null) ?? [];
+    if (siblings.length === 0) return;
+
+    const meta = SPORTS_ERROR_META.SPORTS_SUBCATEGORY_REQUIRED;
+    throw new ServiceError(
+      'validation_error',
+      `${meta.title}. ${meta.explanation} ${meta.action}`,
+      { code: 'SPORTS_SUBCATEGORY_REQUIRED' },
+    );
+  }
+
   /** The row's current sports state, for the resulting-state merge in update(). */
   private async loadSportsState(id: string): Promise<{
+    parentId: string | null;
     sportsSubcategoryKey: string | null;
     trackingMode: TrackingMode | null;
     trackingProfile: SubcategoryTrackingProfile | null;
   }> {
     const { data, error } = await this.ctx.supabase
       .from('categories')
-      .select('id, sports_subcategory_key, tracking_mode, tracking_profile')
+      .select('id, parent_id, sports_subcategory_key, tracking_mode, tracking_profile')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Category not found.');
     const row = data as {
+      parent_id?: string | null;
       sports_subcategory_key: string | null;
       tracking_mode: string | null;
       tracking_profile: SubcategoryTrackingProfile | null;
     };
     return {
+      parentId: row.parent_id ?? null,
       sportsSubcategoryKey: row.sports_subcategory_key ?? null,
       trackingMode: (row.tracking_mode as TrackingMode | null) ?? null,
       trackingProfile: row.tracking_profile ?? null,
@@ -299,6 +368,12 @@ export class CategoriesService {
       trackingProfile: input.trackingProfile ?? null,
     });
     if (input.parentId) await this.assertParentUsable(input.parentId);
+    if (input.parentId) {
+      await this.assertSportsRootChildValid(input.parentId, {
+        sportsSubcategoryKey: input.sportsSubcategoryKey ?? null,
+        trackingProfile: input.trackingProfile ?? null,
+      });
+    }
     if (input.sizeScaleId) await this.assertSizeScaleUsable(input.sizeScaleId);
     const { data, error } = await this.ctx.supabase
       .from('categories')
@@ -329,26 +404,64 @@ export class CategoriesService {
     assertPermission(this.ctx, 'categories:manage');
     this.assertSportsWriteAllowed(patch);
     if (patch.trackingProfile) CategoriesService.assertProfileConsistent(patch.trackingProfile);
+    // Merge over the row as it stands: a key the patch leaves alone still
+    // counts towards the resulting state, so an edit cannot reach a state a
+    // create() would have refused (e.g. `{ trackingProfile: null }` against a
+    // row that still carries a custom `sports_subcategory_key`).
+    let current: Awaited<ReturnType<CategoriesService['loadSportsState']>> | null = null;
+    const resolvedSportsState = () => ({
+      sportsSubcategoryKey:
+        patch.sportsSubcategoryKey !== undefined
+          ? (patch.sportsSubcategoryKey ?? null)
+          : (current?.sportsSubcategoryKey ?? null),
+      trackingMode:
+        patch.trackingMode !== undefined
+          ? (patch.trackingMode ?? null)
+          : (current?.trackingMode ?? null),
+      trackingProfile:
+        patch.trackingProfile !== undefined
+          ? (patch.trackingProfile ?? null)
+          : (current?.trackingProfile ?? null),
+    });
     if (touchesSportsPolicy(patch)) {
-      // Merge over the row as it stands: a key the patch leaves alone still
-      // counts towards the resulting state, so an edit cannot reach a state a
-      // create() would have refused (e.g. `{ trackingProfile: null }` against a
-      // row that still carries a custom `sports_subcategory_key`).
-      const current = await this.loadSportsState(id);
-      this.assertResolvedSportsStateValid({
-        sportsSubcategoryKey:
-          patch.sportsSubcategoryKey !== undefined
-            ? (patch.sportsSubcategoryKey ?? null)
-            : current.sportsSubcategoryKey,
-        trackingMode:
-          patch.trackingMode !== undefined ? (patch.trackingMode ?? null) : current.trackingMode,
-        trackingProfile:
-          patch.trackingProfile !== undefined
-            ? (patch.trackingProfile ?? null)
-            : current.trackingProfile,
-      });
+      current = await this.loadSportsState(id);
+      this.assertResolvedSportsStateValid(resolvedSportsState());
     }
+    // Ordered AFTER the self-parent / depth / org-consistency checks so a
+    // nonsense parent still fails as the nonsense it is.
     if (patch.parentId) await this.assertParentUsable(patch.parentId, id);
+    // The Sports-root rule applies to the parent the row will END UP under, so
+    // it runs on a re-parent as well as on a sports-policy edit — moving a
+    // profile-less category under the Sports root is exactly the state create()
+    // now refuses, and it must not be reachable through the back door.
+    //
+    // GATED ON A REAL CHANGE (review fix). It used to fire on
+    // `patch.parentId !== undefined`, but the edit dialog
+    // (`categories-manager.tsx`) builds one payload and ALWAYS includes
+    // `parentId` — it resends the row's current parent on every save. So a
+    // plain rename of a profile-less category that happens to sit under the
+    // Sports root was refused with SPORTS_SUBCATEGORY_REQUIRED, dead-ending a
+    // legitimate edit and stranding precisely the rows the create-side guard
+    // cannot retroactively clean up.
+    //
+    // A no-op resend changes nothing about where the row lives, so there is no
+    // new state to validate. The guard now needs an actual MOVE (the resolved
+    // parent differs from the current one) or a sports-policy edit — both of
+    // which really do produce a state create() would refuse.
+    if (patch.parentId !== undefined || touchesSportsPolicy(patch)) {
+      current ??= await this.loadSportsState(id);
+      const resolvedParentId =
+        patch.parentId !== undefined ? (patch.parentId ?? null) : current.parentId;
+      const movesToNewParent = resolvedParentId !== current.parentId;
+      if (resolvedParentId && (movesToNewParent || touchesSportsPolicy(patch))) {
+        const { sportsSubcategoryKey, trackingProfile } = resolvedSportsState();
+        await this.assertSportsRootChildValid(
+          resolvedParentId,
+          { sportsSubcategoryKey, trackingProfile },
+          id,
+        );
+      }
+    }
     if (patch.sizeScaleId) await this.assertSizeScaleUsable(patch.sizeScaleId);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;

@@ -41,9 +41,11 @@ import {
 } from '@/server/actions/item-visibility';
 
 import {
+  countingUnitLabel,
   DEFAULT_SUBCATEGORY_PROFILES,
   SPORTS_SUBCATEGORIES,
   TRACKING_MODE_LABELS,
+  type CountingUnit,
   type SportsSubcategoryKey,
   type SubcategoryTrackingProfile,
   type TrackingMode,
@@ -69,6 +71,10 @@ interface CategoryRow {
   tracking_mode: TrackingMode | null;
   sports_subcategory_key: string | null;
   tracking_profile: SubcategoryTrackingProfile | null;
+  /** `categories.default_unit_of_measure` — the counting unit half of what
+   *  Task 12 promises this screen shows ("its resolved mode and counting
+   *  unit"). Null means "inherit", exactly as the server reads it. */
+  default_unit_of_measure: string | null;
 }
 
 interface FormValues {
@@ -87,11 +93,19 @@ const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#
  * Resolves what the Tracking column shows for a row (Task 12). Returns null
  * for a category with nothing sports-related at all — the regression
  * requirement that a plain category "must render with no sports affordances".
+ *
+ * The COUNTING UNIT was missing here until the live verification caught it: a
+ * Shoes row read `Tracking: Quantity by variant` and never said "pairs",
+ * against a Task 12 acceptance line that asks for "its resolved mode and
+ * counting unit". It walks the SAME fallback chain the server's
+ * `resolveTrackingProfile` uses — own column, then the parent's, then the
+ * subcategory profile's default, then `unit` — so this screen can never
+ * advertise a unit the server would not actually stamp on an item.
  */
 function resolveTrackingDisplay(
   row: CategoryRow,
   parent: CategoryRow | null,
-): { label: string; inherited: boolean } | null {
+): { label: string; inherited: boolean; countingUnit: string } | null {
   const builtIn = row.sports_subcategory_key
     ? DEFAULT_SUBCATEGORY_PROFILES[row.sports_subcategory_key as SportsSubcategoryKey]
     : undefined;
@@ -99,9 +113,16 @@ function resolveTrackingDisplay(
   const explicitMode = row.tracking_mode ?? parent?.tracking_mode ?? null;
   const mode = explicitMode ?? profile?.defaultMode ?? null;
   if (!mode) return null;
+  const unit = (row.default_unit_of_measure ??
+    parent?.default_unit_of_measure ??
+    profile?.defaultCountingUnit ??
+    'unit') as CountingUnit;
   return {
     label: TRACKING_MODE_LABELS[mode],
     inherited: row.tracking_mode == null && parent?.tracking_mode != null,
+    // Plural, matching the grouping preview's "Counting unit pairs" — the unit
+    // names how a whole shelf is counted, not a single row.
+    countingUnit: countingUnitLabel(unit, 2),
   };
 }
 
@@ -269,6 +290,8 @@ export function CategoriesManager({
             <p className="mt-1 text-[11px] text-muted-foreground">
               Tracking: <span className="font-medium text-foreground">{tracking.label}</span>
               {tracking.inherited && ' (inherited)'}
+              {' · Counting unit: '}
+              <span className="font-medium text-foreground">{tracking.countingUnit}</span>
             </p>
           )}
           {canManagePublicVisibility && <CategoryVisibilityControl category={row} />}

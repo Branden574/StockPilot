@@ -603,3 +603,297 @@ describe('CategoriesService.setupSportsDefaults (Task 12)', () => {
     expect(result.created).toHaveLength(7);
   });
 });
+
+/**
+ * LIVE-VERIFIED HOLE (Demo Co, 2026-07-28). On `/dashboard/categories`, leaving
+ * "This is a Sports subcategory" unticked and saving under the Sports root
+ * created `Verify Custom NoProfile` — a child of the Sports root carrying no
+ * subcategory key, no tracking profile and no `Tracking:` line at all — with no
+ * error, no toast, and nothing to tell the admin anything was wrong. It was
+ * then offered in the Add-Item category picker beside the eight real
+ * subcategories.
+ *
+ * The shipped guard only ever fired on `sportsSubcategoryKey != null`, so the
+ * whole rule was skippable by simply not claiming to be a subcategory. The rule
+ * is "Category Sports REQUIRES a Sports subcategory", which is a statement
+ * about the PARENT, not about what the caller volunteered.
+ *
+ * "Sports root" is the same structural predicate `item-form.tsx` already uses
+ * (`isSportsRootMissingSubcategory`): a category that carries no subcategory key
+ * of its own but has at least one live child that does. Sharing the predicate is
+ * what keeps the item form's client-side refusal and this server-side one from
+ * disagreeing.
+ */
+describe('CategoriesService — a child of the Sports root needs a subcategory profile', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** The Sports root, as `assertParentUsable`'s single-row read sees it. */
+  const SPORTS_ROOT_READ = {
+    data: { id: 'cat-sports-root', parent_id: null },
+    error: null,
+  } as const;
+  /** The sports-root scan: at least one live sibling carries a subcategory key. */
+  const HAS_SPORTS_CHILD = { data: [{ id: 'cat-shoes' }], error: null } as const;
+  /** The same scan against an ordinary parent — nothing sports-related below it. */
+  const NO_SPORTS_CHILD = { data: [], error: null } as const;
+
+  it('PROBE: refuses a profile-less child of the Sports root (the live defect)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Verify Custom NoProfile', parentId: 'cat-sports-root' }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' },
+    });
+    expect(stub.chains.has('categories.insert')).toBe(false);
+  });
+
+  it('the refusal carries the mapped human copy, not a raw code', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Verify Custom NoProfile', parentId: 'cat-sports-root' }),
+    ).rejects.toThrow(/Pick a Sports subcategory/);
+  });
+
+  it('also refuses a child that claims a key but resolves to no profile', async () => {
+    // Belt and braces: this one was already caught by the resulting-state guard,
+    // and it must stay caught now that a second guard sits behind it.
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({
+        name: 'Custom pads',
+        parentId: 'cat-sports-root',
+        sportsSubcategoryKey: 'custom_pads',
+      }),
+    ).rejects.toMatchObject({ details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' } });
+  });
+
+  it('accepts a built-in subcategory under the Sports root (regression)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+      'categories.insert': { data: categoryRow({ sports_subcategory_key: 'shoes' }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Shoes', parentId: 'cat-sports-root', sportsSubcategoryKey: 'shoes' }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('accepts a custom subcategory carrying a complete profile (regression)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+      'categories.insert': { data: categoryRow(), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({
+        name: 'Custom pads',
+        parentId: 'cat-sports-root',
+        sportsSubcategoryKey: 'custom_pads',
+        trackingProfile: VALID_CUSTOM_PROFILE,
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('leaves an ordinary subcategory under an ordinary parent alone (regression)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': { data: { id: 'cat-hardware', parent_id: null }, error: null },
+      'categories.select': NO_SPORTS_CHILD,
+      'categories.insert': { data: categoryRow({ sports_subcategory_key: null }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.create({ name: 'Cables', parentId: 'cat-hardware' }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('does not fire for a top-level category (no parent, so no Sports root above it)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.insert': { data: categoryRow({ sports_subcategory_key: null }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.create({ name: 'Electronics' })).resolves.toBeTruthy();
+  });
+
+  it('is module-gated like every other sports surface', async () => {
+    // With `sports` off there is no sports UI to repair the row from, and the
+    // subcategory rows are inert data — refusing here would be an unexplainable
+    // dead end. Same gate `item-form.tsx` applies to the client-side refusal.
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': SPORTS_ROOT_READ,
+      'categories.select': HAS_SPORTS_CHILD,
+      'categories.insert': { data: categoryRow({ sports_subcategory_key: null }), error: null },
+    });
+    const noSports = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new CategoriesService(noSports).create({ name: 'Plain', parentId: 'cat-sports-root' }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('refuses MOVING a profile-less category under the Sports root', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': queuedReads(
+        // assertParentUsable's parent read.
+        { data: { id: 'cat-sports-root', parent_id: null }, error: null },
+        // loadSportsState for the row being moved.
+        {
+          data: {
+            id: 'cat-plain',
+            parent_id: null,
+            sports_subcategory_key: null,
+            tracking_mode: null,
+            tracking_profile: null,
+          },
+          error: null,
+        },
+      ),
+      'categories.select': queuedReads(
+        // hasLiveChildren('cat-plain') — it has none, so it may become a child.
+        { data: [], error: null },
+        // the sports-root scan.
+        { data: [{ id: 'cat-shoes' }], error: null },
+      ),
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.update('cat-plain', { parentId: 'cat-sports-root' }),
+    ).rejects.toMatchObject({ details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' } });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  /**
+   * REVIEW FIX (wave 2). The edit dialog builds ONE payload and always includes
+   * `parentId` — `categories-manager.tsx` sends the row's current parent back
+   * unchanged on every save, including a plain rename. The guard fired on
+   * `patch.parentId !== undefined`, so ANY edit of a plain, profile-less
+   * category that happens to sit under the Sports root was refused with
+   * SPORTS_SUBCATEGORY_REQUIRED — dead-ending a legitimate rename with no way
+   * out, and stranding exactly the rows the create-side guard cannot clean up
+   * (the live `Verify Custom NoProfile` is one of them).
+   *
+   * The rule is about MOVING a row under the Sports root, not about resending
+   * the parent it already has.
+   */
+  it('PROBE: renames a plain child that already sits under the Sports root', async () => {
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': queuedReads(
+        // assertParentUsable's parent read.
+        { data: { id: 'cat-sports-root', parent_id: null }, error: null },
+        // loadSportsState — the row is ALREADY under the Sports root.
+        {
+          data: {
+            id: 'cat-plain',
+            parent_id: 'cat-sports-root',
+            sports_subcategory_key: null,
+            tracking_mode: null,
+            tracking_profile: null,
+          },
+          error: null,
+        },
+      ),
+      'categories.select': queuedReads(
+        // hasLiveChildren('cat-plain')
+        { data: [], error: null },
+        // If the guard wrongly ran, this sports-root scan would refuse it.
+        { data: [{ id: 'cat-shoes' }], error: null },
+      ),
+      'categories.update': { data: categoryRow({ name: 'Renamed' }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    // Exactly the payload the edit dialog sends: a new name plus the row's
+    // CURRENT parent, resent unchanged.
+    await expect(
+      svc.update('cat-plain', { name: 'Renamed', parentId: 'cat-sports-root' }),
+    ).resolves.toBeTruthy();
+    expect(stub.chains.has('categories.update')).toBe(true);
+  });
+
+  it('still refuses when the SAME payload shape actually moves the row', async () => {
+    // The only difference from the test above is where the row starts. A
+    // no-op resend is allowed; a real move is not — so relaxing the guard
+    // cannot have reopened the hole it was added to close.
+    const stub = makeSupabaseStub({
+      'categories.select.maybeSingle': queuedReads(
+        { data: { id: 'cat-sports-root', parent_id: null }, error: null },
+        {
+          data: {
+            id: 'cat-plain',
+            parent_id: 'cat-hardware',
+            sports_subcategory_key: null,
+            tracking_mode: null,
+            tracking_profile: null,
+          },
+          error: null,
+        },
+      ),
+      'categories.select': queuedReads(
+        { data: [], error: null },
+        { data: [{ id: 'cat-shoes' }], error: null },
+      ),
+      'categories.update': { data: categoryRow(), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.update('cat-plain', { name: 'Renamed', parentId: 'cat-sports-root' }),
+    ).rejects.toMatchObject({ details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' } });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('still enforces the rule when a resent parent comes WITH a sports edit', async () => {
+    // parentId unchanged, but the patch clears the subcategory key: that is a
+    // sports-policy change under the Sports root and must still be refused.
+    const stub = makeSupabaseStub({
+      // A sports-policy patch loads the row's state FIRST, then validates the
+      // parent — so loadSportsState leads this queue.
+      'categories.select.maybeSingle': queuedReads(
+        {
+          data: {
+            id: 'cat-shoes',
+            parent_id: 'cat-sports-root',
+            sports_subcategory_key: 'shoes',
+            tracking_mode: null,
+            tracking_profile: null,
+          },
+          error: null,
+        },
+        { data: { id: 'cat-sports-root', parent_id: null }, error: null },
+      ),
+      'categories.select': queuedReads(
+        { data: [], error: null },
+        { data: [{ id: 'cat-jerseys' }], error: null },
+      ),
+      'categories.update': { data: categoryRow(), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(
+      svc.update('cat-shoes', { parentId: 'cat-sports-root', sportsSubcategoryKey: null }),
+    ).rejects.toMatchObject({ details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' } });
+    expect(stub.chains.has('categories.update')).toBe(false);
+  });
+
+  it('a plain rename of an existing Sports-root child is untouched (regression)', async () => {
+    const stub = makeSupabaseStub({
+      'categories.update': { data: categoryRow({ name: 'Footwear' }), error: null },
+    });
+    const svc = new CategoriesService(sportsCtx(stub.client));
+    await expect(svc.update('cat-shoes', { name: 'Footwear' })).resolves.toBeTruthy();
+    // Nothing sports-related and no parent change: still no reads at all.
+    expect(stub.chains.has('categories.select')).toBe(false);
+  });
+});
