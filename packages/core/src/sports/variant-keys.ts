@@ -232,3 +232,55 @@ export function groupRollupLabel(
   const v = `${variantCount} ${variantCount === 1 ? 'variant' : 'variants'}`;
   return `${v} · ${totalQuantity} ${countingUnitPlural} total`;
 }
+
+/** The identifying attributes a counting surface shows next to an item name. */
+export interface VariantLabelParts {
+  jerseyNumber?: string | null;
+  size?: string | null;
+  width?: string | null;
+  color?: string | null;
+}
+
+/**
+ * The human label that tells a counter WHICH variant is in their hands:
+ * "Size 10", "#12 · Size XL", "Size 10 · Wide".
+ *
+ * Counting is BY VARIANT, and a count sheet that prints a bare SKU makes a
+ * person match hex strings to shoeboxes. This is the one place that label is
+ * built, so a PDF, a web row, a phone screen and a scan sheet all read the
+ * same words for the same row.
+ *
+ * The jersey number leads and is rendered '#12'. It is a NUMBER, never a
+ * serial: the '#' is the point — it can repeat across sizes, groups and teams,
+ * and no surface may ever label it "Serial Number" (requirements 4).
+ *
+ * Returns null when the row carries no variant attributes at all, which is
+ * every item in every non-sports org. Callers render nothing extra in that
+ * case, so an ungrouped count sheet looks exactly as it did before.
+ */
+export function variantLabel(parts: VariantLabelParts): string | null {
+  const bits: string[] = [];
+  const jersey = parts.jerseyNumber?.trim();
+  if (jersey) bits.push(`#${jersey.replace(/^#+/, '')}`);
+  const size = parts.size?.trim();
+  if (size) bits.push(`Size ${size}`);
+  const width = parts.width?.trim();
+  if (width) bits.push(width);
+  const color = parts.color?.trim();
+  if (color) bits.push(color);
+  return bits.length > 0 ? bits.join(' · ') : null;
+}
+
+/**
+ * `name` with its variant label appended: "Nike Pegasus 41 · Size 10".
+ *
+ * Falls back to the bare name when there is no variant data, so this is safe
+ * to call unconditionally on every row of every count.
+ */
+export function variantDisplayName(
+  name: string,
+  parts: VariantLabelParts,
+): string {
+  const label = variantLabel(parts);
+  return label ? `${name} · ${label}` : name;
+}

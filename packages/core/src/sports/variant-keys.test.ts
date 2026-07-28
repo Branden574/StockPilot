@@ -7,6 +7,8 @@ import {
   isValidJerseyNumber,
   normalizeJerseyNumber,
   normalizeSizeValue,
+  variantDisplayName,
+  variantLabel,
 } from './variant-keys';
 
 describe('normalizeJerseyNumber', () => {
@@ -322,5 +324,49 @@ describe('groupRollupLabel', () => {
   it('renders the counting unit as the requirements phrase it', () => {
     expect(groupRollupLabel(6, 52, 'pairs')).toBe('6 variants · 52 pairs total');
     expect(groupRollupLabel(1, 3, 'each')).toBe('1 variant · 3 each total');
+  });
+});
+
+describe('variantLabel', () => {
+  it('names the size a counter is holding', () => {
+    expect(variantLabel({ size: '10' })).toBe('Size 10');
+    expect(variantLabel({ size: 'XL' })).toBe('Size XL');
+  });
+
+  it('leads with the jersey number, rendered as a number and not a serial', () => {
+    expect(variantLabel({ jerseyNumber: '12', size: 'XL' })).toBe('#12 · Size XL');
+    // Leading zeroes are meaningful all the way to the printed label.
+    expect(variantLabel({ jerseyNumber: '07' })).toBe('#07');
+    expect(variantLabel({ jerseyNumber: '00' })).toBe('#00');
+  });
+
+  it('does not double the hash when the stored value already carries one', () => {
+    expect(variantLabel({ jerseyNumber: '#9' })).toBe('#9');
+  });
+
+  it('appends width and colour after the size', () => {
+    expect(variantLabel({ size: '10', width: 'Wide', color: 'Black' })).toBe(
+      'Size 10 · Wide · Black',
+    );
+  });
+
+  it('returns null for an ungrouped item so nothing extra renders', () => {
+    expect(variantLabel({})).toBeNull();
+    expect(variantLabel({ size: null, jerseyNumber: null })).toBeNull();
+    // Whitespace is not a variant.
+    expect(variantLabel({ size: '   ' })).toBeNull();
+  });
+});
+
+describe('variantDisplayName', () => {
+  it('reads as the requirements phrase it', () => {
+    expect(variantDisplayName('Pegasus 41', { size: '10' })).toBe('Pegasus 41 · Size 10');
+    expect(variantDisplayName('Falcons Home Jersey', { jerseyNumber: '12', size: 'XL' })).toBe(
+      'Falcons Home Jersey · #12 · Size XL',
+    );
+  });
+
+  it('leaves a non-sports item name exactly as it was', () => {
+    expect(variantDisplayName('USB-C Cable', {})).toBe('USB-C Cable');
   });
 });

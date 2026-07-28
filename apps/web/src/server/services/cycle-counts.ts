@@ -54,8 +54,27 @@ export interface CycleCountLineWithItem extends CycleCountLineRow {
     sku: string;
     unit_of_measure: string;
     barcode: string | null;
+    /**
+     * Sports variant identity (0298). `cycle_count_lines` already FKs
+     * `item_id` and A VARIANT IS AN ITEM, so counting by variant needed no
+     * schema change — the lines just have to SAY what they are. Without these
+     * a size run reads as six near-identical rows differing only by a hex SKU,
+     * which is how a counter puts the 10s in the 10.5 column.
+     *
+     * All three are null for every item in every non-sports org, and every
+     * surface renders exactly as it did before when they are.
+     */
+    group_id: string | null;
+    variant_size: string | null;
+    /** A uniform NUMBER, never a serial and never labelled as one. */
+    jersey_number: string | null;
   } | null;
 }
+
+/** The item columns every line read selects. One list, so the paginated page
+ *  and the print/export path can never disagree about what a line knows. */
+const LINE_ITEM_COLUMNS =
+  'id, name, sku, unit_of_measure, barcode, group_id, variant_size, jersey_number';
 
 /** Whole-count roll-up the server-paginated detail page can no longer derive
  *  from a single page of lines (computed set-based by cycle_count_summary). */
@@ -136,6 +155,8 @@ function mapStartCycleCountError(
 ): ServiceError {
   if (message.includes('cycle_count_no_items')) {
     if (scope === 'selection') {
+      // A group scope has already been expanded to its variants by here, so it
+      // reaches the RPC as a selection and shares this message.
       return new ServiceError(
         'validation_error',
         'None of the selected items are still active. Refresh and try again.',
@@ -454,20 +475,17 @@ export class CycleCountsService {
         .select(
           `id, cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity,
            reason, notes, counted_by, counted_at,
-           item:inventory_items!item_id (id, name, sku, unit_of_measure, barcode)`,
+           item:inventory_items!item_id (${LINE_ITEM_COLUMNS})`,
         )
         .eq('cycle_count_id', id)
         .order('id', { ascending: true })
         .range(from, to),
     );
 
+    type JoinedItem = NonNullable<CycleCountLineWithItem['item']>;
     const flattened = rawLines.map((row) => {
       const r = row as Record<string, unknown>;
-      const itemField = r.item as
-        | { id: string; name: string; sku: string; unit_of_measure: string; barcode: string | null }
-        | { id: string; name: string; sku: string; unit_of_measure: string; barcode: string | null }[]
-        | null
-        | undefined;
+      const itemField = r.item as JoinedItem | JoinedItem[] | null | undefined;
       const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
       return { ...r, item } as CycleCountLineWithItem;
     });
@@ -614,25 +632,63 @@ export class CycleCountsService {
         effectivePage = 1;
       }
     }
-    const lines: CycleCountLineWithItem[] = rows.map((r) => ({
-      id: r.id as string,
-      cycle_count_id: r.cycle_count_id as string,
-      item_id: r.item_id as string,
-      warehouse_id: (r.warehouse_id as string | null) ?? null,
-      expected_quantity: Number(r.expected_quantity) || 0,
-      counted_quantity: r.counted_quantity == null ? null : Number(r.counted_quantity),
-      reason: (r.reason as string | null) ?? null,
-      notes: (r.notes as string | null) ?? null,
-      counted_by: (r.counted_by as string | null) ?? null,
-      counted_at: (r.counted_at as string | null) ?? null,
-      item: {
-        id: r.item_id as string,
-        name: (r.item_name as string) ?? '',
-        sku: (r.item_sku as string) ?? '',
-        unit_of_measure: (r.item_uom as string) ?? '',
-        barcode: (r.item_barcode as string | null) ?? null,
-      },
-    }));
+    // Variant identity for THIS page's rows only.
+    //
+    // cycle_count_lines_page (0226) returns a fixed projection — name, sku,
+    // uom, barcode — and widening it would mean re-issuing a SECURITY INVOKER
+    // RPC that the assignee-lock work (0282) hardened. A page is capped at 200
+    // rows, so one extra RLS-scoped read keyed on those item ids buys the
+    // variant columns without touching the RPC at all. It is a LEFT-join in
+    // spirit: a row the read cannot see just keeps null variant fields and
+    // renders exactly as it did before.
+    const pageItemIds = Array.from(
+      new Set(rows.map((r) => r.item_id as string).filter(Boolean)),
+    );
+    const variantByItem = new Map<
+      string,
+      { group_id: string | null; variant_size: string | null; jersey_number: string | null }
+    >();
+    if (pageItemIds.length > 0) {
+      const { data: vRows, error: vErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, group_id, variant_size, jersey_number')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', pageItemIds);
+      if (vErr) throw new ServiceError('internal_error', vErr.message);
+      for (const v of (vRows ?? []) as Array<Record<string, unknown>>) {
+        variantByItem.set(v.id as string, {
+          group_id: (v.group_id as string | null) ?? null,
+          variant_size: (v.variant_size as string | null) ?? null,
+          jersey_number: (v.jersey_number as string | null) ?? null,
+        });
+      }
+    }
+
+    const lines: CycleCountLineWithItem[] = rows.map((r) => {
+      const variant = variantByItem.get(r.item_id as string);
+      return {
+        id: r.id as string,
+        cycle_count_id: r.cycle_count_id as string,
+        item_id: r.item_id as string,
+        warehouse_id: (r.warehouse_id as string | null) ?? null,
+        expected_quantity: Number(r.expected_quantity) || 0,
+        counted_quantity: r.counted_quantity == null ? null : Number(r.counted_quantity),
+        reason: (r.reason as string | null) ?? null,
+        notes: (r.notes as string | null) ?? null,
+        counted_by: (r.counted_by as string | null) ?? null,
+        counted_at: (r.counted_at as string | null) ?? null,
+        item: {
+          id: r.item_id as string,
+          name: (r.item_name as string) ?? '',
+          sku: (r.item_sku as string) ?? '',
+          unit_of_measure: (r.item_uom as string) ?? '',
+          barcode: (r.item_barcode as string | null) ?? null,
+          group_id: variant?.group_id ?? null,
+          variant_size: variant?.variant_size ?? null,
+          jersey_number: variant?.jersey_number ?? null,
+        },
+      };
+    });
 
     const sumRow = (Array.isArray(sumRes.data) ? sumRes.data[0] : sumRes.data) as
       | { total: number; counted: number; variance_count: number; net_delta: number }
@@ -699,13 +755,27 @@ export class CycleCountsService {
    *     warehouses); each line still snapshots its item's warehouse so
    *     post_cycle_count's per-line move guard keeps working unchanged.
    *
+   *   • scope 'group' — count a product group BY VARIANT. The named groups
+   *     are EXPANDED to every variant item under them and the count then runs
+   *     as an ordinary selection: one line per variant, so a size run is
+   *     counted size by size and nothing is ever posted against a group.
+   *     Groups own no quantity, so there is nothing else it could mean.
+   *
+   *     Expansion happens HERE, in TypeScript, on purpose: the DB `scope`
+   *     check constraint (0141) and the atomic snapshot RPC (0226) both stay
+   *     untouched, and every downstream consumer — post_cycle_count's move
+   *     guard, itemsInScopeCount, the assignee lock — keeps behaving exactly
+   *     as it does for a hand-picked selection.
+   *
    * Returns `skipped` = how many requested ids were dropped because they
    * were archived / deleted / not in the org by the time we snapshotted.
    */
   async start(input: {
-    scope?: 'warehouse' | 'selection';
+    scope?: 'warehouse' | 'selection' | 'group';
     warehouseId: string | null;
     itemIds?: string[];
+    /** Product groups to expand into their variants. Scope 'group' only. */
+    groupIds?: string[];
     notes?: string | null;
     assignedTo?: string | null;
   }): Promise<{ id: string; lineCount: number; skipped: number }> {
@@ -717,7 +787,44 @@ export class CycleCountsService {
     // it's the floor for the line writes + the downstream post() this enables.
     assertPermission(this.ctx, 'cycle_counts:assign');
     assertPermission(this.ctx, 'stock:adjust');
-    const scope = input.scope ?? 'warehouse';
+    const requestedScope = input.scope ?? 'warehouse';
+
+    // Expand groups to their variants BEFORE anything else, then fall through
+    // as a selection. `scope` from here down is the persisted one, which is
+    // still only 'warehouse' | 'selection' — the DB check constraint and the
+    // snapshot RPC never learn about groups.
+    let groupItemIds: string[] | null = null;
+    if (requestedScope === 'group') {
+      assertModuleEnabled(this.ctx, 'sports');
+      const groupIds = Array.from(new Set(input.groupIds ?? []));
+      if (groupIds.length === 0) {
+        throw new ServiceError('validation_error', 'Pick at least one product group to count.');
+      }
+      // Read the variants under the caller's own RLS, org-scoped. A group in
+      // another org (or one the caller's category visibility hides) simply
+      // yields no variants, and the empty-scope error below is what they see.
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('group_id', groupIds)
+        .is('deleted_at', null)
+        .eq('status', 'active');
+      if (error) throw new ServiceError('internal_error', error.message);
+      groupItemIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+      if (groupItemIds.length === 0) {
+        throw new ServiceError(
+          'validation_error',
+          'Those product groups have no active variants to count.',
+        );
+      }
+      // Hand-picked items may be counted alongside a group in the same pass.
+      groupItemIds = Array.from(new Set([...groupItemIds, ...(input.itemIds ?? [])]));
+    }
+
+    const scope: 'warehouse' | 'selection' =
+      requestedScope === 'warehouse' ? 'warehouse' : 'selection';
+    const requestedItemIds = groupItemIds ?? input.itemIds ?? [];
 
     // Header warehouse: for a warehouse-scoped count it's the chosen
     // warehouse; for a selection it's derived below (the picks' shared
@@ -731,7 +838,7 @@ export class CycleCountsService {
     let requested = 0;
 
     if (scope === 'selection') {
-      const ids = Array.from(new Set(input.itemIds ?? []));
+      const ids = Array.from(new Set(requestedItemIds));
       requested = ids.length;
       if (ids.length === 0) {
         throw new ServiceError('validation_error', 'Pick at least one item to count.');
@@ -840,7 +947,12 @@ export class CycleCountsService {
         entityType: 'cycle_count',
         entityId: ccId,
         after: {
+          // The PERSISTED scope, plus what the operator actually asked for.
+          // A group count is stored as a selection, and the audit trail is the
+          // only place that distinction survives.
           scope,
+          requestedScope,
+          ...(requestedScope === 'group' ? { groupIds: input.groupIds ?? [] } : {}),
           warehouseId: headerWarehouseId,
           lineCount,
         },

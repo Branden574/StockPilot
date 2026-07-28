@@ -25,10 +25,13 @@ export function NewCycleCount({
   warehouses,
   members,
   canAssign,
+  sportsEnabled = false,
 }: {
   warehouses: Array<{ id: string; name: string }>;
   members: CountMember[];
   canAssign: boolean;
+  /** Org has the sports module — unlocks counting by product group. */
+  sportsEnabled?: boolean;
 }) {
   const picks = useCountPicks();
   const [mounted, setMounted] = React.useState(false);
@@ -56,7 +59,12 @@ export function NewCycleCount({
       </div>
 
       {mode === 'selection' ? (
-        <SelectionConfirm members={members} canAssign={canAssign} warehouses={warehouses} />
+        <SelectionConfirm
+          members={members}
+          canAssign={canAssign}
+          warehouses={warehouses}
+          sportsEnabled={sportsEnabled}
+        />
       ) : (
         <StartCycleCountForm warehouses={warehouses} />
       )}

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { NewCycleCount } from '@/components/cycle-counts/new-cycle-count';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -19,10 +20,14 @@ export default async function NewCycleCountPage() {
   }
 
   const warehousesSvc = await WarehousesService.forCurrentUser();
-  const [warehouses, supabase] = await Promise.all([
+  const [warehouses, supabase, enabledModules] = await Promise.all([
     warehousesSvc.listNames(),
     createClient(),
+    // Gates the "Product groups" scope. An org without the sports module sees
+    // the picker exactly as it was.
+    getModulesForRequest(ctx.organizationId),
   ]);
+  const sportsEnabled = enabledModules.has('sports');
 
   // Manager+ can assign a count to a teammate at creation time. Only
   // fetch the member list when they actually can (mirrors the detail page).
@@ -76,6 +81,7 @@ export default async function NewCycleCountPage() {
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             members={members}
             canAssign={canAssign}
+            sportsEnabled={sportsEnabled}
           />
         </CardContent>
       </Card>

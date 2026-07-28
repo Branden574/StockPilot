@@ -36,6 +36,10 @@ export interface CachedCycleCountLine {
   itemName: string;
   itemSku: string;
   itemBarcode: string | null;
+  /** WHICH VARIANT this line is: "Size 10", "#12 · Size XL". Null for every
+   *  item in a non-sports org, and on rows cached before this column existed
+   *  — they re-cache on the next online open of the count. */
+  itemVariantLabel: string | null;
   expected: number;
   counted: number | null;
   updatedAt: string | null;
@@ -68,6 +72,7 @@ export async function cacheCycleCount(
     itemName: string;
     itemSku: string;
     itemBarcode: string | null;
+    itemVariantLabel?: string | null;
     expected: number;
     counted: number | null;
     updatedAt: string | null;
@@ -105,12 +110,13 @@ export async function cacheCycleCount(
         await db.runAsync(
           `update cycle_count_lines
              set item_name = ?, item_sku = ?, item_barcode = ?,
-                 expected = ?, updated_at = ?
+                 item_variant_label = ?, expected = ?, updated_at = ?
            where id = ?`,
           [
             line.itemName,
             line.itemSku,
             line.itemBarcode,
+            line.itemVariantLabel ?? null,
             line.expected,
             line.updatedAt,
             line.id,
@@ -122,8 +128,8 @@ export async function cacheCycleCount(
       await db.runAsync(
         `insert or replace into cycle_count_lines
            (id, count_id, item_id, item_name, item_sku, item_barcode,
-            expected, counted, updated_at, local_dirty)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            item_variant_label, expected, counted, updated_at, local_dirty)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         [
           line.id,
           header.id,
@@ -131,6 +137,7 @@ export async function cacheCycleCount(
           line.itemName,
           line.itemSku,
           line.itemBarcode,
+          line.itemVariantLabel ?? null,
           line.expected,
           line.counted,
           line.updatedAt,
@@ -173,13 +180,14 @@ export async function getCycleCount(
     item_name: string | null;
     item_sku: string | null;
     item_barcode: string | null;
+    item_variant_label: string | null;
     expected: number;
     counted: number | null;
     updated_at: string | null;
     local_dirty: number;
   }>(
     `select id, count_id, item_id, item_name, item_sku, item_barcode,
-            expected, counted, updated_at, local_dirty
+            item_variant_label, expected, counted, updated_at, local_dirty
        from cycle_count_lines where count_id = ?`,
     [id],
   );
@@ -202,6 +210,7 @@ export async function getCycleCount(
       itemName: r.item_name ?? 'Unknown',
       itemSku: r.item_sku ?? '',
       itemBarcode: r.item_barcode,
+      itemVariantLabel: r.item_variant_label,
       expected: r.expected,
       counted: r.counted,
       updatedAt: r.updated_at,

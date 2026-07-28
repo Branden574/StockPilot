@@ -40,6 +40,21 @@ interface SheetState {
  * Burst-mode toggle: re-scanning the same barcode within 600ms is
  * de-duped; in burst mode subsequent scans of the same item just
  * increment counted by 1.
+ *
+ * BARCODE SCOPE IS EXPLICIT, AND IT IS THE VARIANT.
+ *
+ * `cycle_count_lines` FKs an item and a variant IS an item, so every line in
+ * the cached set is already a single variant with its own barcode and SKU.
+ * Scanning a variant barcode therefore resolves to that variant and counts
+ * exactly it. There is no group barcode to scan: a product group is identity
+ * and owns no quantity, so a group-level scan has no line to land on and none
+ * is invented — an unmatched code says so and counts nothing.
+ *
+ * NO SERIAL SCAN IS DEMANDED, and none may be added here. An ordinary pair of
+ * shoes or a jersey is quantity-tracked: it has no serial, and a jersey NUMBER
+ * is not one. This screen counts a QUANTITY against a line and never reads,
+ * requires or validates a serial — nothing below asks for one, and the confirm
+ * sheet's only input is a number.
  */
 // This route is presented as a `fullScreenModal` (see app/_layout.tsx), which
 // on iOS renders in a container OUTSIDE the root SafeAreaProvider — so the
@@ -129,9 +144,12 @@ function CycleCountScanScreenInner() {
 
     const line = findLineByCode(code);
     if (!line) {
+      // Never guess. A code that matches no line in the snapshot counts
+      // nothing — inventing a line would post stock against an item this
+      // count never scoped.
       Alert.alert(
         'Not in this count',
-        `No item with barcode/SKU "${code}" in this cycle count's scope.`,
+        `No item with barcode/SKU "${code}" in this cycle count's scope. Scan the barcode on the individual size or number, not a shared product label.`,
       );
       return;
     }
@@ -247,6 +265,12 @@ function CycleCountScanScreenInner() {
             <Text style={styles.sheetName} numberOfLines={2}>
               {sheet.line.itemName}
             </Text>
+            {/* WHICH VARIANT was scanned. Six sizes of one shoe carry six
+                barcodes and near-identical names; without this the counter
+                cannot tell which line the sheet is about. */}
+            {sheet.line.itemVariantLabel ? (
+              <Text style={styles.sheetVariant}>{sheet.line.itemVariantLabel}</Text>
+            ) : null}
             <View style={styles.row}>
               <View style={styles.kv}>
                 <Text style={styles.kvLabel}>Expected</Text>
@@ -321,6 +345,7 @@ const styles = StyleSheet.create({
   },
   sheetSku: { color: theme.textMuted, fontFamily: 'Menlo', fontSize: 11 },
   sheetName: { color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
+  sheetVariant: { color: theme.primary, fontSize: 14, fontWeight: '700', marginTop: 2 },
   row: { flexDirection: 'row', gap: space.md, marginTop: space.md },
   kv: { flex: 1 },
   kvLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },

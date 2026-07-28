@@ -1,10 +1,13 @@
 import 'server-only';
 
+import type { CountingUnit } from '@stockpilot/core';
+
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { fetchAllRows } from './lib/paginate';
+import { ProductGroupsService } from './product-groups';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -21,7 +24,13 @@ export interface SizeCountSessionRow {
   warehouse_id: string | null;
   purchase_order_id: string | null;
   supplier_id: string | null;
+  /** Display-only legacy key derived from the item NAME. Kept for pre-0302
+   *  sessions and for ungrouped inventory; never the durable identity. */
   style_key: string | null;
+  /** The product group these sizes belong to (migration 0302). The durable
+   *  identity that replaces style_key. NULL on every pre-0302 session and in
+   *  any org that has not opted into groups. */
+  product_group_id: string | null;
   box_id: string | null;
   mode: SizeCountMode;
   status: SizeCountStatus;
@@ -66,7 +75,11 @@ export class SizeCountsService {
     warehouseId?: string | null;
     purchaseOrderId?: string | null;
     supplierId?: string | null;
+    /** Legacy display key. Still accepted for orgs with no sports module. */
     styleKey?: string | null;
+    /** The product group being counted. Preferred over styleKey: renaming an
+     *  item cannot detach the count from it. */
+    productGroupId?: string | null;
     boxId?: string | null;
     expectedQuantity?: number | null;
     deviceId?: string | null;
@@ -86,6 +99,10 @@ export class SizeCountsService {
         purchase_order_id: input.purchaseOrderId ?? null,
         supplier_id: input.supplierId ?? null,
         style_key: input.styleKey ?? null,
+        // Org consistency is ALSO enforced by the 0302 policy arm
+        // (product_group_in_org): a group id is a client-supplied uuid, and a
+        // plain FK cannot say "and it must be ours".
+        product_group_id: input.productGroupId ?? null,
         box_id: input.boxId ?? null,
         mode: input.mode ?? 'rapid_pass',
         expected_quantity: input.expectedQuantity ?? null,
@@ -376,10 +393,52 @@ export class SizeCountsService {
     await admin.storage.from('size-count-training').remove([path]);
   }
 
+  /**
+   * The group a session is counting, in the shape a tally screen needs: what
+   * to call it, what its quantities are counted in, and WHICH SIZES EXIST.
+   *
+   * The size list is the point. Before 0302 the phone's chips were nine
+   * hardcoded garment sizes (XS..5XL), so a shoe count could not tally a 9.5
+   * at all. A grouped session drives its chips from the group's own size
+   * scale instead.
+   *
+   * Returns null for an ungrouped session — which is every pre-0302 session
+   * and every org without the sports module — and the caller falls back to
+   * the legacy chip set, unchanged.
+   *
+   * The sports module is CHECKED, not asserted: a session keeps its group
+   * after an org turns the module off, and reading back a count list you
+   * already made must not start failing with a 403.
+   */
+  private async groupContext(groupId: string | null): Promise<{
+    id: string;
+    name: string;
+    countingUnit: CountingUnit;
+    sizes: string[];
+  } | null> {
+    if (!groupId) return null;
+    if (!this.ctx.enabledModules.has('sports')) return null;
+    const groups = new ProductGroupsService(this.ctx);
+    const display = (await groups.displayByIds([groupId])).get(groupId);
+    if (!display) return null;
+    // sizeOrder is value -> sort_order; render them in the scale's own order.
+    const sizes = Array.from(display.sizeOrder.entries())
+      .sort((a, b) => a[1] - b[1])
+      .map(([value]) => value);
+    return {
+      id: groupId,
+      name: display.name,
+      countingUnit: display.countingUnit,
+      sizes,
+    };
+  }
+
   /** Session header + the per-size tally (SUM of quantity_delta by size). */
   async getSession(sessionId: string): Promise<{
     session: SizeCountSessionRow;
     tally: Array<{ size: string; quantity: number }>;
+    /** The counted group's identity + size scale, or null when ungrouped. */
+    group: { id: string; name: string; countingUnit: CountingUnit; sizes: string[] } | null;
   }> {
     assertModuleEnabled(this.ctx, 'instant_size_count');
     const { data: session, error } = await this.ctx.supabase
@@ -405,6 +464,7 @@ export class SizeCountsService {
       .map(([size, quantity]) => ({ size, quantity }))
       .filter((t) => t.quantity !== 0);
 
-    return { session: session as unknown as SizeCountSessionRow, tally };
+    const row = session as unknown as SizeCountSessionRow;
+    return { session: row, tally, group: await this.groupContext(row.product_group_id) };
   }
 }

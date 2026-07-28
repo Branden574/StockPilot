@@ -22,21 +22,29 @@ function toResult<T>(error: unknown): ActionResult<T> {
 
 const startSchema = z
   .object({
-    scope: z.enum(['warehouse', 'selection']).default('warehouse'),
+    // 'group' counts BY VARIANT: the service expands each product group into
+    // its variant items, then runs the ordinary selection path.
+    scope: z.enum(['warehouse', 'selection', 'group']).default('warehouse'),
     warehouseId: z.string().uuid().nullable(),
     itemIds: z.array(z.string().uuid()).max(1000).optional(),
+    groupIds: z.array(z.string().uuid()).max(200).optional(),
     notes: z.string().max(2000).optional().nullable(),
     assignedTo: z.string().uuid().nullable().optional(),
   })
   .refine((v) => v.scope !== 'selection' || (v.itemIds?.length ?? 0) > 0, {
     message: 'Pick at least one item to count.',
     path: ['itemIds'],
+  })
+  .refine((v) => v.scope !== 'group' || (v.groupIds?.length ?? 0) > 0, {
+    message: 'Pick at least one product group to count.',
+    path: ['groupIds'],
   });
 
 export async function startCycleCountAction(input: {
-  scope?: 'warehouse' | 'selection';
+  scope?: 'warehouse' | 'selection' | 'group';
   warehouseId: string | null;
   itemIds?: string[];
+  groupIds?: string[];
   notes?: string | null;
   assignedTo?: string | null;
 }): Promise<ActionResult<{ id: string; lineCount: number; skipped: number }>> {

@@ -191,6 +191,46 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       ['schema_version', String(SCHEMA_VERSION)],
     );
   }
+
+  await addColumnIfMissing(
+    db,
+    'cycle_count_lines',
+    'item_variant_label',
+    'text',
+  );
+}
+
+/**
+ * Additive, NON-DESTRUCTIVE column migration.
+ *
+ * Bumping SCHEMA_VERSION drops every cached table — including
+ * `pending_actions`, the offline OUTBOX. A counter who has recorded counts on
+ * a plane would silently lose them on the next app launch. Adding a purely
+ * display-only column is not worth that, so this widens the table in place and
+ * treats an already-present column as success.
+ *
+ * SQLite's `alter table add column` is O(1) (it only rewrites the schema, not
+ * the rows) and existing rows read the new column as NULL — which for a
+ * variant label is exactly right: they re-cache on the next open of the count.
+ */
+async function addColumnIfMissing(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  try {
+    const cols = await db.getAllAsync<{ name: string }>(
+      `pragma table_info(${table})`,
+    );
+    if (cols.some((c) => c.name === column)) return;
+    await db.execAsync(`alter table ${table} add column ${column} ${type}`);
+  } catch {
+    // A racing open (two callers hitting getDb at once) can lose the add and
+    // raise "duplicate column name". The column exists either way, which is
+    // the only thing callers need — and a failed DISPLAY column must never
+    // stop the app from opening its database.
+  }
 }
 
 export async function getMeta(key: string): Promise<string | null> {

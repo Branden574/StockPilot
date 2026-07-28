@@ -2,6 +2,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as React from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -13,17 +14,76 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api } from '@/lib/api';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { radius, space, theme } from '@/lib/theme';
+
+/** A product group as the picker lists it. The roll-up is DERIVED server-side
+ *  from the variants — a group owns no quantity of its own. */
+interface GroupRow {
+  id: string;
+  name: string;
+  brand: string | null;
+  model: string | null;
+  styleNumber: string | null;
+  team: string | null;
+  countingUnit: string;
+  variantCount: number;
+  totalQuantity: number;
+}
 
 /**
  * Start an Instant Size Count session. v1 is a review-only per-vendor size
- * tally (no inventory write). The optional reference labels the shipment.
+ * tally (no inventory write).
+ *
+ * WHAT is being counted comes from a PRODUCT GROUP (migration 0302). Before
+ * this screen posted `{ mode, boxId }` and nothing else, so `style_key` — the
+ * column that was supposed to say which product a tally belonged to — was
+ * never populated by anything. A group is durable identity: renaming an item
+ * cannot detach the count from the product it counted.
+ *
+ * The picker only appears for orgs with the sports module. Everyone else gets
+ * the reference field exactly as before.
  */
 export default function NewSizeCountScreen() {
   const router = useRouter();
+  const enabledModules = useEnabledModules();
+  const sportsEnabled = enabledModules.has('sports');
+
   const [reference, setReference] = React.useState('');
+  const [query, setQuery] = React.useState('');
+  const [groups, setGroups] = React.useState<GroupRow[]>([]);
+  const [groupsStatus, setGroupsStatus] = React.useState<'loading' | 'ready' | 'failed'>(
+    'loading',
+  );
+  const [selected, setSelected] = React.useState<GroupRow | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Debounced group search. Nothing is fetched at all for a non-sports org.
+  React.useEffect(() => {
+    if (!sportsEnabled) return;
+    let cancelled = false;
+    setGroupsStatus('loading');
+    const t = setTimeout(async () => {
+      try {
+        const q = query.trim();
+        const res = await api<{ groups: GroupRow[] }>(
+          `/api/v1/product-groups?limit=50${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+        );
+        if (cancelled) return;
+        setGroups(res.groups ?? []);
+        setGroupsStatus('ready');
+      } catch {
+        if (cancelled) return;
+        setGroups([]);
+        setGroupsStatus('failed');
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, sportsEnabled]);
 
   async function start() {
     setStarting(true);
@@ -34,6 +94,9 @@ export default function NewSizeCountScreen() {
         body: {
           mode: 'rapid_pass',
           boxId: reference.trim() || null,
+          // Durable identity when the org has groups; null otherwise, which is
+          // the pre-0302 shape and still perfectly valid.
+          productGroupId: selected?.id ?? null,
         },
       });
       // Replace so Back from the counter returns to the list, not here.
@@ -47,6 +110,38 @@ export default function NewSizeCountScreen() {
       );
     }
   }
+
+  const renderGroup = React.useCallback(
+    ({ item }: { item: GroupRow }) => {
+      const active = selected?.id === item.id;
+      const detail = [item.brand, item.model, item.styleNumber, item.team]
+        .filter(Boolean)
+        .join(' · ');
+      return (
+        <Pressable
+          onPress={() => setSelected(active ? null : item)}
+          style={[styles.groupRow, active && styles.groupRowActive]}
+          accessibilityRole="button"
+          accessibilityState={{ selected: active }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.groupName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {detail ? (
+              <Text style={styles.groupDetail} numberOfLines={1}>
+                {detail}
+              </Text>
+            ) : null}
+          </View>
+          <Text style={styles.groupMeta}>
+            {item.variantCount} size{item.variantCount === 1 ? '' : 's'}
+          </Text>
+        </Pressable>
+      );
+    },
+    [selected],
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -67,14 +162,63 @@ export default function NewSizeCountScreen() {
         </View>
 
         <View style={styles.body}>
-          <Text style={styles.label}>Reference (optional)</Text>
+          {sportsEnabled ? (
+            <>
+              <Text style={styles.label}>Product</Text>
+              <TextInput
+                value={selected ? selected.name : query}
+                onChangeText={(v) => {
+                  if (selected) setSelected(null);
+                  setQuery(v);
+                }}
+                placeholder="Search product groups"
+                placeholderTextColor={theme.textMuted}
+                style={styles.input}
+                autoCorrect={false}
+              />
+              {selected ? (
+                <Text style={styles.selectedHint}>
+                  Counting {selected.name} · sizes come from its size scale.
+                </Text>
+              ) : groupsStatus === 'loading' ? (
+                <View style={styles.groupsBox}>
+                  <ActivityIndicator color={theme.primary} />
+                </View>
+              ) : groupsStatus === 'failed' ? (
+                <Text style={styles.hint}>
+                  Couldn&apos;t load product groups. You can still start an
+                  unlabelled count.
+                </Text>
+              ) : groups.length === 0 ? (
+                <Text style={styles.hint}>
+                  {query.trim()
+                    ? `No product groups match "${query.trim()}".`
+                    : 'No product groups yet.'}
+                </Text>
+              ) : (
+                <View style={styles.groupsBox}>
+                  <FlatList
+                    data={groups}
+                    keyExtractor={(g) => g.id}
+                    renderItem={renderGroup}
+                    keyboardShouldPersistTaps="handled"
+                    initialNumToRender={10}
+                  />
+                </View>
+              )}
+            </>
+          ) : null}
+
+          <Text style={[styles.label, sportsEnabled && { marginTop: space.lg }]}>
+            Reference (optional)
+          </Text>
           <TextInput
             value={reference}
             onChangeText={setReference}
             placeholder="Vendor name, PO #, or box label"
             placeholderTextColor={theme.textMuted}
             style={styles.input}
-            autoFocus
+            autoFocus={!sportsEnabled}
             returnKeyType="go"
             onSubmitEditing={start}
           />
@@ -114,7 +258,7 @@ const styles = StyleSheet.create({
   backText: { color: theme.primary, fontSize: 14 },
   title: { color: theme.text, fontSize: 24, fontWeight: '700', marginTop: 4 },
   subtitle: { color: theme.textMuted, fontSize: 13, marginTop: 4, lineHeight: 18 },
-  body: { padding: space.md },
+  body: { padding: space.md, flex: 1 },
   label: { color: theme.text, fontSize: 13, fontWeight: '600', marginBottom: 8 },
   input: {
     minHeight: 48,
@@ -125,10 +269,34 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 16,
   },
+  selectedHint: { color: theme.primary, fontSize: 12, marginTop: 8 },
+  hint: { color: theme.textMuted, fontSize: 12, marginTop: 8 },
+  groupsBox: {
+    marginTop: 8,
+    maxHeight: 220,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  groupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  groupRowActive: { backgroundColor: theme.bgElevated },
+  groupName: { color: theme.text, fontSize: 14, fontWeight: '600' },
+  groupDetail: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  groupMeta: { color: theme.textMuted, fontSize: 12, fontVariant: ['tabular-nums'] },
   error: { color: '#dc2626', fontSize: 13, marginTop: 12 },
   captureLink: { marginTop: space.lg, paddingVertical: space.sm },
   captureLinkText: { color: theme.primary, fontSize: 14, fontWeight: '600' },
-  footer: { marginTop: 'auto', padding: space.md },
+  footer: { padding: space.md },
   startBtn: {
     minHeight: 52,
     borderRadius: radius.md,

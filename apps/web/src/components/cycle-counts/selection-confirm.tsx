@@ -42,10 +42,13 @@ export function SelectionConfirm({
   members,
   canAssign,
   warehouses,
+  sportsEnabled = false,
 }: {
   members: CountMember[];
   canAssign: boolean;
   warehouses: Array<{ id: string; name: string }>;
+  /** Org has the sports module — unlocks the Product groups tab. */
+  sportsEnabled?: boolean;
 }) {
   const router = useRouter();
   const picks = useCountPicks();
@@ -87,7 +90,7 @@ export function SelectionConfirm({
 
   return (
     <div className="space-y-5">
-      <CountItemPicker warehouses={warehouses} />
+      <CountItemPicker warehouses={warehouses} sportsEnabled={sportsEnabled} />
 
       {picks.length > 0 && (
         <div className="space-y-3">
