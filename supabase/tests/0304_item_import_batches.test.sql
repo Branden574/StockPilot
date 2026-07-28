@@ -23,19 +23,24 @@
 --       for exactly one new live batch
 --   12  ...and the predecessor SURVIVES, counts intact (superseded, not deleted)
 --   13  ...and a THIRD live batch is refused again — the index still guards
---   14  WRITE FLOOR: a staff member cannot record or forge a fingerprint
---   15  READ SCOPING: another org's member cannot see these batches at all
+--   14  WRITE GATE: a STAFF member CAN record a batch — items:import is a
+--       staff default (0207:102) and the service writes on the caller's own
+--       user-authed client, so a role floor would lock out the very users for
+--       whom CSV import is a daily job
+--   15  ...while a member whose items:import is REVOKED cannot
+--   16  READ SCOPING: another org's member cannot see these batches at all
 --
 -- Namespace: 51304000. Wrapped in begin/rollback — nothing leaks.
 
 begin;
 
-select plan(15);
+select plan(16);
 
 \set orgA  '\'51304000-0000-0000-0000-000000000001\''
 \set orgB  '\'51304000-0000-0000-0000-000000000002\''
 \set mgrA  '\'51304000-0000-0000-0000-000000000003\''
 \set stfA  '\'51304000-0000-0000-0000-000000000004\''
+\set stfR  '\'51304000-0000-0000-0000-000000000006\''
 \set mgrB  '\'51304000-0000-0000-0000-000000000005\''
 \set b1    '\'51304000-0000-0000-0000-0000000000e1\''
 \set b2    '\'51304000-0000-0000-0000-0000000000e2\''
@@ -45,6 +50,7 @@ select plan(15);
 insert into auth.users (id, email, raw_user_meta_data) values
   (:mgrA, 'mgrA-0304@test.local', '{}'::jsonb),
   (:stfA, 'stfA-0304@test.local', '{}'::jsonb),
+  (:stfR, 'stfR-0304@test.local', '{}'::jsonb),
   (:mgrB, 'mgrB-0304@test.local', '{}'::jsonb) on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -54,7 +60,15 @@ insert into public.organizations (id, name, slug) values
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :mgrA, 'manager', now()),
   (:orgA, :stfA, 'staff',   now()),
+  (:orgA, :stfR, 'staff',   now()),
   (:orgB, :mgrB, 'manager', now()) on conflict do nothing;
+
+-- stfR is a staff member whose items:import has been REVOKED by an admin.
+-- has_permission() resolves user override -> role override -> static default,
+-- so this is the exact mechanism a real org uses to take the permission away.
+insert into public.user_permission_overrides
+  (organization_id, user_id, permission, granted)
+  values (:orgA, :stfR, 'items:import', false) on conflict do nothing;
 
 -- ── 1-3. The table and its columns ──────────────────────────────────────────
 select has_table('public', 'item_import_batches',
@@ -164,21 +178,39 @@ select throws_ok(
   '23505', NULL,
   'a THIRD live batch is refused again — one supersede frees exactly ONE slot');
 
--- ── 14. Write floor: staff cannot record or forge a fingerprint ─────────────
+-- ── 14. THE WRITE GATE: a STAFF member CAN record a batch ───────────────────
+-- REVIEW FIX. This policy used to demand has_org_role(...,'manager'). But
+-- items:import is a STAFF default (0207:102) and ItemImportBatchesService.claim
+-- writes on the caller's own user-authed client, so a manager floor made every
+-- staff CSV import raise 42501 before a single item was created — breaking the
+-- import for exactly the people who use it most. The gate is the PERMISSION.
 reset role;
 set local "request.jwt.claim.sub" to '51304000-0000-0000-0000-000000000004';
 set local role to 'authenticated';
-select throws_ok(
+select lives_ok(
   $$ insert into public.item_import_batches
        (organization_id, sha256, file_name, row_count, created_count)
      values ('51304000-0000-0000-0000-000000000001',
              'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
              'staff.csv', 1, 1) $$,
+  'a STAFF member CAN record a batch — items:import is a staff default, and a '
+  'role floor here would lock staff out of CSV import entirely');
+
+-- ── 15. …while a member whose items:import is REVOKED cannot ────────────────
+reset role;
+set local "request.jwt.claim.sub" to '51304000-0000-0000-0000-000000000006';
+set local role to 'authenticated';
+select throws_ok(
+  $$ insert into public.item_import_batches
+       (organization_id, sha256, file_name, row_count, created_count)
+     values ('51304000-0000-0000-0000-000000000001',
+             'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+             'revoked.csv', 1, 1) $$,
   '42501',
   'new row violates row-level security policy for table "item_import_batches"',
-  'a staff member cannot record a batch — the write floor matches items:import');
+  'a member whose items:import is revoked cannot record or forge a fingerprint');
 
--- ── 15. Read scoping: org B's manager sees none of org A's batches ──────────
+-- ── 16. Read scoping: org B's manager sees none of org A's batches ──────────
 reset role;
 set local "request.jwt.claim.sub" to '51304000-0000-0000-0000-000000000005';
 set local role to 'authenticated';

@@ -434,11 +434,26 @@ export class CategoriesService {
     // it runs on a re-parent as well as on a sports-policy edit — moving a
     // profile-less category under the Sports root is exactly the state create()
     // now refuses, and it must not be reachable through the back door.
+    //
+    // GATED ON A REAL CHANGE (review fix). It used to fire on
+    // `patch.parentId !== undefined`, but the edit dialog
+    // (`categories-manager.tsx`) builds one payload and ALWAYS includes
+    // `parentId` — it resends the row's current parent on every save. So a
+    // plain rename of a profile-less category that happens to sit under the
+    // Sports root was refused with SPORTS_SUBCATEGORY_REQUIRED, dead-ending a
+    // legitimate edit and stranding precisely the rows the create-side guard
+    // cannot retroactively clean up.
+    //
+    // A no-op resend changes nothing about where the row lives, so there is no
+    // new state to validate. The guard now needs an actual MOVE (the resolved
+    // parent differs from the current one) or a sports-policy edit — both of
+    // which really do produce a state create() would refuse.
     if (patch.parentId !== undefined || touchesSportsPolicy(patch)) {
       current ??= await this.loadSportsState(id);
       const resolvedParentId =
         patch.parentId !== undefined ? (patch.parentId ?? null) : current.parentId;
-      if (resolvedParentId) {
+      const movesToNewParent = resolvedParentId !== current.parentId;
+      if (resolvedParentId && (movesToNewParent || touchesSportsPolicy(patch))) {
         const { sportsSubcategoryKey, trackingProfile } = resolvedSportsState();
         await this.assertSportsRootChildValid(
           resolvedParentId,

@@ -77,8 +77,16 @@ create index item_import_batches_superseded_by_idx
 
 -- ── RLS ─────────────────────────────────────────────────────────────────────
 -- Read: any org member (the warning has to be visible to whoever re-uploads).
--- Write: manager and above, matching who can hold `items:import` — a viewer
--- who cannot import must not be able to forge or clear a fingerprint either.
+--
+-- Write: exactly whoever holds `items:import`, via 0207's has_permission()
+-- resolver — NOT a role floor. `items:import` is a STAFF default (0207:102),
+-- and the service writes these rows on the caller's own user-authed
+-- ctx.supabase, so gating on has_org_role(...,'manager') would raise 42501 for
+-- every staff importer and lock out precisely the users for whom CSV import is
+-- a daily job. has_permission() also honours the org's per-role and per-user
+-- overrides, so a revoked items:import genuinely cannot fingerprint an import
+-- it is not allowed to run, and a granted one can.
+--
 -- No DELETE policy: a batch is superseded, never removed, so the audit trail of
 -- what was imported when cannot be erased from the client.
 alter table public.item_import_batches enable row level security;
@@ -89,12 +97,12 @@ create policy item_import_batches_select on public.item_import_batches
 
 create policy item_import_batches_insert on public.item_import_batches
   for insert to authenticated
-  with check ((select public.has_org_role(organization_id, 'manager')));
+  with check ((select public.has_permission(organization_id, 'items:import')));
 
 create policy item_import_batches_update on public.item_import_batches
   for update to authenticated
-  using ((select public.has_org_role(organization_id, 'manager')))
-  with check ((select public.has_org_role(organization_id, 'manager')));
+  using ((select public.has_permission(organization_id, 'items:import')))
+  with check ((select public.has_permission(organization_id, 'items:import')));
 
 grant select, insert, update on public.item_import_batches to authenticated;
 
