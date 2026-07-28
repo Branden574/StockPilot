@@ -1,10 +1,21 @@
 import * as React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Card } from './card';
+
+/**
+ * Whether the card header has to become a column. Reads the LIVE scale off
+ * `useWindowDimensions()` so it re-renders when the user changes Larger Text
+ * mid-session, and defers the threshold to the pure, unit-tested helper.
+ */
+function useStackedHeader(): boolean {
+  const { fontScale } = useWindowDimensions();
+  return shouldStackRow(fontScale);
+}
 
 type SparkKind = 'ok' | 'warn' | 'crit' | 'ink';
 
@@ -87,6 +98,13 @@ export function StatCard({
   sparkKind?: SparkKind;
 }) {
   const { c, mode } = useTheme();
+  // Paired with LABEL_CAP, and the half that actually stops "IT/EM/S". A 2-up
+  // card is ~143pt of interior; the sparkline is a fixed 84pt, so the label is
+  // left ~51pt — which even a capped 20pt "ITEMS" (~68pt) overruns, and iOS
+  // then breaks it per character. Past the threshold the chart drops below the
+  // label and the label gets the whole card width. Below it (≤1.35x, every
+  // non-accessibility size) the label needs ~47pt and nothing moves.
+  const stacked = useStackedHeader();
   const deltaColor =
     delta && (delta.startsWith('-') || delta.startsWith('↓'))
       ? ACCENT.crit
@@ -96,12 +114,13 @@ export function StatCard({
 
   return (
     <Card padding={16} style={styles.wrap}>
-      <View style={styles.header}>
+      <View style={[styles.header, stacked && styles.headerStacked]}>
         <Text
           style={[
             styles.label,
             { color: c.ink4 },
           ]}
+          maxFontSizeMultiplier={LABEL_CAP}
         >
           {label}
         </Text>
@@ -127,6 +146,13 @@ export function StatCard({
   );
 }
 
+/**
+ * 9.5pt micro-marker against the chrome ceiling. Uncapped it reached 34pt at
+ * AX5 — larger than the 28pt VALUE it labels, which inverts the card's whole
+ * hierarchy.
+ */
+const LABEL_CAP = capTo(9.5, TYPE_CEILING.chrome);
+
 const styles = StyleSheet.create({
   wrap: {
     minHeight: 102,
@@ -139,15 +165,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 8,
   },
+  headerStacked: {
+    flexDirection: 'column',
+  },
   label: {
     fontFamily: FONT.mono,
     fontSize: 9.5,
     letterSpacing: 9.5 * 0.18,
     textTransform: 'uppercase',
-    // The label keeps scaling — it just has to wrap rather than shoulder the
-    // fixed 84pt sparkline beside it. RN text defaults to flexShrink 0, so
-    // without these it claims its full intrinsic width and pushes the chart
-    // off the card.
+    // The label still scales, up to the ceiling — it just has to wrap rather
+    // than shoulder the fixed 84pt sparkline beside it. RN text defaults to
+    // flexShrink 0, so without these it claims its full intrinsic width and
+    // pushes the chart off the card.
     flex: 1,
     flexShrink: 1,
   },

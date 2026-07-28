@@ -7,8 +7,11 @@ import { useTheme } from '@/lib/use-theme';
 /**
  * Dynamic Type policy for the four text primitives.
  *
- * CHROME CAPS (Display, Eyebrow) are ceilings in points — see `capTo` in
- * lib/theme.ts. CONTENT (Body, Mono) has NO default cap: those two carry the
+ * CHROME CAPS (Display, Eyebrow, FieldLabel) are ceilings in points — see
+ * `capTo` in lib/theme.ts. Eyebrow and FieldLabel render the same line but do
+ * NOT share a ceiling: a section header is a landmark, a field label names the
+ * box you are typing into, and only one of those can afford to be the smallest
+ * text on screen. CONTENT (Body, Mono) has NO default cap: those two carry the
  * paragraphs, SKUs, barcodes, quantities and ETAs a warehouse user actually
  * reads, they live in ScrollViews, and letting them grow all the way is the
  * entire accessibility win. The `maxFontSizeMultiplier` prop exists on them
@@ -23,6 +26,14 @@ import { useTheme } from '@/lib/use-theme';
 /** Props every primitive forwards to its underlying <Text>. */
 type SharedTextProps = Omit<TextProps, 'style' | 'children'>;
 
+/** Shared by Eyebrow and FieldLabel — they differ only in their ceiling. */
+type EyebrowProps = SharedTextProps & {
+  children: React.ReactNode;
+  style?: ViewStyle;
+  prefix?: string;
+  color?: string;
+};
+
 /**
  * Eyebrow — JetBrains Mono, 11pt, uppercase, 0.18em tracking, prefixed
  * with an em-dash. This is the brand signature line that sits above
@@ -32,6 +43,9 @@ type SharedTextProps = Omit<TextProps, 'style' | 'children'>;
  * ("INVENTORY · 1,234 ITEMS", "RENTALS · 3 OUT · 1 OVERDUE") and it is
  * exactly that suffix which gets ellipsized away at larger text sizes. The
  * cap alone does not save it; the second line does.
+ *
+ * SECTION headers only. A label that names a form input is a FieldLabel —
+ * different job, different ceiling.
  */
 export function Eyebrow({
   children,
@@ -41,12 +55,7 @@ export function Eyebrow({
   maxFontSizeMultiplier,
   numberOfLines = 2,
   ...rest
-}: SharedTextProps & {
-  children: React.ReactNode;
-  style?: ViewStyle;
-  prefix?: string;
-  color?: string;
-}) {
+}: EyebrowProps) {
   const { c } = useTheme();
   return (
     <View style={[styles.eyebrowWrap, style]}>
@@ -66,6 +75,33 @@ export function Eyebrow({
         {children}
       </Text>
     </View>
+  );
+}
+
+/**
+ * FieldLabel — the name of a form field. Pixel-identical to Eyebrow (same
+ * 11pt tracked uppercase mono line, same em-dash prefix, same two-line
+ * reflow); the ONLY difference is the ceiling.
+ *
+ * It is a separate primitive rather than an `<Eyebrow variant="field">` prop
+ * on purpose. The two differ by what the text *is*, not how it looks, and a
+ * named export makes that greppable ("which labels name an input?") and
+ * self-documenting at the call site. A variant prop would put the decision on
+ * whoever writes the JSX, where the failure mode is silent omission — a new
+ * field label that quietly inherits the section-header ceiling and is,
+ * once again, the smallest thing on the form.
+ *
+ * See TYPE_CEILING.label for why 28 rather than eyebrow's 16.
+ */
+export function FieldLabel({ maxFontSizeMultiplier, ...rest }: EyebrowProps) {
+  return (
+    <Eyebrow
+      {...rest}
+      maxFontSizeMultiplier={resolveFontCap(
+        maxFontSizeMultiplier,
+        capTo(11, TYPE_CEILING.label),
+      )}
+    />
   );
 }
 

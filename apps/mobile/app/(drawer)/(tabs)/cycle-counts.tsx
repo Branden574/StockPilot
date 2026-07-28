@@ -15,6 +15,7 @@ import {
   RefreshControl,
   StyleSheet,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -32,10 +33,11 @@ import {
 } from '@/lib/cycle-count-cache';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface OpenCount {
@@ -60,6 +62,9 @@ export default function CycleCounts() {
   const { c } = useTheme();
   const tabBarHeight = useBottomTabBarHeight();
   const sync = useSyncStatus();
+  // Live scale (re-renders when the user changes Larger Text mid-session);
+  // threshold lives in the pure, unit-tested helper.
+  const stackedSummary = shouldStackRow(useWindowDimensions().fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const { orgId } = useOrg();
   const [counts, setCounts] = React.useState<OpenCount[]>([]);
@@ -249,10 +254,22 @@ export default function CycleCounts() {
           </View>
         ) : null}
 
-        <View style={styles.summaryGrid}>
-          <SummaryTile label="TODAY" value={String(todayCount)} sub="counts" />
-          <SummaryTile label="ACTIVE" value={String(inProgress)} sub="lists" />
-          <SummaryTile label="PENDING" value={String(pendingTotal)} sub="to sync" kind="warn" />
+        {/* Dynamic Type: three tiles across a 402pt screen leave each one ~90pt
+            of interior, which a 9pt tracked uppercase label outgrows on the
+            first accessibility size — "ACTIVE" broke to "ACTIV/E" and the
+            value's unit ("lists", "to sync") ran off the card entirely. Past
+            the threshold the strip becomes one column and every tile reflows
+            instead of clipping. */}
+        <View style={[styles.summaryGrid, stackedSummary && styles.summaryGridStacked]}>
+          <SummaryTile label="TODAY" value={String(todayCount)} sub="counts" stacked={stackedSummary} />
+          <SummaryTile label="ACTIVE" value={String(inProgress)} sub="lists" stacked={stackedSummary} />
+          <SummaryTile
+            label="PENDING"
+            value={String(pendingTotal)}
+            sub="to sync"
+            kind="warn"
+            stacked={stackedSummary}
+          />
         </View>
 
         <View style={styles.sectionHead}>
@@ -316,16 +333,21 @@ export default function CycleCounts() {
   );
 }
 
+/** 9pt tracked uppercase micro-marker against the chrome ceiling. */
+const TILE_LABEL_CAP = capTo(9, TYPE_CEILING.chrome);
+
 function SummaryTile({
   label,
   value,
   sub,
   kind = 'ink',
+  stacked = false,
 }: {
   label: string;
   value: string;
   sub: string;
   kind?: 'ink' | 'mint' | 'warn';
+  stacked?: boolean;
 }) {
   const { c, mode } = useTheme();
   const valueColor =
@@ -337,11 +359,15 @@ function SummaryTile({
         ? ACCENT.warn
         : c.ink;
   return (
-    <Card padding={12} style={{ flex: 1, gap: 6 }}>
-      <Mono size={9} tracking={0.18} upper color={c.ink4}>
+    // `flex: 1` means "share this ROW's width". Once the strip stacks it would
+    // instead be dividing an auto-height column, so it is dropped.
+    <Card padding={12} style={{ flex: stacked ? undefined : 1, gap: 6 }}>
+      <Mono size={9} tracking={0.18} upper color={c.ink4} maxFontSizeMultiplier={TILE_LABEL_CAP}>
         {label}
       </Mono>
-      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
+      {/* The count itself is content and stays uncapped; wrap + shrink are
+          what stop its unit from running past the card edge. */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 3 }}>
         <Mono
           size={22}
           tracking={-0.022}
@@ -350,7 +376,7 @@ function SummaryTile({
         >
           {value}
         </Mono>
-        <Mono size={11} color={c.ink4} tracking={0}>
+        <Mono size={11} color={c.ink4} tracking={0} style={{ flexShrink: 1 }}>
           {sub}
         </Mono>
       </View>
@@ -484,6 +510,9 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     flexDirection: 'row',
     gap: 10,
+  },
+  summaryGridStacked: {
+    flexDirection: 'column',
   },
   sectionHead: {
     paddingHorizontal: 20,

@@ -27,7 +27,7 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
 // Max compressed bytes before we refuse to upload. Matches the
@@ -400,12 +400,22 @@ export default function AiScanScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
       <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
+        {/* Dynamic Type: the exact twin of the cycle-count scan topBar — a
+            `flex: 1` title column between non-shrinking chrome and a
+            SyncStatusBadge that may claim 60% of the bar. Same fix: the two
+            pinned labels take the chrome ceiling, the bar may wrap to a second
+            line, and the title column keeps a real width floor so that wrap
+            can actually happen. */}
         <View style={styles.topBar} pointerEvents="auto">
           <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeText}>Cancel</Text>
+            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+              Cancel
+            </Text>
           </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerLabel}>AI Shelf Scan</Text>
+          <View style={styles.titleCol}>
+            <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
+              AI Shelf Scan
+            </Text>
             <Text style={styles.headerSub}>
               {cachedLines.length} {cachedLines.length === 1 ? 'book' : 'books'} in this count
             </Text>
@@ -612,6 +622,10 @@ function ReviewRow({
   );
 }
 
+/** Pinned viewfinder chrome: 14pt Cancel, 16pt screen name. */
+const CLOSE_CAP = capTo(14, TYPE_CEILING.chrome);
+const TITLE_CAP = capTo(16, TYPE_CEILING.chrome);
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   center: {
@@ -623,16 +637,20 @@ const styles = StyleSheet.create({
   },
   topBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: space.sm,
     padding: space.md,
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
+  /** See the scan twin: a FLOOR, so `flexWrap` has something to wrap against. */
+  titleCol: { flex: 1, minWidth: 120 },
   closeBtn: {
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
     borderRadius: radius.sm,
     backgroundColor: 'rgba(255,255,255,0.16)',
+    flexShrink: 0,
   },
   closeText: { color: '#fff', fontWeight: '600' },
   headerLabel: { color: '#fff', fontWeight: '700', fontSize: 16 },

@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconChip } from '@/components/ui/row';
-import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -1145,8 +1145,13 @@ function Field({
     // instead be dividing an auto-height column, so it is dropped; marginTop
     // already supplies the vertical rhythm.
     <View style={{ marginTop: 14, flex: flex && !stacked ? 1 : undefined }}>
+      {/* FieldLabel, not Eyebrow: this names the box below it, and the box's
+          own text is uncapped by design. Under the section-header ceiling the
+          label measured 45% the height of its own input at AX3 and 30% at AX5
+          — the smallest thing on the form was the only thing saying what the
+          user was typing. See TYPE_CEILING.label. */}
       <View style={styles.fieldHead}>
-        <Eyebrow>{label}</Eyebrow>
+        <FieldLabel>{label}</FieldLabel>
         {trailing}
       </View>
       <View style={{ marginTop: 6 }}>{children}</View>

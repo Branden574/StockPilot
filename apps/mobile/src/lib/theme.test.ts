@@ -50,6 +50,53 @@ describe('capTo', () => {
   });
 });
 
+/**
+ * The `label` ceiling is the one entry in the table that exists for a purely
+ * accessibility reason rather than a layout one, so its relationships to the
+ * other ceilings are worth pinning: a later "tidy up, these two are the same
+ * 11pt line" edit is exactly how the regression comes back.
+ */
+describe('TYPE_CEILING.label — form field labels', () => {
+  it('is more generous than the section-header ceiling', () => {
+    // Same 11pt tracked uppercase mono line, different job. A section eyebrow
+    // is a landmark you read once; a field label is the only thing naming the
+    // box being typed into.
+    expect(TYPE_CEILING.label).toBeGreaterThan(TYPE_CEILING.eyebrow);
+  });
+
+  it('is never below the ceiling on the input it names', () => {
+    // Otherwise the label is guaranteed to be the smaller of the pair at every
+    // accessibility size — the defect this entry was added to fix.
+    expect(TYPE_CEILING.label).toBeGreaterThanOrEqual(TYPE_CEILING.input);
+  });
+
+  it('lands an 11pt label on its ceiling, well past the eyebrow multiplier', () => {
+    expect(capTo(11, TYPE_CEILING.label)).toBeCloseTo(28 / 11, 6);
+    expect(capTo(11, TYPE_CEILING.label)).toBeGreaterThan(capTo(11, TYPE_CEILING.eyebrow));
+  });
+
+  it('keeps the longest real field label on one line of the form column', () => {
+    // "PRIMARY LOCATION" is the longest label on Add Item; Eyebrow prefixes
+    // "— ", so 18 JetBrains Mono characters at 0.6em advance plus 1.98pt of
+    // tracking (letterSpacing is applied in UNSCALED points and does not grow
+    // with fontScale). The form column is 402pt of screen less 20pt gutters.
+    const width = (chars: number, size: number) => chars * (size * 0.6 + 11 * 0.18);
+    expect(width(18, TYPE_CEILING.label)).toBeLessThanOrEqual(362);
+    // And it is genuinely the largest ceiling that does: one point more and
+    // the same label no longer fits.
+    expect(width(18, TYPE_CEILING.label + 3)).toBeGreaterThan(362);
+  });
+
+  it('holds a field label above half the height of its uncapped 15pt input at AX5', () => {
+    // Add-Item inputs are 15pt and stay uncapped by design (plan §3). At the
+    // old eyebrow ceiling the label was 30% of its own input at AX5.
+    const AX5 = 3.57;
+    const inputPt = 15 * AX5;
+    expect(TYPE_CEILING.eyebrow / inputPt).toBeLessThan(0.35); // the defect
+    expect(TYPE_CEILING.label / inputPt).toBeGreaterThan(0.5); // the fix
+  });
+});
+
 describe('resolveFontCap', () => {
   it('applies the policy default when a call site says nothing', () => {
     expect(resolveFontCap(undefined, 1.45)).toBe(1.45);

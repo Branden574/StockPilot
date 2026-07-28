@@ -238,8 +238,10 @@ function CycleCountScanScreenInner() {
               Done
             </Text>
           </Pressable>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.headerLabel}>Counting</Text>
+          <View style={styles.titleCol}>
+            <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
+              Counting
+            </Text>
             <Text style={styles.headerSub}>
               {counted} of {total} done
             </Text>
@@ -320,6 +322,12 @@ function CycleCountScanScreenInner() {
 /** Chrome caps for the two pinned viewfinder buttons (13pt Done, 12pt Burst). */
 const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
 const BURST_CAP = capTo(12, TYPE_CEILING.chrome);
+/**
+ * The screen name is chrome too — it is the one thing in this bar the user
+ * already knows, having just tapped the button that opened it. Capping it is
+ * what buys the live tally beneath it the width to stay whole.
+ */
+const TITLE_CAP = capTo(12, TYPE_CEILING.chrome);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
@@ -332,6 +340,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
+  /**
+   * A FLOOR, not `minWidth: 0`. `flexWrap` on the bar can only move a sibling
+   * to a second line if some child actually demands width, and Yoga measures
+   * a text column against the space it is offered — so with `minWidth: 0` the
+   * title silently reported ~0, nothing ever wrapped, and Done + the 60%-wide
+   * SyncStatusBadge + Burst (all `flexShrink: 0`) squeezed the title to ~55pt
+   * until "Counting" fractured into "Co / unt / ing".
+   *
+   * 120pt covers "Counting" at the 20pt title ceiling (~84pt) and the tally's
+   * longest word, "done", at AX5 (14pt × 3.57 ≈ 108pt), so the tally wraps at
+   * word boundaries rather than per character. At default size the title's own
+   * content is wider than this, so nothing about the bar changes.
+   */
+  titleCol: { flex: 1, minWidth: 120 },
   closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)', flexShrink: 0 },
   closeText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   headerLabel: { color: '#fff', fontSize: 12, opacity: 0.7 },

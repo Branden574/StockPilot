@@ -87,11 +87,39 @@ export const FONT = {
  */
 export const TYPE_CEILING = {
   display: 48, // headings, call sites 18–40pt
-  eyebrow: 16, // 11pt tracked uppercase mono section labels
+  eyebrow: 16, // 11pt tracked uppercase mono SECTION labels
+  label: 28, // 11pt FORM FIELD labels — see the note below
   control: 22, // button + segmented-control labels, 13–15.5pt
   input: 24, // TextInput inside a bordered box
   chrome: 20, // pill / page-number / micro-marker labels, 9–13pt
 };
+
+/**
+ * Why `label` is nearly double `eyebrow` when both render the same 11pt
+ * tracked uppercase mono line.
+ *
+ * A section eyebrow is a landmark: you read it once on the way past, and the
+ * content under it says what the section is anyway. A FIELD label is the only
+ * thing on screen that names the box you are typing into — and it sits
+ * directly above a value that is deliberately left uncapped (plan §3: "All
+ * Add-Item TextInputs … Only the *labels* are broken").
+ *
+ * The real sizes: Add-Item labels are 11pt, their inputs 15pt — a designed
+ * 73% relationship. Pinned at the 16pt eyebrow ceiling while the input runs
+ * free, that collapses to 16/35.3 = 45% at AX3 and 16/53.6 = 30% at AX5. The
+ * smallest text on the form becomes the label, which is backwards.
+ *
+ * 28pt is the largest ceiling that still fits: the longest real field label,
+ * "PRIMARY LOCATION", is 18 mono characters once Eyebrow's "— " prefix is
+ * counted, each 0.6em wide plus 1.98pt of tracking (letterSpacing is applied
+ * in unscaled points and does not grow), so 18 × (0.6S + 1.98) ≤ 362pt of
+ * form column gives S ≤ 30. At 28 it lands at 338pt — one line — and anything
+ * longer falls back on the two-line reflow Eyebrow already has.
+ *
+ * That restores the label to 79% of its input at AX3 and 52% at AX5, and
+ * 28/11 = 2.55x is still tighter than Apple's own 11pt Caption2 → 36pt
+ * (3.27x) at AX5.
+ */
 
 /**
  * A cap is a CEILING IN POINTS, not a taste multiplier — a 34pt title and an
