@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { PAGE_SIZE } from './lib/paginate';
 
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({
@@ -169,6 +170,60 @@ describe('CycleCountsService.start (group scope)', () => {
     await expect(
       svc.start({ scope: 'group', warehouseId: null, groupIds: ['grp-a'] }),
     ).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+
+  /**
+   * Task 17 review fix (IMPORTANT 1): the group expansion at `start()` used
+   * to run one unpaginated `.select()` for the group's variants — PostgREST's
+   * `[api] max_rows = 1000` (config.toml) silently clamps that to 1000 rows
+   * with NO error, so a big jersey run scoped by group id(s) would start a
+   * count against an arbitrary 1000-row subset and nobody would know a
+   * variant was ever dropped. Page 1 below is FULL (PAGE_SIZE rows), which
+   * forces `fetchAllRows` to fetch page 2 to find the 1001st variant — a
+   * capped `.select()`/`list({limit:1000})` would never see that row at all.
+   *
+   * The SAME cap sits one step downstream too: once the group is expanded to
+   * a selection, `start()` re-reads those ids to gate warehouse access and
+   * derive the header warehouse — another unpaginated `.select()` that would
+   * re-truncate the very set page 1/2 just proved was complete. `groupIds` has
+   * no analogous 1000 cap (unlike hand-picked `itemIds`, capped at 1000 by
+   * the action schema), so a handful of large groups can push the expanded
+   * set past 1000 easily. Both reads must page to exhaustion for the fix to
+   * hold end-to-end — fixing only the expansion and leaving the re-read
+   * capped would silently re-truncate the same run one line later.
+   */
+  it('pages the group expansion AND the selection re-read past 1000 rows — the 1001st variant survives to the snapshot (Task 17 review fix)', async () => {
+    const page1 = Array.from({ length: PAGE_SIZE }, (_, i) => ({
+      id: `v-${String(i).padStart(5, '0')}`,
+      warehouse_id: 'wh-a',
+    }));
+    const the1001st = { id: 'v-01000', warehouse_id: 'wh-a' };
+    const page2 = [the1001st];
+    // Both the expansion query and the downstream selection re-read hit the
+    // same 'inventory_items.select' key. Each is its own fetchAllRows loop of
+    // exactly 2 pages (a full page then a short one that ends the loop), so
+    // alternating on an even/odd call counter serves BOTH loops correctly.
+    let call = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => ({
+        data: call++ % 2 === 0 ? page1 : page2,
+        error: null,
+      }),
+      'rpc:start_cycle_count': {
+        data: [{ cycle_count_id: 'cc-big', line_count: PAGE_SIZE + 1 }],
+        error: null,
+      },
+    });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, { enabledModules: withSports }),
+    );
+
+    await svc.start({ scope: 'group', warehouseId: null, groupIds: ['grp-big'] });
+
+    const rpc = stub.rpcCalls.find((c) => c.name === 'start_cycle_count');
+    const ids = (rpc?.args as { p_item_ids: string[] }).p_item_ids;
+    expect(ids).toHaveLength(PAGE_SIZE + 1);
+    expect(ids).toContain(the1001st.id);
   });
 
   it('leaves the warehouse scope completely untouched', async () => {

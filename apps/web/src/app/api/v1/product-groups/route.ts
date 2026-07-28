@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
@@ -23,6 +24,20 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Per-user rate limit — mirrors GET /api/v1/bundles: this list is the
+  // mobile picker's typeahead source, hit on every keystroke while debounced.
+  // 120/min covers normal-paced typing + burst, hard-limits a runaway client.
+  const rl = await checkRateLimit(`v1-product-groups-list:${ctx.userId}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', retryAt: rl.resetAt },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      },
+    );
+  }
 
   const url = new URL(req.url);
   const search = url.searchParams.get('q')?.trim() ?? '';

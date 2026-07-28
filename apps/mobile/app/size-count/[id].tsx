@@ -85,14 +85,15 @@ export default function SizeCountScreen() {
   );
   // Chips come from the counted group's size scale; an ungrouped session keeps
   // the legacy nine, and any size already carrying a tally is always shown.
+  //
+  // NOT filtered on qty !== 0 (Task 17 review fix): `tally` keys are never
+  // deleted (count() always spreads `{ ...t, [size]: next }`, even when
+  // `next` is 0), so a key's mere presence means "tapped at least once this
+  // session". Filtering on qty !== 0 made an off-scale chip vanish the moment
+  // it was decremented back to zero — a session-scoped miscount recoverable
+  // only by re-adding a chip that no longer existed to tap.
   const sizes = React.useMemo(
-    () =>
-      resolveSizeChips({
-        groupSizes: group?.sizes,
-        talliedSizes: Object.entries(tally)
-          .filter(([, qty]) => qty !== 0)
-          .map(([size]) => size),
-      }),
+    () => resolveSizeChips({ groupSizes: group?.sizes, talliedSizes: Object.keys(tally) }),
     [group?.sizes, tally],
   );
 

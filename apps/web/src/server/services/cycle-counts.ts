@@ -803,15 +803,27 @@ export class CycleCountsService {
       // Read the variants under the caller's own RLS, org-scoped. A group in
       // another org (or one the caller's category visibility hides) simply
       // yields no variants, and the empty-scope error below is what they see.
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('group_id', groupIds)
-        .is('deleted_at', null)
-        .eq('status', 'active');
-      if (error) throw new ServiceError('internal_error', error.message);
-      groupItemIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+      //
+      // PAGINATED via fetchAllRows (Task 17 review fix): a plain `.select()`
+      // is silently clamped to PostgREST's `[api] max_rows = 1000`
+      // (config.toml) with NO error. `groupIds` carries no analogous cap
+      // (unlike hand-picked `itemIds`, capped at 1000 by the action schema),
+      // so a handful of large groups can push their combined variant count
+      // past 1000 easily — a big jersey run would otherwise start a count
+      // scoped to an arbitrary 1000-row subset and nobody would ever know a
+      // variant was dropped.
+      const expansionRows = await fetchAllRows<{ id: string }>((from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('group_id', groupIds)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
+      groupItemIds = expansionRows.map((r) => r.id);
       if (groupItemIds.length === 0) {
         throw new ServiceError(
           'validation_error',
@@ -848,15 +860,26 @@ export class CycleCountsService {
       // (c) surface the "none active" error before snapshotting. Same org +
       // deleted_at + status predicate the snapshot RPC re-selects with, so
       // the gated set and the snapshotted set are the same items.
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, warehouse_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .in('id', ids);
-      if (error) throw new ServiceError('internal_error', error.message);
-      const items = (data ?? []) as Array<{ id: string; warehouse_id: string | null }>;
+      //
+      // PAGINATED via fetchAllRows (Task 17 review fix): `ids` can exceed
+      // 1000 when it came from a group-scope expansion (see above — groupIds
+      // has no 1000 cap), and an unpaginated `.select()` here would silently
+      // re-truncate to PostgREST's max_rows even after the expansion read
+      // above paged past it correctly. A plain hand-picked selection is
+      // capped at 1000 by the action schema, so this only bites group scope
+      // today, but the read has to page regardless of which caller filled it.
+      const items = await fetchAllRows<{ id: string; warehouse_id: string | null }>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('inventory_items')
+            .select('id, warehouse_id')
+            .eq('organization_id', this.ctx.organizationId)
+            .is('deleted_at', null)
+            .eq('status', 'active')
+            .in('id', ids)
+            .order('id', { ascending: true })
+            .range(from, to),
+      );
       if (items.length === 0) {
         throw new ServiceError(
           'validation_error',

@@ -212,8 +212,12 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
  * SQLite's `alter table add column` is O(1) (it only rewrites the schema, not
  * the rows) and existing rows read the new column as NULL — which for a
  * variant label is exactly right: they re-cache on the next open of the count.
+ *
+ * Exported for the pure-module test in db.addColumnIfMissing.test.ts — this
+ * one function is what keeps a future display-only column from being "solved"
+ * by bumping SCHEMA_VERSION instead, which is the outbox-wiping path.
  */
-async function addColumnIfMissing(
+export async function addColumnIfMissing(
   db: SQLite.SQLiteDatabase,
   table: string,
   column: string,

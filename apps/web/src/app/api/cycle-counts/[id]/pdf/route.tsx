@@ -160,8 +160,18 @@ export async function GET(
       // based on cycle.status.
       countedQuantity:
         l.counted_quantity == null ? null : Number(l.counted_quantity),
-      groupId: l.item?.group_id ?? null,
-      groupName: l.item?.group_id ? (groupNameById.get(l.item.group_id) ?? null) : null,
+      // Both gated on the sports module (Task 17 review fix): groupId used to
+      // be set unconditionally, so a module-off org's non-null group_id (an
+      // item can carry one even after sports is disabled — the column isn't
+      // cleared) still reached the PDF. groupCountSheetLines() only checks
+      // `groupId` to decide whether to print group blocks at all, so it
+      // printed a "Product group" header (groupName was already null) over
+      // what should have been the flat, pre-sports sheet.
+      groupId: ctx.enabledModules.has('sports') ? (l.item?.group_id ?? null) : null,
+      groupName:
+        ctx.enabledModules.has('sports') && l.item?.group_id
+          ? (groupNameById.get(l.item.group_id) ?? null)
+          : null,
       variantLabel: variantLabel({
         jerseyNumber: l.item?.jersey_number ?? null,
         size: l.item?.variant_size ?? null,

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { variantLabel } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
@@ -24,6 +25,22 @@ export async function GET(
 ) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Per-user rate limit — mirrors GET /api/v1/bundles and the sibling group
+  // list above: this is the size-count / cycle-count picker's variant fetch,
+  // hit once per group tap while the caller debounces. 120/min covers
+  // normal-paced use + burst, hard-limits a runaway client.
+  const rl = await checkRateLimit(`v1-product-groups-variants:${ctx.userId}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', retryAt: rl.resetAt },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      },
+    );
+  }
+
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
