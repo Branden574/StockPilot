@@ -2641,6 +2641,42 @@ export class InventoryService {
       updates.custom_fields = patch.customFields;
     }
 
+    // DUAL-WRITE (transition window, migration 0303). variant_size is the
+    // durable column — indexed, length-CHECKed, and what the group roll-up and
+    // the import matcher read. custom_fields.size is the shape every row
+    // bulkCreateSizedVariants ever wrote still carries, and it is the source
+    // 0303's backfill copies from and its rollback restores from. Writing one
+    // without the other lets them disagree, so update() always writes both:
+    // otherwise a size edited on the item form drifts from the size a re-run
+    // of the backfill would recover. Remove the custom_fields half only when
+    // every writer and reader has moved — tracked in the migration report.
+    //
+    // Before 0303 this method ignored patch.variantSize entirely, so a size
+    // edit on the item form was silently dropped.
+    const currentVariantSize =
+      (current as { variant_size?: string | null }).variant_size ?? null;
+    let variantSizeChanged = false;
+    if (patch.variantSize !== undefined) {
+      const nextSize = patch.variantSize ?? null;
+      variantSizeChanged = nextSize !== currentVariantSize;
+      updates.variant_size = nextSize;
+      updates.variant_size_original = patch.variantSizeOriginal ?? nextSize;
+      if (nextSize) {
+        // Merge onto whatever custom_fields THIS patch is already writing.
+        // Reading the stored object instead would revert a custom-field edit
+        // submitted in the same form post — the item form always sends both.
+        // No re-validation is needed: `size` is a RESERVED_CUSTOM_FIELD_KEY, so
+        // no org can have defined it and validateCustomFields only walks defs.
+        const baseCustomFields =
+          (updates.custom_fields as Record<string, unknown> | undefined) ??
+          ((current as { custom_fields?: Record<string, unknown> | null }).custom_fields ?? {});
+        updates.custom_fields = { ...baseCustomFields, size: nextSize };
+      }
+      // Clearing the size deliberately does NOT delete custom_fields.size. It
+      // is the only surviving record of what the size was, and 0303's rollback
+      // statement reads it; the reader migration retires the key wholesale.
+    }
+
     if (patch.warehouseId !== undefined && patch.warehouseId !== currentWarehouseId) {
       const forced = await forcedWarehouseId(this.ctx);
       if (forced) {
@@ -2710,6 +2746,15 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+
+    // variant_key is DERIVED from variant_size (plus the other variant
+    // attributes), so a size edit that skipped the recompute would leave the
+    // row keyed under its OLD size — invisible to the group roll-up's
+    // count(distinct variant_key) and to the import matcher, which would then
+    // create a SECOND variant for a size that already exists. Same seam and
+    // same best-effort posture the duplicate path uses. Only fires when the
+    // size actually moved, so an ordinary edit costs nothing.
+    if (variantSizeChanged) await this.recomputeVariantKey(id);
 
     // Model B: fan out shared product fields to every OTHER placement of
     // this SKU. Keyed on the ORIGINAL sku (captured above, before the patch)

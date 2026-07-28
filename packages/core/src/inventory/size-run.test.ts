@@ -250,6 +250,40 @@ describe('groupBySizeRun — stored group_id is the only signal when present', (
     expect(out[1].group.members.map((m) => m.id)).toEqual(['u1', 'u2']);
   });
 
+  // REGRESSION FOR MIGRATION 0303. The backfill puts every historical sized
+  // item into a state no test covered before: variantSize SET, groupId still
+  // NULL. That state is the whole owner decision — grouping is opt-in, so the
+  // display heuristic has to keep carrying these families until a human links
+  // them in the review tool. If the backfill's new column quietly became a
+  // grouping signal, every ungrouped run in every org would change shape on
+  // deploy, which is exactly the silent re-identification the decision forbids.
+  it('still collapses a BACKFILLED-but-ungrouped family on the name heuristic', () => {
+    const rows: GRow[] = [
+      { id: 'a', name: 'Pink Shirt - L', qty: 1, groupId: null, variantSize: 'L' },
+      { id: 'b', name: 'Pink Shirt - XL', qty: 2, groupId: null, variantSize: 'XL' },
+      { id: 'c', name: 'Pink Shirt - 2XL', qty: 3, groupId: null, variantSize: '2XL' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    expect(out).toHaveLength(1);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    // Keyed on the NAME, not on the freshly backfilled size.
+    expect(out[0].group.styleKey).toBe('pink shirt');
+    expect(out[0].group.groupId).toBeNull();
+    expect(out[0].group.total).toBe(6);
+    expect(out[0].group.sizeCount).toBe(3);
+    // Arrival order, byte-identically to before the backfill: a name-keyed run
+    // is never re-sorted on the strength of a parsed token.
+    expect(out[0].group.members.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not fold two DIFFERENT ungrouped styles together just because both now carry a size', () => {
+    const rows: GRow[] = [
+      { id: 'a', name: 'Pink Shirt - L', qty: 1, groupId: null, variantSize: 'L' },
+      { id: 'b', name: 'Blue Hoodie - L', qty: 1, groupId: null, variantSize: 'L' },
+    ];
+    expect(groupBySizeRun(rows, gmeta).map((e) => e.kind)).toEqual(['single', 'single']);
+  });
+
   it('size-orders a group-keyed run (10 after 9, XL after L) whatever order the rows arrive in', () => {
     const numeric = groupBySizeRun(
       [
