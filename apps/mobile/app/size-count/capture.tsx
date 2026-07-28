@@ -304,7 +304,7 @@ export default function TrainingCaptureScreen() {
         <Pressable style={styles.modalBackdrop} onPress={() => setImportUris([])}>
           <Pressable style={styles.sheet} onPress={() => undefined}>
             <Text style={styles.sheetTitle}>Label {importUris.length} photo{importUris.length === 1 ? '' : 's'}</Text>
-            <Text style={styles.sheetBody}>What size are these? They'll all upload with this label.</Text>
+            <Text style={styles.sheetBody}>What size are these? They&apos;ll all upload with this label.</Text>
             <View style={styles.sheetGrid}>
               {LABELS.map((l) => (
                 <Pressable key={l} onPress={() => labelImport(l, false)} style={styles.sheetChip}>
