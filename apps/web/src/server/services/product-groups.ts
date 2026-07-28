@@ -2,9 +2,12 @@ import 'server-only';
 
 import {
   buildGroupKey,
+  buildSizeOrder,
   type CountingUnit,
   type CreateProductGroupInput,
   type GroupKeyParts,
+  type SizeOrderIndex,
+  type SizeScaleValueOrder,
   type UpdateProductGroupInput,
 } from '@stockpilot/core';
 
@@ -51,6 +54,17 @@ export interface GroupRollup {
   variantCount: number;
   totalQuantity: number;
   countingUnit: CountingUnit;
+}
+
+/**
+ * The read-time shape a size-run renderer needs: what the group is called,
+ * what its quantities are counted in, and what order its sizes go in. Carries
+ * NO quantity — a group owns none, ever (see the 0298 header).
+ */
+export interface ProductGroupDisplay {
+  name: string;
+  countingUnit: CountingUnit;
+  sizeOrder: SizeOrderIndex;
 }
 
 /** One variant row (an `inventory_items` row pointed at a group). */
@@ -346,6 +360,78 @@ export class ProductGroupsService {
         variantCount: Number(r.variant_count),
         totalQuantity: Number(r.total_quantity),
         countingUnit: r.counting_unit as CountingUnit,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Everything a size-run RENDERER needs for a set of groups: the group's
+   * name, its counting unit, and the order its sizes go in.
+   *
+   * The counting unit is READ from `default_counting_unit`, never inferred —
+   * PAIR is a display convention with no conversion behind it (requirements
+   * 5), so a surface that guessed "each" would print a number that means
+   * something different from what the group says it means.
+   *
+   * The size order comes from the group's `size_scale_values.sort_order`. A
+   * group with no scale returns an EMPTY order rather than no entry at all:
+   * the caller still gets the name and unit, and `compareSizeValues` falls
+   * back to its natural ladder. Groups the caller cannot see are simply absent
+   * from the map — callers must handle a miss.
+   */
+  async displayByIds(groupIds: string[]): Promise<Map<string, ProductGroupDisplay>> {
+    assertModuleEnabled(this.ctx, 'sports');
+    const unique = Array.from(new Set(groupIds.filter(Boolean)));
+    if (unique.length === 0) return new Map();
+
+    const { data: groupRows, error: groupErr } = await this.ctx.supabase
+      .from('product_groups')
+      .select('id, name, default_counting_unit, size_scale_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', unique)
+      .is('deleted_at', null);
+    if (groupErr) throw new ServiceError('internal_error', groupErr.message);
+
+    const groups = (groupRows ?? []) as Array<{
+      id: string;
+      name: string;
+      default_counting_unit: CountingUnit;
+      size_scale_id: string | null;
+    }>;
+
+    const scaleIds = Array.from(
+      new Set(groups.map((g) => g.size_scale_id).filter((v): v is string => Boolean(v))),
+    );
+    const valuesByScale = new Map<string, SizeScaleValueOrder[]>();
+    if (scaleIds.length > 0) {
+      const { data: valueRows, error: valueErr } = await this.ctx.supabase
+        .from('size_scale_values')
+        .select('size_scale_id, value, normalized, sort_order')
+        .in('size_scale_id', scaleIds)
+        .order('sort_order', { ascending: true });
+      if (valueErr) throw new ServiceError('internal_error', valueErr.message);
+      for (const row of (valueRows ?? []) as Array<Record<string, unknown>>) {
+        const key = row.size_scale_id as string;
+        const arr = valuesByScale.get(key);
+        const entry: SizeScaleValueOrder = {
+          value: row.value as string,
+          normalized: (row.normalized as string | null) ?? null,
+          sortOrder: Number(row.sort_order),
+        };
+        if (arr) arr.push(entry);
+        else valuesByScale.set(key, [entry]);
+      }
+    }
+
+    const out = new Map<string, ProductGroupDisplay>();
+    for (const g of groups) {
+      out.set(g.id, {
+        name: g.name,
+        countingUnit: g.default_counting_unit,
+        sizeOrder: buildSizeOrder(
+          g.size_scale_id ? (valuesByScale.get(g.size_scale_id) ?? []) : [],
+        ),
       });
     }
     return out;

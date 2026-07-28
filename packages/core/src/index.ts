@@ -24,6 +24,7 @@ export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
 export * from './sports/import-results';
+export * from './sports/size-order';
 export * from './sports/tracking-modes';
 export * from './sports/variant-keys';
 export * from './orders/order-number';

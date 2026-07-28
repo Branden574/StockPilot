@@ -1029,12 +1029,17 @@ export class InventoryService {
   }
 
   /**
-   * Loads only the (id, sku, name, barcode, tracking_type) tuple for a list
-   * of item ids. Lets callers like the PO detail page and the label printer
-   * render rows without over-fetching the entire inventory just for name/sku
-   * lookups. Unlike list(), this does NOT exclude rental items — a direct-id
-   * caller (labels, PO lines) legitimately references them. Order is not
-   * guaranteed; callers should index by id.
+   * Loads only the identity tuple (id, sku, name, barcode, tracking_type) plus
+   * the two sports variant columns for a list of item ids. Lets callers like
+   * the PO detail page and the label printer render rows without over-fetching
+   * the entire inventory just for name/sku lookups. Unlike list(), this does
+   * NOT exclude rental items — a direct-id caller (labels, PO lines)
+   * legitimately references them. Order is not guaranteed; callers should
+   * index by id.
+   *
+   * `group_id` / `variant_size` (0298) are NULL for every item in every
+   * non-sports org, so callers that ignore them are unaffected. The PO receive
+   * dialog reads them to lay a size run out as one block (Task 16).
    */
   async byIds(
     ids: string[],
@@ -1046,12 +1051,14 @@ export class InventoryService {
       name: string;
       barcode: string | null;
       tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
+      group_id: string | null;
+      variant_size: string | null;
     }>
   > {
     if (ids.length === 0) return [];
     let query = this.ctx.supabase
       .from('inventory_items')
-      .select('id, sku, name, barcode, tracking_type')
+      .select('id, sku, name, barcode, tracking_type, group_id, variant_size')
       .eq('organization_id', this.ctx.organizationId)
       .in('id', ids);
     // Live surfaces (lists, pickers) exclude soft-deleted items. Historical
@@ -1072,6 +1079,8 @@ export class InventoryService {
         | 'lot'
         | 'serial'
         | 'serial_optional',
+      group_id: (r.group_id as string | null) ?? null,
+      variant_size: (r.variant_size as string | null) ?? null,
     }));
   }
 

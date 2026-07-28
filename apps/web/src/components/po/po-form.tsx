@@ -6,8 +6,18 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { countingUnitLabel, sortBySizeOrder } from '@stockpilot/core';
+
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -23,11 +33,16 @@ import { cn } from '@/lib/utils';
 import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 import { formatCurrency } from '@/lib/utils';
 
+import type { SizeRunGroup } from './size-run-receive-grid';
+
 interface ItemOption {
   id: string;
   name: string;
   sku: string;
   unit_cost: number;
+  /** Sports variant identity (0298). NULL on every item in every non-sports org. */
+  groupId?: string | null;
+  variantSize?: string | null;
 }
 
 interface Option {
@@ -56,6 +71,20 @@ interface PoFormProps {
   poId?: string;
   /** Pre-filled values for edit mode. */
   initial?: InitialPoValues;
+  /**
+   * Display metadata for the product groups the catalog items belong to,
+   * keyed by group id. Empty (the default) for every non-sports org, which
+   * hides the "Add size run" mode entirely.
+   */
+  productGroups?: Record<string, SizeRunGroup>;
+}
+
+/** One orderable size run: a product group and the variants under it. */
+interface SizeRunOption {
+  groupId: string;
+  group: SizeRunGroup;
+  /** Already in scale order. */
+  variants: ItemOption[];
 }
 
 /** A line is either an existing catalog item (itemId set) or a new item to create (newItemName set). */
@@ -216,7 +245,141 @@ const ROW = cn(
 
 // ─── PoForm ─────────────────────────────────────────────────────────────────
 
-export function PoForm({ items, suppliers, locations, charters, poId, initial }: PoFormProps) {
+/**
+ * "Add size run": pick a product group, enter a quantity per size, and get one
+ * PO line per variant in a single action — instead of hunting the same shoe
+ * through the item picker nine times.
+ *
+ * Every line it emits is an ordinary line pointed at an ordinary
+ * `inventory_items` row, because a variant IS an item. Nothing about the PO
+ * payload, the receipt RPC, or the ledger changes.
+ */
+function SizeRunAddDialog({
+  open,
+  onOpenChange,
+  runs,
+  onAdd,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  runs: SizeRunOption[];
+  onAdd: (picked: Array<{ item: ItemOption; quantity: number }>) => void;
+}) {
+  const [groupId, setGroupId] = React.useState<string>(runs[0]?.groupId ?? '');
+  const [quantities, setQuantities] = React.useState<Record<string, number>>({});
+
+  // Reset on every open so a previous run's quantities can never leak into the
+  // next one and silently order stock nobody asked for.
+  React.useEffect(() => {
+    if (!open) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open
+    setGroupId(runs[0]?.groupId ?? '');
+    setQuantities({});
+  }, [open, runs]);
+
+  const run = runs.find((r) => r.groupId === groupId) ?? null;
+  const totalQty = run
+    ? run.variants.reduce((s, v) => s + Math.max(0, quantities[v.id] ?? 0), 0)
+    : 0;
+  const sizeCount = run
+    ? run.variants.filter((v) => (quantities[v.id] ?? 0) > 0).length
+    : 0;
+
+  function confirm() {
+    if (!run) return;
+    const picked = run.variants
+      .map((item) => ({ item, quantity: Math.max(0, quantities[item.id] ?? 0) }))
+      .filter((p) => p.quantity > 0);
+    if (picked.length === 0) return;
+    onAdd(picked);
+    onOpenChange(false);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Add a size run</DialogTitle>
+          <DialogDescription>
+            Pick a product group and enter how many of each size to order. Each
+            size becomes its own line, so receiving stays per-size.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-1.5">
+          <Label>Product group</Label>
+          <Select value={groupId} onValueChange={setGroupId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose a product group" />
+            </SelectTrigger>
+            <SelectContent>
+              {runs.map((r) => (
+                <SelectItem key={r.groupId} value={r.groupId}>
+                  {r.group.name} ({r.variants.length} sizes)
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {run && (
+          <div className="max-h-[45vh] space-y-2 overflow-y-auto rounded-md border p-3">
+            {run.variants.map((v) => (
+              <div key={v.id} className="grid grid-cols-12 items-center gap-2">
+                <div className="col-span-3 font-medium tabular-nums">
+                  {v.variantSize?.trim() ? v.variantSize : 'No size'}
+                </div>
+                <div className="text-muted-foreground col-span-5 truncate font-mono text-xs">
+                  {v.sku}
+                </div>
+                <div className="col-span-4">
+                  <BlankZeroNumberInput
+                    min={0}
+                    step={1}
+                    aria-label={`Quantity for size ${v.variantSize ?? v.sku}`}
+                    value={quantities[v.id] ?? 0}
+                    onValueChange={(n) =>
+                      setQuantities((m) => ({ ...m, [v.id]: Math.max(0, n) }))
+                    }
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter className="items-center justify-between gap-3 sm:justify-between">
+          <span className="text-muted-foreground text-xs">
+            {sizeCount === 0
+              ? 'Nothing entered yet.'
+              : `Ordering ${totalQty} ${countingUnitLabel(
+                  run?.group.countingUnit ?? 'each',
+                  totalQty,
+                )} across ${sizeCount} ${sizeCount === 1 ? 'size' : 'sizes'}`}
+          </span>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirm} disabled={sizeCount === 0}>
+              Add {sizeCount || ''} {sizeCount === 1 ? 'line' : 'lines'}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function PoForm({
+  items,
+  suppliers,
+  locations,
+  charters,
+  poId,
+  initial,
+  productGroups = {},
+}: PoFormProps) {
   const router = useRouter();
   const [supplierId, setSupplierId] = React.useState<string>(initial?.supplierId ?? '');
   const [locationId, setLocationId] = React.useState<string>(initial?.locationId ?? '');
@@ -229,8 +392,71 @@ export function PoForm({ items, suppliers, locations, charters, poId, initial }:
 
   const total = lines.reduce((s, l) => s + l.quantityOrdered * l.unitCost, 0);
 
+  const [sizeRunOpen, setSizeRunOpen] = React.useState(false);
+
+  // The orderable size runs: product groups this org's catalog actually has
+  // two or more variants for. A one-variant group is not a run and offering it
+  // here would just be a slower item picker.
+  const sizeRuns = React.useMemo<SizeRunOption[]>(() => {
+    const byGroup = new Map<string, ItemOption[]>();
+    for (const i of items) {
+      if (!i.groupId || !productGroups[i.groupId]) continue;
+      const arr = byGroup.get(i.groupId);
+      if (arr) arr.push(i);
+      else byGroup.set(i.groupId, [i]);
+    }
+    const out: SizeRunOption[] = [];
+    for (const [groupId, variants] of byGroup) {
+      if (variants.length < 2) continue;
+      const group = productGroups[groupId];
+      if (!group) continue;
+      out.push({
+        groupId,
+        group,
+        variants: sortBySizeOrder(variants, (v) => v.variantSize, group.sizeOrder),
+      });
+    }
+    return out.sort((a, b) => a.group.name.localeCompare(b.group.name));
+  }, [items, productGroups]);
+
   function addLine() {
     setLines((prev) => [...prev, { quantityOrdered: 1, unitCost: 0 }]);
+  }
+
+  /**
+   * Fold a picked size run into the line list.
+   *
+   * A variant already on the PO has its quantity INCREASED rather than
+   * gaining a second line: two lines for one size would show up as two rows
+   * of the same size in the receive grid, and a receiver would have no way to
+   * tell which one to fill.
+   */
+  function addSizeRun(picked: Array<{ item: ItemOption; quantity: number }>) {
+    setLines((prev) => {
+      const next = [...prev];
+      let added = 0;
+      for (const { item, quantity } of picked) {
+        const existing = next.findIndex((l) => l.itemId === item.id);
+        if (existing >= 0) {
+          const current = next[existing];
+          if (!current) continue;
+          next[existing] = {
+            ...current,
+            quantityOrdered: current.quantityOrdered + quantity,
+          };
+          continue;
+        }
+        next.push({ itemId: item.id, quantityOrdered: quantity, unitCost: item.unit_cost });
+        added += 1;
+      }
+      const merged = picked.length - added;
+      toast.success(
+        merged > 0
+          ? `Added ${added} line${added === 1 ? '' : 's'}; topped up ${merged} already on this PO.`
+          : `Added ${added} line${added === 1 ? '' : 's'}.`,
+      );
+      return next;
+    });
   }
 
   function removeLine(idx: number) {
@@ -381,10 +607,30 @@ export function PoForm({ items, suppliers, locations, charters, poId, initial }:
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <Label>Line items</Label>
-          <Button type="button" variant="outline" size="sm" onClick={addLine}>
-            <Plus className="h-4 w-4" /> Add line
-          </Button>
+          <div className="flex gap-2">
+            {sizeRuns.length > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setSizeRunOpen(true)}
+              >
+                <Plus className="h-4 w-4" /> Add size run
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="sm" onClick={addLine}>
+              <Plus className="h-4 w-4" /> Add line
+            </Button>
+          </div>
         </div>
+        {sizeRuns.length > 0 && (
+          <SizeRunAddDialog
+            open={sizeRunOpen}
+            onOpenChange={setSizeRunOpen}
+            runs={sizeRuns}
+            onAdd={addSizeRun}
+          />
+        )}
         {lines.length === 0 ? (
           <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
             No lines yet. Click "Add line" to start.

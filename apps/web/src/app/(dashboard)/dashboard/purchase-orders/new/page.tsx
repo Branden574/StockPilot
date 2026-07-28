@@ -7,6 +7,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
+import { loadSizeRunGroups } from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 
 import { can } from '@stockpilot/core';
@@ -35,6 +36,10 @@ export default async function NewPoPage() {
     chartersSvc.list(),
   ]);
 
+  // Size-run add mode (Task 16). No grouped items = no query, which is every
+  // catalog in every org that has not opted into product groups.
+  const productGroups = await loadSizeRunGroups(inventory.items.map((i) => i.group_id));
+
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -58,7 +63,10 @@ export default async function NewPoPage() {
               name: i.name,
               sku: i.sku,
               unit_cost: i.unit_cost,
+              groupId: i.group_id,
+              variantSize: i.variant_size,
             }))}
+            productGroups={productGroups}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             // Only warehouse-backed locations can be receiving destinations — a
             // warehouse-less location makes the PO impossible to receive against.

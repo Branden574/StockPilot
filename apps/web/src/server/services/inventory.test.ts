@@ -247,10 +247,61 @@ describe('InventoryService.byIds', () => {
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     const rows = await svc.byIds(['a', 'b']);
-    // barcode rides along for the labels page (null when the row lacks it).
+    // barcode rides along for the labels page (null when the row lacks it),
+    // and the two sports variant columns (0298) ride along for the PO receive
+    // dialog's size runs — both NULL for every item in every non-sports org,
+    // which is what this stub is.
     expect(rows).toEqual([
-      { id: 'a', sku: 'A1', name: 'Widget A', tracking_type: 'none', barcode: null },
-      { id: 'b', sku: 'B1', name: 'Widget B', tracking_type: 'lot', barcode: null },
+      {
+        id: 'a',
+        sku: 'A1',
+        name: 'Widget A',
+        tracking_type: 'none',
+        barcode: null,
+        group_id: null,
+        variant_size: null,
+      },
+      {
+        id: 'b',
+        sku: 'B1',
+        name: 'Widget B',
+        tracking_type: 'lot',
+        barcode: null,
+        group_id: null,
+        variant_size: null,
+      },
+    ]);
+  });
+
+  it('carries group_id and variant_size through for a grouped variant', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          {
+            id: 'v9',
+            sku: 'MERC-9',
+            name: 'Mercurial 9',
+            tracking_type: 'none',
+            barcode: null,
+            group_id: 'g1',
+            variant_size: '9',
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    expect(await svc.byIds(['v9'])).toEqual([
+      {
+        id: 'v9',
+        sku: 'MERC-9',
+        name: 'Mercurial 9',
+        tracking_type: 'none',
+        barcode: null,
+        group_id: 'g1',
+        variant_size: '9',
+      },
     ]);
   });
 });
