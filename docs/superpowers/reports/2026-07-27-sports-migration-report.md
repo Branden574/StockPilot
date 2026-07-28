@@ -4,18 +4,49 @@ Every schema change the Sports program makes, what its one backfill wrote, what
 it deliberately refused to write, and how to undo each migration.
 
 Status: migrations 0294-0303 are applied LOCALLY and green under pgTAP
-(100 files / 1284 assertions). None has been pushed to production yet, so the
-"ambiguous rows" section below carries the queries and no numbers. Push order is
-fixed: `supabase db push --linked` (project `xizpqmhhslgzbuqtjubv`) completes
-BEFORE any dependent web deploy — a pending migration crashes pages.
+(100 files / 1285 assertions — the figure is the sum of every `select plan(N)` in
+`supabase/tests/`, re-counted for this report). None has been pushed to
+production yet, so the "ambiguous rows" section below carries the queries and no
+numbers. Push order is fixed: `supabase db push --linked` (project
+`xizpqmhhslgzbuqtjubv`) completes BEFORE any dependent web deploy — a pending
+migration crashes pages.
+
+## Numbering
+
+The plan reserved 0294-0302. Two files shifted during execution and the plan
+document was corrected inline at Task 13 (commit `782621e2`):
+
+| Plan said | Shipped as | Why |
+|---|---|---|
+| 0300 (Task 13, `po_import_lines`) | **0301** | Task 8's `product_groups.organization_id` immutability trigger — a deferred guard, not a planned file — took 0300 |
+| 0301 (Task 17, `size_count_sessions`) | **0302** | knock-on |
+| 0302 (Task 19, backfill) | **0303** | knock-on |
+
+Content is unchanged in each case; 0301's own header records the shift. There is
+no gap and no duplicate: 0294 through 0303 are ten consecutive files.
+
+One column arrived after its migration was written: `po_import_lines.serial_hint`
+was added to the still-unshipped 0301 during Task 14 (commit `f432e77c`), when the
+import seam needed a place to hold a serial the DOCUMENT printed. 0301 has never
+been applied anywhere but locally, so this is an edit to an unshipped file, not a
+follow-up migration. Its pgTAP grew from 26 to 30 assertions in the same commit.
 
 ---
 
 ## 1. Schema
 
-Nothing in this program is NOT NULL and nothing carries a back-filling default.
-Every new column reads as "this org never opted in" when NULL, which is the
-state of every row in every existing org.
+**No column added to an EXISTING table is NOT NULL, and none carries a
+back-filling default.** Every one reads as "this org never opted in" when NULL,
+which is the state of every row in every existing org. (The three NEW tables do
+have NOT NULL columns of their own — `product_groups.organization_id`, `name`,
+`group_key`, `default_counting_unit`, `status`, and the `size_scales` /
+`size_scale_values` key columns — but those tables start empty, so no existing
+row can violate them.)
+
+The per-field contract for every column below — meaning, bounds, required-when,
+normalization, aliases, key participation and display label — is
+`docs/superpowers/specs/2026-07-27-sports-field-dictionary.md`. The architecture
+these columns implement is `docs/superpowers/specs/2026-07-27-sports-inventory-model.md`.
 
 ### New tables
 
@@ -159,10 +190,12 @@ there, `custom_fields.size` is the only copy of the data.
 
 ---
 
-## 3. Ambiguous rows
+## 3. Ambiguous rows — PENDING prod counts (owner-gated)
 
-Pending the production push. Run these immediately after
-`supabase db push --linked` and paste the numbers back into this section.
+**No production numbers exist. Nothing in this section has been run against
+`xizpqmhhslgzbuqtjubv`.** The push is owner-gated; run these three queries
+immediately after `supabase db push --linked` completes and paste the real
+numbers back into this section, replacing this notice.
 
 ```sql
 -- Per-flag counts, per org.
@@ -208,7 +241,73 @@ it.
 
 ---
 
-## 4. Rollback
+## 4. PROD PUSH NOTE
+
+**Push 0294-0303 in a scheduled LOW-TRAFFIC WINDOW.** This is not a formality;
+0303 takes the whole `inventory_items` table offline for the duration of its
+transaction, reads included.
+
+Why. A migration file runs inside ONE transaction, so the ACCESS EXCLUSIVE lock
+that 0303's first `alter table ... add column` takes on `inventory_items` is held
+until the file COMMITS. For that whole window the table is completely
+unavailable — every dashboard query, every `/api/v1` call and every mobile sync
+that touches `inventory_items` queues behind it. The statement-level notes inside
+the file are not a promise of concurrency: individually the `ADD COLUMN` is
+rewrite-free, the `VALIDATE CONSTRAINT` takes only SHARE UPDATE EXCLUSIVE and the
+backfill `UPDATE`s take only ROW EXCLUSIVE, but every one of them runs while that
+first lock is still held.
+
+**Cost:** approximately 4 seconds warm on 1.2 M rows for the scans, plus index
+maintenance on the rows the backfill actually updates (the review-queue index is
+built after the flags, measured at 106 ms). Budget tens of seconds of full table
+unavailability, not milliseconds.
+
+**`lock_timeout`.** 0303 sets `lock_timeout = '5s'` itself. Without it the `ADD
+COLUMN`'s lock REQUEST queues ahead of every new reader, so one slow analytics
+query holding a read lock would take the whole table offline for as long as it
+ran, and the migration would wait behind it indefinitely. The 5-second bound is
+the blast-radius limit, not a performance setting — do not remove it.
+
+**On `lock_timeout` failure** (`canceling statement due to lock timeout`,
+SQLSTATE `55P03`): nothing was applied. The transaction rolled back whole, so
+**RETRY** — ideally a few minutes later, or once whatever holds `inventory_items`
+has finished:
+
+```sql
+select pid, state, xact_start, query
+from pg_stat_activity
+where state <> 'idle'
+order by xact_start;
+```
+
+**Retry-safe by construction.** Every statement in 0303 is idempotent (`if not
+exists`, `create or replace`, and backfill WHERE clauses that re-match zero rows
+on a second pass), so a retry after ANY failure is safe and cannot double-write.
+`supabase/tests/0303_variant_size_backfill.test.sql` asserts the idempotence
+directly, including an `xmin`-proven no-op re-run. The same is true of 0294-0302,
+all of which use `add column if not exists` / `create or replace` / `on conflict
+do nothing` and contain zero DML apart from 0294's system-scale seeds and 0297's
+module grandfathering, both `on conflict do nothing`.
+
+**Order of operations, non-negotiable:**
+
+1. `supabase db push --linked` against `xizpqmhhslgzbuqtjubv`, applying 0294
+   through 0303 in order.
+2. **Before pushing, verify the live constraint name 0295 drops.** 0295 drops
+   `inventory_items_tracking_type_check` by hard-coded name. If production's
+   catalog carries a different name for that CHECK, the drop is a no-op, both
+   constraints survive, and every `serial_optional` write 23514s. Confirm with
+   `select conname from pg_constraint where conrelid = 'public.inventory_items'::regclass
+   and pg_get_constraintdef(oid) ilike '%tracking_type%'`.
+3. Fill in section 3's counts from production.
+4. Only then push `main` — the GitHub integration auto-deploys web. Do NOT also
+   POST `/v13/deployments`.
+5. Only then ship mobile (`pnpm release:ota` from `apps/mobile`). Mobile must
+   never ship before the migrations land; the new Bearer routes 404 loudly if it
+   does, which is a loud failure and not corruption, but it is still a broken
+   build in users' hands.
+
+## 5. Rollback
 
 Every migration in this program is reversible without data loss. `custom_fields`
 is never mutated by any of them, so the source of truth for every backfilled
@@ -250,7 +349,7 @@ time has passed.
 | 0294 | `alter table public.categories drop column if exists tracking_mode, ... sports_subcategory_key, ... tracking_profile, ... size_scale_id, ... default_unit_of_measure;` then `drop table public.size_scale_values, public.size_scales;` and `drop function public.category_tracking_mode(uuid), public.category_default_uom(uuid);`. No row was written, so nothing is lost. |
 | 0295 | Re-add the narrow CHECK: `alter table public.inventory_items drop constraint inventory_items_tracking_type_check, add constraint inventory_items_tracking_type_check check (tracking_type in ('none','lot','serial'));`. Any row already on `serial_optional` must be moved to `serial` or `none` FIRST — that is a real decision, not a mechanical revert. |
 | 0296 | Re-apply the previous `post_receipt_v2` definition, from `0285_allow_over_receipt.sql` (the fifth rewrite). Function-only; no data. |
-| 0297 | `delete from public.role_default_permissions where permission = 'sports:manage';` `delete from public.organization_modules where module_id = 'sports';` then re-apply the prior `seed_org_modules()` body from `0165_zendesk_module.sql` and the prior `org_can_enable_module()`. |
+| 0297 | `delete from public.role_default_permissions where permission = 'sports:manage';` `delete from public.organization_modules where module_id = 'sports';` then re-apply the prior `seed_org_modules()` body from **`0174_enable_returns_module.sql`** — the latest rewrite before this one, and the file 0297's own header says it copied byte-for-byte — and the prior `org_can_enable_module()` from **`0219_org_module_minplan_rls.sql`**. Both functions are rewritten WHOLESALE by every module migration, so restoring an older copy silently un-seeds every module added after it. |
 | 0298 | `drop view public.product_group_rollups;` `alter table public.inventory_items drop column if exists group_id, ... variant_size, ... variant_size_original, ... variant_size_system, ... variant_width, ... variant_fit, ... variant_color, ... jersey_number, ... player_name, ... variant_key;` `drop table public.product_groups;` then restore the `inventory_items_insert` / `_update` WITH CHECK expressions WITHOUT the `product_group_in_org` arm (`alter policy ... with check` REPLACES the whole expression — recurring bug pattern #24). Zero DML in the forward direction. |
 | 0299 | Re-apply the prior `duplicate_inventory_item` definition. Function-only. |
 | 0300 | `drop trigger product_groups_pin_org on public.product_groups; drop function public.tg_pin_product_group_org();` |
@@ -272,3 +371,27 @@ display heuristic — but the groupings are gone. Export
 | `supabase/tests/0303_variant_size_backfill.test.sql` | 31 assertions: the copy, verbatim original, `custom_fields` untouched, group_id untouched (the headline, asserted twice), all three flags, pre-set sizes not overwritten, soft-deleted rows skipped, quantity untouched, zero movements, `updated_at` preserved, a real edit still bumps, idempotent re-run, closed flag vocabulary, a case-only name/size difference not flagged as a conflict |
 | `apps/web/src/server/services/inventory.dual-write.test.ts` | 12 assertions on `update()`: both places written, sibling `custom_fields` keys kept, same-patch merge, clearing semantics, `variant_key` recompute, `group_id`/quantity never touched |
 | `packages/core/src/inventory/size-run.test.ts` | The post-backfill state (`variantSize` set, `groupId` null) still collapses on the name heuristic, in arrival order, and two different styles carrying the same size do not fold together |
+
+Per-migration pgTAP, all green locally. Counts are each file's own
+`select plan(N)`:
+
+| Migration | pgTAP file | Assertions |
+|---|---|---|
+| 0294 | `supabase/tests/0294_category_tracking_profiles.test.sql` | 31 |
+| 0295 | `supabase/tests/0295_tracking_type_serial_optional.test.sql` | 8 |
+| 0296 | `supabase/tests/0296_post_receipt_v2_serial_optional.test.sql` | 20 |
+| 0297 | `supabase/tests/0297_sports_module.test.sql` | (plus `0207_permission_overrides.test.sql`, count 109 -> 111) |
+| 0298 | `supabase/tests/0298_product_groups_and_variants.test.sql` | 51, incl. R2 and R3 at the schema |
+| 0299 | `supabase/tests/0299_duplicate_inventory_item_variants.test.sql` | 47, incl. 4 mutation tests |
+| 0300 | `supabase/tests/0300_product_group_org_immutable.test.sql` | org-immutability trigger |
+| 0301 | `supabase/tests/0301_po_import_line_variants.test.sql` | 30, incl. the `0`/`00`/`07` round trip and `serial_hint` |
+| 0302 | `supabase/tests/0302_size_count_product_group.test.sql` | 14, incl. a pre-0302-shape insert |
+| 0303 | `supabase/tests/0303_variant_size_backfill.test.sql` | 31 (detailed above) |
+
+Whole suite at the branch tip: **100 files / 1285 assertions**, run with
+`supabase db reset && pnpm db:test`. A bare `pnpm db:test` executes against a
+stale schema and reports false failures.
+
+The full-branch gate output, the CI rollup, and the live Demo Co results are in
+`docs/superpowers/reports/2026-07-27-sports-verification.md`. Nothing in this
+report has been verified against production.
