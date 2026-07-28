@@ -65,6 +65,7 @@ import {
   APPAREL_ALPHA_SIZES,
   DEFAULT_SUBCATEGORY_PROFILES,
   SPORTS_ERROR_META,
+  TRACKING_MODE_LABELS,
   buildVariantKey,
   createItemSchema,
   formatRackLabel,
@@ -90,6 +91,14 @@ import {
 // '7'..'15' with halves and could never be expressed by this letter list.
 type SizeCode = ApparelAlphaSize;
 const ALL_SIZES: ReadonlyArray<SizeCode> = APPAREL_ALPHA_SIZES;
+
+/**
+ * Sentinel for the tracking-mode override select's "no override" row. Radix
+ * Select cannot carry an empty-string value, and the field's real absent state
+ * is `undefined` — the same '__none' pattern the other optional selects in this
+ * tree use.
+ */
+const MODE_OVERRIDE_NONE = '__category_default';
 
 /** Display label for each slot buildVariantKey may emit (variant-keys.ts). */
 const VARIANT_KEY_SLOT_LABELS: Record<string, string> = {
@@ -176,6 +185,14 @@ interface ItemFormProps {
   sizeScales?: Record<string, Array<{ value: string; isHalf: boolean }>>;
   /** True when the org has the sports module on. */
   sportsEnabled?: boolean;
+  /**
+   * True when the viewer holds `sports:manage` (page passes
+   * `can(ctx, 'sports:manage')`, the same shape `canManagePublicVisibility`
+   * uses). Gates the tracking-mode override control ONLY — the server re-checks
+   * the permission and the subcategory's allowedModes on every save
+   * (`resolveModeOverride`), so the form is never the authority.
+   */
+  canManageSports?: boolean;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
   /** Every tag in the org. Empty array hides the Tags pill row entirely. */
@@ -246,6 +263,7 @@ export function ItemForm({
   categories,
   sizeScales = {},
   sportsEnabled = false,
+  canManageSports = false,
   locations,
   suppliers,
   tags = [],
@@ -462,12 +480,16 @@ export function ItemForm({
   const profile = subcategoryKey
     ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
     : null;
-  const effectiveMode: TrackingMode =
-    watch('trackingModeOverride') ??
+  // The mode the CATEGORY resolves to on its own, before any override. Split
+  // out of `effectiveMode` so the override control can label its "no override"
+  // option with the value it would fall back to.
+  const categoryDefaultMode: TrackingMode =
     selectedCategory?.tracking_mode ??
     parentCategory?.tracking_mode ??
     profile?.defaultMode ??
     'QUANTITY';
+  const trackingModeOverride = watch('trackingModeOverride');
+  const effectiveMode: TrackingMode = trackingModeOverride ?? categoryDefaultMode;
   const countingUnit = (selectedCategory?.default_unit_of_measure ??
     parentCategory?.default_unit_of_measure ??
     profile?.defaultCountingUnit ??
@@ -477,12 +499,17 @@ export function ItemForm({
   // this too). True only when the SELECTED category is itself a Sports root:
   // it carries no subcategory key of its own, but at least one of its
   // children does.
+  //
+  // Module-gated like every other sports branch in this file: with `sports`
+  // off, the subcategory rows are inert data and blocking submit on them would
+  // be an unexplainable dead end in an org that has no sports UI at all.
   const isSportsRootMissingSubcategory = React.useMemo(() => {
+    if (!sportsEnabled) return false;
     if (!selectedCategory || selectedCategory.sports_subcategory_key) return false;
     return categories.some(
       (c) => c.parent_id === selectedCategory.id && Boolean(c.sports_subcategory_key),
     );
-  }, [categories, selectedCategory]);
+  }, [categories, selectedCategory, sportsEnabled]);
 
   // Group-identity attributes (brand/model/team/season/...). Kept OUTSIDE
   // react-hook-form — see sports-fields.tsx's header for why registering a
@@ -507,7 +534,18 @@ export function ItemForm({
     setSportsGroupFields(EMPTY_SPORTS_GROUP_FIELDS);
     setLinkedGroup(null);
     setGroupCandidates([]);
-  }, [watchedCategoryId]);
+    // Also drop the RHF-held group link and the mode override. `linkedGroup`
+    // alone was not enough: `groupId` lives on the form values, so switching
+    // from Shoes to Jerseys after clicking "Use this group" left the shoe
+    // group's id in the payload — and the server prefers `groupId` over the
+    // freshly-computed `productGroup`, so the jersey would have landed in the
+    // shoe group. Create-only: on edit these are the item's own stored values
+    // and must never be blanked by a render.
+    if (!isEdit) {
+      setValue('groupId', null);
+      setValue('trackingModeOverride', undefined);
+    }
+  }, [watchedCategoryId, isEdit, setValue]);
 
   // Debounced advisory near-miss lookup. Deliberately quiet (no request) once
   // enough of a signal exists: mirrors ProductGroupsService.candidates()'s own
@@ -590,7 +628,13 @@ export function ItemForm({
         // must not appear in the variant-key preview either.
         color: colorIsGroupLevel ? null : watch('variantColor'),
         jerseyNumber: watch('jerseyNumber'),
-        playerName: watch('playerName'),
+        // playerName is deliberately ABSENT, mirroring the server: both
+        // InventoryService.create() and bulkCreateSizedVariants() build
+        // variant_key without it (buildVariantKey accepts the slot, but no
+        // write path fills it — grouping jerseys by player is an unresolved
+        // open question). The server is authoritative, so a preview that
+        // promised "Player Vega" as part of the identity was promising a
+        // variant split that never happens.
       })
     : 'default';
   const variantLabel = variantKeyPreview === 'default' ? null : humanizeVariantKey(variantKeyPreview);
@@ -847,6 +891,48 @@ export function ItemForm({
       return;
     }
 
+    // ── The sports payload, shared by BOTH create paths ──────────────────────
+    // Computed HERE, above the sized-variant branch, because that branch
+    // returns early: a sized sports category (shoes — the canonical case) used
+    // to leave through it before any of this ran, so the grouping preview
+    // promised a product group and nothing was ever saved.
+    //
+    // Create-only. Task 18's linking tool is where an EXISTING item's group
+    // changes. `productGroup.name` defaults to the item's own name: there is no
+    // separate "product group name" input in Add Item, so the first variant
+    // created names its group after itself; renaming/merging groups is the
+    // product-groups admin surface.
+    const sportsActive = !isEdit && sportsEnabled && profile != null;
+    const sportsGroupPayload = sportsActive
+      ? linkedGroup
+        ? // The user explicitly clicked "Use this group".
+          { groupId: linkedGroup.id }
+        : {
+            productGroup: {
+              name: values.name,
+              categoryId: values.categoryId ?? null,
+              brand: sportsGroupFields.brand.trim() || undefined,
+              model: sportsGroupFields.model.trim() || undefined,
+              styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
+              colorway: sportsGroupFields.colorway.trim() || undefined,
+              team: sportsGroupFields.team.trim() || undefined,
+              league: sportsGroupFields.league.trim() || undefined,
+              season: sportsGroupFields.season.trim() || undefined,
+              homeAway: sportsGroupFields.homeAway || undefined,
+              color: sportsGroupFields.color.trim() || undefined,
+              defaultCountingUnit: countingUnit,
+            },
+          }
+      : {};
+    // The override is a plain form value on the single-item path (it is a
+    // `createItemSchema` field), so it only has to be forwarded explicitly on
+    // the sized path. Gated on `sportsActive` for the same reason the control
+    // is: the server refuses it anyway, this just never sends it.
+    const sportsModeOverridePayload =
+      sportsActive && values.trackingModeOverride
+        ? { trackingModeOverride: values.trackingModeOverride }
+        : {};
+
     // Sized-variant create path. Triggered only when the chosen
     // category has supports_sizes = true AND the user picked at least
     // one size on a new item. Bulk inserts one row per size, then
@@ -893,6 +979,23 @@ export function ItemForm({
         customFields:
           Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
         variants: selectedSizes,
+        // Sports: the group the preview promised, plus the attributes that are
+        // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
+        // sent — the size is per-row (`variants[].size`) and the system is
+        // derived server-side from the category's size scale, so a client
+        // cannot choose which physical stock these rows merge with.
+        ...sportsGroupPayload,
+        ...sportsModeOverridePayload,
+        ...(sportsActive
+          ? {
+              // One jersey number across M and XL is the point (regression R3).
+              jerseyNumber: values.jerseyNumber || undefined,
+              playerName: values.playerName || undefined,
+              variantWidth: values.variantWidth || undefined,
+              variantFit: values.variantFit || undefined,
+              variantColor: values.variantColor || undefined,
+            }
+          : {}),
       } as Parameters<typeof bulkCreateSizedVariantsAction>[0]);
       if (!res.ok) {
         toast.error(res.error.message);
@@ -1022,35 +1125,9 @@ export function ItemForm({
     // When isRentalFixed is true, inject is_rental=true into the payload
     // so the item is classified as a rental asset regardless of form state.
     const rentalValues = isRentalFixed ? { ...mergedValues, isRental: true } : mergedValues;
-    // Sports Task 11: attach to the group the user picked from the preview's
-    // candidate list, or ask the server to find-or-create one from the
-    // group-identity fields. Create-only — Task 18's linking tool is where an
-    // EXISTING item's group changes. `productGroup.name` defaults to the
-    // item's own name: there is no separate "product group name" input in
-    // Add Item, so the first variant created names its group after itself;
-    // renaming/merging groups is the product-groups admin surface.
-    const sportsValues =
-      !isEdit && sportsEnabled && profile
-        ? linkedGroup
-          ? { groupId: linkedGroup.id }
-          : {
-              productGroup: {
-                name: values.name,
-                categoryId: values.categoryId ?? null,
-                brand: sportsGroupFields.brand.trim() || undefined,
-                model: sportsGroupFields.model.trim() || undefined,
-                styleNumber: sportsGroupFields.styleNumber.trim() || undefined,
-                colorway: sportsGroupFields.colorway.trim() || undefined,
-                team: sportsGroupFields.team.trim() || undefined,
-                league: sportsGroupFields.league.trim() || undefined,
-                season: sportsGroupFields.season.trim() || undefined,
-                homeAway: sportsGroupFields.homeAway || undefined,
-                color: sportsGroupFields.color.trim() || undefined,
-                defaultCountingUnit: countingUnit,
-              },
-            }
-        : {};
-    const finalValues = { ...rentalValues, ...sportsValues };
+    // `trackingModeOverride` already rides `values` here (it is a
+    // createItemSchema field); only the group needs merging in.
+    const finalValues = { ...rentalValues, ...sportsGroupPayload };
     const action =
       isEdit && defaults?.id
         ? updateItemAction(defaults.id, finalValues as UpdateItemInput)
@@ -1455,16 +1532,65 @@ export function ItemForm({
             );
           })()}
         </div>
-        {sportsEnabled && profile && (
-          <SportsFields
-            profile={profile}
-            register={register}
-            watch={watch}
-            setValue={setValue}
-            errors={errors}
-            groupFields={sportsGroupFields}
-            onGroupFieldChange={updateSportsGroupField}
-          />
+        {/*
+          CREATE-ONLY. These inputs write `productGroup` / variant fields that
+          only the create path merges into its payload, so rendering them on
+          edit silently discarded everything typed into them — and the preview
+          below showed the item's own name as its "product group". Changing an
+          existing item's group/variant identity is Task 18's linking tool.
+        */}
+        {!isEdit && sportsEnabled && profile && (
+          <>
+            <SportsFields
+              profile={profile}
+              register={register}
+              watch={watch}
+              setValue={setValue}
+              errors={errors}
+              groupFields={sportsGroupFields}
+              onGroupFieldChange={updateSportsGroupField}
+            />
+            {/*
+              The authorized mode override. Rendered only for a viewer holding
+              `sports:manage` (same prop-gating pattern as the public-visibility
+              select), and offering ONLY the modes this subcategory allows. The
+              server re-checks both on save via resolveModeOverride — this
+              control is convenience, never authority.
+            */}
+            {canManageSports && (
+              <div className="space-y-1.5">
+                <Label htmlFor="tracking-mode-override">Tracking mode</Label>
+                <Select
+                  value={trackingModeOverride ?? MODE_OVERRIDE_NONE}
+                  onValueChange={(v) =>
+                    setValue(
+                      'trackingModeOverride',
+                      v === MODE_OVERRIDE_NONE ? undefined : (v as TrackingMode),
+                      { shouldDirty: true },
+                    )
+                  }
+                >
+                  <SelectTrigger id="tracking-mode-override" className="sm:max-w-[280px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={MODE_OVERRIDE_NONE}>
+                      {`Category default (${TRACKING_MODE_LABELS[categoryDefaultMode]})`}
+                    </SelectItem>
+                    {profile.allowedModes.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {TRACKING_MODE_LABELS[m]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-[11px]">
+                  Only the modes this subcategory allows. The mode decides whether a unit
+                  needs a serial, so the server re-checks it on save.
+                </p>
+              </div>
+            )}
+          </>
         )}
         {showPublicVisibility && (
           <>
@@ -2010,7 +2136,8 @@ export function ItemForm({
         );
       })()}
 
-      {sportsEnabled && profile && (
+      {/* Create-only, for the same reason the fields above are. */}
+      {!isEdit && sportsEnabled && profile && (
         <GroupingPreview
           groupName={groupNamePreview}
           variantLabel={variantLabel}

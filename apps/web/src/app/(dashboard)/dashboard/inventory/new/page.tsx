@@ -182,6 +182,9 @@ export default async function NewItemPage() {
             }))}
             sizeScales={sizeScales}
             sportsEnabled={sportsEnabled}
+            // Gates the tracking-mode override control only. The server
+            // re-checks `sports:manage` on every save (resolveModeOverride).
+            canManageSports={can(ctx, 'sports:manage')}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -89,6 +89,7 @@ const SPORTS_ROOT_CHILD: Category = {
 function renderForm(opts: {
   categories: Category[];
   sportsEnabled?: boolean;
+  canManageSports?: boolean;
   defaults?: ItemFormDefaults;
   warehouses?: Array<{ id: string; name: string }>;
   sizeScales?: Record<string, Array<{ value: string; isHalf: boolean }>>;
@@ -98,6 +99,7 @@ function renderForm(opts: {
       defaults={opts.defaults}
       categories={opts.categories}
       sportsEnabled={opts.sportsEnabled ?? false}
+      canManageSports={opts.canManageSports ?? false}
       sizeScales={opts.sizeScales}
       locations={[]}
       suppliers={[]}
@@ -108,6 +110,17 @@ function renderForm(opts: {
       charterLabel="Charter"
     />,
   );
+}
+
+/** Radix Select: open the trigger and click one of its options. */
+async function pickFromSelect(
+  user: ReturnType<typeof userEvent.setup>,
+  trigger: HTMLElement,
+  optionName: string | RegExp,
+) {
+  await user.click(trigger);
+  const listbox = await screen.findByRole('listbox');
+  await user.click(within(listbox).getByRole('option', { name: optionName }));
 }
 
 describe('ItemForm — sports fields render from the resolved profile (Task 11)', () => {
@@ -366,5 +379,237 @@ describe('ItemForm — size chips driven by sizeScales, existing apparel flow un
       { size: 'S', quantity: 0 },
       { size: 'M', quantity: 0 },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 11 review fixes.
+// ---------------------------------------------------------------------------
+
+describe('ItemForm — the SIZED bulk path carries the sports values (review finding 1)', () => {
+  const SCALE_ID = '99999999-9999-9999-9999-999999999999';
+  const SIZED_SHOES: Category = {
+    id: SHOES_CATEGORY_ID,
+    name: 'Shoes',
+    supports_sizes: true,
+    sports_subcategory_key: 'shoes',
+    size_scale_id: SCALE_ID,
+  };
+  const SIZE_SCALES = {
+    [SCALE_ID]: [
+      { value: '9', isHalf: false },
+      { value: '10', isHalf: false },
+    ],
+  };
+
+  async function renderSizedShoesAndPickSizes(
+    opts: { candidates?: Array<{ id: string; name: string }>; canManageSports?: boolean } = {},
+  ) {
+    const { bulkCreateSizedVariantsAction, findGroupCandidatesAction } = await import(
+      '@/server/actions/inventory'
+    );
+    vi.mocked(bulkCreateSizedVariantsAction).mockResolvedValue({
+      ok: true,
+      data: { created: 2, ids: ['item-1', 'item-2'] },
+    } as never);
+    vi.mocked(findGroupCandidatesAction).mockResolvedValue({
+      ok: true,
+      data: opts.candidates ?? [],
+    } as never);
+
+    renderForm({
+      categories: [SIZED_SHOES],
+      sportsEnabled: true,
+      canManageSports: opts.canManageSports ?? false,
+      sizeScales: SIZE_SCALES,
+      defaults: {
+        name: 'Nike Pegasus 41',
+        categoryId: SHOES_CATEGORY_ID,
+        warehouseId: WAREHOUSE_ID,
+      },
+      warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
+    });
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: '9' }));
+    await user.click(screen.getByRole('button', { name: '10' }));
+    return { user, bulkCreateSizedVariantsAction };
+  }
+
+  it('sends the inline productGroup with the size run — the preview promised a group, so one must be saved', async () => {
+    const { user, bulkCreateSizedVariantsAction } = await renderSizedShoesAndPickSizes();
+
+    await user.type(screen.getByPlaceholderText('Nike'), 'Nike');
+    await user.type(screen.getByPlaceholderText('Pegasus 41'), 'Pegasus 41');
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+
+    await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(1));
+    const [payload] = vi.mocked(bulkCreateSizedVariantsAction).mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(payload.variants).toEqual([
+      { size: '9', quantity: 0 },
+      { size: '10', quantity: 0 },
+    ]);
+    expect(payload.productGroup).toMatchObject({
+      name: 'Nike Pegasus 41',
+      brand: 'Nike',
+      model: 'Pegasus 41',
+    });
+    expect(payload.groupId).toBeFalsy();
+  });
+
+  it('sends groupId (and no productGroup) with the size run once a candidate is explicitly linked', async () => {
+    const { user, bulkCreateSizedVariantsAction } = await renderSizedShoesAndPickSizes({
+      candidates: [
+        { id: '77777777-7777-7777-7777-777777777777', name: 'Nike Pegasus 41 (existing)' },
+      ],
+    });
+    await user.type(screen.getByPlaceholderText('Nike'), 'Nike');
+    await user.type(screen.getByPlaceholderText('Pegasus 41'), 'Pegasus 41');
+    await user.click(await screen.findByRole('button', { name: 'Use this group' }));
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+
+    await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(1));
+    const [payload] = vi.mocked(bulkCreateSizedVariantsAction).mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(payload.groupId).toBe('77777777-7777-7777-7777-777777777777');
+    expect(payload.productGroup).toBeUndefined();
+  });
+
+  it('sends the authorized trackingModeOverride with the size run', async () => {
+    const { user, bulkCreateSizedVariantsAction } = await renderSizedShoesAndPickSizes({
+      canManageSports: true,
+    });
+
+    await pickFromSelect(user, screen.getByLabelText('Tracking mode'), 'Optional serial');
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+
+    await waitFor(() => expect(bulkCreateSizedVariantsAction).toHaveBeenCalledTimes(1));
+    const [payload] = vi.mocked(bulkCreateSizedVariantsAction).mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(payload.trackingModeOverride).toBe('OPTIONAL_SERIALIZED');
+  });
+});
+
+describe('ItemForm — sports UI is create-only (review finding 2)', () => {
+  it('renders neither the sports fields nor the grouping preview in EDIT mode', () => {
+    renderForm({
+      categories: [SHOES_CATEGORY],
+      sportsEnabled: true,
+      canManageSports: true,
+      defaults: {
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        name: 'Nike Pegasus 41',
+        categoryId: SHOES_CATEGORY_ID,
+      },
+    });
+
+    expect(screen.queryByTestId('sports-fields')).not.toBeInTheDocument();
+    expect(screen.queryByText('This will be saved as')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Tracking mode')).not.toBeInTheDocument();
+  });
+});
+
+describe('ItemForm — the authorized tracking-mode override (review finding 3)', () => {
+  it('is hidden from a user without sports:manage', () => {
+    renderForm({
+      categories: [SHOES_CATEGORY],
+      sportsEnabled: true,
+      canManageSports: false,
+      defaults: { categoryId: SHOES_CATEGORY_ID },
+    });
+
+    expect(screen.getByTestId('sports-fields')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Tracking mode')).not.toBeInTheDocument();
+  });
+
+  it('offers only the modes the subcategory allows, and feeds the preview + the payload', async () => {
+    const { createItemAction, findGroupCandidatesAction } = await import(
+      '@/server/actions/inventory'
+    );
+    vi.mocked(createItemAction).mockResolvedValue({ ok: true, data: { id: 'item-1' } } as never);
+    vi.mocked(findGroupCandidatesAction).mockResolvedValue({ ok: true, data: [] } as never);
+
+    renderForm({
+      categories: [SHOES_CATEGORY],
+      sportsEnabled: true,
+      canManageSports: true,
+      defaults: {
+        name: 'Nike Pegasus 41',
+        categoryId: SHOES_CATEGORY_ID,
+        warehouseId: WAREHOUSE_ID,
+      },
+      warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
+    });
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // Shoes allow QUANTITY_BY_VARIANT / QUANTITY / OPTIONAL_SERIALIZED — and
+    // nothing else. SERIALIZED must not even be offered.
+    await user.click(screen.getByLabelText('Tracking mode'));
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).queryByRole('option', { name: 'Serialized' })).not.toBeInTheDocument();
+    expect(
+      within(listbox).queryByRole('option', { name: 'Individually tagged' }),
+    ).not.toBeInTheDocument();
+    await user.click(within(listbox).getByRole('option', { name: 'Optional serial' }));
+
+    // The preview's serial line follows the override immediately.
+    await waitFor(() => expect(screen.getByText('Serial: optional')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+    await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(1));
+    const [payload] = vi.mocked(createItemAction).mock.calls[0] as [Record<string, unknown>];
+    expect(payload.trackingModeOverride).toBe('OPTIONAL_SERIALIZED');
+  });
+});
+
+describe('ItemForm — the preview mirrors the SERVER variant key (review finding 4)', () => {
+  it('leaves the player name out of the variant identity, exactly as the server key does', async () => {
+    const { findGroupCandidatesAction } = await import('@/server/actions/inventory');
+    vi.mocked(findGroupCandidatesAction).mockResolvedValue({ ok: true, data: [] } as never);
+
+    renderForm({
+      categories: [JERSEYS_CATEGORY],
+      sportsEnabled: true,
+      defaults: { name: 'Wildcats home', categoryId: JERSEYS_CATEGORY_ID },
+    });
+
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText('e.g. Vega'), 'Vega');
+
+    // A player name alone is NOT a variant: InventoryService.create() omits it
+    // from buildVariantKey, so the preview must not promise otherwise.
+    expect(screen.queryByText(/Player Vega/)).not.toBeInTheDocument();
+    expect(screen.getByText('Single variant')).toBeInTheDocument();
+
+    // A real variant attribute still shows up.
+    await user.type(screen.getByPlaceholderText('e.g. 07'), '07');
+    await waitFor(() => expect(screen.getByText('#07')).toBeInTheDocument());
+  });
+});
+
+describe('ItemForm — the Sports-root block is module-gated (review finding 6)', () => {
+  it('does not block submit for a Sports-root category when the module is OFF', async () => {
+    const { createItemAction } = await import('@/server/actions/inventory');
+    vi.mocked(createItemAction).mockResolvedValue({ ok: true, data: { id: 'item-1' } } as never);
+
+    renderForm({
+      categories: [SPORTS_ROOT, SPORTS_ROOT_CHILD],
+      sportsEnabled: false,
+      defaults: {
+        name: 'Some item',
+        categoryId: SPORTS_ROOT_ID,
+        warehouseId: WAREHOUSE_ID,
+      },
+      warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+
+    await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(1));
   });
 });

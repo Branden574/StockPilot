@@ -12,8 +12,10 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import type {
   AdjustStockInput,
   CreateItemInput,
+  CreateProductGroupInput,
   DuplicateItemInput,
   MovementType,
+  TrackingMode,
   TransferStockInput,
   UpdateItemInput,
 } from '@stockpilot/core';
@@ -1924,6 +1926,29 @@ export class InventoryService {
      */
     groupId?: string | null;
     /**
+     * Sports (Task 11 review fix). The exact twin of `create()`'s field: when
+     * the category resolves to a sports subcategory and no `groupId` was given,
+     * the group is found-or-created from these attributes and its id stamped on
+     * every row. `group_key` is computed by `ProductGroupsService`, never
+     * accepted from a caller.
+     */
+    productGroup?: CreateProductGroupInput;
+    /** An authorized mode override, gated by the same `resolveModeOverride`
+     *  path `create()` uses (`sports:manage` + the subcategory's allowedModes). */
+    trackingModeOverride?: TrackingMode;
+    /**
+     * Variant attributes SHARED by every row in the run. A jersey number is
+     * worn in M and in XL (regression R3) and a colour is one colour across the
+     * run, so these are per-RUN, unlike `size` which is per-row. All of them
+     * feed the server-computed `variant_key` except `playerName`, which
+     * `create()` also leaves out of variant identity.
+     */
+    variantWidth?: string | null;
+    variantFit?: string | null;
+    variantColor?: string | null;
+    jerseyNumber?: string | null;
+    playerName?: string | null;
+    /**
      * A size is now free TEXT, not one of nine apparel letters. A shoe run is
      * '7'..'15' with halves and an apparel run is 'XS'..'5XL'; the authority is
      * the category's size scale (migration 0294), validated below.
@@ -1944,10 +1969,14 @@ export class InventoryService {
     // which sizes are legal at all. With no scale configured — every category
     // in every org today — any non-empty size is accepted and the behaviour is
     // unchanged apart from the nine-letter cap being gone.
-    const profile = await resolveTrackingProfile(
+    //
+    // The mode override rides the SAME `resolveModeOverride` gate create()
+    // uses — `sports:manage` plus the subcategory's own allowedModes — so the
+    // sized path can never become the cheap way around a permission check.
+    const profile = resolveModeOverride(
       this.ctx,
-      input.categoryId,
-      this.trackingProfiles,
+      await resolveTrackingProfile(this.ctx, input.categoryId, this.trackingProfiles),
+      input.trackingModeOverride,
     );
     const { sizeSystem, allowedSizes } = await this.loadSizeScale(profile.sizeScaleId);
 
@@ -1972,7 +2001,7 @@ export class InventoryService {
       if (!grantedBySports) assertModuleEnabled(this.ctx, 'lot_serial');
     }
 
-    const resolvedGroupId = input.groupId ?? null;
+    let resolvedGroupId: string | null = input.groupId ?? null;
     if (resolvedGroupId) {
       // Attaching to a group is the `sports` entitlement — same gate create()
       // applies, so the two create paths cannot disagree.
@@ -1991,8 +2020,42 @@ export class InventoryService {
       if (gErr) throw new ServiceError('internal_error', gErr.message);
       if (!g) throw new ServiceError('not_found', 'That product group no longer exists.');
     }
+    // Inline new-group creation, byte-for-byte the branch create() runs. Add
+    // Item shows a "this will be saved as / Product group" preview BEFORE the
+    // user picks sizes, and a sized sports category (shoes) leaves through this
+    // method — without this the preview promised a group that was never saved.
+    // Only for a SPORTS category, and only when no group was chosen already.
+    if (profile.isSports && !resolvedGroupId && input.productGroup) {
+      const groups = new ProductGroupsService(this.ctx);
+      const { group } = await groups.findOrCreate({
+        ...input.productGroup,
+        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+        categoryId: input.categoryId,
+        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+          profile.countingUnit) as CountingUnit,
+      });
+      resolvedGroupId = group.id;
+    }
 
     const seenVariantKeys = new Set<string>();
+    /**
+     * `variant_key` is SERVER-COMPUTED identity, always — the key decides which
+     * physical stock a row merges with. Built ONCE here so the duplicate check
+     * below and the insert further down can never disagree, and shaped exactly
+     * like create()'s call: `playerName` is deliberately absent from both, or
+     * the same jersey would land as two variants depending on which path
+     * created it.
+     */
+    const variantKeyFor = (normalizedSize: string) =>
+      buildVariantKey({
+        size: normalizedSize,
+        sizeSystem,
+        width: input.variantWidth,
+        fit: input.variantFit,
+        color: input.variantColor,
+        jerseyNumber: input.jerseyNumber,
+      });
+
     for (const v of input.variants) {
       const raw = v.size?.trim() ?? '';
       if (raw.length === 0) {
@@ -2018,7 +2081,15 @@ export class InventoryService {
           { code: 'SHOE_SIZE_REQUIRED' },
         );
       }
-      const key = buildVariantKey({ size: normalized, sizeSystem });
+      // The subcategory's own attribute rules, same helper create() calls. A
+      // no-op for every non-sports category (it returns immediately on a null
+      // profile), so nothing that exists today changes.
+      assertVariantAttributesValid(profile.profile, {
+        variantSize: normalized,
+        variantSizeSystem: sizeSystem,
+        jerseyNumber: input.jerseyNumber,
+      });
+      const key = variantKeyFor(normalized);
       if (seenVariantKeys.has(key)) {
         throw new ServiceError('validation_error', `Size "${raw}" is listed twice.`, {
           code: 'VARIANT_ALREADY_EXISTS',
@@ -2135,7 +2206,14 @@ export class InventoryService {
       variant_size: normalizedSize,
       variant_size_original: v.size,
       variant_size_system: sizeSystem,
-      variant_key: buildVariantKey({ size: normalizedSize, sizeSystem }),
+      // Shared across the whole run: a jersey number is worn in M and in XL
+      // (regression R3), and a colour/width/fit is one value for the run.
+      variant_width: input.variantWidth ?? null,
+      variant_fit: input.variantFit ?? null,
+      variant_color: input.variantColor ?? null,
+      jersey_number: input.jerseyNumber ?? null,
+      player_name: input.playerName ?? null,
+      variant_key: variantKeyFor(normalizedSize),
       custom_fields: variantCustomFields(v.size),
       created_by: this.ctx.userId,
       updated_by: this.ctx.userId,

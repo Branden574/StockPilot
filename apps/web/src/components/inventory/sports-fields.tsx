@@ -18,8 +18,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
+import { sizeSystemEnum } from '@stockpilot/core';
 import type {
   CreateItemInput,
+  SizeSystem,
   SportsAttribute,
   SubcategoryTrackingProfile,
 } from '@stockpilot/core';
@@ -69,16 +71,27 @@ export const EMPTY_SPORTS_GROUP_FIELDS: SportsGroupFieldValues = {
  */
 export const GROUP_LEVEL_COLOR_SUBCATEGORIES = new Set(['jerseys', 'uniforms']);
 
-const SIZE_SYSTEMS: Array<{ value: string; label: string }> = [
-  { value: 'US_MENS', label: "US Men's" },
-  { value: 'US_WOMENS', label: "US Women's" },
-  { value: 'US_YOUTH', label: 'US Youth' },
-  { value: 'UK', label: 'UK' },
-  { value: 'EU', label: 'EU' },
-  { value: 'CM', label: 'CM' },
-  { value: 'ALPHA', label: 'Alpha (S/M/L)' },
-  { value: 'CUSTOM', label: 'Custom' },
-];
+/**
+ * Display copy only. The VOCABULARY comes from `sizeSystemEnum.options` below,
+ * so this Record is exhaustive by type: adding a system to the shared zod enum
+ * fails typecheck here until it is given a label, instead of silently shipping
+ * a picker that is missing a value the schema accepts.
+ */
+const SIZE_SYSTEM_LABELS: Record<SizeSystem, string> = {
+  US_MENS: "US Men's",
+  US_WOMENS: "US Women's",
+  US_YOUTH: 'US Youth',
+  UK: 'UK',
+  EU: 'EU',
+  CM: 'CM',
+  ALPHA: 'Alpha (S/M/L)',
+  CUSTOM: 'Custom',
+};
+
+const SIZE_SYSTEM_OPTIONS = sizeSystemEnum.options.map((value) => ({
+  value,
+  label: SIZE_SYSTEM_LABELS[value],
+}));
 
 export interface SportsFieldsProps {
   profile: SubcategoryTrackingProfile;
@@ -264,11 +277,9 @@ export function SportsFields({
             <Select
               value={watch('variantSizeSystem') ?? '__none'}
               onValueChange={(v) =>
-                setValue(
-                  'variantSizeSystem',
-                  v === '__none' ? null : (v as NonNullable<CreateItemInput['variantSizeSystem']>),
-                  { shouldDirty: true },
-                )
+                setValue('variantSizeSystem', v === '__none' ? null : (v as SizeSystem), {
+                  shouldDirty: true,
+                })
               }
             >
               <SelectTrigger>
@@ -276,7 +287,7 @@ export function SportsFields({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none">—</SelectItem>
-                {SIZE_SYSTEMS.map((s) => (
+                {SIZE_SYSTEM_OPTIONS.map((s) => (
                   <SelectItem key={s.value} value={s.value}>
                     {s.label}
                   </SelectItem>

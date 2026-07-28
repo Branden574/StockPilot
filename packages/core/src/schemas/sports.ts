@@ -17,12 +17,28 @@ export const jerseyNumberSchema = z.preprocess(
     .optional(),
 );
 
+/**
+ * The size-system vocabulary. ONE list: the zod enum below and every picker
+ * that offers these values derive from it (`sizeSystemEnum.options`), so a new
+ * system can never be accepted by the schema while staying invisible in the UI
+ * — or, worse, offered in a form and rejected on save.
+ */
+export const SIZE_SYSTEMS = [
+  'US_MENS',
+  'US_WOMENS',
+  'US_YOUTH',
+  'UK',
+  'EU',
+  'CM',
+  'ALPHA',
+  'CUSTOM',
+] as const;
+export type SizeSystem = (typeof SIZE_SYSTEMS)[number];
+
+export const sizeSystemEnum = z.enum(SIZE_SYSTEMS);
 export const sizeSystemSchema = z.preprocess(
   emptyToUndefined,
-  z
-    .enum(['US_MENS', 'US_WOMENS', 'US_YOUTH', 'UK', 'EU', 'CM', 'ALPHA', 'CUSTOM'])
-    .nullable()
-    .optional(),
+  sizeSystemEnum.nullable().optional(),
 );
 
 export const countingUnitSchema = z.enum(COUNTING_UNITS);

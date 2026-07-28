@@ -395,7 +395,11 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
       id: 'cat-1',
       parent_id: null,
       tracking_mode: 'OPTIONAL_SERIALIZED',
-      size_scale_id: null,
+      // Shoes REQUIRE a size system, and on this path it is derived from the
+      // category's size scale — the sized fan-out now runs the subcategory's
+      // attribute rules exactly as create() does (Task 11 review fix), so a
+      // shoes fixture has to carry the scale its profile demands.
+      size_scale_id: 'scale-1',
       default_unit_of_measure: null,
       sports_subcategory_key: 'shoes',
       tracking_profile: null,
@@ -429,7 +433,9 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
       id: 'cat-1',
       parent_id: null,
       tracking_mode: null,
-      size_scale_id: null,
+      // See above: a shoes profile requires a size system, which this path
+      // derives from the scale.
+      size_scale_id: 'scale-1',
       default_unit_of_measure: null,
       sports_subcategory_key: 'shoes',
       tracking_profile: null,

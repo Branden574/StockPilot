@@ -193,7 +193,45 @@ export const bulkCreateSizedVariantsSchema = z.object({
     // Was .max(7), which silently rejected valid input: the form already
     // offered NINE apparel sizes, and a shoe run is routinely 20+.
     .max(60),
-});
+})
+  /**
+   * The variant attributes SHARED by every row in one size run — a jersey
+   * number is worn in M and in XL (regression R3), a colourway is one
+   * colourway across the whole run. Picked from `variantAttributesSchema` so
+   * the bounds and the preprocessing cannot drift from `createItemSchema`'s.
+   *
+   * `variantSize` / `variantSizeOriginal` / `variantSizeSystem` are
+   * deliberately NOT here: the size is per-row (`variants[].size`) and the
+   * system is derived from the category's size scale. `groupId` already lives
+   * above, unchanged.
+   */
+  .merge(
+    variantAttributesSchema.pick({
+      variantWidth: true,
+      variantFit: true,
+      variantColor: true,
+      jerseyNumber: true,
+      playerName: true,
+    }),
+  )
+  .extend({
+    /**
+     * Sports only, and the exact twin of `createItemSchema.productGroup`: when
+     * the category resolves to a sports subcategory and no `groupId` was given,
+     * the server may find-or-create the group from these attributes. Without
+     * it, a SIZED sports category (shoes — the canonical case) took this path
+     * and silently dropped the group the Add Item preview had just promised.
+     * `group_key` is still computed server-side and never accepted.
+     */
+    productGroup: createProductGroupSchema.optional(),
+    /**
+     * An authorized override of the category's default tracking mode. Checked
+     * SERVER-side against `sports:manage` and the subcategory's allowedModes
+     * (the same `resolveModeOverride` path `create()` uses) — the form is never
+     * trusted.
+     */
+    trackingModeOverride: trackingModeSchema.optional(),
+  });
 export type BulkCreateSizedVariantsInput = z.infer<typeof bulkCreateSizedVariantsSchema>;
 
 export const adjustStockSchema = z.object({
