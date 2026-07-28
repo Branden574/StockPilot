@@ -6,7 +6,9 @@ import {
   Animated,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,7 +20,7 @@ import {
   recordAnnouncementsSeen,
   type AnnouncementItem,
 } from '@/lib/announcements';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import {
   isAnyTourVisible,
   setWhatsNewOpen,
@@ -51,6 +53,7 @@ let shownForUserId: string | null = null;
 export function WhatsNew() {
   const { c } = useTheme();
   const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
   const router = useRouter();
   const { user } = useAuth();
   const uid = user?.id ?? null;
@@ -174,6 +177,11 @@ export function WhatsNew() {
                 backgroundColor: c.card,
                 borderColor: c.hair,
                 paddingBottom: 16 + insets.bottom,
+                // Announcement copy is uncapped Body, so a long item is taller
+                // than the window at accessibility sizes. The sheet grows from
+                // bottom: 0 UPWARD, which would push the head — and its X —
+                // off the top of the screen. Bound it and scroll the copy.
+                maxHeight: Math.max(200, winH - insets.top - insets.bottom - 24),
               },
             ]}
           >
@@ -194,12 +202,14 @@ export function WhatsNew() {
               </Pressable>
             </View>
 
-            <Body size={15} color={c.ink} style={[styles.title, { fontFamily: FONT.displaySemi }]}>
-              {item.title}
-            </Body>
-            <Body size={13} color={c.ink3} style={styles.body}>
-              {item.body}
-            </Body>
+            <ScrollView style={styles.scroll} bounces={false} showsVerticalScrollIndicator={false}>
+              <Body size={15} color={c.ink} style={[styles.title, { fontFamily: FONT.displaySemi }]}>
+                {item.title}
+              </Body>
+              <Body size={13} color={c.ink3} style={styles.body}>
+                {item.body}
+              </Body>
+            </ScrollView>
 
             <View style={styles.actions}>
               {items.length > 1 ? (
@@ -223,7 +233,7 @@ export function WhatsNew() {
                   onPress={() => handleCta(cta.href)}
                   style={[styles.cta, { borderColor: c.hair }]}
                 >
-                  <Body size={12.5} color={c.ink3}>
+                  <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
                     {cta.label}
                   </Body>
                 </Pressable>
@@ -233,7 +243,12 @@ export function WhatsNew() {
                 onPress={() => (isLast ? close('seen') : setIndex(index + 1))}
                 style={[styles.btn, { backgroundColor: c.ink }]}
               >
-                <Body size={12.5} color={c.card} style={{ fontFamily: FONT.displaySemi }}>
+                <Body
+                  size={12.5}
+                  color={c.card}
+                  style={{ fontFamily: FONT.displaySemi }}
+                  maxFontSizeMultiplier={ACTION_CAP}
+                >
                   {isLast ? 'Done' : 'Next'}
                 </Body>
               </Pressable>
@@ -245,6 +260,9 @@ export function WhatsNew() {
   );
 }
 
+/** Done / Next / the CTA are chrome, and the only deliberate way out. */
+const ACTION_CAP = capTo(12.5, TYPE_CEILING.control);
+
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   cardSlot: { position: 'absolute', bottom: 0, left: 0, right: 0 },
@@ -254,11 +272,23 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: 18,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  eyebrow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Head and actions are PINNED either side of the scroll region, so the X and
+  // Done/Next stay reachable however long the announcement is.
+  head: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+  eyebrow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  scroll: { flexShrink: 1 },
   title: { marginTop: 10 },
-  body: { marginTop: 6, lineHeight: 19 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 },
+  // No hardcoded lineHeight: 19 — Body scales its own, and pinning it made
+  // 13pt announcement copy overlap itself at accessibility sizes.
+  body: { marginTop: 6 },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 16,
+    flexShrink: 0,
+  },
   spacer: { flex: 1 },
   dots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
   dot: { height: 5, borderRadius: 999 },

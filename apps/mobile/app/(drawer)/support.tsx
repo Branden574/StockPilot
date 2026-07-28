@@ -144,7 +144,7 @@ export default function SupportScreen() {
         </Pressable>
         <View style={styles.topbarTitle}>
           <LifeBuoy size={16} color={c.ink3} />
-          <Body color={c.ink2}>Support & feedback</Body>
+          <Body color={c.ink2} style={{ flexShrink: 1 }}>Support &amp; feedback</Body>
         </View>
         <View style={styles.iconBtn} />
       </View>
@@ -253,14 +253,17 @@ export default function SupportScreen() {
 
 const styles = StyleSheet.create({
   topbar: {
-    height: 52,
+    // minHeight, not height: the title is uncapped Body between two fixed
+    // icon buttons, so a 52pt frame sliced it at accessibility sizes.
+    minHeight: 52,
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  topbarTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  topbarTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
   iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
   attachRow: {

@@ -230,7 +230,7 @@ export default function SignIn() {
                     <Check size={12} color={c.paper} strokeWidth={2.2} />
                   ) : null}
                 </View>
-                <Body size={13} color={c.ink2}>
+                <Body size={13} color={c.ink2} style={{ flexShrink: 1 }}>
                   Keep me signed in
                 </Body>
               </Pressable>
@@ -304,11 +304,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    // "Keep me signed in" and "Forgot?" cannot share a line once the label
+    // grows, and unwrapped it is Forgot? — the only password-reset entry
+    // point in the app — that gets pushed off the right edge.
+    flexWrap: 'wrap',
+    gap: 10,
   },
   keepInRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 1,
   },
   checkbox: {
     width: 18,

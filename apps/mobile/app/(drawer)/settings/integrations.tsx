@@ -13,6 +13,7 @@ import {
   Alert,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -34,8 +35,9 @@ import {
   type SyncHealthRow,
   type SyncHealthStatus,
 } from '@/lib/integrations-api';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useRole } from '@/lib/use-role';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const PROVIDER = 'quickbooks';
@@ -316,12 +318,39 @@ function StatusCard({ connection }: { connection: ConnectionView | null }) {
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  // REALM / LAST SYNCED against a realm id or a timestamp: `space-between`
+  // gives neither side room, and the value is the half that was losing (it
+  // carries numberOfLines={1}). Past the shared threshold it stacks under its
+  // label and takes the card's full width; below it, nothing moves.
+  const stacked = shouldStackRow(fontScale);
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 4 }}>
-      <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+    <View
+      style={[
+        { gap: stacked ? 2 : 12, marginTop: 4 },
+        stacked
+          ? null
+          : { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+      ]}
+    >
+      <Mono
+        size={9.5}
+        tracking={0.18}
+        upper
+        color={c.ink4}
+        // The label is a fixed micro-marker; the value it names is not capped.
+        maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
+        style={{ flexShrink: 1 }}
+      >
         {label}
       </Mono>
-      <Mono size={12.5} tracking={0.02} color={c.ink} numberOfLines={1} style={{ flexShrink: 1, textAlign: 'right' }}>
+      <Mono
+        size={12.5}
+        tracking={0.02}
+        color={c.ink}
+        numberOfLines={stacked ? 2 : 1}
+        style={{ flexShrink: 1, minWidth: 0, textAlign: stacked ? 'left' : 'right' }}
+      >
         {value}
       </Mono>
     </View>
@@ -420,10 +449,10 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
                 <View style={styles.healthRow}>
                   <Icon size={16} color={color} strokeWidth={1.6} />
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }} numberOfLines={1}>
+                    <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }} numberOfLines={2}>
                       {row.topic}
                     </Body>
-                    <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }} numberOfLines={1}>
+                    <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }} numberOfLines={2}>
                       {row.externalId ? `${row.externalId} · ` : ''}
                       {row.attempts} attempt{row.attempts === 1 ? '' : 's'} · {formatDateTime(row.completedAt ?? row.createdAt)}
                     </Mono>
@@ -433,7 +462,18 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
                       </Body>
                     ) : null}
                   </View>
-                  <Mono size={9.5} tracking={0.12} upper color={color}>
+                  {/* The status word duplicates the icon to its left and is
+                      the only non-shrinking sibling of the flex: 1 column;
+                      capped so the topic and its meta keep their width. */}
+                  <Mono
+                    size={9.5}
+                    tracking={0.12}
+                    upper
+                    color={color}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
+                    style={{ flexShrink: 0 }}
+                  >
                     {row.status}
                   </Mono>
                 </View>

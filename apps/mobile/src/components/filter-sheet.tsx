@@ -4,7 +4,7 @@ import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from '
 
 import { Button } from '@/components/ui/button';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
-import { FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 export interface FilterOption {
@@ -356,7 +356,14 @@ export function FilterButton({
         strokeWidth={1.7}
       />
       {isActive ? (
-        <Mono size={11} tracking={0.04} style={{ color: c.paper, fontFamily: FONT.display }}>
+        // A count in a 32pt round chip beside the search bar — chrome, and the
+        // number is restated in the sheet this button opens.
+        <Mono
+          size={11}
+          tracking={0.04}
+          maxFontSizeMultiplier={capTo(11, TYPE_CEILING.chrome)}
+          style={{ color: c.paper, fontFamily: FONT.display }}
+        >
           {count}
         </Mono>
       ) : null}
@@ -409,10 +416,15 @@ export function ActiveFilterPill({
         { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.8 : 1 },
       ]}
     >
+      {/* Two lines and a chrome ceiling: this is a summary of state the sheet
+          below already spells out, and at one uncapped line an accessibility
+          size showed three characters and an ellipsis. The X stays put. */}
       <Text
-        numberOfLines={1}
+        numberOfLines={2}
+        maxFontSizeMultiplier={capTo(11, TYPE_CEILING.chrome)}
         style={{
           flex: 1,
+          minWidth: 0,
           fontFamily: FONT.mono,
           fontSize: 11,
           letterSpacing: 11 * 0.04,
@@ -487,7 +499,10 @@ const optStyles = StyleSheet.create({
 const fbStyles = StyleSheet.create({
   btn: {
     minWidth: 32,
-    height: 32,
+    // minHeight, not height: paired with the cap above, so the capped count
+    // still has a box to sit in rather than being sliced by a 32pt frame.
+    minHeight: 32,
+    paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 16,
     borderWidth: 1,

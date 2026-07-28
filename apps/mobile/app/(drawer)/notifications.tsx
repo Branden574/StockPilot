@@ -13,7 +13,7 @@ import { ensureRealtimeAuth } from '@/lib/realtime-auth';
 import { supabase } from '@/lib/supabase';
 import { rewriteWebPath } from '@/lib/web-path-rewrite';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface NotificationRow {
@@ -266,7 +266,17 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
               >
                 {row.title}
               </Body>
-              <Mono size={10.5} tracking={0.04} color={c.ink4}>
+              {/* Relative age is a micro-marker and the only non-shrinking
+                  sibling of the title (plan §3 keeps the title itself
+                  scaling): capped so it stops taking the title's width. */}
+              <Mono
+                size={10.5}
+                tracking={0.04}
+                color={c.ink4}
+                numberOfLines={1}
+                maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
+                style={{ flexShrink: 0 }}
+              >
                 {ago}
               </Mono>
             </View>

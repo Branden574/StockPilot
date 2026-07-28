@@ -10,12 +10,14 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const FEATURES: { icon: LucideIcon; title: string; body: string }[] = [
@@ -36,6 +38,8 @@ const STATS: { value: string; label: string }[] = [
 
 export default function Welcome() {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stackStats = shouldStackRow(fontScale);
   const router = useRouter();
 
   return (
@@ -69,11 +73,21 @@ export default function Welcome() {
         </View>
 
         {/* Proof stats */}
-        <View style={styles.statRow}>
+        {/* Four cells across ~349pt give each label ~87pt. Past the shared
+            threshold the strip becomes one column so a label like "live
+            integrations" gets the full width instead of breaking per
+            character; the cap keeps it from outgrowing the value above it. */}
+        <View style={[styles.statRow, stackStats && styles.statRowStacked]}>
           {STATS.map((s) => (
-            <View key={s.label} style={styles.statCell}>
+            <View key={s.label} style={stackStats ? styles.statCellStacked : styles.statCell}>
               <Display size={24}>{s.value}</Display>
-              <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              <Mono
+                size={9.5}
+                tracking={0.04}
+                color={c.ink4}
+                maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
+                style={{ marginTop: 4 }}
+              >
                 {s.label}
               </Mono>
             </View>
@@ -133,11 +147,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    // The wordmark and Sign in stop sharing a line at accessibility sizes,
+    // and Sign in is the reason a returning user opens this screen.
+    flexWrap: 'wrap',
+    gap: 10,
   },
   statRow: {
     marginTop: 30,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  statRowStacked: { flexDirection: 'column' },
   statCell: { flex: 1 },
+  statCellStacked: { marginBottom: 14 },
 });

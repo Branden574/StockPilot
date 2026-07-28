@@ -110,5 +110,10 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     letterSpacing: 0.4,
     fontWeight: '500',
+    // Only bites when a CALLER shrinks the pill (the box defaults to
+    // flexShrink: 0, so there is no shrink pressure anywhere else): then the
+    // label wraps inside the narrowed box instead of overflowing it.
+    flexShrink: 1,
+    minWidth: 0,
   },
 });

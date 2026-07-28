@@ -22,7 +22,7 @@ import { usePermissionsRealtime } from '@/lib/use-permissions-realtime';
 import { useSessionRevocation } from '@/lib/use-session-revocation';
 import { useRole } from '@/lib/use-role';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -138,7 +138,18 @@ export function DrawerContent(props: DrawerContentComponentProps) {
                     {item.label}
                   </Body>
                   {item.inTabs ? (
-                    <Mono size={9} tracking={0.16} upper color={c.ink4}>
+                    // Micro-marker, capped: the nav LABEL beside it keeps
+                    // scaling freely (plan §3), so this fixed 3-letter string
+                    // is the sibling that has to stop taking width from it.
+                    <Mono
+                      size={9}
+                      tracking={0.16}
+                      upper
+                      color={c.ink4}
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={capTo(9, TYPE_CEILING.chrome)}
+                      style={{ flexShrink: 0 }}
+                    >
                       TAB
                     </Mono>
                   ) : null}
@@ -173,7 +184,11 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           ]}
         >
           <LogOut size={16} color={ACCENT.crit} strokeWidth={1.5} />
-          <Body size={14} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+          <Body
+            size={14}
+            color={ACCENT.crit}
+            style={{ fontFamily: FONT.display, flexShrink: 1 }}
+          >
             Sign out
           </Body>
         </Pressable>
@@ -208,7 +223,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 40,
+    // minHeight + padding, not a 40pt frame: the label is uncapped (it is the
+    // one destructive action here) so the pill has to grow around it.
+    minHeight: 40,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
     marginTop: 4,

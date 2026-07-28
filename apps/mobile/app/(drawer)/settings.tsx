@@ -24,7 +24,16 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  Alert,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/ui/avatar';
@@ -35,6 +44,7 @@ import { Toggle } from '@/components/ui/toggle';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
@@ -184,7 +194,10 @@ export default function Settings() {
               {profile.email ?? ''}
             </Mono>
           </View>
-          <Pill status="ok">OWNER</Pill>
+          {/* flexShrink: the role badge is a fixed string beside a name and an
+              email that both need width; without it the Pill claims its full
+              intrinsic width and starves the identity column beside it. */}
+          <Pill status="ok" style={{ flexShrink: 1 }}>OWNER</Pill>
         </Card>
 
         <Section label="ACCOUNT">
@@ -423,15 +436,20 @@ export default function Settings() {
               alignItems: 'center',
               gap: 10,
               paddingVertical: 10,
+              flexShrink: 1,
               opacity: pressed ? 0.7 : 1,
             })}
           >
             <LogOut size={16} color={ACCENT.crit} strokeWidth={1.5} />
-            <Body size={14.5} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+            <Body
+              size={14.5}
+              color={ACCENT.crit}
+              style={{ fontFamily: FONT.display, flexShrink: 1 }}
+            >
               Sign out
             </Body>
           </Pressable>
-          <Mono size={10} tracking={0.1} color={c.ink4}>
+          <Mono size={10} tracking={0.1} color={c.ink4} style={{ flexShrink: 1, minWidth: 0 }}>
             {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`}
           </Mono>
         </View>
@@ -467,19 +485,37 @@ function SettingRow({
   onPress?: () => void;
 }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  // Title and detail are both content and neither can be clamped, but they
+  // share one row with a fixed icon well, a Toggle and a chevron. Past the
+  // shared threshold the detail moves under the title and takes the full
+  // column instead of splitting it. Below it, nothing moves.
+  const stacked = shouldStackRow(fontScale);
+  const detailNode = detail ? (
+    <Body
+      size={13.5}
+      color={c.ink4}
+      style={
+        stacked
+          ? { marginTop: 3 }
+          : { flexShrink: 1, textAlign: 'right', marginRight: chevron ? 6 : 0 }
+      }
+    >
+      {detail}
+    </Body>
+  ) : null;
   const inner = (
     <View style={rowStyles.row}>
       <View style={[rowStyles.iconWell, { borderColor: c.hair }]}>
         <Icon size={16} color={c.ink} strokeWidth={1.5} />
       </View>
-      <Body size={15.5} style={{ flex: 1, fontFamily: FONT.display }}>
-        {title}
-      </Body>
-      {detail ? (
-        <Body size={13.5} color={c.ink4} style={{ marginRight: chevron ? 6 : 0 }}>
-          {detail}
+      <View style={rowStyles.labelCol}>
+        <Body size={15.5} style={{ fontFamily: FONT.display }}>
+          {title}
         </Body>
-      ) : null}
+        {stacked ? detailNode : null}
+      </View>
+      {stacked ? null : detailNode}
       {trailing}
       {chevron ? (
         <ChevronLeft
@@ -606,6 +642,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    // Sign out and the version/OTA string cannot both fit one line once the
+    // label grows; wrapping keeps Sign out on screen and tappable.
+    flexWrap: 'wrap',
+    gap: 8,
   },
 });
 
@@ -618,6 +658,7 @@ const rowStyles = StyleSheet.create({
     paddingHorizontal: 16,
     minHeight: 52,
   },
+  labelCol: { flex: 1, minWidth: 0 },
   iconWell: {
     width: 32,
     height: 32,

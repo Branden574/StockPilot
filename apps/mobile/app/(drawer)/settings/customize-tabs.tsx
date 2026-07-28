@@ -18,6 +18,7 @@ import {
   StyleSheet,
   Text,
   UIManager,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,6 +27,7 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   allowedTabIds,
@@ -93,6 +95,10 @@ export default function CustomizeTabsScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const userId = user?.id ?? null;
+
+  const { fontScale } = useWindowDimensions();
+  // Reorder/remove chips move to their own line past the shared threshold.
+  const stackControls = shouldStackRow(fontScale);
 
   // Same gating inputs the tab bar itself resolves with.
   const enabledModules = useEnabledModules();
@@ -245,11 +251,11 @@ export default function CustomizeTabsScreen() {
             return (
               <React.Fragment key={id}>
                 {idx > 0 ? <Hair inset={70} /> : null}
-                <View style={styles.row}>
+                <View style={[styles.row, stackControls && styles.rowStacked]}>
                   <View style={[styles.iconWell, { borderColor: c.hair }]}>
                     <SlotIcon id={id} color={unavailable ? c.ink4 : c.ink} />
                   </View>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <Body
                       size={15.5}
                       color={unavailable ? c.ink4 : undefined}
@@ -268,24 +274,29 @@ export default function CustomizeTabsScreen() {
                       </Mono>
                     ) : null}
                   </View>
-                  <ControlChip
-                    icon={ChevronUp}
-                    label={`Move ${cand.settingsLabel} up`}
-                    disabled={idx === 0}
-                    onPress={() => move(id, -1)}
-                  />
-                  <ControlChip
-                    icon={ChevronDown}
-                    label={`Move ${cand.settingsLabel} down`}
-                    disabled={idx === slots.length - 1}
-                    onPress={() => move(id, 1)}
-                  />
-                  <ControlChip
-                    icon={Minus}
-                    label={`Remove ${cand.settingsLabel} from the bar`}
-                    disabled={atMin}
-                    onPress={() => remove(id)}
-                  />
+                  {/* Three 30pt chips plus the icon well leave the label ~200pt
+                      of a 393pt screen. Past the shared threshold the chips
+                      take their own line and the label takes the width. */}
+                  <View style={[styles.controls, stackControls && styles.controlsStacked]}>
+                    <ControlChip
+                      icon={ChevronUp}
+                      label={`Move ${cand.settingsLabel} up`}
+                      disabled={idx === 0}
+                      onPress={() => move(id, -1)}
+                    />
+                    <ControlChip
+                      icon={ChevronDown}
+                      label={`Move ${cand.settingsLabel} down`}
+                      disabled={idx === slots.length - 1}
+                      onPress={() => move(id, 1)}
+                    />
+                    <ControlChip
+                      icon={Minus}
+                      label={`Remove ${cand.settingsLabel} from the bar`}
+                      disabled={atMin}
+                      onPress={() => remove(id)}
+                    />
+                  </View>
                 </View>
               </React.Fragment>
             );
@@ -482,6 +493,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     minHeight: 52,
   },
+  rowStacked: { flexWrap: 'wrap' },
+  controls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  controlsStacked: { width: '100%', justifyContent: 'flex-end' },
   iconWell: {
     width: 32,
     height: 32,

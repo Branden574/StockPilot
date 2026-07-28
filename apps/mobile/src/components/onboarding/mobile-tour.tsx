@@ -7,6 +7,7 @@ import {
   Keyboard,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   useWindowDimensions,
   View,
@@ -26,7 +27,7 @@ import {
   useWhatsNewOpen,
   type TargetRect,
 } from '@/lib/tour-targets';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -188,6 +189,15 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
 
   const dim = 'rgba(0,0,0,0.45)';
 
+  /**
+   * The card may never be taller than the window. Step copy is uncapped Body
+   * (§3), so past ~2x a two-sentence step is taller than the screen — and the
+   * card grows from `bottom: 0` UPWARD, which pushes the head (and its X) off
+   * the TOP. A tour a user cannot exit traps them in the app, so the head and
+   * the actions row are pinned and only the copy between them scrolls.
+   */
+  const cardMaxHeight = Math.max(200, winH - insets.top - insets.bottom - 24);
+
   return (
     <>
       <Pressable
@@ -268,6 +278,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                   backgroundColor: c.card,
                   borderColor: c.hair,
                   paddingBottom: cardOnTop ? 16 : 16 + insets.bottom,
+                  maxHeight: cardMaxHeight,
                 },
               ]}
             >
@@ -275,13 +286,21 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                 <>
                   <View style={styles.head}>
                     <Sparkles size={14} color={c.ink} />
-                    <Body size={14} style={{ fontFamily: FONT.displaySemi }}>
+                    {/* flex: 1 (via styles.title), or the offer headline
+                        overflows the card instead of wrapping inside it. */}
+                    <Body size={14} style={[styles.title, { fontFamily: FONT.displaySemi }]}>
                       New here? Take a quick tour.
                     </Body>
                   </View>
-                  <Body size={12.5} color={c.ink3} style={styles.body}>
-                    {tour.steps.length} short steps — learn this screen in under a minute.
-                  </Body>
+                  <ScrollView
+                    style={styles.scroll}
+                    bounces={false}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    <Body size={12.5} color={c.ink3} style={styles.body}>
+                      {tour.steps.length} short steps — learn this screen in under a minute.
+                    </Body>
+                  </ScrollView>
                   <View style={styles.actions}>
                     <View style={styles.spacer} />
                     <Pressable
@@ -289,7 +308,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       onPress={() => finish('dismissed')}
                       style={styles.btnGhost}
                     >
-                      <Body size={12.5} color={c.ink3}>
+                      <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
                         No thanks
                       </Body>
                     </Pressable>
@@ -302,7 +321,12 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       }}
                       style={[styles.btn, { backgroundColor: c.ink }]}
                     >
-                      <Body size={12.5} color={c.card} style={{ fontFamily: FONT.displaySemi }}>
+                      <Body
+                        size={12.5}
+                        color={c.card}
+                        style={{ fontFamily: FONT.displaySemi }}
+                        maxFontSizeMultiplier={ACTION_CAP}
+                      >
                         Start tour
                       </Body>
                     </Pressable>
@@ -323,9 +347,15 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       <X size={15} color={c.ink4} />
                     </Pressable>
                   </View>
-                  <Body size={13} color={c.ink3} style={styles.body}>
-                    {current.body}
-                  </Body>
+                  <ScrollView
+                    style={styles.scroll}
+                    bounces={false}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    <Body size={13} color={c.ink3} style={styles.body}>
+                      {current.body}
+                    </Body>
+                  </ScrollView>
                   <View style={styles.actions}>
                     <View style={styles.dots}>
                       {tour.steps.map((_, i) => (
@@ -347,7 +377,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                         onPress={() => setStep(step - 1)}
                         style={styles.btnGhost}
                       >
-                        <Body size={12.5} color={c.ink3}>
+                        <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
                           Back
                         </Body>
                       </Pressable>
@@ -357,7 +387,12 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       onPress={() => (isLast ? finish('completed') : setStep(step + 1))}
                       style={[styles.btn, { backgroundColor: c.ink }]}
                     >
-                      <Body size={12.5} color={c.card} style={{ fontFamily: FONT.displaySemi }}>
+                      <Body
+                        size={12.5}
+                        color={c.card}
+                        style={{ fontFamily: FONT.displaySemi }}
+                        maxFontSizeMultiplier={ACTION_CAP}
+                      >
                         {isLast ? 'Done' : 'Next'}
                       </Body>
                     </Pressable>
@@ -371,6 +406,13 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
     </>
   );
 }
+
+/**
+ * The tour's own buttons are chrome — Back / Next / Done / No thanks / Start
+ * tour are 12.5pt labels in fixed-radius pills, and they are the ONLY way out
+ * of a modal that covers the whole app. The step title and body stay uncapped.
+ */
+const ACTION_CAP = capTo(12.5, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   pill: {
@@ -407,10 +449,23 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 8,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Head and actions are PINNED (flexShrink: 0) either side of the scroll
+  // region, so the X and Next/Done stay on screen at every text size.
+  head: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
   title: { flex: 1, paddingRight: 8 },
-  body: { marginTop: 6, lineHeight: 19 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  // The only child that yields when the card hits its maxHeight.
+  scroll: { flexShrink: 1 },
+  // No hardcoded lineHeight: 19 — Body derives lineHeight from its own scaled
+  // size, and pinning it made 13pt copy overlap itself at accessibility sizes.
+  body: { marginTop: 6 },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
+    flexShrink: 0,
+  },
   spacer: { flex: 1 },
   dots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
   dot: { height: 5, borderRadius: 999 },
