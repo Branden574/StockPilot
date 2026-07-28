@@ -30,10 +30,12 @@ import {
   formatRackLabel,
   isApparelAlphaSize,
   normalizeRackFields,
+  groupKeyUsesColor,
   DEFAULT_SUBCATEGORY_PROFILES,
   type BulkCreateSizedVariantsInput,
   type CountingUnit,
   type CreateItemInput,
+  type SportsAttribute,
   type SportsSubcategoryKey,
 } from '@stockpilot/core';
 
@@ -206,6 +208,98 @@ export interface SportsCategoryFacts {
 }
 
 /**
+ * The GROUP-IDENTITY attributes the Add Item screen collects. The exact field
+ * set web's `SportsGroupFieldValues` carries (sports-fields.tsx), because these
+ * are the slots `buildGroupKey` reads:
+ *
+ *   shoes    -> brand, model, styleNumber, colorway
+ *   jerseys  -> team, league, season, homeAway, brand, styleNumber, color
+ *
+ * These are IDENTITY, not decoration. A shoe style created on web with
+ * brand/model keys as `shoes|nike|vaporfly 3||`; the same style created on a
+ * phone with only a name keys as `shoes|name:...`, and `findOrCreate` is
+ * exact-key, so the two never meet and one product silently becomes two groups
+ * with the stock split between them. Collecting them on BOTH surfaces is what
+ * makes the identity cross-platform — and the spec asks for these fields on
+ * Expo in the same breath as web ("web + Expo, shared rules").
+ */
+export interface SportsGroupFieldValues {
+  brand: string;
+  model: string;
+  styleNumber: string;
+  colorway: string;
+  team: string;
+  league: string;
+  season: string;
+  homeAway: '' | 'home' | 'away' | 'alternate';
+  /** Only collected when the subcategory's GROUP key carries a colour slot. */
+  color: string;
+}
+
+export const EMPTY_SPORTS_GROUP_FIELDS: SportsGroupFieldValues = {
+  brand: '',
+  model: '',
+  styleNumber: '',
+  colorway: '',
+  team: '',
+  league: '',
+  season: '',
+  homeAway: '',
+  color: '',
+};
+
+/**
+ * Which group-identity inputs a subcategory shows, bound to the profile's
+ * `supportedAttributes` exactly as web's `SportsFields` binds them — no
+ * `if (subcategory === 'shoes')` anywhere, so a custom subcategory listing the
+ * same attributes gets the same inputs for free.
+ *
+ * `color` is the one attribute that means two different things. It is a GROUP
+ * slot for jerseys/uniforms and a per-item VARIANT slot everywhere else
+ * (`groupKeyUsesColor`, shared from @stockpilot/core), and this screen collects
+ * only the group one.
+ */
+export function sportsGroupFieldsFor(
+  subcategoryKey: string | null,
+): { key: keyof SportsGroupFieldValues; label: string; placeholder: string }[] {
+  const profile = subcategoryKey
+    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
+    : null;
+  if (!profile) return [];
+  const has = (attr: SportsAttribute) => profile.supportedAttributes.includes(attr);
+  const fields: { key: keyof SportsGroupFieldValues; label: string; placeholder: string }[] = [];
+  if (has('brand')) fields.push({ key: 'brand', label: 'BRAND', placeholder: 'Nike' });
+  if (has('model')) fields.push({ key: 'model', label: 'MODEL', placeholder: 'Pegasus 41' });
+  if (has('style_number'))
+    fields.push({ key: 'styleNumber', label: 'STYLE NUMBER', placeholder: 'DZ4494-001' });
+  if (has('colorway'))
+    fields.push({ key: 'colorway', label: 'COLORWAY', placeholder: 'Black/White' });
+  if (has('team')) fields.push({ key: 'team', label: 'TEAM', placeholder: 'Wildcats' });
+  if (has('league'))
+    fields.push({ key: 'league', label: 'LEAGUE / PROGRAM', placeholder: 'Varsity' });
+  if (has('season')) fields.push({ key: 'season', label: 'SEASON', placeholder: '2026-27' });
+  if (has('color') && groupKeyUsesColor(subcategoryKey))
+    fields.push({ key: 'color', label: 'COLOR', placeholder: 'Navy' });
+  return fields;
+}
+
+/** True when this subcategory shows the home / away picker. */
+export function sportsShowsHomeAway(subcategoryKey: string | null): boolean {
+  const profile = subcategoryKey
+    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
+    : null;
+  return profile?.supportedAttributes.includes('home_away') ?? false;
+}
+
+/** The subcategory's display name ('Shoes'), for the section heading. */
+export function sportsProfileLabelFor(subcategoryKey: string | null): string {
+  const profile = subcategoryKey
+    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
+    : null;
+  return profile?.label ?? '';
+}
+
+/**
  * The sports payload for a create, computed exactly as the web item form
  * computes its `sportsGroupPayload` (item-form.tsx).
  *
@@ -243,6 +337,7 @@ export function buildSportsGroupPayload(input: {
   itemName: string;
   categoryId: string | null;
   category: SportsCategoryFacts | null;
+  groupFields?: SportsGroupFieldValues;
   groupId?: string | null;
 }): { groupId?: string | null; productGroup?: CreateItemInput['productGroup'] } {
   if (input.groupId) return { groupId: input.groupId };
@@ -261,10 +356,25 @@ export function buildSportsGroupPayload(input: {
     input.category?.parentDefaultUnitOfMeasure ??
     profile.defaultCountingUnit ??
     'unit') as CountingUnit;
+  const g = input.groupFields ?? EMPTY_SPORTS_GROUP_FIELDS;
+  const text = (v: string) => v.trim() || undefined;
   return {
     productGroup: {
       name,
       categoryId: input.categoryId,
+      // EVERY attribute is forwarded, not just the ones this subcategory
+      // renders — byte-for-byte the web form's object. The unrendered ones are
+      // '' and collapse to undefined here, exactly as they do on web, so the
+      // two platforms hand `buildGroupKey` the same tuple.
+      brand: text(g.brand),
+      model: text(g.model),
+      styleNumber: text(g.styleNumber),
+      colorway: text(g.colorway),
+      team: text(g.team),
+      league: text(g.league),
+      season: text(g.season),
+      homeAway: g.homeAway || undefined,
+      color: text(g.color),
       defaultCountingUnit: countingUnit,
     },
   };

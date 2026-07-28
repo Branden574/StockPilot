@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { APPAREL_ALPHA_SIZES } from '@stockpilot/core';
+import { APPAREL_ALPHA_SIZES, buildGroupKey } from '@stockpilot/core';
 
 import {
   apparelFallbackSizeOptions,
@@ -15,9 +15,14 @@ import {
   deriveRackFields,
   describeFailure,
   sizeOptionsFromScale,
+  sportsGroupFieldsFor,
+  sportsProfileLabelFor,
+  sportsShowsHomeAway,
   submitCreateItem,
   submitSizedVariants,
+  EMPTY_SPORTS_GROUP_FIELDS,
   type ItemFormState,
+  type SportsGroupFieldValues,
 } from './item-create';
 
 const CAT = '11111111-1111-1111-1111-111111111111';
@@ -170,9 +175,7 @@ describe('buildCreateItemInput — the shared schema, not a native re-implementa
   });
 
   it('never lets the client name variant identity — variantKey is stripped by the schema', () => {
-    const res = buildCreateItemInput(
-      form({ variantSize: '10.5', variantSizeSystem: 'US_MENS' }),
-    );
+    const res = buildCreateItemInput(form({ variantSize: '10.5', variantSizeSystem: 'US_MENS' }));
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.input).not.toHaveProperty('variantKey');
@@ -266,18 +269,15 @@ describe('buildSizedVariantsInput — one request, the server fans out', () => {
   });
 
   it('REJECTS a run with no category (the fan-out needs one to resolve the size scale)', () => {
-    const res = buildSizedVariantsInput(form({ categoryId: null }), [
-      { size: 'M', quantity: 1 },
-    ]);
+    const res = buildSizedVariantsInput(form({ categoryId: null }), [{ size: 'M', quantity: 1 }]);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.field).toBe('categoryId');
   });
 
   it('passes the rack as STRUCTURED fields plus a composed bin label', () => {
-    const res = buildSizedVariantsInput(
-      { ...SIZED, rackNumber: '22-B' },
-      [{ size: 'M', quantity: 1 }],
-    );
+    const res = buildSizedVariantsInput({ ...SIZED, rackNumber: '22-B' }, [
+      { size: 'M', quantity: 1 },
+    ]);
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.input.rackNumber).toBe('22');
@@ -310,6 +310,11 @@ describe('buildSizedVariantsInput — one request, the server fans out', () => {
 describe('buildSportsGroupPayload — the group decision, mirroring the server', () => {
   const SHOES = {
     subcategoryKey: 'shoes',
+    defaultUnitOfMeasure: null,
+    parentDefaultUnitOfMeasure: null,
+  };
+  const JERSEYS = {
+    subcategoryKey: 'jerseys',
     defaultUnitOfMeasure: null,
     parentDefaultUnitOfMeasure: null,
   };
@@ -384,9 +389,147 @@ describe('buildSportsGroupPayload — the group decision, mirroring the server',
   });
 
   it('sends nothing for a nameless item — the group is named after the item', () => {
+    expect(buildSportsGroupPayload({ itemName: '   ', categoryId: CAT, category: SHOES })).toEqual(
+      {},
+    );
+  });
+
+  /**
+   * IDENTITY PARITY WITH WEB. `webPayload` below is literally the object
+   * apps/web/src/components/inventory/item-form.tsx builds (`sportsGroupPayload`,
+   * the `productGroup:` branch): the same eleven keys, the same
+   * `.trim() || undefined` on every text field, the same `homeAway || undefined`.
+   * If the two ever diverge, `buildGroupKey` gets two different tuples for one
+   * physical style and `findOrCreate` — which is exact-key — mints a second
+   * group instead of matching, splitting the stock between them.
+   */
+  const webPayload = (
+    name: string,
+    categoryId: string | null,
+    g: SportsGroupFieldValues,
+    countingUnit: string,
+  ) => ({
+    name,
+    categoryId,
+    brand: g.brand.trim() || undefined,
+    model: g.model.trim() || undefined,
+    styleNumber: g.styleNumber.trim() || undefined,
+    colorway: g.colorway.trim() || undefined,
+    team: g.team.trim() || undefined,
+    league: g.league.trim() || undefined,
+    season: g.season.trim() || undefined,
+    homeAway: g.homeAway || undefined,
+    color: g.color.trim() || undefined,
+    defaultCountingUnit: countingUnit,
+  });
+
+  it('produces the IDENTICAL object web produces for a shoe style', () => {
+    const groupFields: SportsGroupFieldValues = {
+      ...EMPTY_SPORTS_GROUP_FIELDS,
+      brand: ' Nike ',
+      model: 'Vaporfly 3',
+      styleNumber: 'DZ4494-001',
+      colorway: 'Black/White',
+    };
+    const payload = buildSportsGroupPayload({
+      itemName: 'Nike Vaporfly 3',
+      categoryId: CAT,
+      category: SHOES,
+      groupFields,
+    });
+    expect(payload.productGroup).toEqual(webPayload('Nike Vaporfly 3', CAT, groupFields, 'pair'));
+    // And the identity that actually results is the ATTRIBUTE key, not the
+    // name fallback the phone used to force.
+    expect(buildGroupKey({ ...payload.productGroup, subcategoryKey: 'shoes' })).toBe(
+      'shoes|nike|vaporfly 3|dz4494-001|black/white',
+    );
+  });
+
+  it('produces the IDENTICAL object web produces for a jersey', () => {
+    const groupFields: SportsGroupFieldValues = {
+      ...EMPTY_SPORTS_GROUP_FIELDS,
+      team: 'Wildcats',
+      league: 'Varsity',
+      season: '2026-27',
+      homeAway: 'home',
+      color: 'Navy',
+    };
+    const payload = buildSportsGroupPayload({
+      itemName: 'Wildcats home jersey',
+      categoryId: CAT,
+      category: JERSEYS,
+      groupFields,
+    });
+    expect(payload.productGroup).toEqual(
+      webPayload('Wildcats home jersey', CAT, groupFields, 'each'),
+    );
+    // team|league|season|home_away|manufacturer|brand|style_number|color —
+    // manufacturer, brand and style number are the three empty slots.
+    expect(buildGroupKey({ ...payload.productGroup, subcategoryKey: 'jerseys' })).toBe(
+      'jerseys|wildcats|varsity|2026-27|home||||navy',
+    );
+  });
+
+  it('falls back to the NAME key when every attribute is blank (behaviour before this change)', () => {
+    const payload = buildSportsGroupPayload({
+      itemName: 'Nike Vaporfly 3',
+      categoryId: CAT,
+      category: SHOES,
+      groupFields: EMPTY_SPORTS_GROUP_FIELDS,
+    });
+    // Blank attributes collapse to undefined, so the object equals the one the
+    // name-only payload produced — nothing regresses for a user who types
+    // nothing into the new inputs.
+    expect(payload.productGroup).toEqual(
+      buildSportsGroupPayload({ itemName: 'Nike Vaporfly 3', categoryId: CAT, category: SHOES })
+        .productGroup,
+    );
+    expect(buildGroupKey({ ...payload.productGroup, subcategoryKey: 'shoes' })).toBe(
+      'shoes|name:nike vaporfly 3',
+    );
+  });
+
+  it('sends nothing for a non-sports category even with attributes typed', () => {
     expect(
-      buildSportsGroupPayload({ itemName: '   ', categoryId: CAT, category: SHOES }),
+      buildSportsGroupPayload({
+        itemName: 'Team hoodie',
+        categoryId: CAT,
+        category: { subcategoryKey: null, defaultUnitOfMeasure: null },
+        groupFields: { ...EMPTY_SPORTS_GROUP_FIELDS, brand: 'Nike' },
+      }),
     ).toEqual({});
+  });
+});
+
+describe('sportsGroupFieldsFor — the inputs a subcategory shows', () => {
+  const keys = (sub: string | null) => sportsGroupFieldsFor(sub).map((f) => f.key);
+
+  it('offers the shoe identity attributes', () => {
+    expect(keys('shoes')).toEqual(['brand', 'model', 'styleNumber', 'colorway']);
+    expect(sportsShowsHomeAway('shoes')).toBe(false);
+    expect(sportsProfileLabelFor('shoes')).toBe('Shoes');
+  });
+
+  it('offers the jersey identity attributes, home/away included', () => {
+    expect(keys('jerseys')).toEqual(expect.arrayContaining(['team', 'league', 'season', 'color']));
+    expect(sportsShowsHomeAway('jerseys')).toBe(true);
+  });
+
+  it('collects COLOR only where it is a group slot, never where it is a variant slot', () => {
+    // groupKeyUsesColor: jerseys/uniforms only. Anywhere else the same
+    // attribute names a per-ITEM variant, and putting it in the group payload
+    // would key two colours of one style as two groups.
+    expect(keys('jerseys')).toContain('color');
+    for (const sub of ['shoes', 'balls', 'sports_apparel']) {
+      expect(keys(sub)).not.toContain('color');
+    }
+  });
+
+  it('shows nothing at all for a non-sports or unknown category', () => {
+    expect(keys(null)).toEqual([]);
+    expect(keys('not_a_real_key')).toEqual([]);
+    expect(sportsShowsHomeAway(null)).toBe(false);
+    expect(sportsProfileLabelFor(null)).toBe('');
   });
 });
 
@@ -425,18 +568,15 @@ describe('buildSizedVariantsInput — the size run carries its product group', (
       categoryId: CAT,
       category: { subcategoryKey: null, defaultUnitOfMeasure: null },
     });
-    const res = buildSizedVariantsInput(
-      { ...SIZED, name: 'Team hoodie', productGroup },
-      [{ size: 'M', quantity: 3 }],
-    );
+    const res = buildSizedVariantsInput({ ...SIZED, name: 'Team hoodie', productGroup }, [
+      { size: 'M', quantity: 3 },
+    ]);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.input.productGroup).toBeUndefined();
   });
 
   it('sends groupId alone when the caller already chose a group', () => {
-    const res = buildSizedVariantsInput({ ...SIZED, groupId: GROUP }, [
-      { size: '9', quantity: 1 },
-    ]);
+    const res = buildSizedVariantsInput({ ...SIZED, groupId: GROUP }, [{ size: '9', quantity: 1 }]);
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.input.groupId).toBe(GROUP);
@@ -509,9 +649,7 @@ describe('apparelFallbackSizeOptions — one chip per physical size', () => {
     // Not "nine values" — the exact nine, from the one shared list. A category
     // with size_scale_id NULL is every category today, so this is what a real
     // native size run renders.
-    expect(apparelFallbackSizeOptions(SEEDED_APPAREL_ALPHA)).toEqual([
-      ...APPAREL_ALPHA_SIZES,
-    ]);
+    expect(apparelFallbackSizeOptions(SEEDED_APPAREL_ALPHA)).toEqual([...APPAREL_ALPHA_SIZES]);
   });
 
   it('drops the alias spellings that would create two items for one shirt', () => {
@@ -631,18 +769,16 @@ describe('buildQuickAddInput — the Scan tab cards use the SHARED schema', () =
 
 describe('collectSizedVariants', () => {
   it('keeps scale order and drops the sizes left at zero or blank', () => {
-    expect(
-      collectSizedVariants(['XS', 'S', 'M', 'L'], { S: '2', M: '', L: '0', XS: '1' }),
-    ).toEqual([
-      { size: 'XS', quantity: 1 },
-      { size: 'S', quantity: 2 },
-    ]);
+    expect(collectSizedVariants(['XS', 'S', 'M', 'L'], { S: '2', M: '', L: '0', XS: '1' })).toEqual(
+      [
+        { size: 'XS', quantity: 1 },
+        { size: 'S', quantity: 2 },
+      ],
+    );
   });
 
   it('floors a fractional quantity and ignores an unknown size key', () => {
-    expect(collectSizedVariants(['M'], { M: '3', XXL: '9' })).toEqual([
-      { size: 'M', quantity: 3 },
-    ]);
+    expect(collectSizedVariants(['M'], { M: '3', XXL: '9' })).toEqual([{ size: 'M', quantity: 3 }]);
   });
 });
 
@@ -654,9 +790,9 @@ describe('describeFailure', () => {
   });
 
   it('uses the head of a dotted path', () => {
-    expect(
-      describeFailure({ ok: false, message: 'Too small', field: 'variants.0.size' }),
-    ).toBe('Sizes: Too small');
+    expect(describeFailure({ ok: false, message: 'Too small', field: 'variants.0.size' })).toBe(
+      'Sizes: Too small',
+    );
   });
 
   it('falls back to the bare message when there is no field', () => {
@@ -794,6 +930,23 @@ describe('app/item/new.tsx is wired to the shared create path', () => {
     expect(src).toMatch(/sports_subcategory_key/);
     expect(src).toMatch(/default_unit_of_measure/);
     expect(src).toContain('buildSportsGroupPayload');
+  });
+
+  it('renders the group-identity inputs and threads them into the payload', () => {
+    // Without these boxes the phone can only ever send a name, so its group key
+    // is the `name:` fallback while web's is the attribute tuple — one style,
+    // two groups, stock split. The spec asks for them on Expo as well as web.
+    for (const symbol of [
+      'sportsGroupFieldsFor',
+      'sportsShowsHomeAway',
+      'setSportsGroupFields',
+      'groupFields: sportsGroupFields',
+    ]) {
+      expect(src).toContain(symbol);
+    }
+    // The vocabulary is the shared helper's, never a list in the screen.
+    expect(src).not.toMatch(/'styleNumber'/);
+    expect(src).not.toMatch(/=== 'shoes'/);
   });
 
   it('still uploads photos and still honours the scanned barcode prefill', () => {
