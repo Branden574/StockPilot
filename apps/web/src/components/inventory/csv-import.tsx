@@ -1,9 +1,17 @@
 'use client';
 
-import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import { AlertTriangle, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
+
+import {
+  AMBIGUOUS_COLUMN_MEANING_LABELS,
+  itemCsvTemplateHeader,
+  LINE_RESULT_LABELS,
+  resolveItemCsvHeaders,
+  type AmbiguousColumnMeaning,
+} from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,8 +24,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { parseCsv, rowsToObjects, toCsv } from '@/lib/csv';
-import { importItemsAction } from '@/server/actions/import';
+import { importItemsAction, prepareItemImportAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
+
+import type { ItemImportPreview } from '@/server/actions/import';
 
 /**
  * The template columns.
@@ -43,30 +53,14 @@ import { cn } from '@/lib/utils';
  * The SERVER is unchanged either way: `importItemsAction` accepts and validates
  * the same columns for every org, so a hand-built CSV carrying them behaves
  * exactly as it did. This is what the template OFFERS, not what is allowed.
+ *
+ * ONE VOCABULARY (wave-2 fix). The column list now lives in
+ * `@stockpilot/core`'s `itemCsvTemplateHeader`, which is the SAME list the
+ * header-mapping resolver matches against. They used to be separate arrays in
+ * this file, which is exactly how a template can come to offer a column its own
+ * importer does not recognise.
  */
-const BASE_HEADER = [
-  'name', 'sku', 'barcode', 'description',
-  'unit_cost', 'retail_price', 'quantity_on_hand',
-  'reorder_point', 'reorder_quantity', 'unit_of_measure',
-  'category_name', 'subcategory_name',
-  'warehouse_name', 'location_name',
-];
-
-const SPORTS_HEADER = [
-  'brand', 'model', 'style_number', 'colorway',
-  'team', 'season', 'home_away', 'jersey_number', 'player_name',
-  'size', 'size_system', 'width', 'fit', 'color',
-  'counting_unit', 'tracking_mode',
-  'serial', 'asset_tag',
-];
-
-/** Column order, sports block spliced in front of the location lookups so a
- *  sports org's template is byte-identical to the one that shipped. */
-function templateHeader(sportsEnabled: boolean): string[] {
-  if (!sportsEnabled) return BASE_HEADER;
-  const tail = ['warehouse_name', 'location_name'];
-  return [...BASE_HEADER.filter((c) => !tail.includes(c)), ...SPORTS_HEADER, ...tail];
-}
+const templateHeader = itemCsvTemplateHeader;
 
 /** The columns a row's value actually reaches the created item through. */
 const BASE_APPLIED_COLUMNS = [
@@ -165,8 +159,46 @@ export function CsvImport({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [parsing, setParsing] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
-  const [parsed, setParsed] = React.useState<{ header: string[]; rows: Record<string, string>[] } | null>(null);
+  const [parsed, setParsed] = React.useState<
+    { header: string[]; rows: Record<string, string>[]; fileName: string } | null
+  >(null);
   const [summary, setSummary] = React.useState<Awaited<ReturnType<typeof importItemsAction>> | null>(null);
+  /**
+   * The SERVER's review of this file. Everything the table shows — the per-row
+   * Result, the group/variant columns, the ambiguous headers and the duplicate
+   * warning — is computed by `prepareItemImportAction` from the same functions
+   * the write uses, so the screen can never promise one outcome and the import
+   * perform another.
+   */
+  const [preview, setPreview] = React.useState<ItemImportPreview | null>(null);
+  const [reviewing, setReviewing] = React.useState(false);
+  /** The human's answers, keyed by the header exactly as the file printed it. */
+  const [decisions, setDecisions] = React.useState<Record<string, AmbiguousColumnMeaning>>({});
+  /** The explicit same-file override. Never defaulted on. */
+  const [acknowledgeDuplicate, setAcknowledgeDuplicate] = React.useState(false);
+
+  /** Re-run the server review. Called on upload and after every answer. */
+  const review = React.useCallback(
+    async (
+      file: { header: string[]; rows: Record<string, string>[]; fileName: string },
+      nextDecisions: Record<string, AmbiguousColumnMeaning>,
+    ) => {
+      setReviewing(true);
+      const res = await prepareItemImportAction({
+        rows: file.rows,
+        headers: file.header,
+        headerDecisions: nextDecisions,
+        fileName: file.fileName,
+      });
+      setReviewing(false);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      setPreview(res.data);
+    },
+    [],
+  );
 
   function downloadTemplate() {
     const csv = toCsv(header, sample);
@@ -189,15 +221,38 @@ export function CsvImport({
         toast.error('The CSV file is empty. Add at least one row and try again.');
         return;
       }
-      if (!header.includes('name')) {
-        toast.error('CSV must include a "name" column. Add it and re-upload.');
+      // Mapping-aware (wave-2 fix). This used to demand a LITERAL `name`
+      // header, which would now reject a file the importer can read perfectly
+      // well — "Item Name" and "Product Name" resolve to `name` through the
+      // same vocabulary the server uses. The check asks the resolver rather
+      // than the string, so the screen and the importer agree on what counts.
+      const hasName = resolveItemCsvHeaders(header, { sportsEnabled }).some(
+        (m) => m.field === 'name',
+      );
+      if (!hasName) {
+        toast.error(
+          'CSV must include a name column (name, Item Name or Product Name). Add it and re-upload.',
+        );
         return;
       }
-      setParsed({ header, rows: objects });
+      const next = { header, rows: objects, fileName: file.name };
+      setParsed(next);
       setSummary(null);
+      setPreview(null);
+      setDecisions({});
+      setAcknowledgeDuplicate(false);
+      await review(next, {});
     } finally {
       setParsing(false);
     }
+  }
+
+  /** Answering a column re-reviews the whole file: a confirmed meaning can
+   *  change every row's Result, not just the header strip. */
+  async function answerHeader(header: string, meaning: AmbiguousColumnMeaning) {
+    const next = { ...decisions, [header]: meaning };
+    setDecisions(next);
+    if (parsed) await review(parsed, next);
   }
 
   async function runImport() {
@@ -207,7 +262,14 @@ export function CsvImport({
       return;
     }
     setImporting(true);
-    const res = await importItemsAction({ rows: parsed.rows, warehouseId });
+    const res = await importItemsAction({
+      rows: parsed.rows,
+      headers: parsed.header,
+      headerDecisions: decisions,
+      fileName: parsed.fileName,
+      acknowledgeDuplicate,
+      warehouseId,
+    });
     setImporting(false);
     setSummary(res);
     if (res.ok) {
@@ -217,6 +279,24 @@ export function CsvImport({
       toast.error(res.error.message);
     }
   }
+
+  const ambiguous = (preview?.mappings ?? []).filter((m) => m.status === 'ambiguous');
+  const unmapped = (preview?.mappings ?? []).filter(
+    (m) => m.status === 'unmapped' || m.status === 'duplicate',
+  );
+  const duplicate = preview?.duplicate ?? null;
+  const showSportsColumns = Boolean(preview?.sportsEnabled);
+  // Import is blocked by ANY of: an unanswered column, an unacknowledged
+  // re-upload, no destination, or a review still in flight.
+  // `preview == null` is NOT optional: a failed review must not fall through to
+  // an enabled Import over an empty table. Reviewing before committing is the
+  // requirement, so no review means no import.
+  const blocked =
+    !warehouseId ||
+    reviewing ||
+    preview == null ||
+    preview.unresolvedHeaders.length > 0 ||
+    (duplicate != null && !acknowledgeDuplicate);
 
   return (
     <div className="space-y-6">
@@ -326,42 +406,193 @@ export function CsvImport({
           <CardContent className="space-y-4">
             <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
               <p>
-                Detected <strong>{parsed.rows.length}</strong> rows · headers:{' '}
-                <span className="font-mono text-xs">{parsed.header.join(', ')}</span>
+                Detected <strong>{parsed.rows.length}</strong> rows in{' '}
+                <span className="font-mono text-xs">{parsed.fileName}</span>
+                {unmapped.length > 0 && (
+                  <>
+                    {' '}
+                    · not imported:{' '}
+                    <span className="font-mono text-xs">
+                      {unmapped.map((m) => m.header).join(', ')}
+                    </span>
+                  </>
+                )}
               </p>
             </div>
+
+            {/*
+              THE MAPPING STEP. Requirements: "Never silently guess: show
+              candidate mappings, require confirmation, preserve source values,
+              block import until required mappings resolved." The live run found
+              a column headed `Number` echoed once and then dropped, with Import
+              enabled from the moment the file parsed.
+            */}
+            {ambiguous.length > 0 && (
+              <section className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-semibold">
+                      Confirm what {ambiguous.length} column
+                      {ambiguous.length === 1 ? ' means' : 's mean'}
+                    </h3>
+                    <p className="text-muted-foreground text-xs">
+                      A column headed something like &ldquo;Number&rdquo; could be a
+                      {showSportsColumns ? ' jersey number, a' : ''} quantity, a serial or a
+                      style number. Rather than guess, this import waits for you to say.
+                      Choosing <span className="font-medium">Ignore</span> leaves the column
+                      out entirely — its values are never applied to a field you did not name.
+                    </p>
+                  </div>
+                </div>
+                <div className="divide-border border-border bg-card divide-y rounded-md border">
+                  {ambiguous.map((m) => (
+                    <div
+                      key={m.header}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-xs"
+                    >
+                      <span className="font-mono font-medium">{m.header}</span>
+                      <span className="text-muted-foreground max-w-[280px] truncate">
+                        e.g.{' '}
+                        {parsed.rows
+                          .slice(0, 3)
+                          .map((r) => r[m.header])
+                          .filter((v) => (v ?? '').trim() !== '')
+                          .join(', ') || '—'}
+                      </span>
+                      <div className="ml-auto min-w-[220px]">
+                        <Select
+                          value={decisions[m.header] ?? ''}
+                          onValueChange={(v) =>
+                            answerHeader(m.header, v as AmbiguousColumnMeaning)
+                          }
+                          disabled={reviewing}
+                        >
+                          <SelectTrigger
+                            className="h-8 text-xs"
+                            aria-label={`What does the column ${m.header} mean?`}
+                          >
+                            <SelectValue placeholder="What is this column?" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {m.candidates.map((c) => (
+                              <SelectItem key={c} value={c}>
+                                {AMBIGUOUS_COLUMN_MEANING_LABELS[c]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/*
+              THE DUPLICATE WARNING. A byte-identical re-upload used to show
+              nothing at all and offer Import again. The hash is never a dead
+              end: a human who means it ticks the box and the predecessor is
+              superseded.
+            */}
+            {duplicate && (
+              <section className="border-warning/40 bg-warning/5 space-y-2 rounded-xl border p-4">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-semibold">This file was already imported</h3>
+                    <p className="text-muted-foreground text-xs">
+                      The same {duplicate.rowCount} rows were imported on{' '}
+                      {new Date(duplicate.importedAt).toLocaleString()} and created{' '}
+                      {duplicate.createdCount} item
+                      {duplicate.createdCount === 1 ? '' : 's'}. Importing again creates them a
+                      second time. If this really is a second shipment rather than a repeated
+                      upload, confirm below.
+                    </p>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    className="accent-primary h-3.5 w-3.5"
+                    checked={acknowledgeDuplicate}
+                    onChange={(e) => setAcknowledgeDuplicate(e.target.checked)}
+                  />
+                  Import it again anyway
+                </label>
+              </section>
+            )}
+
+            {/*
+              THE REVIEW TABLE. Source row / Name / Group / Variant / Qty /
+              Result — not the file's own first eight raw headers, and never a
+              bare Valid/Invalid. Group and Variant are module-gated.
+            */}
             <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40">
                   <tr>
-                    {parsed.header.slice(0, 8).map((h) => (
-                      <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        {h}
-                      </th>
-                    ))}
+                    {['Row', 'Name', ...(showSportsColumns ? ['Group', 'Variant'] : []), 'Qty', 'Result'].map(
+                      (h) => (
+                        <th
+                          key={h}
+                          className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                        >
+                          {h}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {parsed.rows.slice(0, 5).map((r, i) => (
-                    <tr key={i} className="border-t">
-                      {parsed.header.slice(0, 8).map((h) => (
-                        <td key={h} className="truncate px-3 py-2 text-xs">
-                          {r[h]}
-                        </td>
-                      ))}
+                  {(preview?.rows ?? []).slice(0, 20).map((r) => (
+                    <tr key={r.sourceRow} className="border-t align-top">
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                        {r.sourceRow}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{r.name || '—'}</td>
+                      {showSportsColumns && (
+                        <>
+                          <td className="px-3 py-2 text-xs">{r.group ?? '—'}</td>
+                          <td className="px-3 py-2 text-xs">{r.variant ?? '—'}</td>
+                        </>
+                      )}
+                      <td className="px-3 py-2 text-xs">{r.quantity || '—'}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <span
+                          className={cn(
+                            'rounded-full border px-1.5 py-px text-[10px] font-medium',
+                            r.result === 'ready' || r.result === 'add_new_variant'
+                              ? 'border-success/40 bg-success/10 text-success'
+                              : 'border-warning/40 bg-warning/10 text-warning',
+                          )}
+                        >
+                          {LINE_RESULT_LABELS[r.result]}
+                        </span>
+                        {r.message && (
+                          <span className="text-muted-foreground ml-2">{r.message}</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {parsed.rows.length > 5 && (
+              {(preview?.rows.length ?? 0) > 20 && (
                 <p className="border-t bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-                  …and {parsed.rows.length - 5} more
+                  …and {(preview?.rows.length ?? 0) - 20} more
                 </p>
               )}
             </div>
-            <div className="flex justify-end">
-              <Button variant="gradient" onClick={runImport} disabled={importing || !warehouseId}>
-                {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : `Import ${parsed.rows.length} items`}
+            <div className="flex items-center justify-end gap-3">
+              {reviewing && (
+                <span className="text-muted-foreground text-[11px]">Reviewing…</span>
+              )}
+              <Button variant="gradient" onClick={runImport} disabled={importing || blocked}>
+                {importing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  `Import ${parsed.rows.length} items`
+                )}
               </Button>
             </div>
           </CardContent>

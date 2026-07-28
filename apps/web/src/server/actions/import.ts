@@ -6,15 +6,27 @@ import { z } from 'zod';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import {
+  ItemImportBatchesService,
+  type ItemImportDuplicate,
+} from '@/server/services/item-imports';
 import { WarehousesService } from '@/server/services/warehouses';
 
 import {
+  AMBIGUOUS_COLUMN_MEANINGS,
+  applyItemCsvHeaderDecisions,
   emptyToUndefined,
   err,
+  itemCsvHeaderDecisionsOutstanding,
   jerseyNumberSchema,
   ok,
+  resolveItemCsvHeaders,
+  reviewItemCsvRows,
   sizeSystemSchema,
   type ActionResult,
+  type AmbiguousColumnMeaning,
+  type CsvHeaderMapping,
+  type ItemCsvReviewRow,
 } from '@stockpilot/core';
 
 const csvRowSchema = z.object({
@@ -74,8 +86,28 @@ const csvRowSchema = z.object({
   asset_tag: z.string().max(128).optional(),
 });
 
-const importSchema = z.object({
+/**
+ * The header-mapping answers, keyed by the header EXACTLY as the file printed
+ * it. Bounded to Task 14's vocabulary so a client cannot post an arbitrary
+ * string and have it treated as an answer.
+ */
+const headerDecisionsSchema = z
+  .record(z.string().max(200), z.enum(AMBIGUOUS_COLUMN_MEANINGS))
+  .optional();
+
+const reviewInputSchema = z.object({
   rows: z.array(z.record(z.string(), z.string())).min(1).max(5000),
+  /**
+   * The file's header row, in order. Optional: derived from the union of row
+   * keys when absent, which keeps every pre-existing caller (and a hand-built
+   * payload) working exactly as it did.
+   */
+  headers: z.array(z.string().max(200)).max(200).optional(),
+  headerDecisions: headerDecisionsSchema,
+  fileName: z.string().max(255).optional(),
+});
+
+const importSchema = reviewInputSchema.extend({
   /**
    * The import screen's destination picker — the whole file's default
    * warehouse. `InventoryService.create()` has refused to create an item
@@ -90,7 +122,102 @@ const importSchema = z.object({
    * never invents an id of its own.
    */
   warehouseId: z.string().uuid().optional(),
+  /**
+   * The explicit override for a same-file re-upload. Never defaulted to true:
+   * the whole point of the warning is that a human decides this file really is
+   * a second, intentional import rather than a double-click.
+   */
+  acknowledgeDuplicate: z.boolean().optional(),
 });
+
+/**
+ * ONE resolution of "what do this file's columns mean", shared by the review
+ * action and the write action.
+ *
+ * Both the sports gate and the header mapping are resolved from the SERVER's
+ * context, never from the payload: a review step a client can skip by posting
+ * straight to the action is not a block, and a module gate the client asserts
+ * is not a gate.
+ */
+function resolveMapping(
+  ctx: { enabledModules?: Set<string> },
+  input: { rows: Array<Record<string, string>>; headers?: string[]; headerDecisions?: Record<string, AmbiguousColumnMeaning> },
+): {
+  sportsEnabled: boolean;
+  mappings: CsvHeaderMapping[];
+  unresolvedHeaders: string[];
+  decisions: Record<string, AmbiguousColumnMeaning>;
+} {
+  const sportsEnabled = ctx.enabledModules?.has('sports') ?? false;
+  // Header order is preserved when the screen sends it. Falling back to the
+  // union of row keys keeps a hand-built payload (and every pre-existing test)
+  // resolving exactly the same columns.
+  const headers =
+    input.headers && input.headers.length > 0
+      ? input.headers
+      : [...new Set(input.rows.flatMap((r) => Object.keys(r)))];
+  const decisions = input.headerDecisions ?? {};
+  const mappings = resolveItemCsvHeaders(headers, { sportsEnabled });
+  return {
+    sportsEnabled,
+    mappings,
+    unresolvedHeaders: itemCsvHeaderDecisionsOutstanding(mappings, decisions),
+    decisions,
+  };
+}
+
+export interface ItemImportPreview {
+  sportsEnabled: boolean;
+  mappings: CsvHeaderMapping[];
+  /** Headers a human must still answer. Non-empty ⇒ Import stays blocked. */
+  unresolvedHeaders: string[];
+  rows: ItemCsvReviewRow[];
+  /** The live batch for this exact file, when there is one. */
+  duplicate: ItemImportDuplicate | null;
+}
+
+/**
+ * The review step: what WOULD happen, computed without writing anything.
+ *
+ * LIVE-VERIFIED FAIL (report line 10a): the review table printed the file's own
+ * first eight raw headers with "no Group column, no Variant column, and no
+ * per-row Result column". Requirements: a review row states what will happen,
+ * "Not just Valid/Invalid".
+ *
+ * Deliberately derived on the server from the same functions the write uses, so
+ * the table can never show one verdict and the import perform another.
+ */
+export async function prepareItemImportAction(
+  input: z.infer<typeof reviewInputSchema>,
+): Promise<ActionResult<ItemImportPreview>> {
+  const parsed = reviewInputSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+
+  try {
+    const ctx = await withContext();
+    assertPermission(ctx, 'items:import');
+    const { sportsEnabled, mappings, unresolvedHeaders, decisions } = resolveMapping(
+      ctx,
+      parsed.data,
+    );
+    const duplicate = await new ItemImportBatchesService(ctx).findLiveBatch(
+      ItemImportBatchesService.fingerprint(parsed.data.rows),
+    );
+    return ok({
+      sportsEnabled,
+      mappings,
+      unresolvedHeaders,
+      rows: reviewItemCsvRows(parsed.data.rows, mappings, {
+        sportsEnabled,
+        headerDecisions: decisions,
+      }),
+      duplicate,
+    });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
 
 /**
  * Case- and whitespace-insensitive lookup of the template's own
@@ -126,6 +253,42 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
   try {
     const ctx = await withContext();
     assertPermission(ctx, 'items:import');
+
+    // ── Gate 1: no column may be guessed ────────────────────────────────────
+    // Enforced HERE, not only in the screen. "Block import until required
+    // mappings resolved" is a property of the write, and an answer that was
+    // never offered for that header (a forged 'line_number', or a sports
+    // meaning in a non-sports org) counts as no answer at all.
+    const { mappings, unresolvedHeaders, decisions } = resolveMapping(ctx, parsed.data);
+    if (unresolvedHeaders.length > 0) {
+      return err(
+        'validation_error',
+        `Confirm what ${unresolvedHeaders.map((h) => `"${h}"`).join(', ')} ${
+          unresolvedHeaders.length === 1 ? 'means' : 'mean'
+        } before importing. A column headed something like "Number" could be a jersey number, a quantity, a serial or a style number, and this import will not guess.`,
+      );
+    }
+
+    // ── Gate 2: the same file, twice ────────────────────────────────────────
+    const batches = new ItemImportBatchesService(ctx);
+    const fingerprint = ItemImportBatchesService.fingerprint(parsed.data.rows);
+    const duplicate = await batches.findLiveBatch(fingerprint);
+    if (duplicate && !parsed.data.acknowledgeDuplicate) {
+      return err(
+        'conflict',
+        `This same file was already imported on ${new Date(duplicate.importedAt).toLocaleDateString()} and created ${duplicate.createdCount} item${duplicate.createdCount === 1 ? '' : 's'}. Importing it again will create them a second time. Confirm on the review screen if that is what you want.`,
+      );
+    }
+
+    // Claimed BEFORE the rows are written: a crash mid-import must not leave
+    // the file unfingerprinted, or the retry doubles everything that landed.
+    const batchId = await batches.claim({
+      sha256: fingerprint,
+      fileName: parsed.data.fileName ?? null,
+      rowCount: parsed.data.rows.length,
+      supersedePredecessors: Boolean(duplicate),
+    });
+
     const svc = new InventoryService(ctx);
     const summary: ImportSummary = { total: parsed.data.rows.length, created: 0, failed: 0, errors: [] };
 
@@ -138,7 +301,11 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
       : new Map<string, string | null>();
 
     for (let i = 0; i < parsed.data.rows.length; i++) {
-      const raw = parsed.data.rows[i] ?? {};
+      // The confirmed mapping is what lands: an aliased header ("Qty") fills
+      // its template column, and a confirmed ambiguous header ("Number") goes
+      // to the field the human named — or, on 'ignore', to no field at all.
+      // The source value is preserved under its own header either way.
+      const raw = applyItemCsvHeaderDecisions(parsed.data.rows[i] ?? {}, mappings, decisions);
       const validated = csvRowSchema.safeParse(raw);
       if (!validated.success) {
         summary.failed++;
@@ -218,6 +385,16 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
         });
       }
     }
+
+    await batches.recordOutcome(batchId, {
+      createdCount: summary.created,
+      failedCount: summary.failed,
+    });
+    // A batch that created NOTHING has nothing to double, so it must not stand
+    // between the user and the corrected re-upload. Without this, the exact
+    // failure the live run hit (0 created / 4 failed) would have left a
+    // duplicate warning on the fixed file's very next attempt.
+    if (summary.created === 0) await batches.release(batchId);
 
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
