@@ -64,10 +64,12 @@ export async function editMovementNoteAction(
       if ((error as { code?: string }).code === '42501') {
         return err('forbidden', 'You do not have permission to edit movement notes.');
       }
-      // 22023 = the RPC's system-managed guard: the note on a pre-0231
-      // 'receipt_line' row holds a machine reference (the receipt UUID that
-      // resolves the PO number), so it can never be overwritten. Surface a
-      // clean validation error, not a 500.
+      // 22023 = the RPC's system-managed guard: the note holds a machine
+      // reference (the receipt UUID that resolves the PO number), so it can
+      // never be overwritten. Since mig 0307 that guard keys on the note's
+      // SHAPE (a bare UUID) as well as the pre-0231 `receipt_line` reason, so
+      // it covers post-0231 `PO {number}` / `receipt_reversal` rows too.
+      // Surface a clean validation error, not a 500.
       if ((error as { code?: string }).code === '22023') {
         return err(
           'validation_error',

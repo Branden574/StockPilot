@@ -104,10 +104,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           { status: 403 },
         );
       }
-      // 22023 = the RPC's system-managed guard: a pre-0231 'receipt_line'
-      // row's note holds the receipt UUID that resolves its PO number — a
-      // machine reference that must never be overwritten. Surface a clean
-      // 422 rather than a 500.
+      // 22023 = the RPC's system-managed guard: the note holds the receipt
+      // UUID that resolves the row's PO number — a machine reference that must
+      // never be overwritten. Since mig 0307 the guard keys on the note's SHAPE
+      // (a bare UUID) as well as the pre-0231 `receipt_line` reason, so this
+      // branch now also fires for post-0231 `PO {number}` / `receipt_reversal`
+      // rows — which is exactly what stops a Bearer caller bypassing the UI's
+      // refusal. Surface a clean 422 rather than a 500.
       if (error.code === '22023') {
         return NextResponse.json(
           {

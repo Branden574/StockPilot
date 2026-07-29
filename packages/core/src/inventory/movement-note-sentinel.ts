@@ -102,19 +102,15 @@ export function userMovementNote(notes: string | null | undefined): string | nul
  *    user note over the sentinel would sever the movement's only link to its
  *    receipt (`stagedWorklist` resolves the source receipt through it). This
  *    is the signal that covers the 80 post-0231 rows.
- *  - `reason === 'receipt_line'` — the row the RPC REFUSES. `edit_movement_note`
- *    (migration 0274) raises errcode 22023 on exactly this reason value. Every
- *    such row also carries a sentinel note today, so this is belt-and-braces —
- *    but the UI must not offer an affordance whose only outcome is an error,
- *    and this keeps that promise from the RPC's own condition rather than from
- *    a coincidence about the data.
+ *  - `reason === 'receipt_line'` — the pre-0231 shape, kept so this function
+ *    refuses nothing less than it did before.
  *
- * KNOWN GAP, deliberately not closed here (it needs a migration, and this
- * change is display-side only): the RPC's guard is still the pre-0231
- * `reason = 'receipt_line'` test, so the DATABASE would happily let a caller
- * overwrite the sentinel on the 80 post-0231 rows. This function is what keeps
- * every shipped UI from asking. A follow-up migration should widen the RPC's
- * guard to the note's shape so the ledger is protected at the boundary too.
+ * These are the SAME two terms `edit_movement_note` now applies in SQL
+ * (migration 0307 widened 0274's `reason = 'receipt_line'`-only guard to the
+ * note's shape), so the affordance this function hides and the edit the
+ * database refuses with errcode 22023 are the same set of rows. That agreement
+ * is the point: the UI must not offer an affordance whose only outcome is an
+ * error, and the ledger must not depend on the UI to stay intact.
  */
 export function isMovementNoteEditable(
   reason: string | null | undefined,
