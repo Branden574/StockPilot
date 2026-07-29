@@ -3,9 +3,10 @@ import 'server-only';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import {
-  collectLegacyOrderRefIds,
+  collectLegacyRefIdsByKind,
+  legacyOrderRefId,
   movementOrderRefId,
-  resolveOrderRefReason,
+  resolveMovementRefReason,
 } from '@stockpilot/core';
 
 import {
@@ -13,6 +14,7 @@ import {
   receiptLineSummary,
   resolveOrderNumbers,
   resolveReceiptPoNumbers,
+  resolveReturnNumbers,
 } from './activity';
 import { ServiceError, withContext, type ServiceContext } from './context';
 import {
@@ -42,9 +44,11 @@ export interface MovementWithItem {
   from_location_id: string | null;
   to_location_id: string | null;
   /** Display reason. Pre-0231 receipt rows' internal 'receipt_line' label is
-      already mapped to 'PO {number}' (or 'PO receipt') by list(); pre-0306
-      pick/cancel rows' `(order_request <uuid>)` parenthetical is likewise
-      already resolved to '(SO-000060)' — a raw uuid never reaches a caller. */
+      already mapped to 'PO {number}' (or 'PO receipt') by list(); the
+      `(order_request <uuid>)` parenthetical on pre-0306 pick/cancel rows and
+      the `(return <uuid>)` one the RMA RPCs still write are likewise already
+      resolved to '(SO-000060)' / '(RMA-000012)', or dropped when they cannot
+      be — a raw uuid never reaches a caller. */
   reason: string | null;
   notes: string | null;
   created_at: string;
@@ -75,10 +79,15 @@ export interface MovementExportRow {
   newQuantity: number;
   fromLocation: string | null;
   toLocation: string | null;
+  /** The referenced record, DERIVED the way list()'s order_ref_id and the item
+   *  activity feed derive it: the row's own reference columns, else the
+   *  order_request a pre-0306 pick/cancel reason names. Exporting the raw
+   *  nulls made the file contradict its own `reason` column. */
   referenceType: string | null;
   referenceId: string | null;
-  /** Display reason — pre-0231 receipt rows resolved to 'PO {number}', same
-   *  mapping list() applies. */
+  /** Display reason — pre-0231 receipt rows resolved to 'PO {number}', record
+   *  references resolved to 'SO-000060' / the return number, same mapping
+   *  list() applies. */
   reason: string | null;
   notes: string | null;
   actorEmail: string | null;
@@ -169,44 +178,52 @@ export class MovementsService {
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
 
-    // Pre-0231 receipt rows carry the internal reason 'receipt_line' with the
-    // receipt id in notes — resolve them to 'PO {number}' in ONE extra batched
-    // query (display mapping only; notes keeps the receipt id for consumers
-    // like stagedWorklist). New rows already carry 'PO {n}' in reason.
-    const poNumberByReceipt = await resolveReceiptPoNumbers(
-      this.ctx,
-      collectReceiptLineIds(
-        (data ?? []).map((row) => {
-          const r = row as Record<string, unknown>;
-          return {
+    const rawRows = (data ?? []) as Record<string, unknown>[];
+
+    // Two things are resolved for this page, and they are INDEPENDENT — so
+    // they run concurrently rather than one after the other on a surface with
+    // a do-not-regress latency budget (reference_appwide_nav_perf):
+    //
+    //  * Pre-0231 receipt rows carry the internal reason 'receipt_line' with
+    //    the receipt id in notes — mapped to 'PO {number}' (display only;
+    //    notes keeps the receipt id for consumers like stagedWorklist). New
+    //    rows already carry 'PO {n}' in reason.
+    //  * Rows whose reason stringifies a RECORD'S UUID: pre-0306 pick/cancel
+    //    rows ('Order pick (order_request b3c7390a-…)', written before
+    //    order_number existed in 0254) and the return rows the SHIPPED RMA
+    //    RPCs still write today ('Return restock (return …)', 0153/0154/0197).
+    //    The ledger is append-only, so both are resolved HERE rather than
+    //    rewritten: collect every id on the page, ONE org-scoped lookup per
+    //    kind, map per row.
+    const legacyRefIds = collectLegacyRefIdsByKind(
+      rawRows.map((r) => ({ reason: (r.reason as string | null) ?? null })),
+    );
+    const [poNumberByReceipt, orderNumberById, returnNumberById] = await Promise.all([
+      resolveReceiptPoNumbers(
+        this.ctx,
+        collectReceiptLineIds(
+          rawRows.map((r) => ({
             reason: (r.reason as string | null) ?? null,
             notes: (r.notes as string | null) ?? null,
-          };
-        }),
+          })),
+        ),
       ),
-    );
-
-    // Pre-0306 pick/cancel rows stringified the ORDER'S UUID into the reason
-    // ('Order pick (order_request b3c7390a-…)') because order_number didn't
-    // exist yet (0254). The ledger is append-only, so those rows are resolved
-    // HERE rather than rewritten — same shape as the receipt→PO mapping above:
-    // collect every id on the page, ONE org-scoped lookup, map per row.
-    const orderNumberById = await resolveOrderNumbers(
-      this.ctx,
-      collectLegacyOrderRefIds(
-        (data ?? []).map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
-      ),
-    );
+      resolveOrderNumbers(this.ctx, legacyRefIds.order_request),
+      resolveReturnNumbers(this.ctx, legacyRefIds.return),
+    ]);
+    // One map, both kinds — reference ids are uuids, so the key spaces cannot
+    // collide (same merge ActivityService.forItem does).
+    const refLabelById = new Map([...orderNumberById, ...returnNumberById]);
 
     // PostgREST returns the related row as an array when the relation is
     // ambiguous; flatten to a single object.
-    return (data ?? []).map((row) => {
-      const r = row as Record<string, unknown>;
+    return rawRows.map((row) => {
+      const r = row;
       const rawReason = (r.reason as string | null) ?? null;
       const reason =
         r.reason === 'receipt_line'
           ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
-          : resolveOrderRefReason(rawReason, orderNumberById);
+          : resolveMovementRefReason(rawReason, refLabelById);
       // Computed from the RAW reason — the resolved one no longer carries an id.
       const order_ref_id = movementOrderRefId({
         reason: rawReason,
@@ -373,25 +390,6 @@ export class MovementsService {
       offset += PAGE_SIZE;
     }
 
-    const poNumberByReceipt = await resolveReceiptPoNumbers(
-      this.ctx,
-      collectReceiptLineIds(
-        rawRows.map((r) => ({
-          reason: (r.reason as string | null) ?? null,
-          notes: (r.notes as string | null) ?? null,
-        })),
-      ),
-    );
-
-    // Same legacy-order resolution list() applies, so the CSV and the screen
-    // never disagree about what an event was.
-    const orderNumberById = await resolveOrderNumbers(
-      this.ctx,
-      collectLegacyOrderRefIds(
-        rawRows.map((r) => ({ reason: (r.reason as string | null) ?? null })),
-      ),
-    );
-
     const locationIds = new Set<string>();
     for (const r of rawRows) {
       const from = r.from_location_id as string | null;
@@ -399,28 +397,45 @@ export class MovementsService {
       if (from) locationIds.add(from);
       if (to) locationIds.add(to);
     }
-    let locationNameById = new Map<string, string>();
-    if (locationIds.size > 0) {
-      const { data: locs, error: locErr } = await this.ctx.supabase
-        .from('locations')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', [...locationIds]);
-      if (!locErr) {
-        locationNameById = new Map(
-          ((locs ?? []) as Array<{ id: string; name: string }>).map((l) => [l.id, l.name]),
-        );
-      }
-      // A lookup error degrades to blank location cells rather than failing
-      // the whole export — same fail-open posture as buildInventoryExportRows.
-    }
+
+    // Exactly the resolution list() applies — receipts to PO numbers, order
+    // and return references to their human numbers — so the CSV and the screen
+    // never disagree about what an event was. All four lookups are
+    // independent, so they run concurrently: an export can page 50k rows and
+    // serialising these would add a round trip each for nothing.
+    const legacyRefIds = collectLegacyRefIdsByKind(
+      rawRows.map((r) => ({ reason: (r.reason as string | null) ?? null })),
+    );
+    const [poNumberByReceipt, orderNumberById, returnNumberById, locationNameById] =
+      await Promise.all([
+        resolveReceiptPoNumbers(
+          this.ctx,
+          collectReceiptLineIds(
+            rawRows.map((r) => ({
+              reason: (r.reason as string | null) ?? null,
+              notes: (r.notes as string | null) ?? null,
+            })),
+          ),
+        ),
+        resolveOrderNumbers(this.ctx, legacyRefIds.order_request),
+        resolveReturnNumbers(this.ctx, legacyRefIds.return),
+        this.resolveLocationNames([...locationIds]),
+      ]);
+    const refLabelById = new Map([...orderNumberById, ...returnNumberById]);
 
     const rows: MovementExportRow[] = rawRows.map((row) => {
       const r = row;
+      const rawReason = (r.reason as string | null) ?? null;
       const reason =
         r.reason === 'receipt_line'
           ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
-          : resolveOrderRefReason((r.reason as string | null) ?? null, orderNumberById);
+          : resolveMovementRefReason(rawReason, refLabelById);
+      // The reference COLUMNS get the same derivation list() (order_ref_id)
+      // and the item activity feed apply: a pre-0306 pick row means
+      // order_request + that order's id, it just had nowhere to record it. An
+      // export that shipped the raw nulls contradicted its own `reason`
+      // column, which named the order two cells to the right.
+      const legacyOrderId = legacyOrderRefId(rawReason);
       const itemField = r.item as
         | { id: string; name: string; sku: string }
         | { id: string; name: string; sku: string }[]
@@ -446,8 +461,9 @@ export class MovementsService {
         newQuantity: Number(r.new_quantity),
         fromLocation: fromLocationId ? (locationNameById.get(fromLocationId) ?? null) : null,
         toLocation: toLocationId ? (locationNameById.get(toLocationId) ?? null) : null,
-        referenceType: (r.reference_type as string | null) ?? null,
-        referenceId: (r.reference_id as string | null) ?? null,
+        referenceType:
+          (r.reference_type as string | null) ?? (legacyOrderId ? 'order_request' : null),
+        referenceId: (r.reference_id as string | null) ?? legacyOrderId,
         reason,
         notes: (r.notes as string | null) ?? null,
         actorEmail: actorRaw?.email ?? null,
@@ -455,6 +471,27 @@ export class MovementsService {
     });
 
     return { rows, total };
+  }
+
+  /**
+   * id -> name for this export's from/to locations, in ONE batched query.
+   * A lookup error (or a hard-deleted location) degrades to a blank cell
+   * rather than failing the whole export — the same fail-open posture
+   * `buildInventoryExportRows` takes. Extracted so it can sit in the same
+   * Promise.all as the reason resolvers instead of running after them.
+   */
+  private async resolveLocationNames(locationIds: string[]): Promise<Map<string, string>> {
+    if (locationIds.length === 0) return new Map();
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .select('id, name')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', locationIds);
+    if (error) {
+      console.error('movements export: location name lookup failed', { error: error.message });
+      return new Map();
+    }
+    return new Map(((data ?? []) as Array<{ id: string; name: string }>).map((l) => [l.id, l.name]));
   }
 }
 

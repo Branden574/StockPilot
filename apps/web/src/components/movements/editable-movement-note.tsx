@@ -1,6 +1,7 @@
 'use client';
 
 import { Check, Loader2, Pencil, Plus, X } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -154,10 +155,16 @@ export function EditableMovementNote({
   // record we can navigate to — e.g. "Order pick (SO-000060)" → that order.
   // A user's own note is never linked: it's their prose, not a reference.
   const linkReason = !inline && !value && !!reason && !!reasonHref;
+  // next/link, not a bare <a>: this is an in-app route, and an anchor tears
+  // the whole document down and re-renders the app to reach it. The activity
+  // feed already links the identical destination with <Link>.
   const displayNode = linkReason ? (
-    <a href={reasonHref as string} className="hover:text-foreground underline underline-offset-2">
+    <Link
+      href={reasonHref as string}
+      className="hover:text-foreground underline underline-offset-2"
+    >
       {displayText}
-    </a>
+    </Link>
   ) : (
     displayText
   );

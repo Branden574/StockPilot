@@ -31,10 +31,11 @@ import {
   formatRackLabel,
   formatStockQuantity,
   historyNote,
-  collectLegacyOrderRefIds,
+  collectLegacyRefIdsByKind,
   normalizeRackFields,
   normalizeSizeValue,
   orderNumberLabels,
+  returnNumberLabels,
   parseRackLabel,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RESERVED_CUSTOM_FIELD_KEYS,
@@ -4601,17 +4602,22 @@ export class InventoryService {
       }
     }
 
-    // 5b. Pre-0306 pick/cancel rows stringified the ORDER'S UUID into their
-    //     reason ('Order pick (order_request b3c7390a-…)') because
-    //     order_requests.order_number only arrived in 0254. The ledger is
-    //     append-only so those rows are resolved at read time, not rewritten.
-    //     Chunked and org-scoped for exactly the reasons the two lookups above
-    //     are, and degrading to an empty map on error — historyNote then falls
-    //     back to the bare "Order pick" it has always rendered.
-    const orderNumberById = new Map<string, string>();
-    for (const idChunk of chunkIdsForInFilter(
-      collectLegacyOrderRefIds(raw.map((r) => ({ reason: (r.reason as string | null) ?? null }))),
-    )) {
+    // 5b. Some reasons stringify a RECORD'S UUID into the words a human reads:
+    //     pre-0306 pick/cancel rows ('Order pick (order_request b3c7390a-…)',
+    //     written before order_requests.order_number arrived in 0254) and the
+    //     return rows the shipped RMA RPCs write to this day ('Return restock
+    //     (return …)', 0153/0154/0197). The ledger is append-only so both are
+    //     resolved at read time, not rewritten. Chunked and org-scoped for
+    //     exactly the reasons the two lookups above are, and degrading to an
+    //     empty map on error — historyNote then falls back to the bare "Order
+    //     pick" / "Return restock" it has always rendered. Resolving BOTH here
+    //     is what keeps this dialog and the Movements page saying the same
+    //     words about the same event.
+    const refLabelById = new Map<string, string>();
+    const legacyRefIds = collectLegacyRefIdsByKind(
+      raw.map((r) => ({ reason: (r.reason as string | null) ?? null })),
+    );
+    for (const idChunk of chunkIdsForInFilter(legacyRefIds.order_request)) {
       const { data: orders, error: oErr } = await this.ctx.supabase
         .from('order_requests')
         .select('id, order_number')
@@ -4621,7 +4627,20 @@ export class InventoryService {
       for (const [id, label] of orderNumberLabels(
         (orders ?? []) as Array<{ id: string; order_number: number | null }>,
       )) {
-        orderNumberById.set(id, label);
+        refLabelById.set(id, label);
+      }
+    }
+    for (const idChunk of chunkIdsForInFilter(legacyRefIds.return)) {
+      const { data: returns, error: rErr } = await this.ctx.supabase
+        .from('returns')
+        .select('id, return_number')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', idChunk);
+      if (rErr) console.error('item history: return number lookup failed', { error: rErr.message });
+      for (const [id, label] of returnNumberLabels(
+        (returns ?? []) as Array<{ id: string; return_number: string | null }>,
+      )) {
+        refLabelById.set(id, label);
       }
     }
 
@@ -4704,7 +4723,7 @@ export class InventoryService {
         note: historyNote(
           (r.reason as string | null) ?? null,
           (r.notes as string | null) ?? null,
-          orderNumberById,
+          refLabelById,
         ),
         receiptNumber: meta?.receiptNumber ?? null,
         receiptStatus: meta?.status ?? null,

@@ -386,6 +386,75 @@ describe('MovementsService.list', () => {
     expect(rows[0]!.reason).not.toContain(orderId);
   });
 
+  // ── Return rows: the SAME defect, from a writer that is not history ──
+  // apply_return_dispositions (0153 → 0154 → 0197) writes
+  // 'Return restock (return <uuid>)' TODAY. Resolving only the order shape
+  // left this page printing raw hex while historyNote stripped it — the exact
+  // two-surface split this resolution exists to close.
+
+  it("resolves a 'Return restock (return <uuid>)' reason to the return number", async () => {
+    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-return',
+            movement_type: 'return',
+            quantity_change: 3,
+            moved_quantity: null,
+            reason: `Return restock (return ${returnId})`,
+            notes: null,
+            reference_type: 'return',
+            reference_id: returnId,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'returns.select': { data: [{ id: returnId, return_number: 'RMA-000012' }], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('Return restock (RMA-000012)');
+    expect(rows[0]!.reason).not.toContain(returnId);
+    // A return is NOT an order — order_ref_id stays null so nothing links it
+    // to /dashboard/orders/{a return id}.
+    expect(rows[0]!.order_ref_id).toBeNull();
+    expect(stub.fromCalls.filter((t) => t === 'returns')).toHaveLength(1);
+    expect(stub.fromCalls.filter((t) => t === 'order_requests')).toHaveLength(0);
+  });
+
+  it('drops the parenthetical rather than leaking a uuid when the return cannot be resolved', async () => {
+    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-return-orphan',
+            movement_type: 'loss',
+            quantity_change: -3,
+            moved_quantity: null,
+            reason: `Return scrap write-off (return ${returnId})`,
+            notes: null,
+            reference_type: 'return',
+            reference_id: returnId,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'returns.select': { data: [], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('Return scrap write-off');
+    expect(rows[0]!.reason).not.toContain(returnId);
+  });
+
   it('runs no order lookup at all when the page has no legacy pick rows', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
@@ -611,6 +680,82 @@ describe('MovementsService.exportRows', () => {
 
     const { rows } = await svc.exportRows();
     expect(rows[0]!.reason).toBe('PO PO-77');
+  });
+
+  it('derives the reference columns for a pre-0306 pick row instead of exporting nulls', async () => {
+    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-legacy',
+            movement_type: 'transfer',
+            quantity_change: -5,
+            previous_quantity: 10,
+            new_quantity: 5,
+            from_location_id: null,
+            to_location_id: null,
+            reference_type: null,
+            reference_id: null,
+            reason: `Order pick (order_request ${orderId})`,
+            notes: null,
+            created_at: '2026-05-04T00:00:00.000Z',
+            item_id: 'item-4',
+            user_id: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+        count: 1,
+      },
+      'order_requests.select': { data: [{ id: orderId, order_number: 60 }], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.exportRows();
+    // The file used to name the order in `reason` and leave the two reference
+    // columns blank on the same line — an export contradicting itself.
+    expect(rows[0]!.reason).toBe('Order pick (SO-000060)');
+    expect(rows[0]!.referenceType).toBe('order_request');
+    expect(rows[0]!.referenceId).toBe(orderId);
+  });
+
+  it('resolves a return reference in the CSV exactly as the screen does', async () => {
+    const returnId = 'ecbd03b4-2fbe-4e0a-8507-021a9bd3feed';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-return',
+            movement_type: 'return',
+            quantity_change: 3,
+            previous_quantity: 0,
+            new_quantity: 3,
+            from_location_id: null,
+            to_location_id: null,
+            reference_type: 'return',
+            reference_id: returnId,
+            reason: `Return restock (return ${returnId})`,
+            notes: null,
+            created_at: '2026-05-05T00:00:00.000Z',
+            item_id: 'item-5',
+            user_id: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+        count: 1,
+      },
+      'returns.select': { data: [{ id: returnId, return_number: 'RMA-000012' }], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.exportRows();
+    expect(rows[0]!.reason).toBe('Return restock (RMA-000012)');
+    expect(rows[0]!.reason).not.toContain(returnId);
+    expect(rows[0]!.referenceType).toBe('return');
   });
 
   it('returns rows: [] total: 0 when a warehouse-scoped user has no readable warehouses (no leak)', async () => {

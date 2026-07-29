@@ -34,11 +34,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   can,
-  collectLegacyOrderRefIds,
+  collectLegacyRefIdsByKind,
   formatOrderNumber,
   getCrateColor,
   legacyOrderRefId,
-  resolveOrderRefReason,
+  reasonWithoutRefLabel,
+  resolveMovementRefReason,
   type Role,
 } from '@stockpilot/core';
 
@@ -671,15 +672,15 @@ export default function ItemDetail() {
       // ORDER'S UUID inside the reason instead (order_number only arrived in
       // 0254; the ledger is append-only, so they're resolved at read time —
       // see packages/core movement-order-ref.ts). Folding those ids into the
-      // SAME order_request bucket resolves them at NO extra query cost, and
-      // gives the legacy rows the clickable source the new ones get.
-      const legacyOrderIds = collectLegacyOrderRefIds(
+      // bucket their kind already has resolves them at NO extra query cost,
+      // and gives the legacy rows the clickable source the new ones get. The
+      // return kind is folded the same way (its reference columns are normally
+      // already set, so it is usually a no-op).
+      const legacyRefIds = collectLegacyRefIdsByKind(
         rows.map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
       );
-      if (legacyOrderIds.length > 0) {
-        idsByType.order_request = [
-          ...new Set([...(idsByType.order_request ?? []), ...legacyOrderIds]),
-        ];
+      for (const [kind, ids] of Object.entries(legacyRefIds)) {
+        if (ids.length > 0) idsByType[kind] = [...new Set([...(idsByType[kind] ?? []), ...ids])];
       }
       // Pre-0231 receipt rows (reason='receipt_line', notes=receipt uuid):
       // collect THIS PAGE's receipt ids so they can be resolved to PO
@@ -750,7 +751,7 @@ export default function ItemDetail() {
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
           reason: isReceiptLine
             ? receiptLineSummary(rawNotes, poNumberByReceipt)
-            : resolveOrderRefReason(rawReason, pageLabelMap),
+            : resolveMovementRefReason(rawReason, pageLabelMap),
           notes: movementNotesForDisplay(rawReason, rawNotes),
           // Compute from the RAW reason (isReceiptLine) BEFORE it's resolved to
           // a 'PO {number}' display string above — receipt_line notes are
@@ -1818,7 +1819,6 @@ function MovementCard({
   //  - pre-0231 receipt rows' internal 'receipt_line' reason → 'PO receipt'
   //    (new rows already carry 'PO {number}').
   const amount = movementAmount(movement);
-  const reasonLabel = movementReasonLabel(movement.reason);
   const Icon = isAdd ? Plus : movement.quantity_change < 0 ? Minus : RotateCcw;
   const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
   const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
@@ -1832,6 +1832,14 @@ function MovementCard({
   const referenceDisplayLabel = movement.reference_type
     ? (movement.reference_label ?? referenceTypeLabel(movement.reference_type))
     : null;
+  // Web parity with the activity feed: the reason and the reference chip are
+  // resolved from the SAME record, so a pick row would otherwise read
+  // "Order pick (SO-000060) … SO-000060" on one card. The chip is the tappable
+  // one, so the reason gives the handle up.
+  const reasonLabel = reasonWithoutRefLabel(
+    movementReasonLabel(movement.reason),
+    referenceDisplayLabel,
+  );
   // Web parity (Movement/Activity P1 review follow-up): from/to location
   // route line, e.g. "Rack A1 → Rack B2" for a transfer, "→ Rack B2" for a
   // receive, "Rack A1 →" for a removal. null whenever neither side resolved

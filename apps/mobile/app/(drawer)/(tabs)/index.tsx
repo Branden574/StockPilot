@@ -21,6 +21,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
+import {
+  collectLegacyRefIdsByKind,
+  movementReasonTeaser,
+  orderNumberLabels,
+  returnNumberLabels,
+} from '@stockpilot/core';
+
 import { Avatar } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { MintWash } from '@/components/ui/mint-wash';
@@ -173,9 +180,41 @@ export default function Home() {
         (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
       ),
     });
+    // Same batched, org-scoped resolution the Movements screen and every web
+    // surface run (packages/core movement-order-ref.ts): a pick/cancel row
+    // written before migration 0306 carries the ORDER'S UUID in its reason, and
+    // the shipped RMA RPCs still write a return's uuid the same way. Three
+    // rows here, so the two lookups are at most two tiny `.in()` queries — and
+    // running them is what stops this teaser saying "Order pick" while the web
+    // dashboard widget says "Order pick (SO-000060)" about the SAME movement.
+    // They are independent, so they run concurrently.
+    const movementRows = (movements.data ?? []) as Record<string, unknown>[];
+    const legacyRefIds = collectLegacyRefIdsByKind(
+      movementRows.map((r) => ({ reason: (r.reason as string | null) ?? null })),
+    );
+    const [orders, returns] = await Promise.all([
+      legacyRefIds.order_request.length > 0
+        ? supabase
+            .from('order_requests')
+            .select('id, order_number')
+            .eq('organization_id', orgId)
+            .in('id', legacyRefIds.order_request)
+        : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
+      legacyRefIds.return.length > 0
+        ? supabase
+            .from('returns')
+            .select('id, return_number')
+            .eq('organization_id', orgId)
+            .in('id', legacyRefIds.return)
+        : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
+    ]);
+    const refLabelById = new Map([
+      ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
+      ...returnNumberLabels((returns.data ?? []) as { id: string; return_number: string | null }[]),
+    ]);
+
     setRecent(
-      (movements.data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
+      movementRows.map((r) => {
         const item = r.item as { name?: string } | { name?: string }[] | null;
         const itemObj = Array.isArray(item) ? item[0] ?? null : item;
         return {
@@ -184,7 +223,7 @@ export default function Home() {
           itemName: (itemObj?.name as string | undefined) ?? 'Unknown item',
           movementType: r.movement_type as string,
           quantityChange: Number(r.quantity_change) || 0,
-          reason: (r.reason as string | null) ?? null,
+          reason: movementReasonTeaser((r.reason as string | null) ?? null, refLabelById),
           createdAt: r.created_at as string,
         };
       }),
@@ -397,25 +436,6 @@ export default function Home() {
   );
 }
 
-// Strip noisy auto-generated UUID parentheticals (e.g.
-// "Order pick (order_request 4af...)" -> "Order pick") and clamp
-// length so the secondary line doesn't wrap on narrow rows.
-//
-// Only UUID-BEARING parentheticals go. This used to strip every `(...)`, which
-// would now also delete the human order number migration 0306 writes — so a
-// "Order pick (SO-000060)" row would silently lose the one thing that makes it
-// identifiable. This teaser doesn't run the batched order lookup the Movements
-// screen does, so pre-0306 rows still reduce to a bare "Order pick" here; what
-// matters is that no uuid ever reaches the card and no real number is thrown
-// away. TRAILING_ID_PAREN_RE mirrors packages/core's TRAILING_REF_RE.
-const TRAILING_ID_PAREN_RE = /\s*\([^)]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)]*\)\s*/gi;
-function cleanReason(raw: string | null): string {
-  if (!raw) return '';
-  const stripped = raw.replace(TRAILING_ID_PAREN_RE, ' ').trim();
-  if (stripped.length <= 38) return stripped;
-  return stripped.slice(0, 36).trimEnd() + '…';
-}
-
 function MovementMiniRow({
   m,
   divider,
@@ -436,7 +456,9 @@ function MovementMiniRow({
     minute: '2-digit',
     hour12: false,
   });
-  const reason = cleanReason(m.reason);
+  // Already resolved and clamped by the loader (packages/core
+  // movementReasonTeaser) — the same words the web dashboard widget prints.
+  const reason = m.reason;
   return (
     <Pressable
       onPress={onPress}

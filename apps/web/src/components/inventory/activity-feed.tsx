@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+import { reasonWithoutRefLabel } from '@stockpilot/core';
+
 import { MetadataDiff } from '@/components/audit/metadata-diff';
 import { EditableMovementNote } from '@/components/movements/editable-movement-note';
 import { LocalDateTime } from '@/components/ui/local-datetime';
@@ -139,6 +141,11 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
           e.kind === 'movement' && e.referenceType
             ? (e.referenceLabel ?? referenceTypeLabel(e.referenceType))
             : null;
+        // The reason and the reference chip are resolved from the SAME record,
+        // so a pick row arrives here as reason "Order pick (SO-000060)" beside
+        // a chip reading "SO-000060" — the handle printed twice on one line.
+        // The chip is the linked one, so the reason gives it up.
+        const reasonText = reasonWithoutRefLabel(e.reason, referenceDisplayLabel);
         return (
           <li key={e.id} className="relative flex gap-3 pl-2 pr-1">
             {!isLast && (
@@ -231,10 +238,10 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     )}
                   </>
                 )}
-                {e.reason && (
+                {reasonText && (
                   <>
                     <span className="mx-1.5">·</span>
-                    <span className="italic">{e.reason}</span>
+                    <span className="italic">{reasonText}</span>
                   </>
                 )}
                 {e.kind === 'movement' && canEditNotes && e.noteEditable ? (

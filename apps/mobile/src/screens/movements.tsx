@@ -1,7 +1,8 @@
 import {
-  collectLegacyOrderRefIds,
+  collectLegacyRefIdsByKind,
   orderNumberLabels,
-  resolveOrderRefReason,
+  resolveMovementRefReason,
+  returnNumberLabels,
 } from '@stockpilot/core';
 import { useRouter } from 'expo-router';
 import { ArrowLeftRight, Minus, Plus, RotateCcw } from 'lucide-react-native';
@@ -73,25 +74,35 @@ export default function MovementsScreen() {
 
     // Web parity (packages/core movement-order-ref.ts): pick/cancel rows
     // written before migration 0306 stringified the ORDER'S UUID into their
-    // reason because order_number only arrived in 0254. The ledger is
-    // append-only, so they're resolved at read time — ONE batched, org-scoped
-    // lookup for the whole page, never one per row. A failed/empty lookup
-    // degrades to "Order pick" with the parenthetical dropped; the raw uuid
-    // never reaches the card.
-    const legacyOrderIds = collectLegacyOrderRefIds(
+    // reason because order_number only arrived in 0254, and the shipped RMA
+    // RPCs (0153/0154/0197) still write a return's uuid the same way. The
+    // ledger is append-only, so both are resolved at read time — ONE batched,
+    // org-scoped lookup per kind for the whole page, never one per row, and
+    // the two run concurrently. A failed/empty lookup degrades to "Order pick"
+    // with the parenthetical dropped; the raw uuid never reaches the card.
+    const legacyRefIds = collectLegacyRefIdsByKind(
       (data ?? []).map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
     );
-    let orderNumberById = new Map<string, string>();
-    if (legacyOrderIds.length > 0) {
-      const { data: orders } = await supabase
-        .from('order_requests')
-        .select('id, order_number')
-        .eq('organization_id', orgId)
-        .in('id', legacyOrderIds);
-      orderNumberById = orderNumberLabels(
-        (orders ?? []) as { id: string; order_number: number | null }[],
-      );
-    }
+    const [orders, returns] = await Promise.all([
+      legacyRefIds.order_request.length > 0
+        ? supabase
+            .from('order_requests')
+            .select('id, order_number')
+            .eq('organization_id', orgId)
+            .in('id', legacyRefIds.order_request)
+        : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
+      legacyRefIds.return.length > 0
+        ? supabase
+            .from('returns')
+            .select('id, return_number')
+            .eq('organization_id', orgId)
+            .in('id', legacyRefIds.return)
+        : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
+    ]);
+    const refLabelById = new Map([
+      ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
+      ...returnNumberLabels((returns.data ?? []) as { id: string; return_number: string | null }[]),
+    ]);
 
     setRows(
       (data ?? []).map((row) => {
@@ -104,7 +115,7 @@ export default function MovementsScreen() {
           quantity_change: Number(r.quantity_change) || 0,
           previous_quantity: Number(r.previous_quantity) || 0,
           new_quantity: Number(r.new_quantity) || 0,
-          reason: resolveOrderRefReason((r.reason as string | null) ?? null, orderNumberById),
+          reason: resolveMovementRefReason((r.reason as string | null) ?? null, refLabelById),
           created_at: r.created_at as string,
           item_id: r.item_id as string,
           item: Array.isArray(item) ? item[0] ?? null : item,

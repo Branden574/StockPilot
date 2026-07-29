@@ -7,8 +7,14 @@
 --   N3. A one-digit order number is padded the same way (SO-000007).
 --   N4. reference_type='order_request' + reference_id=<order id>: the machine
 --       link lives in the columns built for it, not inside prose.
---   N5. The stamp is SCOPED — a movement that already existed for the same item
---       in the same org is left untouched (the predicate cannot over-reach).
+--   N5. The stamp claims ONLY rows this call wrote. The decoy is identical to
+--       a pick draw in every column the stamp looks at INCLUDING created_at
+--       (pgTAP runs in one transaction, so a plain `now()` default is the same
+--       value the pick's own rows get — which is precisely the collision a
+--       real caller hits when it moves stock and then completes a pick in one
+--       transaction). It must come back unstamped.
+--   N7. Past six digits the number is NOT truncated: order 1,000,000 reads
+--       SO-1000000, never SO-100000 (the label order 100,000 owns).
 --   N6. A non-positive/absent order number falls back to the pre-0306 text
 --       rather than writing a broken 'Order pick (SO-)'.
 --   C1. REGRESSION (0247): one-click on a SHORT order stages what's available
@@ -24,7 +30,7 @@
 
 begin;
 
-select plan(14);
+select plan(15);
 
 \set org  '\'c0306000-0000-0000-0000-000000000001\''
 \set mgr  '\'c0306000-0000-0000-0000-000000000002\''
@@ -42,6 +48,10 @@ select plan(14);
 \set item_p '\'c0306000-0000-0000-0000-0000000000c0\''
 \set ord_p  '\'c0306000-0000-0000-0000-0000000000c1\''
 \set line_p '\'c0306000-0000-0000-0000-0000000000c2\''
+-- N7: the seven-digit boundary lpad() would have truncated.
+\set item_w '\'c0306000-0000-0000-0000-0000000000c8\''
+\set ord_w  '\'c0306000-0000-0000-0000-0000000000c9\''
+\set line_w '\'c0306000-0000-0000-0000-0000000000ca\''
 -- N6: no usable number -> legacy text.
 \set item_f '\'c0306000-0000-0000-0000-0000000000e0\''
 \set ord_f  '\'c0306000-0000-0000-0000-0000000000e1\''
@@ -79,15 +89,17 @@ insert into public.inventory_items
   values
     (:item_n,  :org, :wh, 'PN-N',  'N',  40, 'active', 'none'),
     (:item_p,  :org, :wh, 'PN-P',  'P',  40, 'active', 'none'),
+    (:item_w,  :org, :wh, 'PN-W',  'W',  40, 'active', 'none'),
     (:item_f,  :org, :wh, 'PN-F',  'F',  40, 'active', 'none'),
     (:item_c1, :org, :wh, 'PN-C1', 'C1', 30, 'active', 'none'),
     (:item_c2, :org, :wh, 'PN-C2', 'C2', 50, 'active', 'none'),
     (:item_l,  :org, :wh, 'PN-L',  'L',  40, 'active', 'none')
   on conflict (id) do nothing;
 delete from public.item_stock_levels
-  where item_id in (:item_n, :item_p, :item_f, :item_c1, :item_c2, :item_l);
+  where item_id in (:item_n, :item_p, :item_w, :item_f, :item_c1, :item_c2, :item_l);
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
   (:org, :item_n, :rack, 40), (:org, :item_p, :rack, 40), (:org, :item_f, :rack, 40),
+  (:org, :item_w, :rack, 40),
   (:org, :item_c1, :rack, 30), (:org, :item_c2, :rack, 50), (:org, :item_l, :rack, 40);
 
 -- order_number is assigned by the 0254 BEFORE INSERT trigger, but explicit
@@ -98,6 +110,7 @@ insert into public.order_requests
   values
     (:ord_n,   :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 60),
     (:ord_p,   :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 7),
+    (:ord_w,   :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 1000000),
     (:ord_f,   :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 0),
     (:ord_c1,  :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 101),
     (:ord_c2,  :org, :wh, 'pick_slip_generated', :mgr, 'internal', 'pickup', 102),
@@ -110,6 +123,7 @@ insert into public.order_request_lines
   values
     (:line_n,  :ord_n,  :item_n,   10, 0, null),
     (:line_p,  :ord_p,  :item_p,   10, 0, null),
+    (:line_w,  :ord_w,  :item_w,   10, 0, null),
     (:line_f,  :ord_f,  :item_f,   10, 0, null),
     (:line_c1, :ord_c1, :item_c1, 100, 0, null),
     (:line_c2, :ord_c2, :item_c2, 100, 0, null),
@@ -121,14 +135,24 @@ insert into public.stock_reservations
   (organization_id, item_id, warehouse_id, order_request_id, quantity)
   values (:org, :item_c2, :wh, :ord_oth, 20);
 
--- N5: a movement that ALREADY exists for the pick's own item. The stamp must
--- not reach backwards and claim it. Same org, same item, same movement_type,
--- same user — everything but "this transaction wrote it".
+-- N5: a movement that ALREADY exists for the pick's own item, and that is
+-- INDISTINGUISHABLE from one of the pick's own draws in every column the stamp
+-- can see: same org, same item, movement_type='transfer', same user, NULL
+-- reference — and the same created_at, because created_at defaults to now(),
+-- the TRANSACTION timestamp, and this fixture and complete_picking below run in
+-- the one transaction pgTAP wraps around the file.
+--
+-- That is not a contrived shape. It is what the ledger looks like the moment a
+-- caller moves stock and completes a pick in the same transaction: 0231's
+-- transfer_stock writes movement_type='transfer' with a NULL reference, and the
+-- first draft of migration 0306 stamped exactly this row with the order's id —
+-- a false record in an append-only ledger. Left deliberately with no explicit
+-- created_at so the row cannot silently drift out of the collision window.
 insert into public.stock_movements
   (id, organization_id, item_id, movement_type, quantity_change,
-   previous_quantity, new_quantity, reason, user_id, created_at)
+   previous_quantity, new_quantity, reason, user_id)
   values (:mv_pre, :org, :item_n, 'transfer', 0, 40, 40,
-          'Pre-existing transfer', :mgr, now() - interval '1 day');
+          'Pre-existing transfer', :mgr);
 
 -- L1: lock the L order to the manager so the staffer is a non-assigned picker.
 update public.order_requests set assigned_picker_id = :mgr where id = :ord_l;
@@ -167,10 +191,23 @@ select results_eq(
   $$ values ('order_request', 'c0306000-0000-0000-0000-0000000000a1'::uuid) $$,
   'N4: the machine link is in reference_type/reference_id, not in the prose');
 
+-- N5 — the row this call did NOT write is still unclaimed. Asserted on
+-- reference_id as well as reference_type: a stamp that reached it would have
+-- written this order's id into a movement that has nothing to do with the order.
 select is(
-  (select reference_type from public.stock_movements where id = :mv_pre),
+  (select reference_type || ':' || coalesce(reference_id::text, 'null')
+     from public.stock_movements where id = :mv_pre),
   null,
-  'N5: the stamp does not reach backwards onto a pre-existing movement');
+  'N5: an identical-in-every-column movement this call did not write is not claimed');
+
+-- N7 — seven digits: padStart() pads, it never truncates, and neither does the
+-- SQL. lpad(n, 6, '0') would have written SO-100000 here, permanently colliding
+-- with order 100,000's label in a ledger that cannot be corrected.
+do $$ begin perform public.complete_picking('c0306000-0000-0000-0000-0000000000c9'::uuid); end $$;
+select is(
+  (select reason from public.stock_movements where item_id = :item_w),
+  'Order pick (SO-1000000)',
+  'N7: an order number past six digits is not truncated to six');
 
 -- N6 — no usable order number: keep the old, still-traceable text.
 do $$ begin perform public.complete_picking('c0306000-0000-0000-0000-0000000000e1'::uuid); end $$;

@@ -1,10 +1,10 @@
 import 'server-only';
 
 import {
-  collectLegacyOrderRefIds,
+  collectLegacyRefIdsByKind,
   formatOrderNumber,
   legacyOrderRefId,
-  resolveOrderRefReason,
+  resolveMovementRefReason,
 } from '@stockpilot/core';
 
 import { ServiceContext, withContext } from './context';
@@ -525,15 +525,16 @@ export class ActivityService {
     }
     // Pre-0306 pick/cancel rows have NULL reference columns and carry the
     // order's uuid inside the reason instead. Folding those ids into the
-    // SAME order_request bucket resolves them for free — the resolver is
-    // already running, and it dedupes — so the feed costs no extra query.
-    const legacyOrderIds = collectLegacyOrderRefIds(
+    // SAME bucket their kind already has resolves them for free — the
+    // resolvers are already running, and they dedupe — so the feed costs no
+    // extra query. Returns are folded the same way: their reference columns
+    // are set (0153/0154/0197), so this is normally a no-op for them, but the
+    // reason is the only carrier if a writer ever omits the columns.
+    const legacyRefIds = collectLegacyRefIdsByKind(
       movementRows.map((m) => ({ reason: (m.reason as string | null) ?? null })),
     );
-    if (legacyOrderIds.length > 0) {
-      idsByType.order_request = [
-        ...new Set([...(idsByType.order_request ?? []), ...legacyOrderIds]),
-      ];
+    for (const [kind, ids] of Object.entries(legacyRefIds)) {
+      if (ids.length > 0) idsByType[kind] = [...new Set([...(idsByType[kind] ?? []), ...ids])];
     }
     const referenceLabelsPromise = resolveReferenceLabels(this.ctx, idsByType);
 
@@ -571,7 +572,7 @@ export class ActivityService {
       // been consumed above to produce the human 'PO {number}' reason).
       const reason = isReceiptLine
         ? receiptLineSummary(rawNotes, poNumberByReceipt)
-        : resolveOrderRefReason(rawReason, referenceLabelById);
+        : resolveMovementRefReason(rawReason, referenceLabelById);
       const notes = isReceiptLine ? null : rawNotes;
       // Pre-0306 pick/cancel rows have NULL reference columns and the order's
       // uuid in the reason instead. Presenting the parsed id under the type it

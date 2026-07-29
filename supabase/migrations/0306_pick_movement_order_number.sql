@@ -12,12 +12,17 @@
 -- was nothing else to point at.
 --
 -- WHAT CHANGES, AND ONLY THIS:
---   1. The reason now reads `Order pick (SO-000060)`, zero-padded to six to
---      match formatOrderNumber() in packages/core/src/orders/order-number.ts
---      so a movement note, the orders list and the mobile order screen cannot
---      disagree about how an order is spelled. order_number is NOT NULL since
---      0254, but a null/non-positive value still falls back to the ORIGINAL
---      text rather than emitting a broken `Order pick (SO-)`.
+--   1. The reason now reads `Order pick (SO-000060)`, zero-padded to AT LEAST
+--      six to match formatOrderNumber() in
+--      packages/core/src/orders/order-number.ts — `padStart(6, '0')` pads a
+--      short number and leaves a long one alone, so the SQL pads to
+--      greatest(6, length) rather than lpad(…, 6) (a bare lpad TRUNCATES:
+--      order 1,000,000 would print as SO-100000 and collide, permanently and
+--      in an append-only ledger, with the label order 100,000 already owns).
+--      A movement note, the orders list and the mobile order screen therefore
+--      cannot disagree about how an order is spelled. order_number is NOT NULL
+--      since 0254, but a null/non-positive value still falls back to the
+--      ORIGINAL text rather than emitting a broken `Order pick (SO-)`.
 --   2. The machine link moves into the columns built for it:
 --      reference_type='order_request', reference_id=p_order_id. Those columns
 --      are what every other RPC that references a record already writes (see
@@ -32,19 +37,43 @@
 -- the status/stamp update are byte-identical to 0247. The only edits are the
 -- reason string, the variable that holds it, and the reference stamp.
 --
--- WHY THE STAMP IS A SEPARATE UPDATE. adjust_stock() is the shared writer for
--- every stock change in the schema and it has no reference parameters. Gaining
--- them would mean DROPping and recreating the hottest function in the database
--- (Postgres cannot add parameters via CREATE OR REPLACE — it would create a
--- second overload and make every existing 6-argument call ambiguous), which is
--- far more blast radius than this defect is worth. So the rows adjust_stock
--- just inserted are stamped here instead. `created_at = now()` is the
--- transaction timestamp and is the column's own DEFAULT, so the predicate
--- matches only rows THIS transaction wrote; combined with the org, the pick's
--- movement_type, the acting user, the still-unstamped filter and this order's
--- own item set, nothing else can be caught by it. The loop above additionally
--- holds `for update of ii` on every item involved, so no concurrent writer can
--- interleave a movement for those items inside this transaction at all.
+-- WHY THE STAMP IS A SEPARATE UPDATE, AND HOW IT KNOWS WHICH ROWS ARE ITS OWN.
+-- adjust_stock() is the shared writer for every stock change in the schema. It
+-- has no reference parameters and it returns the ITEM, not the ledger row it
+-- just wrote. Giving it parameters would mean DROPping and recreating the
+-- hottest function in the database (Postgres cannot add parameters via CREATE
+-- OR REPLACE — it would create a second overload and make every existing
+-- 6-argument call ambiguous), and, since it is security INVOKER and callable as
+-- an RPC, it would also hand every authenticated caller the ability to stamp a
+-- reference of their choosing onto a movement. So the stamp stays here — and
+-- each row it touches is CAPTURED BY ID as it is created: after every
+-- adjust_stock call the row that call inserted is probed for and appended to
+-- v_mv_ids, and the UPDATE at the end matches `id = any(v_mv_ids)`, nothing
+-- else.
+--
+-- THE CAPTURE IS A DIFF, NOT A TIMESTAMP MATCH — and the distinction is the
+-- whole point. `created_at` is the column's own DEFAULT, now(), i.e. the
+-- TRANSACTION timestamp: it narrows the probe onto the (item_id, created_at)
+-- index, but it identifies nothing, because EVERY row written anywhere in this
+-- transaction carries that same value. A movement written earlier in this same
+-- transaction — a manual rack-to-rack transfer_stock (0231) by the same
+-- operator on one of these items — matches the org, the timestamp, the
+-- movement_type, the user, the null reference and the item set all at once.
+-- The first draft of this migration stamped exactly such a row, writing a false
+-- link into a ledger that is append-only and can never take it back. So every
+-- row that already matches is collected into v_seen_ids BEFORE the first draw,
+-- each captured row is added to it, and the probe therefore returns only what
+-- appeared during the adjust_stock call it follows.
+--
+-- WHAT THE PREDICATE GUARANTEES, EXACTLY: the UPDATE stamps a row only if a
+-- probe run immediately after one of this call's own adjust_stock calls found
+-- that row, and ONLY that row, newly present. If a probe ever comes back with
+-- anything other than exactly one row, nothing is stamped for that line: a
+-- movement with no machine link still names its order in the reason and stays
+-- resolvable, whereas a movement carrying the WRONG link is a false audit
+-- record. The loop additionally holds `for update of ii` on every item
+-- involved, so a concurrent writer cannot interleave a movement for an item
+-- this call has already reached.
 --
 -- HISTORY IS NOT REWRITTEN. The ~99 rows already carrying the uuid form are
 -- left exactly as they are: stock_movements is an append-only ledger and the
@@ -72,6 +101,13 @@ declare
   v_other_reserved numeric(14,4);
   v_available      numeric(14,4);
   v_reason         text;
+  -- Ledger rows that are NOT this call's: everything that already matched the
+  -- probe before the first draw, plus every row this call has since claimed.
+  v_seen_ids       uuid[];
+  v_item_ids       uuid[];
+  -- The rows this call created, captured one at a time. Only these get stamped.
+  v_mv_ids         uuid[] := '{}'::uuid[];
+  v_new_ids        uuid[];
 begin
   if v_user is null then
     raise exception 'unauthenticated' using errcode = '42501';
@@ -95,12 +131,19 @@ begin
   end if;
 
   -- The words a human reads. Mirrors formatOrderNumber() exactly: 'SO-' plus
-  -- the number left-padded with zeros to six, and no label at all for a null
-  -- or non-positive number — which falls back to the pre-0306 text so the row
-  -- is still traceable rather than labelled 'SO-'.
+  -- the number zero-padded to AT LEAST six. greatest(6, length(...)) is what
+  -- makes it padStart() and not truncation — `lpad(n, 6, '0')` would cut
+  -- order 1,000,000 down to SO-100000, the label order 100,000 already owns,
+  -- in a ledger that cannot be corrected afterwards. A null or non-positive
+  -- number gets no label at all and falls back to the pre-0306 text, so the
+  -- row stays traceable rather than being labelled 'SO-'.
   v_reason := case
     when coalesce(v_req.order_number, 0) > 0
-      then 'Order pick (SO-' || lpad(v_req.order_number::text, 6, '0') || ')'
+      then 'Order pick (SO-'
+           || lpad(v_req.order_number::text,
+                   greatest(6, length(v_req.order_number::text)),
+                   '0')
+           || ')'
     else 'Order pick (order_request ' || p_order_id::text || ')'
   end;
 
@@ -109,6 +152,27 @@ begin
     from public.order_request_lines
     where order_request_id = p_order_id;
   v_all_null := coalesce(v_all_null, true);
+
+  -- Every ledger row for this order's items that ALREADY answers to the probe
+  -- below. None of them were written by this call — the transaction may have
+  -- written a manual transfer for one of these items a statement ago, and it
+  -- carries this same transaction timestamp — so they are remembered by id and
+  -- excluded. The item ids are materialised into an array first because a
+  -- `in (select …)` semi-join costs the planner the (organization_id,
+  -- created_at) index and turns a bounded lookup into a seq scan of the whole
+  -- ledger; with the array it is an index cond on org + this transaction's
+  -- timestamp, which normally matches nothing at all.
+  select coalesce(array_agg(item_id), '{}'::uuid[])
+    into v_item_ids
+    from public.order_request_lines
+   where order_request_id = p_order_id;
+
+  select coalesce(array_agg(m.id), '{}'::uuid[])
+    into v_seen_ids
+    from public.stock_movements m
+   where m.organization_id = v_req.organization_id
+     and m.created_at      = now()
+     and m.item_id         = any(v_item_ids);
 
   for v_line in
     select l.id                  as line_id,
@@ -150,6 +214,31 @@ begin
         v_reason,
         null
       );
+
+      -- Capture the ledger row that call just inserted, BY ID. Every column
+      -- tested here is a property adjust_stock gives the row it writes (this
+      -- item, this transaction's timestamp, 'transfer', auth.uid(), no
+      -- reference yet), so the probe can never miss our own row; v_seen_ids is
+      -- what turns it from "rows that look like mine" into "the row that was
+      -- not there a moment ago".
+      select coalesce(array_agg(m.id), '{}'::uuid[])
+        into v_new_ids
+        from public.stock_movements m
+       where m.organization_id = v_req.organization_id
+         and m.item_id         = v_line.item_id
+         and m.created_at      = now()
+         and m.movement_type   = 'transfer'
+         and m.user_id         = v_user
+         and m.reference_type is null
+         and not (m.id = any(v_seen_ids));
+
+      v_seen_ids := v_seen_ids || v_new_ids;
+      -- Exactly one new row is the only outcome that identifies OUR row.
+      -- Anything else leaves this line unstamped rather than guessing — see
+      -- the header.
+      if coalesce(array_length(v_new_ids, 1), 0) = 1 then
+        v_mv_ids := v_mv_ids || v_new_ids;
+      end if;
     end if;
 
     update public.order_request_lines
@@ -157,20 +246,16 @@ begin
       where id = v_line.line_id;
   end loop;
 
-  -- Stamp the machine link on the movement rows adjust_stock just wrote. See
-  -- the header for why this is an UPDATE rather than an adjust_stock argument,
-  -- and why the predicate can only match this transaction's own pick draws.
+  -- Stamp the machine link on exactly the rows captured above, BY ID — the one
+  -- predicate that cannot reach a row this call did not write. An empty array
+  -- (nothing drawn, or a probe that could not identify its row) matches
+  -- nothing. See the header for why this is an UPDATE rather than an
+  -- adjust_stock argument.
   update public.stock_movements
      set reference_type = 'order_request',
          reference_id   = p_order_id
-   where organization_id = v_req.organization_id
-     and created_at      = now()
-     and movement_type   = 'transfer'
-     and user_id         = v_user
-     and reference_type is null
-     and item_id in (
-       select item_id from public.order_request_lines where order_request_id = p_order_id
-     );
+   where id = any(v_mv_ids)
+     and organization_id = v_req.organization_id;
 
   update public.stock_reservations
     set released_at = now()
