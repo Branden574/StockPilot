@@ -1,10 +1,13 @@
 import 'server-only';
 
 import {
+  RECEIPT_NOTE_SENTINEL_RE,
   collectLegacyRefIdsByKind,
   formatOrderNumber,
+  isMovementNoteEditable,
   legacyOrderRefId,
   resolveMovementRefReason,
+  userMovementNote,
 } from '@stockpilot/core';
 
 import { ServiceContext, withContext } from './context';
@@ -62,16 +65,21 @@ export interface ActivityEvent {
   /**
    * User-entered free-text notes, carried through VERBATIM alongside `reason`
    * (previously these were dropped whenever `reason` was also set). Movement
-   * only; null for pre-0231 'receipt_line' rows since their notes column
-   * holds an internal receipt id, not user text. Audit: always null.
+   * only; null for RECEIPT rows, whose notes column holds an internal receipt
+   * id rather than user text. That sentinel is detected by its SHAPE (a bare
+   * uuid — @stockpilot/core `userMovementNote`), NOT by the row's reason: 0231
+   * receipts changed their reason to 'PO {number}' and kept the sentinel, so a
+   * reason test misses them. Audit: always null.
    */
   notes: string | null;
   /**
    * Whether this event's note is user-editable (drives the item feed's
    * add/edit-note affordance, alongside the caller's `movements:edit_notes`
-   * permission). False for audit rows (never editable) AND for pre-0231
-   * 'receipt_line' movements, whose `notes` column holds a machine receipt
-   * reference the RPC refuses to overwrite (errcode 22023).
+   * permission). False for audit rows (never editable) AND for any movement
+   * whose note is the machine receipt sentinel — overwriting it would sever
+   * the row's only link to its receipt — AND for pre-0231 'receipt_line' rows,
+   * which the RPC refuses outright (errcode 22023). See @stockpilot/core
+   * `isMovementNoteEditable`.
    */
   noteEditable: boolean;
   /** Display name of the actor (or "System") if attribution missing. */
@@ -87,7 +95,14 @@ export interface ActivityEvent {
   metadata: Record<string, unknown> | null;
 }
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Bare-uuid test, re-exported from the ONE definition in @stockpilot/core
+ * (`movement-note-sentinel`). It used to be a private copy here, byte-identical
+ * to copies in the Movements page and the mobile display helpers — which is
+ * exactly how the three surfaces drifted apart. Kept under this name because
+ * `server/actions/activity.ts` validates an id against it.
+ */
+export const UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
 
 /**
  * One kind's "Load older" keyset boundary — the (created_at, id) of the
@@ -566,14 +581,26 @@ export class ActivityService {
       const isReceiptLine = rawReason === 'receipt_line';
       // Issue 3: `reason` and `notes` are carried through as TWO separate
       // fields (previously notes was silently dropped whenever reason was
-      // non-empty). Exception: pre-0231 'receipt_line' rows stash the
-      // internal receipt uuid in `notes` — that's an implementation detail,
-      // never real user text, so it's masked to null here (it's already
-      // been consumed above to produce the human 'PO {number}' reason).
+      // non-empty). Exception: receipt rows stash the internal receipt uuid in
+      // `notes` — an implementation detail, never real user text.
+      //
+      // The reason is resolved from the RAW reason: only pre-0231 rows carry
+      // the 'receipt_line' token that needs the receipt→PO lookup, and 0231+
+      // rows already say 'PO {number}' themselves.
       const reason = isReceiptLine
         ? receiptLineSummary(rawNotes, poNumberByReceipt)
         : resolveMovementRefReason(rawReason, referenceLabelById);
-      const notes = isReceiptLine ? null : rawNotes;
+      // But the NOTE is masked by the SHAPE of the note, not by the reason.
+      // This used to be `isReceiptLine ? null : rawNotes`, which was the
+      // PRE-0231 shape: migration 0231 changed the receipt writer's reason to
+      // 'PO {number}' while deliberately keeping the sentinel in `notes`, so
+      // the reason test stopped matching and the raw uuid rendered in curly
+      // quotes on the item Activity tab. Measured in prod 2026-07-29: 97 rows
+      // carry a bare-uuid note, this branch masked 17, and 80 leaked (49
+      // 'PO {number}' receipts + 31 'receipt_reversal' corrections). The
+      // Movements page already masked by shape for the same reason; the test
+      // now lives in @stockpilot/core so no surface can drift again.
+      const notes = userMovementNote(rawNotes);
       // Pre-0306 pick/cancel rows have NULL reference columns and the order's
       // uuid in the reason instead. Presenting the parsed id under the type it
       // has always meant gives those rows the same clickable source every
@@ -599,9 +626,13 @@ export class ActivityService {
         referenceLabel,
         reason,
         notes,
-        // receipt_line rows carry a system-managed note (machine receipt
-        // reference) — the RPC rejects edits, so never offer the affordance.
-        noteEditable: !isReceiptLine,
+        // A row whose note IS the machine receipt reference must never offer
+        // an editor: saving over it would sever the movement's only link to
+        // its receipt (stagedWorklist resolves the source receipt through it).
+        // Also refuses a pre-0231 'receipt_line' row, which the RPC rejects
+        // outright (errcode 22023) — see isMovementNoteEditable for why both
+        // signals are needed.
+        noteEditable: isMovementNoteEditable(rawReason, rawNotes),
         actor: a.name,
         actorEmail: a.email,
         metadata: null,

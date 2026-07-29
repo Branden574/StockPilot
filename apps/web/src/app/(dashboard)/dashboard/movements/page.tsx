@@ -30,7 +30,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
-import { can } from '@stockpilot/core';
+import { can, isReceiptNoteSentinel, userMovementNote } from '@stockpilot/core';
 
 const PAGE_SIZE = 50;
 
@@ -42,31 +42,24 @@ const PAGE_SIZE = 50;
  */
 const MOVEMENTS_INSTANT_CAP = 1000;
 
-// Pre-0231 receipt rows stash an internal receipt UUID in `notes` (the service
+// Receipt rows stash an internal receipt UUID in `notes` (the service
 // deliberately keeps it raw there for stagedWorklist — see MovementsService.
-// list). It's a sentinel, NOT user text: the old cell rendered `reason ?? notes`
-// so the resolved 'PO {n}' reason always won and the UUID never showed. Now that
-// the cell edits `notes`, mask a bare-UUID sentinel so it's never displayed or
-// pre-filled into the editor — the resolved reason still shows as the read-only
-// fallback. Mirrors the identical masking activity.ts applies to the item feed.
-const RECEIPT_NOTE_SENTINEL_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// list). It's a sentinel, NOT user text, so it is never displayed nor
+// pre-filled into the editor; the resolved reason still shows as the read-only
+// fallback. `list()` resolves the raw reason to a 'PO {n}' display string, so
+// the reliable per-row signal on this surface is the sentinel's SHAPE in the
+// raw notes column.
+//
+// This page's local copy of that test is gone: the shape test and the masking
+// now live in @stockpilot/core (`movement-note-sentinel`), which the item
+// Activity feed and mobile call too. The old comment here claimed it mirrored
+// activity.ts — it did not, and that gap is the leak this shared module closes.
 function userNote(rawNotes: unknown): string | null {
-  const n = (rawNotes as string | null) ?? null;
-  if (n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim())) return null;
-  return n;
+  return userMovementNote(rawNotes as string | null);
 }
 
-// A pre-0231 'receipt_line' movement stores a receipt-line UUID in `notes` —
-// a MACHINE reference (the ONLY link to its PO number), never a user note. Its
-// note is system-managed and NOT editable: the RPC rejects the edit (errcode
-// 22023) and the item feed / mobile mask it anyway. `list()` resolves the raw
-// 'receipt_line' reason to a 'PO {n}' display string, so `reason` no longer
-// carries the sentinel here — the reliable per-row signal on this surface is
-// the bare-UUID sentinel in the raw notes column.
 function isReceiptLineNote(rawNotes: unknown): boolean {
-  const n = (rawNotes as string | null) ?? null;
-  return !!n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim());
+  return isReceiptNoteSentinel(rawNotes as string | null);
 }
 
 // An order-pick / order-cancelled reason names a real record, so the cell that

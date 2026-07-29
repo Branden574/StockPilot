@@ -752,11 +752,14 @@ export default function ItemDetail() {
           reason: isReceiptLine
             ? receiptLineSummary(rawNotes, poNumberByReceipt)
             : resolveMovementRefReason(rawReason, pageLabelMap),
-          notes: movementNotesForDisplay(rawReason, rawNotes),
-          // Compute from the RAW reason (isReceiptLine) BEFORE it's resolved to
-          // a 'PO {number}' display string above — receipt_line notes are
-          // system-managed (RPC rejects edits, errcode 22023).
-          note_editable: movementNoteEditable(rawReason),
+          notes: movementNotesForDisplay(rawNotes),
+          // Both computed from the RAW columns, BEFORE the reason is resolved
+          // to a 'PO {number}' display string above. The note is system-managed
+          // whenever it IS the receipt sentinel (0231+ rows keep the sentinel
+          // but changed their reason, so the reason alone no longer detects
+          // them) or whenever the reason is the pre-0231 'receipt_line' the RPC
+          // rejects outright (errcode 22023).
+          note_editable: movementNoteEditable(rawReason, rawNotes),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           // Legacy pick/cancel rows get the type/id they have always MEANT, so

@@ -60,28 +60,43 @@ describe('movementReasonLabel', () => {
 });
 
 describe('movementNotesForDisplay', () => {
-  it("OLD receipt row: masks the internal receipt uuid stashed in notes", () => {
-    expect(movementNotesForDisplay('receipt_line', 'a1b2c3d4-...')).toBeNull();
+  it('masks the internal receipt uuid stashed in notes, whatever the reason', () => {
+    // Keyed off the note's SHAPE, so it covers the pre-0231 'receipt_line'
+    // rows AND the 0231+ rows that kept the sentinel but changed their reason
+    // to 'PO {number}' — the case the old reason-only mask missed, which put a
+    // bare uuid in curly quotes on the item screen.
+    expect(movementNotesForDisplay(RECEIPT_ID)).toBeNull();
+    expect(movementNotesForDisplay(` ${RECEIPT_ID} `)).toBeNull();
   });
 
-  it('ordinary reasons pass notes through verbatim', () => {
-    expect(movementNotesForDisplay('PO PO-2026-014', 'Handled with care')).toBe(
-      'Handled with care',
+  it('ordinary notes pass through verbatim', () => {
+    expect(movementNotesForDisplay('Handled with care')).toBe('Handled with care');
+    expect(movementNotesForDisplay(null)).toBeNull();
+    expect(movementNotesForDisplay('Free-text note')).toBe('Free-text note');
+  });
+
+  it('a uuid MENTIONED inside a sentence is real user text and survives', () => {
+    expect(movementNotesForDisplay(`wrong receipt, see ${RECEIPT_ID}`)).toBe(
+      `wrong receipt, see ${RECEIPT_ID}`,
     );
-    expect(movementNotesForDisplay('Damaged in transit', null)).toBeNull();
-    expect(movementNotesForDisplay(null, 'Free-text note')).toBe('Free-text note');
   });
 });
 
 describe('movementNoteEditable', () => {
   it("OLD receipt row: 'receipt_line' notes are system-managed → not editable", () => {
-    expect(movementNoteEditable('receipt_line')).toBe(false);
+    expect(movementNoteEditable('receipt_line', RECEIPT_ID)).toBe(false);
   });
 
-  it('every other reason (including resolved PO + null) is editable', () => {
-    expect(movementNoteEditable('PO PO-2026-014')).toBe(true);
-    expect(movementNoteEditable('Damaged in transit')).toBe(true);
-    expect(movementNoteEditable(null)).toBe(true);
+  it('NEW (0231+) receipt row: sentinel note is not editable despite the PO {n} reason', () => {
+    // Saving here would overwrite the movement's only link back to its receipt.
+    expect(movementNoteEditable('PO CVW-002201', RECEIPT_ID)).toBe(false);
+    expect(movementNoteEditable('receipt_reversal', RECEIPT_ID)).toBe(false);
+  });
+
+  it('every other row (including a PO row with a genuine note) is editable', () => {
+    expect(movementNoteEditable('PO PO-2026-014', 'Pallet arrived damp')).toBe(true);
+    expect(movementNoteEditable('Damaged in transit', null)).toBe(true);
+    expect(movementNoteEditable(null, null)).toBe(true);
   });
 });
 

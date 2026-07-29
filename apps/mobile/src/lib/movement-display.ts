@@ -16,6 +16,12 @@
  *    to the generic 'PO receipt' label — never the raw uuid.
  */
 
+import {
+  RECEIPT_NOTE_SENTINEL_RE,
+  isMovementNoteEditable,
+  userMovementNote,
+} from '@stockpilot/core';
+
 export interface MovementAmountInput {
   movement_type: string;
   quantity_change: number;
@@ -55,14 +61,17 @@ export function movementReasonLabel(reason: string | null): string | null {
 }
 
 /**
- * Matches a bare (unbraced) UUID — mirrors the web's `UUID_RE` in
- * `apps/web/src/server/services/activity.ts` exactly. Pre-0231
- * 'receipt_line' rows stash a receipt id (as text) in `notes`; this guards
+ * Matches a bare (unbraced) UUID. This used to be a private literal that a
+ * comment claimed "mirrors the web's `UUID_RE` exactly" — three such mirrors
+ * existed and they drifted, which is the whole reason the sentinel test now
+ * has ONE home in @stockpilot/core. Re-exported under the old name so this
+ * module's existing callers and tests are unaffected.
+ *
+ * Receipt rows stash a receipt id (as text) in `notes`; this guards
  * `collectReceiptLineIds` against ever batching a malformed/non-uuid value
  * into the `.in()` resolver query.
  */
-export const RECEIPT_LINE_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const RECEIPT_LINE_UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
 
 /**
  * Movement/Activity P5 (mobile web-parity gap): pre-0231 rows written by the
@@ -107,29 +116,36 @@ export function collectReceiptLineIds(
 }
 
 /**
- * Masks the internal receipt uuid stashed in `notes` on pre-0231
- * 'receipt_line' rows — it's an implementation detail (already consumed by
- * `movementReasonLabel` to produce 'PO receipt'), never real user text.
- * Every other reason passes `notes` through verbatim. Mirrors the web's
- * reason/notes split in `ActivityService.forItem` (notes is never silently
- * dropped EXCEPT for this one legacy sentinel case).
+ * Masks the internal receipt uuid stashed in `notes` on receipt rows — it's an
+ * implementation detail (the receipt link stagedWorklist resolves through),
+ * never real user text. Every other note passes through verbatim.
+ *
+ * Masks by the SHAPE of the note. It used to take the row's REASON and return
+ * `reason === 'receipt_line' ? null : notes`, which was the PRE-0231 shape:
+ * migration 0231 changed the receipt writer's reason to 'PO {number}' while
+ * deliberately keeping the sentinel in `notes`, so the reason test stopped
+ * matching and the raw uuid rendered in curly quotes on the item Movements and
+ * Activity tabs — the identical defect the web feed had, which is what a
+ * per-platform copy of this rule always produces. The `reason` parameter is
+ * gone rather than ignored: it was never the right signal.
+ *
+ * Aliased to the shared implementation (no wrapper) so mobile keeps its local
+ * vocabulary while being physically incapable of drifting from web.
  */
-export function movementNotesForDisplay(reason: string | null, notes: string | null): string | null {
-  return reason === 'receipt_line' ? null : notes;
-}
+export { userMovementNote as movementNotesForDisplay };
 
 /**
- * Whether a movement's note is user-editable. False for pre-0231
- * 'receipt_line' rows: their `notes` column holds a machine receipt reference
- * (the ONLY link to the PO number), so the SECURITY DEFINER `edit_movement_note`
- * RPC refuses to overwrite it (errcode 22023). Computed from the RAW
- * `stock_movements.reason` — call it BEFORE that reason is resolved to a
- * 'PO {number}' display string. Mirrors the web's `noteEditable` field on
- * `ActivityService.forItem` events exactly. Pure — unit-tested here.
+ * Whether a movement's note is user-editable. False when the note IS the
+ * machine receipt reference (saving over it would sever the movement's only
+ * link to its receipt), and false for a pre-0231 'receipt_line' row, which the
+ * SECURITY DEFINER `edit_movement_note` RPC rejects outright (errcode 22023).
+ *
+ * Takes the RAW `stock_movements.reason` and the RAW `notes` — call it BEFORE
+ * the reason is resolved to a 'PO {number}' display string and before the note
+ * is masked. Same implementation as the web's `noteEditable` field, so the two
+ * cannot disagree.
  */
-export function movementNoteEditable(reason: string | null): boolean {
-  return reason !== 'receipt_line';
-}
+export { isMovementNoteEditable as movementNoteEditable };
 
 /**
  * Web parity (Movement/Activity P1 review follow-up): renders a movement's

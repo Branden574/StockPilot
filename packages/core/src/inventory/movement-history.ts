@@ -37,6 +37,7 @@
  *  5. No actor is rendered as no actor — never "System" dressed up as a person.
  */
 
+import { RECEIPT_NOTE_SENTINEL_RE } from './movement-note-sentinel';
 import { resolveMovementRefReason } from './movement-order-ref';
 
 /** One stock_movements row, joined out to display-ready names and numbers. */
@@ -172,7 +173,10 @@ const INTERNAL_REASON_TOKENS = new Set([
  */
 const MACHINE_TOKEN_RE = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A note/reason that is nothing but a bare uuid is an identifier, not prose.
+ *  Same shape — and now literally the same regex — as the receipt sentinel in
+ *  `movement-note-sentinel.ts`, which is the one definition in the repo. */
+const UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
 
 /** `PO CVW-002201` — machine-composed by the receipt writer. The PO number is
  *  already carried structurally in `poNumber`, so echoing it as a "note" both

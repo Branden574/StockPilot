@@ -1068,6 +1068,74 @@ function movementRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The receipt-UUID leak (fixed 2026-07-29). Receipts stash an internal receipt
+// UUID in `notes` as a machine sentinel. The feed masked it by testing
+// `reason === 'receipt_line'` — the PRE-0231 shape. Migration 0231 changed the
+// receipt writer's reason to 'PO {number}' and KEPT the sentinel in `notes`, so
+// the test stopped matching and the raw UUID rendered as a quoted, editable
+// note. Prod at the time: 97 bare-UUID notes across 2 orgs, 17 masked, 80
+// leaking. These tests fail against the reason-only masking.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ActivityService.forItem masks the receipt sentinel by SHAPE, not by reason', () => {
+  const cases: Array<{ label: string; reason: string }> = [
+    { label: '0231+ receipt row', reason: 'PO CVW-002201' },
+    { label: 'receipt reversal row', reason: 'receipt_reversal' },
+    { label: 'pre-0231 receipt row', reason: 'receipt_line' },
+  ];
+
+  for (const { label, reason } of cases) {
+    it(`${label}: the UUID never reaches the feed, and the note is not editable`, async () => {
+      const stub = makeSupabaseStub({
+        'stock_movements.select': {
+          data: [movementRow({ reason, notes: RECEIPT_ID })],
+          error: null,
+        },
+        'audit_logs.select': { data: [], error: null },
+        'receipts.select': { data: [], error: null },
+      });
+
+      const [event] = await makeService(stub.client).forItem('item-1');
+
+      expect(event!.notes).toBeNull();
+      // The affordance must be gone BEFORE the RPC is asked: saving over the
+      // sentinel would sever the movement's only link back to its receipt.
+      expect(event!.noteEditable).toBe(false);
+    });
+  }
+
+  it('a genuine note on a 0231+ receipt row still shows and stays editable', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [movementRow({ reason: 'PO CVW-002201', notes: 'Pallet arrived damp' })],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+
+    const [event] = await makeService(stub.client).forItem('item-1');
+
+    expect(event!.notes).toBe('Pallet arrived damp');
+    expect(event!.noteEditable).toBe(true);
+  });
+
+  it('a note that MENTIONS a uuid is user text and survives untouched', async () => {
+    const note = `wrong receipt, see ${RECEIPT_ID}`;
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [movementRow({ reason: 'Correction', notes: note })],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+
+    const [event] = await makeService(stub.client).forItem('item-1');
+
+    expect(event!.notes).toBe(note);
+    expect(event!.noteEditable).toBe(true);
+  });
+});
+
 describe('receipt_line display helpers', () => {
   it('collectReceiptLineIds keeps only receipt_line rows with uuid notes, de-duplicated', () => {
     expect(

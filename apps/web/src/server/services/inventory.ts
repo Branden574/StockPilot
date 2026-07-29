@@ -38,6 +38,7 @@ import {
   returnNumberLabels,
   parseRackLabel,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
+  RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
   trackingTypeForMode,
   validateCustomFields,
@@ -132,8 +133,10 @@ export function buildRackFilterClause(
 
 /** stock_movements.notes carries a receipts.id as TEXT for receipt-written rows
  *  (post_receipt_v2 / adjust_stock p_notes). Only a well-formed uuid is treated
- *  as a receipt reference — anything else is an operator's typed note. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+ *  as a receipt reference — anything else is an operator's typed note. That is
+ *  the same judgement the display surfaces make, so it uses the same regex:
+ *  @stockpilot/core `movement-note-sentinel`, the one definition in the repo. */
+const UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
 
 /**
  * Maps an adjustStock movement_type to the closest existing AuditEvent so
