@@ -22,6 +22,13 @@ interface EditableMovementNoteProps {
    */
   reason?: string | null;
   /**
+   * Where the `reason` points, when it points anywhere — currently
+   * /dashboard/orders/{id} for a pick or cancellation. Applied ONLY when the
+   * reason is what's on screen (a user's own note is prose, not a reference,
+   * and must never become a link). null/absent renders plain text.
+   */
+  reasonHref?: string | null;
+  /**
    * When false the note is purely read-only (current behavior): no pencil, no
    * "Add note". The server action re-gates on `movements:edit_notes` regardless.
    */
@@ -46,6 +53,7 @@ export function EditableMovementNote({
   movementId,
   note,
   reason = null,
+  reasonHref = null,
   canEdit,
   variant = 'cell',
 }: EditableMovementNoteProps) {
@@ -142,20 +150,32 @@ export function EditableMovementNote({
 
   const displayText = value ?? (inline ? null : reason);
 
+  // The cell is showing the REASON (no user note) and that reason references a
+  // record we can navigate to — e.g. "Order pick (SO-000060)" → that order.
+  // A user's own note is never linked: it's their prose, not a reference.
+  const linkReason = !inline && !value && !!reason && !!reasonHref;
+  const displayNode = linkReason ? (
+    <a href={reasonHref as string} className="hover:text-foreground underline underline-offset-2">
+      {displayText}
+    </a>
+  ) : (
+    displayText
+  );
+
   // Read-only: exactly the prior rendering. Cell shows text or an em dash;
   // inline shows a quoted italic note only when one exists.
   if (!canEdit) {
     if (inline) {
       return value ? <span className="italic">&ldquo;{value}&rdquo;</span> : null;
     }
-    return <span>{displayText ?? '—'}</span>;
+    return <span>{displayText ? displayNode : '—'}</span>;
   }
 
   // Editable, has a note (or, for cells, a reason fallback) → text + pencil.
   if (displayText) {
     return (
       <span className="group inline-flex items-center gap-1">
-        {inline ? <span className="italic">&ldquo;{displayText}&rdquo;</span> : <span>{displayText}</span>}
+        {inline ? <span className="italic">&ldquo;{displayText}&rdquo;</span> : <span>{displayNode}</span>}
         <Button
           variant="ghost"
           size="sm"

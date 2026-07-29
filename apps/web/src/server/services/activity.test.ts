@@ -112,6 +112,45 @@ describe('ActivityService.forItem', () => {
     expect(events.map((e) => e.id)).toEqual(['m:m-new', 'a:a1', 'm:m-old']);
   });
 
+  // Pre-0306 pick rows stringified the ORDER'S UUID into the reason, so the
+  // item feed read "Order pick (order_request b3c7390a-…)" while the item
+  // history dialog showed a bare "Order pick" for the SAME event. Both now
+  // resolve the number, and the legacy row gets the clickable source that
+  // 0306-era rows get from their reference columns.
+  it('resolves a pre-0306 order-pick reason and gives the row a linkable order reference', async () => {
+    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-legacy',
+            movement_type: 'transfer',
+            quantity_change: -5,
+            new_quantity: 3,
+            reason: `Order pick (order_request ${orderId})`,
+            notes: null,
+            reference_type: null,
+            reference_id: null,
+            created_at: '2026-07-01T00:00:00.000Z',
+            user_id: null,
+          },
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+      'order_requests.select': { data: [{ id: orderId, order_number: 60 }], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.reason).toBe('Order pick (SO-000060)');
+    expect(events[0]!.referenceType).toBe('order_request');
+    expect(events[0]!.referenceId).toBe(orderId);
+    expect(events[0]!.referenceLabel).toBe('SO-000060');
+    // Folded into the resolver that was already running — no extra query.
+    expect(stub.fromCalls.filter((t) => t === 'order_requests')).toHaveLength(1);
+  });
+
   it('falls back to "System" when movement has null user_id', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {

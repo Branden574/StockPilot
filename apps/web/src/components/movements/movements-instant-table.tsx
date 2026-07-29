@@ -29,6 +29,8 @@ export interface MovementDisplayRow {
   movedQuantity: number | null;
   /** Read-only "why" (stock_movements.reason), shown as the note fallback. */
   reason: string | null;
+  /** Where that reason points (an order), or null for "plain text". */
+  reasonHref: string | null;
   /** Editable free-text note (stock_movements.notes). null when unset. */
   note: string | null;
   /**
@@ -192,6 +194,7 @@ export function MovementsInstantTable({
                         movementId={m.id}
                         note={m.note}
                         reason={m.reason}
+                        reasonHref={m.reasonHref}
                         // receipt_line rows are system-managed (RPC rejects the
                         // edit) — read-only regardless of the caller's perm.
                         canEdit={canEditNotes && m.noteEditable}

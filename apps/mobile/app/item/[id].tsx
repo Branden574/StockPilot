@@ -32,7 +32,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { can, formatOrderNumber, getCrateColor, type Role } from '@stockpilot/core';
+import {
+  can,
+  collectLegacyOrderRefIds,
+  formatOrderNumber,
+  getCrateColor,
+  legacyOrderRefId,
+  resolveOrderRefReason,
+  type Role,
+} from '@stockpilot/core';
 
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
@@ -659,6 +667,20 @@ export default function ItemDetail() {
           };
         }),
       );
+      // Pre-0306 pick/cancel rows have NULL reference columns and carry the
+      // ORDER'S UUID inside the reason instead (order_number only arrived in
+      // 0254; the ledger is append-only, so they're resolved at read time —
+      // see packages/core movement-order-ref.ts). Folding those ids into the
+      // SAME order_request bucket resolves them at NO extra query cost, and
+      // gives the legacy rows the clickable source the new ones get.
+      const legacyOrderIds = collectLegacyOrderRefIds(
+        rows.map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
+      );
+      if (legacyOrderIds.length > 0) {
+        idsByType.order_request = [
+          ...new Set([...(idsByType.order_request ?? []), ...legacyOrderIds]),
+        ];
+      }
       // Pre-0231 receipt rows (reason='receipt_line', notes=receipt uuid):
       // collect THIS PAGE's receipt ids so they can be resolved to PO
       // numbers in one extra batched query (Movement/Activity P5) — mirrors
@@ -726,7 +748,9 @@ export default function ItemDetail() {
           previous_quantity: Number(r.previous_quantity) || 0,
           new_quantity: Number(r.new_quantity) || 0,
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
-          reason: isReceiptLine ? receiptLineSummary(rawNotes, poNumberByReceipt) : rawReason,
+          reason: isReceiptLine
+            ? receiptLineSummary(rawNotes, poNumberByReceipt)
+            : resolveOrderRefReason(rawReason, pageLabelMap),
           notes: movementNotesForDisplay(rawReason, rawNotes),
           // Compute from the RAW reason (isReceiptLine) BEFORE it's resolved to
           // a 'PO {number}' display string above — receipt_line notes are
@@ -734,8 +758,12 @@ export default function ItemDetail() {
           note_editable: movementNoteEditable(rawReason),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
-          reference_type: (r.reference_type as string | null) ?? null,
-          reference_id: (r.reference_id as string | null) ?? null,
+          // Legacy pick/cancel rows get the type/id they have always MEANT, so
+          // the card links to the order like every other referenced movement.
+          reference_type:
+            (r.reference_type as string | null) ??
+            (legacyOrderRefId(rawReason) ? 'order_request' : null),
+          reference_id: (r.reference_id as string | null) ?? legacyOrderRefId(rawReason),
           from_location_id: fromLocationId,
           to_location_id: toLocationId,
           from_location_name: fromLocationId ? (locationNameById.get(fromLocationId) ?? null) : null,

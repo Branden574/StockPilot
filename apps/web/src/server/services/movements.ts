@@ -3,8 +3,15 @@ import 'server-only';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import {
+  collectLegacyOrderRefIds,
+  movementOrderRefId,
+  resolveOrderRefReason,
+} from '@stockpilot/core';
+
+import {
   collectReceiptLineIds,
   receiptLineSummary,
+  resolveOrderNumbers,
   resolveReceiptPoNumbers,
 } from './activity';
 import { ServiceError, withContext, type ServiceContext } from './context';
@@ -35,12 +42,18 @@ export interface MovementWithItem {
   from_location_id: string | null;
   to_location_id: string | null;
   /** Display reason. Pre-0231 receipt rows' internal 'receipt_line' label is
-      already mapped to 'PO {number}' (or 'PO receipt') by list(). */
+      already mapped to 'PO {number}' (or 'PO receipt') by list(); pre-0306
+      pick/cancel rows' `(order_request <uuid>)` parenthetical is likewise
+      already resolved to '(SO-000060)' — a raw uuid never reaches a caller. */
   reason: string | null;
   notes: string | null;
   created_at: string;
   item_id: string;
   user_id: string | null;
+  /** The order this movement belongs to, for linking to /dashboard/orders/{id}.
+      Reference columns for 0306+ rows, parsed out of the legacy reason for the
+      older ones. null means "render plain text, not a link". */
+  order_ref_id: string | null;
   item: { id: string; name: string; sku: string } | null;
   /** Full name (or email fallback) of the user who triggered the movement.
       null when the row was written by a system process (e.g. a trigger
@@ -122,7 +135,7 @@ export class MovementsService {
         `
         id, movement_type, quantity_change, previous_quantity, new_quantity,
         moved_quantity, from_location_id, to_location_id, reason, notes, created_at,
-        item_id, user_id,
+        item_id, user_id, reference_type, reference_id,
         ${itemEmbed},
         actor:user_profiles!user_id (id, full_name, email)
       `,
@@ -173,14 +186,33 @@ export class MovementsService {
       ),
     );
 
+    // Pre-0306 pick/cancel rows stringified the ORDER'S UUID into the reason
+    // ('Order pick (order_request b3c7390a-…)') because order_number didn't
+    // exist yet (0254). The ledger is append-only, so those rows are resolved
+    // HERE rather than rewritten — same shape as the receipt→PO mapping above:
+    // collect every id on the page, ONE org-scoped lookup, map per row.
+    const orderNumberById = await resolveOrderNumbers(
+      this.ctx,
+      collectLegacyOrderRefIds(
+        (data ?? []).map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
+      ),
+    );
+
     // PostgREST returns the related row as an array when the relation is
     // ambiguous; flatten to a single object.
     return (data ?? []).map((row) => {
       const r = row as Record<string, unknown>;
+      const rawReason = (r.reason as string | null) ?? null;
       const reason =
         r.reason === 'receipt_line'
           ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
-          : ((r.reason as string | null) ?? null);
+          : resolveOrderRefReason(rawReason, orderNumberById);
+      // Computed from the RAW reason — the resolved one no longer carries an id.
+      const order_ref_id = movementOrderRefId({
+        reason: rawReason,
+        reference_type: (r.reference_type as string | null) ?? null,
+        reference_id: (r.reference_id as string | null) ?? null,
+      });
       const itemField = r.item as
         | { id: string; name: string; sku: string }
         | { id: string; name: string; sku: string }[]
@@ -200,7 +232,7 @@ export class MovementsService {
             email: actorRaw.email ?? null,
           }
         : null;
-      return { ...r, reason, item, actor } as MovementWithItem;
+      return { ...r, reason, order_ref_id, item, actor } as MovementWithItem;
     });
   }
 
@@ -351,6 +383,15 @@ export class MovementsService {
       ),
     );
 
+    // Same legacy-order resolution list() applies, so the CSV and the screen
+    // never disagree about what an event was.
+    const orderNumberById = await resolveOrderNumbers(
+      this.ctx,
+      collectLegacyOrderRefIds(
+        rawRows.map((r) => ({ reason: (r.reason as string | null) ?? null })),
+      ),
+    );
+
     const locationIds = new Set<string>();
     for (const r of rawRows) {
       const from = r.from_location_id as string | null;
@@ -379,7 +420,7 @@ export class MovementsService {
       const reason =
         r.reason === 'receipt_line'
           ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
-          : ((r.reason as string | null) ?? null);
+          : resolveOrderRefReason((r.reason as string | null) ?? null, orderNumberById);
       const itemField = r.item as
         | { id: string; name: string; sku: string }
         | { id: string; name: string; sku: string }[]

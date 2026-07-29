@@ -31,8 +31,10 @@ import {
   formatRackLabel,
   formatStockQuantity,
   historyNote,
+  collectLegacyOrderRefIds,
   normalizeRackFields,
   normalizeSizeValue,
+  orderNumberLabels,
   parseRackLabel,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RESERVED_CUSTOM_FIELD_KEYS,
@@ -4599,6 +4601,30 @@ export class InventoryService {
       }
     }
 
+    // 5b. Pre-0306 pick/cancel rows stringified the ORDER'S UUID into their
+    //     reason ('Order pick (order_request b3c7390a-…)') because
+    //     order_requests.order_number only arrived in 0254. The ledger is
+    //     append-only so those rows are resolved at read time, not rewritten.
+    //     Chunked and org-scoped for exactly the reasons the two lookups above
+    //     are, and degrading to an empty map on error — historyNote then falls
+    //     back to the bare "Order pick" it has always rendered.
+    const orderNumberById = new Map<string, string>();
+    for (const idChunk of chunkIdsForInFilter(
+      collectLegacyOrderRefIds(raw.map((r) => ({ reason: (r.reason as string | null) ?? null }))),
+    )) {
+      const { data: orders, error: oErr } = await this.ctx.supabase
+        .from('order_requests')
+        .select('id, order_number')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', idChunk);
+      if (oErr) console.error('item history: order number lookup failed', { error: oErr.message });
+      for (const [id, label] of orderNumberLabels(
+        (orders ?? []) as Array<{ id: string; order_number: number | null }>,
+      )) {
+        orderNumberById.set(id, label);
+      }
+    }
+
     // 6. Reversal pairing. `receipts.reversed_receipt_id` is the RECORDED link
     //    between an undo and what it undid — we read it rather than matching on
     //    the "-REV" suffix or on equal-and-opposite quantities, either of which
@@ -4675,7 +4701,11 @@ export class InventoryService {
         toLocationName: r.to_location_id
           ? (locationNames.get(r.to_location_id as string) ?? null)
           : null,
-        note: historyNote((r.reason as string | null) ?? null, (r.notes as string | null) ?? null),
+        note: historyNote(
+          (r.reason as string | null) ?? null,
+          (r.notes as string | null) ?? null,
+          orderNumberById,
+        ),
         receiptNumber: meta?.receiptNumber ?? null,
         receiptStatus: meta?.status ?? null,
         poNumber: meta?.poNumber ?? null,

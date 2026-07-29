@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { formatOrderNumber } from '@stockpilot/core';
+import {
+  collectLegacyOrderRefIds,
+  formatOrderNumber,
+  legacyOrderRefId,
+  resolveOrderRefReason,
+} from '@stockpilot/core';
 
 import { ServiceContext, withContext } from './context';
 
@@ -518,6 +523,18 @@ export class ActivityService {
       const rid = (m.reference_id as string | null) ?? null;
       if (rt && rid) (idsByType[rt] ??= []).push(rid);
     }
+    // Pre-0306 pick/cancel rows have NULL reference columns and carry the
+    // order's uuid inside the reason instead. Folding those ids into the
+    // SAME order_request bucket resolves them for free — the resolver is
+    // already running, and it dedupes — so the feed costs no extra query.
+    const legacyOrderIds = collectLegacyOrderRefIds(
+      movementRows.map((m) => ({ reason: (m.reason as string | null) ?? null })),
+    );
+    if (legacyOrderIds.length > 0) {
+      idsByType.order_request = [
+        ...new Set([...(idsByType.order_request ?? []), ...legacyOrderIds]),
+      ];
+    }
     const referenceLabelsPromise = resolveReferenceLabels(this.ctx, idsByType);
 
     const profiles = new Map<string, { name: string; email: string | null }>();
@@ -554,10 +571,16 @@ export class ActivityService {
       // been consumed above to produce the human 'PO {number}' reason).
       const reason = isReceiptLine
         ? receiptLineSummary(rawNotes, poNumberByReceipt)
-        : rawReason;
+        : resolveOrderRefReason(rawReason, referenceLabelById);
       const notes = isReceiptLine ? null : rawNotes;
-      const referenceType = (m.reference_type as string | null) ?? null;
-      const referenceId = (m.reference_id as string | null) ?? null;
+      // Pre-0306 pick/cancel rows have NULL reference columns and the order's
+      // uuid in the reason instead. Presenting the parsed id under the type it
+      // has always meant gives those rows the same clickable source every
+      // other referenced movement gets — the route/label maps stay untouched.
+      const legacyOrderId = legacyOrderRefId(rawReason);
+      const referenceType =
+        (m.reference_type as string | null) ?? (legacyOrderId ? 'order_request' : null);
+      const referenceId = (m.reference_id as string | null) ?? legacyOrderId;
       const referenceLabel = referenceId ? (referenceLabelById.get(referenceId) ?? null) : null;
       return {
         id: `m:${m.id as string}`,

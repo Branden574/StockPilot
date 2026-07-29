@@ -37,6 +37,8 @@
  *  5. No actor is rendered as no actor — never "System" dressed up as a person.
  */
 
+import { resolveOrderRefReason } from './movement-order-ref';
+
 /** One stock_movements row, joined out to display-ready names and numbers. */
 export interface ItemHistoryMovement {
   /** stock_movements.id */
@@ -139,7 +141,11 @@ export interface ItemHistoryPage {
  * `Shipment {work_order_number}` (the shipment number appears nowhere else on
  * the row) and `Cycle count adjustment` (these are movement_type='adjust', so
  * the title cannot say a cycle count produced them). Their trailing raw ids are
- * stripped by TRAILING_REF_RE, which is a separate concern.
+ * stripped by TRAILING_REF_RE, which is a separate concern — except for
+ * `order_request` ids, which `historyNote` now RESOLVES to "(SO-000060)" via
+ * movement-order-ref.ts when the caller supplies a label map, and only strips
+ * when it cannot. See that module for why the ledger's own rows still carry
+ * the uuid.
  */
 const INTERNAL_REASON_TOKENS = new Set([
   'receipt_line',
@@ -210,8 +216,21 @@ function cleanProse(raw: string | null | undefined): string | null {
 export function historyNote(
   reason: string | null | undefined,
   notes: string | null | undefined,
+  orderNumberById?: ReadonlyMap<string, string> | null,
 ): string | null {
-  const r = cleanProse(reason);
+  // Resolve a legacy `(order_request <uuid>)` parenthetical to `(SO-000060)`
+  // BEFORE cleaning. This is what makes the item-history dialog and the
+  // Movements page say the same words about the same event — they used to
+  // disagree, because this formatter stripped the parenthetical to a bare
+  // "Order pick" while the Movements page printed the raw uuid.
+  //
+  // Two properties make the ordering safe. A resolved `(SO-000060)` is not a
+  // 36-char hex id, so `TRAILING_REF_RE` below leaves it alone. And when
+  // nothing resolves, `resolveOrderRefReason` drops the parenthetical itself,
+  // landing on exactly the "Order pick" this function has always returned —
+  // so callers that pass no map (or hit a degraded lookup) keep today's
+  // behaviour byte for byte.
+  const r = cleanProse(resolveOrderRefReason(reason, orderNumberById));
   const n = cleanProse(notes);
   if (r && n && r.toLowerCase() !== n.toLowerCase()) return `${r} (note: ${n})`;
   return r ?? n;

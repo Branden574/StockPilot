@@ -105,6 +105,37 @@ describe('historyNote — rule 2: never render an internal token as a human note
     );
   });
 
+  // The item-history dialog and the Movements page used to describe the SAME
+  // event differently: this formatter stripped the reference to a bare "Order
+  // pick" while the Movements page printed the raw uuid. Given the page's
+  // batched order-number map both now say the same words.
+  it('renders the human order number when the caller resolved one', () => {
+    const labels = new Map([['51516354-4efe-40e5-89bd-95164cbef2f7', 'SO-000060']]);
+    expect(
+      historyNote('Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)', null, labels),
+    ).toBe('Order pick (SO-000060)');
+    expect(
+      historyNote(
+        'Order cancelled (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)',
+        null,
+        labels,
+      ),
+    ).toBe('Order cancelled (SO-000060)');
+  });
+
+  // The resolved parenthetical is not a 36-char hex id, so TRAILING_REF_RE
+  // must leave it alone — otherwise the number would be stripped right back
+  // off and the fix would be invisible.
+  it('does not strip an already-resolved order number off a 0306-era row', () => {
+    expect(historyNote('Order pick (SO-000060)', null)).toBe('Order pick (SO-000060)');
+  });
+
+  it('falls back to today’s stripped text when nothing resolves', () => {
+    expect(
+      historyNote('Order pick (order_request 51516354-4efe-40e5-89bd-95164cbef2f7)', null, new Map()),
+    ).toBe('Order pick');
+  });
+
   // M1. historyNote used to be `cleanProse(reason) ?? cleanProse(notes)`, so an
   // operator who typed BOTH lost the note silently. The owner asked for "when
   // where notes why everything".

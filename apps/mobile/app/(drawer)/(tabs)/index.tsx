@@ -400,9 +400,18 @@ export default function Home() {
 // Strip noisy auto-generated UUID parentheticals (e.g.
 // "Order pick (order_request 4af...)" -> "Order pick") and clamp
 // length so the secondary line doesn't wrap on narrow rows.
+//
+// Only UUID-BEARING parentheticals go. This used to strip every `(...)`, which
+// would now also delete the human order number migration 0306 writes — so a
+// "Order pick (SO-000060)" row would silently lose the one thing that makes it
+// identifiable. This teaser doesn't run the batched order lookup the Movements
+// screen does, so pre-0306 rows still reduce to a bare "Order pick" here; what
+// matters is that no uuid ever reaches the card and no real number is thrown
+// away. TRAILING_ID_PAREN_RE mirrors packages/core's TRAILING_REF_RE.
+const TRAILING_ID_PAREN_RE = /\s*\([^)]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^)]*\)\s*/gi;
 function cleanReason(raw: string | null): string {
   if (!raw) return '';
-  const stripped = raw.replace(/\s*\([^)]*\)\s*/g, '').trim();
+  const stripped = raw.replace(TRAILING_ID_PAREN_RE, ' ').trim();
   if (stripped.length <= 38) return stripped;
   return stripped.slice(0, 36).trimEnd() + '…';
 }

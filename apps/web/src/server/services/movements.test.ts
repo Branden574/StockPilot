@@ -302,6 +302,118 @@ describe('MovementsService.list', () => {
     expect(rows[0]!.reason).toBe('PO receipt');
   });
 
+  // ── Pre-0306 pick rows: the order's uuid was written INTO the reason ──
+  // The ledger is append-only, so those ~99 prod rows are resolved here at
+  // read time rather than rewritten. Same batched shape as the receipt→PO
+  // mapping above: one lookup per page, never per row.
+
+  it("resolves a pre-0306 'Order pick (order_request <uuid>)' reason to the order number", async () => {
+    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-legacy',
+            movement_type: 'transfer',
+            quantity_change: -5,
+            moved_quantity: null,
+            reason: `Order pick (order_request ${orderId})`,
+            notes: null,
+            reference_type: null,
+            reference_id: null,
+            item: null,
+            actor: null,
+          },
+          {
+            id: 'm-0306',
+            movement_type: 'transfer',
+            quantity_change: -2,
+            moved_quantity: null,
+            reason: 'Order pick (SO-000061)',
+            notes: null,
+            reference_type: 'order_request',
+            reference_id: 'aaaaaaaa-0000-0000-0000-000000000001',
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'order_requests.select': {
+        data: [{ id: orderId, order_number: 60 }],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('Order pick (SO-000060)');
+    // …and the row can LINK to the order it names.
+    expect(rows[0]!.order_ref_id).toBe(orderId);
+    // A 0306-era row already reads correctly and links off its columns.
+    expect(rows[1]!.reason).toBe('Order pick (SO-000061)');
+    expect(rows[1]!.order_ref_id).toBe('aaaaaaaa-0000-0000-0000-000000000001');
+    // ONE batched lookup for the page — no N+1.
+    expect(stub.fromCalls.filter((t) => t === 'order_requests')).toHaveLength(1);
+  });
+
+  it('drops the parenthetical rather than leaking a uuid when the order cannot be resolved', async () => {
+    const orderId = 'b3c7390a-b114-4839-a100-a008d3f3fde0';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-orphan',
+            movement_type: 'transfer',
+            quantity_change: -5,
+            moved_quantity: null,
+            reason: `Order pick (order_request ${orderId})`,
+            notes: null,
+            reference_type: null,
+            reference_id: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'order_requests.select': { data: [], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('Order pick');
+    expect(rows[0]!.reason).not.toContain(orderId);
+  });
+
+  it('runs no order lookup at all when the page has no legacy pick rows', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-plain',
+            movement_type: 'adjust',
+            quantity_change: 1,
+            moved_quantity: null,
+            reason: 'Recount',
+            notes: null,
+            reference_type: null,
+            reference_id: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('Recount');
+    expect(rows[0]!.order_ref_id).toBeNull();
+    expect(stub.fromCalls.filter((t) => t === 'order_requests')).toHaveLength(0);
+  });
+
   // ── P3 Task 2: movement_type + date-range filters (Movements page) ──
 
   it('applies since/until/types filters onto the query', async () => {

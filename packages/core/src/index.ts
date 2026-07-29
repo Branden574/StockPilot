@@ -23,6 +23,7 @@ export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
 export * from './inventory/movement-history';
+export * from './inventory/movement-order-ref';
 export * from './inventory/items-csv-import';
 export * from './sports/import-results';
 export * from './sports/size-count-labels';

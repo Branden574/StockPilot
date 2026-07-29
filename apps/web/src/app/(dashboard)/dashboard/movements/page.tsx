@@ -69,6 +69,14 @@ function isReceiptLineNote(rawNotes: unknown): boolean {
   return !!n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim());
 }
 
+// An order-pick / order-cancelled reason names a real record, so the cell that
+// shows it links there. `order_ref_id` is resolved by MovementsService.list()
+// from the reference columns (0306+ rows) or from the legacy uuid still inside
+// older rows' reason text — null means "render plain text", never a dead link.
+function orderHref(orderRefId: string | null | undefined): string | null {
+  return orderRefId ? `/dashboard/orders/${orderRefId}` : null;
+}
+
 export default async function MovementsPage({
   searchParams,
 }: {
@@ -149,6 +157,7 @@ export default async function MovementsPage({
       // TWO fields now — the note cell edits `note` and falls back to showing
       // `reason` when there's no note (see EditableMovementNote).
       reason: (m.reason as string | null) ?? null,
+      reasonHref: orderHref(m.order_ref_id),
       note: userNote(m.notes),
       // receipt_line rows carry a system-managed note (the RPC rejects edits)
       // — never expose the add/edit affordance on them.
@@ -357,6 +366,7 @@ export default async function MovementsPage({
                         movementId={m.id as string}
                         note={userNote(m.notes)}
                         reason={(m.reason as string | null) ?? null}
+                        reasonHref={orderHref(m.order_ref_id)}
                         // receipt_line rows are system-managed (RPC rejects the
                         // edit) — read-only regardless of the caller's perm.
                         canEdit={canEditNotes && !isReceiptLineNote(m.notes)}
