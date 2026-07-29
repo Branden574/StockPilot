@@ -13,10 +13,16 @@
 --       NOW refused. This is the gap 0307 closes: against the pre-0307 function
 --       this assertion FAILS (the edit succeeds and the receipt link is gone);
 --   (c) a `receipt_reversal` row with a sentinel note is refused, same reason;
---   (d) an ORDINARY movement carrying a real user note is STILL editable — the
+--   (d) a sentinel padded with NON-SPACE whitespace (newline/tab) is refused.
+--       This pins SQL/TS parity rather than asserting it in prose: the display
+--       layer trims with JS `.trim()` (all whitespace), so a DB-side trim that
+--       only handled spaces — Postgres' one-argument `btrim()` — would mask the
+--       note in every UI while still letting the RPC overwrite it, which is the
+--       exact hole this migration exists to close;
+--   (e) an ORDINARY movement carrying a real user note is STILL editable — the
 --       regression that matters, since the guard must not lock operators out of
 --       their own notes;
---   (e) a note that merely CONTAINS a uuid inside a sentence is still editable —
+--   (f) a note that merely CONTAINS a uuid inside a sentence is still editable —
 --       the anchored shape test must not swallow prose.
 --
 -- Every refusal is paired with a read proving the sentinel survived, and every
@@ -28,7 +34,7 @@
 
 begin;
 
-select plan(10);
+select plan(12);
 
 \set org      '\'fd070000-0000-0000-0000-0000000000f1\''
 \set mgr_id   '\'fd070000-0000-0000-0000-0000000000c1\''
@@ -36,8 +42,9 @@ select plan(10);
 \set m_legacy '\'fd070000-0000-0000-0000-0000000000a1\''
 \set m_po     '\'fd070000-0000-0000-0000-0000000000a2\''
 \set m_rev    '\'fd070000-0000-0000-0000-0000000000a3\''
-\set m_plain  '\'fd070000-0000-0000-0000-0000000000a4\''
-\set m_prose  '\'fd070000-0000-0000-0000-0000000000a5\''
+\set m_pad    '\'fd070000-0000-0000-0000-0000000000a4\''
+\set m_plain  '\'fd070000-0000-0000-0000-0000000000a5\''
+\set m_prose  '\'fd070000-0000-0000-0000-0000000000a6\''
 -- The machine sentinels the receiving RPCs stash in `notes` (receipt ids).
 \set rcpt1    '\'fd070000-0000-0000-0000-0000000000b1\''
 \set rcpt2    '\'fd070000-0000-0000-0000-0000000000b2\''
@@ -67,10 +74,15 @@ values
   (:m_po,     :org, :item1, 'receive_po', 4, 3, 7, :mgr_id, 'PO 1042',    :rcpt2),
   -- (c) reverse_receipt: reason 'receipt_reversal', sentinel note.
   (:m_rev,    :org, :item1, 'remove',    -4, 7, 3, :mgr_id, 'receipt_reversal', :rcpt3),
-  -- (d) an ordinary hand-written note — must stay editable.
+  -- (d) a sentinel padded with a LEADING NEWLINE and a TRAILING TAB — not a
+  --     space in sight. The TS side masks this (packages/core
+  --     movement-note-sentinel.test.ts pins it), so the SQL side must refuse it.
+  (:m_pad,    :org, :item1, 'receive_po', 2, 3, 5, :mgr_id, 'PO 1043',
+   E'\n' || 'fd070000-0000-0000-0000-0000000000b4' || E'\t'),
+  -- (e) an ordinary hand-written note — must stay editable.
   (:m_plain,  :org, :item1, 'adjust',     1, 3, 4, :mgr_id, 'manual_adjust',
    'counted short on the top shelf'),
-  -- (e) prose that happens to contain a uuid — must stay editable.
+  -- (f) prose that happens to contain a uuid — must stay editable.
   (:m_prose,  :org, :item1, 'adjust',     1, 4, 5, :mgr_id, 'manual_adjust',
    'swapped for fd070000-0000-0000-0000-0000000000b9 per Dana');
 
@@ -127,12 +139,31 @@ select is(
   'receipt_reversal denial preserved its sentinel'
 );
 
--- ── (d) ORDINARY movement with a real note → still editable ────────────────
+-- ── (d) sentinel padded with newline/tab → refused (SQL/TS trim parity) ────
+-- Postgres' ONE-ARGUMENT btrim() strips spaces ONLY, while JS `.trim()` strips
+-- all whitespace. A guard written with the one-arg form passes this row through
+-- while every UI masks it — masked on screen, overwritable over the wire. This
+-- assertion is what stops that from being true again.
+set local role to 'authenticated';
+select throws_ok(
+  $$ select public.edit_movement_note('fd070000-0000-0000-0000-0000000000a4', 'sneak past the trim') $$,
+  '22023', null,
+  'sentinel padded with newline/tab (no spaces) is refused — SQL trim matches JS .trim()'
+);
+reset role;
+
+select is(
+  (select notes from public.stock_movements where id = :m_pad),
+  E'\n' || 'fd070000-0000-0000-0000-0000000000b4' || E'\t',
+  'whitespace-padded sentinel survived the denial byte-for-byte'
+);
+
+-- ── (e) ORDINARY movement with a real note → still editable ────────────────
 -- The regression guard: widening to a shape test must not lock operators out of
 -- notes they wrote themselves.
 set local role to 'authenticated';
 select lives_ok(
-  $$ select public.edit_movement_note('fd070000-0000-0000-0000-0000000000a4', 'recounted — 4 on hand') $$,
+  $$ select public.edit_movement_note('fd070000-0000-0000-0000-0000000000a5', 'recounted — 4 on hand') $$,
   'ordinary movement with a user note is STILL editable'
 );
 reset role;
@@ -143,12 +174,12 @@ select is(
   'ordinary note edit persisted'
 );
 
--- ── (e) a uuid INSIDE a sentence → still editable ──────────────────────────
+-- ── (f) a uuid INSIDE a sentence → still editable ──────────────────────────
 -- The shape test is anchored at both ends, so prose that mentions an id is not
 -- a sentinel.
 set local role to 'authenticated';
 select lives_ok(
-  $$ select public.edit_movement_note('fd070000-0000-0000-0000-0000000000a5', 'swapped again per Dana') $$,
+  $$ select public.edit_movement_note('fd070000-0000-0000-0000-0000000000a6', 'swapped again per Dana') $$,
   'note containing a uuid inside a sentence is STILL editable'
 );
 reset role;

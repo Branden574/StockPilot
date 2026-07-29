@@ -26,9 +26,20 @@
 -- the display layer shares (packages/core/src/inventory/movement-note-sentinel.ts,
 -- `RECEIPT_NOTE_SENTINEL_RE`). `~*` mirrors that regex's `i` flag; Postgres
 -- `^`/`$` are not newline-sensitive by default, matching JS's non-`m` anchors, so
--- a multi-line note is not a sentinel. `btrim` mirrors the TS `.trim()` — the
--- column is written by string concatenation in SQL and a padded value is still
--- the sentinel.
+-- a multi-line note is not a sentinel.
+--
+-- THE TRIM IS NOT `btrim(x)`. Postgres' ONE-ARGUMENT `btrim()` strips SPACES
+-- ONLY, whereas the TS side trims with JS `.trim()`, which strips ALL
+-- whitespace. A guard built on the one-arg form would let a sentinel padded with
+-- a newline or a tab through — masked on every screen, yet overwritable over the
+-- wire — which is precisely the hole this migration exists to close, reopened at
+-- a smaller size. So the trim here is an explicit regexp_replace over
+-- `[\s\ufeff]`, verified against every character JS `.trim()` strips: ASCII
+-- whitespace (space, tab, CR, LF, FF, VT), the Unicode space separators
+-- (U+00A0, U+2000-200A, U+3000, U+2028/9 — all matched by Postgres `\s` under
+-- this database's ctype) and U+FEFF, which Postgres `\s` does NOT match and so
+-- is named explicitly. pgTAP case (d) pins the newline/tab case so this parity
+-- is asserted by a test rather than by this paragraph.
 --
 -- The existing `reason = 'receipt_line'` term is KEPT, deliberately: nothing that
 -- is refused today may become allowed. (All 17 live receipt_line rows do carry a
@@ -100,8 +111,13 @@ begin
   --     stops the next reason change from re-opening this hole.
   --   * reason = 'receipt_line' — the pre-0231 shape, kept so that nothing
   --     refused before this migration becomes allowed after it.
+  --
+  -- The trim is regexp_replace, NOT one-arg btrim(): btrim(x) strips spaces
+  -- only, while the TS mask trims with JS `.trim()` (all whitespace). See the
+  -- header — a sentinel padded with a newline or tab must not slip through a
+  -- guard that every UI already applies.
   if v_reason = 'receipt_line'
-     or btrim(coalesce(v_old, '')) ~*
+     or regexp_replace(coalesce(v_old, ''), '^[\s\ufeff]+|[\s\ufeff]+$', '', 'g') ~*
         '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
     raise exception 'movement note is system-managed and cannot be edited'
       using errcode = '22023';
