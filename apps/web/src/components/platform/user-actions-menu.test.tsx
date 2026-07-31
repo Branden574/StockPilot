@@ -97,13 +97,33 @@ describe('UserActionsMenu — what the menu offers', () => {
     expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
   });
 
-  it('hides both status actions for a protected platform admin', async () => {
+  it('hides Disable for a protected platform admin', async () => {
     renderMenu({ protectedAdmin: true });
     await openMenu();
     expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
+    // Not offered because the account is ACTIVE, not because it is protected.
     expect(screen.queryByRole('menuitem', { name: /re-enable/i })).not.toBeInTheDocument();
     // The non-destructive action survives.
     expect(screen.getByRole('menuitem', { name: /password reset/i })).toBeInTheDocument();
+  });
+
+  /**
+   * The asymmetry is the point. Disable is refused for a protected admin by the
+   * SERVER, so hiding it is an honest courtesy. Re-enable is NOT refused by the
+   * server for a protected admin — restoring access to a god admin is always
+   * allowed. Gating the menu item on `!protectedAdmin` invented a restriction
+   * the server does not have, and it stranded exactly one real account shape:
+   * a user disabled BEFORE their address was added to
+   * STOCKPILOT_PLATFORM_ADMIN_EMAILS could never be re-enabled from the console
+   * at all.
+   */
+  it('offers Re-enable for a protected platform admin who is already disabled', async () => {
+    renderMenu({ protectedAdmin: true, disabledAt: '2026-07-30T12:00:00Z' });
+    await openMenu();
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+    // Disable stays refused — you may always restore access, never remove a
+    // god admin's.
+    expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
   });
 
   // Without an email there is nothing to type into the type-to-confirm gate,
@@ -263,6 +283,59 @@ describe('UserActionsMenu — re-enabling', () => {
 
     await waitFor(() => expect(h.error).toHaveBeenCalledWith('That account is not disabled.'));
     expect(h.success).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A PARTIAL re-enable carries code ACCOUNT_NOT_DISABLED *and* partialReasons:
+   * the authoritative half landed (the flag is cleared) but a later layer did
+   * not. ACCOUNT_NOT_DISABLED is also a stale-status code, so checking
+   * staleness first sent this down the refresh path — which re-reads the row,
+   * now `disabledAt: null`, and unmounts the very "Re-enable account" item the
+   * toast just told the operator to press. The advertised retry has to survive.
+   */
+  it('keeps the advertised retry reachable after a partial re-enable', async () => {
+    h.reenable.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'The disable flag was cleared, but the change was not written to the audit log. Press Re-enable again to finish.',
+        details: { code: 'ACCOUNT_NOT_DISABLED', partialReasons: ['not_audited'] },
+      },
+    });
+    renderMenu({ disabledAt: '2026-07-30T12:00:00Z' });
+    const user = await openMenu();
+    await user.click(screen.getByRole('menuitem', { name: /re-enable account/i }));
+
+    await waitFor(() => expect(h.error).toHaveBeenCalled());
+    expect(String(h.error.mock.calls[0]![0])).toMatch(/press re-enable again/i);
+    expect(h.success).not.toHaveBeenCalled();
+    // Refreshing is what would strand the retry, so it must NOT happen.
+    expect(h.refresh).not.toHaveBeenCalled();
+    // And the item the message names is still there to be pressed.
+    await openMenu();
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+  });
+
+  /**
+   * The counterpart: a genuinely stale row (no partialReasons) must still
+   * refresh, which is literally what its own message instructs.
+   */
+  it('still re-reads the row on a stale-only re-enable conflict', async () => {
+    h.reenable.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          "That account's status changed while you were working. Reload the page and try again.",
+        details: { code: 'ACCOUNT_STATUS_CHANGED' },
+      },
+    });
+    renderMenu({ disabledAt: '2026-07-30T12:00:00Z' });
+    const user = await openMenu();
+    await user.click(screen.getByRole('menuitem', { name: /re-enable account/i }));
+
+    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
   });
 });
 

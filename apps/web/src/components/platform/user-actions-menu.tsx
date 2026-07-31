@@ -72,8 +72,16 @@ function isPartial(res: ActionResult<unknown>): boolean {
  * Both are courtesies, never controls. The server refuses a protected target
  * independently, on the VERIFIED auth email.
  *
- * Re-enable stays available in case 2: it has no type-to-confirm gate, and an
- * emailless account that is locked out must still be recoverable.
+ * Re-enable is hidden in NEITHER case, and that asymmetry is deliberate:
+ *
+ *   - case 2, because it has no type-to-confirm gate, and an emailless account
+ *     that is locked out must still be recoverable;
+ *   - case 1, because the server does not refuse it. Disable is refused for a
+ *     protected admin; re-enable never is. You may always restore access, you
+ *     may not remove a god admin's. Gating this item on `protectedAdmin` was a
+ *     UI-invented restriction with a real victim: an account disabled BEFORE
+ *     its address was added to STOCKPILOT_PLATFORM_ADMIN_EMAILS would have had
+ *     no re-enable path through the console at all.
  */
 export function UserActionsMenu({
   userId,
@@ -92,7 +100,7 @@ export function UserActionsMenu({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const isDisabled = disabledAt !== null;
   const canDisable = !protectedAdmin && !isDisabled && email !== null && email.length > 0;
-  const canReenable = !protectedAdmin && isDisabled;
+  const canReenable = isDisabled;
 
   /** Runs an action, and on a stale step-up re-challenges TOTP and retries ONCE. */
   async function withStepUp<T>(run: () => Promise<ActionResult<T>>): Promise<ActionResult<T>> {
@@ -121,15 +129,23 @@ export function UserActionsMenu({
    * half-completed re-enable would start rendering "Disable account...", making
    * the advertised fix unreachable. So the row is left as-is and the dialog
    * stays open; the toast carries the whole truth.
+   *
+   * PARTIAL IS TESTED FIRST, and that ordering is load-bearing. The two
+   * conditions are not mutually exclusive: a partial RE-ENABLE is returned with
+   * code ACCOUNT_NOT_DISABLED, which is also a stale-status code. Testing
+   * staleness first therefore sent every partial re-enable down the refresh
+   * path and unmounted its own retry — the exact failure the comment above
+   * describes, reached through the one code that belongs to both sets. A
+   * partial is a statement about THIS write's completeness, a stale status is a
+   * statement about the row being older than the operator thinks; when a result
+   * carries both, the half-applied write is the more specific truth and the one
+   * with an actionable next step.
    */
   function handleFailure(res: Extract<ActionResult<unknown>, { ok: false }>) {
     toast.error(res.error.message);
-    if (isStaleStatus(res)) {
-      setConfirmOpen(false);
-      router.refresh();
-      return;
-    }
-    if (!isPartial(res)) setConfirmOpen(false);
+    if (isPartial(res)) return;
+    setConfirmOpen(false);
+    if (isStaleStatus(res)) router.refresh();
   }
 
   function onDisable(reason: DisableReasonInput) {

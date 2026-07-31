@@ -45,18 +45,52 @@
 --     and `rental_lines` (8 policies). A disabled user would have kept full CRUD
 --     there.
 --
--- So all thirteen STABLE membership helpers are guarded below.
--- rls_orgs_with_permission is the fourteenth and is deliberately NOT given its
+--   * user_can_access_inventory is the SOLE gate on the picking RPCs (see the
+--     RPC note below). It reads organization_members directly and reaches no
+--     other helper.
+--   * user_can_see_item_category likewise reads organization_members directly.
+--     The `has_org_role` inside it is a COMMENT, not a call.
+--
+-- So all fifteen STABLE membership helpers are guarded below.
+-- rls_orgs_with_permission is the sixteenth and is deliberately NOT given its
 -- own check: its body already calls has_permission, so it inherits the guard,
 -- and a second probe would be pure cost. Its pgTAP assertion proves the
 -- inheritance rather than trusting it.
 --
--- The five VOLATILE SECURITY DEFINER RPCs that are granted to `authenticated`
--- (assign_cycle_count, assign_picking, force_reassign_cycle_count,
+-- The RULE that decides which of the two treatments a function gets: a function
+-- whose OWN BODY reads a membership table is guarded here; a function that only
+-- delegates to one of these helpers inherits the guard and is pinned by a test
+-- instead. Nothing is left to a caller's discretion to AND correctly.
+--
+-- ── THE VOLATILE RPCs — AN EARLIER VERSION OF THIS NOTE WAS WRONG ───────────
+-- It read: "The five VOLATILE SECURITY DEFINER RPCs that are granted to
+-- `authenticated` (assign_cycle_count, assign_picking, force_reassign_cycle_count,
 -- set_default_bin) all route through is_org_member / has_org_role /
--- has_permission and therefore inherit this too. transfer_org_ownership does not
--- route through them, but it is granted to service_role only, so it is not
--- reachable by a disabled user's token.
+-- has_permission and therefore inherit this too."
+--
+-- That sentence named four functions while claiming five, and its conclusion was
+-- false. Those four do gate on has_org_role unconditionally and do inherit. But
+-- FOUR MORE picking RPCs are granted to `authenticated` and reach
+-- user_can_access_inventory as their only guarded gate:
+--
+--   * claim_picking's ONLY authorization check is
+--     user_can_access_inventory(auth.uid(), warehouse_id, null, 'write').
+--     Unguarded, a disabled admin claimed orders and PERSISTED
+--     assigned_picker_id as themselves.
+--   * release_picking checks user_can_access_inventory, then
+--     `assigned_picker_id = v_user OR has_org_role(...)`. A self-release
+--     satisfies the left arm, so has_org_role is never evaluated.
+--   * partial_pick_line and complete_picking check
+--     `not has_org_role(...) AND assigned_picker_id <> v_user`. Once the row
+--     names the caller as the picker, a FAILING has_org_role is NOT sufficient
+--     to refuse — the conjunction short-circuits and the RPC proceeds. A
+--     disabled picker therefore wrote quantity_picked. The on_hand draw-down
+--     itself was stopped one layer deeper, by adjust_stock's own
+--     has_org_role(...,'staff') check, which this migration does guard — but
+--     the claim lock and the line write both landed.
+--
+-- transfer_org_ownership does not route through any of them, but it is granted
+-- to service_role only, so it is not reachable by a disabled user's token.
 --
 -- ── SERVICE ROLE ────────────────────────────────────────────────────────────
 -- service_role carries no request.jwt.claim.sub, so auth.uid() is null there and
@@ -505,4 +539,143 @@ as $$
     ) then true
     else false
   end;
+$$;
+
+-- ── 8) The inventory-access gate — GROUP B (row-correlated) ─────────────────
+-- The gate the picking RPCs actually run on. It is referenced by NO live policy
+-- today (0229 replaced inventory_items_select with the hashed-set helpers), so
+-- its whole remaining job is authorizing claim_picking, release_picking,
+-- partial_pick_line, complete_picking, assign_picking, assign_cycle_count and
+-- force_reassign_cycle_count. For the first four it is the only guarded gate
+-- they reach — see the RPC note in this file's header.
+--
+-- Guarded on p_user_id rather than auth.uid(), exactly like
+-- user_can_access_warehouse above: the question is about the SUBJECT user, and
+-- a disabled subject has no inventory access no matter who is asking. That also
+-- keeps assign_picking honest, which calls this helper to validate a TARGET.
+--
+-- Written as an inlined NOT EXISTS rather than a nested account_is_disabled()
+-- call because this helper takes a row-correlated warehouse id — it is GROUP B,
+-- and a nested SECURITY DEFINER call costs a separate plan per candidate row.
+--
+-- The guard sits in the `member` CTE, which closes BOTH branches at once: the
+-- manager+ branch selects from `member` directly, and the assignment branch
+-- joins it (`join member on true`), so an empty `member` makes both false.
+create or replace function public.user_can_access_inventory(
+  p_user_id      uuid,
+  p_warehouse_id uuid,
+  p_charter_id   uuid,
+  p_op           text default 'read'
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with wh as (
+    select organization_id from public.warehouses where id = p_warehouse_id
+  ),
+  member as (
+    select m.role
+    from public.organization_members m
+    join wh on wh.organization_id = m.organization_id
+    where m.user_id = p_user_id
+      and m.accepted_at is not null
+      and not exists (
+        select 1 from public.user_profiles up
+        where up.id = p_user_id and up.disabled_at is not null
+      )
+  )
+  select
+    -- Manager+ has full access
+    exists (select 1 from member where role in ('owner', 'admin', 'manager'))
+    or exists (
+      select 1
+      from public.user_warehouse_assignments uwa
+      join member on true
+      where uwa.user_id = p_user_id
+        and uwa.warehouse_id = p_warehouse_id
+        and (
+              uwa.charter_id is null
+           or p_charter_id is null
+           or uwa.charter_id = p_charter_id
+        )
+        and (p_op = 'read' or member.role <> 'viewer')
+    );
+$$;
+
+-- ── 9) The category-visibility gate — GROUP B (row-correlated) ──────────────
+-- Reads organization_members directly and calls NO helper: the `has_org_role`
+-- appearing in its body is prose in a comment, which is exactly how it was
+-- missed. Its single live use, categories_select, ANDs it with the guarded
+-- is_org_member, so it was never a live bypass — but that safety lives in the
+-- CALLER, and the next policy to reach for this helper alone would have made
+-- one. Guarding the helper itself is what closes the class rather than relying
+-- on every future policy author to remember the conjunction.
+--
+-- The guard goes in the role lookup: with no role resolved, v_role is null and
+-- the function already returns false on its own first branch.
+create or replace function public.user_can_see_item_category(
+  p_user_id uuid,
+  p_org_id uuid,
+  p_category_id uuid
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_role text;
+begin
+  -- Resolve the user's role IN THIS SPECIFIC ORG.
+  -- accepted_at IS NOT NULL excludes pending invites — same gate
+  -- has_org_role uses (migration 0001).
+  select role::text into v_role
+  from public.organization_members
+  where user_id = p_user_id
+    and organization_id = p_org_id
+    and accepted_at is not null
+    and not exists (
+      select 1 from public.user_profiles up
+      where up.id = p_user_id and up.disabled_at is not null
+    )
+  limit 1;
+
+  if v_role is null then
+    return false;
+  end if;
+
+  if v_role in ('owner','admin','manager','staff') then
+    return true;
+  end if;
+
+  -- viewer branch
+  if v_role = 'viewer' then
+    -- Unrestricted if zero assignments IN THIS ORG.
+    if not exists (
+      select 1 from public.user_category_assignments
+      where user_id = p_user_id
+        and organization_id = p_org_id
+    ) then
+      return true;
+    end if;
+
+    -- Restricted: null-category items are never visible.
+    if p_category_id is null then
+      return false;
+    end if;
+
+    return exists (
+      select 1 from public.user_category_assignments
+      where user_id = p_user_id
+        and organization_id = p_org_id
+        and category_id = p_category_id
+    );
+  end if;
+
+  return false;
+end;
 $$;
