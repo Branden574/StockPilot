@@ -221,23 +221,33 @@ export async function disableUserAccount(
   // and must stay that way — but its failure is carried out to the caller. A
   // CHECK violation (0308 not pushed yet) or a transient error would otherwise
   // leave a fully disabled user with no audit row and a clean-success return,
-  // which is exactly the guarantee the owner's brief refuses to lose. Skipped
-  // on a replay: the original disable already wrote the row.
-  const audited = alreadyDisabled
-    ? true
-    : await recordPlatformAudit({
-        actorUserId: input.actorUserId,
-        actorEmail,
-        action: 'user_disabled',
-        targetUserId: input.targetUserId,
-        detail: {
-          reason,
-          reason_category: parsed.data.category,
-          sessions_revoked: revoked.sessionIds.length,
-          sessions_revoke_ok: revoked.ok,
-          banned,
-        },
-      });
+  // which is exactly the guarantee the owner's brief refuses to lose.
+  //
+  // ATTEMPTED ON A REPLAY TOO. This used to read `alreadyDisabled ? true : ...`,
+  // and that shortcut is what turned a lost audit row into a permanent one: the
+  // first press came back partial (say ban_not_applied + not_audited), the
+  // operator was told to press Disable again, and the second press forced
+  // audited=true, returned no partial reasons and reported a clean success with
+  // the user_disabled row never written. Pressing Disable on an already-disabled
+  // account re-asserts the same action, so recording it is correct — and it is
+  // the only thing that makes the advertised retry able to close the gap.
+  const audited = await recordPlatformAudit({
+    actorUserId: input.actorUserId,
+    actorEmail,
+    action: 'user_disabled',
+    targetUserId: input.targetUserId,
+    detail: {
+      reason,
+      reason_category: parsed.data.category,
+      sessions_revoked: revoked.sessionIds.length,
+      sessions_revoke_ok: revoked.ok,
+      banned,
+      // Honest about which press this row describes. On a replay the CAS wrote
+      // nothing, so `reason` is what THIS operator typed, not what is stored on
+      // the profile, and the account was already disabled before the press.
+      already_disabled: alreadyDisabled,
+    },
+  });
 
   // Layer A landed, so the account IS locked out; these tell the UI which
   // deeper layer needs the button pressed again.
@@ -302,15 +312,16 @@ export async function reenableUserAccount(
   // No revocation and no broadcast: re-enable only GRANTS access. The sessions
   // killed by the disable stay dead — the user signs in again, which mints a
   // fresh one.
-  const audited = alreadyActive
-    ? true
-    : await recordPlatformAudit({
-        actorUserId: input.actorUserId,
-        actorEmail,
-        action: 'user_reenabled',
-        targetUserId: input.targetUserId,
-        detail: { ban_cleared: !banError },
-      });
+  // Re-attempted on the already-active healing path for the same reason as the
+  // disable above: the retry the operator is told to perform must actually be
+  // able to write the row it is retrying for.
+  const audited = await recordPlatformAudit({
+    actorUserId: input.actorUserId,
+    actorEmail,
+    action: 'user_reenabled',
+    targetUserId: input.targetUserId,
+    detail: { ban_cleared: !banError, already_active: alreadyActive },
+  });
 
   const partialReasons: AccountStatusPartialReason[] = [];
   if (banError) partialReasons.push('ban_not_lifted');

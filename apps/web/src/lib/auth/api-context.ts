@@ -5,7 +5,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
-import { loadAccountStatus } from '@/lib/auth/account-status';
+import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import type { ServiceContext } from '@/server/services/context';
 
 import type { Role, Database, ModuleId } from '@stockpilot/core';
@@ -236,7 +236,12 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     // The GoTrue ban normally rejects this request one line earlier at
     // getUser(); this is the backstop for the window where the flag landed but
     // the ban write did not.
-    if (status.disabled) return null;
+    //
+    // An UNREADABLE status throws instead: it still refuses the request (an
+    // authz check that cannot read its input must deny), but as a 5xx the
+    // client words as retryable rather than as the 401 it words as "you do not
+    // have access to that".
+    if (accountIsDisabledOrThrow(status)) return null;
     const mfa = await resolveApiMfaState(
       supabase,
       member.organization_id as string,
@@ -304,7 +309,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     loadAccountStatus(supabase, user.id),
   ]);
   if (!member) return null;
-  if (status.disabled) return null;
+  if (accountIsDisabledOrThrow(status)) return null;
 
   const mfa = await resolveApiMfaState(
     supabase,

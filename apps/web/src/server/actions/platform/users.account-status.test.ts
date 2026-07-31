@@ -158,7 +158,7 @@ describe('disableUserAccountAction', () => {
     ]);
   });
 
-  it('names the audit gap and does not promise a retry that cannot fix it', async () => {
+  it('names the audit gap and DOES promise the retry, because the service now re-attempts it', async () => {
     disableUserAccount.mockResolvedValue({
       ok: true,
       alreadyDisabled: false,
@@ -172,10 +172,55 @@ describe('disableUserAccountAction', () => {
 
     expect(res.ok === false && res.error.code).toBe('internal_error');
     expect(res.ok === false && res.error.message).toMatch(/audit log/i);
-    // A second press short-circuits on alreadyDisabled and never re-attempts
-    // the audit row, so "press it again" would be false comfort.
-    expect(res.ok === false && res.error.message).not.toContain('Disable again');
+    // The service no longer short-circuits the audit write on the
+    // already-disabled healing path, so a second press really does re-attempt
+    // the missing row. The advice is now true instead of false comfort.
+    expect(res.ok === false && res.error.message).toContain('Disable again');
     expect(res.ok === false && res.error.details?.partialReasons).toEqual(['not_audited']);
+  });
+
+  it('names EVERY gap in a mixed set and keeps the retry advice honest', async () => {
+    disableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyDisabled: false,
+      banned: false,
+      sessionsRevoked: 0,
+      partial: true,
+      partialReasons: ['ban_not_applied', 'not_audited'],
+    });
+
+    const res = await disableUserAccountAction({ targetUserId: TARGET, reason: REASON });
+
+    // The mixed set is what the suite never covered. It used to be judged by
+    // `.some()`: one retryable member made the whole message say "press it
+    // again", the retry forced audited=true on the already-disabled path, and
+    // the second press reported a clean success with the audit row gone for
+    // good. Both clauses must be named, and the advice must hold for BOTH.
+    expect(res.ok === false && res.error.message).toMatch(/sign-in block/i);
+    expect(res.ok === false && res.error.message).toMatch(/audit log/i);
+    expect(res.ok === false && res.error.message).toContain('Disable again');
+    expect(res.ok === false && res.error.details?.partialReasons).toEqual([
+      'ban_not_applied',
+      'not_audited',
+    ]);
+  });
+
+  it('never promises a retry for a gap it does not know how to heal', async () => {
+    disableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyDisabled: false,
+      banned: true,
+      sessionsRevoked: 1,
+      partial: true,
+      // A reason this layer has no healing verdict for — the shape a future
+      // layer would arrive in. Unknown must mean "do not promise a retry",
+      // never "press it again and hope".
+      partialReasons: ['some_future_layer_failed'],
+    });
+
+    const res = await disableUserAccountAction({ targetUserId: TARGET, reason: REASON });
+
+    expect(res.ok === false && res.error.message).not.toContain('Disable again');
   });
 
   it('returns the revoked-session count on success', async () => {
@@ -279,7 +324,7 @@ describe('reenableUserAccountAction', () => {
     expect(res.ok === false && res.error.details?.partialReasons).toEqual(['ban_not_lifted']);
   });
 
-  it('names an audit-only gap without promising a useless retry', async () => {
+  it('names an audit-only gap and promises the retry the service can now honour', async () => {
     reenableUserAccount.mockResolvedValue({
       ok: true,
       alreadyActive: false,
@@ -292,7 +337,27 @@ describe('reenableUserAccountAction', () => {
 
     expect(res.ok === false && res.error.code).toBe('internal_error');
     expect(res.ok === false && res.error.message).toMatch(/audit log/i);
-    expect(res.ok === false && res.error.message).not.toContain('Re-enable again');
+    expect(res.ok === false && res.error.message).toContain('Re-enable again');
+  });
+
+  it('names every gap in a mixed set', async () => {
+    reenableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyActive: false,
+      banned: true,
+      partial: true,
+      partialReasons: ['ban_not_lifted', 'not_audited'],
+    });
+
+    const res = await reenableUserAccountAction({ targetUserId: TARGET });
+
+    expect(res.ok === false && res.error.message).toMatch(/sign-in block/i);
+    expect(res.ok === false && res.error.message).toMatch(/audit log/i);
+    expect(res.ok === false && res.error.message).toContain('Re-enable again');
+    expect(res.ok === false && res.error.details?.partialReasons).toEqual([
+      'ban_not_lifted',
+      'not_audited',
+    ]);
   });
 
   it('reports a lost compare-and-set race as a retryable conflict', async () => {

@@ -11,7 +11,7 @@ import {
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { loadAccountStatus } from '@/lib/auth/account-status';
+import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { reportError } from '@/lib/error-reporter';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
@@ -135,8 +135,12 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // submission whenever the GoTrue ban half of the disable did not land — which
   // is exactly the case the disable service reports as `partial: true`. The
   // caller already treats null as "not a portal user".
+  //
+  // An UNREADABLE status throws rather than returning null: "not a portal user"
+  // would log a legitimate customer out of a catalog they are entitled to
+  // because of a database error, and it is not what happened.
   const status = await loadAccountStatus(supabase, user.id);
-  if (status.disabled) return null;
+  if (accountIsDisabledOrThrow(status)) return null;
 
   const admin = createAdminClient();
   const { data: mappings } = await admin

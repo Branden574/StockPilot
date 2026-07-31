@@ -5,7 +5,11 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
-import { assertAccountActiveOrRedirect } from '@/lib/auth/account-status';
+import {
+  assertAccountActiveOrRedirect,
+  resolveAccountStatus,
+  type AccountStatusRow,
+} from '@/lib/auth/account-status';
 
 import type { Permission, Role } from '@stockpilot/core';
 
@@ -129,7 +133,21 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   // `userId` can only come from the proxy-set header: an /api route never has
   // that header, returns early above, and therefore can never throw
   // NEXT_REDIRECT out of a route handler (recurring bug #23).
-  if (profile) assertAccountActiveOrRedirect(profile);
+  //
+  // The read is CLASSIFIED, not merely null-checked. This used to be
+  // `if (profile) assertAccountActiveOrRedirect(profile)`, which never looked at
+  // profileRes.error: any failure of the select above produced {data: null},
+  // skipped the guard entirely, and fell through to the header-derived session
+  // below — a disabled user got a complete OrgContext with org and role, and
+  // nothing was reported. The same error failed CLOSED at the other two funnels,
+  // so one error class produced opposite outcomes. resolveAccountStatus reports
+  // the failure and returns 'unreadable', which denies (by throwing) WITHOUT
+  // showing the disabled screen to someone whose account is fine.
+  const status = await resolveAccountStatus(
+    { data: profileRes.data as AccountStatusRow | null, error: profileRes.error },
+    userId,
+  );
+  assertAccountActiveOrRedirect(status);
 
   const session: ServerSession = profile
     ? {

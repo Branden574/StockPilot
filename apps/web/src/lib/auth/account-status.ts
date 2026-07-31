@@ -57,9 +57,86 @@ export interface AccountStatusRow {
   disabled_at?: string | null;
 }
 
+/**
+ * What a status read CONCLUDED — the discriminator all three funnels share.
+ *
+ * `unreadable` exists because a null row used to stand in for two completely
+ * different facts: "this user has no profile" (an onboarding state, correctly
+ * ACTIVE) and "the read failed". Collapsing them is what let a disabled account
+ * through loadSessionAndContext with a full org context whenever the profile
+ * query errored, while the SAME error was failing closed at the API and portal
+ * funnels — one error class, two opposite outcomes.
+ *
+ * The two rules this type exists to keep apart:
+ *   - unreadable must DENY. An authorization check that cannot read its input
+ *     has not authorized anything.
+ *   - unreadable must NOT look like `disabled`. The disabled experience tells a
+ *     person to contact their administrator; saying that to an active user
+ *     during a database problem sends them somewhere no one can help them.
+ */
+export type AccountStatusState = 'active' | 'disabled' | 'unreadable';
+
+/**
+ * Thrown when the status could not be read. Deliberately an EXCEPTION rather
+ * than a fourth quiet return value: `withApiContext` answers a disabled caller
+ * with the same uniform `null` an anonymous caller gets, and ~138 route
+ * handlers turn that null into a 401. Reusing it here would render a database
+ * outage as "You do not have access to that." on every device. Escaping instead
+ * produces a 5xx, which the mobile client already words as "The server had a
+ * problem. Try again in a moment." (apps/mobile/src/lib/api.ts) and which the
+ * web error boundary (app/error.tsx) renders as "Something went wrong / Try
+ * again" — a transient outcome, which is what this actually is.
+ */
+export class AccountStatusUnavailableError extends Error {
+  readonly code = 'ACCOUNT_STATUS_UNAVAILABLE';
+
+  constructor() {
+    super('Account status could not be verified. Please try again.');
+    this.name = 'AccountStatusUnavailableError';
+  }
+}
+
 /** Pure re-export of the shared predicate, so callers need one import. */
 export function accountIsDisabled(profile: AccountStatusRow | null | undefined): boolean {
   return isAccountDisabled(profile);
+}
+
+/**
+ * Classifies a status read that has ALREADY happened, and REPORTS the failure.
+ *
+ * Exists for install point 1, whose read is the widened select on the session
+ * query — it cannot call `loadAccountStatus` without paying a second round trip
+ * for a row it already has. Keeping the classification (and the reporting) here
+ * is what makes the three funnels agree by construction instead of by comment.
+ */
+export async function resolveAccountStatus(
+  read: {
+    data: AccountStatusRow | null | undefined;
+    error: { message: string } | null | undefined;
+  },
+  userId: string,
+): Promise<AccountStatusState> {
+  if (read.error) {
+    await reportError(new Error(read.error.message), {
+      tag: 'auth.account-status.read',
+      extra: { userId },
+    });
+    return 'unreadable';
+  }
+  return accountIsDisabled(read.data) ? 'disabled' : 'active';
+}
+
+/**
+ * The ONE place a resolved status becomes an outcome, for the two funnels that
+ * refuse by returning null (the API and the portal).
+ *
+ * @returns true when the caller is genuinely DISABLED — each funnel already
+ * knows how to refuse that.
+ * @throws AccountStatusUnavailableError when the status could not be read.
+ */
+export function accountIsDisabledOrThrow(status: AccountStatusState): boolean {
+  if (status === 'unreadable') throw new AccountStatusUnavailableError();
+  return status === 'disabled';
 }
 
 /**
@@ -69,9 +146,13 @@ export function accountIsDisabled(profile: AccountStatusRow | null | undefined):
  * destination is a standalone route OUTSIDE the (dashboard) group and OUTSIDE
  * the proxy matcher, so it never receives the verified-identity headers, never
  * resolves a session, and therefore can never redirect to itself.
+ *
+ * An UNREADABLE status throws instead of redirecting: the disabled screen's
+ * copy is owner-approved wording about contacting an administrator, and it must
+ * never be shown to someone whose account is fine.
  */
-export function assertAccountActiveOrRedirect(profile: AccountStatusRow | null | undefined): void {
-  if (!accountIsDisabled(profile)) return;
+export function assertAccountActiveOrRedirect(status: AccountStatusState): void {
+  if (!accountIsDisabledOrThrow(status)) return;
   redirect(ACCOUNT_DISABLED_PATH);
 }
 
@@ -86,9 +167,11 @@ export function assertAccountActiveOrRedirect(profile: AccountStatusRow | null |
  * backstop for the window where the flag landed but the GoTrue ban write did
  * not.
  *
- * Fails CLOSED on a read ERROR. A missing or invisible row is ACTIVE by design
- * — see `isAccountDisabled` in @stockpilot/core: absence of a profile is an
- * onboarding state, not a disable, and the membership checks already handle it.
+ * Returns `unreadable` on a read ERROR — which every caller must treat as a
+ * refusal (see `accountIsDisabledOrThrow`), never as a disable. A missing or
+ * invisible row is ACTIVE by design — see `isAccountDisabled` in
+ * @stockpilot/core: absence of a profile is an onboarding state, not a disable,
+ * and the membership checks already handle it.
  */
 export async function loadAccountStatus(
   // Deliberately untyped: this is called with three DIFFERENT clients — the SSR
@@ -97,24 +180,17 @@ export async function loadAccountStatus(
   // pickActiveMembership / resolveApiMfaState in api-context.ts.
   supabase: any,
   userId: string,
-): Promise<{ disabled: boolean }> {
+): Promise<AccountStatusState> {
   try {
     const { data, error } = await supabase
       .from('user_profiles')
       .select(ACCOUNT_STATUS_COLUMNS)
       .eq('id', userId)
       .maybeSingle();
-    if (error) {
-      await reportError(new Error(error.message), {
-        tag: 'auth.account-status.read',
-        extra: { userId },
-      });
-      return { disabled: true };
-    }
-    return { disabled: accountIsDisabled(data as AccountStatusRow | null) };
+    return await resolveAccountStatus({ data: data as AccountStatusRow | null, error }, userId);
   } catch (e) {
     await reportError(e, { tag: 'auth.account-status.read', extra: { userId } });
-    return { disabled: true };
+    return 'unreadable';
   }
 }
 

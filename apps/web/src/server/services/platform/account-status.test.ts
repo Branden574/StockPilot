@@ -239,15 +239,36 @@ describe('disableUserAccount', () => {
     });
   });
 
-  it('is idempotent: a CAS miss skips the audit but still re-bans and re-revokes', async () => {
+  it('is idempotent: a CAS miss re-bans, re-revokes AND re-attempts the audit row', async () => {
     dbState.update = { data: [], error: null };
 
     const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
 
     expect(res).toMatchObject({ ok: true, alreadyDisabled: true, banned: true, sessionsRevoked: 2 });
-    expect(recordPlatformAudit).not.toHaveBeenCalled();
+    // The audit write used to be SKIPPED here ("the original press wrote the
+    // row"). That assumption is what made a lost audit row permanent: the
+    // operator was told to press Disable again, the retry never re-attempted
+    // the write, and the second press reported clean success with no row.
+    // Pressing Disable on an already-disabled account re-asserts the same
+    // action, so recording it is correct.
+    expect(recordPlatformAudit).toHaveBeenCalledTimes(1);
     expect(updateUserById).toHaveBeenCalledTimes(1);
     expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the replayed audit row as a replay, so it cannot imply a fresh transition', async () => {
+    dbState.update = { data: [], error: null };
+
+    await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+    // On a replay the CAS wrote nothing, so `reason` is what THIS operator
+    // typed, not what is stored on the profile. The row says so.
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user_disabled',
+        detail: expect.objectContaining({ already_disabled: true }),
+      }),
+    );
   });
 
   it('fails CLOSED on a ban error: the flag stays set and the caller is told it is partial', async () => {
@@ -296,15 +317,31 @@ describe('disableUserAccount', () => {
     });
   });
 
-  it('does not claim an unrecorded audit on a replay that never attempted one', async () => {
+  it('reports a replay as clean only when the re-attempted audit row landed', async () => {
     dbState.update = { data: [], error: null };
 
     const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
 
-    // The CAS miss means the ORIGINAL disable already wrote the audit row. No
-    // row was attempted here, so nothing is missing.
     expect(res).toMatchObject({ alreadyDisabled: true, partial: false, partialReasons: [] });
-    expect(recordPlatformAudit).not.toHaveBeenCalled();
+    expect(recordPlatformAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it('a replay whose audit write ALSO fails stays partial — it never launders into success', async () => {
+    dbState.update = { data: [], error: null };
+    recordPlatformAudit.mockResolvedValue(false);
+
+    const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+    // This is the exact laundering the review caught: press one returns
+    // ['ban_not_applied','not_audited'], the operator presses again, and the
+    // retry used to force audited=true and hand back a clean success with the
+    // user_disabled row permanently missing.
+    expect(res).toMatchObject({
+      ok: true,
+      alreadyDisabled: true,
+      partial: true,
+      partialReasons: ['not_audited'],
+    });
   });
 
   it('collects every failed layer, not just the first', async () => {
@@ -363,14 +400,33 @@ describe('reenableUserAccount', () => {
     );
   });
 
-  it('heals a stray ban on a CAS miss: no audit row, but the ban is still lifted', async () => {
+  it('heals a stray ban on a CAS miss, lifts the ban, and re-attempts the audit row', async () => {
     dbState.update = { data: [], error: null };
 
     const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
 
     expect(res).toMatchObject({ ok: true, alreadyActive: true });
     expect(updateUserById).toHaveBeenCalledWith(TARGET, { ban_duration: 'none' });
-    expect(recordPlatformAudit).not.toHaveBeenCalled();
+    // Same reasoning as the disable path: the retry the operator is told to
+    // perform must actually be able to write the row it is retrying for.
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user_reenabled',
+        detail: expect.objectContaining({ already_active: true }),
+      }),
+    );
+  });
+
+  it('a replayed re-enable whose audit ALSO fails stays partial', async () => {
+    dbState.update = { data: [], error: null };
+    recordPlatformAudit.mockResolvedValue(false);
+
+    expect(await reenableUserAccount({ targetUserId: TARGET, ...ACTOR })).toMatchObject({
+      ok: true,
+      alreadyActive: true,
+      partial: true,
+      partialReasons: ['not_audited'],
+    });
   });
 
   it('never revokes sessions or broadcasts — re-enable only grants access', async () => {

@@ -58,7 +58,11 @@ vi.mock('@/server/services/returns', () => ({
 
 import { ACCOUNT_DISABLED_PATH } from '@stockpilot/core';
 
-import { accountIsDisabled, loadAccountStatus } from './account-status';
+import {
+  AccountStatusUnavailableError,
+  accountIsDisabled,
+  loadAccountStatus,
+} from './account-status';
 import { withApiContext } from './api-context';
 import { getServerSession, requireOrgContext } from './session';
 import { resolvePortalContext } from '@/server/services/portal';
@@ -215,18 +219,24 @@ describe('accountIsDisabled', () => {
 });
 
 describe('loadAccountStatus', () => {
-  it('fails CLOSED on a read error', async () => {
+  it('reports a read error as UNREADABLE — never as a disable', async () => {
     state.profileError = { message: 'permission denied' };
 
-    expect(await loadAccountStatus(refs.client, USER_ID)).toEqual({ disabled: true });
+    expect(await loadAccountStatus(refs.client, USER_ID)).toBe('unreadable');
     expect(refs.reportError).toHaveBeenCalled();
   });
 
   it('treats an absent row as ACTIVE (onboarding, not a disable)', async () => {
     state.profile = null;
 
-    expect(await loadAccountStatus(refs.client, USER_ID)).toEqual({ disabled: false });
+    expect(await loadAccountStatus(refs.client, USER_ID)).toBe('active');
     expect(refs.reportError).not.toHaveBeenCalled();
+  });
+
+  it('reports a disabled row as DISABLED', async () => {
+    disableTheAccount();
+
+    expect(await loadAccountStatus(refs.client, USER_ID)).toBe('disabled');
   });
 });
 
@@ -301,5 +311,98 @@ describe('install point 3 — resolvePortalContext (B2B customer portal)', () =>
     disableTheAccount();
 
     expect(await resolvePortalContext()).toBeNull();
+  });
+});
+
+/**
+ * The hole this suite shipped with. `loadSessionAndContext` never inspected
+ * `profileRes.error`, so a null row stood in for BOTH "this user has no
+ * profile" (an onboarding state, correctly ACTIVE) and "the read failed" — and
+ * the second one skipped the guard entirely and handed back a complete
+ * OrgContext with org + role. One error class also produced a SPLIT BRAIN: the
+ * very same failure fails closed at install points 2 and 3.
+ *
+ * The posture proved below, at all three funnels:
+ *   - a status that cannot be read DENIES (an authorization check that cannot
+ *     read its input must never pass), and
+ *   - it is never presented as the disabled-account experience, because
+ *     telling an active user their account was disabled sends them to their
+ *     administrator to fix a database problem, and
+ *   - every read failure is REPORTED. A silent authz failure is how this
+ *     survived review in the first place.
+ */
+function breakTheStatusRead() {
+  state.profileError = { message: 'column user_profiles.disabled_at does not exist' };
+}
+
+/** Resolves to the thrown value, or to the (wrongly) returned value. */
+async function outcomeOf<T>(p: Promise<T>): Promise<unknown> {
+  return p.then(
+    (value) => value as unknown,
+    (e: unknown) => e,
+  );
+}
+
+describe('an UNREADABLE status fails closed at all three points, and never as a disable', () => {
+  it('install point 1: refuses requireOrgContext when the account is disabled AND the read failed', async () => {
+    // The combination the committed suite never tried. Both halves are true:
+    // the flag IS set, and the read that would have proved it errored.
+    disableTheAccount();
+    breakTheStatusRead();
+
+    const outcome = await outcomeOf(requireOrgContext());
+
+    expect(outcome).toBeInstanceOf(AccountStatusUnavailableError);
+    // Not a redirect of any kind: not the disabled screen, not /signin, not
+    // /onboarding. The user is told to retry, not to call their admin.
+    expect(String((outcome as Error).message)).not.toContain('NEXT_REDIRECT');
+    expect(String((outcome as Error).message)).not.toMatch(/disabled/i);
+    expect(refs.reportError).toHaveBeenCalled();
+  });
+
+  it('install point 1: refuses getServerSession rather than falling back to the header identity', async () => {
+    breakTheStatusRead();
+
+    const outcome = await outcomeOf(getServerSession());
+
+    // The old code fell through to the header-derived session here, which is
+    // what gave a disabled user a full working context.
+    expect(outcome).toBeInstanceOf(AccountStatusUnavailableError);
+    expect(refs.reportError).toHaveBeenCalled();
+  });
+
+  it('install point 2 BEARER: throws a transient error instead of the uniform 401', async () => {
+    disableTheAccount();
+    breakTheStatusRead();
+
+    const outcome = await outcomeOf(withApiContext(bearerRequest()));
+
+    // NOT null: null is the disabled/anonymous 401 shape, which the mobile
+    // client words as "You do not have access to that." An escaping error is a
+    // 5xx, which it words as "The server had a problem. Try again in a moment."
+    expect(outcome).toBeInstanceOf(AccountStatusUnavailableError);
+  });
+
+  it('install point 2 COOKIE: throws a transient error instead of the uniform 401', async () => {
+    breakTheStatusRead();
+
+    expect(await outcomeOf(withApiContext(cookieRequest()))).toBeInstanceOf(
+      AccountStatusUnavailableError,
+    );
+  });
+
+  it('install point 3 PORTAL: throws rather than reporting "not a portal user"', async () => {
+    breakTheStatusRead();
+
+    // Returning null here would log the customer out of a catalog they are
+    // entitled to, for a read error.
+    expect(await outcomeOf(resolvePortalContext())).toBeInstanceOf(AccountStatusUnavailableError);
+  });
+
+  it('still sends a genuinely disabled account to the disabled screen', async () => {
+    // The discriminator must not swallow the real case it exists to protect.
+    disableTheAccount();
+
+    await expect(getServerSession()).rejects.toThrow(`NEXT_REDIRECT:${ACCOUNT_DISABLED_PATH}`);
   });
 });

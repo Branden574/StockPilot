@@ -102,17 +102,21 @@ const PARTIAL_REASON_CLAUSES: Record<AccountStatusPartialReason, string> = {
 };
 
 /**
- * Which partial reasons a second press actually heals. Both Layer B steps run
- * again on a replay, so a missing ban or a surviving session is fixed by
- * re-running. The audit row is NOT: the service skips it once the account is
- * already in the requested state, so promising "press it again" for an
- * audit-only gap would be false comfort.
+ * Whether pressing the button again actually heals each gap. Exhaustive over
+ * AccountStatusPartialReason by type, so a new reason cannot ship until this
+ * layer decides whether the retry it advertises is true.
+ *
+ * `not_audited` is TRUE as of the fix that stopped the service short-circuiting
+ * the audit write on the already-disabled / already-enabled healing path. While
+ * it was skipped, this table said false — and the message layer then had to
+ * paper over it, which is exactly where the laundering happened.
  */
-const RETRYABLE_PARTIAL_REASONS: readonly AccountStatusPartialReason[] = [
-  'ban_not_applied',
-  'ban_not_lifted',
-  'sessions_not_revoked',
-];
+const PARTIAL_REASON_RETRY_HEALS: Record<AccountStatusPartialReason, boolean> = {
+  ban_not_applied: true,
+  ban_not_lifted: true,
+  sessions_not_revoked: true,
+  not_audited: true,
+};
 
 /**
  * Turns a half-applied change into an honest failure. The operation DID land
@@ -131,11 +135,18 @@ function partialFailure(opts: {
   const reasons = opts.reasons ?? [];
   const clauses = reasons.map((r) => PARTIAL_REASON_CLAUSES[r]).filter(Boolean);
   const what = clauses.length > 0 ? clauses.join(', and ') : 'part of it did not finish applying';
+  // EVERY named gap must be healable before the retry is promised. `.some()`
+  // was the bug: a MIXED set like ['ban_not_applied','not_audited'] had one
+  // healable member, so the operator was told "press Disable again to complete
+  // it" for a set that included a gap the retry could not close.
+  //
   // An empty list means the service reported `partial` without saying why —
   // treat that as retryable, because re-running is the safe default and the
-  // whole flow is idempotent.
+  // whole flow is idempotent. An UNKNOWN reason resolves to undefined here and
+  // therefore reads as unhealable, which is the right default for a layer this
+  // file has not been taught about yet.
   const retryable =
-    reasons.length === 0 || reasons.some((r) => RETRYABLE_PARTIAL_REASONS.includes(r));
+    reasons.length === 0 || reasons.every((r) => PARTIAL_REASON_RETRY_HEALS[r] === true);
   return err(
     'internal_error',
     `${opts.lede}, but ${what}. ${retryable ? opts.retryHint : opts.unretryableHint}`,
