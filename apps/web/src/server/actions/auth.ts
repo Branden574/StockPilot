@@ -15,6 +15,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
+import { isBannedUserAuthError } from '@/server/actions/auth-error-classify';
 import { audit, type AuditEvent } from '@/server/services/audit';
 
 import {
@@ -219,6 +220,24 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     const isRateLimit =
       errAny.status === 429 ||
       (typeof errAny.code === 'string' && /rate.?limit/i.test(errAny.code));
+
+    // A disabled account is not a credential problem. GoTrue rejects a banned
+    // user with the structured code `user_banned` on every auth endpoint; left
+    // alone it would fall into the generic "Invalid email or password" branch
+    // below and send a locked-out user to reset a password that is perfectly
+    // fine. Audited through the EXISTING sign-in-failure event with a distinct
+    // reason rather than a new org-visible event — org visibility of a platform
+    // disable is an open policy question.
+    if (isBannedUserAuthError(errAny)) {
+      noteDisabledAccountBlocked('login');
+      await emitAuthAudit({
+        event: 'user.sign_in_failed',
+        userId: null,
+        organizationId: null,
+        extra: { email: parsed.data.email, reason: 'account_disabled' },
+      });
+      return err('account_disabled', ACCOUNT_DISABLED_MESSAGE);
+    }
 
     await emitAuthAudit({
       event: 'user.sign_in_failed',
