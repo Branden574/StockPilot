@@ -2,14 +2,17 @@ import * as Network from 'expo-network';
 import * as React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { getAccountDisabled } from './account-disabled-state';
 import { api } from './api';
 import {
   outboxAck,
   outboxBumpFailure,
   outboxMarkSending,
   outboxPending,
+  outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { classifyDrainFailure } from './drain-failure';
 
 /**
  * Cycle-count sync engine.
@@ -176,6 +179,7 @@ class CycleCountSyncEngine {
     this.emit();
 
     let anyFailed = false;
+    let anyRejected = false;
     try {
       const due = await outboxPending();
       // Filter to record_count rows only — this engine owns the
@@ -196,18 +200,36 @@ class CycleCountSyncEngine {
           await this.sendRecordCount(row.payload, controller.signal);
           await outboxAck(row.id);
         } catch (e) {
-          anyFailed = true;
           const msg = e instanceof Error ? e.message : String(e);
           this.lastError = msg;
-          await outboxBumpFailure(row.id, msg);
+          // A 401 on a known-disabled account is TERMINAL. Bumping the failure
+          // counter here would keep the row in the backoff rotation forever and
+          // — the real damage — replay the count edit the instant the account
+          // is re-enabled. outboxReject parks it and clears the line's dirty
+          // flag in one transaction so the screen does not strand a line as
+          // permanently unsynced with no row left to sync it.
+          const outcome = classifyDrainFailure(e, {
+            accountDisabled: getAccountDisabled(),
+          });
+          if (outcome === 'rejected') {
+            anyRejected = true;
+            await outboxReject(row.id, msg);
+          } else {
+            anyFailed = true;
+            await outboxBumpFailure(row.id, msg);
+          }
         }
       }
 
       this.pendingCount = await totalPendingCount();
       if (this.status !== 'offline') {
+        // 'failing' means "still retrying". A rejected row will never be
+        // retried, so the engine is genuinely idle afterwards.
         this.status = anyFailed ? 'failing' : 'idle';
       }
-      if (!anyFailed) {
+      if (!anyFailed && !anyRejected) {
+        // Only a clean pass may clear the error and stamp a success — a drain
+        // that rejected everything synced nothing.
         this.lastError = null;
         this.lastSyncAt = Date.now();
       }

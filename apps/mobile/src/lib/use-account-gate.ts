@@ -17,6 +17,8 @@ import {
   withTimeout,
 } from './account-eviction';
 import { wipeForSignOut } from './db';
+import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
+import { rejectAllPending } from './queue';
 import { abortAllInFlight } from './request-cancellation';
 import { supabase } from './supabase';
 
@@ -116,7 +118,21 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         signOutLocal: async () => {
           await supabase.auth.signOut({ scope: 'local' });
         },
-        clearCaches: () => wipeForSignOut(),
+        // Park the offline outbox BEFORE the wipe. Eviction has already
+        // cancelled the in-flight requests and dropped the session, so the
+        // drains will never get to classify these rows themselves — and
+        // wipeForSignOut used to delete them outright, which meant the queued
+        // work vanished with no record and nothing to explain to the user.
+        // Best-effort: if the rejection fails we still wipe, because losing the
+        // record is bad but replaying the writes after a re-enable is worse.
+        clearCaches: async () => {
+          try {
+            await rejectAllPending(ACCOUNT_DISABLED_REJECTION);
+          } catch (e) {
+            console.warn('[account-gate] could not park the offline outbox', e);
+          }
+          await wipeForSignOut();
+        },
         clearAccountStorage: async () => {
           const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
           if (keys.length > 0) await AsyncStorage.multiRemove(keys);

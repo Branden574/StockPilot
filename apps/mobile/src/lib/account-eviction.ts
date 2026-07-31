@@ -16,7 +16,12 @@ export interface EvictionSteps {
   cancelRequests: () => void | Promise<void>;
   /** Local-scope sign-out: drops the session from secure storage. */
   signOutLocal: () => void | Promise<void>;
-  /** Wipe the account-scoped SQLite cache (and the offline outbox with it). */
+  /**
+   * Wipe the account-scoped SQLite cache. The offline outbox is REJECTED rather
+   * than deleted (see use-account-gate.ts): terminal, so it can never replay
+   * after a re-enable, but preserved, so the operator's queued work leaves a
+   * record instead of disappearing without explanation.
+   */
   clearCaches: () => void | Promise<void>;
   /** Drop the account-scoped keys in AsyncStorage (active org, warehouse). */
   clearAccountStorage: () => void | Promise<void>;
