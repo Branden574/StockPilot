@@ -9,6 +9,7 @@ import {
 } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 import { type Role } from '@stockpilot/core';
 
@@ -529,6 +530,7 @@ export class TeamService {
     // surface it through the audit trail.
     let assignmentsCleared = 0;
     let sessionRevoked = false;
+    let sessionsRevokedCount = 0;
     try {
       const admin = createAdminClient();
 
@@ -558,11 +560,17 @@ export class TeamService {
       // belongs to multiple orgs we accept the collateral sign-out
       // (rare; org membership is invite-only and most users only
       // belong to a single workspace).
-      const { error: signOutErr } = await admin.auth.admin.signOut(
-        removedUserId,
-        'global',
-      );
-      sessionRevoked = !signOutErr;
+      //
+      // This used to call `admin.auth.admin.signOut(removedUserId,
+      // 'global')`, which could never have worked: auth-js's signOut
+      // takes a JWT, not a user id, so the call errored and the audit
+      // row recorded session_revoked=false every time. It now goes
+      // through the 0308 admin_revoke_user_sessions function, which
+      // deletes the user's auth.sessions rows (refresh tokens cascade)
+      // and broadcasts the live eviction.
+      const revoked = await revokeAllSessionsForUser(removedUserId);
+      sessionRevoked = revoked.ok;
+      sessionsRevokedCount = revoked.sessionIds.length;
     } catch {
       // No admin client (missing SUPABASE_SERVICE_ROLE_KEY) or
       // network failure. Membership row deletion already happened,
@@ -579,6 +587,7 @@ export class TeamService {
         extra: {
           assignments_cleared: assignmentsCleared,
           session_revoked: sessionRevoked,
+          sessions_revoked_count: sessionsRevokedCount,
         },
       },
       this.ctx,
