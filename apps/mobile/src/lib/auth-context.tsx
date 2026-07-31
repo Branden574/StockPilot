@@ -7,7 +7,7 @@ import {
   setAccountDisabled,
   setAccountGateState,
 } from './account-disabled-state';
-import { nextGateForProbe } from './account-eviction';
+import { settleProbeResult } from './account-eviction';
 import {
   enableBiometricForUser,
   isBiometricEnabledForUser,
@@ -134,12 +134,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // force-quit. The gate is subscribable, so RootGate reacts whenever
           // the answer lands. A rejection classifies as 'unknown' and changes
           // NOTHING — an offline device must keep working.
+          //
+          // On a RELAUNCH after a platform disable this answers 'signed-out',
+          // never 'disabled': the disable revoked the session before the app
+          // was ever reopened, so GoTrue can only say `session_not_found`.
+          // settleProbeResult drops the dead session and marks the destination
+          // as sign-in, where the password grant finally gets `user_banned` and
+          // the disabled copy. One extra step, and it is the honest one — the
+          // device genuinely cannot tell a disable from a sign-out here.
           void supabase.auth
             .getUser()
             .catch(() => null)
-            .then((probe) => {
+            .then(async (probe) => {
               if (cancelled) return;
-              const nextGate = nextGateForProbe(getAccountGateState(), classifyAuthProbe(probe));
+              const nextGate = await settleProbeResult(
+                getAccountGateState(),
+                classifyAuthProbe(probe),
+                async () => {
+                  await supabase.auth.signOut({ scope: 'local' });
+                },
+              );
+              if (cancelled) return;
               if (nextGate) setAccountGateState(nextGate);
             });
 

@@ -25,6 +25,8 @@ vi.mock('@/lib/realtime/broadcast', () => ({
   broadcastToChannel: (...a: unknown[]) => broadcastToChannel(...a),
 }));
 
+import { SESSION_REVOKED_REASON_DISABLED } from '@stockpilot/core';
+
 import { revokeAllSessionsForUser } from './sessions';
 
 const USER = '55555555-5555-5555-5555-555555555555';
@@ -119,6 +121,43 @@ describe('revokeAllSessionsForUser — live eviction broadcast', () => {
     // Nothing was revoked, so signing devices out would be a lie: they would
     // bounce to /signin and immediately sign back in on a session that is
     // still live.
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The reason is the ONE thing a revoked device cannot work out for itself.
+   * Once the RPC above has deleted the session rows, the device's own
+   * getUser() answers `session_not_found`, never `user_banned` — so without
+   * this field a platform disable is indistinguishable, on the device, from an
+   * ordinary sign-out-everywhere, and the disabled screen can never appear.
+   */
+  it('carries the disable reason when the caller names one', async () => {
+    await revokeAllSessionsForUser(USER, { reason: SESSION_REVOKED_REASON_DISABLED });
+
+    expect(broadcastToChannel).toHaveBeenCalledWith(`user:${USER}:sessions`, 'revoked', {
+      keepId: null,
+      reason: 'account_disabled',
+    });
+  });
+
+  it('OMITS the field entirely when there is no reason', async () => {
+    // Additive, not a shape change. `{ keepId: null }` is what the two older
+    // broadcasters (global sign-out, password reset) still send, and both
+    // listeners must keep behaving exactly as they did — an undefined key
+    // serialised as `"reason": null` would be a new value on the wire for
+    // every caller that never asked for one.
+    await revokeAllSessionsForUser(USER);
+
+    const payload = broadcastToChannel.mock.calls[0]![2] as Record<string, unknown>;
+    expect(payload).toEqual({ keepId: null });
+    expect('reason' in payload).toBe(false);
+  });
+
+  it('never broadcasts a reason for a revoke that did not land', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'permission denied' } });
+
+    await revokeAllSessionsForUser(USER, { reason: SESSION_REVOKED_REASON_DISABLED });
+
     expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 

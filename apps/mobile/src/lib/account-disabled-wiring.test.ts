@@ -35,12 +35,16 @@ const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8')
 /** Comments explain the rules; only the CODE can leak. */
 const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
+/** Collapse formatting so a prettier line-break cannot fail a wiring pin. */
+const flat = (src: string) => code(src).replace(/\s+/g, ' ');
+
 const rootLayout = read('../../app/_layout.tsx');
 const drawer = read('../components/drawer-content.tsx');
 const screen = read('../components/account-disabled-screen.tsx');
 const authContext = read('./auth-context.tsx');
 const apiSrc = read('./api.ts');
 const gate = read('./use-account-gate.ts');
+const revocation = read('./use-session-revocation.ts');
 
 describe('the eviction listener is mounted where every screen can see it', () => {
   it('RootGate owns useSessionRevocation', () => {
@@ -58,8 +62,69 @@ describe('the eviction listener is mounted where every screen can see it', () =>
     expect(rootLayout).toContain('useAccountGate({ onEvicted: onForcedSignOut })');
   });
 
-  it('hands the probe to the revocation listener so a disable is not reported as another device', () => {
-    expect(rootLayout).toContain('onTargeted: accountGate.probeNow');
+  it('hands the revocation listener the handler that can tell the two apart', () => {
+    expect(rootLayout).toContain('onTargeted: accountGate.onSessionRevoked');
+  });
+});
+
+/**
+ * The line-5 / line-11 fix — WIRING PINS.
+ *
+ * The end-to-end run found that our own session revocation had made our own
+ * detection mechanism unreachable: the disable deletes the auth.sessions row,
+ * so the device's probe gets `session_not_found`, never `user_banned`, the gate
+ * never reached 'disabled', the disabled screen never rendered and the outbox
+ * was never rejected. There are exactly two moments a device can learn the
+ * truth, and both must stay wired:
+ *
+ *   ONLINE — the eviction broadcast, which now names the reason. It is a
+ *     PUBLIC channel, so the reason alone is a claim, not proof; the probe has
+ *     to corroborate that the session really is gone before it is believed.
+ *   RELAUNCH / OFFLINE — there is no proof available at all, so the device
+ *     signs out and asks for a SIGN-IN, and GoTrue answers `user_banned` to
+ *     the password grant. One extra step, and honest.
+ */
+describe('a revoked device can still find out what happened', () => {
+  it('the listener forwards the broadcast payload, not just the fact of it', () => {
+    // Without the payload the handler cannot see the reason and the online
+    // half of the fix silently reverts to the old force-logout alert.
+    expect(revocation).toContain('onTargeted?: (payload: unknown) => Promise<boolean>');
+    expect(code(revocation)).toContain('onTargetedRef.current(payload)');
+  });
+
+  it('the gate believes the reason only when the probe corroborates it', () => {
+    expect(gate).toContain("import { isDisableRevocation } from '@stockpilot/core'");
+    expect(gate).toContain('gateForRevocation(');
+    // A bare `if (isDisableRevocation(payload)) setAccountGateState('disabled')`
+    // would let anyone holding the shipped anon key and a user's uuid forge a
+    // disabled screen AND a terminal rejection of that user's queued work.
+    expect(flat(gate)).not.toMatch(
+      /if \(isDisableRevocation\([a-zA-Z]+\)\) \{? ?setAccountGateState\('disabled'\)/,
+    );
+  });
+
+  it('a dead session signs out locally and asks for a sign-in', () => {
+    expect(gate).toContain('settleProbeResult(');
+    expect(authContext).toContain('settleProbeResult(');
+    expect(rootLayout).toContain('takeSignedOutRoute()');
+    // The marketing screen is what the run actually observed, and it is the
+    // one destination from which the user learns nothing.
+    expect(code(rootLayout)).not.toContain("router.replace('/(auth)/welcome' as Href)");
+  });
+
+  it('sign-in remains the path that CONFIRMS a disable', () => {
+    expect(authContext).toContain("(error as { code?: string }).code === 'user_banned'");
+    expect(authContext).toContain('setAccountDisabled(true)');
+  });
+
+  it('the outbox is rejected from the gate transition BOTH paths end at', () => {
+    // Not from the broadcast handler and not from the sign-in branch: one
+    // rejection site, driven by the transition into `disabled`, so neither
+    // path can be the one that silently stops rejecting.
+    expect(gate).toContain('rejectAllPending(ACCOUNT_DISABLED_REJECTION)');
+    const evictionEffect = gate.slice(gate.indexOf("if (state !== 'disabled'"));
+    expect(evictionEffect).toContain('rejectAllPending');
+    expect(code(revocation)).not.toContain('rejectAllPending');
   });
 });
 
@@ -144,7 +209,9 @@ describe('the paths that can raise the gate', () => {
   it('cold launch probes the restored session and cannot log a working user out', () => {
     expect(authContext).toContain('.getUser()');
     expect(authContext).toContain('.catch(() => null)');
-    expect(authContext).toContain('nextGateForProbe(getAccountGateState(), classifyAuthProbe(probe))');
+    expect(flat(authContext)).toContain(
+      'settleProbeResult( getAccountGateState(), classifyAuthProbe(probe),',
+    );
   });
 
   it('never AWAITS the cold-launch probe — the hydrate path owns `loading`', () => {

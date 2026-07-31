@@ -128,7 +128,12 @@ describe('disableUserAccount', () => {
     });
     expect(typeof updateArgs[0]!.disabled_at).toBe('string');
     expect(updateUserById).toHaveBeenCalledWith(TARGET, { ban_duration: '876000h' });
-    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(TARGET);
+    // The reason CATEGORY 'account_disabled' — a fixed enum member, not the
+    // operator's text — so a device that is already revoked can still be told
+    // what kind of sign-out this was. See the leak test below.
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(TARGET, {
+      reason: 'account_disabled',
+    });
     expect(recordPlatformAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'user_disabled',
@@ -168,11 +173,18 @@ describe('disableUserAccount', () => {
       ...ACTOR,
     });
 
-    // The eviction channel is PUBLIC. The helper is handed a bare user id and
-    // nothing else, and nothing at all is broadcast from here, so the reason
-    // cannot reach a subscriber.
-    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(TARGET);
-    expect(JSON.stringify(revokeAllSessionsForUser.mock.calls)).not.toContain('Suspected');
+    // The eviction channel is PUBLIC. The helper is handed the user id and a
+    // FIXED enum member — the kind of event, never the operator's words, the
+    // category they picked, the actor or the timestamp. Nothing at all is
+    // broadcast from here, so none of that can reach a subscriber.
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(TARGET, {
+      reason: 'account_disabled',
+    });
+    const revokeArgs = JSON.stringify(revokeAllSessionsForUser.mock.calls);
+    expect(revokeArgs).not.toContain('Suspected');
+    expect(revokeArgs).not.toContain('credential');
+    expect(revokeArgs).not.toContain('other');
+    expect(revokeArgs).not.toContain(ACTOR_ID);
     expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 

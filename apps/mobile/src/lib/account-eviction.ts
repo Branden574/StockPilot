@@ -104,9 +104,116 @@ export function nextGateForProbe(
       return 'ok';
     case 'unavailable':
       return 'unverified';
+    // 'signed-out' shares the 'unknown' arm deliberately. It is a statement
+    // about this DEVICE's session, not about the account, and an ordinary
+    // sign-out-everywhere from another device produces the identical code —
+    // so promoting it to 'disabled' would tell a perfectly healthy user to
+    // contact their administrator. What it does change is where the device
+    // goes next; that is settleProbeResult's job, below.
     default:
       return current === 'unverified' ? 'ok' : null;
   }
+}
+
+/**
+ * WHERE a signed-out device lands.
+ *
+ * The end-to-end run watched a disabled device end up on the generic marketing
+ * screen — the one destination from which the user learns nothing and can do
+ * nothing. A device that has just been told its session is gone should be asked
+ * to SIGN IN, because signing in is the only remaining way to learn the truth:
+ * GoTrue answers `user_banned` to a disabled user's password grant even though
+ * it will not answer their probe. One extra tap, and it is honest — the device
+ * genuinely does not know yet.
+ */
+export const AUTH_WELCOME_ROUTE = '/(auth)/welcome';
+export const AUTH_SIGN_IN_ROUTE = '/(auth)/sign-in';
+
+/**
+ * A latch rather than React state, because the thing that SETS it (a probe, in
+ * a plain module) and the thing that READS it (RootGate's redirect effect) are
+ * racing the same `session -> null` transition. A state update would land in a
+ * later render and the redirect would already have fired at the marketing
+ * screen, producing a visible welcome→sign-in bounce.
+ */
+let sessionEndedPending = false;
+
+export function markSessionEnded(): void {
+  sessionEndedPending = true;
+}
+
+/**
+ * Read-and-clear. Consumed once, so the NEXT ordinary sign-out — a user
+ * deliberately signing out, the disabled screen's own button — still lands on
+ * the marketing screen exactly as before.
+ */
+export function takeSignedOutRoute(): string {
+  if (!sessionEndedPending) return AUTH_WELCOME_ROUTE;
+  sessionEndedPending = false;
+  return AUTH_SIGN_IN_ROUTE;
+}
+
+/**
+ * Applies a probe verdict: the gate transition it implies, plus the one side
+ * effect a verdict can carry. The effect is INJECTED so this file stays pure
+ * and loadable in a vitest environment that cannot import react-native.
+ *
+ * The sign-out is explicit rather than left to gotrue-js's internal handling.
+ * Relying on that is what produced the observed symptom: the session drained
+ * away as a side effect somewhere below us, the app fell through the plain
+ * `!session` redirect, and nobody had marked where it should go.
+ */
+export async function settleProbeResult(
+  current: AccountGateState,
+  result: AuthProbeResult,
+  signOutLocal: () => Promise<void>,
+): Promise<AccountGateState | null> {
+  if (result === 'signed-out') {
+    // Marked BEFORE the await: the sign-out is what makes RootGate's redirect
+    // effect run, and the destination has to be decided by then.
+    markSessionEnded();
+    try {
+      await signOutLocal();
+    } catch (e) {
+      // The Keychain can reject. The server-side session is gone either way, so
+      // the routing still has to happen — this must not become a throw that
+      // strands the user on a screen backed by a dead session.
+      console.warn('[account-eviction] local sign-out after a dead session failed', e);
+    }
+  }
+  return nextGateForProbe(current, result);
+}
+
+/**
+ * The verdict for a TARGETED revocation broadcast, and the only place the
+ * broadcast's reason is allowed to matter.
+ *
+ * `user:{id}:sessions` is a PUBLIC realtime channel — broadcast.ts posts with
+ * `private: false` — so anyone holding the shipped anon key and a user's uuid
+ * can forge a payload on it. Today the worst that buys them is a forced
+ * sign-out, which is annoying and reversible. Letting a forged `reason` alone
+ * raise the disabled gate would also hand them the eviction, and the eviction
+ * TERMINALLY REJECTS the device's offline outbox: real, unsent warehouse work,
+ * destroyed by an unauthenticated message.
+ *
+ * So the two halves are split by what each can be trusted for. The BROADCAST
+ * says what happened; the PROBE corroborates that it happened. A forged disable
+ * aimed at a live session is refused, because getUser() still resolves the
+ * user, and the device falls through to the ordinary force-logout it would have
+ * performed anyway. On a real disable the corroboration is free and already
+ * paid for: the server revokes before it broadcasts, so the probe that follows
+ * necessarily answers 'signed-out'.
+ *
+ * `null` means "not a disable — handle it as an ordinary revocation".
+ */
+export function gateForRevocation(
+  claimsDisable: boolean,
+  probe: AuthProbeResult,
+): 'disabled' | null {
+  // GoTrue said so outright. That outranks anything on a public channel.
+  if (probe === 'disabled') return 'disabled';
+  if (claimsDisable && probe === 'signed-out') return 'disabled';
+  return null;
 }
 
 /**
@@ -195,4 +302,9 @@ export function notifyUnauthorized(err: unknown, now: number = Date.now()): void
 export function __resetUnauthorizedBusForTests(): void {
   unauthorizedHandler = null;
   lastNotifiedAt = null;
+}
+
+/** Test-only. */
+export function __resetSessionEndedForTests(): void {
+  sessionEndedPending = false;
 }

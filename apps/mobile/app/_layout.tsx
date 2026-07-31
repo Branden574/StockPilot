@@ -13,6 +13,7 @@ import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { WhatsNew } from '@/components/onboarding/whats-new';
+import { takeSignedOutRoute } from '@/lib/account-eviction';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -135,17 +136,17 @@ function RootGate() {
   // reach them. RootGate is the one component mounted on every screen.
   //
   // The destination also changes, deliberately: the drawer sent a
-  // force-logged-out user to '/(auth)/sign-in', this sends them to
-  // '/(auth)/welcome' — the same place the unauthenticated redirect below uses,
-  // so there is one exit for both.
+  // force-logged-out user to '/(auth)/sign-in', this sends them to the same
+  // place the unauthenticated redirect below uses, so there is one exit for
+  // both. takeSignedOutRoute() picks between them — see the redirect effect.
   const onForcedSignOut = React.useCallback(() => {
-    router.replace('/(auth)/welcome' as Href);
+    router.replace(takeSignedOutRoute() as Href);
   }, [router]);
 
   const accountGate = useAccountGate({ onEvicted: onForcedSignOut });
   const revocationOptions = React.useMemo(
-    () => ({ onTargeted: accountGate.probeNow }),
-    [accountGate.probeNow],
+    () => ({ onTargeted: accountGate.onSessionRevoked }),
+    [accountGate.onSessionRevoked],
   );
   useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);
 
@@ -156,9 +157,18 @@ function RootGate() {
     if (loading || accountGate.state === 'disabled') return;
     const inAuthGroup = segments[0] === '(auth)';
     if (!session && !inAuthGroup) {
-      // `welcome` is a new route; the generated route-type union only refreshes
-      // on the next expo build, so cast until then (stays valid afterward).
-      router.replace('/(auth)/welcome' as Href);
+      // WHERE depends on WHY. An ordinary signed-out launch gets the marketing
+      // screen. A device whose session was REVOKED under it gets sign-in: it
+      // cannot know whether it was disabled — GoTrue answers `session_not_found`
+      // to anything it asks — and a password grant is the one action that can
+      // still find out, because GoTrue answers `user_banned` to that. Sending
+      // it to the marketing screen instead is what the end-to-end run observed,
+      // and it is a dead end. The latch is read-and-clear, so this is exactly
+      // as it always was for every other sign-out.
+      //
+      // Both `welcome` and `sign-in` are cast: the generated route-type union
+      // only refreshes on the next expo build (stays valid afterward).
+      router.replace(takeSignedOutRoute() as Href);
     } else if (session && inAuthGroup) {
       router.replace('/');
     }

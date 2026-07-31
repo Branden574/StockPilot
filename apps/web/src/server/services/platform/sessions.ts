@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SessionRevokedReason } from '@stockpilot/core';
+
 import { reportError } from '@/lib/error-reporter';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -45,6 +47,17 @@ import { createAdminClient } from '@/lib/supabase/admin';
  */
 export async function revokeAllSessionsForUser(
   userId: string,
+  options: {
+    /**
+     * WHAT kind of revocation this is, carried to the live devices in the
+     * broadcast below. Supply it ONLY when the device needs to behave
+     * differently — today that means a platform account disable, which the
+     * device cannot otherwise detect once its session is gone. Omit it for an
+     * ordinary revocation (member removal) and the payload keeps its
+     * pre-existing shape exactly.
+     */
+    reason?: SessionRevokedReason;
+  } = {},
 ): Promise<{ ok: boolean; sessionIds: string[] }> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc('admin_revoke_user_sessions', {
@@ -79,10 +92,22 @@ export async function revokeAllSessionsForUser(
   // a device whose JWT names a session row that had already gone would not
   // match and would coast to token expiry.
   //
+  // `reason` rides along ONLY when the caller named one, so an ordinary
+  // revocation still puts the identical `{ keepId: null }` bytes on the wire it
+  // always has. It is the one thing a device cannot work out for itself after
+  // the revoke above: its own getUser() can only answer `session_not_found`
+  // from here on, so without this a platform disable and a plain
+  // sign-out-everywhere are indistinguishable on the device and the disabled
+  // screen can never appear. It names the KIND of event and nothing else — the
+  // channel is public (`private: false`), so the operator's reason text, the
+  // category and the actor stay strictly server-side.
+  //
   // broadcastToChannel swallows its own errors, but it is awaited inside a
   // try/catch anyway so this function's contract does not depend on that.
   try {
-    await broadcastToChannel(`user:${userId}:sessions`, 'revoked', { keepId: null });
+    const payload: { keepId: null; reason?: SessionRevokedReason } = { keepId: null };
+    if (options.reason) payload.reason = options.reason;
+    await broadcastToChannel(`user:${userId}:sessions`, 'revoked', payload);
   } catch (e) {
     console.error('[platform.revoke-sessions] eviction broadcast failed (non-fatal):', e);
   }

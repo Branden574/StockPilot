@@ -6,9 +6,11 @@ import {
   ACCOUNT_DISABLED_TITLE,
   ACCOUNT_DISABLE_CODES,
   DISABLE_REASON_CATEGORIES,
+  SESSION_REVOKED_REASON_DISABLED,
   composeDisabledReason,
   disableReasonSchema,
   isAccountDisabled,
+  isDisableRevocation,
 } from './account-status';
 
 describe('disabled copy', () => {
@@ -123,5 +125,44 @@ describe('composeDisabledReason', () => {
       const composed = composeDisabledReason({ category, notes: category === 'other' ? 'n' : undefined });
       expect(composed.trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The eviction broadcast is the ONLY channel that can tell a still-connected
+ * device WHY it is being signed out. Once the server has revoked the session,
+ * the device can no longer read its own account status — GoTrue answers
+ * `session_not_found`, never `user_banned` — so without a reason on the wire a
+ * platform disable is indistinguishable from an ordinary force-logout.
+ *
+ * The field is ADDITIVE. Every payload that does not carry it must behave
+ * exactly as it did before this existed, because the two older broadcasters
+ * (global sign-out, password reset) still send the bare `{ keepId }` shape and
+ * their listeners must not start rendering a disabled screen.
+ */
+describe('isDisableRevocation', () => {
+  it('recognises the disable reason on the revocation payload', () => {
+    expect(isDisableRevocation({ keepId: null, reason: SESSION_REVOKED_REASON_DISABLED })).toBe(
+      true,
+    );
+  });
+
+  it('is false for a payload with no reason — the pre-existing shape', () => {
+    expect(isDisableRevocation({ keepId: null })).toBe(false);
+    expect(isDisableRevocation({ sessionIds: ['s-1'] })).toBe(false);
+  });
+
+  it('is false for any other reason, and never guesses from free text', () => {
+    expect(isDisableRevocation({ keepId: null, reason: 'signed_out' })).toBe(false);
+    expect(isDisableRevocation({ keepId: null, reason: 'account disabled' })).toBe(false);
+    expect(isDisableRevocation({ keepId: null, reason: 'ACCOUNT_DISABLED' })).toBe(false);
+  });
+
+  it('never throws on a hostile or absent payload', () => {
+    expect(isDisableRevocation(null)).toBe(false);
+    expect(isDisableRevocation(undefined)).toBe(false);
+    expect(isDisableRevocation('account_disabled')).toBe(false);
+    expect(isDisableRevocation(42)).toBe(false);
+    expect(isDisableRevocation([])).toBe(false);
   });
 });

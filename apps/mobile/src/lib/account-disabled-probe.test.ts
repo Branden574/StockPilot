@@ -37,9 +37,53 @@ describe('classifyAuthProbe', () => {
   });
 
   it('reports unknown for any other failure — never lock someone out on a blip', () => {
-    expect(classifyAuthProbe({ data: { user: null }, error: { code: 'session_not_found' } })).toBe('unknown');
     expect(classifyAuthProbe({ data: { user: null }, error: { message: 'Network request failed' } })).toBe('unknown');
     expect(classifyAuthProbe(null)).toBe('unknown');
+  });
+
+  /**
+   * The fourth answer, and the one the first cut of this module did not have.
+   *
+   * A platform disable REVOKES the user's sessions, so by the time a device
+   * probes, its own session row is gone and GoTrue answers `session_not_found`
+   * (403) — or, once the access token expires and gotrue-js tries to refresh,
+   * `refresh_token_not_found` (400), because auth.refresh_tokens cascades on
+   * the session delete. Neither is `user_banned`, and neither ever will be:
+   * a revoked client cannot read its own account status.
+   *
+   * Folding these into 'unknown' was the defect. 'unknown' means "change
+   * nothing", so the app kept its dead session and drifted to the marketing
+   * screen. They are not inconclusive at all — they are a definite answer to a
+   * different question: YOUR SESSION IS GONE. That justifies a local sign-out
+   * and the sign-in screen, and nothing more: the device still cannot tell a
+   * disable from an ordinary sign-out-everywhere, and must not pretend it can.
+   */
+  it('reports signed-out when the session itself is gone', () => {
+    expect(classifyAuthProbe({ data: { user: null }, error: { status: 403, code: 'session_not_found' } })).toBe(
+      'signed-out',
+    );
+    expect(classifyAuthProbe({ data: { user: null }, error: { status: 400, code: 'refresh_token_not_found' } })).toBe(
+      'signed-out',
+    );
+    expect(classifyAuthProbe({ data: { user: null }, error: { code: 'session_expired' } })).toBe('signed-out');
+  });
+
+  it('does NOT infer signed-out from free text either', () => {
+    expect(classifyAuthProbe({ data: { user: null }, error: { message: 'session_not_found' } })).toBe('unknown');
+  });
+
+  it('still prefers a confirmed ban over a dead session', () => {
+    // Belt and braces: if GoTrue ever answers a revoked-AND-banned user with
+    // the ban, that is the better answer and it must win.
+    expect(
+      classifyAuthProbe({ data: { user: null }, error: { status: 403, code: 'user_banned' } }),
+    ).toBe('disabled');
+  });
+
+  it('prefers a live user over a session-gone code', () => {
+    expect(
+      classifyAuthProbe({ data: { user: { id: 'u1' } }, error: { code: 'session_not_found' } }),
+    ).toBe('active');
   });
 
   it('never infers a ban from free text', () => {

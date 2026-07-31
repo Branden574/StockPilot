@@ -3,6 +3,7 @@ import 'server-only';
 import {
   composeDisabledReason,
   disableReasonSchema,
+  SESSION_REVOKED_REASON_DISABLED,
   type AccountDisableCode,
   type DisableReasonInput,
 } from '@stockpilot/core';
@@ -215,7 +216,17 @@ export async function disableUserAccount(
 
   // Kills the live sessions and evicts the devices. The helper reports rather
   // than throws, and it emits the ONE eviction broadcast itself.
-  const revoked = await revokeAllSessionsForUser(input.targetUserId);
+  //
+  // The reason is passed so that broadcast can say WHAT this revocation was.
+  // The revoke immediately above is exactly what makes the device mute: after
+  // it, the device's own getUser() answers `session_not_found`, never
+  // `user_banned`, so a connected device has no other way to learn that this
+  // was a disable rather than an ordinary sign-out-everywhere. It is a fixed
+  // enum member, never `reason` — that string is the operator's, the channel is
+  // public, and §9's visibility matrix keeps it on platform surfaces only.
+  const revoked = await revokeAllSessionsForUser(input.targetUserId, {
+    reason: SESSION_REVOKED_REASON_DISABLED,
+  });
 
   // The audit write is best-effort by design — the account is ALREADY disabled
   // and must stay that way — but its failure is carried out to the caller. A

@@ -65,6 +65,46 @@ export const DISABLED_ACCOUNT_EVENTS = {
 /** Web route for the blocked-route screen. Mobile renders the same copy. */
 export const ACCOUNT_DISABLED_PATH = '/account-disabled';
 
+/**
+ * The reason carried by the device-eviction broadcast
+ * (`user:{id}:sessions` / `revoked`).
+ *
+ * WHY THIS HAS TO EXIST. A platform disable revokes the user's sessions before
+ * anything else can happen, and after that the device is mute: its own
+ * `getUser()` answers `session_not_found`, and once the access token lapses the
+ * refresh answers `refresh_token_not_found`. Neither is `user_banned` and
+ * neither ever will be — a client with no valid session genuinely cannot read
+ * its own account status. Without a reason on the wire, a still-connected
+ * device cannot tell a platform disable from an ordinary sign-out-everywhere,
+ * and the end-to-end run confirmed the consequence: the disabled screen never
+ * appeared on mobile at all.
+ *
+ * WHAT IT IS ALLOWED TO BE. A single fixed enum member naming the KIND of
+ * event. Never the operator's reason text, never the category they chose,
+ * never the actor, never a timestamp: `broadcastToChannel` posts with
+ * `private: false`, so this payload is readable by anyone holding the shipped
+ * anon key who knows the user's uuid.
+ *
+ * WHAT IT IS NOT. Proof. That same public channel means anyone can also WRITE
+ * this payload, so a listener must corroborate the claim before acting on it
+ * (mobile does that with its auth probe — see account-eviction.ts's
+ * `gateForRevocation`). The field is purely ADDITIVE: the two older
+ * broadcasters, global sign-out and password reset, still send the bare
+ * `{ keepId }` shape, and a payload without a `reason` must behave exactly as
+ * it did before this existed.
+ */
+export const SESSION_REVOKED_REASON_DISABLED = 'account_disabled';
+export type SessionRevokedReason = typeof SESSION_REVOKED_REASON_DISABLED;
+
+/**
+ * Whether a `revoked` broadcast payload claims to be a platform account
+ * disable. Total: any shape at all may arrive on a public channel.
+ */
+export function isDisableRevocation(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  return (payload as { reason?: unknown }).reason === SESSION_REVOKED_REASON_DISABLED;
+}
+
 /** Owner-approved wording. Do not paraphrase, shorten or localize in place. */
 export const ACCOUNT_DISABLED_TITLE = 'Your account has been temporarily disabled';
 export const ACCOUNT_DISABLED_MESSAGE =

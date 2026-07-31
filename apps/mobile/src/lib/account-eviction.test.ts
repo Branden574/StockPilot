@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __resetSessionEndedForTests,
   __resetUnauthorizedBusForTests,
   accountScopedStorageKeys,
+  AUTH_SIGN_IN_ROUTE,
+  AUTH_WELCOME_ROUTE,
   EVICTION_STEP_ORDER,
+  gateForRevocation,
+  markSessionEnded,
   nextGateForProbe,
   notifyUnauthorized,
   PROBE_MIN_INTERVAL_MS,
   runAccountEviction,
   setUnauthorizedHandler,
+  settleProbeResult,
   shouldRunProbeNow,
+  takeSignedOutRoute,
   withTimeout,
 } from './account-eviction';
 
@@ -111,6 +118,135 @@ describe('nextGateForProbe', () => {
     // Otherwise a warehouse that loses its uplink while the transient screen is
     // up is stuck behind a retry button that can never succeed.
     expect(nextGateForProbe('unverified', 'unknown')).toBe('ok');
+  });
+
+  /**
+   * 'signed-out' says nothing about the ACCOUNT — only that this device's
+   * session is gone. It must therefore move the gate exactly as little as
+   * 'unknown' does. Mapping it to 'disabled' would be the fake distinction:
+   * an ordinary sign-out-everywhere from another device produces the identical
+   * answer, and it would tell a perfectly healthy user to contact their
+   * administrator.
+   */
+  it('never turns a dead session into a disabled account', () => {
+    expect(nextGateForProbe('ok', 'signed-out')).toBeNull();
+    expect(nextGateForProbe('disabled', 'signed-out')).toBeNull();
+    expect(nextGateForProbe('unverified', 'signed-out')).toBe('ok');
+  });
+});
+
+/**
+ * WHERE a signed-out device lands.
+ *
+ * Before this, a revoked session drained away through supabase-js's own
+ * handling and the app fell through the plain `!session` redirect to the
+ * MARKETING screen — the observed line-5 symptom. A device that has just been
+ * told its session is gone should be asked to sign in, because signing in is
+ * the one action that can still learn the truth: GoTrue answers `user_banned`
+ * to a disabled user's password grant even though it will not answer a probe.
+ */
+describe('the signed-out destination latch', () => {
+  beforeEach(() => {
+    __resetSessionEndedForTests();
+  });
+
+  it('defaults to the marketing screen — the pre-existing behaviour', () => {
+    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+    expect(AUTH_WELCOME_ROUTE).toBe('/(auth)/welcome');
+  });
+
+  it('sends a device whose session died to SIGN-IN instead', () => {
+    markSessionEnded();
+    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(AUTH_SIGN_IN_ROUTE).toBe('/(auth)/sign-in');
+  });
+
+  it('is consumed once, so a later ordinary sign-out still lands on welcome', () => {
+    markSessionEnded();
+    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+});
+
+describe('settleProbeResult', () => {
+  beforeEach(() => {
+    __resetSessionEndedForTests();
+  });
+
+  it('signs the device out locally, once, when the session is gone', async () => {
+    const signOutLocal = vi.fn(async () => {});
+
+    const gate = await settleProbeResult('ok', 'signed-out', signOutLocal);
+
+    expect(signOutLocal).toHaveBeenCalledTimes(1);
+    expect(gate).toBeNull();
+    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+  });
+
+  it('leaves the session alone for every other verdict', async () => {
+    const signOutLocal = vi.fn(async () => {});
+
+    expect(await settleProbeResult('ok', 'disabled', signOutLocal)).toBe('disabled');
+    expect(await settleProbeResult('ok', 'active', signOutLocal)).toBe('ok');
+    expect(await settleProbeResult('ok', 'unavailable', signOutLocal)).toBe('unverified');
+    expect(await settleProbeResult('ok', 'unknown', signOutLocal)).toBeNull();
+
+    expect(signOutLocal).not.toHaveBeenCalled();
+    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+
+  it('still marks the destination when the sign-out itself throws', async () => {
+    // The Keychain can reject. The session is gone either way, so the user must
+    // still be routed somewhere they can actually recover from.
+    const signOutLocal = vi.fn(async () => {
+      throw new Error('Keychain unavailable');
+    });
+
+    await expect(settleProbeResult('ok', 'signed-out', signOutLocal)).resolves.toBeNull();
+    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+  });
+});
+
+/**
+ * The ONLINE half of the fix, and the only place the broadcast's reason is
+ * allowed to matter.
+ *
+ * `user:{id}:sessions` is a PUBLIC realtime channel (broadcast.ts posts with
+ * `private: false`), so anyone holding the shipped anon key and a user's uuid
+ * can forge a payload on it. Today the worst that buys them is a forced
+ * sign-out. Letting a forged `reason` alone raise the disabled gate would also
+ * hand them the ability to terminally reject a warehouse's queued offline work
+ * — real data loss on an unauthenticated message.
+ *
+ * So the two halves are split by what each can be trusted for: the BROADCAST
+ * says what happened, and the PROBE corroborates that it happened. A forged
+ * disable against a live session is refused because getUser() still resolves
+ * the user, and the device falls through to the ordinary force-logout it would
+ * have done anyway.
+ */
+describe('gateForRevocation', () => {
+  it('accepts a disable that the probe corroborates', () => {
+    expect(gateForRevocation(true, 'signed-out')).toBe('disabled');
+  });
+
+  it('accepts a ban the probe confirmed outright, reason or not', () => {
+    expect(gateForRevocation(true, 'disabled')).toBe('disabled');
+    expect(gateForRevocation(false, 'disabled')).toBe('disabled');
+  });
+
+  it('REFUSES a claimed disable while the session is demonstrably alive', () => {
+    expect(gateForRevocation(true, 'active')).toBeNull();
+  });
+
+  it('refuses a claimed disable it could not corroborate at all', () => {
+    expect(gateForRevocation(true, 'unknown')).toBeNull();
+    expect(gateForRevocation(true, 'unavailable')).toBeNull();
+  });
+
+  it('treats a reasonless revoke exactly as before — an ordinary sign-out', () => {
+    expect(gateForRevocation(false, 'signed-out')).toBeNull();
+    expect(gateForRevocation(false, 'active')).toBeNull();
+    expect(gateForRevocation(false, 'unknown')).toBeNull();
   });
 });
 

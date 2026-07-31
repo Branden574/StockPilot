@@ -13,18 +13,28 @@ import { supabase } from './supabase';
  * Payload variants:
  *   { sessionIds: string[] }  — sign out iff own session id ∈ sessionIds
  *   { keepId: string }        — sign out iff own session id ≠ keepId
+ *   { …, reason: 'account_disabled' } — OPTIONAL, additive. Names WHAT the
+ *     revocation was. Only a platform disable sends it today; every payload
+ *     without it behaves exactly as it always has.
  *
  * `onTargeted` is an optional first refusal, run BEFORE the local sign-out
  * while the access token GoTrue needs to answer still exists. It returns true
  * when it has fully handled the eviction itself, which suppresses the default
- * sign-out, the alert and `onSignedOut`. RootGate passes the account probe:
- * a platform disable revokes sessions through this same broadcast, and
- * "You were signed out from another device." is simply not what happened.
+ * sign-out, the alert and `onSignedOut`. RootGate passes the account gate's
+ * handler, and the RAW PAYLOAD is forwarded to it: a platform disable revokes
+ * sessions through this same broadcast, after which the device's own auth probe
+ * can only ever answer `session_not_found` — so the reason on the payload is
+ * the one signal that survives the revocation, and "You were signed out from
+ * another device." is simply not what happened.
+ *
+ * This listener stays deliberately dumb about that reason. It forwards it and
+ * nothing more: the channel is public, so deciding whether to BELIEVE the claim
+ * needs corroboration, and that judgement lives with the account gate.
  */
 export function useSessionRevocation(
   userId: string | null,
   onSignedOut: () => void,
-  options: { onTargeted?: () => Promise<boolean> } = {},
+  options: { onTargeted?: (payload: unknown) => Promise<boolean> } = {},
 ): void {
   // Held in a ref, not a dependency: `options` is a fresh object every render,
   // so depending on it would tear down and re-subscribe the channel on every
@@ -71,10 +81,12 @@ export function useSessionRevocation(
         void (async () => {
           // First refusal, while the token is still on the device: if this
           // revoke is really a platform disable, the account gate takes over
-          // and shows the disabled screen instead of the wrong sentence.
+          // and shows the disabled screen instead of the wrong sentence. The
+          // whole payload goes across — the gate needs the `reason` field, and
+          // narrowing it here would put the decision in the wrong module.
           if (onTargetedRef.current) {
             try {
-              if (await onTargetedRef.current()) return;
+              if (await onTargetedRef.current(payload)) return;
             } catch {
               /* fall through to the ordinary force-logout */
             }

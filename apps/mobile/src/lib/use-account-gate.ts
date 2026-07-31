@@ -10,10 +10,11 @@ import {
 } from './account-disabled-state';
 import {
   accountScopedStorageKeys,
-  nextGateForProbe,
+  gateForRevocation,
   PROBE_TIMEOUT_MS,
   runAccountEviction,
   setUnauthorizedHandler,
+  settleProbeResult,
   withTimeout,
 } from './account-eviction';
 import { wipeForSignOut } from './db';
@@ -21,6 +22,10 @@ import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
 import { rejectAllPending } from './queue';
 import { abortAllInFlight } from './request-cancellation';
 import { supabase } from './supabase';
+
+import { isDisableRevocation } from '@stockpilot/core';
+
+import type { AuthProbeResult } from './account-disabled-probe';
 
 /**
  * The ONE place the account gate is wired to the device.
@@ -33,20 +38,33 @@ import { supabase } from './supabase';
  * It reuses the app's EXISTING lifecycle architecture rather than adding
  * listeners of its own. There is no new AppState subscription here: foreground
  * resume and network reconnect already run useSync → syncNow → api(), and every
- * api() failure with a 401 rings the unauthorized bus. The paths that can
- * discover a disable are therefore:
+ * api() failure with a 401 rings the unauthorized bus.
  *
- *   1. cold launch / session restore — auth-context probes once it has hydrated
- *      a session;
- *   2. sign-in — GoTrue answers `user_banned` (auth-context);
- *   3. any protected request that 401s, from any screen, including the sync
- *      snapshot pull and the foreground/reconnect sync ticks — the bus, here;
- *   4. the live force-logout broadcast, via useSessionRevocation's onTargeted
- *      override — probeNow below runs BEFORE the local sign-out, while the
- *      token that GoTrue needs to answer still exists.
+ * WHICH PATHS CAN ACTUALLY CONFIRM A DISABLE — and the correction the
+ * end-to-end run forced. A disable revokes the user's sessions FIRST, so from
+ * that moment the device is mute: its probe can only ever get
+ * `session_not_found`. `user_banned` is unreachable on every path that runs
+ * against a revoked session, which is all of them except one.
  *
- * All four funnel into the same gate state, and the eviction runs exactly once
- * per transition into `disabled`.
+ *   1. cold launch / session restore — auth-context probes a hydrated session.
+ *      Post-revocation this answers 'signed-out', NOT 'disabled': the device
+ *      signs out and lands on sign-in (settleProbeResult).
+ *   2. SIGN-IN — GoTrue answers `user_banned` to a password grant (auth-context).
+ *      This is the ONE path that can still confirm a disable outright, and it
+ *      is where every offline / relaunched device converges.
+ *   3. any protected request that 401s — same story as (1): 'signed-out'.
+ *   4. the live eviction broadcast, via useSessionRevocation's onTargeted
+ *      override. This is the ONLINE fast path: the broadcast NAMES the reason,
+ *      and `onSessionRevoked` below believes it only once the probe has
+ *      corroborated that the session really is gone (the channel is public and
+ *      therefore forgeable — see gateForRevocation).
+ *
+ * They funnel into the same gate state, and the eviction — including the
+ * terminal rejection of the offline outbox — runs exactly once per transition
+ * into `disabled`. Keeping rejection on the TRANSITION rather than on either
+ * discovery path is deliberate: (4) and (2) are the two ways a device learns
+ * the truth, and wiring the outbox to just one of them is precisely the bug the
+ * end-to-end run found.
  */
 export interface AccountGate {
   state: AccountGateState;
@@ -55,11 +73,18 @@ export interface AccountGate {
   /** Re-run the probe. The retry affordance on the unverified screen. */
   retry: () => void;
   /**
-   * Probe now and report whether the account is CONFIRMED disabled. Handed to
-   * useSessionRevocation so a god-admin disable shows the disabled screen
-   * instead of "You were signed out from another device."
+   * Probe now and report whether the account is CONFIRMED disabled. Kept for
+   * the retry affordance and for callers that only want the verdict.
    */
   probeNow: () => Promise<boolean>;
+  /**
+   * Handed to useSessionRevocation as its `onTargeted` first refusal. Receives
+   * the RAW broadcast payload so it can read the reason, corroborates it with a
+   * probe, and returns true when it has taken the eviction over — which
+   * suppresses the listener's "You were signed out from another device." alert,
+   * a sentence that is simply not what happened.
+   */
+  onSessionRevoked: (payload: unknown) => Promise<boolean>;
 }
 
 export function useAccountGate(options: { onEvicted: () => void }): AccountGate {
@@ -76,7 +101,12 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     return subscribeAccountGate(setState);
   }, []);
 
-  const probeNow = React.useCallback(async (): Promise<boolean> => {
+  /**
+   * One probe round trip, applied. Returns the raw verdict so the revocation
+   * handler can reason about 'signed-out' — the answer a revoked device
+   * actually gets — rather than only about "was it a confirmed ban".
+   */
+  const runProbe = React.useCallback(async (): Promise<AuthProbeResult> => {
     setBusy(true);
     try {
       // getUser() is the ONLY authority here: /api/v1 answers a disabled caller
@@ -84,13 +114,43 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
       // rejected call (offline, DNS, timeout) classifies as 'unknown' and
       // changes nothing.
       const res = await withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null);
-      const next = nextGateForProbe(getAccountGateState(), classifyAuthProbe(res));
+      const result = classifyAuthProbe(res);
+      const next = await settleProbeResult(getAccountGateState(), result, async () => {
+        await supabase.auth.signOut({ scope: 'local' });
+      });
       if (next) setAccountGateState(next);
-      return next === 'disabled';
+      return result;
     } finally {
       setBusy(false);
     }
   }, []);
+
+  const probeNow = React.useCallback(async (): Promise<boolean> => {
+    return (await runProbe()) === 'disabled';
+  }, [runProbe]);
+
+  /**
+   * The ONLINE half of the disable story.
+   *
+   * The broadcast is the only thing that can name the reason — after the
+   * server-side revoke, the probe below can never answer `user_banned` — but
+   * the channel is public and therefore forgeable, so the reason is a claim and
+   * the probe is the corroboration. gateForRevocation owns that judgement; this
+   * just supplies both inputs and applies the verdict.
+   *
+   * Returning false hands the listener back its ordinary force-logout, which is
+   * exactly right for a real sign-out-everywhere.
+   */
+  const onSessionRevoked = React.useCallback(
+    async (payload: unknown): Promise<boolean> => {
+      const claimsDisable = isDisableRevocation(payload);
+      const probe = await runProbe();
+      if (gateForRevocation(claimsDisable, probe) !== 'disabled') return false;
+      setAccountGateState('disabled');
+      return true;
+    },
+    [runProbe],
+  );
 
   // Any 401, anywhere in the app, gets ONE throttled probe. Registered here so
   // api.ts stays a plain module with no supabase / router / SQLite imports.
@@ -125,6 +185,14 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         // work vanished with no record and nothing to explain to the user.
         // Best-effort: if the rejection fails we still wipe, because losing the
         // record is bad but replaying the writes after a re-enable is worse.
+        //
+        // THE ONE REJECTION SITE. It hangs off the transition into `disabled`,
+        // not off any single discovery path, and that is what makes it reachable
+        // from BOTH: the corroborated eviction broadcast (a connected device)
+        // and the `user_banned` sign-in rejection (a relaunched or offline one).
+        // The end-to-end run found it wired only to a path that the session
+        // revocation had made unreachable, and both queues stayed 'failed' —
+        // retryable — instead of terminally rejected.
         clearCaches: async () => {
           try {
             await rejectAllPending(ACCOUNT_DISABLED_REJECTION);
@@ -155,5 +223,5 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     void probeNow();
   }, [probeNow]);
 
-  return { state, busy, retry, probeNow };
+  return { state, busy, retry, probeNow, onSessionRevoked };
 }
