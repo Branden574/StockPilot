@@ -32,7 +32,7 @@ const revokeAllSessionsForUser = vi.fn(async (..._args: unknown[]) => ({
   sessionIds: [] as string[],
 }));
 const broadcastToChannel = vi.fn(async (..._args: unknown[]) => {});
-const recordPlatformAudit = vi.fn(async (..._args: unknown[]) => {});
+const recordPlatformAudit = vi.fn(async (..._args: unknown[]) => true);
 const reportError = vi.fn(async (..._args: unknown[]) => {});
 
 const dbState: {
@@ -108,6 +108,7 @@ describe('disableUserAccount', () => {
     primeAuthUsers();
     updateUserById.mockResolvedValue({ data: { user: { id: TARGET } }, error: null });
     revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: ['s-1', 's-2'] });
+    recordPlatformAudit.mockResolvedValue(true);
   });
 
   it('flags, bans, revokes and audits — in that order', async () => {
@@ -119,6 +120,7 @@ describe('disableUserAccount', () => {
       banned: true,
       sessionsRevoked: 2,
       partial: false,
+      partialReasons: [],
     });
     expect(updateArgs[0]).toMatchObject({
       disabled_reason: 'Security investigation',
@@ -253,7 +255,12 @@ describe('disableUserAccount', () => {
 
     const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
 
-    expect(res).toMatchObject({ ok: true, banned: false, partial: true });
+    expect(res).toMatchObject({
+      ok: true,
+      banned: false,
+      partial: true,
+      partialReasons: ['ban_not_applied'],
+    });
     expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
     expect(reportError).toHaveBeenCalled();
   });
@@ -267,15 +274,59 @@ describe('disableUserAccount', () => {
       banned: true,
       sessionsRevoked: 0,
       partial: true,
+      partialReasons: ['sessions_not_revoked'],
     });
   });
 
-  it('surfaces a CAS write error instead of pretending it worked', async () => {
+  it('reports partial when the account was disabled but the audit row did NOT land', async () => {
+    recordPlatformAudit.mockResolvedValue(false);
+
+    const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+    // The disable is NOT rolled back — the user must stay locked out — but the
+    // owner's "every disable is auditable" guarantee is broken for this row, so
+    // the caller is told, distinctly, rather than being handed a clean success.
+    expect(res).toEqual({
+      ok: true,
+      alreadyDisabled: false,
+      banned: true,
+      sessionsRevoked: 2,
+      partial: true,
+      partialReasons: ['not_audited'],
+    });
+  });
+
+  it('does not claim an unrecorded audit on a replay that never attempted one', async () => {
+    dbState.update = { data: [], error: null };
+
+    const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+    // The CAS miss means the ORIGINAL disable already wrote the audit row. No
+    // row was attempted here, so nothing is missing.
+    expect(res).toMatchObject({ alreadyDisabled: true, partial: false, partialReasons: [] });
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('collects every failed layer, not just the first', async () => {
+    updateUserById.mockResolvedValue({ data: null, error: { message: 'gotrue down' } });
+    revokeAllSessionsForUser.mockResolvedValue({ ok: false, sessionIds: [] });
+    recordPlatformAudit.mockResolvedValue(false);
+
+    expect(await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR })).toMatchObject(
+      { partial: true, partialReasons: ['ban_not_applied', 'sessions_not_revoked', 'not_audited'] },
+    );
+  });
+
+  it('calls a lost CAS write a CONCURRENT CHANGE, never a permission problem', async () => {
     dbState.update = { data: null, error: { message: 'deadlock detected' } };
 
     const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
 
-    expect(res).toEqual({ ok: false, code: 'ACCOUNT_DISABLE_NOT_AUTHORIZED' });
+    // The actor was already verified against the allowlist above, so a failure
+    // at the write can never be an authorization failure. Telling the operator
+    // they lack permission would be a lie; the honest instruction is "the
+    // status just moved, reload and try again".
+    expect(res).toEqual({ ok: false, code: 'ACCOUNT_STATUS_CHANGED' });
     expect(updateUserById).not.toHaveBeenCalled();
   });
 });
@@ -288,12 +339,19 @@ describe('reenableUserAccount', () => {
     dbState.update = { data: [{ id: TARGET }], error: null };
     primeAuthUsers();
     updateUserById.mockResolvedValue({ data: { user: { id: TARGET } }, error: null });
+    recordPlatformAudit.mockResolvedValue(true);
   });
 
   it('clears all three columns, lifts the ban and audits', async () => {
     const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
 
-    expect(res).toEqual({ ok: true, alreadyActive: false, banned: false, partial: false });
+    expect(res).toEqual({
+      ok: true,
+      alreadyActive: false,
+      banned: false,
+      partial: false,
+      partialReasons: [],
+    });
     expect(updateArgs[0]).toEqual({ disabled_at: null, disabled_reason: null, disabled_by: null });
     expect(updateUserById).toHaveBeenCalledWith(TARGET, { ban_duration: 'none' });
     expect(recordPlatformAudit).toHaveBeenCalledWith(
@@ -350,8 +408,31 @@ describe('reenableUserAccount', () => {
       alreadyActive: false,
       banned: true,
       partial: true,
+      partialReasons: ['ban_not_lifted'],
     });
     expect(reportError).toHaveBeenCalled();
+  });
+
+  it('reports partial when the re-enable landed but the audit row did NOT', async () => {
+    recordPlatformAudit.mockResolvedValue(false);
+
+    expect(await reenableUserAccount({ targetUserId: TARGET, ...ACTOR })).toEqual({
+      ok: true,
+      alreadyActive: false,
+      banned: false,
+      partial: true,
+      partialReasons: ['not_audited'],
+    });
+  });
+
+  it('calls a lost CAS write a CONCURRENT CHANGE, never a permission problem', async () => {
+    dbState.update = { data: null, error: { message: 'could not serialize access' } };
+
+    expect(await reenableUserAccount({ targetUserId: TARGET, ...ACTOR })).toEqual({
+      ok: false,
+      code: 'ACCOUNT_STATUS_CHANGED',
+    });
+    expect(updateUserById).not.toHaveBeenCalled();
   });
 });
 

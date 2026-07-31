@@ -38,6 +38,15 @@ export const ACCOUNT_DISABLE_CODES = [
   'ACCOUNT_DISABLE_REASON_REQUIRED',
   /** No auth user with that id. */
   'ACCOUNT_NOT_FOUND',
+  /**
+   * The compare-and-set write was lost — a serialization failure, a deadlock or
+   * another admin moving the same account at the same moment. Deliberately NOT
+   * folded into ACCOUNT_DISABLE_NOT_AUTHORIZED: the actor's permission was
+   * already verified before the write, so reusing that code would tell a god
+   * admin they lack permission when someone else simply won the race. The
+   * surface renders "this account's status just changed — reload and retry".
+   */
+  'ACCOUNT_STATUS_CHANGED',
 ] as const;
 export type AccountDisableCode = (typeof ACCOUNT_DISABLE_CODES)[number];
 

@@ -62,6 +62,29 @@ export interface ReenableUserAccountInput {
   actorUserId: string;
 }
 
+/**
+ * Which layer of a partially-applied change did not land. The operation still
+ * succeeded — the authoritative flag is written — so these are what the surface
+ * turns into "…but press it again" wording, one accurate sentence per token
+ * instead of one vague "partial".
+ */
+export const ACCOUNT_STATUS_PARTIAL_REASONS = [
+  /** Layer B: the GoTrue ban was not applied, so token refresh still works. */
+  'ban_not_applied',
+  /** Layer B: the GoTrue ban is still in place, so the user still cannot sign in. */
+  'ban_not_lifted',
+  /** Live sessions survive until their access tokens expire. */
+  'sessions_not_revoked',
+  /**
+   * The action happened but no audit row landed. It is NOT rolled back — the
+   * account must stay in the state the operator asked for — but the owner's
+   * "every disable, revocation and re-enable is auditable" guarantee is broken
+   * for this one, so it can never be reported as a clean success.
+   */
+  'not_audited',
+] as const;
+export type AccountStatusPartialReason = (typeof ACCOUNT_STATUS_PARTIAL_REASONS)[number];
+
 export type DisableUserAccountResult =
   | {
       ok: true;
@@ -69,8 +92,10 @@ export type DisableUserAccountResult =
       alreadyDisabled: boolean;
       banned: boolean;
       sessionsRevoked: number;
-      /** True when Layer A landed but Layer B or revocation did not. */
+      /** True when Layer A landed but a later layer did not. */
       partial: boolean;
+      /** Empty when `partial` is false. */
+      partialReasons: AccountStatusPartialReason[];
     }
   | { ok: false; code: AccountDisableCode };
 
@@ -81,6 +106,8 @@ export type ReenableUserAccountResult =
       /** True when the GoTrue ban is STILL in place because lifting it failed. */
       banned: boolean;
       partial: boolean;
+      /** Empty when `partial` is false. */
+      partialReasons: AccountStatusPartialReason[];
     }
   | { ok: false; code: AccountDisableCode };
 
@@ -162,7 +189,12 @@ export async function disableUserAccount(
       tag: 'platform.account-disable.cas',
       extra: { targetUserId: input.targetUserId },
     });
-    return { ok: false, code: 'ACCOUNT_DISABLE_NOT_AUTHORIZED' };
+    // A CONCURRENCY outcome, not an authorization one: the actor's allowlist
+    // membership was verified above, so nothing that fails here means "you may
+    // not do this". Serialization failures, deadlocks and a peer admin moving
+    // the same row all land here, and the honest instruction for every one of
+    // them is "reload and try again".
+    return { ok: false, code: 'ACCOUNT_STATUS_CHANGED' };
   }
 
   const alreadyDisabled = ((casRows ?? []) as Array<{ id: string }>).length === 0;
@@ -185,30 +217,42 @@ export async function disableUserAccount(
   // than throws, and it emits the ONE eviction broadcast itself.
   const revoked = await revokeAllSessionsForUser(input.targetUserId);
 
-  if (!alreadyDisabled) {
-    await recordPlatformAudit({
-      actorUserId: input.actorUserId,
-      actorEmail,
-      action: 'user_disabled',
-      targetUserId: input.targetUserId,
-      detail: {
-        reason,
-        reason_category: parsed.data.category,
-        sessions_revoked: revoked.sessionIds.length,
-        sessions_revoke_ok: revoked.ok,
-        banned,
-      },
-    });
-  }
+  // The audit write is best-effort by design — the account is ALREADY disabled
+  // and must stay that way — but its failure is carried out to the caller. A
+  // CHECK violation (0308 not pushed yet) or a transient error would otherwise
+  // leave a fully disabled user with no audit row and a clean-success return,
+  // which is exactly the guarantee the owner's brief refuses to lose. Skipped
+  // on a replay: the original disable already wrote the row.
+  const audited = alreadyDisabled
+    ? true
+    : await recordPlatformAudit({
+        actorUserId: input.actorUserId,
+        actorEmail,
+        action: 'user_disabled',
+        targetUserId: input.targetUserId,
+        detail: {
+          reason,
+          reason_category: parsed.data.category,
+          sessions_revoked: revoked.sessionIds.length,
+          sessions_revoke_ok: revoked.ok,
+          banned,
+        },
+      });
+
+  // Layer A landed, so the account IS locked out; these tell the UI which
+  // deeper layer needs the button pressed again.
+  const partialReasons: AccountStatusPartialReason[] = [];
+  if (!banned) partialReasons.push('ban_not_applied');
+  if (!revoked.ok) partialReasons.push('sessions_not_revoked');
+  if (!audited) partialReasons.push('not_audited');
 
   return {
     ok: true,
     alreadyDisabled,
     banned,
     sessionsRevoked: revoked.sessionIds.length,
-    // Layer A landed, so the account IS locked out; partial tells the UI that
-    // one of the deeper layers needs the button pressed again.
-    partial: !banned || !revoked.ok,
+    partial: partialReasons.length > 0,
+    partialReasons,
   };
 }
 
@@ -235,7 +279,9 @@ export async function reenableUserAccount(
       tag: 'platform.account-reenable.cas',
       extra: { targetUserId: input.targetUserId },
     });
-    return { ok: false, code: 'ACCOUNT_DISABLE_NOT_AUTHORIZED' };
+    // Same reasoning as the disable path: a lost write is a concurrent change,
+    // never a permission problem.
+    return { ok: false, code: 'ACCOUNT_STATUS_CHANGED' };
   }
 
   const alreadyActive = ((casRows ?? []) as Array<{ id: string }>).length === 0;
@@ -256,15 +302,25 @@ export async function reenableUserAccount(
   // No revocation and no broadcast: re-enable only GRANTS access. The sessions
   // killed by the disable stay dead — the user signs in again, which mints a
   // fresh one.
-  if (!alreadyActive) {
-    await recordPlatformAudit({
-      actorUserId: input.actorUserId,
-      actorEmail,
-      action: 'user_reenabled',
-      targetUserId: input.targetUserId,
-      detail: { ban_cleared: !banError },
-    });
-  }
+  const audited = alreadyActive
+    ? true
+    : await recordPlatformAudit({
+        actorUserId: input.actorUserId,
+        actorEmail,
+        action: 'user_reenabled',
+        targetUserId: input.targetUserId,
+        detail: { ban_cleared: !banError },
+      });
 
-  return { ok: true, alreadyActive, banned: !!banError, partial: !!banError };
+  const partialReasons: AccountStatusPartialReason[] = [];
+  if (banError) partialReasons.push('ban_not_lifted');
+  if (!audited) partialReasons.push('not_audited');
+
+  return {
+    ok: true,
+    alreadyActive,
+    banned: !!banError,
+    partial: partialReasons.length > 0,
+    partialReasons,
+  };
 }

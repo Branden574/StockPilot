@@ -12,9 +12,16 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * ONLY through the service-role admin client behind the platform-admin
  * gate — never reachable by the anon/authed clients.
  *
- * Best-effort: a failed audit insert is reported but never throws, so it
- * can't break the action it's logging. (Reads for the Audit screen live
- * in `listPlatformAudit` below and DO surface errors.)
+ * Best-effort but NOT silent: a failed audit insert is reported and never
+ * throws, so it can't break the action it's logging, but `recordPlatformAudit`
+ * RETURNS whether the row landed. The owner's account-disable brief requires
+ * every disable, revocation and re-enable to be auditable, so a caller that
+ * carries that guarantee (account-status.ts) must be able to tell that the row
+ * is missing and report the operation as partial rather than as a clean
+ * success. Callers that don't care simply ignore the boolean — the pre-existing
+ * `await recordPlatformAudit(...)` sites behave exactly as before.
+ * (Reads for the Audit screen live in `listPlatformAudit` below and DO surface
+ * errors.)
  */
 
 export type PlatformAuditAction =
@@ -40,7 +47,8 @@ export interface RecordPlatformAuditInput {
   detail?: Record<string, unknown>;
 }
 
-export async function recordPlatformAudit(input: RecordPlatformAuditInput): Promise<void> {
+/** @returns true when the audit row landed, false when it was reported instead. */
+export async function recordPlatformAudit(input: RecordPlatformAuditInput): Promise<boolean> {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from('platform_admin_audit').insert({
@@ -52,11 +60,13 @@ export async function recordPlatformAudit(input: RecordPlatformAuditInput): Prom
       detail: input.detail ?? {},
     });
     if (error) throw new Error(error.message);
+    return true;
   } catch (e) {
     await reportError(e, {
       tag: 'platform-audit.record',
       extra: { action: input.action, targetOrg: input.targetOrganizationId ?? null },
     });
+    return false;
   }
 }
 

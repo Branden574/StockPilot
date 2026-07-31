@@ -38,7 +38,17 @@ describe('ACCOUNT_DISABLE_CODES', () => {
       'PROTECTED_ADMIN_ACCOUNT',
       'ACCOUNT_DISABLE_REASON_REQUIRED',
       'ACCOUNT_NOT_FOUND',
+      'ACCOUNT_STATUS_CHANGED',
     ]);
+  });
+
+  it('separates "someone else changed it" from "you may not do this"', () => {
+    // A lost write on the compare-and-set is a CONCURRENCY outcome, not an
+    // authorization one. Sharing ACCOUNT_DISABLE_NOT_AUTHORIZED with it would
+    // tell a god admin they lack permission when another god admin simply won
+    // the race, and the copy Task 5 renders is derived from this code.
+    expect(ACCOUNT_DISABLE_CODES).toContain('ACCOUNT_STATUS_CHANGED');
+    expect(new Set(ACCOUNT_DISABLE_CODES).size).toBe(ACCOUNT_DISABLE_CODES.length);
   });
 });
 
