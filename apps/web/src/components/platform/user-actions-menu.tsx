@@ -1,0 +1,207 @@
+'use client';
+
+import { MoreHorizontal } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import * as React from 'react';
+import { toast } from 'sonner';
+
+import { useStepUp } from '@/components/auth/step-up-modal';
+import { DisableAccountDialog } from '@/components/platform/disable-account-dialog';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  disableUserAccountAction,
+  reenableUserAccountAction,
+  sendUserPasswordResetAction,
+} from '@/server/actions/platform/users';
+
+import type { ActionResult, DisableReasonInput } from '@stockpilot/core';
+
+/**
+ * The row's status is stale, not the operator's permissions. A lost
+ * compare-and-set (ACCOUNT_STATUS_CHANGED) and the two already-in-that-state
+ * conflicts are the same staleness seen from either side, and the action layer
+ * already types all three as `conflict`. Re-reading the page is the honest
+ * response — and it is literally what ACCOUNT_STATUS_CHANGED's own sentence
+ * instructs. None of them may ever be narrated as "not authorized": the actor's
+ * allowlist membership was verified before the write, so sending a god admin
+ * hunting a permissions problem that does not exist is the exact failure the
+ * separate code was introduced to prevent.
+ */
+const STALE_STATUS_CODES = new Set([
+  'ACCOUNT_STATUS_CHANGED',
+  'ACCOUNT_ALREADY_DISABLED',
+  'ACCOUNT_NOT_DISABLED',
+]);
+
+function isStaleStatus(res: ActionResult<unknown>): boolean {
+  if (res.ok) return false;
+  const code = res.error.details?.code;
+  return typeof code === 'string' && STALE_STATUS_CODES.has(code);
+}
+
+/**
+ * A half-applied change: the authoritative half landed, the rest did not. The
+ * action layer composes one clause per missing layer (including `not_audited`,
+ * which it refuses to launder into a success), so the message is passed through
+ * verbatim rather than re-summarised here.
+ */
+function isPartial(res: ActionResult<unknown>): boolean {
+  if (res.ok) return false;
+  return Array.isArray(res.error.details?.partialReasons);
+}
+
+/**
+ * Per-user actions on the platform console's org-detail Users tab. This is the
+ * ONLY surface in the product that can disable an account: the org Team page
+ * and the mobile admin screens are org-admin surfaces and deliberately get
+ * nothing.
+ *
+ * Disable is hidden — rather than shown-and-refused — in two cases:
+ *
+ *   1. a protected (allowlisted) platform admin, so an operator never aims at a
+ *      target the server will reject;
+ *   2. a member with no email on file, because the email IS the type-to-confirm
+ *      string and there is nothing to type.
+ *
+ * Both are courtesies, never controls. The server refuses a protected target
+ * independently, on the VERIFIED auth email.
+ *
+ * Re-enable stays available in case 2: it has no type-to-confirm gate, and an
+ * emailless account that is locked out must still be recoverable.
+ */
+export function UserActionsMenu({
+  userId,
+  email,
+  disabledAt,
+  protectedAdmin,
+}: {
+  userId: string;
+  email: string | null;
+  disabledAt: string | null;
+  protectedAdmin: boolean;
+}) {
+  const router = useRouter();
+  const { ensure, modal } = useStepUp();
+  const [pending, start] = React.useTransition();
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const isDisabled = disabledAt !== null;
+  const canDisable = !protectedAdmin && !isDisabled && email !== null && email.length > 0;
+  const canReenable = !protectedAdmin && isDisabled;
+
+  /** Runs an action, and on a stale step-up re-challenges TOTP and retries ONCE. */
+  async function withStepUp<T>(run: () => Promise<ActionResult<T>>): Promise<ActionResult<T>> {
+    const first = await run();
+    if (first.ok || first.error.details?.reason !== 'aal2_required') return first;
+    const ok = await ensure();
+    if (!ok) return first;
+    return run();
+  }
+
+  function onReset() {
+    if (!window.confirm(`Email a password-reset link to ${email ?? 'this user'}?`)) return;
+    start(async () => {
+      const res = await sendUserPasswordResetAction({ targetUserId: userId });
+      if (res.ok) toast.success(`Reset email sent to ${email ?? 'the user'}.`);
+      else toast.error(res.error.message);
+    });
+  }
+
+  /**
+   * Failure handling shared by both status actions. The rule is deliberately
+   * narrow: re-read the page ONLY when the row is stale, never on a partial.
+   *
+   * On a partial, the action layer's message ends in "press <Button> again",
+   * and refreshing would swap the very menu item that retry needs — a
+   * half-completed re-enable would start rendering "Disable account...", making
+   * the advertised fix unreachable. So the row is left as-is and the dialog
+   * stays open; the toast carries the whole truth.
+   */
+  function handleFailure(res: Extract<ActionResult<unknown>, { ok: false }>) {
+    toast.error(res.error.message);
+    if (isStaleStatus(res)) {
+      setConfirmOpen(false);
+      router.refresh();
+      return;
+    }
+    if (!isPartial(res)) setConfirmOpen(false);
+  }
+
+  function onDisable(reason: DisableReasonInput) {
+    start(async () => {
+      const res = await withStepUp(() => disableUserAccountAction({ targetUserId: userId, reason }));
+      if (!res.ok) {
+        handleFailure(res);
+        return;
+      }
+      setConfirmOpen(false);
+      toast.success(
+        res.data.sessionsRevoked > 0
+          ? `Account disabled. ${res.data.sessionsRevoked} session${res.data.sessionsRevoked === 1 ? '' : 's'} revoked.`
+          : 'Account disabled.',
+      );
+      router.refresh();
+    });
+  }
+
+  function onReenable() {
+    start(async () => {
+      const res = await withStepUp(() => reenableUserAccountAction({ targetUserId: userId }));
+      if (!res.ok) {
+        handleFailure(res);
+        return;
+      }
+      toast.success('Account re-enabled. The user can sign in again.');
+      router.refresh();
+    });
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" disabled={pending} aria-label="User actions">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={onReset}>Send password reset...</DropdownMenuItem>
+          {canDisable && (
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={(e) => {
+                // Keep the menu from closing before the dialog mounts, so focus
+                // moves straight into the type-to-confirm field.
+                e.preventDefault();
+                setConfirmOpen(true);
+              }}
+            >
+              Disable account...
+            </DropdownMenuItem>
+          )}
+          {canReenable && (
+            <DropdownMenuItem onSelect={onReenable}>Re-enable account</DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Mounted only when the gate can actually be satisfied — an empty
+          expected string must never reach the dialog. */}
+      {canDisable && email !== null && (
+        <DisableAccountDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          email={email}
+          pending={pending}
+          onConfirm={onDisable}
+        />
+      )}
+      {modal}
+    </>
+  );
+}

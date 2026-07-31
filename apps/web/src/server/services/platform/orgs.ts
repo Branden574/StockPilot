@@ -377,14 +377,21 @@ export interface PlatformOrgMember {
   fullName: string | null;
   role: string;
   joinedAt: string | null;
+  /**
+   * `user_profiles.disabled_at` — the AUTHORITATIVE disable flag (the one both
+   * request chokepoints read), not a derived label. Null means active. The tab
+   * needs it for two things: the status chip, and deciding whether the row's
+   * menu offers Disable or Re-enable.
+   */
+  disabledAt: string | null;
 }
 
-/** Members for the users tab — includes the user id so the reset button can target it. */
+/** Members for the users tab — includes the user id so the row actions can target it. */
 export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('organization_members')
-    .select('user_id, role, accepted_at, user_profiles:user_id (email, full_name)')
+    .select('user_id, role, accepted_at, user_profiles:user_id (email, full_name, disabled_at)')
     .eq('organization_id', orgId)
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null) // real members only, not "act as" grants
@@ -392,7 +399,8 @@ export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]>
     .limit(DETAIL_PREVIEW_LIMIT);
   if (error) throw new Error(error.message);
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
-    const prof = r.user_profiles as { email: string; full_name: string | null } | { email: string; full_name: string | null }[] | null;
+    type Profile = { email: string; full_name: string | null; disabled_at: string | null };
+    const prof = r.user_profiles as Profile | Profile[] | null;
     const p = Array.isArray(prof) ? (prof[0] ?? null) : prof;
     return {
       userId: (r.user_id as string | null) ?? null,
@@ -400,6 +408,7 @@ export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]>
       fullName: p?.full_name ?? null,
       role: r.role as string,
       joinedAt: (r.accepted_at as string | null) ?? null,
+      disabledAt: p?.disabled_at ?? null,
     };
   });
 }

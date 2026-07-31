@@ -4,9 +4,9 @@ import { notFound } from 'next/navigation';
 
 import { ActAsButton } from '@/components/platform/act-as-button';
 import { BillingPanel } from '@/components/platform/billing-panel';
-import { PasswordResetButton } from '@/components/platform/password-reset-button';
 import { RemoveOrgDialog } from '@/components/platform/remove-org-dialog';
-import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
+import { UserActionsMenu } from '@/components/platform/user-actions-menu';
+import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
@@ -237,8 +237,20 @@ async function UsersTab({ orgId }: { orgId: string }) {
           {members.map((m, idx) => (
             <tr key={m.userId ?? idx} className="border-b border-border last:border-0">
               <td className="px-4 py-2.5">
-                <div className="font-medium">{m.fullName ?? '—'}</div>
-                <div className="text-[11.5px] text-[var(--ed-ink-4)]">{m.email ?? '—'}</div>
+                <div className="flex items-center gap-2">
+                  <div>
+                    <div className="font-medium">{m.fullName ?? '—'}</div>
+                    <div className="text-[11.5px] text-[var(--ed-ink-4)]">{m.email ?? '—'}</div>
+                  </div>
+                  {m.disabledAt ? (
+                    <span
+                      title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
+                      className="inline-flex rounded-full border border-red-500/40 px-2 py-0.5 text-[11px] font-medium text-red-600"
+                    >
+                      Disabled
+                    </span>
+                  ) : null}
+                </div>
               </td>
               <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{m.role}</td>
               <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
@@ -246,7 +258,38 @@ async function UsersTab({ orgId }: { orgId: string }) {
               </td>
               <td className="px-4 py-2.5 text-right">
                 {m.userId ? (
-                  <PasswordResetButton userId={m.userId} email={m.email} />
+                  <UserActionsMenu
+                    userId={m.userId}
+                    email={m.email}
+                    disabledAt={m.disabledAt}
+                    // COSMETIC ONLY — this decides whether the menu item is
+                    // drawn, never whether the disable is allowed.
+                    //
+                    // It reads user_profiles.email, which is NOT the verified
+                    // auth email the real gate uses: the service resolves the
+                    // target's email from GoTrue (auth.admin.getUserById) and
+                    // refuses a protected admin there. Resolving it here too
+                    // would cost one GoTrue round-trip per row — up to
+                    // DETAIL_PREVIEW_LIMIT (100) per render — and supabase-js
+                    // offers no batched id→email lookup, so this tab reads the
+                    // column instead and accepts a bounded inaccuracy:
+                    //
+                    //   * migration 0177 pins user_profiles.email against any
+                    //     UPDATE, so a member cannot rewrite it to an
+                    //     allowlisted address to make themselves look
+                    //     protected — the escalation this guards against;
+                    //   * the auth→profile sync (0001_init) is INSERT-only, so
+                    //     the two can diverge if an auth email changes later.
+                    //     No product flow changes an auth email today, and
+                    //     GoTrue refuses to move one onto an address already
+                    //     registered, so the reachable divergence is an
+                    //     ex-admin whose profile still shows the old address:
+                    //     Disable is wrongly HIDDEN, never wrongly permitted.
+                    //
+                    // The allowlist itself never crosses to the client — only
+                    // this boolean does.
+                    protectedAdmin={isPlatformAdmin(m.email)}
+                  />
                 ) : (
                   <span className="text-[11.5px] text-[var(--ed-ink-4)]">—</span>
                 )}
