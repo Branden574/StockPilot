@@ -19,7 +19,6 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useProfile } from '@/lib/use-profile';
 import { usePermissionsRealtime } from '@/lib/use-permissions-realtime';
-import { useSessionRevocation } from '@/lib/use-session-revocation';
 import { useRole } from '@/lib/use-role';
 import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -45,13 +44,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   usePermissionsRealtime({ organizationId: activeOrgId, userId: user?.id ?? null, role: role ?? null });
   const router = useRouter();
   const segments = useSegments();
-  // Force-logout: when this device's session is revoked from another device,
-  // sign out and redirect to the sign-in screen.
-  const handleForcedSignOut = React.useCallback(
-    () => router.replace('/(auth)/sign-in'),
-    [router],
-  );
-  useSessionRevocation(user?.id ?? null, handleForcedSignOut);
+  // Force-logout lives in RootGate now (app/_layout.tsx) so it is mounted on
+  // every screen, not only behind the drawer.
 
   const activeHref = React.useMemo(() => {
     const path = '/' + segments.filter((s) => !s.startsWith('(')).join('/');

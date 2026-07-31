@@ -1,6 +1,13 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
 
+import { classifyAuthProbe } from './account-disabled-probe';
+import {
+  getAccountGateState,
+  setAccountDisabled,
+  setAccountGateState,
+} from './account-disabled-state';
+import { nextGateForProbe } from './account-eviction';
 import {
   enableBiometricForUser,
   isBiometricEnabledForUser,
@@ -9,6 +16,8 @@ import {
 } from './biometric';
 import { wipeForSignOut } from './db';
 import { supabase } from './supabase';
+
+import { ACCOUNT_DISABLED_MESSAGE } from '@stockpilot/core';
 
 interface AuthState {
   session: Session | null;
@@ -113,6 +122,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const s = data.session;
         setSession(s);
         if (s?.user) {
+          // COLD LAUNCH / SESSION RESTORE probe. getSession() only reads the
+          // Keychain, so a session belonging to an account disabled while this
+          // device was closed hydrates perfectly happily. This is the moment to
+          // ask GoTrue the question.
+          //
+          // DETACHED ON PURPOSE — never awaited. This whole hydrate path owns
+          // `loading`, and RN's fetch has no timeout: a captive portal that
+          // accepts the connection and never answers would otherwise hold
+          // loading=true forever and render a blank shell with no recovery but
+          // force-quit. The gate is subscribable, so RootGate reacts whenever
+          // the answer lands. A rejection classifies as 'unknown' and changes
+          // NOTHING — an offline device must keep working.
+          void supabase.auth
+            .getUser()
+            .catch(() => null)
+            .then((probe) => {
+              if (cancelled) return;
+              const nextGate = nextGateForProbe(getAccountGateState(), classifyAuthProbe(probe));
+              if (nextGate) setAccountGateState(nextGate);
+            });
+
           let enabled = false;
           try {
             enabled = await isBiometricEnabledForUser(s.user.id);
@@ -148,6 +178,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // user is left intact so if THEY sign back in, biometric is
       // still on for them.
       if (event === 'SIGNED_OUT' || !s?.user) {
+        // Deliberately does NOT clear the account gate. The eviction's own
+        // local sign-out fires SIGNED_OUT, so clearing it here would unmount
+        // the disabled screen the instant it appeared and hand the user back
+        // to sign-in — the session-restoration loop this gate exists to
+        // prevent. Only AccountDisabledScreen's own "Sign out" clears it.
         setLocked(false);
         setBiometricEnabledState(false);
         setMfaRequired(false);
@@ -182,7 +217,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn: AuthState['signIn'] = async (email, password) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: error.message };
+    if (error) {
+      // GoTrue answers a disabled account with the STRUCTURED code
+      // `user_banned`. Never infer it from free text — GoTrue's own sentence
+      // is not ours, changes between releases, and would leak a reason we
+      // deliberately do not reveal. Raising the gate here is what makes the
+      // disabled screen reachable from a rejected sign-in, where there is no
+      // session for any other path to work from.
+      if ((error as { code?: string }).code === 'user_banned') {
+        setAccountDisabled(true);
+        return { error: ACCOUNT_DISABLED_MESSAGE };
+      }
+      return { error: error.message };
+    }
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
