@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
+import { assertAccountActiveOrRedirect } from '@/lib/auth/account-status';
 
 import type { Permission, Role } from '@stockpilot/core';
 
@@ -91,7 +92,10 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   const [profileRes, membersRes] = await Promise.all([
     supabase
       .from('user_profiles')
-      .select('id, email, full_name, avatar_url, default_organization_id')
+      // disabled_at rides this EXISTING select for free — the row is already
+      // fetched by primary key on every authenticated render, so the
+      // platform-wide account-disable check costs zero extra round trips here.
+      .select('id, email, full_name, avatar_url, default_organization_id, disabled_at')
       .eq('id', userId)
       .maybeSingle(),
     supabase
@@ -113,8 +117,19 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
         full_name: string | null;
         avatar_url: string | null;
         default_organization_id: string | null;
+        disabled_at: string | null;
       }
     | null;
+
+  // Account-status gate (install point 1 of 3). This covers every RSC page and
+  // every org-scoped Server Action, inherited by all ~128 requireOrgContext and
+  // ~166 withContext call sites without touching any of them.
+  //
+  // It is safe to redirect from inside this cache()d loader precisely because
+  // `userId` can only come from the proxy-set header: an /api route never has
+  // that header, returns early above, and therefore can never throw
+  // NEXT_REDIRECT out of a route handler (recurring bug #23).
+  if (profile) assertAccountActiveOrRedirect(profile);
 
   const session: ServerSession = profile
     ? {

@@ -11,6 +11,7 @@ import {
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { loadAccountStatus } from '@/lib/auth/account-status';
 import { reportError } from '@/lib/error-reporter';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
@@ -126,6 +127,16 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+
+  // Account-status gate (install point 3 of 3 — see lib/auth/account-status.ts).
+  // This funnel resolves identity ITSELF and then reads with the service-role
+  // client, so it inherits nothing from loadSessionAndContext or withApiContext.
+  // Without this line a disabled customer keeps full catalog browsing and order
+  // submission whenever the GoTrue ban half of the disable did not land — which
+  // is exactly the case the disable service reports as `partial: true`. The
+  // caller already treats null as "not a portal user".
+  const status = await loadAccountStatus(supabase, user.id);
+  if (status.disabled) return null;
 
   const admin = createAdminClient();
   const { data: mappings } = await admin

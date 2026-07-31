@@ -5,6 +5,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
+import { loadAccountStatus } from '@/lib/auth/account-status';
 import type { ServiceContext } from '@/server/services/context';
 
 import type { Role, Database, ModuleId } from '@stockpilot/core';
@@ -222,8 +223,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       },
     );
     const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
-    const member = await pickActiveMembership(supabase, userRes.user.id, requestedOrgId);
+    // Status and membership in parallel. The status read is NOT free on this
+    // path: pickActiveMembership returns before touching user_profiles whenever
+    // an org header is present, which is every mobile request. Issuing both at
+    // once keeps the added latency off the hot path.
+    const [member, status] = await Promise.all([
+      pickActiveMembership(supabase, userRes.user.id, requestedOrgId),
+      loadAccountStatus(supabase, userRes.user.id),
+    ]);
     if (!member) return null;
+    // A disabled account gets the same uniform 401 an anonymous caller gets.
+    // The GoTrue ban normally rejects this request one line earlier at
+    // getUser(); this is the backstop for the window where the flag landed but
+    // the ban write did not.
+    if (status.disabled) return null;
     const mfa = await resolveApiMfaState(
       supabase,
       member.organization_id as string,
@@ -284,8 +297,14 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   if (!user) return null;
 
   const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
-  const member = await pickActiveMembership(supabase, user.id, requestedOrgId);
+  // Same parallel shape as the bearer branch above — a disabled account is
+  // refused with the same uniform null (401) an anonymous caller gets.
+  const [member, status] = await Promise.all([
+    pickActiveMembership(supabase, user.id, requestedOrgId),
+    loadAccountStatus(supabase, user.id),
+  ]);
   if (!member) return null;
+  if (status.disabled) return null;
 
   const mfa = await resolveApiMfaState(
     supabase,
