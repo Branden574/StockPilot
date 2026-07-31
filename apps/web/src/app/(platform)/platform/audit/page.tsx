@@ -17,6 +17,8 @@ const ACTION_LABEL: Record<PlatformAuditAction, string> = {
   ticket_updated: 'Updated ticket',
   deletion_passphrase_set: 'Set org-deletion passphrase',
   org_deleted: 'Deleted org',
+  user_disabled: 'Disabled account',
+  user_reenabled: 'Re-enabled account',
 };
 
 export default async function PlatformAuditPage({

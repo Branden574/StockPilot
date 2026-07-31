@@ -26,7 +26,10 @@ export type PlatformAuditAction =
   | 'org_provisioned'
   | 'ticket_updated'
   | 'deletion_passphrase_set'
-  | 'org_deleted';
+  | 'org_deleted'
+  /** Temporary platform-wide account disable (migration 0308). */
+  | 'user_disabled'
+  | 'user_reenabled';
 
 export interface RecordPlatformAuditInput {
   actorUserId: string;
