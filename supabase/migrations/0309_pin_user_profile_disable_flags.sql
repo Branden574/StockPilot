@@ -78,6 +78,52 @@
 -- POSTURE: silent revert, not an exception — matching 0177. Raising would name
 -- the guarded column in the error, telling an attacker precisely what to probe
 -- for, and for a legitimate no-op the honest UX is nothing at all.
+--
+-- ── WHY THERE IS NO `WHEN` CLAUSE (the first cut of this migration had one) ──
+-- The original trigger carried
+--     when (new.disabled_at is distinct from old.disabled_at or ... )
+-- so it fired ONLY when one of the three guarded columns changed. That scoped
+-- the guard to the un-disable attack and left the rest of the row writable by a
+-- disabled account. Reproduced on the local stack: as role `authenticated` with
+-- request.jwt.claims.sub set to a profile whose disabled_at was already stamped,
+--     update public.user_profiles set full_name = 'DEFACED' where id = auth.uid()
+-- returned UPDATE 1 and the new name stuck.
+--
+-- user_profiles is not a private preferences row. full_name and avatar_url are
+-- embedded into every colleague's UI through `user_profiles!<fk> (full_name,
+-- avatar_url)`: the team list, the order timeline actor, the cycle-count
+-- assignee, the movement actor, the procedure author. A user disabled for
+-- suspected compromise could therefore deface their identity ORG-WIDE for the
+-- remaining ~1h of their access-token TTL — with the same token that 0310 now
+-- refuses everywhere else. It also contradicted the guard the web layer
+-- documents ("a disabled token is refused for SELECT/INSERT/UPDATE/DELETE
+-- immediately", lib/auth/account-status.ts).
+--
+-- So the trigger now fires on EVERY update of this table and takes one of three
+-- paths:
+--   1. an allowlisted role (service_role / postgres / supabase_admin) — allowed
+--      through untouched, because the disable/re-enable service and migrations
+--      MUST be able to write a disabled row;
+--   2. the row's account is already disabled — the whole statement is dropped
+--      for that row (`return null`), so nothing about a disabled identity can be
+--      changed by anyone but the platform;
+--   3. an active row — only the three disable columns are pinned, exactly as
+--      before, so ordinary profile editing is untouched.
+--
+-- `return null` rather than `return old`: returning OLD still performs a write
+-- of identical values (a new row version, AFTER triggers, an updated_at bump on
+-- any future trigger that sets one). Returning NULL suppresses the row update
+-- entirely, which is the honest meaning of "a disabled account cannot write this
+-- row". It stays SILENT — the statement succeeds and simply affects no rows —
+-- for the same reason the revert is silent.
+--
+-- The check is `old.disabled_at is not null`, i.e. a property of the ROW, not of
+-- the caller. That is deliberate: it needs no nested SECURITY DEFINER call (this
+-- trigger runs on the hottest table in the product since 0310), and the only
+-- policy that lets a non-service caller reach another user's row is none — 0003's
+-- user_profiles_update_self is `id = auth.uid()` — so row-disabled and
+-- caller-disabled are the same fact here, and the row-based form additionally
+-- refuses any future policy that widened the reach.
 
 create or replace function public.tg_pin_user_profile_disable_flags()
 returns trigger
@@ -91,6 +137,14 @@ begin
     return new;
   end if;
 
+  -- A DISABLED profile is frozen for every request-facing role. Not just the
+  -- three flags: full_name and avatar_url are rendered to the whole org, so a
+  -- disabled account editing them is an org-wide write, not a self-scoped one.
+  -- Returning NULL skips the row entirely — no write, no AFTER triggers.
+  if old.disabled_at is not null then
+    return null;
+  end if;
+
   -- Layer A and its attribution are owned by the platform-admin disable action.
   -- Silently keep the existing values for everyone else, including the row's
   -- own owner holding a still-valid pre-disable access token.
@@ -102,16 +156,20 @@ end;
 $$;
 
 comment on function public.tg_pin_user_profile_disable_flags() is
-  'Reverts user_profiles.disabled_at/_reason/_by for any caller that is not the '
-  'service role (or a direct superuser connection). Without it, 0003''s '
-  'column-unrestricted user_profiles_update_self lets a disabled user clear '
-  'their own disable flag with their still-valid access token.';
+  'Two guards in one BEFORE UPDATE trigger, for any caller that is not the '
+  'service role (or a direct superuser connection): (1) a row whose account is '
+  'already disabled is frozen ENTIRELY — the update is dropped, so a disabled '
+  'user cannot deface the full_name/avatar_url every colleague''s UI renders; '
+  '(2) on an active row, disabled_at/_reason/_by are reverted, so 0003''s '
+  'column-unrestricted user_profiles_update_self cannot be used to clear the '
+  'disable flag with a still-valid access token.';
 
 drop trigger if exists pin_user_profile_disable_flags on public.user_profiles;
+-- No WHEN clause on purpose — see the header. Scoping the trigger to the three
+-- disable columns is exactly what left the rest of a disabled user's row
+-- writable. The allowlist check is the first statement in the body, so the
+-- service-role and migration paths pay one string comparison per row.
 create trigger pin_user_profile_disable_flags
   before update on public.user_profiles
   for each row
-  when (new.disabled_at     is distinct from old.disabled_at
-     or new.disabled_reason is distinct from old.disabled_reason
-     or new.disabled_by     is distinct from old.disabled_by)
   execute function public.tg_pin_user_profile_disable_flags();

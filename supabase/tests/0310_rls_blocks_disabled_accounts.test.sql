@@ -31,7 +31,7 @@
 
 begin;
 
-select plan(51);
+select plan(65);
 
 \set org     '\'03100000-0000-0000-0000-000000000001\''
 \set wh      '\'03100000-0000-0000-0000-0000000000b1\''
@@ -39,6 +39,7 @@ select plan(51);
 \set u_peer  '\'03100000-0000-0000-0000-0000000000a2\''
 \set item    '\'03100000-0000-0000-0000-0000000000c1\''
 \set rental  '\'03100000-0000-0000-0000-0000000000e1\''
+\set sview   '\'03100000-0000-0000-0000-0000000000f1\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:u_mgr,  'mgr@ad10.test',  '{"full_name":"Disable Subject"}'::jsonb),
@@ -109,6 +110,78 @@ select ok(
   'a user with no profile row reads ACTIVE, not disabled'
 );
 
+-- ── 1b. Nobody request-facing may call the predicate DIRECTLY ──────────────
+-- The first cut granted EXECUTE to authenticated, anon and service_role, which
+-- (because Postgres also grants EXECUTE to PUBLIC on every new function, and a
+-- later GRANT does not subtract that) left an UNAUTHENTICATED per-uuid oracle:
+-- anyone holding the publishable key that ships in the web bundle and the mobile
+-- binary could POST /rest/v1/rpc/account_is_disabled and read a named person's
+-- disable timeline, against a table whose every policy is `to authenticated`.
+--
+-- Both halves are asserted: the direct call is refused, AND section 2 below —
+-- which runs after this revoke — proves every guarded helper still answers
+-- correctly for an authenticated caller. The helpers are SECURITY DEFINER owned
+-- by postgres, so the nested call is checked against the DEFINER, not the
+-- request role. That inheritance is the thing this revoke depends on, so it is
+-- proven rather than assumed.
+select ok(
+  not exists (
+    select 1 from pg_proc p, aclexplode(p.proacl) a
+    where p.oid = 'public.account_is_disabled(uuid)'::regprocedure
+      and a.grantee = 0            -- grantee 0 is PUBLIC
+      and a.privilege_type = 'EXECUTE'
+  ),
+  'PUBLIC holds no EXECUTE on account_is_disabled — the implicit grant was revoked'
+);
+select ok(
+  not has_function_privilege('anon', 'public.account_is_disabled(uuid)', 'EXECUTE'),
+  'anon holds no EXECUTE on account_is_disabled'
+);
+select ok(
+  not has_function_privilege('authenticated', 'public.account_is_disabled(uuid)', 'EXECUTE'),
+  'authenticated holds no EXECUTE either — the same call answers for uuids outside the caller''s orgs'
+);
+select ok(
+  has_function_privilege('service_role', 'public.account_is_disabled(uuid)', 'EXECUTE'),
+  'service_role keeps EXECUTE, for operator SQL'
+);
+
+-- DO NOT turn the next two into `throws_ok(..., '42501')`. On the Supabase CLI
+-- local image (postgres 17, CLI 2.98.2) ANY function-permission denial raised
+-- under a `set local role` SEGFAULTS the backend — `signal 11` in the container
+-- log, the whole cluster restarts, and every later test file in the run dies
+-- with "the database system is in recovery mode". Verified to be an image bug
+-- and nothing to do with this migration: it reproduces identically on
+-- rls_member_org_ids() (which anon has never held EXECUTE on, untouched by this
+-- branch) and on a freshly created plain SQL function with its PUBLIC grant
+-- revoked. So the refusal is asserted through the privilege system itself,
+-- evaluated from INSIDE each role, which is the same authority Postgres uses at
+-- call time and does not crash.
+set local role to 'anon';
+select ok(
+  not has_function_privilege(current_user, 'public.account_is_disabled(uuid)', 'EXECUTE'),
+  'anon, asked as itself, is NOT permitted to call the oracle'
+);
+reset role;
+
+set local "request.jwt.claim.sub" to '03100000-0000-0000-0000-0000000000a1';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select ok(
+  not has_function_privilege(current_user, 'public.account_is_disabled(uuid)', 'EXECUTE'),
+  'an authenticated caller, asked as itself, is NOT permitted to probe an arbitrary uuid'
+);
+reset role;
+
+-- service_role is a real call, not a catalog question: the keep-grant has to
+-- actually work for operator SQL.
+set local role to 'service_role';
+select lives_ok(
+  $$select public.account_is_disabled('03100000-0000-0000-0000-0000000000a1')$$,
+  'service_role can still call it'
+);
+reset role;
+
 -- ── 2. ACTIVE user: every gate helper answers exactly as it did before ───────
 set local "request.jwt.claim.sub" to '03100000-0000-0000-0000-0000000000a1';
 set local "request.jwt.claim.role" to 'authenticated';
@@ -151,6 +224,19 @@ select is((select count(*) from public.inventory_items where sku = 'AD10-ACTIVE-
   'ACTIVE: DELETE applied');
 select is((select count(*) from public.rentals where id = :rental), 1::bigint,
   'ACTIVE: SELECT on rentals (user_can_access_warehouse sole gate) sees the row');
+
+-- saved_views reaches NO membership helper on its own — its write policies were
+-- a bare `user_id = auth.uid()`, so guarding the fifteen helpers did not touch
+-- it. 0037's is_shared makes a row visible to the WHOLE org, so this is not a
+-- private preferences table; 0310 now ANDs is_org_member(organization_id) into
+-- all three write policies. Active behaviour must be unchanged.
+select lives_ok(
+  $$insert into public.saved_views (id, organization_id, user_id, name, scope, is_shared)
+    values ('03100000-0000-0000-0000-0000000000f1','03100000-0000-0000-0000-000000000001',
+            '03100000-0000-0000-0000-0000000000a1','AD10 Shared View','inventory',true)$$,
+  'ACTIVE: INSERT of an org-shared saved_view is allowed');
+select is((select count(*) from public.saved_views where id = :sview), 1::bigint,
+  'ACTIVE: the shared saved_view exists');
 reset role;
 
 -- ── 4. Disable the account, exactly the way the service does ────────────────
@@ -201,6 +287,19 @@ update public.inventory_items set name = 'Renamed While Disabled' where id = :it
 delete from public.inventory_items where id = :item;
 select is((select count(*) from public.rentals where id = :rental), 0::bigint,
   'DISABLED: SELECT on rentals is refused — the sole-gate helper is guarded too');
+
+-- The org-visible write class. A disabled user planting or re-sharing a
+-- saved_view reaches every colleague's view list with a token the rest of the
+-- product now refuses.
+select throws_ok(
+  $$insert into public.saved_views (organization_id, user_id, name, scope, is_shared)
+    values ('03100000-0000-0000-0000-000000000001','03100000-0000-0000-0000-0000000000a1',
+            'AD10 Planted View','inventory',true)$$,
+  '42501', null,
+  'DISABLED: planting an org-shared saved_view is refused');
+update public.saved_views set name = 'Renamed While Disabled', is_shared = false
+ where id = '03100000-0000-0000-0000-0000000000f1';
+delete from public.saved_views where id = '03100000-0000-0000-0000-0000000000f1';
 reset role;
 
 -- Verified with RLS off: the UPDATE and DELETE above must have been no-ops, not
@@ -212,6 +311,13 @@ select is((select count(*) from public.inventory_items where id = :item), 1::big
   'DISABLED: the DELETE removed NOTHING — the row survives');
 select is((select count(*) from public.inventory_items where sku = 'AD10-DISABLED-INS'), 0::bigint,
   'DISABLED: no row was inserted');
+
+select is((select name from public.saved_views where id = :sview), 'AD10 Shared View',
+  'DISABLED: the saved_view UPDATE changed NOTHING — it could not be renamed or un-shared');
+select is((select count(*) from public.saved_views where id = :sview), 1::bigint,
+  'DISABLED: the saved_view DELETE removed NOTHING');
+select is((select count(*) from public.saved_views where name = 'AD10 Planted View'), 0::bigint,
+  'DISABLED: no org-visible saved_view was planted');
 
 -- ── 7. An unrelated ACTIVE member of the SAME org is untouched ──────────────
 -- The guard must key on the CALLER, not on the org. If disabling one member
@@ -260,6 +366,9 @@ select lives_ok(
   'RE-ENABLED: UPDATE works again');
 select is((select count(*) from public.rentals where id = :rental), 1::bigint,
   'RE-ENABLED: the sole-gate rentals path works again');
+select lives_ok(
+  $$delete from public.saved_views where id = '03100000-0000-0000-0000-0000000000f1'$$,
+  'RE-ENABLED: the owner can delete their own saved_view again');
 reset role;
 select is((select name from public.inventory_items where id = :item), 'Back In Business',
   'RE-ENABLED: the UPDATE actually applied');

@@ -97,6 +97,26 @@
 -- read that silently returns nothing. `select *` on this table ERRORS for these
 -- roles (verified), so a wildcard read is a hard failure, never a quiet one.
 
+-- ── LOCK POSTURE — READ BEFORE PUSHING THIS TO PROD ────────────────────────
+-- GRANT and REVOKE on a table acquire AccessExclusiveLock on it, held for the
+-- whole transaction, and this migration is one transaction. As of this branch
+-- EVERY authenticated request in the product reads user_profiles (session.ts,
+-- api-context.ts:160, account-status.ts) — the table moved from cold to the
+-- single hottest read path. Postgres lock requests are FIFO, so if any open
+-- transaction is holding even an AccessShareLock when this runs, the
+-- AccessExclusive request queues AND every subsequent reader queues behind IT.
+-- The work itself is instant (the row count is tiny); the exposure is purely
+-- the lock wait, and it would present as a site-wide stall rather than a slow
+-- migration. Same precedent and same value as 0295, 0298 and 0303.
+--
+-- ON lock_timeout FAILURE ("canceling statement due to lock timeout", SQLSTATE
+-- 55P03): nothing was applied — one transaction, so the revoke and the re-grant
+-- roll back together and `authenticated` keeps the blanket grant it had before.
+-- Re-run `supabase db push --linked` during a quiet window. There is no
+-- half-applied state to clean up, and no window in which the keep-list is
+-- granted without the blanket grant having been dropped.
+set lock_timeout = '5s';
+
 -- ── authenticated ──────────────────────────────────────────────────────────
 revoke select on public.user_profiles from authenticated;
 grant select (
@@ -153,3 +173,5 @@ comment on column public.user_profiles.disabled_by is
   'lands in platform_admin_audit with the actor email. SELECT is revoked from '
   'authenticated and anon at the COLUMN level by 0311 — the God Admin identity '
   'must not be revealed to org members.';
+
+reset lock_timeout;

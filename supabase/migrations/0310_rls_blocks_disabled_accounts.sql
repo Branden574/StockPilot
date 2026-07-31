@@ -126,13 +126,69 @@
 --
 --   Group B therefore inlines the same predicate as a NOT EXISTS against the
 --   partial index below, which keeps it in the helper's own plan: 33.5 s back
---   down to 12.9 s on that pathological scan, and no measurable change on the
---   shapes the application actually issues (UPDATE by primary key 3.8 ms vs
---   4.0 ms; paged SELECT 124 ms vs 123 ms).
+--   down to 12.9 s on that pathological scan, and no measurable change on
+--   UPDATE by primary key (3.8 ms vs 4.0 ms).
+--
+-- ── WHAT GROUP B ACTUALLY COSTS ON READS — RE-MEASURED 2026-07-31 ───────────
+-- An earlier version of this header said the residual regression was confined
+-- to "a pathological bulk UPDATE" and that there was "no measurable change on
+-- the shapes the application actually issues", citing a paged inventory SELECT.
+-- That was true of inventory_items, whose SELECT policy runs entirely through
+-- the Group A rls_* helpers (hoisted, loops=1) — but it is NOT true of the
+-- class. ~70 other SELECT policies gate on a ROW-CORRELATED helper instead:
+-- item_stock_levels_select is `(select is_org_member(item_stock_levels.
+-- organization_id))`, activity_logs_select is `(select has_org_role(
+-- activity_logs.organization_id,'manager'))`, and the same shape covers
+-- purchase_order_items, order_request_lines, cycle_count_lines,
+-- stock_reservations and ~65 more. Those pay the disable probe once per
+-- candidate row on READS, exactly as the bulk UPDATE does on writes.
+--
+-- Re-measured on the local stack: 500,002 item_stock_levels rows in one org;
+-- user_profiles at 10,001 rows of which 1,112 disabled (so the partial index is
+-- populated, not empty); role `authenticated` with request.jwt.claim.sub set;
+-- `explain (analyze, costs off, timing off)`. The two helper sets were swapped
+-- back and forth between EVERY single run — 8 interleaved pre/post pairs —
+-- because measuring one block then the other on this stack produces drift of
+-- the same magnitude as the effect being measured.
+--
+--   select count(*) from public.item_stock_levels;   -- SubPlan, loops=500,002
+--     pre-0310 helpers   median 3,556 ms
+--     0310 helpers       median 4,555 ms        -->  +28%
+--     (paired deltas across the 8 pairs: +24% .. +49%, median +33%)
+--
+-- Isolating the helper with a direct row-correlated call on the same fixture:
+--   has_org_role(isl.organization_id,'staff')   3,458 ms -> 4,551 ms  (+32%)
+--   is_org_member(isl.organization_id)          1,465 ms -> 2,845 ms  (+94%)
+-- Both are the SAME absolute cost — about 2.2-2.8 us per invocation, the
+-- Index Only Scan on user_profiles_disabled_at_idx (Heap Fetches: 0). It reads
+-- as +32% or +94% purely because is_org_member's body is the cheaper of the two
+-- to begin with. Percentages here are a property of the helper, not of the
+-- guard.
+--
+-- SO: the honest characterisation is that ANY large scan through a Group B
+-- helper — a full item_stock_levels rollup, an activity_logs export, a wide
+-- purchase_order_items report — costs roughly +28% more, on reads as well as
+-- writes. It is the same band as the bulk-UPDATE figure, not a separate
+-- pathological case. Paged application queries are unaffected only because they
+-- scan a page; a query that scans the table pays per row.
 --
 -- The duplication is deliberate and is fenced by tests, not by discipline: the
 -- pgTAP file asserts EVERY helper in both groups individually, active and
 -- disabled, so the two forms cannot drift apart without the suite going red.
+--
+-- ── LOCK POSTURE ────────────────────────────────────────────────────────────
+-- `create index` below takes ShareLock on user_profiles, which blocks writes,
+-- and as of this branch EVERY authenticated request in the product reads
+-- user_profiles (session.ts, api-context.ts, account-status.ts). Postgres lock
+-- requests are FIFO, so a blocked ShareLock request queues every subsequent
+-- reader behind it and a few seconds of blocking becomes a site-wide stall.
+-- `set lock_timeout` (precedent: 0295, 0298, 0303) makes the push fail fast and
+-- be retried instead.
+--
+-- ON lock_timeout FAILURE ("canceling statement due to lock timeout", SQLSTATE
+-- 55P03): nothing was applied — the whole migration is one transaction. Re-run
+-- `supabase db push --linked` during a quiet window; there is no cleanup to do.
+set lock_timeout = '5s';
 --
 -- The partial index indexes ONLY disabled profiles, so in a healthy org it is
 -- empty or near-empty and the per-row probe is a root-page hit on a fully cached
@@ -177,7 +233,37 @@ comment on function public.account_is_disabled(uuid) is
   'STABLE so the planner can hoist it to a one-time InitPlan where the calling '
   'helper is not row-correlated.';
 
-grant execute on function public.account_is_disabled(uuid) to authenticated, anon, service_role;
+-- ── WHO MAY CALL IT DIRECTLY: service_role, and nobody else ────────────────
+-- A bare `grant execute ... to authenticated, anon, service_role` (the first
+-- cut) leaves PUBLIC holding EXECUTE as well, because Postgres grants EXECUTE
+-- to PUBLIC on every new function and a later GRANT does not subtract it. The
+-- resulting ACL was `=X/postgres,postgres=X,anon=X,authenticated=X,
+-- service_role=X`, and this function is SECURITY DEFINER over an RLS-protected,
+-- column-restricted table. Probed on the local stack: as role `anon`,
+-- `select count(*) from public.user_profiles where id = '<uuid>'` returns 0
+-- (every user_profiles policy is `to authenticated`) but
+-- `select public.account_is_disabled('<uuid>')` returned true — i.e. anyone
+-- holding NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, which ships in every web bundle
+-- and mobile binary, could POST /rest/v1/rpc/account_is_disabled with a user id
+-- and read that person's disable timeline with no credential at all. User ids
+-- are not secret: they appear in audit-trail cells, notification payloads, the
+-- eviction channel name `user:{id}:sessions` and any row carrying created_by.
+--
+-- Nothing needs the grant. The Group A helpers call this function as the
+-- DEFINER (they are themselves SECURITY DEFINER, owned by postgres, so the
+-- nested call is checked against postgres, not against the request role), and
+-- the Group B helpers do not call it at all — they inline the predicate. No
+-- policy references it directly, and no application path RPCs it. `authenticated`
+-- is revoked too, not just anon: the same call from any signed-in user answers
+-- for uuids in orgs they have no membership in, which is a cross-tenant read
+-- that RLS otherwise refuses. service_role is kept for operator SQL, matching
+-- 0308's treatment of its own helper.
+--
+-- The pgTAP file proves BOTH halves: that the direct call is refused for anon
+-- and authenticated, AND that every guarded helper still answers correctly for
+-- an authenticated caller afterwards — the inheritance is asserted, not assumed.
+revoke all on function public.account_is_disabled(uuid) from public, anon, authenticated;
+grant execute on function public.account_is_disabled(uuid) to service_role;
 
 -- Partial index: only disabled profiles are indexed, so the per-row probe in the
 -- row-correlated helpers touches a tiny, fully cached relation instead of the
@@ -679,3 +765,63 @@ begin
   return false;
 end;
 $$;
+
+-- ── 10) The self-scoped write class that reaches NO membership helper ───────
+-- Guarding the fifteen helpers closes every policy that gates on membership.
+-- It does NOT close the policies whose whole predicate is `<col> = auth.uid()`,
+-- because those never call a helper at all. Enumerated from pg_policies, the
+-- writable self-scoped set is: user_profiles_update_self, saved_views_owner_
+-- insert/update/delete, notification_preferences_self, push_tokens_self,
+-- notifications_update_own and user_onboarding_insert/update.
+--
+-- Most of them are genuinely private and are LEFT ALONE on purpose. A disabled
+-- user toggling their own digest opt-in (notification_preferences), registering
+-- or dropping their own device token (push_tokens), marking their own
+-- notification read (notifications_update_own) or advancing their own product
+-- tour (user_onboarding) changes nothing any other person can see, and all four
+-- carry a WITH CHECK of `user_id = auth.uid()` so they cannot be aimed at
+-- somebody else's row. Freezing them would buy no confidentiality or integrity
+-- and would add four more policies to keep in sync.
+--
+-- user_profiles is handled in 0309 (the trigger now drops the whole update for
+-- a disabled row, not just the three disable columns) — full_name and avatar_url
+-- render into every colleague's UI, so that one is not self-scoped in effect.
+--
+-- saved_views is the other one that is not self-scoped in effect: 0037 added
+-- `is_shared`, and saved_views_visible_to_org_or_owner shows an is_shared row to
+-- the WHOLE org. A disabled user could plant an org-visible view — or flip an
+-- existing one to shared — with a still-valid access token. The three write
+-- policies are restated below (dropped and recreated in full, never
+-- `alter policy ... with check`, which REPLACES rather than adds — recurring
+-- bug #24) with is_org_member(organization_id) added.
+--
+-- is_org_member rather than account_is_disabled(auth.uid()): it is already
+-- guarded above, `authenticated` holds EXECUTE on it (account_is_disabled is
+-- revoked from that role just above, so a policy could not call it), and it
+-- simultaneously fixes the missing org constraint — the previous WITH CHECK was
+-- a bare `user_id = auth.uid()`, so an owner could file a row against ANY
+-- organization_id, including one they have no membership in.
+drop policy if exists "saved_views_owner_insert" on public.saved_views;
+create policy "saved_views_owner_insert" on public.saved_views
+  for insert
+  with check (user_id = auth.uid() and public.is_org_member(organization_id));
+
+-- 0046 added the WITH CHECK half here (an owner could otherwise reassign
+-- user_id/organization_id to a victim). Both halves keep it and gain the guard.
+drop policy if exists "saved_views_owner_update" on public.saved_views;
+create policy "saved_views_owner_update" on public.saved_views
+  for update
+  using (user_id = auth.uid() and public.is_org_member(organization_id))
+  with check (user_id = auth.uid() and public.is_org_member(organization_id));
+
+drop policy if exists "saved_views_owner_delete" on public.saved_views;
+create policy "saved_views_owner_delete" on public.saved_views
+  for delete
+  using (user_id = auth.uid() and public.is_org_member(organization_id));
+
+-- saved_views_visible_to_org_or_owner (SELECT) is deliberately untouched: a
+-- disabled user reading back their own list is harmless, and narrowing it would
+-- also hide a disabled colleague's shared views from the ACTIVE members who
+-- have been using them.
+
+reset lock_timeout;

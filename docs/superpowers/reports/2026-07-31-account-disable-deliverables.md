@@ -521,10 +521,37 @@ same column, would report them active. The feature was defeatable by exactly the
 stop. **This was verified end-to-end over HTTP**: the attack PATCH returns 200 and changes nothing
 while `full_name` in the same body still applies, and dropping the trigger reproduces the hole.
 
-**The fix:** `tg_pin_user_profile_disable_flags()` + a `before update … for each row … when` trigger
-that fires only when one of the three columns actually changes. It **silently reverts** them for any
-caller outside the allowlist — matching migration 0177's `pin_user_profile_email` precedent. Raising
-an error would name the guarded column and tell an attacker precisely what to probe for.
+**The fix:** `tg_pin_user_profile_disable_flags()` + a `before update … for each row` trigger. It
+**silently reverts** the three columns for any caller outside the allowlist — matching migration 0177's
+`pin_user_profile_email` precedent. Raising an error would name the guarded column and tell an attacker
+precisely what to probe for.
+
+**Correction, 2026-07-31 — the `WHEN` clause is gone.** The first cut scoped the trigger with
+`when (new.disabled_at is distinct from old.disabled_at or …)`, so it never fired for any other column
+and a **disabled** user kept write access to the rest of their own row. Reproduced live: as role
+`authenticated` with a disabled profile, `update user_profiles set full_name='DEFACED'` returned
+`UPDATE 1` and stuck. `user_profiles` is not a private row — `full_name` and `avatar_url` are embedded
+into every colleague's UI through `user_profiles!<fk> (full_name, avatar_url)` (team list, order
+timeline actor, cycle-count assignee, movement actor, procedure author), so a user disabled for
+suspected compromise could deface their identity **org-wide** for the remaining ~1h of their access
+token, with the same token 0310 refuses everywhere else. The trigger now fires on every update and takes
+one of three paths: an allowlisted role passes through untouched; **a row whose `disabled_at` is set has
+the whole update dropped** (`return null` — no write at all, proven by a `RETURNING` row count of zero
+in pgTAP); an active row has only the three disable columns pinned, so ordinary profile editing is
+untouched. `supabase/tests/0309_*.test.sql` asserts both halves and pins `pg_trigger.tgqual IS NULL` so
+the `WHEN` clause cannot come back.
+
+**The rest of the self-scoped write class** (`saved_views`, `notification_preferences`, `push_tokens`,
+`notifications`, `user_onboarding`) survives a disable the same way, because those policies are a bare
+`<col> = auth.uid()` and reach no membership helper. Assessed one at a time: the four preference tables
+are genuinely private — a disabled user toggling their own digest opt-in, device token, read flag or
+tour progress changes nothing anyone else can see, and each carries a `WITH CHECK` of
+`user_id = auth.uid()` so it cannot be aimed at another row — and they are **deliberately left alone**.
+`saved_views` is not private: 0037's `is_shared` shows a row to the **whole org**, so a disabled user
+could plant or re-share an org-visible view. Its three write policies are restated in 0310 (dropped and
+recreated in full — never `alter policy … with check`, recurring bug #24) with
+`is_org_member(organization_id)` added, which brings the disable guard **and** fixes the missing org
+constraint the bare `user_id = auth.uid()` `WITH CHECK` left open.
 
 **Why `current_user`, not `auth.role()`** (measured with real connections per role, not assumed):
 `auth.role()` reads the `request.jwt.claims` GUC, which only PostgREST sets, so it is NULL on every
@@ -543,12 +570,42 @@ previously called this exposure "read-only, because all mobile writes go through
 that describes *our* client, not an attacker holding the token. **The exposure was read AND write.**
 
 **The predicate.** `public.account_is_disabled(p_user_id uuid) returns boolean`, SQL, **STABLE**,
-SECURITY DEFINER, `search_path = public, pg_temp`; granted to `authenticated`, `anon`, `service_role`.
+SECURITY DEFINER, `search_path = public, pg_temp`; **EXECUTE granted to `service_role` only**.
 Takes the user id as a parameter rather than reading `auth.uid()` internally, because
 `user_can_access_warehouse` is itself parameterised by user id. Deliberately **not STRICT**: a null id
 must answer FALSE, and `exists()` always returns a real boolean. A **missing profile row also reads
 active**, matching `isAccountDisabled()` in `@stockpilot/core` — absence of a profile is an onboarding
 state, not a disable.
+
+**Correction, 2026-07-31 — the grant was an unauthenticated oracle.** The first cut wrote
+`grant execute … to authenticated, anon, service_role`, which also leaves **PUBLIC** holding EXECUTE
+(Postgres grants EXECUTE to PUBLIC on every new function and a later GRANT does not subtract it): the
+live ACL was `=X/postgres,postgres=X,anon=X,authenticated=X,service_role=X`. Probed on the local stack:
+as role `anon`, `select count(*) from user_profiles where id = '<uuid>'` returns 0 (every `user_profiles`
+policy is `to authenticated`), but `select account_is_disabled('<uuid>')` returned `true` — so anyone
+holding `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, which ships in every web bundle and mobile binary, could
+POST `/rest/v1/rpc/account_is_disabled` and read a named individual's disable timeline with no
+credential. User ids are not secret: they appear in audit-trail cells, notification payloads, the
+eviction channel name `user:{id}:sessions`, and any row carrying `created_by`. 0310 now does
+`revoke all on function … from public, anon, authenticated;` + `grant execute … to service_role;`,
+matching 0308's treatment of its own helper and 0230's `rls_manager_org_ids()`. `authenticated` is
+revoked too, not just `anon`, because the same call answers for uuids in orgs the caller has no
+membership in — a cross-tenant read RLS otherwise refuses.
+
+**Nothing needed the grant, and that is proven rather than assumed.** The Group A helpers call the
+predicate as the **definer** (they are themselves SECURITY DEFINER owned by `postgres`, so the nested
+call is checked against `postgres`, not the request role), the Group B helpers inline the predicate
+instead, no policy references it directly, and no application path RPCs it. The pgTAP asserts both
+halves: that `PUBLIC`/`anon`/`authenticated` hold no EXECUTE, and that **every** guarded helper still
+answers correctly for an authenticated caller *after* the revoke.
+
+> **pgTAP landmine.** Do not assert the refusal with `throws_ok(…, '42501')` under a `set local role`.
+> On the Supabase CLI local image any function-permission denial raised under a switched role
+> **segfaults the backend** (`signal 11`), restarting the cluster and killing every later test file with
+> "the database system is in recovery mode". It is an image bug, not a migration bug — it reproduces
+> identically on `rls_member_org_ids()` (which `anon` has never held EXECUTE on) and on a fresh plain
+> SQL function with its PUBLIC grant revoked. The test asks `has_function_privilege(current_user, …)`
+> from inside each role instead: same authority Postgres uses at call time, no crash.
 
 **Index.** `create index if not exists user_profiles_disabled_at_idx on public.user_profiles (id)
 where disabled_at is not null` — a **partial** index, so in a healthy org it is empty or near-empty and
@@ -599,17 +656,59 @@ numbers in `.superpowers/sdd/bypass-closure-report.md`):
 | UPDATE by primary key (the real app write) | 3.81 ms | 4.02 ms | +5% |
 | Bulk sequential-scan UPDATE (a shape the app does not issue) | 10.27 s | **13.13 s** | **+28%** |
 
-The +28% is stated plainly, not called negligible, and is carried to the owner in §8.
+**Correction, re-measured 2026-07-31.** The table above understated the blast radius by presenting the
+regression as write-only. Its paged-SELECT row is an `inventory_items` read, and `inventory_items_select`
+is gated entirely by the **Group A** `rls_*` helpers, which the planner hoists to a one-time InitPlan
+(`loops=1`). About **70 other SELECT policies gate on a row-correlated (Group B) helper instead** —
+`item_stock_levels_select` is `(select is_org_member(item_stock_levels.organization_id))`,
+`activity_logs_select` is `(select has_org_role(activity_logs.organization_id,'manager'))`, and the same
+shape covers `purchase_order_items`, `order_request_lines`, `cycle_count_lines`, `stock_reservations` and
+~65 more. Those pay the disable probe **once per candidate row on reads**, exactly as the bulk UPDATE
+does on writes.
+
+Re-measured on the local stack: 500,002 `item_stock_levels` rows in one org; `user_profiles` at 10,001
+rows of which 1,112 disabled (so the partial index is populated, not empty); role `authenticated` with
+`request.jwt.claim.sub` set; `EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF)`. The two helper sets were swapped
+back and forth between **every single run** — 8 interleaved pre/post pairs — because measuring one block
+and then the other on this stack produces drift of the same magnitude as the effect.
+
+| Shape | Before | After | Delta |
+|---|---|---|---|
+| `select count(*) from item_stock_levels` — row-correlated SELECT policy, SubPlan `loops=500,002` | 3,556 ms (median) | **4,555 ms (median)** | **+28%** (paired deltas +24%…+49%, median +33%) |
+
+Isolating the helper with a direct row-correlated call on the same fixture: `has_org_role` 3,458 ms →
+4,551 ms (+32%), `is_org_member` 1,465 ms → 2,845 ms (+94%). Both are the **same absolute cost** — about
+2.2–2.8 µs per invocation, the Index Only Scan on `user_profiles_disabled_at_idx` (`Heap Fetches: 0`).
+It reads as +32% or +94% only because `is_org_member`'s body is cheaper to begin with; the percentage is
+a property of the helper, not of the guard.
+
+So the honest characterisation is that **any large scan through a Group B helper costs roughly +28% more,
+on reads as well as writes** — the same band as the bulk UPDATE, not a separate pathological case. Paged
+application queries are unaffected only because they scan a page; a query that scans the table pays per
+row. The +28% is stated plainly, not called negligible, and is carried to the owner in §8.
 
 **A completeness caveat.** 0310 closes the *helper-routed* policies. Roughly 25 policies inline their
 own membership check rather than calling a helper (`user_profiles_select_orgmates` is one — see §2.1);
 those do not inherit the guard. The known consequence is bounded to profile reads within an org, and
 the write surface that mattered is covered.
 
-### 5.4 Migration 0311 — `0311_restrict_disable_reason_visibility.sql` (155 lines)
+### 5.4 Migration 0311 — `0311_restrict_disable_reason_visibility.sql`
 
 Closes the confidentiality leak 0308 opened. This is the fix for what §8.10 recorded as an unprobed
 addendum; it was probed, it reproduced, and it is now closed.
+
+**Lock posture, added 2026-07-31.** `GRANT`/`REVOKE` on a table takes **AccessExclusiveLock** on it for
+the whole transaction, and as of this branch **every authenticated request in the product reads
+`user_profiles`** (`session.ts`, `api-context.ts`, `account-status.ts`) — the table moved from cold to
+the single hottest read path. Postgres lock requests are FIFO, so if any open transaction holds even an
+AccessShareLock when the push runs, the AccessExclusive request queues *and every subsequent reader
+queues behind it*: a few seconds of blocking becomes a site-wide stall rather than a slow migration. The
+work itself is instant (tiny row count); the exposure is purely the lock wait. 0311 now opens with
+`set lock_timeout = '5s'` and ends with `reset lock_timeout`, the same precedent as 0295/0298/0303, so
+the push fails fast (SQLSTATE 55P03) and is retried instead of pile-driving the request path. 0310 gets
+the same treatment for its non-CONCURRENT `create index … on user_profiles` (ShareLock, blocks writes).
+On timeout nothing is applied — each migration is a single transaction — so there is no half-applied
+state and no window where the blanket grant is dropped without the keep-list being re-granted.
 
 **The leak, reproduced.** `user_profiles_select_orgmates` (0003) returns the **whole row** to anyone
 sharing an organization. That was harmless while the row held name/avatar/email. 0308 added
@@ -1015,16 +1114,27 @@ status. There is also no per-user attribution on those keys to revoke selectivel
 leave as-is and treat key rotation as a manual step in the offboarding runbook; add per-user key
 ownership so only the disabled user's keys die; or revoke org-wide and accept the integration breakage.
 
-### 8.3 The +28% worst-case bulk UPDATE from migration 0310
+### 8.3 The +28% large-scan cost from migration 0310 — on READS as well as writes
 
-Measured, not estimated (§5.3): the paged SELECT (124.2 → 124.6 ms) and the UPDATE by primary key
-(3.81 → 4.02 ms) are unaffected — both are the shapes the application actually issues. The **bulk
+Measured, not estimated (§5.3). The UPDATE by primary key (3.81 → 4.02 ms) and the paged
+`inventory_items` SELECT (124.2 → 124.6 ms) are unaffected — the first scans one row, the second one
+page, and `inventory_items_select` runs entirely through the hoisted Group A helpers anyway. The **bulk
 sequential-scan UPDATE on 500k rows went 10.27 s → 13.13 s, +28%.**
+
+**This was originally written up as a write-only, "pathological" case. That was wrong, and the
+re-measurement is in §5.3.** ~70 SELECT policies gate on a *row-correlated* helper, so they pay the same
+probe per row on reads: a `select count(*)` over 500,002 `item_stock_levels` rows through
+`item_stock_levels`'s row-correlated policy went **3,556 ms → 4,555 ms, +28%** (8 interleaved pre/post
+pairs; paired deltas +24%…+49%). The absolute cost is ~2.2–2.8 µs per row-correlated helper invocation —
+an Index Only Scan on the partial index, `Heap Fetches: 0`. So the exposure is any query that *scans*
+through a Group B policy: a full `item_stock_levels` rollup, an `activity_logs` export, a wide
+`purchase_order_items` report. Paged application queries stay unaffected.
 
 *Tradeoff:* accept it, or spend a denormalised `disabled_at` on `organization_members` (kept in sync by
 a trigger) to answer the row-correlated question at zero extra buffers. That trades a synchronous
-trigger and a second copy of the truth for the last 28% on a query shape the product does not issue.
-It was judged not worth doing without the owner's word, and it is flagged rather than buried.
+trigger and a second copy of the truth for the last 28% — which, corrected, applies to large reads too,
+not only to a write shape the product does not issue. It was judged not worth doing without the owner's
+word, and it is flagged rather than buried.
 
 ### 8.4 Should the session-revocation broadcast channel be made private?
 
