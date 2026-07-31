@@ -37,12 +37,38 @@ export type AuthProbeResult = 'disabled' | 'active' | 'signed-out' | 'unknown' |
  * outcome reached by a different route (a session that aged out rather than one
  * that was deleted), and the response — sign out, ask for a sign-in — is
  * identical.
+ *
+ * `session_not_found` is listed for completeness and for a raw-protocol caller,
+ * but it does NOT survive the client library — see AUTH_SESSION_MISSING below.
  */
 const SESSION_GONE_CODES = new Set([
   'session_not_found',
   'session_expired',
   'refresh_token_not_found',
 ]);
+
+/**
+ * The one session-gone signal that arrives with NO code at all, and the reason
+ * a code-only classifier still did not work.
+ *
+ * auth-js 2.105.1's handleError singles `session_not_found` out from every
+ * other error code and rethrows it as `AuthSessionMissingError`, whose
+ * constructor passes `undefined` for the code:
+ *
+ *     super('Auth session missing!', 'AuthSessionMissingError', 400, undefined)
+ *
+ * So the exact case this whole feature turns on — a device whose session the
+ * disable just revoked — reaches the app as `{ name: 'AuthSessionMissingError',
+ * code: undefined, status: 400 }`. Verified against a live local stack, not
+ * inferred: a code-only check answered 'unknown' and the simulator fell through
+ * to "You were signed out from another device." Every OTHER session-gone code
+ * keeps its `code` and is matched above.
+ *
+ * Matching on `name` is not a free-text exception. It is the same structured
+ * field auth-js's own `isAuthSessionMissingError()` predicate tests, and it is
+ * the only discriminator the library leaves on this error.
+ */
+const AUTH_SESSION_MISSING = 'AuthSessionMissingError';
 
 /** Whether a failed request justifies spending one getUser() round trip. */
 export function shouldProbeAfterFailure(err: unknown): boolean {
@@ -64,7 +90,9 @@ export function classifyAuthProbe(
         data?: { user?: unknown } | null;
         // `message` is accepted so a real AuthError type-checks, and is then
         // deliberately never read: a ban is never inferred from free text.
-        error?: { code?: unknown; status?: unknown; message?: unknown } | null;
+        // `name` IS read — it is auth-js's own structured discriminator, and
+        // the only one left on AuthSessionMissingError.
+        error?: { name?: unknown; code?: unknown; status?: unknown; message?: unknown } | null;
       }
     | null
     | undefined,
@@ -79,6 +107,7 @@ export function classifyAuthProbe(
   if (typeof res.error?.code === 'string' && SESSION_GONE_CODES.has(res.error.code)) {
     return 'signed-out';
   }
+  if (res.error?.name === AUTH_SESSION_MISSING) return 'signed-out';
   const status = res.error?.status;
   if (typeof status === 'number' && status >= 500) return 'unavailable';
   return 'unknown';

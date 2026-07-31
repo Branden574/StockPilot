@@ -8,15 +8,17 @@ import {
   AUTH_WELCOME_ROUTE,
   EVICTION_STEP_ORDER,
   gateForRevocation,
+  clearSessionEnded,
   markSessionEnded,
   nextGateForProbe,
   notifyUnauthorized,
+  probeAndSettle,
   PROBE_MIN_INTERVAL_MS,
   runAccountEviction,
   setUnauthorizedHandler,
   settleProbeResult,
   shouldRunProbeNow,
-  takeSignedOutRoute,
+  signedOutRoute,
   withTimeout,
 } from './account-eviction';
 
@@ -151,20 +153,35 @@ describe('the signed-out destination latch', () => {
   });
 
   it('defaults to the marketing screen — the pre-existing behaviour', () => {
-    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
     expect(AUTH_WELCOME_ROUTE).toBe('/(auth)/welcome');
   });
 
   it('sends a device whose session died to SIGN-IN instead', () => {
     markSessionEnded();
-    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
     expect(AUTH_SIGN_IN_ROUTE).toBe('/(auth)/sign-in');
   });
 
-  it('is consumed once, so a later ordinary sign-out still lands on welcome', () => {
+  /**
+   * RootGate's redirect effect depends on `segments`, which has not updated by
+   * the time the effect re-runs after the first `replace`. So it fires more
+   * than once per sign-out. A read-and-clear latch answered sign-in on the
+   * first call and the MARKETING SCREEN on the second, which then won — the
+   * bug this replaced, caught on the simulator.
+   */
+  it('is STABLE across repeated reads — the redirect effect runs more than once', () => {
     markSessionEnded();
-    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
-    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+  });
+
+  it('goes back to the marketing screen once the device is healthy again', () => {
+    markSessionEnded();
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    clearSessionEnded();
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
   });
 });
 
@@ -180,7 +197,7 @@ describe('settleProbeResult', () => {
 
     expect(signOutLocal).toHaveBeenCalledTimes(1);
     expect(gate).toBeNull();
-    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
   });
 
   it('leaves the session alone for every other verdict', async () => {
@@ -192,7 +209,7 @@ describe('settleProbeResult', () => {
     expect(await settleProbeResult('ok', 'unknown', signOutLocal)).toBeNull();
 
     expect(signOutLocal).not.toHaveBeenCalled();
-    expect(takeSignedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
   });
 
   it('still marks the destination when the sign-out itself throws', async () => {
@@ -203,7 +220,104 @@ describe('settleProbeResult', () => {
     });
 
     await expect(settleProbeResult('ok', 'signed-out', signOutLocal)).resolves.toBeNull();
-    expect(takeSignedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+  });
+});
+
+/**
+ * WHY THE DESTINATION IS STAKED BEFORE THE PROBE, NOT AFTER IT.
+ *
+ * Pinned from a simulator run that failed. gotrue-js `await`s `_removeSession()`
+ * — which notifies SIGNED_OUT — from INSIDE `getUser()`, before it returns the
+ * result. So the app's session hits null, and RootGate's `!session` redirect
+ * runs, while the probe call is still on the stack. Marking the destination in
+ * the `.then()` is unconditionally too late: the redirect has already read the
+ * unstaked latch and sent the device to the marketing screen. Observed exactly
+ * that way — a relaunch against a disabled account landed on the marketing
+ * screen despite the classifier being correct.
+ *
+ * So the stake goes up FIRST and comes down if the account turns out to be
+ * fine. It cannot produce a false positive: the only thing that consumes it is
+ * a redirect that fires because the session is gone, and during a probe the
+ * session can only go away if it was already dead.
+ */
+describe('probeAndSettle', () => {
+  beforeEach(() => {
+    __resetSessionEndedForTests();
+  });
+
+  it('has already staked SIGN-IN by the time the probe drops the session', async () => {
+    let routeSeenMidProbe: string | null = null;
+    const res = await probeAndSettle(
+      'ok',
+      async () => {
+        // Stands in for gotrue-js's internal _removeSession(): the redirect
+        // effect runs HERE, before the probe result exists.
+        routeSeenMidProbe = signedOutRoute();
+        return { data: { user: null }, error: { name: 'AuthSessionMissingError', status: 400 } };
+      },
+      async () => {},
+    );
+
+    expect(routeSeenMidProbe).toBe(AUTH_SIGN_IN_ROUTE);
+    expect(res.result).toBe('signed-out');
+    expect(res.gate).toBeNull();
+  });
+
+  it('takes the stake back down when the account is healthy', async () => {
+    const res = await probeAndSettle(
+      'ok',
+      async () => ({ data: { user: { id: 'u1' } }, error: null }),
+      async () => {},
+    );
+
+    expect(res.result).toBe('active');
+    expect(res.gate).toBe('ok');
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+
+  it('takes it down on an inconclusive answer too — an offline device keeps its session', async () => {
+    const res = await probeAndSettle('ok', async () => null, async () => {});
+
+    expect(res.result).toBe('unknown');
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+
+  it('leaves it down for a confirmed ban — the disabled screen owns the render', async () => {
+    const res = await probeAndSettle(
+      'ok',
+      async () => ({ data: { user: null }, error: { code: 'user_banned' } }),
+      async () => {},
+    );
+
+    expect(res.gate).toBe('disabled');
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+
+  it('signs out locally when the session is gone', async () => {
+    const signOutLocal = vi.fn(async () => {});
+
+    await probeAndSettle(
+      'ok',
+      async () => ({ data: { user: null }, error: { code: 'refresh_token_not_found' } }),
+      signOutLocal,
+    );
+
+    expect(signOutLocal).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies a probe that threw as inconclusive rather than exploding', async () => {
+    const res = await probeAndSettle(
+      'ok',
+      async () => {
+        throw new Error('Network request failed');
+      },
+      async () => {},
+    );
+
+    expect(res.result).toBe('unknown');
+    expect(res.gate).toBeNull();
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
   });
 });
 

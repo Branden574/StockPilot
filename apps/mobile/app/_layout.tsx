@@ -13,7 +13,7 @@ import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { WhatsNew } from '@/components/onboarding/whats-new';
-import { takeSignedOutRoute } from '@/lib/account-eviction';
+import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -138,9 +138,9 @@ function RootGate() {
   // The destination also changes, deliberately: the drawer sent a
   // force-logged-out user to '/(auth)/sign-in', this sends them to the same
   // place the unauthenticated redirect below uses, so there is one exit for
-  // both. takeSignedOutRoute() picks between them — see the redirect effect.
+  // both. signedOutRoute() picks between them — see the redirect effect.
   const onForcedSignOut = React.useCallback(() => {
-    router.replace(takeSignedOutRoute() as Href);
+    router.replace(signedOutRoute() as Href);
   }, [router]);
 
   const accountGate = useAccountGate({ onEvicted: onForcedSignOut });
@@ -163,13 +163,19 @@ function RootGate() {
       // to anything it asks — and a password grant is the one action that can
       // still find out, because GoTrue answers `user_banned` to that. Sending
       // it to the marketing screen instead is what the end-to-end run observed,
-      // and it is a dead end. The latch is read-and-clear, so this is exactly
-      // as it always was for every other sign-out.
+      // and it is a dead end. signedOutRoute() is a pure, STABLE read — this
+      // effect depends on `segments` and re-runs before they settle, so a
+      // read-and-clear latch answered sign-in once and then overwrote it with
+      // the marketing screen on the very next pass.
       //
       // Both `welcome` and `sign-in` are cast: the generated route-type union
       // only refreshes on the next expo build (stays valid afterward).
-      router.replace(takeSignedOutRoute() as Href);
+      router.replace(signedOutRoute() as Href);
     } else if (session && inAuthGroup) {
+      // A session again: whatever killed the last one is history, so the next
+      // ordinary sign-out gets the marketing screen back. Without this the
+      // sign-in destination would be sticky for the rest of the app's life.
+      clearSessionEnded();
       router.replace('/');
     }
   }, [session, loading, segments, router, accountGate.state]);

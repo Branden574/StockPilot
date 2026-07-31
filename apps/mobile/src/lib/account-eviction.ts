@@ -1,4 +1,8 @@
-import { shouldProbeAfterFailure, type AuthProbeResult } from './account-disabled-probe';
+import {
+  classifyAuthProbe,
+  shouldProbeAfterFailure,
+  type AuthProbeResult,
+} from './account-disabled-probe';
 
 import type { AccountGateState } from './account-disabled-state';
 
@@ -143,14 +147,32 @@ export function markSessionEnded(): void {
 }
 
 /**
- * Read-and-clear. Consumed once, so the NEXT ordinary sign-out — a user
- * deliberately signing out, the disabled screen's own button — still lands on
- * the marketing screen exactly as before.
+ * Cleared when the device is demonstrably fine again — a healthy probe, or a
+ * fresh sign-in. NOT cleared by reading the destination: see below.
  */
-export function takeSignedOutRoute(): string {
-  if (!sessionEndedPending) return AUTH_WELCOME_ROUTE;
+export function clearSessionEnded(): void {
   sessionEndedPending = false;
-  return AUTH_SIGN_IN_ROUTE;
+}
+
+/**
+ * The destination for a signed-out device. A PURE READ — deliberately not
+ * read-and-clear.
+ *
+ * The read-and-clear version was wrong on the device and the simulator caught
+ * it. RootGate's redirect effect depends on `segments`, which has not updated
+ * by the time the effect re-runs after the first `replace`, so the effect fires
+ * TWICE on one sign-out: the first call consumed the latch and asked for
+ * sign-in, the second saw a spent latch and replaced it with the marketing
+ * screen — the exact symptom being fixed, reintroduced one layer up. Observed
+ * as `REPLACE {"name":"welcome"}` immediately after the correct one.
+ *
+ * Stable while signed out, therefore idempotent however many times the effect
+ * runs. The latch is only ever raised by a probe, and probes only run when
+ * there IS a session, so a device that has never lost one still gets the
+ * marketing screen.
+ */
+export function signedOutRoute(): string {
+  return sessionEndedPending ? AUTH_SIGN_IN_ROUTE : AUTH_WELCOME_ROUTE;
 }
 
 /**
@@ -182,6 +204,45 @@ export async function settleProbeResult(
     }
   }
   return nextGateForProbe(current, result);
+}
+
+/**
+ * Run one auth probe and apply everything it implies. The ONE way either caller
+ * (the cold-launch hydrate, the 401 bus / revocation handler) should probe.
+ *
+ * THE ORDERING THIS EXISTS FOR. gotrue-js `await`s `_removeSession()` — which
+ * notifies SIGNED_OUT — from INSIDE `getUser()`, before it returns. So the
+ * app's session is already null, and RootGate's `!session` redirect has already
+ * chosen a destination, while the probe call is still on the stack. Staking the
+ * destination in the `.then()` is therefore unconditionally too late; a
+ * simulator relaunch against a disabled account landed on the marketing screen
+ * for exactly that reason, with a completely correct classifier.
+ *
+ * So the stake goes up BEFORE the call and comes down if the account turns out
+ * to be fine. That cannot mis-route anyone: the only thing that consumes the
+ * stake is a redirect that fires because the session is gone, and while a probe
+ * is in flight the session can only go away if it was already dead.
+ *
+ * `probe` is injected (and never allowed to throw) so this stays pure enough to
+ * test without react-native or a network.
+ */
+export async function probeAndSettle(
+  current: AccountGateState,
+  probe: () => Promise<unknown>,
+  signOutLocal: () => Promise<void>,
+): Promise<{ result: AuthProbeResult; gate: AccountGateState | null }> {
+  markSessionEnded();
+  let raw: unknown = null;
+  try {
+    raw = await probe();
+  } catch {
+    // A rejected probe is inconclusive, never evidence of anything.
+    raw = null;
+  }
+  const result = classifyAuthProbe(raw as Parameters<typeof classifyAuthProbe>[0]);
+  if (result !== 'signed-out') clearSessionEnded();
+  const gate = await settleProbeResult(current, result, signOutLocal);
+  return { result, gate };
 }
 
 /**

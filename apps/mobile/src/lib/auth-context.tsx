@@ -1,13 +1,12 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
 
-import { classifyAuthProbe } from './account-disabled-probe';
 import {
   getAccountGateState,
   setAccountDisabled,
   setAccountGateState,
 } from './account-disabled-state';
-import { settleProbeResult } from './account-eviction';
+import { clearSessionEnded, markSessionEnded, probeAndSettle } from './account-eviction';
 import {
   enableBiometricForUser,
   isBiometricEnabledForUser,
@@ -138,25 +137,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // On a RELAUNCH after a platform disable this answers 'signed-out',
           // never 'disabled': the disable revoked the session before the app
           // was ever reopened, so GoTrue can only say `session_not_found`.
-          // settleProbeResult drops the dead session and marks the destination
-          // as sign-in, where the password grant finally gets `user_banned` and
-          // the disabled copy. One extra step, and it is the honest one — the
-          // device genuinely cannot tell a disable from a sign-out here.
-          void supabase.auth
-            .getUser()
-            .catch(() => null)
-            .then(async (probe) => {
-              if (cancelled) return;
-              const nextGate = await settleProbeResult(
-                getAccountGateState(),
-                classifyAuthProbe(probe),
-                async () => {
-                  await supabase.auth.signOut({ scope: 'local' });
-                },
-              );
-              if (cancelled) return;
-              if (nextGate) setAccountGateState(nextGate);
-            });
+          // probeAndSettle drops the dead session and routes to sign-in, where
+          // the password grant finally gets `user_banned` and the disabled
+          // copy. One extra step, and it is the honest one — the device
+          // genuinely cannot tell a disable from a sign-out here.
+          //
+          // probeAndSettle, not a bare getUser().then(...): gotrue-js drops a
+          // dead session from INSIDE getUser(), so RootGate's redirect has
+          // already picked a destination by the time any `.then()` of ours
+          // runs. It stakes sign-in up front and withdraws it if the account
+          // turns out to be fine.
+          void probeAndSettle(
+            getAccountGateState(),
+            () => supabase.auth.getUser(),
+            async () => {
+              await supabase.auth.signOut({ scope: 'local' });
+            },
+          ).then(({ gate }) => {
+            if (cancelled || !gate) return;
+            setAccountGateState(gate);
+          });
 
           let enabled = false;
           try {
@@ -193,6 +193,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // user is left intact so if THEY sign back in, biometric is
       // still on for them.
       if (event === 'SIGNED_OUT' || !s?.user) {
+        // A SIGNED_OUT this app did not ask for means the session was taken
+        // away — and on a RELAUNCH that is the only trace left of it. auth-js
+        // validates the stored session inside its own initialize(), and a
+        // revoked one is dropped there, BEFORE our getSession() returns: the
+        // hydrate below then sees no session at all, never probes, and the
+        // device looks exactly like one that launched signed out. Verified on
+        // the simulator — the cold-launch probe never ran.
+        //
+        // So the default is "involuntary": land on sign-in, where the password
+        // grant is the one call that can still learn the truth. The two
+        // DELIBERATE exits (signOut, signOutToFallback) clear it again, so a
+        // user who chose to leave still gets the marketing screen.
+        markSessionEnded();
         // Deliberately does NOT clear the account gate. The eviction's own
         // local sign-out fires SIGNED_OUT, so clearing it here would unmount
         // the disabled screen the instant it appeared and hand the user back
@@ -283,6 +296,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // sessions on the web tabs + any other devices. Mirrors the
     // server action's behavior in apps/web/src/server/actions/auth.ts.
     await supabase.auth.signOut({ scope: 'global' });
+    // DELIBERATE: the marker raised by the SIGNED_OUT above is withdrawn, so a
+    // user who chose to leave lands on the marketing screen, not sign-in.
+    clearSessionEnded();
     try {
       await wipeForSignOut();
     } catch (err) {
@@ -297,6 +313,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // biometric prompt and wants to re-authenticate with password
     // on this device only.
     await supabase.auth.signOut({ scope: 'local' });
+    // DELIBERATE, same as signOut above.
+    clearSessionEnded();
     setLocked(false);
     setMfaRequired(false);
     mfaFactorId.current = null;

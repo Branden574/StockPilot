@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as React from 'react';
 
-import { classifyAuthProbe } from './account-disabled-probe';
 import {
   getAccountGateState,
   setAccountGateState,
@@ -11,10 +10,10 @@ import {
 import {
   accountScopedStorageKeys,
   gateForRevocation,
+  probeAndSettle,
   PROBE_TIMEOUT_MS,
   runAccountEviction,
   setUnauthorizedHandler,
-  settleProbeResult,
   withTimeout,
 } from './account-eviction';
 import { wipeForSignOut } from './db';
@@ -113,12 +112,14 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
       // with the same uniform 401 an anonymous caller gets, on purpose. A
       // rejected call (offline, DNS, timeout) classifies as 'unknown' and
       // changes nothing.
-      const res = await withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null);
-      const result = classifyAuthProbe(res);
-      const next = await settleProbeResult(getAccountGateState(), result, async () => {
-        await supabase.auth.signOut({ scope: 'local' });
-      });
-      if (next) setAccountGateState(next);
+      const { result, gate } = await probeAndSettle(
+        getAccountGateState(),
+        () => withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null),
+        async () => {
+          await supabase.auth.signOut({ scope: 'local' });
+        },
+      );
+      if (gate) setAccountGateState(gate);
       return result;
     } finally {
       setBusy(false);

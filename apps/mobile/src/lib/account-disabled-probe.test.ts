@@ -68,8 +68,54 @@ describe('classifyAuthProbe', () => {
     expect(classifyAuthProbe({ data: { user: null }, error: { code: 'session_expired' } })).toBe('signed-out');
   });
 
+  /**
+   * THE SHAPE THAT ACTUALLY ARRIVES — pinned from a live run, not from the
+   * wire format.
+   *
+   * The simulator re-run caught this: keying on `error.code` alone was still
+   * not enough, because gotrue-js does not pass `session_not_found` through.
+   * auth-js 2.105.1's handleError singles that one code out and rethrows it as
+   * `AuthSessionMissingError`, whose constructor takes NO code
+   * (`super('Auth session missing!', 'AuthSessionMissingError', 400, undefined)`).
+   * So the object the app sees is `{ name: 'AuthSessionMissingError', code:
+   * undefined, status: 400 }`, and a code-only classifier answered 'unknown' —
+   * exactly the original defect, one layer further down. Observed on device as
+   * the app falling through to "You were signed out from another device."
+   *
+   * `name` is a STRUCTURED discriminator, not free text: it is the same field
+   * auth-js's own `isAuthSessionMissingError()` predicate tests. Every OTHER
+   * session-gone code (`refresh_token_not_found`, `session_expired`) does keep
+   * its `code`, so both routes have to be recognised.
+   */
+  it('recognises the AuthSessionMissingError gotrue-js actually returns', () => {
+    expect(
+      classifyAuthProbe({
+        data: { user: null },
+        error: {
+          name: 'AuthSessionMissingError',
+          code: undefined,
+          status: 400,
+          message: 'Auth session missing!',
+        },
+      }),
+    ).toBe('signed-out');
+  });
+
   it('does NOT infer signed-out from free text either', () => {
     expect(classifyAuthProbe({ data: { user: null }, error: { message: 'session_not_found' } })).toBe('unknown');
+    // The MESSAGE of the real error must not be what carries the decision.
+    expect(classifyAuthProbe({ data: { user: null }, error: { message: 'Auth session missing!' } })).toBe(
+      'unknown',
+    );
+  });
+
+  it('does not treat any other named auth error as a dead session', () => {
+    expect(
+      classifyAuthProbe({ data: { user: null }, error: { name: 'AuthRetryableFetchError', status: 0 } }),
+    ).toBe('unknown');
+    expect(
+      classifyAuthProbe({ data: { user: null }, error: { name: 'AuthApiError', code: 'bad_jwt', status: 401 } }),
+    ).toBe('unknown');
   });
 
   it('still prefers a confirmed ban over a dead session', () => {

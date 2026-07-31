@@ -45,6 +45,7 @@ const authContext = read('./auth-context.tsx');
 const apiSrc = read('./api.ts');
 const gate = read('./use-account-gate.ts');
 const revocation = read('./use-session-revocation.ts');
+const evictionSrc = read('./account-eviction.ts');
 
 describe('the eviction listener is mounted where every screen can see it', () => {
   it('RootGate owns useSessionRevocation', () => {
@@ -104,9 +105,12 @@ describe('a revoked device can still find out what happened', () => {
   });
 
   it('a dead session signs out locally and asks for a sign-in', () => {
-    expect(gate).toContain('settleProbeResult(');
-    expect(authContext).toContain('settleProbeResult(');
-    expect(rootLayout).toContain('takeSignedOutRoute()');
+    expect(gate).toContain('probeAndSettle(');
+    expect(authContext).toContain('probeAndSettle(');
+    expect(rootLayout).toContain('signedOutRoute()');
+    // Cleared on a fresh sign-in, or the sign-in destination would be sticky
+    // for the rest of the app's life.
+    expect(rootLayout).toContain('clearSessionEnded();');
     // The marketing screen is what the run actually observed, and it is the
     // one destination from which the user learns nothing.
     expect(code(rootLayout)).not.toContain("router.replace('/(auth)/welcome' as Href)");
@@ -207,11 +211,12 @@ describe('the paths that can raise the gate', () => {
   });
 
   it('cold launch probes the restored session and cannot log a working user out', () => {
-    expect(authContext).toContain('.getUser()');
-    expect(authContext).toContain('.catch(() => null)');
-    expect(flat(authContext)).toContain(
-      'settleProbeResult( getAccountGateState(), classifyAuthProbe(probe),',
-    );
+    expect(authContext).toContain('supabase.auth.getUser()');
+    expect(flat(authContext)).toContain('probeAndSettle( getAccountGateState(),');
+    // The rejection tolerance moved INTO probeAndSettle (a thrown probe
+    // classifies as 'unknown', which changes nothing) so the hydrate path can
+    // no longer forget its own try/catch.
+    expect(evictionSrc).toContain('// A rejected probe is inconclusive, never evidence of anything.');
   });
 
   it('never AWAITS the cold-launch probe — the hydrate path owns `loading`', () => {
@@ -219,8 +224,20 @@ describe('the paths that can raise the gate', () => {
     // hold loading=true forever and render a blank shell with no recovery but
     // force-quit — the exact failure the hydrate path's fail-closed guard was
     // written for.
-    expect(authContext).toContain('void supabase.auth');
+    expect(authContext).toContain('void probeAndSettle(');
     expect(authContext).not.toContain('await supabase.auth.getUser()');
+    expect(authContext).not.toContain('await probeAndSettle(');
+  });
+
+  it('an involuntary SIGNED_OUT routes to sign-in; a deliberate one does not', () => {
+    // auth-js drops a REVOKED session inside its own initialize(), before
+    // getSession() returns, so on a relaunch this event is the only trace that
+    // the device ever had one. Default involuntary; the two deliberate exits
+    // withdraw it so a user who chose to leave still gets the marketing screen.
+    expect(authContext).toContain('markSessionEnded();');
+    expect((authContext.match(/clearSessionEnded\(\);/g) ?? []).length).toBe(2);
+    const signOutFns = authContext.slice(authContext.indexOf("const signOut: AuthState['signOut']"));
+    expect(signOutFns).toContain('clearSessionEnded();');
   });
 
   it('a SIGNED_OUT event does not clear the gate', () => {
