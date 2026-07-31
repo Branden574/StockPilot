@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
 
 /**
  * Pending-actions queue. Every offline-capable write goes through
@@ -184,6 +185,70 @@ export async function rejectAllPending(error: string): Promise<number> {
       where status in ('pending','sending','failed')`,
     [error.slice(0, 1000), Date.now()],
   );
+  return result.changes;
+}
+
+/**
+ * How many rejected rows are on this device.
+ *
+ * Read by the sync badge (so "All synced" can stop being said over the top of
+ * work that was never sent) and by the Settings row that opens the list.
+ */
+export async function countRejected(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions where status = 'rejected'`,
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * RETENTION. Rejected rows are kept on purpose — they are the only record that
+ * the operator's queued work existed at all, and `wipeForSignOut` spares them —
+ * but keeping cannot mean keeping forever. On a shared warehouse device an
+ * unpruned table carries one user's payloads past every later sign-in and grows
+ * for the life of the install.
+ *
+ * Two bounds, because age alone is not enough: one eviction after a long
+ * offline stint can park thousands of rows that all share a timestamp.
+ *
+ *   1. older than REJECTED_RETENTION_DAYS (measured from the rejection, falling
+ *      back to when the work was queued);
+ *   2. beyond the newest REJECTED_KEEP_MAX, whatever their age.
+ *
+ * Runs at cold launch (app/_layout.tsx). Returns how many rows it removed.
+ */
+export async function pruneRejected(now: number = Date.now()): Promise<number> {
+  const db = await getDb();
+  const aged = await db.runAsync(
+    `delete from pending_actions
+      where status = 'rejected'
+        and coalesce(last_attempt_at, created_at) < ?`,
+    [rejectedPruneCutoff(now)],
+  );
+  const excess = await db.runAsync(
+    `delete from pending_actions
+      where status = 'rejected'
+        and id not in (
+          select id from pending_actions
+           where status = 'rejected'
+           order by coalesce(last_attempt_at, created_at) desc
+           limit ?
+        )`,
+    [REJECTED_KEEP_MAX],
+  );
+  return aged.changes + excess.changes;
+}
+
+/**
+ * Drop the rejected record on the user's own say-so — the "Clear this list"
+ * action on the Unsent work screen. Deliberately explicit: nothing else in the
+ * app deletes these rows, so the operator decides when they have finished with
+ * them.
+ */
+export async function clearRejected(): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(`delete from pending_actions where status = 'rejected'`);
   return result.changes;
 }
 

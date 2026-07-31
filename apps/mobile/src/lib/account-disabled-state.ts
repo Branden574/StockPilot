@@ -26,7 +26,27 @@
 
 export type AccountGateState = 'ok' | 'disabled' | 'unverified';
 
+/**
+ * HOW a `disabled` verdict was established — and therefore WHOSE it is.
+ *
+ *   'session'  the verdict is about the session this device is holding: a
+ *              getUser() probe answered `user_banned`, or an eviction broadcast
+ *              aimed at this user was corroborated by a probe. The device's own
+ *              data is the disabled account's data.
+ *   'sign-in'  GoTrue answered `user_banned` to a PASSWORD GRANT typed at the
+ *              sign-in screen. It says nothing about this device: GoTrue
+ *              evaluates the ban BEFORE the password, so any passer-by who
+ *              knows one disabled address gets this answer, and the queued work
+ *              on the device may belong to a different, healthy user who fell
+ *              back from the biometric lock.
+ *
+ * The screen may be raised by either. The EVICTION — which terminally rejects
+ * the offline outbox and wipes the cache — may only ever follow 'session'.
+ */
+export type DisableEvidence = 'session' | 'sign-in';
+
 let state: AccountGateState = 'ok';
+let evidence: DisableEvidence | null = null;
 
 /** Subscribers that only care about the boolean "is this account disabled". */
 const disabledListeners = new Set<(next: boolean) => void>();
@@ -37,10 +57,36 @@ export function getAccountGateState(): AccountGateState {
   return state;
 }
 
-export function setAccountGateState(next: AccountGateState): void {
-  if (state === next) return;
+/**
+ * Reads how the CURRENT disabled verdict was established, or null when the gate
+ * is not disabled. Consumed by the eviction precondition (account-eviction.ts's
+ * `shouldRunEviction`), which is the only caller allowed to act destructively.
+ */
+export function getDisableEvidence(): DisableEvidence | null {
+  return evidence;
+}
+
+/**
+ * `how` defaults to 'session' because every caller EXCEPT the sign-in rejection
+ * is reasoning about this device's own session. The one exception passes
+ * 'sign-in' explicitly, and the eviction precondition refuses it.
+ */
+export function setAccountGateState(
+  next: AccountGateState,
+  how: DisableEvidence = 'session',
+): void {
+  if (state === next) {
+    // A repeat verdict can still STRENGTHEN the attribution — the sign-in
+    // rejection may have raised the screen first and a probe of this device's
+    // own session may confirm it afterwards. It can never weaken it: 'sign-in'
+    // must not overwrite 'session', or a passer-by could disarm nothing and
+    // re-arm nothing but would muddy the one input the eviction trusts.
+    if (next === 'disabled' && how === 'session') evidence = 'session';
+    return;
+  }
   const wasDisabled = state === 'disabled';
   state = next;
+  evidence = next === 'disabled' ? how : null;
   for (const l of gateListeners) l(next);
   // Only wake the boolean subscribers when the BOOLEAN actually moved, so a
   // transient ok↔unverified flap never churns the disabled gate.
@@ -54,9 +100,9 @@ export function getAccountDisabled(): boolean {
   return state === 'disabled';
 }
 
-export function setAccountDisabled(next: boolean): void {
+export function setAccountDisabled(next: boolean, how: DisableEvidence = 'session'): void {
   if (next) {
-    setAccountGateState('disabled');
+    setAccountGateState('disabled', how);
     return;
   }
   // Clearing the disable clears the whole gate: a re-enabled (or different)
@@ -91,6 +137,7 @@ export function resetAccountDisabled(): void {
 /** Test-only: clears the flag AND every subscription. */
 export function __resetAccountGateForTests(): void {
   state = 'ok';
+  evidence = null;
   disabledListeners.clear();
   gateListeners.clear();
 }

@@ -4,7 +4,7 @@ import {
   type AuthProbeResult,
 } from './account-disabled-probe';
 
-import type { AccountGateState } from './account-disabled-state';
+import type { AccountGateState, DisableEvidence } from './account-disabled-state';
 
 /**
  * What happens to a device whose account was just confirmed disabled, and the
@@ -69,6 +69,82 @@ export async function runAccountEviction(steps: EvictionSteps): Promise<Eviction
     }
   }
   return failed;
+}
+
+/**
+ * MAY THE EVICTION RUN? — the precondition, and the one question it answers.
+ *
+ * The eviction is destructive in a way nothing else in this app is: it
+ * terminally rejects THIS DEVICE's offline outbox (real, unsent warehouse work)
+ * and wipes the SQLite cache. It used to hang off nothing but the transition
+ * into `disabled`, and one of the paths into that transition is a FAILED
+ * sign-in — GoTrue evaluates the ban BEFORE the password, so `user_banned`
+ * comes back for any password at all. Anyone who could reach the sign-in screen
+ * and knew one disabled colleague's email could therefore destroy whatever was
+ * queued on the device, with no credentials whatsoever. And after "Use password
+ * instead" on the biometric lock (signOutToFallback, which deliberately does
+ * NOT wipe), what is queued routinely belongs to a different, healthy user.
+ *
+ * So the verdict has to say whose it is. Only 'session' evidence — a probe of
+ * the session this device holds, or an eviction broadcast corroborated by one —
+ * may evict. A verdict typed at the sign-in screen raises the SCREEN and
+ * nothing more. Unattributed fails closed.
+ */
+export function shouldRunEviction(input: {
+  state: AccountGateState;
+  evidence: DisableEvidence | null;
+  alreadyEvicting: boolean;
+}): boolean {
+  if (input.state !== 'disabled') return false;
+  if (input.alreadyEvicting) return false;
+  return input.evidence === 'session';
+}
+
+/**
+ * Does this auth event mean the device LOST a session, as opposed to simply not
+ * having one?
+ *
+ * auth-js hands every new subscriber an INITIAL_SESSION event, with a NULL
+ * session on a device that has never signed in (`callback('INITIAL_SESSION',
+ * null)` in GoTrueClient). Latching the signed-out destination on `!session`
+ * therefore fired on a FRESH INSTALL, and `/(auth)/welcome` — the marketing and
+ * first-run screen — became unreachable at launch for every user.
+ *
+ * A genuinely revoked session is distinguishable: auth-js drops it inside its
+ * own initialize() through `_removeSession()`, which notifies SIGNED_OUT. On a
+ * relaunch that event is the only trace the device has that it ever held a
+ * session, so it is the one — and the only one — that latches.
+ */
+export function isInvoluntarySessionEnd(event: string, hasSession: boolean): boolean {
+  if (hasSession) return false;
+  return event === 'SIGNED_OUT';
+}
+
+/**
+ * The background re-probe schedule for the `unverified` gate.
+ *
+ * `unverified` (a GoTrue 5xx: the identity server could not answer) used to
+ * replace the entire app with a retry button, which cut an offline-first
+ * warehouse phone off from its own SQLite cache and its own outbox — the two
+ * things built to work without a server — for as long as the incident lasted.
+ * It is now a background condition: the app runs on its cached session and
+ * re-probes on this backoff until the answer lands. Only a DEFINITIVE disabled
+ * verdict blocks.
+ *
+ * Short first (a 502 behind the auth load balancer clears in seconds), then
+ * backing off so a long incident is not hammered by every device at once.
+ */
+export const UNVERIFIED_RETRY_DELAYS_MS: readonly number[] = [
+  15_000,
+  30_000,
+  60_000,
+  300_000,
+];
+
+export function unverifiedRetryDelayMs(attempt: number): number {
+  const last = UNVERIFIED_RETRY_DELAYS_MS[UNVERIFIED_RETRY_DELAYS_MS.length - 1];
+  if (!Number.isFinite(attempt) || attempt < 0) return UNVERIFIED_RETRY_DELAYS_MS[0];
+  return UNVERIFIED_RETRY_DELAYS_MS[Math.floor(attempt)] ?? last;
 }
 
 /**

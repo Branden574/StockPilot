@@ -49,6 +49,10 @@ const queue = read('./queue.ts');
 const cache = read('./cycle-count-cache.ts');
 const db = read('./db.ts');
 const gate = read('./use-account-gate.ts');
+const rootLayout = read('../../app/_layout.tsx');
+const settingsScreen = read('../../app/(drawer)/settings.tsx');
+const rejectedScreen = read('../../app/(drawer)/settings/rejected-work.tsx');
+const badge = read('../components/SyncStatusBadge.tsx');
 
 /** The one method of the cycle-count engine that owns failure handling. */
 const drainOutbox = (() => {
@@ -154,7 +158,7 @@ describe('the local record survives', () => {
   it('markRejected UPDATES the row — it never deletes the operator work', () => {
     const body = code(queue).slice(
       code(queue).indexOf('export async function markRejected'),
-      code(queue).indexOf('export async function listRejected'),
+      code(queue).indexOf('export async function rejectAllPending'),
     );
     expect(body).toContain("set status = 'rejected'");
     expect(body).toContain('last_error');
@@ -164,6 +168,55 @@ describe('the local record survives', () => {
   it('exposes the rejected rows so the user can be told what happened', () => {
     expect(queue).toContain('export async function listRejected');
     expect(queue).toContain("where status = 'rejected'");
+  });
+
+  /**
+   * KEEPING IS ONLY HALF A PROMISE.
+   *
+   * The rows were preserved and then read by nobody: `listRejected` had no
+   * caller, both counters excluded the status by design, and the header badge
+   * said "All synced" over the top of a dozen writes that never landed. So the
+   * record now has a reader and a lifetime — a screen, a count on the badge,
+   * and a prune, or "preserved for the user and support" is just a comment.
+   */
+  it('is actually rendered somewhere the operator can reach', () => {
+    expect(settingsScreen).toContain("import { countRejected } from '@/lib/queue'");
+    expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
+    expect(rejectedScreen).toContain("from '@/lib/queue'");
+    expect(rejectedScreen).toContain('listRejected()');
+    // The reason each row carries, in the operator's own vocabulary.
+    expect(rejectedScreen).toContain('pendingActionLabel(row.kind)');
+    expect(rejectedScreen).toContain('row.lastError');
+  });
+
+  it('stops the badge claiming "All synced" over work that was never sent', () => {
+    expect(badge).toContain('rejectedCount');
+    const allSyncedAt = badge.indexOf("label = 'All synced'");
+    const rejectedAt = badge.indexOf('rejectedCount > 0');
+    expect(rejectedAt).toBeGreaterThan(-1);
+    expect(rejectedAt).toBeLessThan(allSyncedAt);
+    expect(cycleSync).toContain("import { countRejected } from './queue'");
+    expect(cycleSync).toContain('rejectedCount: number;');
+  });
+
+  it('ages the record out instead of accumulating for the life of the install', () => {
+    // A shared warehouse device otherwise carries one user's payloads past
+    // every later sign-in, forever: wipeForSignOut spares these rows and
+    // nothing else ever deleted them.
+    expect(queue).toContain('export async function pruneRejected');
+    const prune = code(queue).slice(
+      code(queue).indexOf('export async function pruneRejected'),
+      code(queue).indexOf('export async function clearRejected'),
+    );
+    expect(prune).toContain('rejectedPruneCutoff(now)');
+    expect(prune).toContain('REJECTED_KEEP_MAX');
+    expect(prune).toMatch(/delete from pending_actions\s+where status = 'rejected'/);
+    // Only rejected rows — a prune that reached a pending row would delete
+    // queued work that is still perfectly sendable.
+    expect(prune).not.toMatch(/delete from pending_actions;/);
+    // And it has to actually run.
+    expect(rootLayout).toContain("import { pruneRejected } from '@/lib/queue'");
+    expect(rootLayout).toContain('await pruneRejected();');
   });
 
   it('widens the status union rather than lying about the row state', () => {

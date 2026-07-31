@@ -3,6 +3,7 @@ import * as React from 'react';
 
 import {
   getAccountGateState,
+  getDisableEvidence,
   setAccountGateState,
   subscribeAccountGate,
   type AccountGateState,
@@ -14,6 +15,8 @@ import {
   PROBE_TIMEOUT_MS,
   runAccountEviction,
   setUnauthorizedHandler,
+  shouldRunEviction,
+  unverifiedRetryDelayMs,
   withTimeout,
 } from './account-eviction';
 import { wipeForSignOut } from './db';
@@ -64,16 +67,22 @@ import type { AuthProbeResult } from './account-disabled-probe';
  * discovery path is deliberate: (4) and (2) are the two ways a device learns
  * the truth, and wiring the outbox to just one of them is precisely the bug the
  * end-to-end run found.
+ *
+ * WHAT THE TRANSITION ALONE IS NOT ENOUGH FOR. Path (2) is a sign-in screen,
+ * and GoTrue evaluates the ban BEFORE the password: `user_banned` comes back to
+ * anyone who types a disabled colleague's address, with any password and no
+ * credentials at all. The eviction destroys THIS DEVICE's queued work, which
+ * after "Use password instead" on the biometric lock routinely belongs to
+ * somebody else. So the transition raises the SCREEN from either path, and only
+ * a verdict attributed to this device's own session (DisableEvidence 'session')
+ * may evict — shouldRunEviction, below.
  */
 export interface AccountGate {
   state: AccountGateState;
-  /** True while a probe is in flight (drives the retry screen's spinner). */
-  busy: boolean;
-  /** Re-run the probe. The retry affordance on the unverified screen. */
-  retry: () => void;
   /**
-   * Probe now and report whether the account is CONFIRMED disabled. Kept for
-   * the retry affordance and for callers that only want the verdict.
+   * Probe now and report whether the account is CONFIRMED disabled. Driven by
+   * the 401 bus and by the background re-probe loop that replaced the blocking
+   * retry screen.
    */
   probeNow: () => Promise<boolean>;
   /**
@@ -89,7 +98,6 @@ export interface AccountGate {
 export function useAccountGate(options: { onEvicted: () => void }): AccountGate {
   const { onEvicted } = options;
   const [state, setState] = React.useState<AccountGateState>(getAccountGateState);
-  const [busy, setBusy] = React.useState(false);
   const evicting = React.useRef(false);
 
   React.useEffect(() => {
@@ -106,24 +114,19 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
    * actually gets — rather than only about "was it a confirmed ban".
    */
   const runProbe = React.useCallback(async (): Promise<AuthProbeResult> => {
-    setBusy(true);
-    try {
-      // getUser() is the ONLY authority here: /api/v1 answers a disabled caller
-      // with the same uniform 401 an anonymous caller gets, on purpose. A
-      // rejected call (offline, DNS, timeout) classifies as 'unknown' and
-      // changes nothing.
-      const { result, gate } = await probeAndSettle(
-        getAccountGateState(),
-        () => withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null),
-        async () => {
-          await supabase.auth.signOut({ scope: 'local' });
-        },
-      );
-      if (gate) setAccountGateState(gate);
-      return result;
-    } finally {
-      setBusy(false);
-    }
+    // getUser() is the ONLY authority here: /api/v1 answers a disabled caller
+    // with the same uniform 401 an anonymous caller gets, on purpose. A
+    // rejected call (offline, DNS, timeout) classifies as 'unknown' and
+    // changes nothing.
+    const { result, gate } = await probeAndSettle(
+      getAccountGateState(),
+      () => withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null),
+      async () => {
+        await supabase.auth.signOut({ scope: 'local' });
+      },
+    );
+    if (gate) setAccountGateState(gate);
+    return result;
   }, []);
 
   const probeNow = React.useCallback(async (): Promise<boolean> => {
@@ -162,11 +165,50 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     return () => setUnauthorizedHandler(null);
   }, [probeNow]);
 
-  // Evict on the transition into `disabled`, once. The ref (not state) is what
+  // Re-probe in the BACKGROUND while the status is unreadable, instead of
+  // blocking the app behind a retry screen. A GoTrue 5xx says nothing about
+  // this account, and an offline-first warehouse device must keep reaching its
+  // cached work through an identity-server incident. The loop reschedules
+  // itself on a backoff and unwinds the moment the gate settles either way.
+  React.useEffect(() => {
+    if (state !== 'unverified') return;
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        void probeNow().finally(() => {
+          if (cancelled || getAccountGateState() !== 'unverified') return;
+          attempt += 1;
+          schedule();
+        });
+      }, unverifiedRetryDelayMs(attempt));
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [state, probeNow]);
+
+  // Evict on the transition into `disabled`, once — and ONLY when the verdict
+  // is about the session this device is holding. The ref (not state) is what
   // prevents a session-restoration loop: onAuthStateChange fires during the
   // eviction's own sign-out and would otherwise re-enter this effect.
   React.useEffect(() => {
-    if (state !== 'disabled' || evicting.current) return;
+    // shouldRunEviction is what stops a FAILED sign-in from destroying somebody
+    // else's queued work: `user_banned` comes back for any password, from the
+    // sign-in screen, with no credentials — see account-eviction.ts.
+    if (
+      !shouldRunEviction({
+        state,
+        evidence: getDisableEvidence(),
+        alreadyEvicting: evicting.current,
+      })
+    ) {
+      return;
+    }
     evicting.current = true;
     void (async () => {
       const failed = await runAccountEviction({
@@ -220,9 +262,5 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     if (state !== 'disabled') evicting.current = false;
   }, [state]);
 
-  const retry = React.useCallback(() => {
-    void probeNow();
-  }, [probeNow]);
-
-  return { state, busy, retry, probeNow, onSessionRevoked };
+  return { state, probeNow, onSessionRevoked };
 }

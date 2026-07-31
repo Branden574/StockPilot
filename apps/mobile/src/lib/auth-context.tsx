@@ -3,10 +3,16 @@ import * as React from 'react';
 
 import {
   getAccountGateState,
+  resetAccountDisabled,
   setAccountDisabled,
   setAccountGateState,
 } from './account-disabled-state';
-import { clearSessionEnded, markSessionEnded, probeAndSettle } from './account-eviction';
+import {
+  clearSessionEnded,
+  isInvoluntarySessionEnd,
+  markSessionEnded,
+  probeAndSettle,
+} from './account-eviction';
 import {
   enableBiometricForUser,
   isBiometricEnabledForUser,
@@ -201,11 +207,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // device looks exactly like one that launched signed out. Verified on
         // the simulator — the cold-launch probe never ran.
         //
-        // So the default is "involuntary": land on sign-in, where the password
-        // grant is the one call that can still learn the truth. The two
+        // So a SIGNED_OUT is treated as involuntary: land on sign-in, where the
+        // password grant is the one call that can still learn the truth. The two
         // DELIBERATE exits (signOut, signOutToFallback) clear it again, so a
         // user who chose to leave still gets the marketing screen.
-        markSessionEnded();
+        //
+        // ONLY on SIGNED_OUT, though. auth-js hands every new subscriber an
+        // INITIAL_SESSION event, with a null session on a device that has never
+        // signed in — so latching on `!s?.user` fired on a FRESH INSTALL and
+        // made /(auth)/welcome unreachable at launch for every first-run user.
+        // isInvoluntarySessionEnd draws that line; the branch below still
+        // resets the lock/MFA UI for any null-session event.
+        if (isInvoluntarySessionEnd(event, Boolean(s?.user))) markSessionEnded();
         // Deliberately does NOT clear the account gate. The eviction's own
         // local sign-out fires SIGNED_OUT, so clearing it here would unmount
         // the disabled screen the instant it appeared and hand the user back
@@ -252,12 +265,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // deliberately do not reveal. Raising the gate here is what makes the
       // disabled screen reachable from a rejected sign-in, where there is no
       // session for any other path to work from.
+      //
+      // ATTRIBUTED 'sign-in', and that is the whole point. This answer is about
+      // an EMAIL SOMEBODY TYPED, not about this device: GoTrue evaluates the
+      // ban before the password, so any passer-by who knows one disabled
+      // address gets it with any password at all. It may raise the screen; it
+      // may NOT drive the eviction, which terminally rejects the offline outbox
+      // — work that, after "Use password instead" on the biometric lock,
+      // routinely belongs to a different and perfectly healthy user.
       if ((error as { code?: string }).code === 'user_banned') {
-        setAccountDisabled(true);
+        setAccountDisabled(true, 'sign-in');
         return { error: ACCOUNT_DISABLED_MESSAGE };
       }
       return { error: error.message };
     }
+    // A password grant that SUCCEEDED is proof the account is not banned —
+    // GoTrue refuses a banned user before it ever checks the password. So this
+    // is the moment a gate raised by someone else's rejected attempt (or by an
+    // identity-server blip) is demonstrably stale and must come down, or the
+    // healthy user who just signed in would meet the disabled screen.
+    resetAccountDisabled();
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password

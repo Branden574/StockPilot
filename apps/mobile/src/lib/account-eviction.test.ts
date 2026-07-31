@@ -9,6 +9,7 @@ import {
   EVICTION_STEP_ORDER,
   gateForRevocation,
   clearSessionEnded,
+  isInvoluntarySessionEnd,
   markSessionEnded,
   nextGateForProbe,
   notifyUnauthorized,
@@ -17,8 +18,11 @@ import {
   runAccountEviction,
   setUnauthorizedHandler,
   settleProbeResult,
+  shouldRunEviction,
   shouldRunProbeNow,
   signedOutRoute,
+  UNVERIFIED_RETRY_DELAYS_MS,
+  unverifiedRetryDelayMs,
   withTimeout,
 } from './account-eviction';
 
@@ -492,5 +496,135 @@ describe('the unauthorized bus', () => {
     notifyUnauthorized({ status: 401 }, 1_000);
 
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE EVICTION PRECONDITION — the unauthenticated data-destruction bug.
+ *
+ * The eviction terminally rejects THIS DEVICE's offline outbox and wipes its
+ * SQLite cache. It used to hang off nothing but the transition into `disabled`,
+ * and one of the paths into that transition is a FAILED sign-in: GoTrue
+ * evaluates the ban BEFORE the password, so `user_banned` comes back for any
+ * password at all. Anyone who could reach the sign-in screen and knew one
+ * disabled colleague's email address could therefore destroy whatever queued
+ * warehouse work was sitting on the device — which, after "Use password
+ * instead" on the biometric lock, routinely belongs to somebody else entirely.
+ *
+ * So the verdict now has to say WHOSE it is. Only a verdict established about
+ * the session this device is holding may evict; a verdict typed at the sign-in
+ * screen may raise the screen and nothing more.
+ */
+describe('shouldRunEviction', () => {
+  it('refuses to evict on a verdict typed at the SIGN-IN screen', () => {
+    expect(
+      shouldRunEviction({ state: 'disabled', evidence: 'sign-in', alreadyEvicting: false }),
+    ).toBe(false);
+  });
+
+  it('evicts when the verdict is about the session this device holds', () => {
+    expect(
+      shouldRunEviction({ state: 'disabled', evidence: 'session', alreadyEvicting: false }),
+    ).toBe(true);
+  });
+
+  it('fails CLOSED on an unattributed verdict', () => {
+    expect(
+      shouldRunEviction({ state: 'disabled', evidence: null, alreadyEvicting: false }),
+    ).toBe(false);
+  });
+
+  it('never evicts without a confirmed disable', () => {
+    for (const state of ['ok', 'unverified'] as const) {
+      expect(shouldRunEviction({ state, evidence: 'session', alreadyEvicting: false })).toBe(
+        false,
+      );
+    }
+  });
+
+  it('evicts at most once per transition', () => {
+    expect(
+      shouldRunEviction({ state: 'disabled', evidence: 'session', alreadyEvicting: true }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * WHICH auth events mean "this device LOST a session", as opposed to "this
+ * device does not have one".
+ *
+ * auth-js delivers INITIAL_SESSION to every new subscriber, with a null session
+ * on a device that has never signed in (GoTrueClient's `callback('INITIAL_SESSION',
+ * null)`). Latching the signed-out destination on `!session` therefore fired on
+ * a FRESH INSTALL and sent every first-run user to the sign-in screen —
+ * `/(auth)/welcome`, the marketing screen, became unreachable at launch.
+ *
+ * A genuinely revoked session is different: auth-js drops it inside its own
+ * initialize() via `_removeSession()`, which notifies SIGNED_OUT. That event is
+ * the only trace a relaunch has, and it is the one that must latch.
+ */
+describe('isInvoluntarySessionEnd', () => {
+  it('a fresh install is not a lost session', () => {
+    expect(isInvoluntarySessionEnd('INITIAL_SESSION', false)).toBe(false);
+  });
+
+  it('a dropped session is', () => {
+    expect(isInvoluntarySessionEnd('SIGNED_OUT', false)).toBe(true);
+  });
+
+  it('ignores every other null-session event', () => {
+    for (const event of ['TOKEN_REFRESHED', 'USER_UPDATED', 'PASSWORD_RECOVERY']) {
+      expect(isInvoluntarySessionEnd(event, false)).toBe(false);
+    }
+  });
+
+  it('never latches while a session is still in hand', () => {
+    expect(isInvoluntarySessionEnd('SIGNED_OUT', true)).toBe(false);
+    expect(isInvoluntarySessionEnd('INITIAL_SESSION', true)).toBe(false);
+  });
+
+  it('leaves a signed-out cold launch on the marketing screen', () => {
+    __resetSessionEndedForTests();
+    if (isInvoluntarySessionEnd('INITIAL_SESSION', false)) markSessionEnded();
+    expect(signedOutRoute()).toBe(AUTH_WELCOME_ROUTE);
+  });
+
+  it('still sends a revoked relaunch to sign-in', () => {
+    __resetSessionEndedForTests();
+    if (isInvoluntarySessionEnd('SIGNED_OUT', false)) markSessionEnded();
+    expect(signedOutRoute()).toBe(AUTH_SIGN_IN_ROUTE);
+  });
+});
+
+/**
+ * A GoTrue 5xx must not blockade an offline-first app.
+ *
+ * `unverified` used to replace the whole app with a retry button, so an
+ * identity-server blip cut a warehouse phone off from its own SQLite cache and
+ * its own outbox — the two things built to work without a server. It is now a
+ * background condition: the app runs on its cached session and re-probes on a
+ * backoff until the answer lands.
+ */
+describe('unverifiedRetryDelayMs', () => {
+  it('retries soon enough to clear a blip on its own', () => {
+    expect(unverifiedRetryDelayMs(0)).toBe(UNVERIFIED_RETRY_DELAYS_MS[0]);
+    expect(unverifiedRetryDelayMs(0)).toBeLessThanOrEqual(30_000);
+  });
+
+  it('backs off rather than hammering an already-failing identity server', () => {
+    expect(unverifiedRetryDelayMs(1)).toBeGreaterThan(unverifiedRetryDelayMs(0));
+    expect(unverifiedRetryDelayMs(2)).toBeGreaterThan(unverifiedRetryDelayMs(1));
+  });
+
+  it('caps, and stays capped for a long outage', () => {
+    const last = UNVERIFIED_RETRY_DELAYS_MS[UNVERIFIED_RETRY_DELAYS_MS.length - 1];
+    expect(unverifiedRetryDelayMs(UNVERIFIED_RETRY_DELAYS_MS.length)).toBe(last);
+    expect(unverifiedRetryDelayMs(9_999)).toBe(last);
+  });
+
+  it('never schedules a zero or negative timer', () => {
+    for (const attempt of [-5, -1, 0, 1, 4, 40]) {
+      expect(unverifiedRetryDelayMs(attempt)).toBeGreaterThan(0);
+    }
   });
 });

@@ -13,6 +13,7 @@ import {
   totalPendingCount,
 } from './cycle-count-cache';
 import { classifyDrainFailure } from './drain-failure';
+import { countRejected } from './queue';
 
 /**
  * Cycle-count sync engine.
@@ -42,6 +43,14 @@ export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'failing';
 export interface SyncSnapshot {
   status: SyncStatus;
   pendingCount: number;
+  /**
+   * Terminally REJECTED rows still on the device — work that was queued, will
+   * never be sent, and has to stop being invisible. The badge said "All synced"
+   * over the top of it, because `pendingCount` (correctly) excludes a row no
+   * drain will ever read again. Counted separately so the badge can tell the
+   * truth without the drains ever seeing these rows.
+   */
+  rejectedCount: number;
   lastError: string | null;
   lastSyncAt: number | null;
 }
@@ -51,6 +60,7 @@ type Listener = (snap: SyncSnapshot) => void;
 class CycleCountSyncEngine {
   private status: SyncStatus = 'idle';
   private pendingCount = 0;
+  private rejectedCount = 0;
   private lastError: string | null = null;
   private lastSyncAt: number | null = null;
   private listeners = new Set<Listener>();
@@ -108,6 +118,7 @@ class CycleCountSyncEngine {
     return {
       status: this.status,
       pendingCount: this.pendingCount,
+      rejectedCount: this.rejectedCount,
       lastError: this.lastError,
       lastSyncAt: this.lastSyncAt,
     };
@@ -120,7 +131,22 @@ class CycleCountSyncEngine {
    */
   async refreshPendingCount(): Promise<void> {
     this.pendingCount = await totalPendingCount();
+    this.rejectedCount = await this.safeRejectedCount();
     this.emit();
+  }
+
+  /**
+   * The rejected tally must never be able to break a drain: it is display-only,
+   * and a failed count is answered with the last known value rather than an
+   * exception thrown out of the sync lifecycle.
+   */
+  private async safeRejectedCount(): Promise<number> {
+    try {
+      return await countRejected();
+    } catch (e) {
+      console.warn('[cycle-count-sync] rejected count failed', e);
+      return this.rejectedCount;
+    }
   }
 
   /** Force a drain attempt now (badge tap, pull-to-refresh). */
@@ -148,6 +174,7 @@ class CycleCountSyncEngine {
     if (this.inFlight) return;
     const online = await this.isOnline();
     this.pendingCount = await totalPendingCount();
+    this.rejectedCount = await this.safeRejectedCount();
     if (!online) {
       this.status = 'offline';
       this.emit();
@@ -222,6 +249,7 @@ class CycleCountSyncEngine {
       }
 
       this.pendingCount = await totalPendingCount();
+      this.rejectedCount = await this.safeRejectedCount();
       if (this.status !== 'offline') {
         // 'failing' means "still retrying". A rejected row will never be
         // retried, so the engine is genuinely idle afterwards.

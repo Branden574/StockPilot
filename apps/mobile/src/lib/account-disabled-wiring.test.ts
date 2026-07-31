@@ -118,7 +118,7 @@ describe('a revoked device can still find out what happened', () => {
 
   it('sign-in remains the path that CONFIRMS a disable', () => {
     expect(authContext).toContain("(error as { code?: string }).code === 'user_banned'");
-    expect(authContext).toContain('setAccountDisabled(true)');
+    expect(authContext).toContain("setAccountDisabled(true, 'sign-in')");
   });
 
   it('the outbox is rejected from the gate transition BOTH paths end at', () => {
@@ -126,9 +126,52 @@ describe('a revoked device can still find out what happened', () => {
     // rejection site, driven by the transition into `disabled`, so neither
     // path can be the one that silently stops rejecting.
     expect(gate).toContain('rejectAllPending(ACCOUNT_DISABLED_REJECTION)');
-    const evictionEffect = gate.slice(gate.indexOf("if (state !== 'disabled'"));
+    const evictionEffect = gate.slice(gate.indexOf('shouldRunEviction({'));
     expect(evictionEffect).toContain('rejectAllPending');
     expect(code(revocation)).not.toContain('rejectAllPending');
+  });
+});
+
+/**
+ * THE UNAUTHENTICATED DATA-DESTRUCTION BUG.
+ *
+ * The eviction terminally rejects THIS DEVICE's offline outbox and wipes its
+ * cache. It hung off the transition into `disabled` alone — and one path into
+ * that transition is a FAILED sign-in, because GoTrue evaluates the ban BEFORE
+ * the password. Anyone who could reach the sign-in screen and knew one disabled
+ * colleague's address could therefore destroy whatever queued warehouse work
+ * was on the device, with no credentials at all; and after "Use password
+ * instead" on the biometric lock (signOutToFallback, which deliberately does
+ * not wipe), that work routinely belongs to a different, healthy user.
+ *
+ * The screen may still be raised from either path. The EVICTION may only follow
+ * a verdict attributed to this device's own session.
+ */
+describe('only a verdict about THIS device may destroy its queued work', () => {
+  it('the sign-in rejection is attributed to the sign-in, not to the session', () => {
+    expect(authContext).toContain("setAccountDisabled(true, 'sign-in')");
+    expect(code(authContext)).not.toContain('setAccountDisabled(true)');
+  });
+
+  it('the eviction asks the precondition, not just the gate state', () => {
+    expect(gate).toContain("import {");
+    expect(gate).toContain('shouldRunEviction');
+    expect(gate).toContain('getDisableEvidence');
+    expect(flat(gate)).toContain(
+      'shouldRunEviction({ state, evidence: getDisableEvidence(), alreadyEvicting: evicting.current, })',
+    );
+    // The bare state check is exactly what was wrong: it cannot tell a verdict
+    // about this device from an email somebody typed.
+    expect(code(gate)).not.toContain("if (state !== 'disabled' || evicting.current) return;");
+  });
+
+  it('a successful password grant takes a stale gate back down', () => {
+    // GoTrue refuses a banned user before it checks the password, so a sign-in
+    // that SUCCEEDED is proof the account is fine. Without this, a gate raised
+    // by somebody else's rejected attempt would meet the next healthy user
+    // with the disabled screen.
+    const signInFn = authContext.slice(authContext.indexOf("const signIn: AuthState['signIn']"));
+    expect(signInFn).toContain('resetAccountDisabled();');
   });
 });
 
@@ -151,14 +194,31 @@ describe('the gate renders above every other gate', () => {
     expect(rootLayout).toContain("if (loading || accountGate.state === 'disabled') return;");
   });
 
-  it('renders the RETRYABLE screen for an unreadable status, never the disabled one', () => {
-    expect(rootLayout).toContain("accountGate.state === 'unverified'");
-    expect(rootLayout).toContain('<AccountStatusUnverifiedScreen');
-    // The transient screen must not be reachable through the disabled branch.
-    const unverifiedBranch = rootLayout.slice(
-      rootLayout.indexOf("accountGate.state === 'unverified'"),
-    );
-    expect(unverifiedBranch).not.toContain('AccountDisabledScreen');
+  /**
+   * An UNREADABLE status must not blockade an offline-first app.
+   *
+   * It used to render a full-screen "Something went wrong / Try again" for any
+   * signed-in user, so a GoTrue 5xx — which says nothing about the account —
+   * cut a warehouse phone off from its SQLite cache and its offline outbox, the
+   * two things built to work without a server, for the length of the incident.
+   * Only a CONFIRMED disable blocks now; the unreadable case runs on the cached
+   * session and re-probes in the background.
+   */
+  it('never blocks the app on a status it merely could not read', () => {
+    expect(code(rootLayout)).not.toContain('AccountStatusUnverifiedScreen');
+    expect(code(rootLayout)).not.toMatch(/accountGate\.state === 'unverified'/);
+    expect(code(screen)).not.toContain('export function AccountStatusUnverifiedScreen');
+  });
+
+  it('re-probes an unreadable status in the background instead', () => {
+    expect(gate).toContain('unverifiedRetryDelayMs');
+    const loop = gate.slice(gate.indexOf("if (state !== 'unverified') return;"));
+    expect(loop).toContain('probeNow()');
+    expect(loop).toContain('clearTimeout');
+    // 'unverified' remains a real gate state — collapsing it into 'disabled'
+    // was the critical defect on the web side.
+    expect(evictionSrc).toContain("case 'unavailable':");
+    expect(evictionSrc).toContain("return 'unverified'");
   });
 });
 
@@ -195,18 +255,19 @@ describe('the screen says exactly what the web screen says', () => {
     if (screen.includes('ACCENT')) expect(screen).toMatch(/ACCENT\.[a-zA-Z]/);
   });
 
-  it('does not tell an unverified user to contact their administrator', () => {
-    const transient = screen.slice(screen.indexOf('export function AccountStatusUnverifiedScreen'));
-    expect(transient).not.toContain('ACCOUNT_DISABLED_MESSAGE');
-    expect(transient).not.toContain('ACCOUNT_DISABLED_TITLE');
-    expect(transient).toContain('try again');
+  it('is the ONLY screen this file ships — the transient twin blocked the app', () => {
+    // It offered one control, "Try again", above every app surface, so an
+    // identity-server blip denied a warehouse device its own offline work while
+    // the screen's footer read "YOUR OFFLINE WORK IS SAFE".
+    expect(code(screen)).not.toContain('YOUR OFFLINE WORK IS SAFE');
+    expect((code(screen).match(/export function /g) ?? []).length).toBe(1);
   });
 });
 
 describe('the paths that can raise the gate', () => {
   it('sign-in trusts the structured code only, and answers with the shared copy', () => {
     expect(authContext).toContain("(error as { code?: string }).code === 'user_banned'");
-    expect(authContext).toContain('setAccountDisabled(true)');
+    expect(authContext).toContain("setAccountDisabled(true, 'sign-in')");
     expect(authContext).toContain('return { error: ACCOUNT_DISABLED_MESSAGE };');
   });
 
@@ -232,12 +293,25 @@ describe('the paths that can raise the gate', () => {
   it('an involuntary SIGNED_OUT routes to sign-in; a deliberate one does not', () => {
     // auth-js drops a REVOKED session inside its own initialize(), before
     // getSession() returns, so on a relaunch this event is the only trace that
-    // the device ever had one. Default involuntary; the two deliberate exits
-    // withdraw it so a user who chose to leave still gets the marketing screen.
+    // the device ever had one. The two deliberate exits withdraw the latch so a
+    // user who chose to leave still gets the marketing screen.
     expect(authContext).toContain('markSessionEnded();');
     expect((authContext.match(/clearSessionEnded\(\);/g) ?? []).length).toBe(2);
     const signOutFns = authContext.slice(authContext.indexOf("const signOut: AuthState['signOut']"));
     expect(signOutFns).toContain('clearSessionEnded();');
+  });
+
+  it('a device that never had a session still gets the MARKETING screen', () => {
+    // auth-js hands every new subscriber an INITIAL_SESSION event, with a null
+    // session on a fresh install. Latching on `!s?.user` fired there too, so
+    // /(auth)/welcome became unreachable at launch for every first-run user —
+    // and the latch is read by RootGate's redirect, which cannot tell why.
+    expect(authContext).toContain('isInvoluntarySessionEnd(event, Boolean(s?.user))');
+    const signedOutBranch = code(authContext).slice(
+      code(authContext).indexOf("if (event === 'SIGNED_OUT'"),
+      code(authContext).indexOf("if (event === 'SIGNED_IN')"),
+    );
+    expect(signedOutBranch).not.toMatch(/^\s*markSessionEnded\(\);/m);
   });
 
   it('a SIGNED_OUT event does not clear the gate', () => {

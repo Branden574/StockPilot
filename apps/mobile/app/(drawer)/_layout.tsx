@@ -65,6 +65,12 @@ export default function DrawerLayout() {
         name="settings/customize-tabs"
         options={{ drawerLabel: 'Customize tab bar', drawerItemStyle: { display: 'none' } }}
       />
+      {/* Reached from Settings only — an unregistered route would otherwise be
+          auto-added to the drawer under its raw file path. */}
+      <Drawer.Screen
+        name="settings/rejected-work"
+        options={{ drawerLabel: 'Unsent work', drawerItemStyle: { display: 'none' } }}
+      />
       <Drawer.Screen
         name="admin/index"
         options={{ drawerLabel: 'Admin overview', drawerItemStyle: { display: 'none' } }}

@@ -4,10 +4,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import {
-  AccountDisabledScreen,
-  AccountStatusUnverifiedScreen,
-} from '@/components/account-disabled-screen';
+import { AccountDisabledScreen } from '@/components/account-disabled-screen';
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
@@ -18,6 +15,7 @@ import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import { pruneRejected } from '@/lib/queue';
 import { initSentry, Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
 import { useAccountGate } from '@/lib/use-account-gate';
@@ -52,6 +50,13 @@ function RootLayout() {
     void (async () => {
       try {
         await initDb();
+        // RETENTION for terminally rejected offline work. Those rows are kept
+        // on purpose (wipeForSignOut spares them) so the operator and support
+        // can still see what was never sent — but "kept" cannot mean "kept
+        // forever": on a shared warehouse device they would otherwise
+        // accumulate for the life of the install, carrying one user's payloads
+        // past every later sign-in. Best-effort and never fatal.
+        await pruneRejected();
       } catch (e) {
         console.warn('[init] db init failed', e);
       }
@@ -188,14 +193,14 @@ function RootGate() {
     return <AccountDisabledScreen />;
   }
 
-  // A status we could NOT read is not a disable. Same distinction the web guard
-  // draws with AccountStatusUnavailableError: this is transient and retryable,
-  // and it must never show the disabled copy to someone whose account is fine.
-  // Session-scoped, so a server blip never blocks the sign-in screen.
-  if (!loading && session && accountGate.state === 'unverified') {
-    return <AccountStatusUnverifiedScreen onRetry={accountGate.retry} busy={accountGate.busy} />;
-  }
-
+  // A status we could NOT read ('unverified') deliberately renders NOTHING of
+  // its own. It used to replace the whole app with a retry button, which meant
+  // a GoTrue 5xx — an identity-server blip that says nothing about this account
+  // — cut a warehouse phone off from its SQLite cache and its offline outbox,
+  // the two things built to keep working without a server. The app now proceeds
+  // on its cached session while useAccountGate re-probes in the background; only
+  // a DEFINITIVE disabled verdict blocks, above.
+  //
   // MFA gate takes precedence over the biometric lock: a fresh password
   // sign-in that owes a TOTP code must complete it before anything else.
   if (!loading && session && mfaRequired) {

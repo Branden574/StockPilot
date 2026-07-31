@@ -1,12 +1,12 @@
-import { Lock, WifiOff } from 'lucide-react-native';
+import { Lock } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
-import { Body, Display, Mono } from '@/components/ui/text';
+import { Body, Display } from '@/components/ui/text';
 import { setAccountDisabled } from '@/lib/account-disabled-state';
 import { useAuth } from '@/lib/auth-context';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/core';
@@ -82,69 +82,22 @@ export function AccountDisabledScreen() {
 }
 
 /**
- * The transient twin, and the reason it exists.
+ * There is deliberately NO transient twin any more.
  *
- * On the web, an UNREADABLE account status throws
- * AccountStatusUnavailableError instead of redirecting to the disabled screen,
- * because the disabled copy is owner-approved wording about contacting an
- * administrator and it must never be shown to someone whose account is fine.
- * Mobile keeps the same distinction: only GoTrue's structured `user_banned`
- * reaches AccountDisabledScreen; an identity server that answered with its own
- * 5xx lands HERE, worded as transient and retryable.
+ * An unreadable account status ('unverified') used to render a full-screen
+ * "Something went wrong / Try again" here, mirroring the web guard's
+ * AccountStatusUnavailableError. On a phone that was the wrong translation: a
+ * GoTrue 5xx says nothing about the account, but the screen blocked the entire
+ * app — including the SQLite cache and the offline outbox built to work without
+ * a server — with no escape but going offline hard enough for the probe to
+ * classify as 'unknown'. Its own footer read "YOUR OFFLINE WORK IS SAFE" while
+ * denying access to it.
+ *
+ * The gate state survives and is now handled where it belongs: the app runs on
+ * its cached session and useAccountGate re-probes in the background until the
+ * identity server answers. Only a CONFIRMED disable renders a screen, and this
+ * is that screen.
  */
-export function AccountStatusUnverifiedScreen({
-  onRetry,
-  busy = false,
-}: {
-  onRetry: () => void;
-  busy?: boolean;
-}) {
-  const { c } = useTheme();
-
-  return (
-    <AuthShell>
-      <View style={styles.iconWrap}>
-        <View style={[styles.iconRing, { borderColor: c.hair }]}>
-          <WifiOff size={28} color={c.ink} strokeWidth={1.5} />
-        </View>
-      </View>
-
-      <Display size={28} accessibilityRole="header">
-        Something went wrong
-      </Display>
-      <Body muted style={styles.message}>
-        We could not check your account just now. This is usually temporary —
-        try again in a moment.
-      </Body>
-
-      <Pressable
-        accessibilityRole="button"
-        onPress={onRetry}
-        disabled={busy}
-        style={({ pressed }) => [
-          styles.action,
-          {
-            borderColor: c.ink,
-            backgroundColor: c.ink,
-            opacity: busy ? 0.5 : pressed ? 0.8 : 1,
-          },
-        ]}
-      >
-        {busy ? (
-          <ActivityIndicator color={c.paper} />
-        ) : (
-          <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
-            Try again
-          </Body>
-        )}
-      </Pressable>
-
-      <Mono size={12} tracking={0.04} color={ACCENT.mint} style={styles.reassure}>
-        YOUR OFFLINE WORK IS SAFE
-      </Mono>
-    </AuthShell>
-  );
-}
 
 const styles = StyleSheet.create({
   iconWrap: {
@@ -168,9 +121,5 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
-  },
-  reassure: {
-    marginTop: 18,
-    alignSelf: 'center',
   },
 });

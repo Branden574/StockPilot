@@ -4,6 +4,7 @@ import {
   __resetAccountGateForTests,
   getAccountDisabled,
   getAccountGateState,
+  getDisableEvidence,
   resetAccountDisabled,
   setAccountDisabled,
   setAccountGateState,
@@ -111,5 +112,52 @@ describe('account gate state', () => {
 
     expect(getAccountGateState()).toBe('disabled');
     expect(seen).toHaveBeenCalledWith('disabled');
+  });
+});
+
+/**
+ * WHOSE verdict is it?
+ *
+ * The gate is raised from two very different places. A probe (or a corroborated
+ * eviction broadcast) answers about the session THIS DEVICE is holding. A
+ * password grant typed at the sign-in screen answers about whatever email was
+ * typed — by anyone, with any password, since GoTrue evaluates the ban before
+ * the password. Only the first may drive the eviction, which terminally rejects
+ * the device's offline outbox, so the state has to carry which one it was.
+ */
+describe('how the disabled verdict was established', () => {
+  beforeEach(() => __resetAccountGateForTests());
+
+  it('has no evidence at rest', () => {
+    expect(getDisableEvidence()).toBeNull();
+  });
+
+  it('attributes a probe/broadcast verdict to this device session', () => {
+    setAccountGateState('disabled');
+    expect(getDisableEvidence()).toBe('session');
+  });
+
+  it('records a sign-in rejection as exactly that', () => {
+    setAccountDisabled(true, 'sign-in');
+    expect(getAccountGateState()).toBe('disabled');
+    expect(getDisableEvidence()).toBe('sign-in');
+  });
+
+  it('forgets the evidence the moment the gate leaves disabled', () => {
+    setAccountDisabled(true, 'sign-in');
+    setAccountDisabled(false);
+    expect(getDisableEvidence()).toBeNull();
+  });
+
+  it('does not let a stale sign-in verdict outlive a re-raise from the session', () => {
+    setAccountDisabled(true, 'sign-in');
+    resetAccountDisabled();
+    setAccountGateState('disabled');
+    expect(getDisableEvidence()).toBe('session');
+  });
+
+  it('carries no evidence for the transient state', () => {
+    setAccountGateState('unverified');
+    expect(getDisableEvidence()).toBeNull();
   });
 });
