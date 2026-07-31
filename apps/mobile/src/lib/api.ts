@@ -40,6 +40,32 @@ function resolveApiUrl(): string {
 
 const API_URL = resolveApiUrl();
 
+/**
+ * Typed API failure. The app used to throw a bare Error with the message only,
+ * so no caller could tell a 401 from a 500 — which is why nothing signed out on
+ * auth failure and why the offline outbox retried a permanently rejected write
+ * forever.
+ *
+ * `message` is unchanged from the previous behaviour and remains the ONLY thing
+ * that should ever be shown to a person; `status` and `code` are for control
+ * flow. `code` is whatever our JSON body put in `error`; most routes send a
+ * machine code (`'unauthenticated'`, `'internal_error'`), a few still send a
+ * sentence (`'isbn is required'`), so treat it as a HINT and never render it —
+ * and never key a permanent-failure decision off it. HTTP status is the only
+ * uniformly trustworthy field.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -108,12 +134,14 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       // can act on.
       const raw = await res.text().catch(() => '');
       let message: string | null = null;
+      let code: string | undefined;
       if (raw.trimStart().startsWith('{')) {
         try {
           const body = JSON.parse(raw) as { message?: unknown; error?: unknown };
           const m = typeof body.message === 'string' ? body.message : null;
           const e = typeof body.error === 'string' ? body.error : null;
           message = m ?? e;
+          code = e ?? undefined;
         } catch {
           message = null;
         }
@@ -128,7 +156,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
                 ? 'The server had a problem. Try again in a moment.'
                 : `Request failed (${res.status}).`;
       }
-      throw new Error(message);
+      throw new ApiError(message, res.status, code);
     }
     return (await res.json()) as T;
   } catch (err) {

@@ -104,4 +104,24 @@ describe('the real helper still keeps this contract', () => {
     expect(src).toContain('The server had a problem. Try again in a moment.');
     expect(src).toContain('That is not available on this version of the app.');
   });
+
+  it('throws a typed ApiError carrying the status', () => {
+    expect(src).toContain('export class ApiError extends Error');
+    expect(src).toContain('readonly status: number');
+    expect(src).toContain('readonly code?: string');
+    expect(src).toContain('throw new ApiError(');
+  });
+
+  it('still never throws a bare Error for a failed response', () => {
+    // The old shape was `throw new Error(message)` inside the !res.ok branch.
+    const failureBranch = src.slice(src.indexOf('if (!res.ok)'), src.indexOf('return (await res.json())'));
+    expect(failureBranch).not.toContain('throw new Error(');
+  });
+
+  it('keeps the fallback sentences byte-identical', () => {
+    expect(src).toContain('You do not have access to that.');
+    expect(src).toContain('That is not available on this version of the app. Update the app and try again.');
+    expect(src).toContain('The server had a problem. Try again in a moment.');
+    expect(src).toContain('`Request failed (${res.status}).`');
+  });
 });
