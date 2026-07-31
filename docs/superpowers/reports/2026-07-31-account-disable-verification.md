@@ -5,6 +5,28 @@
 **Verdict:** the four local gates are green; the scenario is **NOT fully green**. Four scenario
 lines fail and two more pass only partially. Details and evidence below — nothing here is inferred.
 
+> ## UPDATE — 2026-07-31, after the fix (`4adde5f0`, `cd50d43a`)
+>
+> The four FAIL/PARTIAL lines this report raised were fixed and the affected legs were **re-run
+> against the same local stack**, using the same env-swap discipline recorded in
+> [Environment and safety](#environment-and-safety). The re-run results are in
+> [Re-run after the fix](#re-run-after-the-fix-2026-07-31) at the end of this document.
+>
+> | Line | Original | After the fix |
+> |---|---|---|
+> | 5. Instant eviction — mobile | **FAIL** | **PASS** (re-run on device) |
+> | 10. Token refresh blocked | PARTIAL | **PASS** (re-run) |
+> | 11. Offline replay rejected | **FAIL** | **PASS** (re-run on device) |
+> | 14. Audit trail | PARTIAL | **PASS** (re-run in the browser) |
+> | 8. Wrong password does not leak | **FAIL** | **ACCEPTED — will not fix** (owner ruling: line 7 wins) |
+> | 12 / 16. Idempotency | PARTIAL | **ACCEPTED — by design** (owner ruling: the replay row stays) |
+>
+> **New counts: 13 PASS, 0 PARTIAL, 0 open FAIL, 3 accepted-as-designed (8, 12, 16).**
+>
+> Everything below this box is the ORIGINAL report, left exactly as written. Nothing in it has been
+> edited to say PASS after the fact — the re-run is recorded separately and the original findings
+> stand as the record of what was true before the fix.
+
 **Everything in this report ran against the LOCAL stack only.** No migration was pushed, no
 production account was disabled, and no hosted project was contacted. The proof for that claim is in
 [Environment and safety](#environment-and-safety).
@@ -727,3 +749,241 @@ tab, the mobile screen after eviction, and `/platform/audit`.
 
 They are outside the repository, in the session scratchpad:
 `…/b7fc6dc0-134e-4114-b7df-23e58c2f3915/scratchpad/acctdisable-e2e/`.
+
+---
+
+## Re-run after the fix (2026-07-31)
+
+**Fix commits:** `4adde5f0` (the design change) and `cd50d43a` (three defects the simulator found
+that the unit tests could not). Both local to `feat/account-disable`; nothing pushed, no
+`supabase db push`, no production contact.
+
+Legs re-run: **5, 10, 11, 14**. Lines 1-4, 6-9, 12-13 and 15-17 were **not** re-run — the fix does
+not touch the server state machine, the web chokepoints or the reason validation, and re-running
+them would have added no information. That is stated rather than implied.
+
+### Environment for the re-run
+
+Same discipline as the original run.
+
+| File | Change for the run | Reverted |
+|---|---|---|
+| `apps/mobile/.env.local` | the three `EXPO_PUBLIC_*` keys repointed at `http://127.0.0.1:54321` / `http://localhost:3000` | **Yes** |
+| `apps/web/.env.local` | **not touched at all** — the local URL, anon key, service-role key and platform-admin allowlist were passed to `next dev` and `vitest` as inline process env, which Next.js and vitest both prefer over `.env` files | n/a |
+
+Not touching the web env file is a deliberate improvement on the original run: it sidesteps finding
+E1 entirely instead of editing and restoring a secret.
+
+Restoration verified by SHA-256 (a count of `2` for a single hash means the live file and its
+pre-run backup are byte-identical):
+
+```
+=== mobile .env.local vs backup ===
+   2 2a37ed4ec60662eb10961465ea7807ed1e28d3ee694c9c30af34defc2da8bec8
+=== web .env.local vs backup ===
+   2 dac9fb130f0bd49acb26a3a3ba6ebfabf5e364344c5166e9b90c701e53e0221f
+```
+
+Both hashes are identical to the values recorded in the original run, so the files are back to the
+same bytes they held before either run. `apps/mobile/.env.local` after the revert:
+`localhost`/`127.0.0.1` occurrences = **0**.
+
+Proof the simulator was pointed at the local stack while it mattered — read from the bundle Metro
+actually served, not assumed:
+
+```
+EXPO_PUBLIC_API_URL": { enumerable: true, value: "http://localhost:3000"
+EXPO_PUBLIC_SUPABASE_URL": { enumerable: true, value: "http://127.0.0.1:54321"
+```
+
+Corroborated behaviourally: the home screen rendered the local fixture data (`Acme Demo Co`,
+2 SKUs, `$900`), which exists only in the local database. The same two local accounts were used;
+Demo Co was not touched. The member was left **ACTIVE** and both accounts verified so afterwards.
+
+### Line 5 — Instant eviction, mobile — **PASS**
+
+Two distinct paths, both hand-tested on the iOS simulator (iPhone 17 Pro, iOS 26.5).
+
+**(a) CONNECTED device.** With the app in the foreground and signed in, a real
+`disableUserAccount` was run against the local database. Observed on the device: the
+**disabled screen**, with the owner-approved copy read off the screen —
+
+```
+Your account has been temporarily disabled
+Your StockPilot account has been temporarily disabled. Please contact your system administrator for assistance.
+Sign out
+```
+
+— and **no** "You were signed out from another device." alert. That alert is what the device showed
+before the fix, and it was the visible symptom of this line's failure.
+
+The mechanism, captured live rather than inferred. The eviction broadcast now carries the reason,
+subscribed to as it was emitted:
+
+```
+broadcast payload received = {"keepId":null,"reason":"account_disabled"}
+```
+
+and the probe that corroborates it, with the real GoTrue answer:
+
+```
+GET /auth/v1/user  (pre-disable token)  -> 403
+{"code":403,"error_code":"session_not_found","msg":"Session from session_id claim in JWT does not exist"}
+
+classifyAuthProbe                       = signed-out
+gateForRevocation(claims=true, probe=signed-out) = disabled
+gateForRevocation(claims=true, probe=active)     = null   ← a forged reason is refused
+```
+
+**(b) RELAUNCH / OFFLINE device.** The app was **killed** first, so it could not receive the
+broadcast at all, then the account was disabled, then the app was relaunched. Observed: the app
+lands on the **sign-in screen** —
+
+```
+[trace] redirect -> /(auth)/sign-in  segments=["(drawer)","(tabs)"]
+```
+
+— not the marketing screen it landed on before the fix. Signing in there produced the disabled
+screen with the same exact copy, from the pre-existing `user_banned` branch:
+
+```
+POST /auth/v1/token?grant_type=password -> 400
+{"code":400,"error_code":"user_banned","msg":"User is banned"}
+```
+
+So the brief's mobile bullets are met as follows, stated plainly:
+
+| Brief bullet | Satisfied |
+|---|---|
+| The device leaves its session promptly | **Directly**, both paths |
+| The dedicated disabled screen with the approved copy | **Directly** when connected; **after one sign-in attempt** on a relaunched or offline device |
+| The user is told to contact their administrator | Same as above |
+| Queued offline work is terminally rejected | **Directly** in both paths (line 11) |
+
+The one-extra-step case is not a shortfall being excused. A revoked client cannot read its own
+account status — GoTrue answers `session_not_found` to everything it asks — so on a relaunch the
+device genuinely does not yet know whether it was disabled or simply signed out elsewhere. It says
+so by asking for a sign-in, and the sign-in is what learns the truth.
+
+### Line 10 — Token refresh blocked — **PASS**
+
+The observed code is still `refresh_token_not_found` rather than `user_banned`, for the reason the
+original report gives (the refresh row cascades on the session delete). That is now handled under
+the same honest logic as `session_not_found` instead of being an unclassified gap:
+
+```
+POST /auth/v1/token?grant_type=refresh_token -> 400
+{"code":400,"error_code":"refresh_token_not_found","msg":"Invalid Refresh Token: Refresh Token Not Found"}
+
+classifyAuthProbe = signed-out
+```
+
+Recorded as a pass rather than a partial because the scenario's intent — the refresh is blocked AND
+the client reacts correctly — is now fully met. The literal code differs from the scenario's wording
+and always will; the wording is what is wrong there, and the security outcome is the stronger one.
+
+### Line 11 — Offline replay rejected — **PASS**
+
+Re-run with the **same two rows the original run left behind**, which is the strongest available
+continuity. State immediately before the disable, read from the app's SQLite on the simulator:
+
+```
+id  kind               status  attempts
+1   record_count       failed  11
+2   distribute_bundle  failed  15
+```
+
+Both `failed` — retryable — with `attempts` still climbing, exactly as the original report
+described. After the disable, on the same device:
+
+```
+id  kind               status    attempts  last_error
+1   record_count       rejected  11        Account disabled: this queued change was never sent.
+2   distribute_bundle  rejected  15        Account disabled: this queued change was never sent.
+```
+
+Both rows **terminally rejected**, both **preserved**, both carrying the self-explanatory sentence.
+`listPending()` selects only `pending`/`failed`, so they are no longer live work and cannot replay
+after a re-enable — this time structurally, not by the timing accident the original report was
+careful not to claim as a pass.
+
+Also confirmed on the relaunch path: the rows were still `rejected` after the app was killed,
+relaunched and signed into, so rejection survives the route that does not involve the broadcast.
+
+### Line 14 — Audit trail — **PASS**
+
+Re-run in the browser, signed in as the allowlisted platform admin at AAL2 (TOTP step-up
+completed). `/platform/audit` now renders six columns, read back off the rendered page:
+
+```
+headers: WHEN | ACTOR | ACTION | TARGET USER | REASON | TARGET ORG
+
+7/31/2026, 2:02:28 PM | platform.admin@local.example.com | Re-enabled account |
+  member.user@local.example.com | — | —
+7/31/2026, 2:02:26 PM | platform.admin@local.example.com | Disabled account   |
+  member.user@local.example.com | Security investigation — E2E re-run after the L5/L11 fix | —
+7/31/2026, 1:24:55 PM | platform.admin@local.example.com | Disabled account   |
+  member.user@local.example.com | Security investigation — Task 12 scenario line 4 — scripted disable | —
+```
+
+The third row is the **original run's own line-4 disable** — the row this report said an operator
+could not review — now showing both the target user and the reason. The actor is still the actor;
+the target is resolved from `user_profiles` in one batched lookup and falls back to the uuid if the
+lookup fails, so a degraded name column can never blank out the trail itself.
+
+### The two lines that were NOT fixed, and why
+
+**Line 8 — accepted, will not fix.** GoTrue checks the ban *before* it verifies the password, so a
+wrong password on a disabled account still reveals the disabled state. Lines 7 and 8 are mutually
+unsatisfiable as written and the brief's behaviour (line 7 — the dedicated screen on a correct
+password) wins. The oracle is reachable with the public anon key regardless of what the app does, so
+closing it in the app would buy nothing. Recorded as known and accepted.
+
+**Lines 12 / 16 — accepted, by design.** A second `user_disabled` row on a repeat disable is
+deliberate. The healing path re-attempts the audit write on purpose; that is what closed an earlier
+bug where a lost audit row became a permanently lost one. The replay row is honestly marked
+`already_disabled: true`. The scenario's wording is what is wrong here.
+
+### What the simulator caught that the unit tests could not
+
+Recorded because it is the most useful thing in this re-run. The first fix commit was correct
+against the wire format and wrong against the client library and the navigator. Three defects
+surfaced in sequence on the device, each hiding the next:
+
+1. **gotrue-js never surfaces `session_not_found`.** auth-js 2.105.1's `handleError` singles that one
+   code out and rethrows `AuthSessionMissingError`, whose constructor passes `undefined` for the
+   code. The exact case this feature turns on reached the app as
+   `{ name: 'AuthSessionMissingError', code: undefined, status: 400 }`, and a code-only classifier
+   answered `'unknown'` — the original defect, one layer down.
+2. **The destination was staked too late.** gotrue-js awaits `_removeSession()` — which notifies
+   `SIGNED_OUT` — from *inside* `getUser()`, so the redirect had already chosen a screen before the
+   probe returned.
+3. **The latch was read-and-clear, and the redirect effect runs more than once.** It depends on
+   `segments`, which have not settled when it re-runs after the first `replace`, so the second pass
+   saw a spent latch and overwrote sign-in with the marketing screen.
+
+Plus, on relaunch, auth-js discards a revoked session inside its own `initialize()` before
+`getSession()` returns, so the hydrate sees no session at all and never probes.
+
+Every one of these is now pinned by a test that models what actually arrives rather than what the
+protocol says. None of them would have been found without booting the simulator.
+
+### Gates after the fix
+
+```
+pnpm test
+  @stockpilot/core:test:    Test Files  40 passed (40)   Tests   709 passed (709)
+  @stockpilot/mobile:test:  Test Files  46 passed (46)   Tests   937 passed (937)
+  @stockpilot/web:test:     Test Files 393 passed (393)  Tests  4170 passed (4170)
+  Tasks: 3 successful, 3 total   EXIT=0
+
+pnpm typecheck    Tasks: 3 successful, 3 total   EXIT=0
+pnpm lint         0 errors, 102 warnings (74 mobile + 28 web)
+```
+
+5,816 tests, up from 5,768. The 102 lint warnings are all pre-existing: mobile was verified at 74
+both before and after this work by linting the stashed tree, and web is the same 28 the original
+report recorded.
+
+`pnpm db:test` was **not** re-run: this fix adds no migration and touches no SQL, so the pgTAP
+result recorded in Gate 1 stands unchanged.
