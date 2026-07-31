@@ -228,16 +228,20 @@ as a result.
 The table above describes the **product surfaces**. The **database boundary is wider than the UI**:
 
 `user_profiles_select_orgmates` (`supabase/migrations/0003_rls.sql:33-45`) is a row-level policy with
-no column restriction, and no migration in this repo issues a column-level `GRANT` on
-`user_profiles`. Postgres RLS filters rows, not columns. So an authenticated org-mate holding a valid
-token can, in principle, read `disabled_at`, `disabled_reason` and `disabled_by` for a co-member by
-querying PostgREST directly — even though nothing in the web or mobile product ever selects those
-columns.
+no column restriction. Postgres RLS filters rows, not columns. So an authenticated org-mate holding a
+valid token could read `disabled_at`, `disabled_reason` and `disabled_by` for a co-member by querying
+PostgREST directly — even though nothing in the web or mobile product ever selects those columns.
 
-Stated precisely: this is **read from the policy text and the absence of any column GRANT in
-`supabase/migrations`. It was not confirmed with a live probe in this program.** It is recorded here so
-the matrix is honest about what enforces what, and it is carried into §8 as an addendum rather than
-silently omitted.
+**This was subsequently probed, it reproduced, and it is now fixed.** The paragraph above originally
+ended by conceding it was read from the policy text and *"not confirmed with a live probe"*. It has
+since been confirmed with one: a plain `staff` member read a disabled colleague's full internal reason
+and the God Admin's uid, both by naming the columns and via `select *`. **Migration 0311** closes it
+with column-level `SELECT` privileges — see **§5.4** for the mechanism and the trap in it, and §8.10
+for the disposition.
+
+So the corrected statement of the boundary is: an org-mate can still see **that** a co-member is
+disabled (`disabled_at` is deliberately retained — the enforcement guard reads it as the user), but no
+longer **why**, and no longer **who** did it. Those two columns are now readable only by `service_role`.
 
 The same policy also inlines its own membership check rather than calling one of the fifteen helpers
 migration 0310 guards, so it is one of the roughly 25 inline-membership policies that a still-tokened
@@ -602,12 +606,94 @@ own membership check rather than calling a helper (`user_profiles_select_orgmate
 those do not inherit the guard. The known consequence is bounded to profile reads within an org, and
 the write surface that mattered is covered.
 
-### 5.4 Rollback and recovery
+### 5.4 Migration 0311 — `0311_restrict_disable_reason_visibility.sql` (155 lines)
 
-- **All three are additive.** Rolling back the **code** while the migrations stay applied is safe: the
+Closes the confidentiality leak 0308 opened. This is the fix for what §8.10 recorded as an unprobed
+addendum; it was probed, it reproduced, and it is now closed.
+
+**The leak, reproduced.** `user_profiles_select_orgmates` (0003) returns the **whole row** to anyone
+sharing an organization. That was harmless while the row held name/avatar/email. 0308 added
+`disabled_at`, `disabled_reason` and `disabled_by` to that same row, and RLS is *row*-level: a policy
+that grants the row grants every column in it. Probed on the local stack as a plain `staff` member
+reading a `manager` colleague's row:
+
+```text
+set local role to 'authenticated';   -- sub = the ordinary colleague
+select disabled_reason, disabled_by from public.user_profiles where id = <peer>;
+
+ disabled_reason                                                       | disabled_by
+ Suspected account compromise — notes: credential stuffing from        | 0311beef-…-a3
+ 203.0.113.44, pending SOC review, do not notify subject               |
+```
+
+`select *` returned it too — which is exactly what PostgREST serves for `/user_profiles?select=*`. This
+violated the brief on two counts: the internal reason must never reach the disabled user (a colleague is
+strictly worse), and the God Admin identity must not be revealed.
+
+**Why column privileges and not a narrower policy.** RLS cannot express this. A policy decides which
+*rows* you may see, never which columns of them, so no edit to `user_profiles_select_orgmates` could
+hide two columns of a row it is otherwise correct to return. Column-level `GRANT`s sit *below* RLS —
+the privilege check fires before any policy is evaluated — so the fix also covers the user's **own** row
+via `user_profiles_select_self`, which is what makes "the reason is not shown to the disabled user" true
+by construction rather than by the UI declining to render it. Editing the shared policy would also have
+been the more dangerous change (recurring bug #24); 0309 declined to narrow this same policy for the
+same reason.
+
+**The trap: the obvious spelling is a silent no-op.** Measured, not assumed:
+
+```sql
+revoke select (disabled_reason, disabled_by) on public.user_profiles from authenticated;
+```
+
+reports `REVOKE`, changes nothing, and the column stays readable — `column_privileges` still showed all
+16 columns held and the select above still returned the reason. Postgres treats a table-level `SELECT`
+grant and per-column grants as **separate** privileges, and a column revoke cannot subtract from a
+table-level one; `authenticated` holds a table-level grant here from Supabase's defaults. So 0311 drops
+the table-level grant and re-grants an enumerated 14-column keep-list to `authenticated` and `anon`.
+`service_role` is untouched — the platform console reads these columns through `createAdminClient()`.
+
+**`disabled_at` is deliberately retained, and that is load-bearing.** Every enforcement funnel reads it
+with the **user's own** client, never the admin client — traced before choosing the keep list:
+
+| # | Funnel | Client for the status read |
+|---|---|---|
+| 1 | `loadSessionAndContext` (`lib/auth/session.ts:87`) | `createClient()` |
+| 2 | `withApiContext` — Bearer (`api-context.ts:232`) / cookie (`:298`) | bearer `createClient` / `createClient()` |
+| 3 | `resolvePortalContext` (`services/portal.ts:125`) | `createClient()` — `createAdminClient()` appears at `:145` but only *after* the status read |
+| 4 | QuickBooks / Sage Intacct OAuth callbacks | `createClient()` |
+| 5 | `changePasswordAction` (`actions/auth.ts:470`) | `createClient()` |
+
+All five resolve through `loadAccountStatus` or the session select, and both ask for
+`ACCOUNT_STATUS_COLUMNS = 'disabled_at'` — that column **only**. Neither reads `disabled_reason` or
+`disabled_by`. Since the guard now fails **closed**, revoking `disabled_at` would not have weakened it —
+it would have locked every user out of the entire product.
+
+**No `select('*')` site had to be fixed.** `select *` on this table now *errors* for these roles
+(asserted in pgTAP), so a wildcard read fails loudly rather than quietly. A full sweep of every
+`user_profiles` read — 63 `.from()` call sites, every PostgREST embed including the two FK-name embeds
+that never spell the table (`audit-log.ts`'s `actor:user_id`, `recovery.ts`'s `deleter:deleted_by`),
+plus web, mobile, views and RPCs — found **zero** wildcard reads. Every read names explicit columns, and
+every column named is on the keep-list. The eight `user_profiles`-reading functions in 0310 are
+`SECURITY DEFINER`, so they bypass column privileges entirely and are unaffected.
+
+**Writes are untouched on purpose.** Only `SELECT` is narrowed. 0309's `tg_pin_user_profile_disable_flags`
+already silently reverts writes to these columns from any role outside its allowlist; converting that
+into a hard permission error would change 0309's deliberate silent-revert posture and break its test plan.
+
+> **Maintenance landmine.** Because the table-level grant is gone, `authenticated`/`anon` now hold
+> `SELECT` on an *enumerated* list. **A column added to `user_profiles` later is unreadable by both
+> roles until it is added to that list.** This fails closed on purpose — a new column on a table that
+> now carries operator-only fields should be invisible until someone decides otherwise. The 0311 pgTAP
+> pins the exact expected column set, so adding a column lands as a red test naming the decision rather
+> than as a production read that fails at 3am.
+
+### 5.5 Rollback and recovery
+
+- **All four are additive.** Rolling back the **code** while the migrations stay applied is safe: the
   columns are simply unread, the trigger never fires (nothing writes those columns), and the guarded
   helpers answer FALSE for every non-disabled user, which is every user in a database where nothing
-  ever set the flag.
+  ever set the flag. 0311 is safe under a code rollback for the same reason — no code path at any
+  revision of this branch reads `disabled_reason` or `disabled_by` on a user-authed client.
 - **Rolling back the schema is the dangerous direction and must never precede a code rollback**
   (see §9). If it is ever required: drop the 0309 trigger and function; re-create the fifteen helpers
   **from 0177's definitions, not 0001's** — 0177 added the impersonation-expiry semantics, and 0310
@@ -621,7 +707,7 @@ the write surface that mattered is covered.
   a stray ban even when the CAS matches nothing (verified live, e2e line 17). No manual SQL is
   expected in any scenario.
 
-### 5.5 Compatibility
+### 5.6 Compatibility
 
 | Combination | Outcome |
 |---|---|
@@ -629,12 +715,19 @@ the write surface that mattered is covered.
 | Migrations applied + **old** code | Harmless. The columns are unread, the trigger is dormant, the helpers answer FALSE for everyone |
 | **Pre-0308 database** + this code | **TOTAL OUTAGE.** `select('… , disabled_at')` errors, the guard now fails CLOSED, and every page and API route refuses. See §9 |
 | 0308 applied, 0309/0310 not | The feature works but is defeatable: a disabled user can clear their own flag (0309's hole) and can reach PostgREST directly (0310's hole). Do not split them |
+| 0308 applied, **0311 not** | The feature works, but every org-mate can read the internal reason and the God Admin's uid off PostgREST. This is the leak 0311 exists to close — do not split them |
+| 0311 applied + **old** code | Harmless. No code at any revision of this branch reads `disabled_reason`/`disabled_by` on a user-authed client, and `disabled_at` is retained |
 
-### 5.6 Deployment order
+### 5.7 Deployment order
 
-**0308 → 0309 → 0310, in that order, before any web deploy.** A single `supabase db push --linked`
-applies them in numeric order, so no manual sequencing is needed — but the three must go together, and
-they must land **before** the build that reads `disabled_at`. Full deployment requirements in §9.
+**0308 → 0309 → 0310 → 0311, in that order, before any web deploy.** A single
+`supabase db push --linked` applies them in numeric order, so no manual sequencing is needed — but the
+four must go together, and they must land **before** the build that reads `disabled_at`. Full
+deployment requirements in §9.
+
+0311 must not be split from 0308 in particular: 0308 is the migration that puts the reason in a
+row every org-mate can read, so any window in which 0308 is applied and 0311 is not is a window in
+which the leak is live in production.
 
 ---
 
@@ -643,17 +736,19 @@ they must land **before** the build that reads `disabled_at`. Full deployment re
 75 files, +14,792 / −125 (`git diff --stat main...e01d7c7f`). Test files are listed with their
 subjects rather than separately.
 
-### Database (3 migrations, 4 pgTAP files)
+### Database (4 migrations, 5 pgTAP files)
 
 | File | What it does |
 |---|---|
 | `supabase/migrations/0308_account_disable.sql` | The three `user_profiles` columns, the `platform_admin_audit` CHECK widen, and `admin_revoke_user_sessions` |
 | `supabase/migrations/0309_pin_user_profile_disable_flags.sql` | The pin trigger that stops a disabled user clearing their own flag |
 | `supabase/migrations/0310_rls_blocks_disabled_accounts.sql` | `account_is_disabled`, the partial index, and the fifteen guarded gate helpers |
+| `supabase/migrations/0311_restrict_disable_reason_visibility.sql` | Column-level `SELECT` privileges that hide `disabled_reason`/`disabled_by` from `authenticated` and `anon` while retaining `disabled_at` (§5.4) |
 | `supabase/tests/0308_account_disable.test.sql` | plan(39) — columns, CHECK values old and new, function ACL, search_path |
 | `supabase/tests/0309_pin_user_profile_disable_flags.test.sql` | plan(28) — the revert behaves per role |
 | `supabase/tests/0310_rls_blocks_disabled_accounts.test.sql` | plan(51) — every helper, both groups, active and disabled |
-| `supabase/tests/0311_user_can_access_inventory_disable_guard.test.sql` | plan(39) — the picking-RPC gate found in the re-audit |
+| `supabase/tests/0311_user_can_access_inventory_disable_guard.test.sql` | plan(39) — the picking-RPC gate found in the re-audit. **Note the number is a misnomer**: this file tests 0310's helpers, not migration 0311. It predates 0311 existing |
+| `supabase/tests/0311_restrict_disable_reason_visibility.test.sql` | plan(27) — the grants, the exact readable column set, the org-mate refusal, the disabled user's own row, and the guard's read path |
 
 ### Shared vocabulary (`packages/core`)
 
@@ -753,6 +848,7 @@ supabase db reset && pnpm db:test
   0308_account_disable.test.sql ................................ ok
   0309_pin_user_profile_disable_flags.test.sql ................. ok
   0310_rls_blocks_disabled_accounts.test.sql ................... ok
+  0311_restrict_disable_reason_visibility.test.sql ............. ok
   0311_user_can_access_inventory_disable_guard.test.sql ........ ok
   All tests successful.
   Files=108, Tests=1526
@@ -760,11 +856,39 @@ supabase db reset && pnpm db:test
 ```
 
 Declared plans read from the files, not assumed: 0308 → **39**, 0309 → **28**, 0310 → **51**,
-0311 → **39**.
+0311 (picking gate) → **39**.
 
 **`pnpm db:test` was NOT re-run after the mobile fix.** That fix adds no migration and touches no SQL,
 so the 108/1526 result above stands unchanged from the run that produced it. Stated rather than
 implied.
+
+### 7.1a Re-run after migration 0311 — measured, not carried forward
+
+The whole gate was re-run from a clean `supabase db reset --local` after 0311 landed. Turbo's cache was
+bypassed with `--force` so these are real executions, not replayed summaries.
+
+```
+supabase db reset --local && pnpm db:test
+  0311_restrict_disable_reason_visibility.test.sql ............. ok
+  All tests successful.
+  Files=109, Tests=1553          EXIT=0
+
+pnpm turbo run test --force
+  @stockpilot/core:test:    Test Files  40 passed (40)    Tests   709 passed (709)
+  @stockpilot/mobile:test:  Test Files  46 passed (46)    Tests   937 passed (937)
+  @stockpilot/web:test:     Test Files 393 passed (393)   Tests  4170 passed (4170)
+  Tasks: 3 successful, 3 total   EXIT=0
+
+pnpm turbo run typecheck --force   Tasks: 3 successful, 3 total   EXIT=0
+pnpm turbo run lint --force        0 errors, 102 warnings (74 mobile + 28 web)   EXIT=0
+```
+
+pgTAP moves **108 → 109 files and 1,526 → 1,553 tests**: exactly the 27 assertions 0311's new test
+declares, and **no change to any existing test**. That last point is the one worth stating plainly —
+0311 revokes a privilege from `authenticated`, the role most of the RLS suite runs as, so the 0308,
+0309 and 0310 plans staying green at their original counts is the evidence that the revoke is
+surgical. The application suites are unchanged at **5,816 tests** because 0311 touches no TypeScript,
+and lint holds at the same pre-existing 102 warnings for the same reason.
 
 ### 7.2 End-to-end scenario — per leg
 
@@ -979,15 +1103,19 @@ It is a **developer-environment fix, not a product change**, and it is outside t
 a symlink into `~/Developer/stockpilot-env/` and was restored byte-identical after both runs. The
 second run avoided the file entirely by passing the local values as inline process env instead.
 
-### 8.10 Addendum — surfaced while writing this document, not part of the brief's list
+### 8.10 ~~Addendum — the org-mate could read the internal reason~~ — **CLOSED, no decision needed**
 
-`user_profiles_select_orgmates` (§2.1) is row-scoped with no column restriction and there are no
-column-level `GRANT`s on `user_profiles`, so an org-mate could in principle read `disabled_at`,
-`disabled_reason` and `disabled_by` for a co-member straight from PostgREST, even though no product
-surface exposes them. This is read from the policy text, **not confirmed by a live probe**. It is
-recorded because §2's matrix would otherwise overstate what enforces the reason's confidentiality; the
-owner may want it closed with a column `GRANT` or by moving the reason out of `user_profiles`
-altogether.
+This was the one entry in §8 that was a **defect, not a policy question**, and it is now fixed rather
+than tabled. The addendum originally recorded it as read from the policy text and *"not confirmed by a
+live probe"*. It has since been probed on the local stack: it **reproduced**. A plain `staff` member,
+reading as `authenticated`, got a disabled colleague's full internal reason text and the God Admin's
+uid back — via an explicit column list and via `select *`.
+
+Migration **0311** closes it with column-level privileges, the only mechanism in Postgres that can hide
+a column of a row a policy is otherwise right to return. Full detail, including the no-op trap the
+obvious spelling falls into, is in **§5.4**. Nothing here is left for the owner to rule on: the
+alternative floated above — moving the reason out of `user_profiles` — is no longer needed, because the
+column is now unreadable by every request-facing role.
 
 ---
 
