@@ -99,6 +99,7 @@ const PARTIAL_REASON_CLAUSES: Record<AccountStatusPartialReason, string> = {
   ban_not_lifted: 'the sign-in block is still in place',
   sessions_not_revoked: 'the existing sessions were not all signed out',
   not_audited: 'the change was not written to the audit log',
+  status_unverified: 'the final account state could not be confirmed',
 };
 
 /**
@@ -116,6 +117,9 @@ const PARTIAL_REASON_RETRY_HEALS: Record<AccountStatusPartialReason, boolean> = 
   ban_not_lifted: true,
   sessions_not_revoked: true,
   not_audited: true,
+  // Pressing the button re-runs the whole sequence — CAS, GoTrue write, and
+  // the read-back that failed — so the retry is exactly what confirms the pair.
+  status_unverified: true,
 };
 
 /**
@@ -204,6 +208,19 @@ export async function disableUserAccountAction(
   if (!res.ok) return accountStatusFailure(res.code);
 
   if (res.partial) {
+    // A SUPERSEDED disable ended up with the account ACTIVE (a peer admin's
+    // re-enable won Layer A), so the ordinary lede would state the opposite of
+    // the truth and point at the wrong button: what is stuck is the sign-in
+    // block, and Re-enable is what clears it.
+    if (res.superseded) {
+      return partialFailure({
+        lede: 'Another administrator re-enabled this account first, so it is active',
+        retryHint: 'Press Re-enable to clear it.',
+        unretryableHint: 'The account is active; clear the sign-in block with Re-enable.',
+        code: 'ACCOUNT_NOT_DISABLED',
+        reasons: res.partialReasons,
+      });
+    }
     // Layer A landed, so the account is already locked out of every page and
     // API route. Say exactly that, then say what (if anything) fixes the rest.
     return partialFailure({
@@ -245,6 +262,17 @@ export async function reenableUserAccountAction(
   if (!res.ok) return accountStatusFailure(res.code);
 
   if (res.partial) {
+    // The mirror of the disable path: a superseded re-enable ended up with the
+    // account DISABLED, so the gap to close is the missing sign-in block.
+    if (res.superseded) {
+      return partialFailure({
+        lede: 'Another administrator disabled this account first, so it is disabled',
+        retryHint: 'Press Disable to complete it.',
+        unretryableHint: 'The account stays disabled; complete it with Disable.',
+        code: 'ACCOUNT_TEMPORARILY_DISABLED',
+        reasons: res.partialReasons,
+      });
+    }
     return partialFailure({
       lede: 'The disable flag was cleared',
       retryHint: 'Press Re-enable again to finish.',

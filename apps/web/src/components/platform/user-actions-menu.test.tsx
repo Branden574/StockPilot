@@ -83,26 +83,36 @@ async function armDisableDialog() {
 }
 
 describe('UserActionsMenu — what the menu offers', () => {
-  it('offers Disable for an active, unprotected account', async () => {
+  /**
+   * BOTH status items are offered on every row, and that is the fix for the
+   * finding below rather than a cosmetic choice. The items are idempotent state
+   * SETTERS ("make this account disabled" / "make this account active") and the
+   * row's own Disabled chip is what reports the current state; deriving which
+   * item exists from `disabledAt` is what made a half-applied change
+   * unrepairable the moment the page was reloaded.
+   */
+  it('offers both status actions for an active, unprotected account', async () => {
     renderMenu();
     await openMenu();
     expect(screen.getByRole('menuitem', { name: /disable account/i })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /re-enable/i })).not.toBeInTheDocument();
+    // Reachable on an ACTIVE row because a partial re-enable leaves exactly
+    // that row shape with the sign-in block still standing.
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
   });
 
-  it('offers Re-enable, and not Disable, for a disabled account', async () => {
+  it('offers both status actions for a disabled account', async () => {
     renderMenu({ disabledAt: '2026-07-30T12:00:00Z' });
     await openMenu();
     expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /disable account/i })).toBeInTheDocument();
   });
 
   it('hides Disable for a protected platform admin', async () => {
     renderMenu({ protectedAdmin: true });
     await openMenu();
     expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
-    // Not offered because the account is ACTIVE, not because it is protected.
-    expect(screen.queryByRole('menuitem', { name: /re-enable/i })).not.toBeInTheDocument();
+    // Re-enable is never refused by the server, for anyone, so it stays.
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
     // The non-destructive action survives.
     expect(screen.getByRole('menuitem', { name: /password reset/i })).toBeInTheDocument();
   });
@@ -139,6 +149,84 @@ describe('UserActionsMenu — what the menu offers', () => {
     renderMenu({ email: null, disabledAt: '2026-07-30T12:00:00Z' });
     await openMenu();
     expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE ADVERTISED RETRY MUST SURVIVE A REFRESH.
+ *
+ * A partial result tells the operator to press a named button again. The menu
+ * used to derive which button existed from the server-rendered `disabledAt`,
+ * so the retry survived only inside that one page instance: reload, navigate,
+ * or hand the incident to a colleague, and the button the toast named was
+ * gone. Worse in the mirror case — a re-enable returning ['ban_not_lifted']
+ * clears the flag while the ban stands, so after a reload the row read Active,
+ * "Re-enable account" was gone, and for a member with no email on file
+ * "Disable account..." was hidden too: a signed-out, banned, legitimate user
+ * with no status action anywhere in the product.
+ *
+ * These render the POST-REFRESH row shape each partial leaves behind and
+ * require the named button to still be there.
+ */
+describe('UserActionsMenu — the advertised retry survives a reload', () => {
+  it('a partial disable leaves a Disabled row that can still be pressed Disable', async () => {
+    // What the server renders after the refresh: Layer A landed.
+    renderMenu({ disabledAt: '2026-07-30T12:00:00Z' });
+    await openMenu();
+
+    expect(screen.getByRole('menuitem', { name: /disable account/i })).toBeInTheDocument();
+  });
+
+  it('a partial re-enable leaves an Active row that can still be pressed Re-enable', async () => {
+    // What the server renders after the refresh: the flag was cleared, and the
+    // stray ban this retry exists to clear is invisible to the console.
+    renderMenu({ disabledAt: null });
+    await openMenu();
+
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+  });
+
+  it('reaches the worst case: active row, banned user, no email on file', async () => {
+    renderMenu({ email: null, disabledAt: null });
+    await openMenu();
+
+    // Disable stays hidden (nothing to type into the confirm gate) — but the
+    // action that actually clears the ban must not be hidden with it.
+    expect(screen.queryByRole('menuitem', { name: /disable account/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /re-enable account/i })).toBeInTheDocument();
+  });
+
+  /**
+   * Both items are always present, so `disabledAt` stops deciding WHETHER an
+   * action exists — but it must still decide which one leads, or the menu
+   * gives a disabled row and an active row identical guidance.
+   */
+  it('leads with Re-enable on a disabled row', async () => {
+    renderMenu({ disabledAt: '2026-07-30T12:00:00Z' });
+    await openMenu();
+
+    const labels = screen.getAllByRole('menuitem').map((n) => n.textContent ?? '');
+    expect(labels.findIndex((t) => /re-enable account/i.test(t))).toBeLessThan(
+      labels.findIndex((t) => /^disable account/i.test(t)),
+    );
+  });
+
+  it('leads with Disable on an active row', async () => {
+    renderMenu({ disabledAt: null });
+    await openMenu();
+
+    const labels = screen.getAllByRole('menuitem').map((n) => n.textContent ?? '');
+    expect(labels.findIndex((t) => /^disable account/i.test(t))).toBeLessThan(
+      labels.findIndex((t) => /re-enable account/i.test(t)),
+    );
+  });
+
+  it('actually runs the re-enable from an active row', async () => {
+    renderMenu({ disabledAt: null });
+    const user = await openMenu();
+    await user.click(screen.getByRole('menuitem', { name: /re-enable account/i }));
+
+    await waitFor(() => expect(h.reenable).toHaveBeenCalledWith({ targetUserId: USER_ID }));
   });
 });
 

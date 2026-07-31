@@ -386,19 +386,92 @@ export interface PlatformOrgMember {
   disabledAt: string | null;
 }
 
-/** Members for the users tab — includes the user id so the row actions can target it. */
-export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]> {
+/** How many members one page of the Users tab shows. */
+export const MEMBERS_PAGE_SIZE = 50;
+
+export interface PlatformOrgMembersPage {
+  members: PlatformOrgMember[];
+  /** EXACT number of members matching the current search (not just this page). */
+  total: number;
+  /** 1-based. */
+  page: number;
+  pageSize: number;
+  /** At least 1, so "Page 1 of 1" is always renderable. */
+  pageCount: number;
+  /** The applied search term, normalised — null when none. */
+  search: string | null;
+}
+
+/**
+ * Members for the Users tab — includes the user id so the row actions can
+ * target it.
+ *
+ * PAGED AND SEARCHABLE, not preview-capped, and that is a correctness
+ * requirement rather than a nicety. The three-dot menu this feeds is the ONLY
+ * place in the product that can disable or re-enable an account, so a member
+ * this function does not return is a member no operator can act on anywhere.
+ * The previous shape — `.order(accepted_at).limit(100)` with no search, no
+ * pages, and (alone among the detail tabs) no cap note — silently hid the
+ * 101st member onward of every large tenant behind a table that looked
+ * complete. A bigger limit only moves that cliff, so the cap is replaced
+ * rather than raised: an exact count the surface must display, real pages, and
+ * a server-side search that can reach any single member directly.
+ *
+ * The search filters the EMBEDDED profile (email + name), which requires the
+ * embed to be `!inner`: PostgREST answers a filter on a non-inner embed by
+ * nulling the embed and keeping the top-level row, so a left-joined version of
+ * this query would return every member regardless of the term. The embed stays
+ * non-inner when there is no term so a membership whose profile row is missing
+ * still appears in the list. `user_id` disambiguates the embed — organization_
+ * members has TWO foreign keys into user_profiles (user_id and invited_by).
+ */
+export async function getOrgMembers(
+  orgId: string,
+  options: { search?: string | null; page?: number; pageSize?: number } = {},
+): Promise<PlatformOrgMembersPage> {
   const admin = createAdminClient();
-  const { data, error } = await admin
+
+  const term = options.search?.trim() ?? '';
+  const search = term.length > 0 ? term : null;
+  const pageSize = Math.min(
+    Math.max(Math.floor(options.pageSize ?? MEMBERS_PAGE_SIZE), 1),
+    DETAIL_PREVIEW_LIMIT,
+  );
+  const page = Math.max(Math.floor(options.page ?? 1), 1);
+  const from = (page - 1) * pageSize;
+
+  const embed = search
+    ? 'user_profiles:user_id!inner (email, full_name, disabled_at)'
+    : 'user_profiles:user_id (email, full_name, disabled_at)';
+
+  let query = admin
     .from('organization_members')
-    .select('user_id, role, accepted_at, user_profiles:user_id (email, full_name, disabled_at)')
+    .select(`user_id, role, accepted_at, ${embed}`, { count: 'exact' })
     .eq('organization_id', orgId)
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null) // real members only, not "act as" grants
     .order('accepted_at', { ascending: true })
-    .limit(DETAIL_PREVIEW_LIMIT);
+    // Tiebreaker. Bulk-invited members share an accepted_at to the
+    // microsecond; without a stable second key Postgres may order those ties
+    // differently for the page-1 and page-2 queries, which drops a member out
+    // of both — the same invisible loss, one layer down.
+    .order('user_id', { ascending: true })
+    .range(from, from + pageSize - 1);
+
+  if (search) {
+    // ilike on email OR full name. Escape PostgREST's or() metacharacters —
+    // a bare comma or paren would otherwise be read as filter syntax.
+    const safe = search.replace(/[%,()]/g, ' ');
+    query = query.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`, {
+      referencedTable: 'user_profiles',
+    });
+  }
+
+  const { data, error, count } = await query;
   if (error) throw new Error(error.message);
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+
+  const total = count ?? 0;
+  const members = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     type Profile = { email: string; full_name: string | null; disabled_at: string | null };
     const prof = r.user_profiles as Profile | Profile[] | null;
     const p = Array.isArray(prof) ? (prof[0] ?? null) : prof;
@@ -411,6 +484,15 @@ export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]>
       disabledAt: p?.disabled_at ?? null,
     };
   });
+
+  return {
+    members,
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    search,
+  };
 }
 
 export interface PlatformOrgOrder {

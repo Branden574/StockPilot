@@ -205,6 +205,49 @@ describe('disableUserAccountAction', () => {
     ]);
   });
 
+  it('says so when the two layers could not be confirmed to agree', async () => {
+    disableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyDisabled: false,
+      banned: true,
+      sessionsRevoked: 1,
+      superseded: false,
+      partial: true,
+      partialReasons: ['status_unverified'],
+    });
+
+    const res = await disableUserAccountAction({ targetUserId: TARGET, reason: REASON });
+
+    // The convergence read is the thing that stops a flag/ban divergence being
+    // silent. When IT is the thing that failed, saying nothing would restore
+    // exactly the silence it was added to remove.
+    expect(res.ok === false && res.error.message).toMatch(/could not be confirmed/i);
+    // Pressing again re-runs the whole sequence, re-read included.
+    expect(res.ok === false && res.error.message).toContain('Disable again');
+  });
+
+  it('names the RIGHT button when a peer admin superseded the disable', async () => {
+    disableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyDisabled: false,
+      banned: true,
+      sessionsRevoked: 0,
+      superseded: true,
+      partial: true,
+      partialReasons: ['ban_not_lifted'],
+    });
+
+    const res = await disableUserAccountAction({ targetUserId: TARGET, reason: REASON });
+
+    const message = res.ok === false ? res.error.message : '';
+    // The account ended up ACTIVE, so "the account is flagged as disabled"
+    // would be a false lede and "press Disable again" the wrong instruction —
+    // it is the sign-in block that is stuck, and Re-enable is what clears it.
+    expect(message).not.toMatch(/flagged as disabled/i);
+    expect(message).toMatch(/re-enabled it first|another administrator/i);
+    expect(message).toContain('Re-enable');
+  });
+
   it('never promises a retry for a gap it does not know how to heal', async () => {
     disableUserAccount.mockResolvedValue({
       ok: true,
@@ -358,6 +401,26 @@ describe('reenableUserAccountAction', () => {
       'ban_not_lifted',
       'not_audited',
     ]);
+  });
+
+  it('names the RIGHT button when a peer admin superseded the re-enable', async () => {
+    reenableUserAccount.mockResolvedValue({
+      ok: true,
+      alreadyActive: false,
+      banned: false,
+      superseded: true,
+      partial: true,
+      partialReasons: ['ban_not_applied'],
+    });
+
+    const res = await reenableUserAccountAction({ targetUserId: TARGET });
+
+    const message = res.ok === false ? res.error.message : '';
+    // The account ended up DISABLED, so telling the operator the flag was
+    // cleared and to press Re-enable again would send them at the wrong half.
+    expect(message).not.toMatch(/disable flag was cleared/i);
+    expect(message).toMatch(/disabled it first|another administrator/i);
+    expect(message).toContain('Disable');
   });
 
   it('reports a lost compare-and-set race as a retryable conflict', async () => {

@@ -531,6 +531,7 @@ export class TeamService {
     let assignmentsCleared = 0;
     let sessionRevoked = false;
     let sessionsRevokedCount = 0;
+    let sessionRevokeSkipped: string | null = null;
     try {
       const admin = createAdminClient();
 
@@ -554,23 +555,60 @@ export class TeamService {
         }
       }
 
-      // Kill the removed user's auth sessions globally. This forces
-      // them to sign in again — at which point RLS + missing
-      // membership row will keep them out of this org. If the user
-      // belongs to multiple orgs we accept the collateral sign-out
-      // (rare; org membership is invite-only and most users only
-      // belong to a single workspace).
+      // Kill the removed user's auth sessions — but ONLY when this org was
+      // their last one.
       //
-      // This used to call `admin.auth.admin.signOut(removedUserId,
-      // 'global')`, which could never have worked: auth-js's signOut
-      // takes a JWT, not a user id, so the call errored and the audit
-      // row recorded session_revoked=false every time. It now goes
-      // through the 0308 admin_revoke_user_sessions function, which
-      // deletes the user's auth.sessions rows (refresh tokens cascade)
-      // and broadcasts the live eviction.
-      const revoked = await revokeAllSessionsForUser(removedUserId);
-      sessionRevoked = revoked.ok;
-      sessionsRevokedCount = revoked.sessionIds.length;
+      // This used to call `admin.auth.admin.signOut(removedUserId, 'global')`,
+      // which could never have worked: auth-js's signOut takes a JWT, not a
+      // user id, so the call errored and the audit row recorded
+      // session_revoked=false every time. The real revoke (0308's
+      // admin_revoke_user_sessions) replaced it — and in doing so made a
+      // dormant piece of collateral live for the first time.
+      //
+      // PER-ORG SESSION SCOPING IS NOT POSSIBLE, and this is not a limitation
+      // we can engineer around here. A GoTrue session belongs to a USER: the
+      // auth.sessions row carries a user_id and nothing else, the access token
+      // it mints names no organization, and 0308's function is necessarily
+      // `delete from auth.sessions where user_id = $1`. There is no narrower
+      // revocation to call. Revoking unconditionally therefore signs a
+      // multi-org user out of every OTHER tenant, on every device, mid-task,
+      // at the press of an admin who has no authority in those tenants.
+      //
+      // Nothing is lost by skipping it, because the session was never what
+      // kept this org's data reachable:
+      //
+      //   * org context is re-derived from organization_members on EVERY
+      //     request (lib/auth/session.ts loadSessionAndContext), so the
+      //     deleted row above removes this org from the user's switcher and
+      //     from requireOrgContext on their very next request;
+      //   * every org-scoped table's RLS resolves membership per statement,
+      //     so their existing access token can no longer read or write a
+      //     single row of this org's data either.
+      //
+      // So the revoke's only remaining job is the one case where it costs
+      // nobody anything: the user has no other org left, and forcing a fresh
+      // sign-in is strictly tidier than letting a contextless session idle to
+      // expiry. `.neq(this org)` is deliberate — the membership row we just
+      // deleted must never be able to count as "belongs elsewhere" and
+      // suppress that. A probe that ERRORS revokes, because an unreadable
+      // answer must not silently buy the user a session this code cannot
+      // justify.
+      const { data: otherOrgs, error: otherOrgsError } = await admin
+        .from('organization_members')
+        .select('organization_id')
+        .eq('user_id', removedUserId)
+        .neq('organization_id', this.ctx.organizationId)
+        .not('accepted_at', 'is', null)
+        .is('impersonation_expires_at', null) // real memberships, not "act as"
+        .limit(1);
+
+      if (!otherOrgsError && (otherOrgs ?? []).length > 0) {
+        sessionRevokeSkipped = 'user_belongs_to_other_orgs';
+      } else {
+        const revoked = await revokeAllSessionsForUser(removedUserId);
+        sessionRevoked = revoked.ok;
+        sessionsRevokedCount = revoked.sessionIds.length;
+      }
     } catch {
       // No admin client (missing SUPABASE_SERVICE_ROLE_KEY) or
       // network failure. Membership row deletion already happened,
@@ -588,6 +626,10 @@ export class TeamService {
           assignments_cleared: assignmentsCleared,
           session_revoked: sessionRevoked,
           sessions_revoked_count: sessionsRevokedCount,
+          // WHY there was no revocation, when there was none. Without this,
+          // a deliberate multi-org skip and a failed revoke are the same
+          // `session_revoked: false` in the trail.
+          session_revoke_skipped: sessionRevokeSkipped,
         },
       },
       this.ctx,

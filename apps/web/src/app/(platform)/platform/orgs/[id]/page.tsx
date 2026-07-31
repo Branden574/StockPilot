@@ -16,6 +16,7 @@ import {
   getOrgMembers,
   getOrgOrders,
   getOrgOverview,
+  type PlatformOrgMember,
 } from '@/server/services/platform/orgs';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ export default async function PlatformOrgDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; q?: string; page?: string }>;
 }) {
   // In-page gate — see note in (platform)/platform/page.tsx. The layout's
   // requirePlatformAdmin can't stop this page body (it renders in parallel),
@@ -46,8 +47,10 @@ export default async function PlatformOrgDetailPage({
   await requirePlatformAdmin();
 
   const { id } = await params;
-  const { tab: tabParam } = await searchParams;
+  const { tab: tabParam, q, page: pageParam } = await searchParams;
   const tab: Tab = (TABS.find((t) => t.key === tabParam)?.key ?? 'overview') as Tab;
+  const search = q?.trim() ? q.trim() : null;
+  const usersPage = Number.parseInt(pageParam ?? '1', 10);
 
   const overview = await getOrgOverview(id);
   if (!overview) notFound();
@@ -129,7 +132,12 @@ export default async function PlatformOrgDetailPage({
       <div className="mt-5">
         {tab === 'overview' && <OverviewTab overview={overview} />}
         {tab === 'inventory' && (await InventoryTab({ orgId: id }))}
-        {tab === 'users' && (await UsersTab({ orgId: id }))}
+        {tab === 'users' &&
+          (await UsersTab({
+            orgId: id,
+            search,
+            page: Number.isFinite(usersPage) ? usersPage : 1,
+          }))}
         {tab === 'orders' && (await OrdersTab({ orgId: id }))}
         {tab === 'billing' && (await BillingTab({ orgId: id }))}
       </div>
@@ -218,10 +226,107 @@ async function InventoryTab({ orgId }: { orgId: string }) {
   );
 }
 
-async function UsersTab({ orgId }: { orgId: string }) {
-  const members = await getOrgMembers(orgId);
-  if (members.length === 0)
-    return <p className="text-[13px] text-[var(--ed-ink-4)]">No members.</p>;
+/**
+ * The Users tab. Unlike its sibling tabs this one is NOT a preview: it is the
+ * only place in the product that can disable or re-enable an account, so a
+ * member it does not render is a member no operator can act on at all. It
+ * therefore pages through the whole org (never a silent slice), offers a
+ * server-side search that can reach one member directly in a tenant of any
+ * size, and states the exact total on screen so a partial page can never be
+ * mistaken for a complete one.
+ */
+async function UsersTab({
+  orgId,
+  search,
+  page,
+}: {
+  orgId: string;
+  search: string | null;
+  page: number;
+}) {
+  const result = await getOrgMembers(orgId, { search, page });
+  const { members, total, pageSize, pageCount } = result;
+  const first = members.length === 0 ? 0 : (result.page - 1) * pageSize + 1;
+  const last = (result.page - 1) * pageSize + members.length;
+
+  const hrefFor = (p: number) => {
+    const params = new URLSearchParams({ tab: 'users' });
+    if (result.search) params.set('q', result.search);
+    if (p > 1) params.set('page', String(p));
+    return `/platform/orgs/${orgId}?${params.toString()}`;
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Same GET-form pattern as the org directory. The hidden tab field is
+          what keeps a submit on this tab; omitting `page` resets to the first
+          page of the new result set, which is the only sane landing. */}
+      <form method="GET" className="flex items-center gap-2">
+        <input type="hidden" name="tab" value="users" />
+        <input
+          type="search"
+          name="q"
+          defaultValue={result.search ?? ''}
+          placeholder="Search by name or email…"
+          className="h-9 w-full max-w-sm rounded-md border border-border bg-background px-3 text-[13px] outline-none focus:border-[var(--ed-line-strong)]"
+        />
+        <button
+          type="submit"
+          className="h-9 rounded-md border border-border bg-card px-3 text-[13px] font-medium hover:border-[var(--ed-line-strong)]"
+        >
+          Search
+        </button>
+        {result.search ? (
+          <Link
+            href={`/platform/orgs/${orgId}?tab=users`}
+            className="text-[12px] text-[var(--ed-ink-4)] hover:text-foreground"
+          >
+            Clear
+          </Link>
+        ) : null}
+      </form>
+
+      {members.length === 0 ? (
+        <p className="text-[13px] text-[var(--ed-ink-4)]">
+          {result.search ? `No members match “${result.search}”.` : 'No members.'}
+        </p>
+      ) : (
+        <>
+          <MembersTable members={members} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* The bound, stated. This tab used to render nothing here at all,
+                which is what made 50 unreachable accounts invisible. */}
+            <p className="text-[12px] text-[var(--ed-ink-4)]">
+              Showing {first}–{last} of {total} member{total === 1 ? '' : 's'}
+              {result.search ? ` matching “${result.search}”` : ''} · page {result.page} of{' '}
+              {pageCount}
+            </p>
+            {pageCount > 1 ? (
+              <div className="flex items-center gap-2 text-[12.5px]">
+                {result.page > 1 ? (
+                  <Link href={hrefFor(result.page - 1)} className="font-medium hover:underline">
+                    ← Previous
+                  </Link>
+                ) : (
+                  <span className="text-[var(--ed-ink-4)]">← Previous</span>
+                )}
+                {result.page < pageCount ? (
+                  <Link href={hrefFor(result.page + 1)} className="font-medium hover:underline">
+                    Next →
+                  </Link>
+                ) : (
+                  <span className="text-[var(--ed-ink-4)]">Next →</span>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MembersTable({ members }: { members: PlatformOrgMember[] }) {
   return (
     <div className="overflow-hidden rounded-[10px] border border-border">
       <table className="w-full text-[13px]">

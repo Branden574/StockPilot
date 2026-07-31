@@ -37,11 +37,15 @@ const reportError = vi.fn(async (..._args: unknown[]) => {});
 
 const dbState: {
   update: { data: Array<{ id: string }> | null; error: { message: string } | null };
+  /** What the post-GoTrue re-read of the authoritative flag answers. */
+  read: { data: { disabled_at: string | null } | null; error: { message: string } | null };
 } = {
   update: { data: [{ id: 'target' }], error: null },
+  read: { data: { disabled_at: null }, error: null },
 };
 const updateArgs: Array<Record<string, unknown>> = [];
 const updateSpies: Array<ReturnType<typeof vi.fn>> = [];
+const readSpies: Array<ReturnType<typeof vi.fn>> = [];
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
 vi.mock('@/lib/realtime/broadcast', () => ({
@@ -62,8 +66,10 @@ vi.mock('@/lib/supabase/admin', () => ({
     auth: { admin: { getUserById, updateUserById } },
     from: () => {
       const q: Record<string, unknown> = {};
+      let isUpdate = false;
       const update = vi.fn((patch: Record<string, unknown>) => {
         updateArgs.push(patch);
+        isUpdate = true;
         return q;
       });
       updateSpies.push(update);
@@ -71,7 +77,16 @@ vi.mock('@/lib/supabase/admin', () => ({
       q.eq = vi.fn(() => q);
       q.is = vi.fn(() => q);
       q.not = vi.fn(() => q);
-      q.select = vi.fn(async () => dbState.update);
+      // A CAS terminates on `.select('id')` and is awaited there; the flag
+      // re-read continues to `.maybeSingle()`.
+      q.select = vi.fn((cols: string) => {
+        if (isUpdate) return Promise.resolve(dbState.update);
+        const read = vi.fn(async () => dbState.read);
+        readSpies.push(read);
+        q.maybeSingle = read;
+        q.__cols = cols;
+        return q;
+      });
       return q;
     },
   }),
@@ -104,7 +119,10 @@ describe('disableUserAccount', () => {
     vi.clearAllMocks();
     updateArgs.length = 0;
     updateSpies.length = 0;
+    readSpies.length = 0;
     dbState.update = { data: [{ id: TARGET }], error: null };
+    // The converged case: after the ban, the flag still reads DISABLED.
+    dbState.read = { data: { disabled_at: '2026-07-31T00:00:00Z' }, error: null };
     primeAuthUsers();
     updateUserById.mockResolvedValue({ data: { user: { id: TARGET } }, error: null });
     revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: ['s-1', 's-2'] });
@@ -119,6 +137,7 @@ describe('disableUserAccount', () => {
       alreadyDisabled: false,
       banned: true,
       sessionsRevoked: 2,
+      superseded: false,
       partial: false,
       partialReasons: [],
     });
@@ -306,6 +325,7 @@ describe('disableUserAccount', () => {
       alreadyDisabled: false,
       banned: true,
       sessionsRevoked: 0,
+      superseded: false,
       partial: true,
       partialReasons: ['sessions_not_revoked'],
     });
@@ -324,6 +344,7 @@ describe('disableUserAccount', () => {
       alreadyDisabled: false,
       banned: true,
       sessionsRevoked: 2,
+      superseded: false,
       partial: true,
       partialReasons: ['not_audited'],
     });
@@ -385,7 +406,10 @@ describe('reenableUserAccount', () => {
     vi.clearAllMocks();
     updateArgs.length = 0;
     updateSpies.length = 0;
+    readSpies.length = 0;
     dbState.update = { data: [{ id: TARGET }], error: null };
+    // The converged case: after the unban, the flag still reads ACTIVE.
+    dbState.read = { data: { disabled_at: null }, error: null };
     primeAuthUsers();
     updateUserById.mockResolvedValue({ data: { user: { id: TARGET } }, error: null });
     recordPlatformAudit.mockResolvedValue(true);
@@ -398,6 +422,7 @@ describe('reenableUserAccount', () => {
       ok: true,
       alreadyActive: false,
       banned: false,
+      superseded: false,
       partial: false,
       partialReasons: [],
     });
@@ -475,6 +500,7 @@ describe('reenableUserAccount', () => {
       ok: true,
       alreadyActive: false,
       banned: true,
+      superseded: false,
       partial: true,
       partialReasons: ['ban_not_lifted'],
     });
@@ -488,6 +514,7 @@ describe('reenableUserAccount', () => {
       ok: true,
       alreadyActive: false,
       banned: false,
+      superseded: false,
       partial: true,
       partialReasons: ['not_audited'],
     });
@@ -501,6 +528,225 @@ describe('reenableUserAccount', () => {
       code: 'ACCOUNT_STATUS_CHANGED',
     });
     expect(updateUserById).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * LAYER A / LAYER B CONVERGENCE.
+ *
+ * The CAS on user_profiles was the only serialized step. Both transitions then
+ * wrote GoTrue unconditionally (the healing paths, which must stay) and never
+ * looked at the flag again, so the two layers were ordered independently and
+ * the last GoTrue writer won regardless of who won Layer A. Admin A pressing
+ * Disable and admin B pressing Re-enable inside the same GoTrue round trip
+ * could interleave to: flag CLEARED (every chokepoint reads ACTIVE) with
+ * banned_until set 100 years out (GoTrue refuses every sign-in). Both admins
+ * got a success toast, both audit rows claimed a state neither account was in,
+ * and the console — which reads only disabled_at — showed no Disabled chip and
+ * offered no way to see or clear the ban.
+ *
+ * The fix is a second read AFTER the GoTrue write: whatever Layer A says at
+ * that point is the truth, and Layer B is made to agree with it. Because every
+ * transition re-reads after its own write, the interleavings all settle on the
+ * last committed Layer A value — see the convergence note in the service.
+ */
+describe('Layer A / Layer B convergence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateArgs.length = 0;
+    updateSpies.length = 0;
+    readSpies.length = 0;
+    dbState.update = { data: [{ id: TARGET }], error: null };
+    primeAuthUsers();
+    updateUserById.mockResolvedValue({ data: { user: { id: TARGET } }, error: null });
+    revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: ['s-1'] });
+    recordPlatformAudit.mockResolvedValue(true);
+  });
+
+  describe('disable', () => {
+    it('re-reads the authoritative flag AFTER writing GoTrue', async () => {
+      dbState.read = { data: { disabled_at: '2026-07-31T00:00:00Z' }, error: null };
+
+      await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // Reading it BEFORE the ban would prove nothing: the whole point is to
+      // observe Layer A as it stands once this call's own Layer B write is in.
+      expect(readSpies).toHaveLength(1);
+      expect(updateUserById.mock.invocationCallOrder[0]!).toBeLessThan(
+        readSpies[0]!.mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it('lifts the ban it just applied when a concurrent re-enable won Layer A', async () => {
+      // A's CAS won, then B's re-enable cleared the flag before A's re-read.
+      dbState.read = { data: { disabled_at: null }, error: null };
+
+      const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      expect(updateUserById).toHaveBeenCalledTimes(2);
+      expect(updateUserById).toHaveBeenNthCalledWith(1, TARGET, { ban_duration: '876000h' });
+      // Without this the account reads ACTIVE everywhere and cannot sign in.
+      expect(updateUserById).toHaveBeenNthCalledWith(2, TARGET, { ban_duration: 'none' });
+      // And the operator is told the truth: their press did not stick.
+      expect(res).toEqual({ ok: false, code: 'ACCOUNT_STATUS_CHANGED' });
+    });
+
+    it('audits the RESULTING state when it was superseded, not the API call it made', async () => {
+      dbState.read = { data: { disabled_at: null }, error: null };
+
+      await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // The row must never claim banned:true for an account that ended up
+      // active and unbanned — that is the audit trail lying about a state.
+      expect(recordPlatformAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'user_disabled',
+          detail: expect.objectContaining({
+            resulting_disabled: false,
+            banned: false,
+            superseded: true,
+          }),
+        }),
+      );
+    });
+
+    it('does not revoke sessions for a disable that was superseded', async () => {
+      dbState.read = { data: { disabled_at: null }, error: null };
+
+      await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // Layer A says this account is ACTIVE, so evicting its devices would be
+      // one admin's stale press signing out a user another admin just restored.
+      expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+    });
+
+    it('records the resulting state on the ordinary path too', async () => {
+      dbState.read = { data: { disabled_at: '2026-07-31T00:00:00Z' }, error: null };
+
+      const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      expect(res).toMatchObject({ ok: true, partial: false });
+      expect(recordPlatformAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detail: expect.objectContaining({
+            resulting_disabled: true,
+            banned: true,
+            superseded: false,
+          }),
+        }),
+      );
+      expect(updateUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps healing an already-disabled account rather than treating it as superseded', async () => {
+      dbState.update = { data: [], error: null }; // CAS miss
+      dbState.read = { data: { disabled_at: '2026-07-30T00:00:00Z' }, error: null };
+
+      const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // The flag agrees with what this press asked for, so the re-applied ban
+      // is exactly the divergence repair the retry exists to perform.
+      expect(res).toMatchObject({ ok: true, alreadyDisabled: true, banned: true });
+      expect(updateUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the pair as UNVERIFIED when the flag cannot be re-read', async () => {
+      dbState.read = { data: null, error: { message: 'connection reset' } };
+
+      const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // Silence here is what the whole finding is about: an unverifiable pair
+      // must be named, not assumed converged.
+      expect(res).toMatchObject({ ok: true, partial: true });
+      expect((res as { partialReasons: string[] }).partialReasons).toContain('status_unverified');
+      expect(recordPlatformAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ detail: expect.objectContaining({ resulting_disabled: null }) }),
+      );
+      expect(reportError).toHaveBeenCalled();
+    });
+
+    it('stays partial when the compensating unban itself fails', async () => {
+      dbState.read = { data: { disabled_at: null }, error: null };
+      updateUserById
+        .mockResolvedValueOnce({ data: { user: { id: TARGET } }, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: 'gotrue down' } });
+
+      const res = await disableUserAccount({ targetUserId: TARGET, reason: REASON, ...ACTOR });
+
+      // The divergence survives, so it must be reported rather than swallowed:
+      // an active account that cannot sign in.
+      expect(res).toMatchObject({ ok: true, partial: true });
+      expect((res as { partialReasons: string[] }).partialReasons).toContain('ban_not_lifted');
+    });
+  });
+
+  describe('re-enable', () => {
+    it('re-applies the ban when a concurrent disable won Layer A', async () => {
+      dbState.read = { data: { disabled_at: '2026-07-31T00:00:00Z' }, error: null };
+
+      const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
+
+      expect(updateUserById).toHaveBeenCalledTimes(2);
+      expect(updateUserById).toHaveBeenNthCalledWith(1, TARGET, { ban_duration: 'none' });
+      // Otherwise the account reads DISABLED everywhere while its existing
+      // refresh tokens keep working — the mirror of the finding's case.
+      expect(updateUserById).toHaveBeenNthCalledWith(2, TARGET, { ban_duration: '876000h' });
+      expect(res).toEqual({ ok: false, code: 'ACCOUNT_STATUS_CHANGED' });
+    });
+
+    it('audits the resulting state for a superseded re-enable', async () => {
+      dbState.read = { data: { disabled_at: '2026-07-31T00:00:00Z' }, error: null };
+
+      await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
+
+      expect(recordPlatformAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'user_reenabled',
+          detail: expect.objectContaining({
+            resulting_disabled: true,
+            ban_cleared: false,
+            superseded: true,
+          }),
+        }),
+      );
+    });
+
+    it('records the resulting state on the ordinary path', async () => {
+      dbState.read = { data: { disabled_at: null }, error: null };
+
+      const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
+
+      expect(res).toMatchObject({ ok: true, partial: false });
+      expect(recordPlatformAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detail: expect.objectContaining({
+            resulting_disabled: false,
+            ban_cleared: true,
+            superseded: false,
+          }),
+        }),
+      );
+      expect(updateUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps healing a stray ban on an already-active account', async () => {
+      dbState.update = { data: [], error: null }; // CAS miss
+      dbState.read = { data: { disabled_at: null }, error: null };
+
+      const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
+
+      expect(res).toMatchObject({ ok: true, alreadyActive: true, banned: false });
+      expect(updateUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the pair as UNVERIFIED when the flag cannot be re-read', async () => {
+      dbState.read = { data: null, error: { message: 'connection reset' } };
+
+      const res = await reenableUserAccount({ targetUserId: TARGET, ...ACTOR });
+
+      expect(res).toMatchObject({ ok: true, partial: true });
+      expect((res as { partialReasons: string[] }).partialReasons).toContain('status_unverified');
+    });
   });
 });
 

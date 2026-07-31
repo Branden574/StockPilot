@@ -62,7 +62,28 @@ function isPartial(res: ActionResult<unknown>): boolean {
  * and the mobile admin screens are org-admin surfaces and deliberately get
  * nothing.
  *
- * Disable is hidden — rather than shown-and-refused — in two cases:
+ * BOTH status items are offered on EVERY row, whatever `disabledAt` says. They
+ * are idempotent state setters — "make this account disabled", "make this
+ * account active" — and the row's Disabled chip, not the menu, is what reports
+ * the current state. Pressing either on an account already in that state is a
+ * supported healing replay in the service, never an error.
+ *
+ * That is a fix, not a decoration. The items used to be derived from
+ * `disabledAt` (`canDisable = !isDisabled`, `canReenable = isDisabled`), which
+ * made every partial result's advertised retry unreachable the moment the page
+ * was re-read. A partial disable tells the operator "press Disable again" and
+ * leaves the row rendering as Disabled — so after any reload, navigation, or
+ * handover to a colleague, the only item left was Re-enable, and healing meant
+ * first restoring access to the very account under investigation. The mirror
+ * case was worse: a re-enable returning ['ban_not_lifted'] clears the flag
+ * while the GoTrue ban stands, so the row read Active, "Re-enable account" was
+ * gone, and for a member with no email on file Disable was hidden too —
+ * leaving a signed-out, banned, legitimate user with NO status action anywhere
+ * in the product and no recovery short of direct GoTrue/SQL access. The
+ * component cannot see a stray ban (nothing in the console can), so the only
+ * honest posture is to keep both repairs reachable at all times.
+ *
+ * Disable is still hidden — rather than shown-and-refused — in two cases:
  *
  *   1. a protected (allowlisted) platform admin, so an operator never aims at a
  *      target the server will reject;
@@ -98,9 +119,14 @@ export function UserActionsMenu({
   const { ensure, modal } = useStepUp();
   const [pending, start] = React.useTransition();
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // NOT derived from `disabledAt` — see the note above. The only gates are the
+  // ones the server itself applies (protected admin) or that the confirm dialog
+  // physically needs (an email to type). Re-enable has neither, so it is
+  // rendered unconditionally below.
+  const canDisable = !protectedAdmin && email !== null && email.length > 0;
+  // `disabledAt` no longer decides WHICH actions exist — only which one leads,
+  // so a disabled row and an active row do not offer identical guidance.
   const isDisabled = disabledAt !== null;
-  const canDisable = !protectedAdmin && !isDisabled && email !== null && email.length > 0;
-  const canReenable = isDisabled;
 
   /** Runs an action, and on a stale step-up re-challenges TOTP and retries ONCE. */
   async function withStepUp<T>(run: () => Promise<ActionResult<T>>): Promise<ActionResult<T>> {
@@ -124,11 +150,12 @@ export function UserActionsMenu({
    * Failure handling shared by both status actions. The rule is deliberately
    * narrow: re-read the page ONLY when the row is stale, never on a partial.
    *
-   * On a partial, the action layer's message ends in "press <Button> again",
-   * and refreshing would swap the very menu item that retry needs — a
-   * half-completed re-enable would start rendering "Disable account...", making
-   * the advertised fix unreachable. So the row is left as-is and the dialog
-   * stays open; the toast carries the whole truth.
+   * On a partial, the action layer's message ends in "press <Button> again".
+   * Both status items are now mounted on every row, so a refresh can no longer
+   * unmount the retry — but the row is still left alone and the dialog left
+   * open, because re-rendering mid-incident would also discard the typed
+   * confirmation and scroll the operator away from the row they are working.
+   * The toast carries the whole truth either way.
    *
    * PARTIAL IS TESTED FIRST, and that ordering is load-bearing. The two
    * conditions are not mutually exclusive: a partial RE-ENABLE is returned with
@@ -177,6 +204,21 @@ export function UserActionsMenu({
     });
   }
 
+  const disableItem = canDisable ? (
+    <DropdownMenuItem
+      className="text-destructive focus:text-destructive"
+      onSelect={(e) => {
+        // Keep the menu from closing before the dialog mounts, so focus
+        // moves straight into the type-to-confirm field.
+        e.preventDefault();
+        setConfirmOpen(true);
+      }}
+    >
+      Disable account...
+    </DropdownMenuItem>
+  ) : null;
+  const reenableItem = <DropdownMenuItem onSelect={onReenable}>Re-enable account</DropdownMenuItem>;
+
   return (
     <>
       <DropdownMenu>
@@ -187,21 +229,16 @@ export function UserActionsMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onReset}>Send password reset...</DropdownMenuItem>
-          {canDisable && (
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={(e) => {
-                // Keep the menu from closing before the dialog mounts, so focus
-                // moves straight into the type-to-confirm field.
-                e.preventDefault();
-                setConfirmOpen(true);
-              }}
-            >
-              Disable account...
-            </DropdownMenuItem>
-          )}
-          {canReenable && (
-            <DropdownMenuItem onSelect={onReenable}>Re-enable account</DropdownMenuItem>
+          {isDisabled ? (
+            <>
+              {reenableItem}
+              {disableItem}
+            </>
+          ) : (
+            <>
+              {disableItem}
+              {reenableItem}
+            </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
