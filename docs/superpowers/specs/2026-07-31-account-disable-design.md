@@ -53,7 +53,15 @@ The audit proves **no single existing function covers pages + Server Actions + c
 
 This closes the documented middleware fast-path gap ("locally-verified token accepted until exp", Audit §1.2): a disabled user's very next page render or Server Action hits the Layer A check regardless of JWT validity — that is the brief's "logout on next validation".
 
-**Deliberately NOT added:** an RLS-level status check. Direct PostgREST reads from mobile coast on the outstanding access token for up to ~1 h (Audit §4.5; Absent #10). All mobile **writes** go through Bearer /api/v1 (blocked immediately); the instant broadcast (§3 step 6) signs the app out within ~1 s when online; the residual risk is read-only access with an already-issued token from a device that missed the broadcast, bounded by the token TTL (unverified hosted value, assume ~1 h — Audit §1.7). Adding the check to RLS helpers would tax every query platform-wide (Audit sessions facts). Accepted and documented; revisit only if the owner rejects the window.
+**Now CLOSED by migration 0310 — this section previously understated the risk.**
+
+The original text called the residual exposure "read-only", reasoning that all mobile writes go through Bearer /api/v1. That reasoning was wrong: it describes what **our** client does, not what an attacker holding the token can do. PostgREST is not the Next.js server — it verifies the JWT signature locally and never asks GoTrue whether the session was revoked — so anyone holding a still-valid access token could issue **any verb PostgREST exposes**, including POST/PATCH/DELETE, against every business table. The pre-0310 exposure was read **and write**, for the full token lifetime.
+
+The window is the access-token TTL. `supabase/config.toml` sets `jwt_expiry = 3600` for the LOCAL stack. **The hosted project's value is configured in the Supabase dashboard and has not been verified** — it is not asserted here, and the risk should not be described using the local number as though it were production's.
+
+Migration `0310_rls_blocks_disabled_accounts.sql` closes this at the database. `user_profiles.disabled_at` is now consulted by the membership gate helpers themselves, so all 261 policies in the schema inherit the check without being edited. A disabled user is refused for SELECT, INSERT, UPDATE and DELETE the moment the flag is written, regardless of how much life their token has left. `service_role` is unaffected (its `auth.uid()` is null), which is what keeps re-enable possible.
+
+The earlier objection — that an RLS check "would tax every query platform-wide" — was tested rather than assumed, and it holds only for the naive implementation. Measured on a 500k-row `inventory_items` fixture: the read path is hoisted into a one-time InitPlan and is unchanged (paged SELECT 124.2 ms → 122.7 ms; UPDATE by primary key 3.8 ms → 4.0 ms). Calling the check as a nested SECURITY DEFINER function from the row-correlated helpers *did* cost 3.3x on a bulk scan (10.2 s → 33.5 s), so those helpers inline the predicate instead, which brings the same worst case to 13.1 s (+28%) on a query shape the application does not issue. Full numbers: `.superpowers/sdd/bypass-closure-report.md`.
 
 **Machine-readable signal to clients** is deliberately GoTrue's own `user_banned` code (sign-in, refresh, getUser) plus the web ActionResult code below — not a per-route 403 rewrite of 86 API routes (§6).
 
@@ -200,7 +208,8 @@ Notes for the implementer:
 | Disabled | Sign-in / token refresh / getUser | Rejected by GoTrue (`user_banned`) |
 | Disabled | Web page / Server Action with live JWT | Layer A → /account-disabled on next request |
 | Disabled | /api (cookie or Bearer) | 401 (ban fails getUser; Layer A null-ctx as backstop) |
-| Disabled | Direct PostgREST read with live JWT | Succeeds until token exp (≤ ~1 h, §2 accepted risk); refresh then fails |
+| Disabled | Direct PostgREST **read** with live JWT | Blocked by RLS from the moment the flag is written (mig 0310). Was: succeeded until token exp |
+| Disabled | Direct PostgREST **write** (POST/PATCH/DELETE) with live JWT | Blocked by RLS (mig 0310). Was: **also succeeded** — the pre-0310 exposure was never read-only, because "writes go through Bearer /api/v1" constrains our client, not an attacker holding the token |
 | Disabled | Org removeMember / role change | Unaffected — memberships preserved (brief) |
 | Disabled | Platform deleteUser | Unaffected — existing flow (Audit §2.2); delete supersedes disable |
 | Disabled target is allowlisted admin | Disable | Refused before CAS (§3 step 3) — unreachable state |

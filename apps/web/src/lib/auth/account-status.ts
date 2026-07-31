@@ -37,17 +37,36 @@ import {
  * disable there would leave the customer portal wide open. Installing the guard
  * at all three funnels is what makes the flag, not the ban, the source of truth.
  *
+ * A FOURTH AND FIFTH FUNNEL EXIST, and they are guarded at their own call sites
+ * rather than here, because each resolves its principal inline:
+ *   4. the QuickBooks and Sage Intacct OAuth callbacks, under
+ *      `app/api/integrations/<provider>/callback/route.ts`, which call
+ *      `createClient()` + `auth.getUser()` themselves. (Written with a
+ *      placeholder rather than a glob on purpose: a literal star-slash here
+ *      would close this comment block.) They use `loadAccountStatus` and
+ *      map the result onto their OWN redirect vocabulary — `forbidden` for a
+ *      disable, `internal_error` for an unreadable status — so no new failure
+ *      page is invented for them.
+ *   5. `changePasswordAction` (server/actions/auth.ts) does the same, and
+ *      refuses BEFORE spending the caller's rate-limit budget.
+ *
  * WHAT IS STILL NOT COVERED, and why that is a deliberate choice:
  *   - the proxy matcher excludes /api by design, so middleware cannot cover it;
  *   - middleware verifies JWTs LOCALLY (getClaims), so it would accept a
- *     revoked session until the token expires anyway;
- *   - an RLS-level check would tax every query platform-wide. Direct PostgREST
- *     reads from mobile therefore coast on an already-issued access token until
- *     it expires; the broadcast eviction closes that window in about a second
- *     for any device that is online, and every mobile WRITE goes through Bearer
- *     /api/v1, which is covered here. The disable flag itself is pinned against
- *     that same window by migration 0309, so a still-tokened user cannot clear
- *     their own `disabled_at`.
+ *     revoked session until the token expires anyway.
+ *
+ * DIRECT PostgREST TRAFFIC IS NO LONGER AN ACCEPTED GAP. This comment used to
+ * say an RLS-level check "would tax every query platform-wide", and that direct
+ * PostgREST access therefore coasted on an already-issued token — described as
+ * read-only because "every mobile WRITE goes through Bearer /api/v1". That last
+ * step was wrong: it constrains OUR client, not an attacker holding the token,
+ * who could issue any verb PostgREST exposes. Migration 0310 puts the
+ * `disabled_at` check inside the membership gate helpers, so all 261 policies
+ * inherit it and a disabled token is refused for SELECT/INSERT/UPDATE/DELETE
+ * immediately. The "taxes every query" concern was measured rather than assumed:
+ * the read path is hoisted to a one-time InitPlan and is unchanged. The disable
+ * flag itself is pinned by migration 0309, so a still-tokened user cannot clear
+ * their own `disabled_at`.
  */
 
 /** The column set every chokepoint must select. Keep the readers in sync. */

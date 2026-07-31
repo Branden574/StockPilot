@@ -5,6 +5,7 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 
+import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { noteLoginDevice } from '@/lib/auth/login-device';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { env } from '@/lib/env';
@@ -17,6 +18,7 @@ import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supaba
 import { audit, type AuditEvent } from '@/server/services/audit';
 
 import {
+  ACCOUNT_DISABLED_MESSAGE,
   changePasswordSchema,
   completePasswordResetSchema,
   err,
@@ -453,6 +455,31 @@ export async function changePasswordAction(
   } = await supabase.auth.getUser();
   if (!user || !user.email) {
     return err('unauthenticated', 'Sign in required');
+  }
+
+  // ACCOUNT STATUS (0308). This action authenticates with a bare
+  // auth.getUser(), which makes it a FOURTH identity funnel alongside
+  // loadSessionAndContext, withApiContext and resolvePortalContext — none of
+  // which run here. Without this check a disabled user with a live cookie could
+  // still rotate their own password, which is precisely what an offboarded or
+  // compromised account would do to establish a credential the operator does
+  // not know before the GoTrue ban propagates.
+  //
+  // Placed BEFORE the rate-limit call on purpose: the 5-per-15-min budget is
+  // keyed on the user, and spending it on a caller who is refused
+  // unconditionally would let a disabled session burn the budget and lock the
+  // account out of a legitimate password change after it is re-enabled.
+  //
+  // `unreadable` is kept distinct from `disabled`, the same way the three
+  // chokepoints keep them apart: a failed read has authorized nothing and must
+  // refuse, but it must not tell a healthy user their account was disabled.
+  const accountStatus = await loadAccountStatus(supabase, user.id);
+  if (accountStatus === 'unreadable') {
+    return err('internal_error', 'Could not verify your account status. Please try again.');
+  }
+  if (accountStatus === 'disabled') {
+    noteDisabledAccountBlocked('request', { userId: user.id, path: 'changePasswordAction' });
+    return err('forbidden', ACCOUNT_DISABLED_MESSAGE);
   }
 
   // 5 attempts / 15 min / user. Closed mode — prevents an authenticated

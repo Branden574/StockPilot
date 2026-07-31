@@ -93,6 +93,12 @@ function userClient(
       data: [{ role: 'admin' }],
       error: null,
     },
+    // Account status (0308). Default = ACTIVE. Override to model a disabled
+    // account or an unreadable status.
+    'user_profiles.select': {
+      data: [{ disabled_at: null }],
+      error: null,
+    },
     ...overrides,
   });
   // The route now validates the cookie session via supabase.auth.getUser()
@@ -163,6 +169,59 @@ describe('GET /api/integrations/quickbooks/callback', () => {
     expect(res.status).toBe(302);
     expect(location(res).pathname).toBe('/signin');
     expect(exchangeCode).not.toHaveBeenCalled();
+  });
+
+  // ── Account disable (0308) ────────────────────────────────────────────────
+  // This route resolves its own principal with createClient() + auth.getUser(),
+  // so it is covered by NONE of the three enforcement chokepoints
+  // (loadSessionAndContext / withApiContext / resolvePortalContext). Without an
+  // explicit guard, a disabled user holding a live cookie could replay the
+  // consent redirect against a pending row they created before being disabled
+  // and activate the connection — writing Vault secrets and an audit row
+  // attributed to themselves.
+  it('refuses a DISABLED account before exchanging the code or writing any secret', async () => {
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'user_profiles.select': {
+          data: [{ disabled_at: '2026-07-31T00:00:00.000Z' }],
+          error: null,
+        },
+      }).client as never,
+    );
+
+    const res = await GET(
+      callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }),
+    );
+
+    expect(res.status).toBe(302);
+    expect(location(res).searchParams.get('error')).toBe('forbidden');
+
+    // Nothing may have happened: no token exchange, no Vault write, no
+    // activation, and no audit row in the disabled user's name.
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(createAdminClient).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses with internal_error (not forbidden) when the account status cannot be read', async () => {
+    // An unreadable status must NOT be reported as a disable: the disabled
+    // wording tells people to contact an administrator, and saying that during
+    // a database problem sends them somewhere no one can help them.
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'user_profiles.select': { data: null, error: { message: 'db down' } },
+      }).client as never,
+    );
+
+    const res = await GET(
+      callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }),
+    );
+
+    expect(res.status).toBe(302);
+    expect(location(res).searchParams.get('error')).toBe('internal_error');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
   });
 
   it('redirects with error=access_denied when the user declined consent', async () => {
