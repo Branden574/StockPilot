@@ -566,3 +566,118 @@ describe('DeliveryRequestAction — preview dialog', () => {
     expect(dialog).toHaveTextContent('This message was shortened');
   });
 });
+
+describe('DeliveryRequestAction — honesty', () => {
+  it('states plainly that this does not create a ticket, before any click', () => {
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const notice = screen.getByTestId('delivery-request-notice');
+    expect(notice).toHaveTextContent(
+      'This opens a draft email. StockPilot does not send it and does not create a ticket. Review the message and press Send in your mail app.',
+    );
+  });
+
+  it('never uses ticket-created language anywhere in the rendered surface', () => {
+    const { container } = render(<DeliveryRequestAction input={makeInput()} />);
+    const text = (container.textContent ?? '').toLowerCase();
+    for (const claim of [
+      'ticket created',
+      'ticket submitted',
+      'ticket has been',
+      'request submitted to dc4',
+      'assigned to',
+      'we have sent',
+      'email sent',
+    ]) {
+      expect(text).not.toContain(claim);
+    }
+  });
+
+  it('warns on a REPEATED draft without blocking it', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+
+    await user.click(btn);
+    expect(screen.queryByTestId('delivery-request-repeat')).toBeNull();
+
+    await user.click(btn);
+    const repeat = await screen.findByTestId('delivery-request-repeat');
+    expect(repeat).toHaveTextContent(
+      'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+    );
+    // Still allowed — the first draft may have been closed by accident.
+    expect(btn).toBeEnabled();
+  });
+
+  it('counts every draft, including ones opened from the preview dialog', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
+
+    expect(await screen.findByTestId('delivery-request-repeat')).toBeInTheDocument();
+  });
+
+  it('DISCLOSES truncation on the surface when the order was too large for a link', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
+    const base = makeInput().itemMap.get('i-1')!;
+    const itemMap = new Map(
+      lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
+    );
+
+    render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
+    expect(screen.getByTestId('delivery-request-condensed')).toHaveTextContent(
+      'This order is too large to fit in a compose link, so the draft carries a summary and a link to the full order. Copy the details instead to include every line.',
+    );
+  });
+
+  it('shows no truncation disclosure for a normal order', () => {
+    render(<DeliveryRequestAction input={makeInput()} />);
+    expect(screen.queryByTestId('delivery-request-condensed')).toBeNull();
+  });
+
+  it('the repeat warning survives a re-render and does not reset the count', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+
+    const { rerender } = render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    rerender(<DeliveryRequestAction input={makeInput()} />);
+
+    expect(await screen.findByTestId('delivery-request-repeat')).toBeInTheDocument();
+  });
+});
+
+describe('DeliveryRequestAction — preview honesty (Task 7 review rider)', () => {
+  it('an oversized draft opened from the PREVIEW dialog never calls window.open or location.assign, closes the dialog, and shows the too-long panel, not the popup-blocked one', async () => {
+    const user = userEvent.setup();
+    const open = stubOpen();
+    const assign = stubLocationAssign();
+
+    render(
+      <DeliveryRequestAction
+        input={makeInput({ warehouseName: 'W'.repeat(3000), destination: null })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
+
+    expect(open).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    const fallback = await screen.findByTestId('delivery-request-fallback');
+    expect(fallback).toHaveTextContent(
+      "This order's details are too long to prefill into a mail link safely.",
+    );
+    expect(fallback).not.toHaveTextContent(/blocked the popup/i);
+  });
+});

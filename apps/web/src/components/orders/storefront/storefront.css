@@ -2451,3 +2451,23 @@
   line-height: 1.5;
   opacity: 0.8;
 }
+
+/* Delivery-request assistant notices. There is no ui/alert.tsx in this repo
+   (zero imports of @/components/ui/alert), so this reuses the house inline
+   banner shape without importing Tailwind semantics into hand-rolled CSS. */
+.sf-note {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.sf-note-warn {
+  padding: 8px 10px;
+  border: 1px solid rgba(180, 83, 9, 0.4);
+  background: rgba(180, 83, 9, 0.08);
+  border-radius: 6px;
+  opacity: 1;
+}

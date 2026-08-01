@@ -64,6 +64,23 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   // reflexively blame a popup blocker for a link-length problem.
   const [fallbackReason, setFallbackReason] = React.useState<'blocked' | 'oversized' | null>(null);
   const [manualText, setManualText] = React.useState<string | null>(null);
+  /**
+   * How many drafts we have opened for THIS order in this session.
+   *
+   * We cannot detect a send — no integration observes the mailbox — so a repeat
+   * is warned about, not blocked. Blocking would strand an employee whose first
+   * draft was closed by accident, which is the more common case; sending two
+   * near-identical requests to DC4 is the less common but noisier one, so it
+   * gets a visible warning.
+   *
+   * Only the branches that can actually produce a draft count: the successful
+   * window.open AND the popup-blocked mailto: fallback (a mail client may still
+   * open a compose window from that navigation). The linkFits-oversized early
+   * return never opens anything — no window.open, no mailto: — so it is
+   * deliberately excluded, or the warning would fire for an order that has
+   * opened zero drafts.
+   */
+  const [draftCount, setDraftCount] = React.useState(0);
   // The preview dialog (addendum requirement 3): shows both recipients and
   // the composed message before anything opens. Independent of
   // fallbackReason/manualText — the preview can be opened and closed any
@@ -112,6 +129,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       // Clears a stale failure panel left over from an earlier blocked click
       // on this same mount, now that a later click has actually succeeded.
       setFallbackReason(null);
+      setDraftCount((n) => n + 1);
       toast.success('Delivery request draft opened in Outlook. Review it and press Send yourself.');
       return;
     }
@@ -121,6 +139,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
     // panel reappears on every blocked click, but the mailto: navigation
     // itself only fires once per mount — otherwise a double-click (or a
     // second blocked attempt) opens a second draft.
+    setDraftCount((n) => n + 1);
     setFallbackReason('blocked');
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
@@ -160,6 +179,34 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         <Eye size={14} aria-hidden="true" />
         Preview
       </button>
+
+      {/*
+        The honesty affordances (addendum requirement: "this does not create a
+        ticket"). Static, rendered before any click — not a toast, which
+        disappears, and not folded into the fallback panel, which only shows
+        after a failed open. There is no ui/alert.tsx in this repo (zero
+        imports of @/components/ui/alert), so these reuse the house inline
+        banner shape via the sf-note classes rather than importing Tailwind
+        semantics into this hand-rolled CSS.
+      */}
+      <p className="sf-note" data-testid="delivery-request-notice">
+        This opens a draft email. StockPilot does not send it and does not create a ticket. Review
+        the message and press Send in your mail app.
+      </p>
+
+      {draftCount > 1 && (
+        <p className="sf-note sf-note-warn" data-testid="delivery-request-repeat" role="status">
+          You have already opened a draft for this order. Sending more than one creates duplicate
+          requests for DC4.
+        </p>
+      )}
+
+      {prepared.draft.condensed && (
+        <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
+          This order is too large to fit in a compose link, so the draft carries a summary and a
+          link to the full order. Copy the details instead to include every line.
+        </p>
+      )}
 
       {fallbackReason !== null && (
         <div className="sf-fallback" data-testid="delivery-request-fallback">
