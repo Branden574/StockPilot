@@ -617,6 +617,52 @@ describe('DeliveryRequestAction — preview dialog', () => {
   });
 });
 
+describe('DeliveryRequestAction — preview dialog stacking (Bug 1)', () => {
+  it('raises the dialog content above the storefront review/success modal backdrop', async () => {
+    // storefront.css:1983 sets `.sp-storefront .sf-modal-bk { position: fixed;
+    // z-index: 90 }`, and `.sp-storefront` (storefront.css:15) declares only
+    // custom properties — no transform/filter/opacity/isolation — so it never
+    // creates a stacking context; that backdrop paints in the ROOT stacking
+    // context. The shared ui/dialog.tsx DialogContent ships `fixed ... z-50`,
+    // also portalled to document.body (root stacking context). 90 > 50, so
+    // without an override this preview dialog — opened FROM INSIDE that
+    // review/success modal — would paint BEHIND its own backdrop: still
+    // operable (Radix neutralizes outside pointer events in modal mode) but
+    // visually smothered by a 60%-opaque veil. This asserts the call site
+    // carries a z-index utility high enough to clear 90, protecting against a
+    // regression to the bare "sp-storefront max-w-2xl" className.
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.className).toContain('z-[100]');
+  });
+});
+
+describe('DeliveryRequestAction — preview dialog focus restore on Escape (Bug 2)', () => {
+  it('returns focus to the Preview button that opened it, not document.body, after Escape', async () => {
+    // Reproduces the real-browser finding: opening the preview then pressing
+    // Escape left focus on <body>. Root cause (see delivery-request-action.tsx
+    // near the Dialog): the Preview button is a plain <button onClick=...>,
+    // never wrapped in <DialogTrigger>, so Radix's own `context.triggerRef`
+    // (the target its default onCloseAutoFocus calls .focus() on) is never
+    // populated — the restore target Radix would normally use does not exist,
+    // so the call is a no-op and focus falls through to <body>.
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+
+    const previewButton = screen.getByRole('button', { name: /Preview/i });
+    await user.click(previewButton);
+    await screen.findByRole('dialog');
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(previewButton);
+  });
+});
+
 describe('DeliveryRequestAction — honesty', () => {
   it('states plainly that this does not create a ticket, before any click', () => {
     render(<DeliveryRequestAction input={makeInput()} />);

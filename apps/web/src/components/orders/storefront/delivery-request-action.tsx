@@ -105,6 +105,15 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   // second, third, ... blocked click while the first mailto: tab/prompt is
   // still up would fire a second draft. One mailto: attempt per mount.
   const mailtoAttemptedRef = React.useRef(false);
+  // The preview dialog's own restore target (Bug 2 fix). The button below is
+  // a plain <button onClick>, not a <DialogTrigger> — it lives outside the
+  // <Dialog> tree entirely (the Dialog element further down wraps only
+  // DialogContent) — so Radix's own `context.triggerRef` (the ref its
+  // default onCloseAutoFocus calls .focus() on when the dialog closes) is
+  // never populated. Without this ref and the explicit onCloseAutoFocus
+  // handler below, that default restore is a silent no-op and Escape (or any
+  // other close) drops focus to <body> instead of back to this button.
+  const previewTriggerRef = React.useRef<HTMLButtonElement>(null);
 
   // The repeat-draft warning (rendered below, gated on draftCount > 1) has no
   // toast of its own to piggyback the announcement on — it appears as a side
@@ -240,7 +249,12 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         Email delivery request
       </button>
 
-      <button type="button" className="sf-btn-ghost" onClick={() => setPreviewOpen(true)}>
+      <button
+        type="button"
+        ref={previewTriggerRef}
+        className="sf-btn-ghost"
+        onClick={() => setPreviewOpen(true)}
+      >
         <Eye size={14} aria-hidden="true" />
         Preview
       </button>
@@ -355,7 +369,38 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         conflict between the two Escape handlers.
       */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="sp-storefront max-w-2xl">
+        <DialogContent
+          // Bug 1 (visual, z-index): the review/success modal this preview
+          // is opened FROM (.sf-modal-bk, storefront.css:1980-1983) is
+          // `position: fixed; z-index: 90` in the ROOT stacking context —
+          // `.sp-storefront` (storefront.css:15) declares only custom
+          // properties, no transform/filter/opacity/isolation, so it creates
+          // no stacking context of its own to contain that backdrop. The
+          // shared ui/dialog.tsx DialogContent/DialogOverlay ship
+          // `fixed ... z-50`, also portalled to document.body (root stacking
+          // context). 90 > 50, so without this override the preview would
+          // paint BEHIND the review/success modal's backdrop: still
+          // operable (Radix's modal mode neutralizes outside pointer events)
+          // but visually smothered by a 60%-opaque veil. z-[100] clears 90.
+          // twMerge (via `cn`) drops the base "z-50" utility in favor of
+          // this one since both target the same z-index property. The
+          // overlay itself (rendered internally by DialogContent, not
+          // classNameable from this call site) is NOT raised and stays at
+          // z-50, under the storefront backdrop — that is fine, arguably
+          // better: no double-dimming, and DO NOT restructure ui/dialog.tsx
+          // to fix it, it serves every dialog in the app.
+          className="sp-storefront max-w-2xl z-[100]"
+          // Bug 2 (a11y, focus restore): the Preview button above is a plain
+          // <button>, not a <DialogTrigger>, so Radix's own `context.triggerRef`
+          // — the target its default onCloseAutoFocus focuses — is never
+          // populated, and that default restore silently no-ops, dropping
+          // focus to <body> on close (Escape included). Focus the actual
+          // trigger explicitly instead.
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            previewTriggerRef.current?.focus();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Delivery request preview</DialogTitle>
             <DialogDescription>
