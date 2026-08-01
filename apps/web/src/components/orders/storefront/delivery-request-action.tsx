@@ -138,11 +138,14 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
     // a silent no-op on Safari, so the copy path is surfaced regardless. The
     // panel reappears on every blocked click, but the mailto: navigation
     // itself only fires once per mount — otherwise a double-click (or a
-    // second blocked attempt) opens a second draft.
-    setDraftCount((n) => n + 1);
+    // second blocked attempt) opens a second draft. The count is gated on
+    // that same one-shot guard: a second (or third, ...) blocked click cannot
+    // produce a draft — mailtoAttemptedRef suppresses its navigation — so it
+    // must not be counted as one.
     setFallbackReason('blocked');
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
+      setDraftCount((n) => n + 1);
       try {
         window.location.assign(prepared.mailtoUrl);
       } catch {
@@ -196,15 +199,36 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
 
       {draftCount > 1 && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-repeat" role="status">
+          {/* Task 9 wires this into the always-mounted live region for reliable SR announcement. */}
           You have already opened a draft for this order. Sending more than one creates duplicate
           requests for DC4.
         </p>
       )}
 
-      {prepared.draft.condensed && (
+      {/*
+        Two variants, same testid, chosen by linkFits so this static line
+        never contradicts the oversized panel that can appear after a click
+        (Finding 1). `draft.condensed` alone is not enough: it is true
+        whenever the FULL draft didn't fit a compose link, regardless of
+        whether the condensed links themselves fit. When they do fit
+        (condensed && linkFits), the summary-plus-order-link path really is
+        available, so the original sentence stands. When even the condensed
+        links are too long (!linkFits — which only happens when condensed is
+        also true, see prepareDeliveryRequest), nothing can be prefilled
+        safely, so this must say the same thing the oversized fallback panel
+        says, before AND after any click.
+      */}
+      {prepared.draft.condensed && prepared.linkFits && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
           This order is too large to fit in a compose link, so the draft carries a summary and a
           link to the full order. Copy the details instead to include every line.
+        </p>
+      )}
+
+      {!prepared.linkFits && (
+        <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
+          This order is too large for a prefilled email link. Use Copy the details to include
+          every line.
         </p>
       )}
 

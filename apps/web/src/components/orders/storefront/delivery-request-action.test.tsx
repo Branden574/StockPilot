@@ -288,6 +288,24 @@ describe('DeliveryRequestAction — popup blocked', () => {
     expect(screen.getByTestId('delivery-request-fallback')).toBeInTheDocument();
   });
 
+  it('does not count a second blocked click as a draft — only the click that actually navigates counts', async () => {
+    // Finding 2: after the first blocked click, mailtoAttemptedRef suppresses
+    // the navigation, so a second blocked click cannot produce a draft. Only
+    // one countable draft means the repeat warning must not appear yet.
+    const user = userEvent.setup();
+    vi.stubGlobal('open', vi.fn(() => null));
+    const assign = stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+    await user.click(btn);
+    await user.click(btn);
+
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('delivery-request-fallback')).toBeInTheDocument();
+    expect(screen.queryByTestId('delivery-request-repeat')).toBeNull();
+  });
+
   it('clears the stale failure panel and fires the success toast when a blocked click is followed by a successful one', async () => {
     const user = userEvent.setup();
     const open = vi.fn((..._args: unknown[]): Window | null => null);
@@ -304,6 +322,27 @@ describe('DeliveryRequestAction — popup blocked', () => {
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('delivery-request-fallback')).not.toBeInTheDocument();
+  });
+
+  it('counts a blocked click followed by a successful open as two countable drafts, and shows the repeat warning', async () => {
+    // Finding 2: the blocked click that actually navigates to mailto: counts
+    // as one draft; the subsequent successful open counts as a second. Two
+    // countable drafts should surface the repeat warning.
+    const user = userEvent.setup();
+    const open = vi.fn((..._args: unknown[]): Window | null => null);
+    vi.stubGlobal('open', open);
+    stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+    await user.click(btn);
+    expect(await screen.findByTestId('delivery-request-fallback')).toBeInTheDocument();
+
+    open.mockImplementation(() => ({ focus: vi.fn() }) as unknown as Window);
+    await user.click(btn);
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId('delivery-request-repeat')).toBeInTheDocument();
   });
 });
 
@@ -679,5 +718,35 @@ describe('DeliveryRequestAction — preview honesty (Task 7 review rider)', () =
       "This order's details are too long to prefill into a mail link safely.",
     );
     expect(fallback).not.toHaveTextContent(/blocked the popup/i);
+  });
+
+  it('shows the linkFits-aware disclosure — never the "carries a summary and a link" claim — both before the click and while the oversized panel is visible', async () => {
+    // Finding 1: when even the condensed links don't fit, the static
+    // disclosure must not contradict the oversized panel that appears after
+    // a click. Both must agree that nothing can be prefilled safely.
+    const user = userEvent.setup();
+    stubOpen();
+    stubLocationAssign();
+
+    render(
+      <DeliveryRequestAction
+        input={makeInput({ warehouseName: 'W'.repeat(3000), destination: null })}
+      />,
+    );
+
+    const before = screen.getByTestId('delivery-request-condensed');
+    expect(before).toHaveTextContent(
+      'This order is too large for a prefilled email link. Use Copy the details to include every line.',
+    );
+    expect(before).not.toHaveTextContent(/carries a summary and a link/i);
+
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await screen.findByTestId('delivery-request-fallback');
+
+    const after = screen.getByTestId('delivery-request-condensed');
+    expect(after).toHaveTextContent(
+      'This order is too large for a prefilled email link. Use Copy the details to include every line.',
+    );
+    expect(after).not.toHaveTextContent(/carries a summary and a link/i);
   });
 });
