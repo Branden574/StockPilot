@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { signInAction } from '@/server/actions/auth';
 
-import { signInSchema, type SignInInput } from '@stockpilot/core';
+import { ACCOUNT_DISABLED_PATH, signInSchema, type SignInInput } from '@stockpilot/core';
 
 /**
  * Same-origin path sanitizer. Rejects absolute URLs, protocol-relative
@@ -46,6 +46,13 @@ export function SignInForm() {
   const onSubmit = handleSubmit(async (values) => {
     const res = await signInAction(values);
     if (!res.ok) {
+      // A disabled account gets the dedicated screen, not a toast: the message
+      // is not something a user can act on from the form, and a toast vanishes
+      // before it can be read.
+      if (res.error.code === 'account_disabled') {
+        router.replace(ACCOUNT_DISABLED_PATH);
+        return;
+      }
       toast.error(res.error.message);
       return;
     }

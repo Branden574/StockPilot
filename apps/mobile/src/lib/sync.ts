@@ -1,13 +1,15 @@
 import * as Network from 'expo-network';
 
+import { getAccountDisabled } from './account-disabled-state';
 import { api } from './api';
 import { getDb, getMeta, setMeta } from './db';
+import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
   EFFECTIVE_PERMISSIONS_META_KEY,
   refreshEffectivePermissions,
 } from './use-effective-permissions';
-import { listPending, markFailed, markOk, markSending } from './queue';
+import { listPending, markFailed, markOk, markRejected, markSending } from './queue';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -20,7 +22,9 @@ import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-sco
  *         endpoint with the idempotency_key from the row. On 2xx, delete
  *         the row. On 4xx (client error — bad payload), mark failed; the
  *         user can retry from a queue UI. On 5xx / network failure, leave
- *         pending so the next tick retries.
+ *         pending so the next tick retries. On a 401 raised while the
+ *         account is known disabled, mark REJECTED — terminal, never
+ *         re-read, so the write cannot land when the account is re-enabled.
  */
 
 interface SnapshotResponse {
@@ -294,12 +298,17 @@ export async function pullSnapshot(
   };
 }
 
-export async function drainQueue(): Promise<{ ok: number; failed: number }> {
-  if (!(await isOnline())) return { ok: 0, failed: 0 };
+export async function drainQueue(): Promise<{
+  ok: number;
+  failed: number;
+  rejected: number;
+}> {
+  if (!(await isOnline())) return { ok: 0, failed: 0, rejected: 0 };
 
   const pending = await listPending();
   let ok = 0;
   let failed = 0;
+  let rejected = 0;
 
   for (const action of pending) {
     // record_count rows are owned by the cycle-count sync engine
@@ -314,15 +323,20 @@ export async function drainQueue(): Promise<{ ok: number; failed: number }> {
       ok += 1;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // 4xx errors (bad payload, validation) — don't retry; mark failed
-      // so the user can review. 5xx / network errors — retry next tick
-      // by leaving the row in 'failed' too (the worker re-reads
-      // 'pending' or 'failed').
-      await markFailed(action.id, msg);
-      failed += 1;
+      // 4xx (bad payload, validation) and 5xx / network errors both stay in
+      // 'failed' and are re-read next tick. The ONE terminal case is a 401 on a
+      // known-disabled account: that write must never replay after re-enable.
+      const outcome = classifyDrainFailure(e, { accountDisabled: getAccountDisabled() });
+      if (outcome === 'rejected') {
+        await markRejected(action.id, msg);
+        rejected += 1;
+      } else {
+        await markFailed(action.id, msg);
+        failed += 1;
+      }
     }
   }
-  return { ok, failed };
+  return { ok, failed, rejected };
 }
 
 async function sendOne(

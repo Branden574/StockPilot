@@ -28,9 +28,23 @@ const { adminRef, authUser } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminRef.current }));
+// The cookie-bound client. resolvePortalContext uses it for TWO things: the
+// auth.getUser() identity read, and the account-status read that gates the
+// portal on user_profiles.disabled_at (see lib/auth/account-status.ts — the
+// portal is install point 3 of 3, because it resolves identity itself and then
+// reads with the service-role client). An active row is the default here; the
+// disabled case is proved in src/lib/auth/account-status.test.ts.
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: { getUser: async () => ({ data: { user: authUser.current }, error: null }) },
+    from: () => {
+      const q: Record<string, unknown> = {};
+      const self = () => q;
+      q.select = self;
+      q.eq = self;
+      q.maybeSingle = async () => ({ data: { disabled_at: null }, error: null });
+      return q;
+    },
   }),
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));

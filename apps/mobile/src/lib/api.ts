@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
+import { notifyUnauthorized } from './account-eviction';
+import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
 
 /**
@@ -39,6 +41,32 @@ function resolveApiUrl(): string {
 }
 
 const API_URL = resolveApiUrl();
+
+/**
+ * Typed API failure. The app used to throw a bare Error with the message only,
+ * so no caller could tell a 401 from a 500 — which is why nothing signed out on
+ * auth failure and why the offline outbox retried a permanently rejected write
+ * forever.
+ *
+ * `message` is unchanged from the previous behaviour and remains the ONLY thing
+ * that should ever be shown to a person; `status` and `code` are for control
+ * flow. `code` is whatever our JSON body put in `error`; most routes send a
+ * machine code (`'unauthenticated'`, `'internal_error'`), a few still send a
+ * sentence (`'isbn is required'`), so treat it as a HINT and never render it —
+ * and never key a permanent-failure decision off it. HTTP status is the only
+ * uniformly trustworthy field.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -82,6 +110,10 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   // Internal timeout, composed with any caller-supplied signal. Either firing
   // aborts the fetch so the promise settles instead of hanging indefinitely.
   const ctrl = new AbortController();
+  // Registered so an account eviction can cancel requests ALREADY on the wire:
+  // one that lands after the credentials are cleared would repopulate a cache
+  // the eviction just wiped. Released in `finally`, always.
+  const releaseInFlight = registerInFlight(ctrl);
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const onCallerAbort = () => ctrl.abort();
   if (opts.signal) {
@@ -108,12 +140,14 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       // can act on.
       const raw = await res.text().catch(() => '');
       let message: string | null = null;
+      let code: string | undefined;
       if (raw.trimStart().startsWith('{')) {
         try {
           const body = JSON.parse(raw) as { message?: unknown; error?: unknown };
           const m = typeof body.message === 'string' ? body.message : null;
           const e = typeof body.error === 'string' ? body.error : null;
           message = m ?? e;
+          code = e ?? undefined;
         } catch {
           message = null;
         }
@@ -128,7 +162,14 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
                 ? 'The server had a problem. Try again in a moment.'
                 : `Request failed (${res.status}).`;
       }
-      throw new Error(message);
+      // A 401 is the app's earliest reliable signal that the account was
+      // disabled while the device was offline or missed the broadcast — but the
+      // server will NOT say so (it answers a uniform 401 on purpose), so this
+      // only ASKS for a probe. The bus filters to 401 (a 403 is a permission
+      // answer, not an identity one), throttles to one getUser() per burst, and
+      // never throws back into this path.
+      notifyUnauthorized({ status: res.status });
+      throw new ApiError(message, res.status, code);
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -140,6 +181,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     throw err;
   } finally {
     clearTimeout(timer);
+    releaseInFlight();
     if (opts.signal) opts.signal.removeEventListener('abort', onCallerAbort);
   }
 }

@@ -4,20 +4,25 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { AccountDisabledScreen } from '@/components/account-disabled-screen';
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { WhatsNew } from '@/components/onboarding/whats-new';
+import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import { pruneRejected } from '@/lib/queue';
 import { initSentry, Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
+import { useAccountGate } from '@/lib/use-account-gate';
 import { useBrandFonts } from '@/lib/use-fonts';
 import { useOtaAutoReload } from '@/lib/use-ota-updates';
 import { usePushNotifications } from '@/lib/use-push-notifications';
+import { useSessionRevocation } from '@/lib/use-session-revocation';
 import { useSync } from '@/lib/use-sync';
 import { useTheme } from '@/lib/use-theme';
 
@@ -45,6 +50,13 @@ function RootLayout() {
     void (async () => {
       try {
         await initDb();
+        // RETENTION for terminally rejected offline work. Those rows are kept
+        // on purpose (wipeForSignOut spares them) so the operator and support
+        // can still see what was never sent — but "kept" cannot mean "kept
+        // forever": on a shared warehouse device they would otherwise
+        // accumulate for the life of the install, carrying one user's payloads
+        // past every later sign-in. Best-effort and never fatal.
+        await pruneRejected();
       } catch (e) {
         console.warn('[init] db init failed', e);
       }
@@ -123,18 +135,72 @@ function RootGate() {
   usePushNotifications(session?.user ?? null);
   useSync(session?.user ?? null);
 
+  // Mounted HERE, not in DrawerContent: a user sitting on an auth-group screen,
+  // a pushed card screen, a full-screen modal or the pre-drawer cold-launch
+  // path had no revocation listener at all, so a force-logout simply did not
+  // reach them. RootGate is the one component mounted on every screen.
+  //
+  // The destination also changes, deliberately: the drawer sent a
+  // force-logged-out user to '/(auth)/sign-in', this sends them to the same
+  // place the unauthenticated redirect below uses, so there is one exit for
+  // both. signedOutRoute() picks between them — see the redirect effect.
+  const onForcedSignOut = React.useCallback(() => {
+    router.replace(signedOutRoute() as Href);
+  }, [router]);
+
+  const accountGate = useAccountGate({ onEvicted: onForcedSignOut });
+  const revocationOptions = React.useMemo(
+    () => ({ onTargeted: accountGate.onSessionRevoked }),
+    [accountGate.onSessionRevoked],
+  );
+  useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);
+
   React.useEffect(() => {
-    if (loading) return;
+    // A disabled account owns the screen: leave the router alone so the
+    // redirect below cannot fight the disabled screen (the session-restoration
+    // loop this gate exists to prevent).
+    if (loading || accountGate.state === 'disabled') return;
     const inAuthGroup = segments[0] === '(auth)';
     if (!session && !inAuthGroup) {
-      // `welcome` is a new route; the generated route-type union only refreshes
-      // on the next expo build, so cast until then (stays valid afterward).
-      router.replace('/(auth)/welcome' as Href);
+      // WHERE depends on WHY. An ordinary signed-out launch gets the marketing
+      // screen. A device whose session was REVOKED under it gets sign-in: it
+      // cannot know whether it was disabled — GoTrue answers `session_not_found`
+      // to anything it asks — and a password grant is the one action that can
+      // still find out, because GoTrue answers `user_banned` to that. Sending
+      // it to the marketing screen instead is what the end-to-end run observed,
+      // and it is a dead end. signedOutRoute() is a pure, STABLE read — this
+      // effect depends on `segments` and re-runs before they settle, so a
+      // read-and-clear latch answered sign-in once and then overwrote it with
+      // the marketing screen on the very next pass.
+      //
+      // Both `welcome` and `sign-in` are cast: the generated route-type union
+      // only refreshes on the next expo build (stays valid afterward).
+      router.replace(signedOutRoute() as Href);
     } else if (session && inAuthGroup) {
+      // A session again: whatever killed the last one is history, so the next
+      // ordinary sign-out gets the marketing screen back. Without this the
+      // sign-in destination would be sticky for the rest of the app's life.
+      clearSessionEnded();
       router.replace('/');
     }
-  }, [session, loading, segments, router]);
+  }, [session, loading, segments, router, accountGate.state]);
 
+  // The account gate outranks every other gate, and deliberately does NOT
+  // require a session: a disabled user is rejected AT sign-in, so there is no
+  // session to test. It also sits above the MFA gate — a disabled account must
+  // not be asked for a TOTP code it can never usefully supply.
+  if (!loading && accountGate.state === 'disabled') {
+    return <AccountDisabledScreen />;
+  }
+
+  // A status we could NOT read ('unverified') deliberately renders NOTHING of
+  // its own. It used to replace the whole app with a retry button, which meant
+  // a GoTrue 5xx — an identity-server blip that says nothing about this account
+  // — cut a warehouse phone off from its SQLite cache and its offline outbox,
+  // the two things built to keep working without a server. The app now proceeds
+  // on its cached session while useAccountGate re-probes in the background; only
+  // a DEFINITIVE disabled verdict blocks, above.
+  //
   // MFA gate takes precedence over the biometric lock: a fresh password
   // sign-in that owes a TOTP code must complete it before anything else.
   if (!loading && session && mfaRequired) {

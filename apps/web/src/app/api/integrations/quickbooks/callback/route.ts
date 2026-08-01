@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
@@ -59,6 +60,36 @@ export async function GET(req: Request) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.redirect(new URL('/signin', appUrl), { status: 302 });
+  }
+
+  // ACCOUNT STATUS (0308). This route builds its own principal above, so it is
+  // covered by NONE of the three enforcement chokepoints — not
+  // loadSessionAndContext (this is not an RSC page or Server Action), not
+  // withApiContext (this handler does not use it), and not resolvePortalContext.
+  // Without this call a disabled user holding a still-valid cookie could replay
+  // the consent redirect against a pending row they started BEFORE being
+  // disabled, and the rest of this handler would write Vault secrets, flip the
+  // connection to active, and file an audit row in their name.
+  //
+  // The two outcomes are kept apart deliberately, using the same
+  // disabled-vs-unreadable distinction the chokepoints use:
+  //   - disabled   -> `forbidden`, this route's existing refusal. The user is
+  //                   sent to the settings page, where loadSessionAndContext
+  //                   then routes them to the disabled screen. No new failure
+  //                   page is invented here.
+  //   - unreadable -> `internal_error`, a TRANSIENT failure. A status read that
+  //                   errored has authorized nothing, so it must refuse; but it
+  //                   must not claim the account is disabled, because that copy
+  //                   tells people to contact an administrator who would have
+  //                   nothing to act on.
+  const accountStatus = await loadAccountStatus(supabase, user.id);
+  if (accountStatus === 'unreadable') return redirectWithError('internal_error');
+  if (accountStatus === 'disabled') {
+    noteDisabledAccountBlocked('request', {
+      userId: user.id,
+      path: '/api/integrations/quickbooks/callback',
+    });
+    return redirectWithError('forbidden');
   }
 
   const params = new URL(req.url).searchParams;

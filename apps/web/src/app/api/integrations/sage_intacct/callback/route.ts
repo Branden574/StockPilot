@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
@@ -46,6 +47,22 @@ export async function GET(req: Request) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.redirect(new URL('/signin', appUrl), { status: 302 });
+  }
+
+  // ACCOUNT STATUS (0308) — identical posture to the QuickBooks callback, and
+  // for the identical reason: this handler resolves its own principal, so none
+  // of the three enforcement chokepoints ever see this request. `disabled`
+  // refuses with this route's existing `forbidden`; an UNREADABLE status refuses
+  // with `internal_error`, because a failed read has authorized nothing but also
+  // must not tell an active user their account was disabled.
+  const accountStatus = await loadAccountStatus(supabase, user.id);
+  if (accountStatus === 'unreadable') return redirectWithError('internal_error');
+  if (accountStatus === 'disabled') {
+    noteDisabledAccountBlocked('request', {
+      userId: user.id,
+      path: '/api/integrations/sage_intacct/callback',
+    });
+    return redirectWithError('forbidden');
   }
 
   const params = new URL(req.url).searchParams;

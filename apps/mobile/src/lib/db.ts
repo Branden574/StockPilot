@@ -313,5 +313,13 @@ export async function wipeForSignOut(): Promise<void> {
   await clearOrgScopedTables(db);
   // Sign-out is a full reset: the user (and any queued writes) are leaving the
   // device session entirely, so the pending outbox is dropped here too.
-  await db.execAsync('delete from pending_actions;');
+  //
+  // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
+  // them, so keeping them cannot replay anything — and they are the only record
+  // that queued work existed at all. This path also runs during the disabled-
+  // account eviction, which rejects the outbox immediately beforehand
+  // (use-account-gate.ts); deleting them here would mean the operator is shown
+  // the disabled screen while the work they thought they had saved disappears
+  // silently, and listRejected() could never return a row.
+  await db.execAsync("delete from pending_actions where status <> 'rejected';");
 }

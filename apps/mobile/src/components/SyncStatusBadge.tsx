@@ -19,11 +19,19 @@ import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
  *   syncing                  spinner + "Syncing…"           (blue)
  *   offline                  gray dot + "Offline — N queued" (gray)
  *   failing                  red dot  + "Sync issue — retrying" (red)
- *   idle, pendingCount === 0 green dot + "All synced"        (green)
+ *   idle, nothing queued     green dot + "All synced"        (green)
  *   idle, pendingCount > 0   amber dot + "N pending"         (amber)
+ *   idle, rejectedCount > 0  red dot  + "N not sent"         (red)
+ *
+ * The last row is the one that was missing. A terminal REJECTION (work queued
+ * while the account was disabled) leaves `pendingCount` at zero — correctly, no
+ * drain will ever read those rows again — and the badge answered "All synced"
+ * over the top of writes that never landed. That is the silent-loss outcome the
+ * rejection design existed to prevent, moved one layer out. Settings → Unsent
+ * work lists what they were.
  */
 export function SyncStatusBadge() {
-  const { status, pendingCount } = useSyncStatus();
+  const { status, pendingCount, rejectedCount } = useSyncStatus();
 
   let label: string;
   let dotColor = theme.success;
@@ -38,6 +46,9 @@ export function SyncStatusBadge() {
     dotColor = theme.textMuted;
   } else if (status === 'failing') {
     label = 'Sync issue · retrying';
+    dotColor = theme.destructive;
+  } else if (pendingCount === 0 && rejectedCount > 0) {
+    label = `${rejectedCount} not sent`;
     dotColor = theme.destructive;
   } else if (pendingCount === 0) {
     label = 'All synced';

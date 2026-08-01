@@ -2,6 +2,18 @@ import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
 
 import {
+  getAccountGateState,
+  resetAccountDisabled,
+  setAccountDisabled,
+  setAccountGateState,
+} from './account-disabled-state';
+import {
+  clearSessionEnded,
+  isInvoluntarySessionEnd,
+  markSessionEnded,
+  probeAndSettle,
+} from './account-eviction';
+import {
   enableBiometricForUser,
   isBiometricEnabledForUser,
   promptBiometric,
@@ -9,6 +21,8 @@ import {
 } from './biometric';
 import { wipeForSignOut } from './db';
 import { supabase } from './supabase';
+
+import { ACCOUNT_DISABLED_MESSAGE } from '@stockpilot/core';
 
 interface AuthState {
   session: Session | null;
@@ -113,6 +127,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const s = data.session;
         setSession(s);
         if (s?.user) {
+          // COLD LAUNCH / SESSION RESTORE probe. getSession() only reads the
+          // Keychain, so a session belonging to an account disabled while this
+          // device was closed hydrates perfectly happily. This is the moment to
+          // ask GoTrue the question.
+          //
+          // DETACHED ON PURPOSE — never awaited. This whole hydrate path owns
+          // `loading`, and RN's fetch has no timeout: a captive portal that
+          // accepts the connection and never answers would otherwise hold
+          // loading=true forever and render a blank shell with no recovery but
+          // force-quit. The gate is subscribable, so RootGate reacts whenever
+          // the answer lands. A rejection classifies as 'unknown' and changes
+          // NOTHING — an offline device must keep working.
+          //
+          // On a RELAUNCH after a platform disable this answers 'signed-out',
+          // never 'disabled': the disable revoked the session before the app
+          // was ever reopened, so GoTrue can only say `session_not_found`.
+          // probeAndSettle drops the dead session and routes to sign-in, where
+          // the password grant finally gets `user_banned` and the disabled
+          // copy. One extra step, and it is the honest one — the device
+          // genuinely cannot tell a disable from a sign-out here.
+          //
+          // probeAndSettle, not a bare getUser().then(...): gotrue-js drops a
+          // dead session from INSIDE getUser(), so RootGate's redirect has
+          // already picked a destination by the time any `.then()` of ours
+          // runs. It stakes sign-in up front and withdraws it if the account
+          // turns out to be fine.
+          void probeAndSettle(
+            getAccountGateState(),
+            () => supabase.auth.getUser(),
+            async () => {
+              await supabase.auth.signOut({ scope: 'local' });
+            },
+          ).then(({ gate }) => {
+            if (cancelled || !gate) return;
+            setAccountGateState(gate);
+          });
+
           let enabled = false;
           try {
             enabled = await isBiometricEnabledForUser(s.user.id);
@@ -148,6 +199,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // user is left intact so if THEY sign back in, biometric is
       // still on for them.
       if (event === 'SIGNED_OUT' || !s?.user) {
+        // A SIGNED_OUT this app did not ask for means the session was taken
+        // away — and on a RELAUNCH that is the only trace left of it. auth-js
+        // validates the stored session inside its own initialize(), and a
+        // revoked one is dropped there, BEFORE our getSession() returns: the
+        // hydrate below then sees no session at all, never probes, and the
+        // device looks exactly like one that launched signed out. Verified on
+        // the simulator — the cold-launch probe never ran.
+        //
+        // So a SIGNED_OUT is treated as involuntary: land on sign-in, where the
+        // password grant is the one call that can still learn the truth. The two
+        // DELIBERATE exits (signOut, signOutToFallback) clear it again, so a
+        // user who chose to leave still gets the marketing screen.
+        //
+        // ONLY on SIGNED_OUT, though. auth-js hands every new subscriber an
+        // INITIAL_SESSION event, with a null session on a device that has never
+        // signed in — so latching on `!s?.user` fired on a FRESH INSTALL and
+        // made /(auth)/welcome unreachable at launch for every first-run user.
+        // isInvoluntarySessionEnd draws that line; the branch below still
+        // resets the lock/MFA UI for any null-session event.
+        if (isInvoluntarySessionEnd(event, Boolean(s?.user))) markSessionEnded();
+        // Deliberately does NOT clear the account gate. The eviction's own
+        // local sign-out fires SIGNED_OUT, so clearing it here would unmount
+        // the disabled screen the instant it appeared and hand the user back
+        // to sign-in — the session-restoration loop this gate exists to
+        // prevent. Only AccountDisabledScreen's own "Sign out" clears it.
         setLocked(false);
         setBiometricEnabledState(false);
         setMfaRequired(false);
@@ -182,7 +258,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn: AuthState['signIn'] = async (email, password) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: error.message };
+    if (error) {
+      // GoTrue answers a disabled account with the STRUCTURED code
+      // `user_banned`. Never infer it from free text — GoTrue's own sentence
+      // is not ours, changes between releases, and would leak a reason we
+      // deliberately do not reveal. Raising the gate here is what makes the
+      // disabled screen reachable from a rejected sign-in, where there is no
+      // session for any other path to work from.
+      //
+      // ATTRIBUTED 'sign-in', and that is the whole point. This answer is about
+      // an EMAIL SOMEBODY TYPED, not about this device: GoTrue evaluates the
+      // ban before the password, so any passer-by who knows one disabled
+      // address gets it with any password at all. It may raise the screen; it
+      // may NOT drive the eviction, which terminally rejects the offline outbox
+      // — work that, after "Use password instead" on the biometric lock,
+      // routinely belongs to a different and perfectly healthy user.
+      if ((error as { code?: string }).code === 'user_banned') {
+        setAccountDisabled(true, 'sign-in');
+        return { error: ACCOUNT_DISABLED_MESSAGE };
+      }
+      return { error: error.message };
+    }
+    // A password grant that SUCCEEDED is proof the account is not banned —
+    // GoTrue refuses a banned user before it ever checks the password. So this
+    // is the moment a gate raised by someone else's rejected attempt (or by an
+    // identity-server blip) is demonstrably stale and must come down, or the
+    // healthy user who just signed in would meet the disabled screen.
+    resetAccountDisabled();
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
@@ -221,6 +323,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // sessions on the web tabs + any other devices. Mirrors the
     // server action's behavior in apps/web/src/server/actions/auth.ts.
     await supabase.auth.signOut({ scope: 'global' });
+    // DELIBERATE: the marker raised by the SIGNED_OUT above is withdrawn, so a
+    // user who chose to leave lands on the marketing screen, not sign-in.
+    clearSessionEnded();
     try {
       await wipeForSignOut();
     } catch (err) {
@@ -235,6 +340,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // biometric prompt and wants to re-authenticate with password
     // on this device only.
     await supabase.auth.signOut({ scope: 'local' });
+    // DELIBERATE, same as signOut above.
+    clearSessionEnded();
     setLocked(false);
     setMfaRequired(false);
     mfaFactorId.current = null;

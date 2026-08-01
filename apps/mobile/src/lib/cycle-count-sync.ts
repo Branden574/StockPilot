@@ -2,14 +2,18 @@ import * as Network from 'expo-network';
 import * as React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { getAccountDisabled } from './account-disabled-state';
 import { api } from './api';
 import {
   outboxAck,
   outboxBumpFailure,
   outboxMarkSending,
   outboxPending,
+  outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { classifyDrainFailure } from './drain-failure';
+import { countRejected } from './queue';
 
 /**
  * Cycle-count sync engine.
@@ -39,6 +43,14 @@ export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'failing';
 export interface SyncSnapshot {
   status: SyncStatus;
   pendingCount: number;
+  /**
+   * Terminally REJECTED rows still on the device — work that was queued, will
+   * never be sent, and has to stop being invisible. The badge said "All synced"
+   * over the top of it, because `pendingCount` (correctly) excludes a row no
+   * drain will ever read again. Counted separately so the badge can tell the
+   * truth without the drains ever seeing these rows.
+   */
+  rejectedCount: number;
   lastError: string | null;
   lastSyncAt: number | null;
 }
@@ -48,6 +60,7 @@ type Listener = (snap: SyncSnapshot) => void;
 class CycleCountSyncEngine {
   private status: SyncStatus = 'idle';
   private pendingCount = 0;
+  private rejectedCount = 0;
   private lastError: string | null = null;
   private lastSyncAt: number | null = null;
   private listeners = new Set<Listener>();
@@ -105,6 +118,7 @@ class CycleCountSyncEngine {
     return {
       status: this.status,
       pendingCount: this.pendingCount,
+      rejectedCount: this.rejectedCount,
       lastError: this.lastError,
       lastSyncAt: this.lastSyncAt,
     };
@@ -117,7 +131,22 @@ class CycleCountSyncEngine {
    */
   async refreshPendingCount(): Promise<void> {
     this.pendingCount = await totalPendingCount();
+    this.rejectedCount = await this.safeRejectedCount();
     this.emit();
+  }
+
+  /**
+   * The rejected tally must never be able to break a drain: it is display-only,
+   * and a failed count is answered with the last known value rather than an
+   * exception thrown out of the sync lifecycle.
+   */
+  private async safeRejectedCount(): Promise<number> {
+    try {
+      return await countRejected();
+    } catch (e) {
+      console.warn('[cycle-count-sync] rejected count failed', e);
+      return this.rejectedCount;
+    }
   }
 
   /** Force a drain attempt now (badge tap, pull-to-refresh). */
@@ -145,6 +174,7 @@ class CycleCountSyncEngine {
     if (this.inFlight) return;
     const online = await this.isOnline();
     this.pendingCount = await totalPendingCount();
+    this.rejectedCount = await this.safeRejectedCount();
     if (!online) {
       this.status = 'offline';
       this.emit();
@@ -176,6 +206,7 @@ class CycleCountSyncEngine {
     this.emit();
 
     let anyFailed = false;
+    let anyRejected = false;
     try {
       const due = await outboxPending();
       // Filter to record_count rows only — this engine owns the
@@ -196,18 +227,37 @@ class CycleCountSyncEngine {
           await this.sendRecordCount(row.payload, controller.signal);
           await outboxAck(row.id);
         } catch (e) {
-          anyFailed = true;
           const msg = e instanceof Error ? e.message : String(e);
           this.lastError = msg;
-          await outboxBumpFailure(row.id, msg);
+          // A 401 on a known-disabled account is TERMINAL. Bumping the failure
+          // counter here would keep the row in the backoff rotation forever and
+          // — the real damage — replay the count edit the instant the account
+          // is re-enabled. outboxReject parks it and clears the line's dirty
+          // flag in one transaction so the screen does not strand a line as
+          // permanently unsynced with no row left to sync it.
+          const outcome = classifyDrainFailure(e, {
+            accountDisabled: getAccountDisabled(),
+          });
+          if (outcome === 'rejected') {
+            anyRejected = true;
+            await outboxReject(row.id, msg);
+          } else {
+            anyFailed = true;
+            await outboxBumpFailure(row.id, msg);
+          }
         }
       }
 
       this.pendingCount = await totalPendingCount();
+      this.rejectedCount = await this.safeRejectedCount();
       if (this.status !== 'offline') {
+        // 'failing' means "still retrying". A rejected row will never be
+        // retried, so the engine is genuinely idle afterwards.
         this.status = anyFailed ? 'failing' : 'idle';
       }
-      if (!anyFailed) {
+      if (!anyFailed && !anyRejected) {
+        // Only a clean pass may clear the error and stamp a success — a drain
+        // that rejected everything synced nothing.
         this.lastError = null;
         this.lastSyncAt = Date.now();
       }

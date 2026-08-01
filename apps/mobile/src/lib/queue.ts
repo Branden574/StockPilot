@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
 
 /**
  * Pending-actions queue. Every offline-capable write goes through
@@ -28,7 +29,7 @@ export interface PendingActionRow {
   attempts: number;
   lastAttemptAt: number | null;
   lastError: string | null;
-  status: 'pending' | 'sending' | 'ok' | 'failed';
+  status: 'pending' | 'sending' | 'ok' | 'failed' | 'rejected';
 }
 
 function uuid(): string {
@@ -127,6 +128,156 @@ export async function markFailed(id: number, error: string): Promise<void> {
   );
 }
 
+/**
+ * Terminal rejection. Used when the server will NEVER accept this write —
+ * today, only when the account was disabled while the row was queued.
+ *
+ * The row is KEPT, not deleted: it is a local record of work the operator
+ * believed they had completed, and both they and support need to be able to see
+ * it. It is simply never sent again, because every drain selector reads only
+ * 'pending' and 'failed'. That is what stops the write from landing the moment
+ * the account is re-enabled — re-enabling must not resurrect a rejected queue.
+ *
+ * `attempts` is deliberately NOT bumped: the row is not being retried, and
+ * leaving the counter alone keeps it a truthful record of how many times this
+ * write was actually attempted.
+ *
+ * No SCHEMA_VERSION bump is involved. 'rejected' is a new VALUE in the existing
+ * `status` text column (no CHECK constraint), so nothing migrates. A bump would
+ * DROP pending_actions, destroying the very outbox this is protecting; a column,
+ * if one were ever needed, would go through db.ts's addColumnIfMissing.
+ */
+export async function markRejected(id: number, error: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `update pending_actions
+        set status = 'rejected',
+            last_error = ?,
+            last_attempt_at = ?
+      where id = ?`,
+    [error.slice(0, 1000), Date.now(), id],
+  );
+}
+
+/**
+ * Reject the WHOLE outbox at once. Called from the account eviction, where the
+ * account has been confirmed disabled out of band: nothing queued will ever be
+ * accepted, and the drain will not get another chance to say so per row —
+ * eviction cancels the in-flight requests and drops the session first.
+ *
+ * Without this, eviction's `wipeForSignOut()` deleted every queued write with
+ * no trace, so the operator was never told what became of the work they
+ * believed they had saved.
+ *
+ * Unlike the per-row `outboxReject`, this does NOT clear
+ * `cycle_count_lines.local_dirty`: the caller wipes that whole table
+ * immediately afterwards, so there is no line left to strand.
+ *
+ * @returns how many rows were rejected (for logging / the hand-test).
+ */
+export async function rejectAllPending(error: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    `update pending_actions
+        set status = 'rejected',
+            last_error = ?,
+            last_attempt_at = ?
+      where status in ('pending','sending','failed')`,
+    [error.slice(0, 1000), Date.now()],
+  );
+  return result.changes;
+}
+
+/**
+ * How many rejected rows are on this device.
+ *
+ * Read by the sync badge (so "All synced" can stop being said over the top of
+ * work that was never sent) and by the Settings row that opens the list.
+ */
+export async function countRejected(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions where status = 'rejected'`,
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * RETENTION. Rejected rows are kept on purpose — they are the only record that
+ * the operator's queued work existed at all, and `wipeForSignOut` spares them —
+ * but keeping cannot mean keeping forever. On a shared warehouse device an
+ * unpruned table carries one user's payloads past every later sign-in and grows
+ * for the life of the install.
+ *
+ * Two bounds, because age alone is not enough: one eviction after a long
+ * offline stint can park thousands of rows that all share a timestamp.
+ *
+ *   1. older than REJECTED_RETENTION_DAYS (measured from the rejection, falling
+ *      back to when the work was queued);
+ *   2. beyond the newest REJECTED_KEEP_MAX, whatever their age.
+ *
+ * Runs at cold launch (app/_layout.tsx). Returns how many rows it removed.
+ */
+export async function pruneRejected(now: number = Date.now()): Promise<number> {
+  const db = await getDb();
+  const aged = await db.runAsync(
+    `delete from pending_actions
+      where status = 'rejected'
+        and coalesce(last_attempt_at, created_at) < ?`,
+    [rejectedPruneCutoff(now)],
+  );
+  const excess = await db.runAsync(
+    `delete from pending_actions
+      where status = 'rejected'
+        and id not in (
+          select id from pending_actions
+           where status = 'rejected'
+           order by coalesce(last_attempt_at, created_at) desc
+           limit ?
+        )`,
+    [REJECTED_KEEP_MAX],
+  );
+  return aged.changes + excess.changes;
+}
+
+/**
+ * Drop the rejected record on the user's own say-so — the "Clear this list"
+ * action on the Unsent work screen. Deliberately explicit: nothing else in the
+ * app deletes these rows, so the operator decides when they have finished with
+ * them.
+ */
+export async function clearRejected(): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(`delete from pending_actions where status = 'rejected'`);
+  return result.changes;
+}
+
+/** Rejected rows, newest first — the local record for the user and support. */
+export async function listRejected(limit = 100): Promise<PendingActionRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: number;
+    kind: string;
+    idempotency_key: string;
+    payload_json: string;
+    created_at: number;
+    attempts: number;
+    last_attempt_at: number | null;
+    last_error: string | null;
+    status: string;
+  }>(
+    `select * from pending_actions where status = 'rejected'
+      order by created_at desc limit ?`,
+    [limit],
+  );
+  return rows.map(rowFromDb);
+}
+
+/**
+ * Hand a row back to the drain. Only ever called from an explicit user action —
+ * a rejected row must never be re-armed automatically, least of all by the
+ * account being re-enabled.
+ */
 export async function retry(id: number): Promise<void> {
   const db = await getDb();
   await db.runAsync(

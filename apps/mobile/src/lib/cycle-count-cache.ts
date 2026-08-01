@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { markRejected } from './queue';
 
 /**
  * Offline cycle-count cache + outbox helpers.
@@ -387,6 +388,61 @@ export async function outboxAck(id: number): Promise<void> {
       }
     }
     await db.runAsync('delete from pending_actions where id = ?', [id]);
+  });
+}
+
+/**
+ * TERMINAL rejection of a cycle-count outbox row — the counterpart to
+ * `outboxAck` for a write the server will never accept (today: a 401 while the
+ * account is known disabled).
+ *
+ * Two things must happen, and they must happen TOGETHER:
+ *
+ *   1. the row goes to 'rejected', so neither drain re-reads it — this is what
+ *      stops the count edit replaying the moment the account is re-enabled;
+ *   2. the line's `local_dirty` flag is cleared, exactly as `outboxAck` does.
+ *
+ * Without (2) the count screen shows a line flagged unsynced forever with no
+ * outbox row left that could ever move it. Without the shared transaction, a
+ * crash in between leaves precisely that state. So this mirrors `outboxAck`'s
+ * bookkeeping — including its guard: if the user edited the same line twice
+ * offline, the flag stays set until the LAST live row for that line settles.
+ *
+ * Unlike `outboxAck` the row is NOT deleted. It is the local record of work the
+ * counter believed they had saved, and it is the only way to tell them what
+ * became of it.
+ */
+export async function outboxReject(id: number, error: string): Promise<void> {
+  const db = await getDb();
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ payload_json: string }>(
+      'select payload_json from pending_actions where id = ?',
+      [id],
+    );
+    if (row) {
+      const payload = safeParse(row.payload_json);
+      const lineId = typeof payload.lineId === 'string' ? payload.lineId : null;
+      if (lineId) {
+        const other = await db.getFirstAsync<{ n: number }>(
+          `select count(*) as n from pending_actions
+             where kind = 'record_count'
+               and id != ?
+               and status in ('pending','failed','sending')
+               and json_extract(payload_json, '$.lineId') = ?`,
+          [id, lineId],
+        );
+        if (!other || other.n === 0) {
+          await db.runAsync(
+            'update cycle_count_lines set local_dirty = 0 where id = ?',
+            [lineId],
+          );
+        }
+      }
+    }
+    // Same terminal write engine 1 uses. Called inside this transaction on the
+    // same memoized connection, so the status change and the dirty clear commit
+    // as one unit.
+    await markRejected(id, error);
   });
 }
 

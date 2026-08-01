@@ -1,11 +1,12 @@
 import Constants from 'expo-constants';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
 import {
   ArrowLeft,
   Bell,
   ChevronLeft,
   FileText,
+  FileWarning,
   Fingerprint,
   HelpCircle,
   LayoutGrid,
@@ -46,6 +47,7 @@ import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { countRejected } from '@/lib/queue';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -94,6 +96,7 @@ export default function Settings() {
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [pending, setPending] = React.useState(false);
+  const [rejectedCount, setRejectedCount] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -105,6 +108,27 @@ export default function Settings() {
       cancelled = true;
     };
   }, []);
+
+  // Count the terminally-rejected outbox rows so the row can say how many there
+  // are without opening the screen. Re-read on focus: coming back from the list
+  // after clearing it must not leave a stale count behind. Never fatal — a
+  // failed count just leaves the row reading "None".
+  useFocusEffect(
+    React.useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const n = await countRejected();
+          if (!cancelled) setRejectedCount(n);
+        } catch (e) {
+          console.warn('[settings] rejected count failed', e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   async function toggleBiometric(next: boolean) {
     if (pending) return;
@@ -363,6 +387,19 @@ export default function Settings() {
                 'Cycle counts and stock movements sync automatically every 60 seconds while the app is open. Cellular sync can be toggled in iOS Settings → StockPilot.',
               )
             }
+          />
+          <Hair inset={70} />
+          {/* The record of work that was queued on this device and can never be
+              sent — today, whatever was in the outbox when the account was
+              disabled. Those rows are kept deliberately and excluded from every
+              drain, which also excluded them from the "N pending" badge: without
+              a surface the operator was simply never told. */}
+          <SettingRow
+            icon={FileWarning}
+            title="Unsent work"
+            detail={rejectedCount > 0 ? `${rejectedCount} never sent` : 'None'}
+            chevron
+            onPress={() => router.push('/settings/rejected-work' as never)}
           />
           <Hair inset={70} />
           <SettingRow
