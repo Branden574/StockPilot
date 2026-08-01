@@ -245,16 +245,29 @@ export function isBrowsingAll(input: CatalogFilterInput): boolean {
 }
 
 /**
- * Collapse anything destined for a plain-text email line: CR, LF, tabs and any
- * other control character become a single space, and the result is trimmed.
+ * Collapse anything destined for a plain-text email line: CR, LF, tabs, and
+ * every other C0 control character (U+0000-U+001F) plus DEL (U+007F) become a
+ * single space, and the result is trimmed.
  *
- * Two reasons, both real. (1) A newline inside a value would break the body's
- * block structure and could forge a header-looking line ("Bcc: ...") in a mail
- * client that parses the pasted text. (2) The repo already has this helper —
- * `sanitizePlainText` in lib/email/order-requests.ts:1247 — but it is
- * module-private and lives in a `server-only` module, so a client builder
- * cannot import it. This is the client-side twin, deliberately named
- * differently so nobody assumes the two are kept in sync.
+ * C1 controls (U+0080-U+009F, including NEL, U+0085) are deliberately NOT
+ * stripped — they pass through unchanged. That is a scope boundary, not an
+ * oversight: every value that reaches here also passes through a
+ * percent-encoding transport before it leaves this feature (`encodeDraftQuery`
+ * for both compose URLs, the browser's own clipboard write for the copy
+ * path), and none of those transports treat a raw C1 control as a delimiter
+ * or header marker the way a bare CR/LF would. A C1 character is therefore not
+ * weaponizable through any path this feature actually uses, even though this
+ * function does not remove it. This matches the server-side twin's narrower
+ * behavior below (CR/LF only) rather than widening past what either needs.
+ *
+ * Two reasons this exists at all, both real. (1) A newline inside a value
+ * would break the body's block structure and could forge a header-looking
+ * line ("Bcc: ...") in a mail client that parses the pasted text. (2) The
+ * repo already has this helper — `sanitizePlainText` in
+ * lib/email/order-requests.ts:1247 — but it is module-private and lives in a
+ * `server-only` module, so a client builder cannot import it. This is the
+ * client-side twin, deliberately named differently so nobody assumes the two
+ * are kept in sync.
  */
 export function toPlainTextLine(value: string): string {
   // eslint-disable-next-line no-control-regex

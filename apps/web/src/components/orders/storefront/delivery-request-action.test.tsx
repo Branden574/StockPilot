@@ -589,6 +589,32 @@ describe('DeliveryRequestAction — preview dialog', () => {
     expect(String(writeText.mock.calls[0]![0])).toContain('CC: arosas@cvwest.org');
   });
 
+  it('Finding 1: shows the manual-copy textarea INSIDE the dialog when the clipboard is denied, with no need for the standalone fallback panel', async () => {
+    // Before the fix, handleCopy's catch set manualText, but the only render
+    // site for the textarea was nested inside the `fallbackReason !== null`
+    // panel — which never appears from this surface, because opening the
+    // preview and clicking its own Copy button never touches handleOpen at
+    // all. The error toast fired with nowhere for the employee to actually
+    // read or select the text.
+    const user = userEvent.setup();
+    stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
+
+    const box = await within(dialog).findByLabelText(/Delivery request text to copy manually/i);
+    expect((box as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
+    expect((box as HTMLTextAreaElement).value).toContain('CC: arosas@cvwest.org');
+    expect((box as HTMLTextAreaElement).value).toContain('MESSAGE:');
+    expect((box as HTMLTextAreaElement).value).toContain('CVW Clovis');
+    // The standalone fallback panel (Finding 1's OLD only render site) was
+    // never triggered on this path — handleOpen was never called — so it
+    // must not be required, and must not appear, for the textarea to show.
+    expect(screen.queryByTestId('delivery-request-fallback')).not.toBeInTheDocument();
+  });
+
   it('shows the pickup body for a pickup order, with no destination', async () => {
     const user = userEvent.setup();
     render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
@@ -824,6 +850,33 @@ describe('DeliveryRequestAction accessibility', () => {
     expect(live).toHaveAttribute('aria-atomic', 'true');
     await waitFor(() =>
       expect(live).toHaveTextContent(
+        'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+      ),
+    );
+  });
+
+  it('Finding 2: announces a copy triggered inside the preview dialog, in a SECOND live region rendered inside the dialog', async () => {
+    // Radix's modal mode aria-hides everything outside the portal while the
+    // dialog is open — including the always-mounted `delivery-request-live`
+    // region rendered in the component's own root fragment. A copy result
+    // triggered by the dialog's own Copy button was therefore never
+    // announced to a screen-reader user with the preview open. The fix adds
+    // a second live region INSIDE DialogContent, fed by the same
+    // `announcement` state.
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const liveInDialog = await within(dialog).findByTestId('delivery-request-live-dialog');
+    expect(liveInDialog).toHaveAttribute('aria-live', 'polite');
+    expect(liveInDialog).toHaveAttribute('aria-atomic', 'true');
+    await waitFor(() =>
+      expect(liveInDialog).toHaveTextContent(
         'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
       ),
     );

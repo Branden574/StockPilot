@@ -437,6 +437,49 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
             aria-label="Delivery request message preview"
           />
 
+          {/*
+            Finding 1 (final review): the ONLY render site for the manual
+            fallback textarea used to be nested inside the `fallbackReason
+            !== null` panel below, which this dialog never triggers — the
+            dialog's own Copy button calls the same `handleCopy`, but
+            reaching a clipboard-denied/absent browser from here never runs
+            `handleOpen`, so `fallbackReason` stays null and that panel never
+            mounts. The error toast fired with no textarea anywhere in the
+            document for the employee to read or select. This renders from
+            the SAME `manualText` state as the panel's copy below — whichever
+            surface the user is on when the clipboard call fails shows it.
+          */}
+          {manualText !== null && (
+            <textarea
+              className="sf-fallback-text"
+              readOnly
+              rows={8}
+              value={manualText}
+              aria-label="Delivery request text to copy manually"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          )}
+
+          {/*
+            Finding 2 (final review): Radix's modal mode sets
+            aria-hidden="true" on every sibling of the portalled dialog
+            content while it is open — including the always-mounted live
+            region rendered in this component's own root fragment below. A
+            copy triggered by THIS dialog's Copy button was therefore never
+            announced to a screen-reader user with the preview open. This is
+            a second live region, fed by the same `announcement` state,
+            living inside DialogContent so it is never aria-hidden while the
+            dialog is open.
+          */}
+          <div
+            aria-live="polite"
+            aria-atomic="true"
+            className="sf-sr-only"
+            data-testid="delivery-request-live-dialog"
+          >
+            {announcement}
+          </div>
+
           <div className="sf-modal-foot">
             <button type="button" className="sf-btn-ghost" onClick={handleCopy}>
               <Copy size={14} aria-hidden="true" />

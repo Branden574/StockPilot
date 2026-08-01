@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 
+import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 
 const schema = z.object({
@@ -27,9 +28,21 @@ const schema = z.object({
  * The actor and the organisation come from the audit service's own context, not
  * from the caller, so a client cannot attribute a draft to somebody else.
  *
+ * Before writing anything, this confirms `orderId` actually names a row the
+ * CALLER can see: a plain `createClient()` (the same cookie-bound, user-authed
+ * client every other server action in this directory uses for a scoped read —
+ * deliberately NOT `requireOrgContext()`/`withContext()`, which `redirect()` on
+ * a missing session/org and would hijack navigation out from under an employee
+ * for what is supposed to be invisible background bookkeeping) reads
+ * `order_requests` by id. RLS (migration 0044) already scopes that SELECT to
+ * the caller's own organization, so one round trip answers both "does it
+ * exist" and "can this caller see it." A well-formed but unknown or
+ * not-visible id is a silent no-op, same as a failed zod parse — it is not an
+ * error, just nothing worth auditing.
+ *
  * Best-effort and never throws: it is called AFTER window.open, and a logging
- * failure must never surface as a broken action to an employee who has already
- * got their draft.
+ * failure — the existence check included — must never surface as a broken
+ * action to an employee who has already got their draft.
  */
 export async function recordDeliveryRequestDraftedAction(input: {
   orderId: string;
@@ -39,6 +52,14 @@ export async function recordDeliveryRequestDraftedAction(input: {
   if (!parsed.success) return;
 
   try {
+    const supabase = await createClient();
+    const { data: order } = await supabase
+      .from('order_requests')
+      .select('id')
+      .eq('id', parsed.data.orderId)
+      .maybeSingle();
+    if (!order) return;
+
     await audit({
       event: 'order.delivery_request_drafted',
       entityType: 'order_request',
@@ -51,6 +72,7 @@ export async function recordDeliveryRequestDraftedAction(input: {
     });
   } catch {
     // audit() is already best-effort; this is belt and braces so the client
-    // promise never rejects.
+    // promise never rejects. Also covers the existence check above: a flaky
+    // read must not surface as a broken action either.
   }
 }
