@@ -3,6 +3,8 @@
 // (cards / toolbar / cart) call these so filtering, sorting, status
 // derivation, and totals behave identically everywhere.
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 import type { CartLineState, CatalogItem } from '../v2/types';
 
 /** Derived stock status per item (README state model). */
@@ -202,17 +204,32 @@ export function buildQtyMap(
 }
 
 /**
- * Success-state reference line, e.g. "SO-1A2B3C4D · DC4 · 7 units":
- * first 8 chars of the created order id (uppercased) + warehouse +
- * unit count.
+ * Success-state reference line, e.g. "SO-000049 · DC4 · 7 units".
+ *
+ * This used to be `orderRef()`, which rendered `SO-` plus the first 8 hex
+ * characters of the order UUID. That string is visually indistinguishable from
+ * the canonical `formatOrderNumber()` output but exists NOWHERE else in the
+ * product — not in the orders list, not on the detail page, not in any email,
+ * not on a pick or packing slip. An employee who quoted it (and, once the
+ * delivery-request assistant ships, an employee who mails it to DC4) quoted a
+ * number nobody can look up.
+ *
+ * The canonical number now reaches the client (createOrderRequestAction returns
+ * it), so this renders the real handle. When it is genuinely absent — an old
+ * client bundle, or a row the BEFORE-INSERT trigger somehow missed — the
+ * fallback is deliberately NOT SO-shaped: a bare uuid prefix reads as an
+ * internal id, which is honest, where a fake SO number reads as a searchable
+ * order number, which is not.
  */
-export function orderRef(
+export function successRefLine(
+  orderNumber: number | null,
   orderId: string,
   warehouseName: string,
   unitCount: number,
 ): string {
-  const id8 = orderId.replace(/-/g, '').slice(0, 8).toUpperCase();
-  return `SO-${id8} · ${warehouseName} · ${unitCount} ${unitCount === 1 ? 'unit' : 'units'}`;
+  const handle = formatOrderNumber(orderNumber) ?? `Order ${orderId.replace(/-/g, '').slice(0, 8)}`;
+  const units = `${unitCount} ${unitCount === 1 ? 'unit' : 'units'}`;
+  return `${handle} · ${warehouseName} · ${units}`;
 }
 
 /** True when the catalog is in the unfiltered "browse All" state. */

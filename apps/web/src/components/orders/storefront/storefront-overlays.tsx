@@ -13,7 +13,7 @@ import { CharterTag, SfAddControl, SfPhoto } from './storefront-cards';
 import {
   availableOf,
   cartTotals,
-  orderRef,
+  successRefLine,
   statusOf,
 } from './storefront-logic';
 
@@ -198,7 +198,7 @@ interface ReviewModalProps {
   summary: ReviewSummary;
   submitting: boolean;
   /** Set once the order is created — drives the success reference line. */
-  submitted: { id: string; unitCount: number } | null;
+  submitted: { id: string; orderNumber: number | null; unitCount: number } | null;
   onClose: () => void;
   onConfirm: () => void;
   onViewOrder: () => void;
@@ -347,7 +347,12 @@ export function ReviewModal({
             <h3>Order request submitted</h3>
             <div className="ref">
               {submitted
-                ? orderRef(submitted.id, summary.warehouseName, submitted.unitCount)
+                ? successRefLine(
+                    submitted.orderNumber,
+                    submitted.id,
+                    summary.warehouseName,
+                    submitted.unitCount,
+                  )
                 : ''}
             </div>
             <p>

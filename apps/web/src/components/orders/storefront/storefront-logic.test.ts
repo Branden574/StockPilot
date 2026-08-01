@@ -12,7 +12,7 @@ import {
   fullKitLines,
   glyphFor,
   isBrowsingAll,
-  orderRef,
+  successRefLine,
   sortCatalog,
   statusOf,
   type ItemStatus,
@@ -332,15 +332,6 @@ describe('clampQty', () => {
 });
 
 describe('misc helpers', () => {
-  it('orderRef uses the first 8 id chars uppercased + warehouse + units', () => {
-    expect(orderRef('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'DC4', 7)).toBe(
-      'SO-A1B2C3D4 · DC4 · 7 units',
-    );
-    expect(orderRef('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'DC4', 1)).toBe(
-      'SO-A1B2C3D4 · DC4 · 1 unit',
-    );
-  });
-
   it('glyphFor strips the L4L prefix and takes two initials', () => {
     expect(glyphFor('L4L Water Bottle')).toBe('WB');
     expect(glyphFor('Planner')).toBe('P');
@@ -359,5 +350,47 @@ describe('misc helpers', () => {
         availability: new Set<ItemStatus>(['ok']),
       }),
     ).toBe(false);
+  });
+});
+
+describe('successRefLine', () => {
+  it('prints the CANONICAL order number, zero-padded, exactly as every other surface does', () => {
+    expect(successRefLine(49, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 7)).toBe(
+      'SO-000049 · DC4 · 7 units',
+    );
+  });
+
+  it('singularizes one unit', () => {
+    expect(successRefLine(49, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 1)).toBe(
+      'SO-000049 · DC4 · 1 unit',
+    );
+  });
+
+  it('NEVER fabricates an SO- handle from the uuid when the number is missing', () => {
+    // The old orderRef() produced "SO-B3F1C2D4", which looks canonical and is
+    // not. When the number is genuinely unavailable we fall back to a handle
+    // that is visibly NOT an SO number, so nobody searches for it.
+    const line = successRefLine(null, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 7);
+    expect(line).toBe('Order b3f1c2d4 · DC4 · 7 units');
+    expect(line).not.toContain('SO-');
+  });
+
+  it('treats 0 as missing — order_number is a 1-based sequence', () => {
+    expect(successRefLine(0, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 2)).toBe(
+      'Order b3f1c2d4 · DC4 · 2 units',
+    );
+  });
+
+  it('pads a large number without truncating it', () => {
+    expect(successRefLine(1234567, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 1)).toBe(
+      'SO-1234567 · DC4 · 1 unit',
+    );
+  });
+});
+
+describe('the fabricated order handle is gone', () => {
+  it('storefront-logic.ts no longer exports orderRef', async () => {
+    const mod = await import('./storefront-logic');
+    expect('orderRef' in mod).toBe(false);
   });
 });

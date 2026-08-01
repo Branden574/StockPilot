@@ -82,7 +82,7 @@ const createSchema = z
 
 export async function createOrderRequestAction(
   input: z.input<typeof createSchema>,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; orderNumber: number | null }>> {
   const parsed = createSchema.safeParse(input);
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -119,7 +119,13 @@ export async function createOrderRequestAction(
     });
     revalidatePath('/dashboard/orders');
     revalidateOrdersCatalog();
-    return ok({ id: row.id });
+    // `create()` already returns the full inserted row from
+    // `.insert(...).select('*').single()`, and `order_number` is assigned by the
+    // BEFORE-INSERT trigger `assign_order_request_number` (migration 0254) under
+    // an advisory lock, so it is populated by the time we get here. Returning it
+    // is what lets the success screen and the delivery-request email print the
+    // SAME handle the orders list prints.
+    return ok({ id: row.id, orderNumber: row.order_number ?? null });
   } catch (e) {
     return toResult(e);
   }

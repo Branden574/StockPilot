@@ -93,7 +93,7 @@ export interface OrdersStorefrontProps {
 }
 
 type ReviewStage = null | 'review' | 'success';
-type SubmittedOrder = { id: string; unitCount: number } | null;
+type SubmittedOrder = { id: string; orderNumber: number | null; unitCount: number } | null;
 
 export function OrdersStorefront(props: OrdersStorefrontProps) {
   const initial = initialCartState({
@@ -784,6 +784,7 @@ function StorefrontCatalog({
       clearCartDraft(warehouseId);
       setSubmitted({
         id: res.data.id,
+        orderNumber: res.data.orderNumber,
         unitCount: lines.reduce((s, l) => s + l.quantity, 0),
       });
       setReviewStage('success');
