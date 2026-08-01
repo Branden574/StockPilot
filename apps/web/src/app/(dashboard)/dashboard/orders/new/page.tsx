@@ -8,7 +8,6 @@ import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { env } from '@/lib/env';
 import { SITE_URL } from '@/lib/site';
-import { ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
@@ -61,10 +60,12 @@ export default async function NewOrderPage({
     getCachedOrgTimezone(ctx.organizationId),
   ]);
   // getCachedOrgTimezone already falls back to 'UTC' internally and never
-  // returns '', but the delivery-request draft's needed-by line is the one
-  // place an empty zone would render an empty "()" after the date — belt and
-  // suspenders, matching the ORDER_URL_BASE fallback above.
-  const orgTimezone = orgTimezoneRaw || ORG_TIMEZONE_DEFAULT;
+  // returns '' — `|| ORG_TIMEZONE_DEFAULT` here was dead code (it can never
+  // fire) and, worse, would have silently swapped a legitimate 'UTC' org for
+  // 'America/Los_Angeles' had the helper ever returned it. Use the cached
+  // value as-is: the delivery-request draft's needed-by line must print the
+  // SAME zone the rest of the app already uses for this org.
+  const orgTimezone = orgTimezoneRaw;
   const warehouses = warehouseRows.map((w) => ({
     id: w.id,
     name: w.name,

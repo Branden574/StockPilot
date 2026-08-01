@@ -49,38 +49,74 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   // than inside the handler keeps the handler's first statement the open call.
   const prepared = React.useMemo(() => prepareDeliveryRequest(input), [input]);
 
-  const [showFallback, setShowFallback] = React.useState(false);
+  // null = panel hidden. 'oversized' = the linkFits guard tripped (a
+  // measured length problem, no popup was ever attempted). 'blocked' = the
+  // window.open attempt itself came back empty-handed. The panel looks
+  // almost identical either way — same testid, same two recipients, same
+  // copy button — but the lead sentence must name the real cause, not
+  // reflexively blame a popup blocker for a link-length problem.
+  const [fallbackReason, setFallbackReason] = React.useState<'blocked' | 'oversized' | null>(null);
   const [manualText, setManualText] = React.useState<string | null>(null);
+  // Guards the mailto: navigation, not the panel: the panel is allowed to
+  // reappear on every blocked click, but re-navigating to mailto: on a
+  // second, third, ... blocked click while the first mailto: tab/prompt is
+  // still up would fire a second draft. One mailto: attempt per mount.
+  const mailtoAttemptedRef = React.useRef(false);
 
   function handleOpen() {
     if (!prepared.linkFits) {
       // Even the condensed links exceed the safe URL length, so a mail client
       // would silently truncate the body. Do not open anything — the clipboard
       // path carries the complete message and is the only honest transport here.
-      setShowFallback(true);
+      setFallbackReason('oversized');
       return;
     }
 
     // R3: nothing may precede this line beyond the linkFits guard above.
     let opened: Window | null = null;
     try {
-      opened = window.open(prepared.outlookUrl, '_blank', 'noopener,noreferrer');
+      // No 'noopener' in the features string: with it, window.open returns
+      // null EVEN ON SUCCESS (the spec severs the opener before returning),
+      // which is indistinguishable from a blocked popup — the exact signal
+      // this chain runs on. We take the handle, then sever the opener
+      // ourselves so the OWA tab still cannot reach back into this page.
+      opened = window.open(prepared.outlookUrl, '_blank');
+      if (opened) {
+        try {
+          opened.opener = null;
+        } catch {
+          // Cross-origin handles can refuse; severing is best-effort.
+        }
+      }
     } catch {
       opened = null;
     }
 
+    // TASK 10 CALL SITE: the audit action (recordDeliveryRequestDraftedAction)
+    // and the analytics capture fire here — always AFTER the open attempt,
+    // never before it (R3).
+
     if (opened) {
+      // Clears a stale failure panel left over from an earlier blocked click
+      // on this same mount, now that a later click has actually succeeded.
+      setFallbackReason(null);
       toast.success('Delivery request draft opened in Outlook. Review it and press Send yourself.');
       return;
     }
 
     // Popup blocked. Same-tab mailto: is the next best thing; it may still be
-    // a silent no-op on Safari, so the copy path is surfaced regardless.
-    setShowFallback(true);
-    try {
-      window.location.assign(prepared.mailtoUrl);
-    } catch {
-      // Ignored on purpose: the visible fallback below is the recovery.
+    // a silent no-op on Safari, so the copy path is surfaced regardless. The
+    // panel reappears on every blocked click, but the mailto: navigation
+    // itself only fires once per mount — otherwise a double-click (or a
+    // second blocked attempt) opens a second draft.
+    setFallbackReason('blocked');
+    if (!mailtoAttemptedRef.current) {
+      mailtoAttemptedRef.current = true;
+      try {
+        window.location.assign(prepared.mailtoUrl);
+      } catch {
+        // Ignored on purpose: the visible fallback below is the recovery.
+      }
     }
   }
 
@@ -108,11 +144,13 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         Email delivery request
       </button>
 
-      {showFallback && (
+      {fallbackReason !== null && (
         <div className="sf-fallback" data-testid="delivery-request-fallback">
           <p>
-            Outlook did not open — your browser may have blocked the popup. Copy the details and
-            create the email yourself: To {DELIVERY_REQUEST_EMAIL.to}, CC{' '}
+            {fallbackReason === 'oversized'
+              ? "This order's details are too long to prefill into a mail link safely."
+              : 'Outlook did not open — your browser may have blocked the popup.'}{' '}
+            Copy the details and create the email yourself: To {DELIVERY_REQUEST_EMAIL.to}, CC{' '}
             {DELIVERY_REQUEST_EMAIL.cc}.
           </p>
           <button type="button" className="sf-btn-ghost" onClick={handleCopy}>

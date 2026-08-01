@@ -107,9 +107,28 @@ function stubLocationAssign(assign = vi.fn()) {
   return assign;
 }
 
+// Captured once, before any test has had a chance to overwrite either
+// property with Object.defineProperty. Both stub helpers above replace an
+// OWN property on `navigator`/`window`; vi.unstubAllGlobals() only undoes
+// vi.stubGlobal(), so those own-property overrides otherwise survive into
+// the next test — a later describe block with no clipboard/location stub of
+// its own would see whatever the previous test last defined.
+const ORIGINAL_CLIPBOARD_DESCRIPTOR = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+const ORIGINAL_LOCATION_DESCRIPTOR = Object.getOwnPropertyDescriptor(window, 'location');
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  if (ORIGINAL_CLIPBOARD_DESCRIPTOR) {
+    Object.defineProperty(navigator, 'clipboard', ORIGINAL_CLIPBOARD_DESCRIPTOR);
+  } else {
+    Reflect.deleteProperty(navigator, 'clipboard');
+  }
+  if (ORIGINAL_LOCATION_DESCRIPTOR) {
+    Object.defineProperty(window, 'location', ORIGINAL_LOCATION_DESCRIPTOR);
+  } else {
+    Reflect.deleteProperty(window, 'location');
+  }
 });
 
 describe('DeliveryRequestAction — the primary Outlook path', () => {
@@ -137,15 +156,36 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     expect(url.searchParams.get('body')).toContain('CVW Clovis');
   });
 
-  it('opens in a new tab with noopener', async () => {
+  it('opens in a new tab with NO features string, and severs the opener itself', async () => {
+    // Per the HTML spec, window.open(url, '_blank', 'noopener,noreferrer')
+    // returns null EVEN ON SUCCESS — the opener relationship is severed
+    // before the handle is returned, which is indistinguishable from a
+    // blocked popup. So the features string must be absent (locking that
+    // nobody reintroduces 'noopener' there), and the opener-severing must
+    // happen on the handle the component itself gets back.
     const user = userEvent.setup();
-    const open = stubOpen();
+    const handle: { focus: () => void; opener: unknown } = { focus: vi.fn(), opener: {} };
+    const open = stubOpen(handle);
 
     render(<DeliveryRequestAction input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     expect(open.mock.calls[0]![1]).toBe('_blank');
-    expect(String(open.mock.calls[0]![2])).toContain('noopener');
+    expect(open.mock.calls[0]![2]).toBeUndefined();
+    expect(handle.opener).toBeNull();
+  });
+
+  it('does not show the fallback panel or navigate to mailto on a successful open', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+    const assign = stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('delivery-request-fallback')).not.toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('confirms a DRAFT was opened, never that anything was sent', async () => {
@@ -160,6 +200,26 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     expect(msg).toContain('draft');
     expect(msg).not.toContain('sent');
     expect(msg).not.toContain('ticket');
+  });
+
+  it('R3: nothing side-effecting runs before window.open itself', async () => {
+    // The assertion lives INSIDE the open() implementation, so it runs at
+    // the exact moment the click handler calls window.open — pinning that
+    // the success toast (the handler's only other observable side effect on
+    // this path) cannot have fired yet, no matter how the handler is
+    // reordered later.
+    const user = userEvent.setup();
+    const open = vi.fn(() => {
+      expect(toastSuccess).not.toHaveBeenCalled();
+      return { focus: vi.fn() };
+    });
+    vi.stubGlobal('open', open);
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+
+    expect(open).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
   });
 });
 
@@ -191,6 +251,12 @@ describe('DeliveryRequestAction — popup blocked', () => {
     const fallback = await screen.findByTestId('delivery-request-fallback');
     expect(fallback).toHaveTextContent('dc4@learn4life.org');
     expect(fallback).toHaveTextContent('arosas@cvwest.org');
+    expect(fallback).toHaveTextContent(
+      'Outlook did not open — your browser may have blocked the popup.',
+    );
+    // The blocked-open path never measured link length, so it must not
+    // blame that — that copy belongs only to the oversized-draft branch.
+    expect(fallback).not.toHaveTextContent(/too long to prefill/i);
     expect(screen.getByRole('button', { name: /Copy the details/i })).toBeInTheDocument();
   });
 
@@ -206,6 +272,38 @@ describe('DeliveryRequestAction — popup blocked', () => {
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
     expect(String(assign.mock.calls[0]![0]).startsWith('mailto:')).toBe(true);
+  });
+
+  it('only navigates to mailto ONCE across repeated blocked clicks, though the panel stays up', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('open', vi.fn(() => null));
+    const assign = stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+    await user.click(btn);
+    await user.click(btn);
+
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('delivery-request-fallback')).toBeInTheDocument();
+  });
+
+  it('clears the stale failure panel and fires the success toast when a blocked click is followed by a successful one', async () => {
+    const user = userEvent.setup();
+    const open = vi.fn((..._args: unknown[]): Window | null => null);
+    vi.stubGlobal('open', open);
+    stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+    await user.click(btn);
+    expect(await screen.findByTestId('delivery-request-fallback')).toBeInTheDocument();
+
+    open.mockImplementation(() => ({ focus: vi.fn() }) as unknown as Window);
+    await user.click(btn);
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('delivery-request-fallback')).not.toBeInTheDocument();
   });
 });
 
@@ -297,6 +395,15 @@ describe('DeliveryRequestAction — link too long even condensed (linkFits=false
     const fallback = await screen.findByTestId('delivery-request-fallback');
     expect(fallback).toHaveTextContent('dc4@learn4life.org');
     expect(fallback).toHaveTextContent('arosas@cvwest.org');
+    // The oversized-draft path never touched a popup, so it must not blame
+    // one — that copy belongs only to the blocked-open branch.
+    expect(fallback).toHaveTextContent(
+      "This order's details are too long to prefill into a mail link safely.",
+    );
+    expect(fallback).not.toHaveTextContent(/blocked the popup/i);
+    // Nothing "succeeded" here — the draft was never opened, so the success
+    // toast (reserved for an actual Outlook open) must not fire.
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });
 
@@ -335,5 +442,22 @@ describe('DeliveryRequestAction — no duplicate order, ever', () => {
     await user.click(btn);
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('DeliveryRequestAction — test isolation (no stub leakage across describes)', () => {
+  it('does not leak a previous test\'s navigator.clipboard/window.location stub into a fresh test', () => {
+    // Deliberately does NOT call stubClipboard()/stubLocationAssign(). Many
+    // earlier tests in this file replace both with Object.defineProperty,
+    // which vi.unstubAllGlobals() (used in beforeEach) does NOT undo — only
+    // vi.stubGlobal() stubs are undone by it. If beforeEach doesn't also
+    // restore these two own-property overrides, whichever test ran last
+    // leaves its stub installed for every test after it, this one included.
+    expect(Object.getOwnPropertyDescriptor(navigator, 'clipboard')).toEqual(
+      ORIGINAL_CLIPBOARD_DESCRIPTOR,
+    );
+    expect(Object.getOwnPropertyDescriptor(window, 'location')).toEqual(
+      ORIGINAL_LOCATION_DESCRIPTOR,
+    );
   });
 });
