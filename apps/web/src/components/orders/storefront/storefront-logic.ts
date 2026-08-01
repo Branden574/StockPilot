@@ -575,6 +575,15 @@ export function buildDeliveryRequestDraft(
  * The org runs managed Microsoft 365, so outlook.office.com is the work-account
  * host (outlook.live.com is the consumer one and would land a work user on the
  * wrong tenant).
+ *
+ * CORRECTION (2026-08-01): this endpoint originally received plain `to` /
+ * `cc` / `subject` / `body` query params. The owner tested that shape
+ * against the real L4L tenant and found Outlook Web honors `to`, `subject`
+ * and `body` but SILENTLY DROPS `cc` — Andrew (arosas@cvwest.org, a
+ * mandatory CC) never landed in the Cc line. Microsoft Q&A confirms a plain
+ * `cc=` on `mail/deeplink/compose` is effectively unimplemented. See
+ * `buildOutlookComposeUrl` below for the fix (the `mailtouri` form) and its
+ * own tenant-verification note.
  */
 export const OUTLOOK_COMPOSE_BASE = 'https://outlook.office.com/mail/deeplink/compose';
 
@@ -606,25 +615,39 @@ function encodeDraftQuery(params: Record<string, string>): string {
 }
 
 /**
- * Encoded EXACTLY ONCE, via `encodeDraftQuery` — never `URLSearchParams`,
- * whose `application/x-www-form-urlencoded` output turns every space into a
- * literal '+'. That reads fine to a web query parser but not to this link's
- * own mailto: fallback or to desktop Outlook, Apple Mail and Thunderbird,
- * which give '+' no space meaning under RFC 6068 and would render the whole
- * draft as "Delivery+Request+...". `encodeDraftQuery` emits %20 instead,
- * which both kinds of decoder read correctly. Nothing is pre-encoded on the
- * way in, and nothing is encoded again on the way out — double-encoding is
- * the other classic failure here, producing a body full of literal %20 that
- * the recipient has to read through.
+ * Wraps the mailto: URI (built by `buildMailtoUrl`) in OWA's `mailtouri`
+ * param — NOT plain `to`/`cc`/`subject`/`body` query params.
+ *
+ * HISTORY: this originally built `${OUTLOOK_COMPOSE_BASE}?to=...&cc=...&
+ * subject=...&body=...`, each value encoded once via `encodeDraftQuery`. The
+ * owner tested that exact URL against the real L4L Microsoft 365 tenant
+ * (2026-08-01): Outlook Web opened the compose window with To, Subject and
+ * Body populated correctly, but Cc was EMPTY — Andrew (arosas@cvwest.org, a
+ * mandatory CC) silently never received the request. Microsoft Q&A confirms
+ * plain `cc=` on `mail/deeplink/compose` is effectively unimplemented; this
+ * was not a bug in this codebase, it is how the endpoint behaves.
+ *
+ * FIX: `mailtouri` is the parameter OWA uses to hand the URL to the
+ * browser's registered mailto: protocol handler — that handler's parser
+ * must honor `cc` per RFC 6068, and the owner hand-tested this exact form
+ * in the same tenant and confirmed BOTH To and Cc populate correctly, with
+ * subject and body intact.
+ *
+ * The inner mailto: URI (built by `buildMailtoUrl`, itself %20-encoded via
+ * `encodeDraftQuery` — see that function's own doc comment) is the single
+ * source of truth for every field. It is wrapped in `encodeURIComponent`
+ * EXACTLY ONCE here. That is two encoding layers total — one inside
+ * `buildMailtoUrl`, one here — each applied exactly once. That is correct,
+ * not double-encoding: double-encoding would mean encoding the SAME layer
+ * twice (e.g. running `encodeURIComponent` on an already-`encodeDraftQuery`d
+ * value at the SAME nesting level), which this is not. A decoder must undo
+ * both layers to reach the original value — see `decodeCompose` in
+ * storefront-logic.test.ts for the reference two-step decode, mirrored by
+ * this component's own click handler which passes the whole URL straight to
+ * `window.open` and lets the browser do both un-wraps.
  */
 export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
-  const query = encodeDraftQuery({
-    to: draft.to,
-    cc: draft.cc,
-    subject: draft.subject,
-    body: draft.body,
-  });
-  return `${OUTLOOK_COMPOSE_BASE}?${query}`;
+  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(buildMailtoUrl(draft))}`;
 }
 
 /**

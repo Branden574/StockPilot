@@ -118,6 +118,28 @@ function stubLocationAssign(assign = vi.fn()) {
   return assign;
 }
 
+/**
+ * Decodes the two-layer `mailtouri` wrapper the Outlook URL now carries
+ * (storefront-logic.ts's `buildOutlookComposeUrl`): layer 1 is the outer
+ * OWA URL's own `?mailtouri=` query param, undone by `URL#searchParams`;
+ * layer 2 is the decoded value's own mailto: query string, parsed by
+ * slicing at the first '?' rather than `new URL()`, since the WHATWG URL
+ * parser never populates `.searchParams` for the opaque-path `mailto:`
+ * scheme. Mirrors `decodeCompose` in storefront-logic.test.ts.
+ */
+function decodeCompose(url: string): { to: string; cc: string; subject: string; body: string } {
+  const mailtouri = new URL(url).searchParams.get('mailtouri') ?? '';
+  const queryStart = mailtouri.indexOf('?');
+  const to = mailtouri.slice('mailto:'.length, queryStart);
+  const inner = new URLSearchParams(mailtouri.slice(queryStart + 1));
+  return {
+    to,
+    cc: inner.get('cc') ?? '',
+    subject: inner.get('subject') ?? '',
+    body: inner.get('body') ?? '',
+  };
+}
+
 // Captured once, before any test has had a chance to overwrite either
 // property with Object.defineProperty. Both stub helpers above replace an
 // OWN property on `navigator`/`window`; vi.unstubAllGlobals() only undoes
@@ -159,12 +181,14 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     expect(open).toHaveBeenCalledTimes(1);
-    const url = new URL(open.mock.calls[0]![0] as string);
+    const rawUrl = open.mock.calls[0]![0] as string;
+    const url = new URL(rawUrl);
     expect(url.origin + url.pathname).toBe('https://outlook.office.com/mail/deeplink/compose');
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
-    expect(url.searchParams.get('subject')).toContain('SO-000049');
-    expect(url.searchParams.get('body')).toContain('CVW Clovis');
+    const decoded = decodeCompose(rawUrl);
+    expect(decoded.to).toBe('dc4@learn4life.org');
+    expect(decoded.cc).toBe('arosas@cvwest.org');
+    expect(decoded.subject).toContain('SO-000049');
+    expect(decoded.body).toContain('CVW Clovis');
   });
 
   it('opens in a new tab with NO features string, and severs the opener itself', async () => {
@@ -470,7 +494,7 @@ describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
     render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
-    const body = new URL(open.mock.calls[0]![0] as string).searchParams.get('body') ?? '';
+    const body = decodeCompose(open.mock.calls[0]![0] as string).body;
     expect(body).toContain('Pickup / will-call');
     expect(body).toContain('PICKUP FROM');
     expect(body).toContain('COLLECTED BY');
@@ -571,9 +595,9 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await screen.findByRole('dialog');
     await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
 
-    const url = new URL(open.mock.calls[0]![0] as string);
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    const decoded = decodeCompose(open.mock.calls[0]![0] as string);
+    expect(decoded.to).toBe('dc4@learn4life.org');
+    expect(decoded.cc).toBe('arosas@cvwest.org');
   });
 
   it('offers copy from inside the dialog, copying both recipients', async () => {
