@@ -14,7 +14,7 @@ import 'server-only';
 import { unstable_cache } from 'next/cache';
 
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
-import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
+import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
@@ -233,38 +233,53 @@ export const loadCatalogThumbMapCached = unstable_cache(
 /**
  * Charters per warehouse change rarely — cache for 5 minutes. Same
  * admin-client + page-perimeter argument as the catalog cache.
+ *
+ * `address` (jsonb) rides along so the delivery-request assistant can print a
+ * street address on the success screen WITHOUT a server round-trip inside the
+ * click handler. That matters: window.open must run in the same tick as the
+ * click or the browser blocks the popup, so any await before it is fatal.
+ *
+ * The key is v2 because the returned SHAPE changed. Leaving it at v1 would let
+ * up-to-5-minute-old entries without `address` linger after the deploy, and the
+ * address would silently be missing for the first users — the same trap the
+ * thumbmap loader above documents.
  */
 const loadChartersForWarehouseCached = unstable_cache(
-  async (
-    warehouseId: string,
-  ): Promise<Array<{ id: string; name: string; code: string | null }>> => {
+  async (warehouseId: string): Promise<StorefrontCharter[]> => {
     const supabase = createAdminClient();
     const { data: pairs } = await supabase
       .from('warehouse_charters')
-      .select('charter:charters!inner (id, name, code, status)')
+      .select('charter:charters!inner (id, name, code, status, address)')
       .eq('warehouse_id', warehouseId);
     return (pairs ?? []).flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)
         ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
         : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
-      return c && (c.status as string) === 'active'
-        ? [
-            {
-              id: c.id as string,
-              name: c.name as string,
-              code: (c.code as string | null) ?? null,
-            },
-          ]
-        : [];
+      if (!c || (c.status as string) !== 'active') return [];
+      const raw = c.address;
+      // jsonb: could be null, an object, or (defensively) a scalar. Anything
+      // that is not a plain object is treated as "no address".
+      const address =
+        raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+          ? (raw as StorefrontCharter['address'])
+          : null;
+      return [
+        {
+          id: c.id as string,
+          name: c.name as string,
+          code: (c.code as string | null) ?? null,
+          address,
+        },
+      ];
     });
   },
-  ['orders-new-v2-charters-v1'],
+  ['orders-new-v2-charters-v2'],
   { revalidate: 300, tags: ['orders-new-v2-charters'] },
 );
 
 export async function loadChartersForWarehouse(
   warehouseId: string,
-): Promise<Array<{ id: string; name: string; code: string | null }>> {
+): Promise<StorefrontCharter[]> {
   return loadChartersForWarehouseCached(warehouseId);
 }
 

@@ -9,6 +9,7 @@ import {
   cartTotals,
   clampQty,
   filterCatalog,
+  formatSiteAddressLines,
   fullKitLines,
   glyphFor,
   isBrowsingAll,
@@ -392,5 +393,74 @@ describe('the fabricated order handle is gone', () => {
   it('storefront-logic.ts no longer exports orderRef', async () => {
     const mod = await import('./storefront-logic');
     expect('orderRef' in mod).toBe(false);
+  });
+});
+
+describe('formatSiteAddressLines', () => {
+  it('renders a full US address as street / city-region-postal / country', () => {
+    expect(
+      formatSiteAddressLines({
+        line1: '1295 Shaw Ave',
+        line2: null,
+        city: 'Fresno',
+        region: 'California',
+        postalCode: '93612',
+        country: 'United States',
+      }),
+    ).toEqual(['1295 Shaw Ave', 'Fresno, California 93612', 'United States']);
+  });
+
+  it('keeps line2 as its own line when present', () => {
+    expect(
+      formatSiteAddressLines({
+        line1: '1295 Shaw Ave',
+        line2: 'Suite 200',
+        city: 'Fresno',
+        region: 'California',
+        postalCode: '93612',
+        country: 'United States',
+      }),
+    ).toEqual(['1295 Shaw Ave', 'Suite 200', 'Fresno, California 93612', 'United States']);
+  });
+
+  it('returns NO lines at all for a null address — 4 of 16 sites have none', () => {
+    expect(formatSiteAddressLines(null)).toEqual([]);
+  });
+
+  it('returns no lines for an all-blank address rather than blank lines', () => {
+    expect(
+      formatSiteAddressLines({ line1: '', line2: null, city: '  ', region: null, postalCode: '', country: null }),
+    ).toEqual([]);
+  });
+
+  it('omits the city line entirely when city, region and postal are all missing', () => {
+    expect(formatSiteAddressLines({ line1: '1295 Shaw Ave', country: 'United States' })).toEqual([
+      '1295 Shaw Ave',
+      'United States',
+    ]);
+  });
+
+  it('reads `region`, never `state` — the jsonb key is region', () => {
+    const lines = formatSiteAddressLines({
+      line1: '1 Main St',
+      city: 'Tulare',
+      region: 'California',
+      postalCode: '93274',
+    } as never);
+    expect(lines).toContain('Tulare, California 93274');
+  });
+
+  it('passes a typo through verbatim instead of guessing — KVA Tulare really says "Calfornia"', () => {
+    // Data quality is the owner's to fix. Silently "correcting" a site address
+    // in an outbound delivery instruction would be worse than reproducing it.
+    expect(formatSiteAddressLines({ city: 'Fresno', region: 'Calfornia', postalCode: '93274' })).toEqual([
+      'Fresno, Calfornia 93274',
+    ]);
+  });
+
+  it('collapses newlines injected into an address field to a single space', () => {
+    expect(formatSiteAddressLines({ line1: '1 Main St\nBcc: evil@evil.test' })).toEqual([
+      '1 Main St Bcc: evil@evil.test',
+    ]);
   });
 });

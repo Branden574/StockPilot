@@ -7,7 +7,7 @@
 import { Check, ClipboardList, Loader2, X } from 'lucide-react';
 import * as React from 'react';
 
-import type { CartLineState, CatalogItem } from '../v2/types';
+import type { CartLineState, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import { CharterTag, SfAddControl, SfPhoto } from './storefront-cards';
 import {
@@ -196,6 +196,20 @@ interface ReviewModalProps {
   itemMap: ReadonlyMap<string, CatalogItem>;
   notes: string;
   summary: ReviewSummary;
+  /**
+   * Raw `datetime-local` value from the cart ('YYYY-MM-DDTHH:mm') or ''. It has
+   * never reached this modal before; the delivery-request draft needs it. It is
+   * NOT an ISO instant — the builder normalises it the same way
+   * handleConfirmSubmit does, with `new Date(v).toISOString()`.
+   */
+  neededBy: string;
+  /**
+   * The delivery site, when the order is a delivery. Null for pickup — and the
+   * draft must then print no destination at all rather than an empty block.
+   */
+  destination: StorefrontCharter | null;
+  /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
+  orderUrlBase: string;
   submitting: boolean;
   /** Set once the order is created — drives the success reference line. */
   submitted: { id: string; orderNumber: number | null; unitCount: number } | null;
@@ -211,6 +225,13 @@ export function ReviewModal({
   itemMap,
   notes,
   summary,
+  // Not consumed by this component yet — a later task's click handler reads
+  // these to build the delivery-request draft. Underscore-prefixed so
+  // noUnusedParameters doesn't fail the build in the interim; the interface
+  // field names (neededBy/destination/orderUrlBase) are the real contract.
+  neededBy: _neededBy,
+  destination: _destination,
+  orderUrlBase: _orderUrlBase,
   submitting,
   submitted,
   onClose,

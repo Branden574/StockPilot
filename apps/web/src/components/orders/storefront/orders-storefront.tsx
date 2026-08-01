@@ -37,7 +37,7 @@ import { createOrderRequestAction } from '@/server/actions/order-requests';
 import { isManagerOrAbove } from '@stockpilot/core';
 
 import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
-import type { AisleSummary, CatalogItem } from '../v2/types';
+import type { AisleSummary, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import {
   CategorySection,
@@ -86,10 +86,12 @@ export interface OrdersStorefrontProps {
   warehouseId: string;
   /** Un-awaited on the server so the shell streams ahead of the grid. */
   catalogPromise: Promise<StorefrontCatalogData>;
-  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
+  chartersForWarehouse: StorefrontCharter[];
   viewerRole: string;
   viewerName: string | null;
   viewerEmail: string;
+  /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
+  orderUrlBase: string;
 }
 
 type ReviewStage = null | 'review' | 'success';
@@ -196,6 +198,7 @@ function StorefrontShell({
   viewerRole,
   viewerName,
   viewerEmail,
+  orderUrlBase,
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch } = useCart();
@@ -554,6 +557,7 @@ function StorefrontShell({
             setReviewStage={setReviewStage}
             submitted={submitted}
             setSubmitted={setSubmitted}
+            orderUrlBase={orderUrlBase}
           />
         </React.Suspense>
       </div>
@@ -567,12 +571,13 @@ interface StorefrontCatalogProps {
   catalogPromise: Promise<StorefrontCatalogData>;
   warehouseId: string;
   warehouseName: string;
-  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
+  chartersForWarehouse: StorefrontCharter[];
   viewerLabel: string;
   reviewStage: ReviewStage;
   setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
   submitted: SubmittedOrder;
   setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
+  orderUrlBase: string;
 }
 
 function StorefrontCatalog({
@@ -585,6 +590,7 @@ function StorefrontCatalog({
   setReviewStage,
   submitted,
   setSubmitted,
+  orderUrlBase,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
@@ -1158,6 +1164,9 @@ function StorefrontCatalog({
               : (charter?.name ?? 'Select a site'),
           requestedFor: state.onBehalfOf?.name ?? viewerLabel,
         }}
+        neededBy={state.neededBy}
+        destination={state.fulfillmentType === 'delivery' ? charter : null}
+        orderUrlBase={orderUrlBase}
         submitting={isPending}
         submitted={submitted}
         onClose={() => setReviewStage(null)}

@@ -5,7 +5,7 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import type { CartLineState, CatalogItem } from '../v2/types';
+import type { CartLineState, CatalogItem, CharterAddress } from '../v2/types';
 
 /** Derived stock status per item (README state model). */
 export type ItemStatus = 'ok' | 'low' | 'out';
@@ -239,4 +239,57 @@ export function isBrowsingAll(input: CatalogFilterInput): boolean {
     input.search.trim() === '' &&
     input.availability.size === 0
   );
+}
+
+/**
+ * Collapse anything destined for a plain-text email line: CR, LF, tabs and any
+ * other control character become a single space, and the result is trimmed.
+ *
+ * Two reasons, both real. (1) A newline inside a value would break the body's
+ * block structure and could forge a header-looking line ("Bcc: ...") in a mail
+ * client that parses the pasted text. (2) The repo already has this helper —
+ * `sanitizePlainText` in lib/email/order-requests.ts:1247 — but it is
+ * module-private and lives in a `server-only` module, so a client builder
+ * cannot import it. This is the client-side twin, deliberately named
+ * differently so nobody assumes the two are kept in sync.
+ */
+export function toPlainTextLine(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Render `charters.address` as zero or more plain-text lines.
+ *
+ * Returns an EMPTY array whenever there is nothing real to print. The caller
+ * must then omit the whole block: 4 of 16 prod charters have `address = null`,
+ * and printing "Address:" with nothing under it implies the system captured
+ * something it did not.
+ *
+ * Values are reproduced verbatim, typos included (KVA Tulare's address really
+ * says "Calfornia"). Silently correcting a site address inside a delivery
+ * instruction would be a worse failure than reproducing the owner's data.
+ */
+export function formatSiteAddressLines(address: CharterAddress | null): string[] {
+  if (!address) return [];
+  const clean = (v: string | null | undefined): string =>
+    typeof v === 'string' ? toPlainTextLine(v) : '';
+
+  const lines: string[] = [];
+  const line1 = clean(address.line1);
+  const line2 = clean(address.line2);
+  if (line1) lines.push(line1);
+  if (line2) lines.push(line2);
+
+  const city = clean(address.city);
+  const region = clean(address.region);
+  const postal = clean(address.postalCode);
+  const cityRegion = [city, region].filter(Boolean).join(', ');
+  const cityLine = [cityRegion, postal].filter(Boolean).join(' ');
+  if (cityLine) lines.push(cityLine);
+
+  const country = clean(address.country);
+  if (country) lines.push(country);
+
+  return lines;
 }

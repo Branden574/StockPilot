@@ -72,3 +72,31 @@ export type CartAction =
   | { type: 'set-notes'; value: string }
   | { type: 'set-needed-by'; value: string }
   | { type: 'set-warehouse'; warehouseId: string };
+
+/**
+ * `charters.address` is a jsonb blob, not a typed column set. Every key is
+ * optional and any of them can be null or an empty string in prod.
+ *
+ * The regional key is **`region`**, NOT `state`. Reading `state` returns
+ * undefined for every row in the database.
+ */
+export interface CharterAddress {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+}
+
+/**
+ * A delivery site as the storefront sees it. The UI calls a charter a "site".
+ * `address` is present for 12 of 16 prod charters; null for the rest, and the
+ * renderer must print NOTHING rather than an empty labelled block when it is.
+ */
+export interface StorefrontCharter {
+  id: string;
+  name: string;
+  code: string | null;
+  address: CharterAddress | null;
+}
