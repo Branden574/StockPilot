@@ -13,6 +13,17 @@ vi.mock('sonner', () => ({
   },
 }));
 
+// Rest param (not the brief's literal zero-arg `() => {}`) for the same
+// reason `stubOpen` above takes one: keeps `mock.calls[0]` typed as
+// `unknown[]` rather than `[]`, so `mock.calls[0]![0]` typechecks under
+// noUncheckedIndexedAccess (TS2493 otherwise).
+const recordDraftedSpy = vi.fn(async (..._args: unknown[]) => {});
+vi.mock('@/server/actions/delivery-request', () => ({
+  recordDeliveryRequestDraftedAction: (...a: unknown[]) => recordDraftedSpy(...a),
+}));
+const captureSpy = vi.fn();
+vi.mock('@/lib/analytics', () => ({ capture: (...a: unknown[]) => captureSpy(...a) }));
+
 import DeliveryRequestAction from './delivery-request-action';
 
 function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryRequestInput {
@@ -842,5 +853,52 @@ describe('DeliveryRequestAction accessibility', () => {
         'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
       ),
     );
+  });
+});
+
+describe('DeliveryRequestAction — bookkeeping never precedes the open', () => {
+  it('opens the window BEFORE recording anything', async () => {
+    const user = userEvent.setup();
+    const order: string[] = [];
+    vi.stubGlobal('open', vi.fn(() => {
+      order.push('open');
+      return { focus: vi.fn() };
+    }));
+
+    recordDraftedSpy.mockImplementationOnce(async () => {
+      order.push('record');
+    });
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+
+    await waitFor(() => expect(recordDraftedSpy).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(['open', 'record']);
+  });
+
+  it('records only the safe fields', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+
+    await waitFor(() => expect(recordDraftedSpy).toHaveBeenCalledTimes(1));
+    expect(recordDraftedSpy.mock.calls[0]![0]).toEqual({
+      orderId: 'b3f1c2d4-1111-2222-3333-444455556666',
+      isCondensed: false,
+    });
+  });
+
+  it('still opens the draft when the audit call rejects', async () => {
+    const user = userEvent.setup();
+    const open = stubOpen();
+    recordDraftedSpy.mockRejectedValueOnce(new Error('offline'));
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

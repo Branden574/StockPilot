@@ -157,6 +157,19 @@ export type AuditEvent =
   | 'order.closed_partial'
   | 'order.signature_collected'
   | 'order.completed'
+  /**
+   * An employee opened a prefilled delivery-request DRAFT in their mail client
+   * from the order-success screen. It records that a draft was OPENED and
+   * nothing more: StockPilot cannot observe whether the employee pressed Send,
+   * cannot confirm the message arrived, and cannot know whether a Zendesk
+   * ticket was created — DC4's intake is email-based and entirely outside this
+   * application. Never widen this event's meaning.
+   *
+   * No migration: audit_logs.event is plain text with no CHECK and no enum
+   * (prod-verified), so this union member is the whole change. It renders in
+   * OrderTimeline on the order detail page for free.
+   */
+  | 'order.delivery_request_drafted'
   | 'pdf.exported'
   | 'tag.created'
   | 'tag.updated'

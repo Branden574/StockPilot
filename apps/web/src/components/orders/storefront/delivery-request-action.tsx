@@ -11,7 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { capture } from '@/lib/analytics';
 import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { recordDeliveryRequestDraftedAction } from '@/server/actions/delivery-request';
 
 import { prepareDeliveryRequest, type DeliveryRequestInput } from './storefront-logic';
 
@@ -119,6 +121,28 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
     }
   }, [draftCount]);
 
+  /**
+   * Fire-and-forget bookkeeping. Called only AFTER window.open has already run,
+   * because anything awaited before the open makes it asynchronous relative to
+   * the click gesture and the browser blocks the popup.
+   *
+   * Analytics records the FACT of a CC, never the address — the addresses do
+   * not go to a third-party processor.
+   */
+  function recordDraft() {
+    void recordDeliveryRequestDraftedAction({
+      orderId: input.orderId,
+      isCondensed: prepared.draft.condensed,
+    });
+    capture('delivery_request_drafted', {
+      order_id: input.orderId,
+      fulfillment_type: input.fulfillmentType,
+      is_condensed: prepared.draft.condensed,
+      included_cc_recipient: true,
+      line_count: prepared.draft.lineCount,
+    });
+  }
+
   function handleOpen() {
     if (!prepared.linkFits) {
       // Even the condensed links exceed the safe URL length, so a mail client
@@ -148,15 +172,15 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       opened = null;
     }
 
-    // TASK 10 CALL SITE: the audit action (recordDeliveryRequestDraftedAction)
-    // and the analytics capture fire here — always AFTER the open attempt,
-    // never before it (R3).
-
     if (opened) {
       // Clears a stale failure panel left over from an earlier blocked click
       // on this same mount, now that a later click has actually succeeded.
       setFallbackReason(null);
       setDraftCount((n) => n + 1);
+      // R3: the audit action + analytics capture fire here — always AFTER the
+      // open attempt, never before it. Only real, countable draft attempts
+      // are recorded, matching draftCount's own gating.
+      recordDraft();
       const message = 'Delivery request draft opened in Outlook. Review it and press Send yourself.';
       toast.success(message);
       setAnnouncement(message);
@@ -175,6 +199,10 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
       setDraftCount((n) => n + 1);
+      // R3: same call as the success branch above, gated the same way — only
+      // the FIRST blocked click (the one that actually navigates) counts as a
+      // draft, so only it is recorded. Repeat blocked clicks record nothing.
+      recordDraft();
       try {
         window.location.assign(prepared.mailtoUrl);
       } catch {
