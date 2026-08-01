@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+
 import type { CatalogItem } from '../v2/types';
 
 import {
   availabilityLabel,
   availableOf,
+  buildDeliveryRequestDraft,
   buildQtyMap,
   cartTotals,
   clampQty,
@@ -18,6 +21,8 @@ import {
   statusOf,
   type ItemStatus,
 } from './storefront-logic';
+
+import type { DeliveryRequestInput } from './storefront-logic';
 
 let seq = 0;
 function makeItem(overrides: Partial<CatalogItem> = {}): CatalogItem {
@@ -462,5 +467,406 @@ describe('formatSiteAddressLines', () => {
     expect(formatSiteAddressLines({ line1: '1 Main St\nBcc: evil@evil.test' })).toEqual([
       '1 Main St Bcc: evil@evil.test',
     ]);
+  });
+});
+
+/**
+ * Fixture for the draft builder. Deliberately a DELIVERY order with every
+ * optional field populated, so each test can strip exactly the one thing it is
+ * about instead of building up from nothing.
+ */
+function makeDraftInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryRequestInput {
+  const polo = makeItem({ id: 'i-1', sku: 'APP-POLO-W', name: "L4L Polo (Women's)" });
+  const bottle = makeItem({ id: 'i-2', sku: 'GEN-BOTL', name: 'L4L Water Bottle' });
+  return {
+    orderId: 'b3f1c2d4-1111-2222-3333-444455556666',
+    orderNumber: 49,
+    orderUrlBase: 'https://app.stockpilotusa.com',
+    fulfillmentType: 'delivery',
+    warehouseName: 'DC4',
+    destination: {
+      id: 'ch-1',
+      name: 'CVW Clovis',
+      code: 'CVW-CLO',
+      address: {
+        line1: '1295 Shaw Ave',
+        line2: null,
+        city: 'Fresno',
+        region: 'California',
+        postalCode: '93612',
+        country: 'United States',
+      },
+    },
+    requestedFor: 'Branden Vincent-Walker',
+    requesterEmail: 'branden@cvwest.org',
+    neededByLocal: '2026-08-05T09:00',
+    orgTimezone: 'America/Los_Angeles',
+    notes: 'Please stage these by Friday.',
+    lines: [
+      { itemId: 'i-1', quantity: 5 },
+      { itemId: 'i-2', quantity: 2 },
+    ],
+    itemMap: new Map([
+      ['i-1', polo],
+      ['i-2', bottle],
+    ]),
+    ...overrides,
+  };
+}
+
+describe('buildDeliveryRequestDraft — recipients', () => {
+  it('carries both recipients as explicit properties, read from the ONE constant', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    expect(draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
+    expect(draft.cc).toBe(DELIVERY_REQUEST_EMAIL.cc);
+    expect(draft.to).toBe('dc4@learn4life.org');
+    expect(draft.cc).toBe('arosas@cvwest.org');
+  });
+
+  it('never puts either recipient in the body — the CC is a real field, not prose', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    expect(draft.body).not.toContain('dc4@learn4life.org');
+    expect(draft.body).not.toContain('arosas@cvwest.org');
+  });
+
+  it('accepts NO recipient argument — there is no parameter for a caller to poison', () => {
+    // Passing hostile values through every user-controlled field must not move
+    // the recipients. This is the security invariant in executable form.
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({
+        notes: 'to=attacker@evil.test cc=attacker2@evil.test',
+        requestedFor: 'attacker@evil.test',
+        requesterEmail: 'attacker@evil.test',
+        destination: {
+          id: 'ch-x',
+          name: 'attacker@evil.test',
+          code: 'to=attacker@evil.test',
+          address: { line1: 'cc: attacker@evil.test' },
+        },
+      }),
+    );
+    expect(draft.to).toBe('dc4@learn4life.org');
+    expect(draft.cc).toBe('arosas@cvwest.org');
+  });
+});
+
+describe('buildDeliveryRequestDraft — subject', () => {
+  it('is ONE format carrying the canonical order number and the destination', () => {
+    expect(buildDeliveryRequestDraft(makeDraftInput()).subject).toBe(
+      'Delivery Request — StockPilot Order SO-000049 — CVW Clovis',
+    );
+  });
+
+  it('uses the SAME format for pickup, with the warehouse as the location', () => {
+    // Brief section 10 wants one subject shape so Zendesk routing stays
+    // uniform; the body's Fulfillment Method line carries the distinction.
+    // A pickup-specific subject would be a second format and needs owner
+    // sign-off (see the plan's open questions).
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
+    );
+    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — DC4');
+  });
+
+  it('falls back to the warehouse when a delivery order somehow has no site', () => {
+    // R8: order_requests_delivery_target_chk is NOT VALID, so 5 of 41 prod
+    // delivery rows have delivery_charter_id = NULL. New orders cannot reach
+    // this state, but the builder must not print "undefined".
+    const draft = buildDeliveryRequestDraft(makeDraftInput({ destination: null }));
+    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — DC4');
+    expect(draft.subject).not.toContain('undefined');
+    expect(draft.subject).not.toContain('null');
+  });
+
+  it('degrades honestly when the order number is missing', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput({ orderNumber: null }));
+    expect(draft.subject).toBe('Delivery Request — StockPilot Order b3f1c2d4 — CVW Clovis');
+    expect(draft.subject).not.toContain('SO-');
+  });
+
+  it('is a single line — a newline in a subject is a header-injection shape', () => {
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({
+        destination: { id: 'x', name: 'Clovis\nBcc: evil@evil.test', code: null, address: null },
+      }),
+    );
+    expect(draft.subject).not.toContain('\n');
+    expect(draft.subject).not.toContain('\r');
+  });
+});
+
+describe('buildDeliveryRequestDraft — delivery body', () => {
+  it('states the method, the origin, the destination and the needed-by date', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain('Fulfillment method: Delivery');
+    expect(body).toContain('FROM (WAREHOUSE)\nDC4');
+    expect(body).toContain('DELIVERY DESTINATION\nCVW Clovis (CVW-CLO)');
+    expect(body).toContain('1295 Shaw Ave');
+    expect(body).toContain('Fresno, California 93612');
+  });
+
+  it('renders needed-by in the ORG timezone with the zone named, never a raw ISO string', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain('NEEDED BY');
+    expect(body).toContain('America/Los_Angeles');
+    expect(body).not.toContain('2026-08-05T');
+    expect(body).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+
+  it('omits the NEEDED BY block entirely when none was given — 70 of 78 prod orders have none', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ neededByLocal: '' }));
+    expect(body).not.toContain('NEEDED BY');
+  });
+
+  it('lists every line with name, SKU and quantity, and a counted heading', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain('ITEMS (2 lines, 7 units)');
+    expect(body).toContain("1. L4L Polo (Women's) — APP-POLO-W — qty 5");
+    expect(body).toContain('2. L4L Water Bottle — GEN-BOTL — qty 2');
+  });
+
+  it('singularizes one line and one unit', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ lines: [{ itemId: 'i-1', quantity: 1 }] }),
+    );
+    expect(body).toContain('ITEMS (1 line, 1 unit)');
+  });
+
+  it('falls back to the item id when the catalog map has no entry', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ lines: [{ itemId: 'ghost', quantity: 3 }], itemMap: new Map() }),
+    );
+    expect(body).toContain('1. ghost — qty 3');
+  });
+
+  it('handles zero lines without emitting an empty ITEMS block', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ lines: [] }));
+    expect(body).not.toContain('ITEMS (');
+    expect(body).toContain('No line items were recorded on this order.');
+  });
+
+  it('prints the order notes under an honest heading, not as "delivery instructions"', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain('ORDER NOTES\nPlease stage these by Friday.');
+    expect(body).not.toContain('DELIVERY INSTRUCTIONS');
+  });
+
+  it('omits the notes block when there are none', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ notes: '   ' }));
+    expect(body).not.toContain('ORDER NOTES');
+  });
+
+  it('includes an absolute, clickable order link', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain(
+      'Order link: https://app.stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+  });
+
+  it('omits the link rather than emitting a relative path when no base is configured', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ orderUrlBase: '' }));
+    expect(body).not.toContain('Order link:');
+    expect(body).not.toContain('/dashboard/orders/');
+  });
+
+  it('states the real status — a fresh internal order is pending approval, not approved', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain('Order status in StockPilot: Pending approval');
+    for (const claim of ['approved', 'reserved', 'scheduled', 'ticket']) {
+      expect(body.toLowerCase()).not.toContain(`is ${claim}`);
+    }
+  });
+
+  it('closes with the non-claim footer', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain(
+      'Drafted in StockPilot. StockPilot did not send this message and has not created a ticket.',
+    );
+  });
+});
+
+describe('buildDeliveryRequestDraft — pickup body (owner decision: pickup gets the assistant)', () => {
+  const pickup = () =>
+    buildDeliveryRequestDraft(makeDraftInput({ fulfillmentType: 'pickup', destination: null }));
+
+  it('states pickup as the method', () => {
+    expect(pickup().body).toContain('Fulfillment method: Pickup / will-call');
+  });
+
+  it('names where to collect from and who is collecting', () => {
+    const { body } = pickup();
+    expect(body).toContain('PICKUP FROM\nDC4 will-call desk');
+    expect(body).toContain('COLLECTED BY\nBranden Vincent-Walker (branden@cvwest.org)');
+  });
+
+  it('prints NO destination block and no empty or invented address', () => {
+    const { body } = pickup();
+    expect(body).not.toContain('DELIVERY DESTINATION');
+    expect(body).not.toContain('1295 Shaw Ave');
+    expect(body).not.toContain('Address:');
+  });
+
+  it('ignores a stray destination on a pickup order rather than printing it', () => {
+    // fulfillment_type is the authority. A pickup order's charter is NULL by
+    // CHECK constraint; if one ever arrives, printing it would invent a
+    // destination the order does not have.
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ fulfillmentType: 'pickup' }));
+    expect(body).not.toContain('DELIVERY DESTINATION');
+    expect(body).not.toContain('CVW Clovis');
+  });
+});
+
+describe('buildDeliveryRequestDraft — fields that DO NOT EXIST are omitted, never stubbed', () => {
+  it('never prints a labelled-but-empty row for building, room, instructions or priority', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    for (const absent of [
+      'Building',
+      'Room',
+      'Delivery instructions',
+      'DELIVERY INSTRUCTIONS',
+      'Priority',
+      'PRIORITY',
+      'Urgency',
+      'Rush',
+    ]) {
+      expect(body).not.toContain(absent);
+    }
+  });
+
+  it('never prints a site contact block — 0 of 16 charters have a name or email', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).not.toContain('Site contact');
+    expect(body).not.toContain('CONTACT');
+  });
+
+  it('never prints a unit of measure or a per-line note', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).not.toContain('UOM');
+    expect(body).not.toContain('Unit of measure');
+    expect(body).not.toContain('Line note');
+  });
+
+  it('never prints cost, price or any staff-only figure', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    for (const leak of ['$', 'cost', 'Cost', 'price', 'Price', 'internal', 'Internal', 'Picker']) {
+      expect(body).not.toContain(leak);
+    }
+  });
+
+  it('omits the address lines for a site that has none, keeping the name and code', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({
+        destination: { id: 'ch-2', name: 'KVA Tulare', code: 'KVA-TUL', address: null },
+      }),
+    );
+    expect(body).toContain('DELIVERY DESTINATION\nKVA Tulare (KVA-TUL)');
+    expect(body).not.toContain('Address');
+  });
+
+  it('prints a site with no code without an empty parenthesis', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ destination: { id: 'ch-3', name: 'Mendota', code: null, address: null } }),
+    );
+    expect(body).toContain('DELIVERY DESTINATION\nMendota');
+    expect(body).not.toContain('Mendota ()');
+  });
+});
+
+describe('buildDeliveryRequestDraft — plain text and safety', () => {
+  it('is plain text: no HTML, no markdown emphasis, no CRLF', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).not.toMatch(/<[a-z/][^>]*>/i);
+    expect(body).not.toContain('**');
+    expect(body).not.toContain('\r');
+  });
+
+  it('collapses newlines inside user text so nothing can forge a header line', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ notes: 'Line one\nBcc: evil@evil.test\nLine two' }),
+    );
+    expect(body).toContain('ORDER NOTES\nLine one Bcc: evil@evil.test Line two');
+    expect(body).not.toContain('\nBcc:');
+  });
+
+  it('never emits three consecutive newlines', () => {
+    expect(buildDeliveryRequestDraft(makeDraftInput()).body).not.toContain('\n\n\n');
+  });
+
+  it('reports condensed:false and a real character count for a normal order', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    expect(draft.condensed).toBe(false);
+    expect(draft.lineCount).toBe(2);
+    expect(draft.unitCount).toBe(7);
+  });
+});
+
+describe('buildDeliveryRequestDraft — condensed mode', () => {
+  it('keeps both recipients, the subject, the counts and the link', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.to).toBe('dc4@learn4life.org');
+    expect(draft.cc).toBe('arosas@cvwest.org');
+    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — CVW Clovis');
+    expect(draft.condensed).toBe(true);
+    expect(draft.body).toContain('ITEMS (2 lines, 7 units)');
+    expect(draft.body).toContain(
+      'Order link: https://app.stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+  });
+
+  it('DISCLOSES the truncation in the body rather than silently dropping lines', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. The complete order is at the link above.',
+    );
+  });
+
+  it('drops the per-line list and the address, which is what makes it short', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.body).not.toContain('APP-POLO-W');
+    expect(draft.body).not.toContain('1295 Shaw Ave');
+    expect(draft.body.length).toBeLessThan(
+      buildDeliveryRequestDraft(makeDraftInput()).body.length,
+    );
+  });
+
+  it('keeps the site name so DC4 still knows where it goes', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.body).toContain('CVW Clovis');
+  });
+
+  it('still adapts to pickup', () => {
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
+      { condensed: true },
+    );
+    expect(draft.body).toContain('Pickup / will-call');
+    expect(draft.body).not.toContain('DELIVERY DESTINATION');
+  });
+});
+
+describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () => {
+  const bigInput = () => {
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `big-${i}`, quantity: 4 }));
+    const itemMap = new Map(
+      lines.map((l, i) => [
+        l.itemId,
+        makeItem({ id: l.itemId, sku: `SKU-BIG-${i}`, name: `Bulk Item Number ${i}` }),
+      ]),
+    );
+    return makeDraftInput({ lines, itemMap });
+  };
+
+  it('renders all 100 lines in full mode', () => {
+    const { body, lineCount, unitCount } = buildDeliveryRequestDraft(bigInput());
+    expect(lineCount).toBe(100);
+    expect(unitCount).toBe(400);
+    expect(body).toContain('ITEMS (100 lines, 400 units)');
+    expect(body).toContain('100. Bulk Item Number 99 — SKU-BIG-99 — qty 4');
+  });
+
+  it('keeps both recipients at that size', () => {
+    const draft = buildDeliveryRequestDraft(bigInput(), { condensed: true });
+    expect(draft.to).toBe('dc4@learn4life.org');
+    expect(draft.cc).toBe('arosas@cvwest.org');
   });
 });

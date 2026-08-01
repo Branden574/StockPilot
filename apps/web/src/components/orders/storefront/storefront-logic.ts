@@ -5,7 +5,10 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import type { CartLineState, CatalogItem, CharterAddress } from '../v2/types';
+import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '@/lib/timezone';
+
+import type { CartLineState, CatalogItem, CharterAddress, StorefrontCharter } from '../v2/types';
 
 /** Derived stock status per item (README state model). */
 export type ItemStatus = 'ok' | 'low' | 'out';
@@ -292,4 +295,226 @@ export function formatSiteAddressLines(address: CharterAddress | null): string[]
   if (country) lines.push(country);
 
   return lines;
+}
+
+/* ---- delivery-request assistant ------------------------------------------ */
+
+/**
+ * Everything the draft builder is allowed to see.
+ *
+ * This is an explicit ALLOW-LIST, not a DTO spread. `internal_notes`,
+ * reservations, the assigned picker, `unit_cost_at_request` and
+ * `unit_price_at_request` are all staff-only and must never reach a mailbox
+ * outside the organisation — the way to guarantee that is for the builder to
+ * have no way to reach them.
+ *
+ * Note what is NOT here, because the data does not exist anywhere in the
+ * schema: destination building, room, delivery instructions, priority/urgency,
+ * a site contact (0 of 16 charters have a name or email), a requester phone
+ * (the internal storefront hardcodes null), a per-line note (0 of 150 prod
+ * rows), and unit of measure (present but unselected and messy free text).
+ * Adding any of them is a product decision about data CAPTURE and belongs in a
+ * separate spec — the assistant must not print a labelled row that implies the
+ * system asked a question it never asked.
+ */
+export interface DeliveryRequestInput {
+  /** Order UUID. The detail route is keyed by UUID; there is no route that resolves an SO number. */
+  orderId: string;
+  /** `order_requests.order_number`, or null when it did not reach the client. */
+  orderNumber: number | null;
+  /** Absolute origin, no trailing slash, e.g. 'https://app.stockpilotusa.com'. '' disables the link. */
+  orderUrlBase: string;
+  fulfillmentType: 'pickup' | 'delivery';
+  /** Origin warehouse display name. */
+  warehouseName: string;
+  /** The delivery site. Null for pickup, and null for the 5 legacy delivery rows with no charter. */
+  destination: StorefrontCharter | null;
+  /** Who the order is for — on-behalf-of name, else the viewer's name, else their email. */
+  requestedFor: string;
+  /** The requester's email when known. The one contact DC4 can actually reach. */
+  requesterEmail: string | null;
+  /** Raw `datetime-local` value ('YYYY-MM-DDTHH:mm') or ''. NOT an ISO instant. */
+  neededByLocal: string;
+  /** `organizations.timezone`; falls back to America/Los_Angeles. */
+  orgTimezone: string;
+  /** `order_requests.notes` — the requester-facing message. Safe to include. */
+  notes: string;
+  lines: readonly CartLineState[];
+  itemMap: ReadonlyMap<string, CatalogItem>;
+}
+
+/**
+ * The prepared draft. `to` and `cc` are EXPLICIT properties, not merely
+ * embedded in a URL, so the preview, both URL builders, the clipboard fallback,
+ * the a11y labels and the tests all read one source (addendum requirement 5).
+ */
+export interface DeliveryRequestDraft {
+  to: string;
+  cc: string;
+  subject: string;
+  body: string;
+  /** True when the item list and address were dropped to fit a compose link. */
+  condensed: boolean;
+  lineCount: number;
+  unitCount: number;
+}
+
+/** A fresh internal order is inserted as 'pending_approval' — never claim more. */
+const DRAFT_STATUS_LABEL = 'Pending approval';
+
+const NON_CLAIM_FOOTER =
+  'Drafted in StockPilot. StockPilot did not send this message and has not created a ticket.';
+
+const CONDENSED_DISCLOSURE =
+  'This message was shortened because the full item list did not fit in a compose link. The complete order is at the link above.';
+
+/** "SO-000049" when the number is real, else a visibly non-SO handle. */
+function orderHandle(orderNumber: number | null, orderId: string): string {
+  return formatOrderNumber(orderNumber) ?? orderId.replace(/-/g, '').slice(0, 8);
+}
+
+/** "CVW Clovis (CVW-CLO)" / "Mendota" — never "Mendota ()". */
+function siteLabel(site: StorefrontCharter): string {
+  const name = toPlainTextLine(site.name);
+  const code = site.code ? toPlainTextLine(site.code) : '';
+  return code ? `${name} (${code})` : name;
+}
+
+/**
+ * The needed-by line, in the ORG's timezone with the zone named.
+ *
+ * The value arrives as a `datetime-local` string with no offset, exactly as the
+ * cart holds it, and is interpreted in the viewer's zone by `new Date(...)` —
+ * the same normalisation `handleConfirmSubmit` performs before submitting. The
+ * zone name is printed because a California DC reading a bare time has no way
+ * to know whose clock it is. Never `slice(0, 10)` an ISO string here: that
+ * shifts the day for any local time after 16:00 PT.
+ */
+function neededByLine(neededByLocal: string, tz: string): string | null {
+  const raw = neededByLocal.trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  const formatted = formatOrgDateTime(
+    d,
+    { dateStyle: 'medium', timeStyle: 'short' },
+    tz || ORG_TIMEZONE_DEFAULT,
+  );
+  if (formatted === '—') return null;
+  return `${formatted} (${tz || ORG_TIMEZONE_DEFAULT})`;
+}
+
+/**
+ * Build the delivery-request draft.
+ *
+ * Pure: no React, no DOM, no network, no clock beyond formatting the value it
+ * was handed. It takes NO recipient argument — it reads DELIVERY_REQUEST_EMAIL
+ * — so there is no parameter through which a URL parameter, a stored value, an
+ * order note or a site name could redirect the mail.
+ *
+ * `condensed` exists for RISK R4: Outlook Web compose links and mailto: both
+ * carry the body in the query string, practical limits land around 2,000
+ * characters, and truncation is SILENT — the client opens with half a body and
+ * the employee sends it. Condensed mode drops the per-line list and the street
+ * address, keeps the counts, the site and the link, and SAYS SO in the body.
+ */
+export function buildDeliveryRequestDraft(
+  input: DeliveryRequestInput,
+  opts: { condensed?: boolean } = {},
+): DeliveryRequestDraft {
+  const condensed = opts.condensed === true;
+  const isPickup = input.fulfillmentType === 'pickup';
+  // fulfillment_type is the authority. A pickup order's charter is NULL by
+  // CHECK constraint; ignoring a stray one keeps us from inventing a
+  // destination the order does not have (owner decision D1).
+  const site = isPickup ? null : input.destination;
+
+  const { lineCount, unitCount } = cartTotals(input.lines);
+  const handle = orderHandle(input.orderNumber, input.orderId);
+  const warehouse = toPlainTextLine(input.warehouseName);
+  const requester = toPlainTextLine(input.requestedFor);
+  const requesterEmail = input.requesterEmail ? toPlainTextLine(input.requesterEmail) : '';
+  const requesterLine = requesterEmail ? `${requester} (${requesterEmail})` : requester;
+
+  const subjectLocation = site ? toPlainTextLine(site.name) : warehouse;
+  const subject = toPlainTextLine(
+    `Delivery Request — StockPilot Order ${handle} — ${subjectLocation}`,
+  );
+
+  const orderUrl = input.orderUrlBase
+    ? `${input.orderUrlBase.replace(/\/+$/, '')}/dashboard/orders/${input.orderId}`
+    : '';
+
+  // Blocks are assembled as an array and joined with a blank line, so an
+  // omitted block leaves no trace — no heading, no stray blank line, and never
+  // three newlines in a row.
+  const blocks: string[] = [];
+
+  blocks.push(
+    [
+      'DELIVERY REQUEST — StockPilot',
+      '',
+      `Order: ${handle}`,
+      `Requested by: ${requesterLine}`,
+      `Fulfillment method: ${isPickup ? 'Pickup / will-call' : 'Delivery'}`,
+      `Order status in StockPilot: ${DRAFT_STATUS_LABEL}`,
+    ].join('\n'),
+  );
+
+  if (isPickup) {
+    blocks.push(`PICKUP FROM\n${warehouse} will-call desk`);
+    blocks.push(`COLLECTED BY\n${requesterLine}`);
+  } else {
+    blocks.push(`FROM (WAREHOUSE)\n${warehouse}`);
+    if (site) {
+      const addressLines = condensed ? [] : formatSiteAddressLines(site.address);
+      blocks.push(['DELIVERY DESTINATION', siteLabel(site), ...addressLines].join('\n'));
+    } else {
+      // R8: 5 of 41 prod delivery orders have no charter because the CHECK is
+      // NOT VALID. Say so plainly instead of printing an empty block.
+      blocks.push(
+        'DELIVERY DESTINATION\nNot recorded on this order. Please confirm the destination with the requester before delivering.',
+      );
+    }
+  }
+
+  const needed = neededByLine(input.neededByLocal, input.orgTimezone);
+  if (needed) blocks.push(`NEEDED BY\n${needed}`);
+
+  if (lineCount === 0) {
+    blocks.push('No line items were recorded on this order.');
+  } else {
+    const heading = `ITEMS (${lineCount} ${lineCount === 1 ? 'line' : 'lines'}, ${unitCount} ${
+      unitCount === 1 ? 'unit' : 'units'
+    })`;
+    if (condensed) {
+      blocks.push(heading);
+    } else {
+      const rows = input.lines.map((line, i) => {
+        const item = input.itemMap.get(line.itemId);
+        const name = toPlainTextLine(item?.name ?? line.itemId);
+        const sku = item?.sku ? toPlainTextLine(item.sku) : '';
+        const label = sku ? `${name} — ${sku}` : name;
+        return `${i + 1}. ${label} — qty ${line.quantity}`;
+      });
+      blocks.push([heading, ...rows].join('\n'));
+    }
+  }
+
+  const notes = toPlainTextLine(input.notes);
+  if (notes && !condensed) blocks.push(`ORDER NOTES\n${notes}`);
+
+  if (orderUrl) blocks.push(`Order link: ${orderUrl}`);
+  if (condensed) blocks.push(CONDENSED_DISCLOSURE);
+  blocks.push(NON_CLAIM_FOOTER);
+
+  return {
+    to: DELIVERY_REQUEST_EMAIL.to,
+    cc: DELIVERY_REQUEST_EMAIL.cc,
+    subject,
+    body: blocks.join('\n\n'),
+    condensed,
+    lineCount,
+    unitCount,
+  };
 }
