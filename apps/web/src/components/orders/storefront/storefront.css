@@ -2402,3 +2402,52 @@
   border-radius: 6px;
   resize: vertical;
 }
+
+/* Delivery-request preview: the recipient block. Rendered as a definition
+   list, never as inputs — employees must not be able to edit either address,
+   and a field that LOOKS editable invites the attempt.
+
+   NOT scoped under .sp-storefront: the Radix dialog this lives in portals to
+   document.body, outside the storefront wrapper. The sf-fallback-text and
+   sf-btn-* rules used inside the same dialog ARE scoped that way and still
+   apply there because DialogContent itself carries the sp-storefront class. */
+.sf-recip {
+  margin-top: 12px;
+}
+
+.sf-recip-h {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+
+.sf-recip dl {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.sf-recip dl > div {
+  display: contents;
+}
+
+.sf-recip dt {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.sf-recip dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sf-recip-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.8;
+}

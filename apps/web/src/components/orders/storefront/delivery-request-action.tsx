@@ -1,10 +1,17 @@
 'use client';
 
-import { Copy, Mail } from 'lucide-react';
+import { Copy, Eye, Mail } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL } from '@/lib/site';
 
 import { prepareDeliveryRequest, type DeliveryRequestInput } from './storefront-logic';
 
@@ -57,6 +64,11 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   // reflexively blame a popup blocker for a link-length problem.
   const [fallbackReason, setFallbackReason] = React.useState<'blocked' | 'oversized' | null>(null);
   const [manualText, setManualText] = React.useState<string | null>(null);
+  // The preview dialog (addendum requirement 3): shows both recipients and
+  // the composed message before anything opens. Independent of
+  // fallbackReason/manualText — the preview can be opened and closed any
+  // number of times regardless of whether a prior Outlook attempt failed.
+  const [previewOpen, setPreviewOpen] = React.useState(false);
   // Guards the mailto: navigation, not the panel: the panel is allowed to
   // reappear on every blocked click, but re-navigating to mailto: on a
   // second, third, ... blocked click while the first mailto: tab/prompt is
@@ -144,6 +156,11 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         Email delivery request
       </button>
 
+      <button type="button" className="sf-btn-ghost" onClick={() => setPreviewOpen(true)}>
+        <Eye size={14} aria-hidden="true" />
+        Preview
+      </button>
+
       {fallbackReason !== null && (
         <div className="sf-fallback" data-testid="delivery-request-fallback">
           <p>
@@ -169,6 +186,75 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
           )}
         </div>
       )}
+
+      {/*
+        Built on the Radix Dialog rather than a second hand-rolled sf-modal:
+        brief section 26 requires a focus trap and focus restore, and the
+        storefront's own sf-modal has neither. Radix supplies both correctly.
+        The BUTTONS inside still use sf-* classes so it reads as part of the
+        storefront. The review modal's Escape listener is inert at the success
+        stage (its `closable` guard requires stage === 'review'), so there is no
+        conflict between the two Escape handlers.
+      */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="sp-storefront max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Delivery request preview</DialogTitle>
+            <DialogDescription>
+              StockPilot will open this as a draft in your mail client. Nothing is sent until you
+              press Send yourself, and no ticket exists yet.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="sf-recip">
+            <div className="sf-recip-h">EMAIL RECIPIENTS</div>
+            <dl>
+              <div>
+                <dt>To</dt>
+                <dd>{DELIVERY_REQUEST_EMAIL.to}</dd>
+              </div>
+              <div>
+                <dt>CC</dt>
+                <dd>{DELIVERY_REQUEST_EMAIL.cc}</dd>
+              </div>
+            </dl>
+            <p className="sf-recip-note">{DELIVERY_REQUEST_CC_NOTICE}</p>
+          </div>
+
+          <div className="sf-recip">
+            <div className="sf-recip-h">SUBJECT</div>
+            <p>{prepared.draft.subject}</p>
+          </div>
+
+          <textarea
+            className="sf-fallback-text"
+            readOnly
+            rows={14}
+            value={prepared.draft.body}
+            aria-label="Delivery request message preview"
+          />
+
+          <div className="sf-modal-foot">
+            <button type="button" className="sf-btn-ghost" onClick={handleCopy}>
+              <Copy size={14} aria-hidden="true" />
+              Copy the details
+            </button>
+            <button
+              type="button"
+              className="sf-btn-go"
+              onClick={() => {
+                // R3 still applies inside the dialog: the open is the first
+                // statement, and the dialog is closed afterwards.
+                handleOpen();
+                setPreviewOpen(false);
+              }}
+            >
+              <Mail size={14} aria-hidden="true" />
+              Open in Outlook
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

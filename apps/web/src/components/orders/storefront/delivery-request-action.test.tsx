@@ -461,3 +461,108 @@ describe('DeliveryRequestAction — test isolation (no stub leakage across descr
     );
   });
 });
+
+describe('DeliveryRequestAction — preview dialog', () => {
+  it('opens from a Preview control and shows the subject and body', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Delivery Request — StockPilot Order SO-000049');
+    expect(dialog).toHaveTextContent('CVW Clovis');
+    expect(dialog).toHaveTextContent('1295 Shaw Ave');
+  });
+
+  it('shows BOTH recipients under an EMAIL RECIPIENTS heading', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('EMAIL RECIPIENTS');
+    expect(dialog).toHaveTextContent('dc4@learn4life.org');
+    expect(dialog).toHaveTextContent('arosas@cvwest.org');
+  });
+
+  it('carries the exact CC helper text and never claims assignment', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(
+      'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.',
+    );
+    expect(dialog.textContent?.toLowerCase()).not.toContain('assigned to');
+  });
+
+  it('renders the recipients as TEXT — no input, no editable field, no way to change them', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    // The only form control in the dialog is the read-only body preview.
+    const editable = Array.from(dialog.querySelectorAll('input, select, [contenteditable="true"]'));
+    expect(editable).toHaveLength(0);
+    for (const ta of Array.from(dialog.querySelectorAll('textarea'))) {
+      expect(ta).toHaveAttribute('readonly');
+    }
+  });
+
+  it('opens Outlook from inside the dialog, with both recipients intact', async () => {
+    const user = userEvent.setup();
+    const open = stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
+
+    const url = new URL(open.mock.calls[0]![0] as string);
+    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
+    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+  });
+
+  it('offers copy from inside the dialog, copying both recipients', async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: /Copy the details/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(String(writeText.mock.calls[0]![0])).toContain('CC: arosas@cvwest.org');
+  });
+
+  it('shows the pickup body for a pickup order, with no destination', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('PICKUP FROM');
+    expect(dialog).not.toHaveTextContent('DELIVERY DESTINATION');
+  });
+
+  it('discloses condensation in the preview when the order is large', async () => {
+    const user = userEvent.setup();
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
+    const itemMap = new Map(
+      lines.map((l, i) => [
+        l.itemId,
+        { ...makeInput().itemMap.get('i-1')!, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` },
+      ]),
+    );
+
+    render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('This message was shortened');
+  });
+});
