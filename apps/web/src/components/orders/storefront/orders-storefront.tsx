@@ -92,6 +92,12 @@ export interface OrdersStorefrontProps {
   viewerEmail: string;
   /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
   orderUrlBase: string;
+  /**
+   * `organizations.timezone`, resolved server-side via `getCachedOrgTimezone`
+   * and never empty — the delivery-request draft prints the needed-by date in
+   * it, and a blank value would render an empty "()" after the date.
+   */
+  orgTimezone: string;
 }
 
 type ReviewStage = null | 'review' | 'success';
@@ -199,6 +205,7 @@ function StorefrontShell({
   viewerName,
   viewerEmail,
   orderUrlBase,
+  orgTimezone,
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch } = useCart();
@@ -553,11 +560,13 @@ function StorefrontShell({
             warehouseName={warehouseName}
             chartersForWarehouse={chartersForWarehouse}
             viewerLabel={viewerLabel}
+            viewerEmail={viewerEmail}
             reviewStage={reviewStage}
             setReviewStage={setReviewStage}
             submitted={submitted}
             setSubmitted={setSubmitted}
             orderUrlBase={orderUrlBase}
+            orgTimezone={orgTimezone}
           />
         </React.Suspense>
       </div>
@@ -573,11 +582,14 @@ interface StorefrontCatalogProps {
   warehouseName: string;
   chartersForWarehouse: StorefrontCharter[];
   viewerLabel: string;
+  /** The viewer's own email — the `requesterEmail` fallback when nobody is set on-behalf-of. */
+  viewerEmail: string;
   reviewStage: ReviewStage;
   setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
   submitted: SubmittedOrder;
   setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
   orderUrlBase: string;
+  orgTimezone: string;
 }
 
 function StorefrontCatalog({
@@ -586,11 +598,13 @@ function StorefrontCatalog({
   warehouseName,
   chartersForWarehouse,
   viewerLabel,
+  viewerEmail,
   reviewStage,
   setReviewStage,
   submitted,
   setSubmitted,
   orderUrlBase,
+  orgTimezone,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
@@ -1163,6 +1177,8 @@ function StorefrontCatalog({
               ? `${warehouseName} will-call desk`
               : (charter?.name ?? 'Select a site'),
           requestedFor: state.onBehalfOf?.name ?? viewerLabel,
+          requesterEmail: state.onBehalfOf?.email ?? viewerEmail,
+          orgTimezone,
         }}
         neededBy={state.neededBy}
         destination={state.fulfillmentType === 'delivery' ? charter : null}

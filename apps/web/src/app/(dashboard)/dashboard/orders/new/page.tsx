@@ -4,9 +4,11 @@ import { redirect } from 'next/navigation';
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { env } from '@/lib/env';
 import { SITE_URL } from '@/lib/site';
+import { ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
@@ -53,10 +55,16 @@ export default async function NewOrderPage({
   // Anything only the CATALOG needs (items, media map, and the
   // access-key queries that build the catalog cache key) runs inside
   // catalogPromise, which is never awaited here.
-  const [params, warehouseRows] = await Promise.all([
+  const [params, warehouseRows, orgTimezoneRaw] = await Promise.all([
     searchParams,
     getWarehousesForRequest(ctx.organizationId),
+    getCachedOrgTimezone(ctx.organizationId),
   ]);
+  // getCachedOrgTimezone already falls back to 'UTC' internally and never
+  // returns '', but the delivery-request draft's needed-by line is the one
+  // place an empty zone would render an empty "()" after the date — belt and
+  // suspenders, matching the ORDER_URL_BASE fallback above.
+  const orgTimezone = orgTimezoneRaw || ORG_TIMEZONE_DEFAULT;
   const warehouses = warehouseRows.map((w) => ({
     id: w.id,
     name: w.name,
@@ -116,6 +124,7 @@ export default async function NewOrderPage({
       viewerName={ctx.fullName}
       viewerEmail={ctx.email}
       orderUrlBase={ORDER_URL_BASE}
+      orgTimezone={orgTimezone}
     />
   );
 }

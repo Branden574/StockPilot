@@ -10,6 +10,7 @@ import * as React from 'react';
 import type { CartLineState, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import { CharterTag, SfAddControl, SfPhoto } from './storefront-cards';
+import DeliveryRequestAction from './delivery-request-action';
 import {
   availableOf,
   cartTotals,
@@ -188,6 +189,10 @@ export interface ReviewSummary {
   /** "DC4 will-call desk" or the delivery site (charter) name. */
   deliverTo: string;
   requestedFor: string;
+  /** The requester's email — the one contact DC4 can reliably reach. */
+  requesterEmail: string | null;
+  /** `organizations.timezone`; the draft renders needed-by in it. */
+  orgTimezone: string;
 }
 
 interface ReviewModalProps {
@@ -225,13 +230,9 @@ export function ReviewModal({
   itemMap,
   notes,
   summary,
-  // Not consumed by this component yet — a later task's click handler reads
-  // these to build the delivery-request draft. Underscore-prefixed so
-  // noUnusedParameters doesn't fail the build in the interim; the interface
-  // field names (neededBy/destination/orderUrlBase) are the real contract.
-  neededBy: _neededBy,
-  destination: _destination,
-  orderUrlBase: _orderUrlBase,
+  neededBy,
+  destination,
+  orderUrlBase,
   submitting,
   submitted,
   onClose,
@@ -382,6 +383,25 @@ export function ReviewModal({
               {summary.method === 'pickup' ? 'pickup' : 'delivery'}.
             </p>
             <div className="acts">
+              {submitted && (
+                <DeliveryRequestAction
+                  input={{
+                    orderId: submitted.id,
+                    orderNumber: submitted.orderNumber,
+                    orderUrlBase,
+                    fulfillmentType: summary.method,
+                    warehouseName: summary.warehouseName,
+                    destination,
+                    requestedFor: summary.requestedFor,
+                    requesterEmail: summary.requesterEmail,
+                    neededByLocal: neededBy,
+                    orgTimezone: summary.orgTimezone,
+                    notes,
+                    lines,
+                    itemMap,
+                  }}
+                />
+              )}
               <button type="button" className="sf-btn-ghost" onClick={onViewOrder}>
                 View order
               </button>
