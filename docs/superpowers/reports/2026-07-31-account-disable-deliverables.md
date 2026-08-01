@@ -1070,7 +1070,20 @@ simulator.**
 Each is stated neutrally with its tradeoff. **None is decided here, and none may be implemented before
 the owner rules.**
 
-### 8.1 The brief's four
+### 8.1 The brief's four — OWNER DECIDED 2026-08-01
+
+- **Email the disabled user?** NO. Decided by the owner; do not build it. The in-app
+  disabled screen already tells them to contact their administrator.
+- **Notify managers/owners?** NO. Decided by the owner; do not build it.
+- **Flag active assignments (cycle counts, picking, PO approvals) for reassignment?**
+  DEFERRED — the owner will decide later. Current behaviour stands: assignments are
+  preserved historically, the disabled user simply cannot act on them. Nothing is
+  auto-reassigned and nothing is flagged.
+- **Scheduled auto-re-enable?** Still open, not raised by the owner.
+
+Original framing retained below for context.
+
+### 8.1a The brief's four (original)
 
 **1. Should the disabled user receive an email?** On disable, on re-enable, both, or neither.
 *Tradeoff:* an email is the only channel that reaches a user whose account is already locked, and the
