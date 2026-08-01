@@ -1074,6 +1074,22 @@ describe('buildOutlookComposeUrl', () => {
     expect(url.searchParams.getAll('mailtouri')).toHaveLength(1);
   });
 
+  it('pins the once-decoded mailtouri value directly: %20 for spaces, never a literal +', () => {
+    // A regression pin ONE LAYER IN from the full `decodeCompose` round
+    // trip. `decodeCompose` fully un-escapes both layers, and
+    // `URLSearchParams#get` treats a literal '+' as a space on the way
+    // OUT — so a regression in `encodeDraftQuery` back to
+    // `URLSearchParams`-style form-encoding (spaces as '+' instead of
+    // '%20') could slip past every assertion that only checks the fully
+    // decoded body/subject/cc. Catch it here instead, on the
+    // once-decoded (outer-`mailtouri=`-layer-only) value — the same kind
+    // of direct string the `buildMailtoUrl` tests below pin.
+    const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
+    const mailtouri = url.searchParams.get('mailtouri')!;
+    expect(mailtouri).toContain('%20');
+    expect(mailtouri).not.toContain('+');
+  });
+
   it('carries the CC exactly once, inside the inner mailto QUERY — never in its path (To) segment', () => {
     const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
     const mailtouri = new URL(url).searchParams.get('mailtouri')!;
@@ -1327,15 +1343,27 @@ describe('prepareDeliveryRequest', () => {
       }),
     );
     const url = new URL(prepared.outlookUrl);
-    // The mailtouri wrapper leaves no plain to/cc params on the outer URL at
-    // all — a hostile value would have to land IN the inner mailto: URI to
-    // move a recipient, and buildDeliveryRequestDraft never reads any of
-    // these fields into `to`/`cc` in the first place. The display NAMES are
-    // even further out of reach: they come from the frozen
-    // `DELIVERY_REQUEST_EMAIL_NAMES` constant, which no draft field — and no
-    // function parameter anywhere in this call chain — can reach at all.
+    // `searchParams.getAll('to'/'cc')` on the OUTER url is now tautological
+    // by construction — buildOutlookComposeUrl never writes a plain to/cc
+    // param at all, hostile input or not, so this alone would pass even if
+    // a duplicate `cc` were smuggled into the mailtouri value itself.
+    // Kept as a cheap sanity check, but the real assertions are below.
     expect(url.searchParams.getAll('to')).toEqual([]);
     expect(url.searchParams.getAll('cc')).toEqual([]);
+
+    // The teeth: `decodeCompose`'s `URLSearchParams#get('cc')` returns only
+    // the FIRST match, so it would silently miss a hostile value that
+    // smuggled in a SECOND `cc=` param inside the inner mailto: query
+    // string. Extract that inner query directly and assert there is
+    // exactly one `cc=` occurrence, with exactly one value, and that value
+    // is the untampered name-addr chip.
+    const mailtouri = url.searchParams.get('mailtouri')!;
+    const innerQuery = mailtouri.slice(mailtouri.indexOf('?') + 1);
+    expect(innerQuery.match(/(?:^|&)cc=/g)).toHaveLength(1);
+    expect(new URLSearchParams(innerQuery).getAll('cc')).toEqual([
+      'Andrew Rosas <arosas@cvwest.org>',
+    ]);
+
     const decoded = decodeCompose(prepared.outlookUrl);
     expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');

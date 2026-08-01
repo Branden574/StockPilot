@@ -635,29 +635,44 @@ function encodeDraftQuery(params: Record<string, string>): string {
  * subject and body intact.
  *
  * DISPLAY NAMES (2026-08-01, second tenant test): the owner then verified
- * that this same `mailtouri` parser also handles RFC 6068 name-addr forms
- * ("Name <addr>") cleanly — his test URL produced OWA compose chips reading
- * 'Fresno Warehouse DC4 <dc4@learn4life.org>' (To) and 'Andrew Rosas
- * <arosas@cvwest.org>' (Cc), correct addresses underneath. So this function
- * builds its own inner mailto: URI rather than reusing `buildMailtoUrl`'s:
- * the To PATH segment is `encodeURIComponent` of
+ * that this same `mailtouri` parser also handles name-addr forms ("Name
+ * <addr>") cleanly IN THE PATH POSITION — his test URL produced OWA compose
+ * chips reading 'Fresno Warehouse DC4 <dc4@learn4life.org>' (To) and
+ * 'Andrew Rosas <arosas@cvwest.org>' (Cc), correct addresses underneath.
+ *
+ * CORRECTION on the RFC: name-addr itself is RFC 5322 mailbox syntax, not
+ * RFC 6068. RFC 6068 (the mailto: URI scheme) admits a name-addr string
+ * only as the VALUE of an hfield like `to=` or `cc=` in the query string —
+ * it does not define name-addr in the PATH position at all. Putting a
+ * name-addr there, as this function does for the To address, is an OWA
+ * `mailtouri` PARSER EXTENSION beyond the RFC, tenant-verified 2026-08-01,
+ * not a documented part of RFC 6068 itself. That is exactly why the
+ * boundary below exists: nothing says a generic RFC 6068 `mailto:` consumer
+ * — including desktop mail clients — would parse a path-position name-addr
+ * the same way.
+ *
+ * So this function builds its own inner mailto: URI rather than reusing
+ * `buildMailtoUrl`'s: the To PATH segment is `encodeURIComponent` of
  * `` `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>` `` (spaces become
  * `%20`, angle brackets `%3C`/`%3E`), and the Cc query value — passed
- * through the same `encodeDraftQuery` used for subject/body — is
+ * through the same `encodeDraftQuery` used for subject/body, so it rides in
+ * the RFC-6068-legal hfield-value position — is
  * `` `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>` ``. The NAMES come
- * only from the frozen `DELIVERY_REQUEST_EMAIL_NAMES` constant (`@/lib/site`)
- * — cosmetic labels, never routing truth; `draft.to`/`draft.cc` (from
+ * only from the frozen `DELIVERY_REQUEST_EMAIL_NAMES` constant (`@/lib/site`,
+ * which also documents why they must stay free of RFC 5322 specials like
+ * `,`) — cosmetic labels, never routing truth; `draft.to`/`draft.cc` (from
  * `DELIVERY_REQUEST_EMAIL`) remain the only addresses that actually
  * determine where mail goes.
  *
  * BOUNDARY (deliberate, do not extend): this name-addr treatment is
  * OWA-ONLY. `buildMailtoUrl` — the popup-blocked desktop `mailto:` fallback
- * — stays PLAIN-ADDRESS RFC 6068, because desktop clients' name-addr
- * parsing (Outlook desktop, Apple Mail, Thunderbird) was never tested and is
- * unverified; only the tenant-verified OWA path carries names.
- * `buildClipboardText` and every on-screen recipient label likewise keep
- * bare addresses — those are the owner-pinned strings, unaffected by this
- * constant.
+ * — stays PLAIN-ADDRESS RFC 6068, because the path-position name-addr this
+ * function relies on is an OWA parser extension, and desktop clients'
+ * handling of it (Outlook desktop, Apple Mail, Thunderbird) was never
+ * tested and is unverified; only the tenant-verified OWA path carries
+ * names. `buildClipboardText` and every on-screen recipient label likewise
+ * keep bare addresses — those are the owner-pinned strings, unaffected by
+ * this constant.
  *
  * The resulting mailto: URI — `mailto:<encoded name-addr To>?cc=<encoded
  * name-addr Cc>&subject=...&body=...` — is wrapped in `encodeURIComponent`

@@ -52,11 +52,14 @@ export const DELIVERY_REQUEST_EMAIL = Object.freeze({
 
 /**
  * Cosmetic display labels for the Outlook compose chips — the human-readable
- * name half of an RFC 6068 name-addr ("Name <addr>"), tenant-verified
- * 2026-08-01: the owner's `mailtouri=` test against the real L4L Microsoft
- * 365 tenant produced OWA compose chips reading 'Fresno Warehouse DC4
+ * name half of a name-addr ("Name <addr>"), tenant-verified 2026-08-01: the
+ * owner's `mailtouri=` test against the real L4L Microsoft 365 tenant
+ * produced OWA compose chips reading 'Fresno Warehouse DC4
  * <dc4@learn4life.org>' (To) and 'Andrew Rosas <arosas@cvwest.org>' (Cc),
- * correct addresses underneath.
+ * correct addresses underneath. (name-addr itself is RFC 5322 mailbox
+ * syntax; RFC 6068's mailto: scheme only admits it as an hfield VALUE, not
+ * in path position — see `buildOutlookComposeUrl`'s own doc comment for why
+ * the path-position To here is an OWA parser extension, not the RFC.)
  *
  * The ADDRESSES in `DELIVERY_REQUEST_EMAIL` above remain the routing truth —
  * these names are decoration only. They must never replace or be
@@ -66,6 +69,18 @@ export const DELIVERY_REQUEST_EMAIL = Object.freeze({
  * (`buildMailtoUrl`) and the clipboard/UI copy (`buildClipboardText` and
  * every on-screen recipient label) stay bare addresses, unaffected by this
  * constant.
+ *
+ * SECURITY: these names must stay free of RFC 5322 specials — `< > , " @ ;`
+ * — because `buildOutlookComposeUrl` interpolates them UNQUOTED into the
+ * name-addr string (`` `${name} <${address}>` ``) before percent-encoding.
+ * A comma in particular can split what a mail parser reads as one recipient
+ * into two, silently dropping the mandatory CC — the exact class of failure
+ * this whole file exists to prevent. Safe today because both values are
+ * compile-time literals, same as `DELIVERY_REQUEST_EMAIL` above. If these
+ * names ever become configurable (see the OPEN note below), the config path
+ * must quote them (RFC 5322 quoted-string) or boundary-validate against
+ * this character set before they reach `buildOutlookComposeUrl` — an
+ * unvalidated free-text name field is not safe to interpolate here as-is.
  */
 export const DELIVERY_REQUEST_EMAIL_NAMES = Object.freeze({
   to: 'Fresno Warehouse DC4',
