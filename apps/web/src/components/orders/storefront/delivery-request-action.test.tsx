@@ -14,7 +14,7 @@ vi.mock('sonner', () => ({
 }));
 
 // Rest param (not the brief's literal zero-arg `() => {}`) for the same
-// reason `stubOpen` above takes one: keeps `mock.calls[0]` typed as
+// reason `stubOpen` in this file takes one: keeps `mock.calls[0]` typed as
 // `unknown[]` rather than `[]`, so `mock.calls[0]![0]` typechecks under
 // noUncheckedIndexedAccess (TS2493 otherwise).
 const recordDraftedSpy = vi.fn(async (..._args: unknown[]) => {});
@@ -895,9 +895,31 @@ describe('DeliveryRequestAction — bookkeeping never precedes the open', () => 
     const open = stubOpen();
     recordDraftedSpy.mockRejectedValueOnce(new Error('offline'));
 
+    // The bookkeeping RPC is fire-and-forget (`recordDraft` never awaits or
+    // returns it), so a rejection — offline, a flaky transport, anything
+    // short of the server action itself throwing synchronously — has
+    // nowhere to land except a process-level 'unhandledRejection' UNLESS
+    // production code attaches its own .catch(). This listener is the only
+    // thing in this test that observes that: it asserts nothing about the
+    // draft flow (the two expects below, unchanged, still cover that) — it
+    // only proves the rejection above was actually absorbed rather than
+    // escaping to the process.
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
     render(<DeliveryRequestAction input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
+    // Flush microtasks so a same-tick 'unhandledRejection' has a chance to
+    // fire before we assert on `unhandled`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    process.off('unhandledRejection', onUnhandledRejection);
+
+    expect(unhandled).toEqual([]);
     expect(open).toHaveBeenCalledTimes(1);
     expect(toastError).not.toHaveBeenCalled();
   });

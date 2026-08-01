@@ -130,9 +130,12 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
    * not go to a third-party processor.
    */
   function recordDraft() {
-    void recordDeliveryRequestDraftedAction({
+    recordDeliveryRequestDraftedAction({
       orderId: input.orderId,
       isCondensed: prepared.draft.condensed,
+    }).catch(() => {
+      // The RPC itself can reject (offline); bookkeeping is best-effort and
+      // must never surface to the employee who already has their draft.
     });
     capture('delivery_request_drafted', {
       order_id: input.orderId,
