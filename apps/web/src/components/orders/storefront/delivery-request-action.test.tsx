@@ -126,11 +126,16 @@ function stubLocationAssign(assign = vi.fn()) {
  * slicing at the first '?' rather than `new URL()`, since the WHATWG URL
  * parser never populates `.searchParams` for the opaque-path `mailto:`
  * scheme. Mirrors `decodeCompose` in storefront-logic.test.ts.
+ *
+ * `to` is a percent-encoded RFC 6068 name-addr ("Name <addr>"), not a bare
+ * address — the tenant-verified 2026-08-01 chip form — so it needs an
+ * explicit `decodeURIComponent`; `cc` is decoded automatically by
+ * `URLSearchParams`.
  */
 function decodeCompose(url: string): { to: string; cc: string; subject: string; body: string } {
   const mailtouri = new URL(url).searchParams.get('mailtouri') ?? '';
   const queryStart = mailtouri.indexOf('?');
-  const to = mailtouri.slice('mailto:'.length, queryStart);
+  const to = decodeURIComponent(mailtouri.slice('mailto:'.length, queryStart));
   const inner = new URLSearchParams(mailtouri.slice(queryStart + 1));
   return {
     to,
@@ -185,8 +190,8 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const url = new URL(rawUrl);
     expect(url.origin + url.pathname).toBe('https://outlook.office.com/mail/deeplink/compose');
     const decoded = decodeCompose(rawUrl);
-    expect(decoded.to).toBe('dc4@learn4life.org');
-    expect(decoded.cc).toBe('arosas@cvwest.org');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
     expect(decoded.subject).toContain('SO-000049');
     expect(decoded.body).toContain('CVW Clovis');
   });
@@ -596,8 +601,8 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
 
     const decoded = decodeCompose(open.mock.calls[0]![0] as string);
-    expect(decoded.to).toBe('dc4@learn4life.org');
-    expect(decoded.cc).toBe('arosas@cvwest.org');
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
   it('offers copy from inside the dialog, copying both recipients', async () => {

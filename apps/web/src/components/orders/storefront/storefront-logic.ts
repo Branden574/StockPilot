@@ -5,7 +5,7 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } from '@/lib/site';
 import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '@/lib/timezone';
 
 import type { CartLineState, CatalogItem, CharterAddress, StorefrontCharter } from '../v2/types';
@@ -615,8 +615,9 @@ function encodeDraftQuery(params: Record<string, string>): string {
 }
 
 /**
- * Wraps the mailto: URI (built by `buildMailtoUrl`) in OWA's `mailtouri`
- * param — NOT plain `to`/`cc`/`subject`/`body` query params.
+ * Builds its OWN inner mailto: URI — deliberately NOT `buildMailtoUrl`'s
+ * output — then wraps it in OWA's `mailtouri` param, NOT plain
+ * `to`/`cc`/`subject`/`body` query params.
  *
  * HISTORY: this originally built `${OUTLOOK_COMPOSE_BASE}?to=...&cc=...&
  * subject=...&body=...`, each value encoded once via `encodeDraftQuery`. The
@@ -633,21 +634,50 @@ function encodeDraftQuery(params: Record<string, string>): string {
  * in the same tenant and confirmed BOTH To and Cc populate correctly, with
  * subject and body intact.
  *
- * The inner mailto: URI (built by `buildMailtoUrl`, itself %20-encoded via
- * `encodeDraftQuery` — see that function's own doc comment) is the single
- * source of truth for every field. It is wrapped in `encodeURIComponent`
- * EXACTLY ONCE here. That is two encoding layers total — one inside
- * `buildMailtoUrl`, one here — each applied exactly once. That is correct,
- * not double-encoding: double-encoding would mean encoding the SAME layer
- * twice (e.g. running `encodeURIComponent` on an already-`encodeDraftQuery`d
- * value at the SAME nesting level), which this is not. A decoder must undo
- * both layers to reach the original value — see `decodeCompose` in
- * storefront-logic.test.ts for the reference two-step decode, mirrored by
- * this component's own click handler which passes the whole URL straight to
- * `window.open` and lets the browser do both un-wraps.
+ * DISPLAY NAMES (2026-08-01, second tenant test): the owner then verified
+ * that this same `mailtouri` parser also handles RFC 6068 name-addr forms
+ * ("Name <addr>") cleanly — his test URL produced OWA compose chips reading
+ * 'Fresno Warehouse DC4 <dc4@learn4life.org>' (To) and 'Andrew Rosas
+ * <arosas@cvwest.org>' (Cc), correct addresses underneath. So this function
+ * builds its own inner mailto: URI rather than reusing `buildMailtoUrl`'s:
+ * the To PATH segment is `encodeURIComponent` of
+ * `` `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>` `` (spaces become
+ * `%20`, angle brackets `%3C`/`%3E`), and the Cc query value — passed
+ * through the same `encodeDraftQuery` used for subject/body — is
+ * `` `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>` ``. The NAMES come
+ * only from the frozen `DELIVERY_REQUEST_EMAIL_NAMES` constant (`@/lib/site`)
+ * — cosmetic labels, never routing truth; `draft.to`/`draft.cc` (from
+ * `DELIVERY_REQUEST_EMAIL`) remain the only addresses that actually
+ * determine where mail goes.
+ *
+ * BOUNDARY (deliberate, do not extend): this name-addr treatment is
+ * OWA-ONLY. `buildMailtoUrl` — the popup-blocked desktop `mailto:` fallback
+ * — stays PLAIN-ADDRESS RFC 6068, because desktop clients' name-addr
+ * parsing (Outlook desktop, Apple Mail, Thunderbird) was never tested and is
+ * unverified; only the tenant-verified OWA path carries names.
+ * `buildClipboardText` and every on-screen recipient label likewise keep
+ * bare addresses — those are the owner-pinned strings, unaffected by this
+ * constant.
+ *
+ * The resulting mailto: URI — `mailto:<encoded name-addr To>?cc=<encoded
+ * name-addr Cc>&subject=...&body=...` — is wrapped in `encodeURIComponent`
+ * EXACTLY ONCE as the `mailtouri` value. That is two encoding layers total
+ * — one building this inner URI, one wrapping it here — each applied
+ * exactly once; see `decodeCompose` in storefront-logic.test.ts for the
+ * reference two-step decode (its `to` needs an explicit
+ * `decodeURIComponent` now, since the path segment is no longer a bare,
+ * unencoded address).
  */
 export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
-  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(buildMailtoUrl(draft))}`;
+  const toNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>`;
+  const ccNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>`;
+  const query = encodeDraftQuery({
+    cc: ccNameAddr,
+    subject: draft.subject,
+    body: draft.body,
+  });
+  const innerMailto = `mailto:${encodeURIComponent(toNameAddr)}?${query}`;
+  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(innerMailto)}`;
 }
 
 /**

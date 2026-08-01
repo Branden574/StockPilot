@@ -50,6 +50,28 @@ export const DELIVERY_REQUEST_EMAIL = Object.freeze({
   cc: 'arosas@cvwest.org',
 } as const);
 
+/**
+ * Cosmetic display labels for the Outlook compose chips — the human-readable
+ * name half of an RFC 6068 name-addr ("Name <addr>"), tenant-verified
+ * 2026-08-01: the owner's `mailtouri=` test against the real L4L Microsoft
+ * 365 tenant produced OWA compose chips reading 'Fresno Warehouse DC4
+ * <dc4@learn4life.org>' (To) and 'Andrew Rosas <arosas@cvwest.org>' (Cc),
+ * correct addresses underneath.
+ *
+ * The ADDRESSES in `DELIVERY_REQUEST_EMAIL` above remain the routing truth —
+ * these names are decoration only. They must never replace or be
+ * concatenated into any address field outside the Outlook compose URL's
+ * inner mailto: URI construction (`buildOutlookComposeUrl` in
+ * `storefront-logic.ts`); the popup-blocked `mailto:` fallback
+ * (`buildMailtoUrl`) and the clipboard/UI copy (`buildClipboardText` and
+ * every on-screen recipient label) stay bare addresses, unaffected by this
+ * constant.
+ */
+export const DELIVERY_REQUEST_EMAIL_NAMES = Object.freeze({
+  to: 'Fresno Warehouse DC4',
+  cc: 'Andrew Rosas',
+} as const);
+
 /** Helper text shown wherever the recipients are displayed. Accuracy, not optimism. */
 export const DELIVERY_REQUEST_CC_NOTICE =
   'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.';
