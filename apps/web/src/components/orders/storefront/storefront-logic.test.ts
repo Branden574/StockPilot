@@ -639,6 +639,19 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).toContain('1. ghost — qty 3');
   });
 
+  it('falls back to the item id when the catalog item exists but has an empty name', () => {
+    // item?.name ?? line.itemId only catches null/undefined — an empty
+    // string survives the ?? and used to render "1.  — qty 3".
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({
+        lines: [{ itemId: 'i-9', quantity: 3 }],
+        itemMap: new Map([['i-9', makeItem({ id: 'i-9', name: '', sku: '' })]]),
+      }),
+    );
+    expect(body).toContain('1. i-9 — qty 3');
+    expect(body).not.toContain('1.  —');
+  });
+
   it('handles zero lines without emitting an empty ITEMS block', () => {
     const { body } = buildDeliveryRequestDraft(makeDraftInput({ lines: [] }));
     expect(body).not.toContain('ITEMS (');
@@ -772,6 +785,66 @@ describe('buildDeliveryRequestDraft — fields that DO NOT EXIST are omitted, ne
   });
 });
 
+describe('buildDeliveryRequestDraft — honest placeholders for empty-string inputs', () => {
+  // toPlainTextLine('   ') === ''. Every one of these inputs used to produce a
+  // labelled heading with nothing under it, and blocks.join('\n\n') then
+  // turned that trailing newline into three in a row. The fix is an honest
+  // placeholder string, never a blank line and never an invented value.
+
+  it('uses an honest placeholder when the warehouse name is all whitespace, on a delivery order', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ warehouseName: '   ' }));
+    expect(body).toContain('FROM (WAREHOUSE)\n(warehouse not recorded)');
+    expect(body).not.toContain('FROM (WAREHOUSE)\n\n');
+    expect(body).not.toContain('\n\n\n');
+  });
+
+  it('uses the same honest placeholder for the will-call desk on a pickup order', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ warehouseName: '   ', fulfillmentType: 'pickup', destination: null }),
+    );
+    expect(body).toContain('PICKUP FROM\n(warehouse not recorded) will-call desk');
+    expect(body).not.toContain('PICKUP FROM\n\n');
+    expect(body).not.toContain('\n\n\n');
+  });
+
+  it('falls back to the same warehouse placeholder in the subject when neither the site nor the warehouse is usable', () => {
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({ warehouseName: '   ', destination: null }),
+    );
+    expect(draft.subject).toBe(
+      'Delivery Request — StockPilot Order SO-000049 — (warehouse not recorded)',
+    );
+  });
+
+  it('uses an honest placeholder when the requester is all whitespace and no email is known', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({
+        fulfillmentType: 'pickup',
+        destination: null,
+        requestedFor: '   ',
+        requesterEmail: null,
+      }),
+    );
+    expect(body).toContain('Requested by: (requester not recorded)');
+    expect(body).toContain('COLLECTED BY\n(requester not recorded)');
+    expect(body).not.toContain('COLLECTED BY\n\n');
+    expect(body).not.toContain('\n\n\n');
+  });
+
+  it('falls through to the honest destination fallback when the site name is all whitespace', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({
+        destination: { id: 'ch-4', name: '   ', code: null, address: null },
+      }),
+    );
+    expect(body).toContain(
+      'DELIVERY DESTINATION\nNot recorded on this order. Please confirm the destination with the requester before delivering.',
+    );
+    expect(body).not.toContain('DELIVERY DESTINATION\n\n');
+    expect(body).not.toContain('\n\n\n');
+  });
+});
+
 describe('buildDeliveryRequestDraft — plain text and safety', () => {
   it('is plain text: no HTML, no markdown emphasis, no CRLF', () => {
     const { body } = buildDeliveryRequestDraft(makeDraftInput());
@@ -790,6 +863,24 @@ describe('buildDeliveryRequestDraft — plain text and safety', () => {
 
   it('never emits three consecutive newlines', () => {
     expect(buildDeliveryRequestDraft(makeDraftInput()).body).not.toContain('\n\n\n');
+  });
+
+  it('sanitizes a newline embedded in the order id before it reaches the body', () => {
+    // orderId and orderUrlBase are the only input strings that reach the body
+    // unsanitized: a newline inside orderId used to survive into both
+    // `Order: ${handle}` and `Order link: ${orderUrl}` verbatim.
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({
+        orderId: 'ab\ncd1234-1111-2222-3333-444455556666',
+        orderNumber: null,
+      }),
+    );
+    expect(body).toContain('Order: ab cd123');
+    expect(body).toContain(
+      'Order link: https://app.stockpilotusa.com/dashboard/orders/ab cd1234-1111-2222-3333-444455556666',
+    );
+    expect(body).not.toContain('\ncd1234');
+    expect(body).not.toContain('\n\n\n');
   });
 
   it('reports condensed:false and a real character count for a normal order', () => {
@@ -821,12 +912,29 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
   });
 
   it('drops the per-line list and the address, which is what makes it short', () => {
-    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    // The 2-item default fixture is too small to demonstrate this on its
+    // own once condensed mode also discloses the dropped notes (Finding 2):
+    // that fixed second sentence can outweigh the savings from condensing
+    // just two lines and one address. A realistic multi-item order still
+    // condenses smaller, which is the property under test — so this widens
+    // the fixture rather than touching the assertions.
+    const base = makeDraftInput();
+    const extraLines = Array.from({ length: 8 }, (_, i) => ({ itemId: `extra-${i}`, quantity: 1 }));
+    const extraItems = new Map(
+      extraLines.map((l, i) => [
+        l.itemId,
+        makeItem({ id: l.itemId, sku: `EXTRA-SKU-${i}`, name: `Extra Condensed Fixture Item ${i}` }),
+      ]),
+    );
+    const input: DeliveryRequestInput = {
+      ...base,
+      lines: [...base.lines, ...extraLines],
+      itemMap: new Map([...base.itemMap, ...extraItems]),
+    };
+    const draft = buildDeliveryRequestDraft(input, { condensed: true });
     expect(draft.body).not.toContain('APP-POLO-W');
     expect(draft.body).not.toContain('1295 Shaw Ave');
-    expect(draft.body.length).toBeLessThan(
-      buildDeliveryRequestDraft(makeDraftInput()).body.length,
-    );
+    expect(draft.body.length).toBeLessThan(buildDeliveryRequestDraft(input).body.length);
   });
 
   it('keeps the site name so DC4 still knows where it goes', () => {
@@ -841,6 +949,25 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
     );
     expect(draft.body).toContain('Pickup / will-call');
     expect(draft.body).not.toContain('DELIVERY DESTINATION');
+  });
+
+  it('discloses that order notes were also dropped, when there were notes to drop', () => {
+    // Condensed mode already drops ORDER NOTES silently; the disclosure used
+    // to mention only the shortened item list, so a real requester note (e.g.
+    // "dock closes at 3pm") vanished with no signal at all.
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. The complete order is at the link above. Order notes were also omitted and are available at the link above.',
+    );
+    expect(draft.body).not.toContain('Please stage these by Friday.');
+  });
+
+  it('does not claim notes were dropped when there were none to begin with', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput({ notes: '' }), { condensed: true });
+    expect(draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. The complete order is at the link above.',
+    );
+    expect(draft.body).not.toContain('Order notes were also omitted');
   });
 });
 

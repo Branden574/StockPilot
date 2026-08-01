@@ -340,7 +340,14 @@ export interface DeliveryRequestInput {
   /** `order_requests.notes` — the requester-facing message. Safe to include. */
   notes: string;
   lines: readonly CartLineState[];
-  itemMap: ReadonlyMap<string, CatalogItem>;
+  /**
+   * Only `name` and `sku` — closed at the type level, not merely by
+   * convention. A `Map<string, CatalogItem>` remains structurally assignable
+   * here (every caller keeps working unchanged), but the builder itself can
+   * no longer read `price` or any other staff-only field even by accident:
+   * the type checker refuses it.
+   */
+  itemMap: ReadonlyMap<string, Pick<CatalogItem, 'name' | 'sku'>>;
 }
 
 /**
@@ -400,7 +407,9 @@ function neededByLine(neededByLocal: string, tz: string): string | null {
     { dateStyle: 'medium', timeStyle: 'short' },
     tz || ORG_TIMEZONE_DEFAULT,
   );
-  if (formatted === '—') return null;
+  // formatOrgDateTime only returns '—' when its Date is NaN, and the
+  // Number.isNaN guard above already excludes that input — this branch was
+  // provably unreachable.
   return `${formatted} (${tz || ORG_TIMEZONE_DEFAULT})`;
 }
 
@@ -432,11 +441,18 @@ export function buildDeliveryRequestDraft(
   const { lineCount, unitCount } = cartTotals(input.lines);
   const handle = orderHandle(input.orderNumber, input.orderId);
   const warehouse = toPlainTextLine(input.warehouseName);
+  // Honest placeholders, computed once. toPlainTextLine('   ') === '', and an
+  // empty value here used to produce a labelled heading with nothing under
+  // it — never an invented value, always a visible admission the field is
+  // unusable.
+  const warehouseLabel = warehouse || '(warehouse not recorded)';
   const requester = toPlainTextLine(input.requestedFor);
   const requesterEmail = input.requesterEmail ? toPlainTextLine(input.requesterEmail) : '';
   const requesterLine = requesterEmail ? `${requester} (${requesterEmail})` : requester;
+  const requesterLabel = requesterLine || '(requester not recorded)';
 
-  const subjectLocation = site ? toPlainTextLine(site.name) : warehouse;
+  const siteName = site ? toPlainTextLine(site.name) : '';
+  const subjectLocation = siteName || warehouseLabel;
   const subject = toPlainTextLine(
     `Delivery Request — StockPilot Order ${handle} — ${subjectLocation}`,
   );
@@ -454,24 +470,27 @@ export function buildDeliveryRequestDraft(
     [
       'DELIVERY REQUEST — StockPilot',
       '',
-      `Order: ${handle}`,
-      `Requested by: ${requesterLine}`,
+      `Order: ${toPlainTextLine(handle)}`,
+      `Requested by: ${requesterLabel}`,
       `Fulfillment method: ${isPickup ? 'Pickup / will-call' : 'Delivery'}`,
       `Order status in StockPilot: ${DRAFT_STATUS_LABEL}`,
     ].join('\n'),
   );
 
   if (isPickup) {
-    blocks.push(`PICKUP FROM\n${warehouse} will-call desk`);
-    blocks.push(`COLLECTED BY\n${requesterLine}`);
+    blocks.push(`PICKUP FROM\n${warehouseLabel} will-call desk`);
+    blocks.push(`COLLECTED BY\n${requesterLabel}`);
   } else {
-    blocks.push(`FROM (WAREHOUSE)\n${warehouse}`);
-    if (site) {
+    blocks.push(`FROM (WAREHOUSE)\n${warehouseLabel}`);
+    const destinationLabel = site ? siteLabel(site) : '';
+    if (site && destinationLabel) {
       const addressLines = condensed ? [] : formatSiteAddressLines(site.address);
-      blocks.push(['DELIVERY DESTINATION', siteLabel(site), ...addressLines].join('\n'));
+      blocks.push(['DELIVERY DESTINATION', destinationLabel, ...addressLines].join('\n'));
     } else {
       // R8: 5 of 41 prod delivery orders have no charter because the CHECK is
-      // NOT VALID. Say so plainly instead of printing an empty block.
+      // NOT VALID, and a site whose name is blank after sanitizing is
+      // equally unusable — both get the same honest fallback instead of an
+      // empty or malformed labelled block.
       blocks.push(
         'DELIVERY DESTINATION\nNot recorded on this order. Please confirm the destination with the requester before delivering.',
       );
@@ -492,7 +511,10 @@ export function buildDeliveryRequestDraft(
     } else {
       const rows = input.lines.map((line, i) => {
         const item = input.itemMap.get(line.itemId);
-        const name = toPlainTextLine(item?.name ?? line.itemId);
+        // `?? line.itemId` only catches null/undefined — an empty-string
+        // name would sail through and render "1.  — qty 5". `||` catches
+        // both a missing item AND a present-but-blank name.
+        const name = toPlainTextLine(item?.name || line.itemId);
         const sku = item?.sku ? toPlainTextLine(item.sku) : '';
         const label = sku ? `${name} — ${sku}` : name;
         return `${i + 1}. ${label} — qty ${line.quantity}`;
@@ -504,8 +526,22 @@ export function buildDeliveryRequestDraft(
   const notes = toPlainTextLine(input.notes);
   if (notes && !condensed) blocks.push(`ORDER NOTES\n${notes}`);
 
-  if (orderUrl) blocks.push(`Order link: ${orderUrl}`);
-  if (condensed) blocks.push(CONDENSED_DISCLOSURE);
+  // orderId (and by extension orderUrl, which embeds it) is the other input
+  // string that reaches the body without going through toPlainTextLine —
+  // sanitize at the point of use so a newline in the id can't survive into
+  // the link line.
+  if (orderUrl) blocks.push(`Order link: ${toPlainTextLine(orderUrl)}`);
+  if (condensed) {
+    // Condensed mode drops ORDER NOTES silently (see above); say so in the
+    // same disclosure block rather than letting a real requester note
+    // vanish with no signal. The original sentence stays intact and
+    // contiguous — callers still assert on it with toContain.
+    blocks.push(
+      notes
+        ? `${CONDENSED_DISCLOSURE} Order notes were also omitted and are available at the link above.`
+        : CONDENSED_DISCLOSURE,
+    );
+  }
   blocks.push(NON_CLAIM_FOOTER);
 
   return {
