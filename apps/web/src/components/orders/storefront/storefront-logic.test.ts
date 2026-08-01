@@ -1069,6 +1069,19 @@ describe('buildOutlookComposeUrl', () => {
     );
     expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
   });
+
+  it('encodes spaces as %20, never as + — RFC 6068 mailto clients (desktop Outlook, Apple Mail, Thunderbird) render a literal + as a plus sign, not a space', () => {
+    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(url).toContain('%20');
+    expect(url).not.toContain('+');
+  });
+
+  it('a literal + in the order notes round-trips through the query string as %2B, not as a space', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput({ notes: 'Size L+ jerseys' }));
+    const url = buildOutlookComposeUrl(draft);
+    expect(url).toContain('%2B');
+    expect(new URL(url).searchParams.get('body')).toContain('Size L+ jerseys');
+  });
 });
 
 describe('buildMailtoUrl', () => {
@@ -1099,6 +1112,20 @@ describe('buildMailtoUrl', () => {
     );
     const params = new URLSearchParams(buildMailtoUrl(bare).slice(buildMailtoUrl(bare).indexOf('?') + 1));
     expect(params.get('cc')).toBe('arosas@cvwest.org');
+  });
+
+  it('encodes spaces as %20, never as + — RFC 6068 mailto clients render a literal + as a plus sign, not a space', () => {
+    const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(url).toContain('%20');
+    expect(url).not.toContain('+');
+  });
+
+  it('a literal + in the order notes round-trips through the query string as %2B, not as a space', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput({ notes: 'Size L+ jerseys' }));
+    const url = buildMailtoUrl(draft);
+    expect(url).toContain('%2B');
+    const params = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    expect(params.get('body')).toContain('Size L+ jerseys');
   });
 });
 
@@ -1140,6 +1167,7 @@ describe('prepareDeliveryRequest', () => {
     expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
     expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
     expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.linkFits).toBe(true);
   });
 
   it('CONDENSES automatically when the full body would exceed the link limit', () => {
@@ -1156,6 +1184,29 @@ describe('prepareDeliveryRequest', () => {
     expect(prepared.draft.body).toContain(
       'This message was shortened because the full item list did not fit in a compose link.',
     );
+    // The condensed 100-line order is well within DRAFT_URL_LIMIT once
+    // condensed, so the CHOSEN (condensed) urls honestly fit.
+    expect(prepared.linkFits).toBe(true);
+  });
+
+  it('linkFits is FALSE when even the condensed URL exceeds the limit — a pathological warehouse name, not the line count, is the cause', () => {
+    // Site/warehouse/requester names are unbounded database strings.
+    // Condensing drops the per-line list, the address and the notes, but it
+    // does NOT shorten the warehouse name — so a pathological name alone can
+    // push even the condensed link past DRAFT_URL_LIMIT. That must produce an
+    // honest signal, not a silently truncated mail-client draft.
+    const prepared = prepareDeliveryRequest(
+      makeDraftInput({ warehouseName: 'W'.repeat(3000), destination: null }),
+    );
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.linkFits).toBe(false);
+    // The clipboard path has no URL-length limit and must still carry the
+    // complete body — recipients plus content that condensing would have
+    // dropped (the order notes).
+    expect(prepared.clipboardText).toContain('TO: dc4@learn4life.org');
+    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+    expect(prepared.clipboardText).toContain('Please stage these by Friday.');
+    expect(prepared.clipboardText).toContain('APP-POLO-W');
   });
 
   it('the CLIPBOARD text is always the FULL body, even when the links are condensed', () => {

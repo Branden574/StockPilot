@@ -577,34 +577,59 @@ export const OUTLOOK_COMPOSE_BASE = 'https://outlook.office.com/mail/deeplink/co
 export const DRAFT_URL_LIMIT = 1800;
 
 /**
- * Encoded EXACTLY ONCE. URLSearchParams performs the percent-encoding; nothing
- * is pre-encoded on the way in, and nothing is encoded again on the way out.
- * Double-encoding is the classic failure here — it produces a body full of
- * literal %20 that the recipient has to read through.
+ * Build a query string with %20 for spaces, never '+'.
+ *
+ * URLSearchParams serializes per application/x-www-form-urlencoded, where a
+ * space becomes '+'. Web query parsers decode that fine, but RFC 6068 gives
+ * '+' no space meaning in mailto: URLs — desktop Outlook, Apple Mail and
+ * Thunderbird render it literally, turning the whole draft into
+ * "Delivery+Request+...". %20 is unambiguous: BOTH form-decoders and
+ * RFC-style decoders read it as a space, so both transports use this.
+ */
+function encodeDraftQuery(params: Record<string, string>): string {
+  return Object.entries(params)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join('&');
+}
+
+/**
+ * Encoded EXACTLY ONCE, via `encodeDraftQuery` — never `URLSearchParams`,
+ * whose `application/x-www-form-urlencoded` output turns every space into a
+ * literal '+'. That reads fine to a web query parser but not to this link's
+ * own mailto: fallback or to desktop Outlook, Apple Mail and Thunderbird,
+ * which give '+' no space meaning under RFC 6068 and would render the whole
+ * draft as "Delivery+Request+...". `encodeDraftQuery` emits %20 instead,
+ * which both kinds of decoder read correctly. Nothing is pre-encoded on the
+ * way in, and nothing is encoded again on the way out — double-encoding is
+ * the other classic failure here, producing a body full of literal %20 that
+ * the recipient has to read through.
  */
 export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
-  const params = new URLSearchParams({
+  const query = encodeDraftQuery({
     to: draft.to,
     cc: draft.cc,
     subject: draft.subject,
     body: draft.body,
   });
-  return `${OUTLOOK_COMPOSE_BASE}?${params.toString()}`;
+  return `${OUTLOOK_COMPOSE_BASE}?${query}`;
 }
 
 /**
  * mailto: fallback for when the popup is blocked or OWA is not the user's
  * client. The To address is the PATH; cc, subject and body are query
- * parameters. Both recipients are still generated — a mailto that drops the CC
- * is non-compliant.
+ * parameters, built with `encodeDraftQuery` so spaces are %20 rather than
+ * '+' — RFC 6068 gives '+' no space meaning, and this is exactly the client
+ * family (desktop Outlook, Apple Mail, Thunderbird) that renders it
+ * literally instead of decoding it. Both recipients are still generated — a
+ * mailto that drops the CC is non-compliant.
  */
 export function buildMailtoUrl(draft: DeliveryRequestDraft): string {
-  const params = new URLSearchParams({
+  const query = encodeDraftQuery({
     cc: draft.cc,
     subject: draft.subject,
     body: draft.body,
   });
-  return `mailto:${draft.to}?${params.toString()}`;
+  return `mailto:${draft.to}?${query}`;
 }
 
 /**
@@ -632,11 +657,30 @@ export interface PreparedDeliveryRequest {
   mailtoUrl: string;
   /** ALWAYS the full body — the clipboard has no URL-length limit. */
   clipboardText: string;
+  /**
+   * True when the CHOSEN urls — full when they fit, else condensed — both
+   * measure at or under `DRAFT_URL_LIMIT`.
+   *
+   * Site, warehouse and requester names are unbounded database strings.
+   * Condensing drops the per-line list, the street address and the order
+   * notes, but it does NOT shorten those names — so a pathological name can
+   * push even the condensed link past the limit. That is the same silent-
+   * truncation failure `condensed` exists to prevent, one step later and
+   * with nothing left to drop.
+   *
+   * When this is false, the UI MUST NOT open either link: the mail client
+   * would truncate the body silently, invisible to us and to the employee.
+   * It must instead present the clipboard path — which always carries the
+   * complete body — as the way to send.
+   */
+  linkFits: boolean;
 }
 
 /**
  * Build everything the UI needs, choosing full or condensed by MEASURING the
- * encoded URL rather than guessing from the line count.
+ * encoded URL rather than guessing from the line count. The chosen pair is
+ * measured again as `linkFits`, because condensing is not a guarantee — see
+ * that field's doc comment.
  *
  * Degrading deliberately is the whole point: silent truncation by the mail
  * client is invisible to us and to the employee, so we shorten the LINK, say so
@@ -649,12 +693,27 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
   const fullMailto = buildMailtoUrl(full);
   const fits = fullUrl.length <= DRAFT_URL_LIMIT && fullMailto.length <= DRAFT_URL_LIMIT;
 
-  const draft = fits ? full : buildDeliveryRequestDraft(input, { condensed: true });
+  if (fits) {
+    return {
+      draft: full,
+      outlookUrl: fullUrl,
+      mailtoUrl: fullMailto,
+      clipboardText: buildClipboardText(full),
+      linkFits: true,
+    };
+  }
+
+  const condensed = buildDeliveryRequestDraft(input, { condensed: true });
+  const condensedUrl = buildOutlookComposeUrl(condensed);
+  const condensedMailto = buildMailtoUrl(condensed);
+  const condensedFits =
+    condensedUrl.length <= DRAFT_URL_LIMIT && condensedMailto.length <= DRAFT_URL_LIMIT;
 
   return {
-    draft,
-    outlookUrl: fits ? fullUrl : buildOutlookComposeUrl(draft),
-    mailtoUrl: fits ? fullMailto : buildMailtoUrl(draft),
+    draft: condensed,
+    outlookUrl: condensedUrl,
+    mailtoUrl: condensedMailto,
     clipboardText: buildClipboardText(full),
+    linkFits: condensedFits,
   };
 }
