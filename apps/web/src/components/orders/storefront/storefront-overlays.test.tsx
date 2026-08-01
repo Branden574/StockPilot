@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -227,6 +227,92 @@ describe('ReviewModal accessibility', () => {
     trigger.remove();
   });
 
+  // Finding 2 (Important, plan-mandated): the call site's `onClose` is an
+  // unstable inline arrow (`onClose={() => setReviewStage(null)}` in
+  // orders-storefront.tsx), so it is a NEW function on every parent render.
+  // A single effect keyed on `[open, closable, onClose]` tears down and
+  // re-runs on every one of those renders while the modal is open — and its
+  // cleanup unconditionally calls `restoreRef.current?.focus()`, which used
+  // to fire on every dep churn, not only on a real close. A spy on the
+  // pre-open trigger's own `focus` method catches this even though the
+  // effect's own re-run immediately re-focuses a dialog control afterward
+  // (in the same synchronous act flush) — a plain end-state
+  // `document.activeElement` check would miss the transient call entirely.
+  it('Finding 2: a rerender with a brand-new onClose reference does not restore focus to the pre-open trigger', async () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Trigger';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const focusSpy = vi.spyOn(trigger, 'focus');
+
+    const { props, rerender } = renderSuccess();
+    await waitFor(() => expect(document.activeElement).not.toBe(trigger));
+
+    // Mirrors the real call site: same stage, same everything else, just a
+    // fresh onClose closure — exactly what happens on an unrelated parent
+    // re-render while the modal sits open.
+    rerender(<ReviewModal {...(props as React.ComponentProps<typeof ReviewModal>)} onClose={() => {}} />);
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+
+    trigger.remove();
+  });
+
+  it('Finding 2: the review-to-success stage transition focuses a success control, never the external trigger', async () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Trigger';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const focusSpy = vi.spyOn(trigger, 'focus');
+
+    const baseProps: React.ComponentProps<typeof ReviewModal> = {
+      stage: 'review',
+      lines: [{ itemId: 'i-1', quantity: 5 }],
+      itemMap: new Map([['i-1', ITEM]]),
+      notes: '',
+      summary: {
+        warehouseName: 'DC4',
+        method: 'delivery',
+        deliverTo: 'CVW Clovis',
+        requestedFor: 'Branden Vincent-Walker',
+        requesterEmail: 'branden@cvwest.org',
+        orgTimezone: 'America/Los_Angeles',
+      },
+      neededBy: '',
+      destination: null,
+      orderUrlBase: '',
+      submitting: false,
+      submitted: null,
+      onClose: vi.fn(),
+      onConfirm: vi.fn(),
+      onViewOrder: vi.fn(),
+      onDone: vi.fn(),
+    };
+
+    const { rerender } = render(<ReviewModal {...baseProps} />);
+    await waitFor(() => expect(document.activeElement).not.toBe(trigger));
+
+    // The submit transition: stage flips straight from 'review' to 'success'
+    // with `submitted` now set — accompanied by a fresh onClose reference,
+    // exactly as the real call site produces on every render.
+    rerender(
+      <ReviewModal
+        {...baseProps}
+        stage="success"
+        submitted={{ id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 }}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(screen.getByText('Order request submitted')).toBeInTheDocument();
+
+    trigger.remove();
+  });
+
   it('every new control is reachable by keyboard and has an accessible name', async () => {
     const user = userEvent.setup();
     renderSuccess();
@@ -239,5 +325,51 @@ describe('ReviewModal accessibility', () => {
       for (const n of names) if (label.includes(n)) seen.add(n);
     }
     expect(Array.from(seen).sort()).toEqual([...names].sort());
+  });
+
+  // Finding 1 (CRITICAL, focus-trap fix wave): the Task 7 preview dialog is a
+  // real Radix Dialog, portalled to document.body. It is NOT a descendant of
+  // dialogRef.current (the ReviewModal's own `.sf-modal`), so the document-level
+  // trap's escaped-focus recovery — "if activeElement isn't inside MY dialog,
+  // yank it back" — used to fire on every Tab pressed inside the preview too.
+  //
+  // Under happy-dom, Radix's own FocusScope fights this back synchronously
+  // (its `focusout` listener snaps focus straight back into its container the
+  // instant our handler yanks it out), so `document.activeElement` never
+  // visibly lands on a ReviewModal control across the cycle below — asserting
+  // that alone would pass even with the bug present (confirmed empirically:
+  // it passed before the fix, with `document.activeElement` pinned to the
+  // textarea on every single Tab). The real, reproducible symptom is the one
+  // Radix's counter-correction can't hide: Tab becomes a no-op stuck on
+  // whichever control has focus, so it NEVER reaches the preview's other own
+  // controls. That is what this test pins.
+  it('does not hijack Tab when focus is legitimately inside the Task 7 preview dialog', async () => {
+    const user = userEvent.setup();
+    renderSuccess();
+
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    const dialogs = await screen.findAllByRole('dialog');
+    const preview = dialogs.find((d) => d.textContent?.includes('Delivery request preview'));
+    expect(preview).not.toBeUndefined();
+    const reviewModal = dialogs.find((d) => d !== preview);
+    expect(reviewModal).not.toBeUndefined();
+
+    const copyBtn = within(preview!).getByRole('button', { name: /Copy the details/i });
+    const openBtn = within(preview!).getByRole('button', { name: /Open in Outlook/i });
+    const textarea = within(preview!).getByLabelText(/Delivery request message preview/i);
+
+    const reached = { copy: false, open: false, textarea: false };
+    for (let i = 0; i < 8; i += 1) {
+      await user.tab();
+      const active = document.activeElement;
+      // The ReviewModal's own controls must never receive focus while the
+      // preview owns it.
+      expect(reviewModal!.contains(active)).toBe(false);
+      if (active === copyBtn) reached.copy = true;
+      if (active === openBtn) reached.open = true;
+      if (active === textarea) reached.textarea = true;
+    }
+
+    expect(reached).toEqual({ copy: true, open: true, textarea: true });
   });
 });

@@ -692,6 +692,12 @@ function StorefrontCatalog({
     [dispatch],
   );
   const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
+  // Stabilized so ReviewModal's own focus-management effects (keyed in part
+  // on `onClose`) don't churn on every unrelated re-render of this component
+  // — an inline `() => setReviewStage(null)` here would be a brand-new
+  // function every render, forcing the modal's keydown-listener effect to
+  // tear down and rebind constantly while it is open.
+  const handleReviewClose = React.useCallback(() => setReviewStage(null), [setReviewStage]);
 
   const handleAddKit = React.useCallback(
     (kitItems: CatalogItem[]) => {
@@ -1185,7 +1191,7 @@ function StorefrontCatalog({
         orderUrlBase={orderUrlBase}
         submitting={isPending}
         submitted={submitted}
-        onClose={() => setReviewStage(null)}
+        onClose={handleReviewClose}
         onConfirm={handleConfirmSubmit}
         onViewOrder={handleViewOrder}
         onDone={handleDone}

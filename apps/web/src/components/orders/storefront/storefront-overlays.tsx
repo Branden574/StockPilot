@@ -258,26 +258,66 @@ export function ReviewModal({
    * Deliberately NOT a migration to Radix Dialog: this is a working surface
    * with its own visual language, and the one place that genuinely needed
    * Radix — the preview dialog — already uses it.
+   *
+   * Split into three effects (rather than one effect doing everything) because
+   * they churn on different things:
+   *
+   *   1. Capture + restore — keyed on `open` ONLY. Fires exactly once per
+   *      "open episode": captures whatever had focus right before opening,
+   *      and its cleanup — which only runs when `open` flips back to false,
+   *      or on unmount — restores it. Nothing else may cause this cleanup to
+   *      run, or a benign parent re-render (see effect 3's rationale) would
+   *      restore focus to the trigger mid-open, a real bug this used to have.
+   *   2. Initial placement — keyed on `[open, stage]`. Places focus on the
+   *      first focusable control (else the dialog itself) whenever the modal
+   *      opens AND whenever `stage` changes while it stays open. That second
+   *      case is what makes the review → success submit transition land
+   *      focus on the success stage's own first control directly, with no
+   *      detour through the external trigger.
+   *   3. The keydown listener — keyed on `[open, closable, onClose]`, same as
+   *      the old single effect. Rebinding this one on every dep churn is
+   *      harmless: its cleanup ONLY removes the listener now, with no focus
+   *      side effect. `focusables()` is still recomputed live from the DOM on
+   *      every keydown, not memoized at mount, so it stays correct as
+   *      controls appear/disappear.
    */
+
+  const focusables = React.useCallback((): HTMLElement[] => {
+    const root = dialogRef.current;
+    if (!root) return [];
+    return Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+  }, []);
+
+  // Effect 1: capture + restore. Deliberately NOT keyed on `stage` or
+  // `closable` — a stage change or a submitting-state flip while the modal
+  // stays open must not re-capture (there is nothing to restore FROM at that
+  // point but the dialog's own last-focused control) and must not restore
+  // (there has been no real close).
   React.useEffect(() => {
     if (!open) return;
-
     restoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-    const focusables = (): HTMLElement[] => {
-      const root = dialogRef.current;
-      if (!root) return [];
-      return Array.from(
-        root.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+    return () => {
+      // Runs only when `open` flips to false, or on unmount — a real close —
+      // so a keyboard user is not dropped at the top of the document.
+      restoreRef.current?.focus();
     };
+  }, [open]);
 
-    // Initial focus: the first control in the dialog, else the dialog itself.
+  // Effect 2: initial placement, re-run on stage change while open.
+  React.useEffect(() => {
+    if (!open) return;
     const first = focusables()[0];
     if (first) first.focus();
     else dialogRef.current?.focus();
+  }, [open, stage, focusables]);
+
+  // Effect 3: the keydown listener only.
+  React.useEffect(() => {
+    if (!open) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -286,6 +326,17 @@ export function ReviewModal({
       }
       if (e.key !== 'Tab') return;
 
+      const active = document.activeElement;
+      // Another dialog (the Radix preview, portalled to document.body) may
+      // legitimately own focus. If the active element sits inside a dialog
+      // that is not THIS one, its own trap governs — do nothing. `closest`
+      // finds this modal for our own descendants because the container
+      // carries role="dialog".
+      if (active instanceof Element) {
+        const owningDialog = active.closest('[role="dialog"]');
+        if (owningDialog && owningDialog !== dialogRef.current) return;
+      }
+
       const items = focusables();
       if (items.length === 0) {
         e.preventDefault();
@@ -293,7 +344,6 @@ export function ReviewModal({
       }
       const firstItem = items[0]!;
       const lastItem = items[items.length - 1]!;
-      const active = document.activeElement;
 
       if (e.shiftKey && (active === firstItem || !dialogRef.current?.contains(active))) {
         e.preventDefault();
@@ -307,11 +357,8 @@ export function ReviewModal({
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      // Restore focus to whatever opened us, so a keyboard user is not dropped
-      // at the top of the document.
-      restoreRef.current?.focus();
     };
-  }, [open, closable, onClose]);
+  }, [open, closable, onClose, focusables]);
 
   if (!stage) return null;
 

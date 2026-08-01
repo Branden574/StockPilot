@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -783,9 +783,45 @@ describe('DeliveryRequestAction accessibility', () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
-  it('gives every icon aria-hidden so screen readers read the label once', () => {
-    const { container } = render(<DeliveryRequestAction input={makeInput()} />);
-    for (const svg of Array.from(container.querySelectorAll('svg'))) {
+  it('gives every icon aria-hidden so screen readers read the label once', async () => {
+    // Finding 3 (focus-trap fix wave): the original version of this test only
+    // ever rendered the two always-visible buttons (Mail, Eye) — the fallback
+    // panel's Copy icon, the preview dialog's Copy icon, and the Radix
+    // dialog's own close X were never in the DOM when the assertion ran.
+    // Open both surfaces first so their icons are actually present.
+    const user = userEvent.setup();
+    vi.stubGlobal('open', vi.fn(() => null));
+    stubLocationAssign();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+
+    // The blocked path — puts the fallback panel's Copy icon in the DOM.
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await screen.findByTestId('delivery-request-fallback');
+
+    // The Task 7 preview dialog — portalled to document.body, outside the
+    // render container — puts its own Copy icon AND the Radix close X in the
+    // DOM too.
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    await screen.findByRole('dialog');
+
+    // The Radix DialogPrimitive.Close's `X` icon (ui/dialog.tsx:50) ships
+    // with no aria-hidden of its own — only a paired sr-only "Close" text
+    // gives the button its accessible name. It is ui-kit-owned and out of
+    // scope for this fix wave (touching ui/dialog.tsx is explicitly excluded
+    // from this task), so it is named and excluded here rather than making
+    // every icon in the document satisfy a rule this repo's shared Dialog
+    // component doesn't itself follow.
+    const dialog = screen.getByRole('dialog');
+    const radixCloseButton = within(dialog).getByRole('button', { name: /^close$/i });
+    const radixCloseIcon = radixCloseButton.querySelector('svg');
+    expect(radixCloseIcon).not.toBeNull();
+
+    // Query the whole document, not just the render container: the preview
+    // dialog lives outside it (Radix portals DialogContent to document.body).
+    const svgs = Array.from(document.querySelectorAll('svg')).filter((svg) => svg !== radixCloseIcon);
+    expect(svgs.length).toBeGreaterThan(0);
+    for (const svg of svgs) {
       expect(svg).toHaveAttribute('aria-hidden', 'true');
     }
   });
