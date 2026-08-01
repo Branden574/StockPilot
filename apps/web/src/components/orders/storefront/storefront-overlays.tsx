@@ -243,13 +243,74 @@ export function ReviewModal({
   const open = stage !== null;
   const closable = stage === 'review' && !submitting;
 
+  const dialogRef = React.useRef<HTMLDivElement | null>(null);
+  const restoreRef = React.useRef<HTMLElement | null>(null);
+
+  /**
+   * Focus management for a hand-rolled dialog.
+   *
+   * This modal has always declared role="dialog" aria-modal="true" while doing
+   * neither of the two things that declaration promises: Tab walked straight
+   * out into the page behind it, and closing dropped focus to <body>. That was
+   * survivable when the success screen held two buttons; it is not now that it
+   * holds a mail action, a preview, a copy control and a fallback textarea.
+   *
+   * Deliberately NOT a migration to Radix Dialog: this is a working surface
+   * with its own visual language, and the one place that genuinely needed
+   * Radix — the preview dialog — already uses it.
+   */
   React.useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && closable) onClose();
+
+    restoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const focusables = (): HTMLElement[] => {
+      const root = dialogRef.current;
+      if (!root) return [];
+      return Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
     };
+
+    // Initial focus: the first control in the dialog, else the dialog itself.
+    const first = focusables()[0];
+    if (first) first.focus();
+    else dialogRef.current?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (closable) onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const firstItem = items[0]!;
+      const lastItem = items[items.length - 1]!;
+      const active = document.activeElement;
+
+      if (e.shiftKey && (active === firstItem || !dialogRef.current?.contains(active))) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && (active === lastItem || !dialogRef.current?.contains(active))) {
+        e.preventDefault();
+        firstItem.focus();
+      }
+    };
+
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // Restore focus to whatever opened us, so a keyboard user is not dropped
+      // at the top of the document.
+      restoreRef.current?.focus();
+    };
   }, [open, closable, onClose]);
 
   if (!stage) return null;
@@ -263,6 +324,8 @@ export function ReviewModal({
     >
       <div
         className="sf-modal"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={stage === 'review' ? 'Review order request' : 'Order request submitted'}

@@ -81,6 +81,18 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
    * opened zero drafts.
    */
   const [draftCount, setDraftCount] = React.useState(0);
+  /**
+   * Fed to the always-mounted live region below, in lockstep with every
+   * toast this component fires (same string, so a sighted user and a screen
+   * reader user hear/see the same thing) — plus one case a toast never
+   * covers: the repeat-draft warning first appearing at draftCount 1 -> 2.
+   * That warning is a conditionally-mounted `role="status"` paragraph, and
+   * conditionally-mounted live regions are unreliably announced (especially
+   * VoiceOver/Safari, which only pick up nodes that were already in the tree
+   * when the aria-live attribute was observed). The always-mounted region is
+   * the reliable path; the visible warning paragraph itself is unchanged.
+   */
+  const [announcement, setAnnouncement] = React.useState('');
   // The preview dialog (addendum requirement 3): shows both recipients and
   // the composed message before anything opens. Independent of
   // fallbackReason/manualText — the preview can be opened and closed any
@@ -91,6 +103,21 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   // second, third, ... blocked click while the first mailto: tab/prompt is
   // still up would fire a second draft. One mailto: attempt per mount.
   const mailtoAttemptedRef = React.useRef(false);
+
+  // The repeat-draft warning (rendered below, gated on draftCount > 1) has no
+  // toast of its own to piggyback the announcement on — it appears as a side
+  // effect of a click that ALSO fires the success toast for that same click,
+  // so its announcement is driven from draftCount directly rather than from
+  // a call site. draftCount only ever increases by one, so this fires exactly
+  // once, the moment it first crosses from 1 to 2 — the warning's first
+  // appearance.
+  React.useEffect(() => {
+    if (draftCount === 2) {
+      setAnnouncement(
+        'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+      );
+    }
+  }, [draftCount]);
 
   function handleOpen() {
     if (!prepared.linkFits) {
@@ -130,7 +157,9 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       // on this same mount, now that a later click has actually succeeded.
       setFallbackReason(null);
       setDraftCount((n) => n + 1);
-      toast.success('Delivery request draft opened in Outlook. Review it and press Send yourself.');
+      const message = 'Delivery request draft opened in Outlook. Review it and press Send yourself.';
+      toast.success(message);
+      setAnnouncement(message);
       return;
     }
 
@@ -160,14 +189,16 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(text);
       setManualText(null);
-      toast.success(
-        `Delivery request copied. Create a new email to ${DELIVERY_REQUEST_EMAIL.to}, CC ${DELIVERY_REQUEST_EMAIL.cc}, and paste the copied details.`,
-      );
+      const message = `Delivery request copied. Create a new email to ${DELIVERY_REQUEST_EMAIL.to}, CC ${DELIVERY_REQUEST_EMAIL.cc}, and paste the copied details.`;
+      toast.success(message);
+      setAnnouncement(message);
     } catch {
       // The selectable box is the terminal fallback: it always shows both
       // recipients, so the employee can always complete the task by hand.
       setManualText(text);
-      toast.error('Could not copy automatically. Select the text below and copy it manually.');
+      const message = 'Could not copy automatically. Select the text below and copy it manually.';
+      toast.error(message);
+      setAnnouncement(message);
     }
   }
 
@@ -199,11 +230,36 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
 
       {draftCount > 1 && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-repeat" role="status">
-          {/* Task 9 wires this into the always-mounted live region for reliable SR announcement. */}
+          {/*
+            This is a conditionally-mounted role="status" node, which is
+            unreliably announced (especially VoiceOver/Safari, which only
+            reads live regions that already existed in the tree when the
+            attribute was observed). The always-mounted live region below is
+            the reliable path — it is set to this exact sentence the moment
+            draftCount first crosses from 1 to 2. This visible paragraph is
+            unchanged.
+          */}
           You have already opened a draft for this order. Sending more than one creates duplicate
           requests for DC4.
         </p>
       )}
+
+      {/*
+        The reliable SR-announcement path (brief section 26 / Task 9). Every
+        toast this component fires also lands here as the identical string,
+        and the repeat-draft warning above — which has no toast of its own —
+        is announced here too via the draftCount effect. Always mounted, so
+        VoiceOver/Safari pick up the text-change rather than missing a node
+        that only just appeared.
+      */}
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        className="sf-sr-only"
+        data-testid="delivery-request-live"
+      >
+        {announcement}
+      </div>
 
       {/*
         Two variants, same testid, chosen by linkFits so this static line

@@ -750,3 +750,61 @@ describe('DeliveryRequestAction — preview honesty (Task 7 review rider)', () =
     expect(after).not.toHaveTextContent(/carries a summary and a link/i);
   });
 });
+
+describe('DeliveryRequestAction accessibility', () => {
+  it('announces the copy result in a polite live region', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('open', vi.fn(() => null));
+    stubLocationAssign();
+    stubClipboard();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
+
+    const live = await screen.findByTestId('delivery-request-live');
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    expect(live).toHaveAttribute('aria-atomic', 'true');
+    await waitFor(() =>
+      expect(live).toHaveTextContent(
+        'Delivery request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+      ),
+    );
+  });
+
+  it('is operable entirely from the keyboard', async () => {
+    const user = userEvent.setup();
+    const open = stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    screen.getByRole('button', { name: /Email delivery request/i }).focus();
+    await user.keyboard('{Enter}');
+
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives every icon aria-hidden so screen readers read the label once', () => {
+    const { container } = render(<DeliveryRequestAction input={makeInput()} />);
+    for (const svg of Array.from(container.querySelectorAll('svg'))) {
+      expect(svg).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+
+  it('announces the repeat-draft warning sentence in the live region on the second countable draft', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+
+    render(<DeliveryRequestAction input={makeInput()} />);
+    const btn = screen.getByRole('button', { name: /Email delivery request/i });
+
+    await user.click(btn);
+    await user.click(btn);
+
+    const live = await screen.findByTestId('delivery-request-live');
+    await waitFor(() =>
+      expect(live).toHaveTextContent(
+        'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+      ),
+    );
+  });
+});
