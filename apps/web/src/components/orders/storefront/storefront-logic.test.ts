@@ -7,15 +7,20 @@ import type { CatalogItem } from '../v2/types';
 import {
   availabilityLabel,
   availableOf,
+  buildClipboardText,
   buildDeliveryRequestDraft,
+  buildMailtoUrl,
+  buildOutlookComposeUrl,
   buildQtyMap,
   cartTotals,
   clampQty,
+  DRAFT_URL_LIMIT,
   filterCatalog,
   formatSiteAddressLines,
   fullKitLines,
   glyphFor,
   isBrowsingAll,
+  prepareDeliveryRequest,
   successRefLine,
   sortCatalog,
   statusOf,
@@ -995,5 +1000,198 @@ describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () 
     const draft = buildDeliveryRequestDraft(bigInput(), { condensed: true });
     expect(draft.to).toBe('dc4@learn4life.org');
     expect(draft.cc).toBe('arosas@cvwest.org');
+  });
+});
+
+describe('buildOutlookComposeUrl', () => {
+  it('targets the OWA deep-link compose endpoint', () => {
+    const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
+    expect(url.origin).toBe('https://outlook.office.com');
+    expect(url.pathname).toBe('/mail/deeplink/compose');
+  });
+
+  it('carries to, cc, subject and body as REAL query parameters', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    const url = new URL(buildOutlookComposeUrl(draft));
+    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
+    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    expect(url.searchParams.get('subject')).toBe(draft.subject);
+    expect(url.searchParams.get('body')).toBe(draft.body);
+  });
+
+  it('carries the CC exactly ONCE', () => {
+    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(url.match(/[?&]cc=/g)).toHaveLength(1);
+    expect(new URL(url).searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
+  });
+
+  it('never concatenates the CC into the to parameter', () => {
+    const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
+    expect(url.searchParams.get('to')).not.toContain('arosas');
+    expect(url.searchParams.get('to')).not.toContain(',');
+  });
+
+  it('encodes exactly once — a decoded body round-trips to the original', () => {
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({ notes: 'Ampersand & plus + hash # question ? equals =' }),
+    );
+    const decoded = new URL(buildOutlookComposeUrl(draft)).searchParams.get('body');
+    expect(decoded).toBe(draft.body);
+    expect(decoded).toContain('Ampersand & plus + hash # question ? equals =');
+    expect(decoded).not.toContain('%20');
+    expect(decoded).not.toContain('%26');
+  });
+
+  it('keeps the CC when every optional field is missing', () => {
+    const url = new URL(
+      buildOutlookComposeUrl(
+        buildDeliveryRequestDraft(
+          makeDraftInput({
+            orderNumber: null,
+            destination: null,
+            neededByLocal: '',
+            notes: '',
+            requesterEmail: null,
+            orderUrlBase: '',
+            lines: [],
+            itemMap: new Map(),
+          }),
+        ),
+      ),
+    );
+    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
+    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+  });
+
+  it('keeps the CC in condensed mode', () => {
+    const url = new URL(
+      buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true })),
+    );
+    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+  });
+});
+
+describe('buildMailtoUrl', () => {
+  it('puts the To address in the PATH and the cc in the query string', () => {
+    const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(url.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+  });
+
+  it('carries cc, subject and body, decodable back to the originals', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    const url = buildMailtoUrl(draft);
+    const params = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    expect(params.get('cc')).toBe('arosas@cvwest.org');
+    expect(params.get('subject')).toBe(draft.subject);
+    expect(params.get('body')).toBe(draft.body);
+  });
+
+  it('carries the CC exactly once and never inside the To path segment', () => {
+    const url = buildMailtoUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(url.match(/[?&]cc=/g)).toHaveLength(1);
+    expect(url.slice(0, url.indexOf('?'))).toBe('mailto:dc4@learn4life.org');
+  });
+
+  it('keeps the CC in condensed mode and with everything optional missing', () => {
+    const bare = buildDeliveryRequestDraft(
+      makeDraftInput({ destination: null, notes: '', neededByLocal: '', lines: [] }),
+      { condensed: true },
+    );
+    const params = new URLSearchParams(buildMailtoUrl(bare).slice(buildMailtoUrl(bare).indexOf('?') + 1));
+    expect(params.get('cc')).toBe('arosas@cvwest.org');
+  });
+});
+
+describe('buildClipboardText', () => {
+  it('emits labelled TO / CC / SUBJECT / MESSAGE blocks', () => {
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    const text = buildClipboardText(draft);
+    expect(text).toContain('TO: dc4@learn4life.org');
+    expect(text).toContain('CC: arosas@cvwest.org');
+    expect(text).toContain(`SUBJECT: ${draft.subject}`);
+    expect(text).toContain('MESSAGE:');
+    expect(text).toContain(draft.body);
+  });
+
+  it('orders the blocks TO, CC, SUBJECT, MESSAGE', () => {
+    const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(text.indexOf('TO:')).toBeLessThan(text.indexOf('CC:'));
+    expect(text.indexOf('CC:')).toBeLessThan(text.indexOf('SUBJECT:'));
+    expect(text.indexOf('SUBJECT:')).toBeLessThan(text.indexOf('MESSAGE:'));
+  });
+
+  it('names BOTH recipients — copy instructions that omit the CC are non-compliant', () => {
+    const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput()));
+    expect(text).toContain('dc4@learn4life.org');
+    expect(text).toContain('arosas@cvwest.org');
+  });
+
+  it('keeps both recipients in condensed mode', () => {
+    const text = buildClipboardText(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true }));
+    expect(text).toContain('TO: dc4@learn4life.org');
+    expect(text).toContain('CC: arosas@cvwest.org');
+  });
+});
+
+describe('prepareDeliveryRequest', () => {
+  it('returns the full draft and both URLs for a normal order', () => {
+    const prepared = prepareDeliveryRequest(makeDraftInput());
+    expect(prepared.draft.condensed).toBe(false);
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(prepared.mailtoUrl.startsWith('mailto:dc4@learn4life.org?')).toBe(true);
+    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+  });
+
+  it('CONDENSES automatically when the full body would exceed the link limit', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `big-${i}`, quantity: 4 }));
+    const itemMap = new Map(
+      lines.map((l, i) => [
+        l.itemId,
+        makeItem({ id: l.itemId, sku: `SKU-BIG-${i}`, name: `Bulk Item Number ${i}` }),
+      ]),
+    );
+    const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(prepared.draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link.',
+    );
+  });
+
+  it('the CLIPBOARD text is always the FULL body, even when the links are condensed', () => {
+    // The clipboard has no URL-length limit, so degrading it too would lose
+    // detail for no reason. This is the path that always carries everything.
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `big-${i}`, quantity: 4 }));
+    const itemMap = new Map(
+      lines.map((l, i) => [l.itemId, makeItem({ id: l.itemId, sku: `SKU-BIG-${i}`, name: `Bulk ${i}` })]),
+    );
+    const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.clipboardText).toContain('SKU-BIG-99');
+    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+  });
+
+  it('keeps both recipients on a condensed 100-line order', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `big-${i}`, quantity: 4 }));
+    const itemMap = new Map(
+      lines.map((l, i) => [l.itemId, makeItem({ id: l.itemId, sku: `SKU-BIG-${i}`, name: `Bulk ${i}` })]),
+    );
+    const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
+    const url = new URL(prepared.outlookUrl);
+    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
+    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+  });
+
+  it('no user-controlled field can move the recipients, at any size or mode', () => {
+    const prepared = prepareDeliveryRequest(
+      makeDraftInput({
+        notes: '?cc=attacker@evil.test&to=attacker@evil.test',
+        requestedFor: '"><script>x</script>attacker@evil.test',
+        destination: { id: 'x', name: '&cc=attacker@evil.test', code: null, address: null },
+      }),
+    );
+    const url = new URL(prepared.outlookUrl);
+    expect(url.searchParams.getAll('to')).toEqual(['dc4@learn4life.org']);
+    expect(url.searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
   });
 });

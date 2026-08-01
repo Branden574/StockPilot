@@ -554,3 +554,107 @@ export function buildDeliveryRequestDraft(
     unitCount,
   };
 }
+
+/**
+ * Outlook Web compose deep link. Greenfield: the repo had no OWA link, no
+ * shared mailto builder and no clipboard helper before this feature.
+ *
+ * The org runs managed Microsoft 365, so outlook.office.com is the work-account
+ * host (outlook.live.com is the consumer one and would land a work user on the
+ * wrong tenant).
+ */
+export const OUTLOOK_COMPOSE_BASE = 'https://outlook.office.com/mail/deeplink/compose';
+
+/**
+ * Conservative ceiling for a compose link, in characters.
+ *
+ * Outlook Web and mailto: both carry the body in the query string. Practical
+ * limits land around 2,000 (IE/Edge historically ~2,048; Outlook desktop
+ * truncates SILENTLY, which is the dangerous part — the client opens with half
+ * a body and the employee sends it). 1,800 leaves headroom for the tenant's own
+ * redirect wrapper, which appends to the URL.
+ */
+export const DRAFT_URL_LIMIT = 1800;
+
+/**
+ * Encoded EXACTLY ONCE. URLSearchParams performs the percent-encoding; nothing
+ * is pre-encoded on the way in, and nothing is encoded again on the way out.
+ * Double-encoding is the classic failure here — it produces a body full of
+ * literal %20 that the recipient has to read through.
+ */
+export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
+  const params = new URLSearchParams({
+    to: draft.to,
+    cc: draft.cc,
+    subject: draft.subject,
+    body: draft.body,
+  });
+  return `${OUTLOOK_COMPOSE_BASE}?${params.toString()}`;
+}
+
+/**
+ * mailto: fallback for when the popup is blocked or OWA is not the user's
+ * client. The To address is the PATH; cc, subject and body are query
+ * parameters. Both recipients are still generated — a mailto that drops the CC
+ * is non-compliant.
+ */
+export function buildMailtoUrl(draft: DeliveryRequestDraft): string {
+  const params = new URLSearchParams({
+    cc: draft.cc,
+    subject: draft.subject,
+    body: draft.body,
+  });
+  return `mailto:${draft.to}?${params.toString()}`;
+}
+
+/**
+ * Terminal fallback. Safari treats a mailto: navigation with no registered
+ * handler as a silent no-op, so the clipboard is the only genuinely reliable
+ * path and it must be surfaced explicitly rather than hidden.
+ *
+ * Labelled blocks so the employee can build the message by hand, INCLUDING the
+ * CC. Instructions that omit the CC are non-compliant.
+ */
+export function buildClipboardText(draft: DeliveryRequestDraft): string {
+  return [
+    `TO: ${draft.to}`,
+    `CC: ${draft.cc}`,
+    `SUBJECT: ${draft.subject}`,
+    '',
+    'MESSAGE:',
+    draft.body,
+  ].join('\n');
+}
+
+export interface PreparedDeliveryRequest {
+  draft: DeliveryRequestDraft;
+  outlookUrl: string;
+  mailtoUrl: string;
+  /** ALWAYS the full body — the clipboard has no URL-length limit. */
+  clipboardText: string;
+}
+
+/**
+ * Build everything the UI needs, choosing full or condensed by MEASURING the
+ * encoded URL rather than guessing from the line count.
+ *
+ * Degrading deliberately is the whole point: silent truncation by the mail
+ * client is invisible to us and to the employee, so we shorten the LINK, say so
+ * in the body, and keep the complete detail on the clipboard path and behind
+ * the order link.
+ */
+export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
+  const full = buildDeliveryRequestDraft(input);
+  const fullUrl = buildOutlookComposeUrl(full);
+  const fullMailto = buildMailtoUrl(full);
+  const fits = fullUrl.length <= DRAFT_URL_LIMIT && fullMailto.length <= DRAFT_URL_LIMIT;
+
+  const draft = fits ? full : buildDeliveryRequestDraft(input, { condensed: true });
+
+  return {
+    draft,
+    outlookUrl: fits ? fullUrl : buildOutlookComposeUrl(draft),
+    mailtoUrl: fits ? fullMailto : buildMailtoUrl(draft),
+    clipboardText: buildClipboardText(full),
+  };
+}
