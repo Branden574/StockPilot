@@ -41,6 +41,7 @@ const EVENT_LABELS: Record<string, string> = {
   'order.in_transit': 'In transit',
   'order.signature_collected': 'Signature collected',
   'order.completed': 'Completed',
+  'order.delivery_request_drafted': 'Delivery request drafted',
 };
 
 const prettyStatus = (v: unknown): string =>
@@ -122,6 +123,9 @@ function humanDetails(
       break;
     case 'order.completed':
       lines.push('Hand-over finished — fulfilled quantities are final.');
+      break;
+    case 'order.delivery_request_drafted':
+      lines.push('A prefilled draft was opened — StockPilot did not send it.');
       break;
     default:
       break;

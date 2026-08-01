@@ -37,7 +37,7 @@ import { createOrderRequestAction } from '@/server/actions/order-requests';
 import { isManagerOrAbove } from '@stockpilot/core';
 
 import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
-import type { AisleSummary, CatalogItem } from '../v2/types';
+import type { AisleSummary, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import {
   CategorySection,
@@ -86,14 +86,22 @@ export interface OrdersStorefrontProps {
   warehouseId: string;
   /** Un-awaited on the server so the shell streams ahead of the grid. */
   catalogPromise: Promise<StorefrontCatalogData>;
-  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
+  chartersForWarehouse: StorefrontCharter[];
   viewerRole: string;
   viewerName: string | null;
   viewerEmail: string;
+  /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
+  orderUrlBase: string;
+  /**
+   * `organizations.timezone`, resolved server-side via `getCachedOrgTimezone`
+   * and never empty — the delivery-request draft prints the needed-by date in
+   * it, and a blank value would render an empty "()" after the date.
+   */
+  orgTimezone: string;
 }
 
 type ReviewStage = null | 'review' | 'success';
-type SubmittedOrder = { id: string; unitCount: number } | null;
+type SubmittedOrder = { id: string; orderNumber: number | null; unitCount: number } | null;
 
 export function OrdersStorefront(props: OrdersStorefrontProps) {
   const initial = initialCartState({
@@ -196,6 +204,8 @@ function StorefrontShell({
   viewerRole,
   viewerName,
   viewerEmail,
+  orderUrlBase,
+  orgTimezone,
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch } = useCart();
@@ -550,10 +560,13 @@ function StorefrontShell({
             warehouseName={warehouseName}
             chartersForWarehouse={chartersForWarehouse}
             viewerLabel={viewerLabel}
+            viewerEmail={viewerEmail}
             reviewStage={reviewStage}
             setReviewStage={setReviewStage}
             submitted={submitted}
             setSubmitted={setSubmitted}
+            orderUrlBase={orderUrlBase}
+            orgTimezone={orgTimezone}
           />
         </React.Suspense>
       </div>
@@ -567,12 +580,16 @@ interface StorefrontCatalogProps {
   catalogPromise: Promise<StorefrontCatalogData>;
   warehouseId: string;
   warehouseName: string;
-  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
+  chartersForWarehouse: StorefrontCharter[];
   viewerLabel: string;
+  /** The viewer's own email — the `requesterEmail` fallback when nobody is set on-behalf-of. */
+  viewerEmail: string;
   reviewStage: ReviewStage;
   setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
   submitted: SubmittedOrder;
   setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
+  orderUrlBase: string;
+  orgTimezone: string;
 }
 
 function StorefrontCatalog({
@@ -581,10 +598,13 @@ function StorefrontCatalog({
   warehouseName,
   chartersForWarehouse,
   viewerLabel,
+  viewerEmail,
   reviewStage,
   setReviewStage,
   submitted,
   setSubmitted,
+  orderUrlBase,
+  orgTimezone,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
@@ -672,6 +692,12 @@ function StorefrontCatalog({
     [dispatch],
   );
   const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
+  // Stabilized so ReviewModal's own focus-management effects (keyed in part
+  // on `onClose`) don't churn on every unrelated re-render of this component
+  // — an inline `() => setReviewStage(null)` here would be a brand-new
+  // function every render, forcing the modal's keydown-listener effect to
+  // tear down and rebind constantly while it is open.
+  const handleReviewClose = React.useCallback(() => setReviewStage(null), [setReviewStage]);
 
   const handleAddKit = React.useCallback(
     (kitItems: CatalogItem[]) => {
@@ -784,6 +810,7 @@ function StorefrontCatalog({
       clearCartDraft(warehouseId);
       setSubmitted({
         id: res.data.id,
+        orderNumber: res.data.orderNumber,
         unitCount: lines.reduce((s, l) => s + l.quantity, 0),
       });
       setReviewStage('success');
@@ -1156,10 +1183,15 @@ function StorefrontCatalog({
               ? `${warehouseName} will-call desk`
               : (charter?.name ?? 'Select a site'),
           requestedFor: state.onBehalfOf?.name ?? viewerLabel,
+          requesterEmail: state.onBehalfOf?.email ?? viewerEmail,
+          orgTimezone,
         }}
+        neededBy={state.neededBy}
+        destination={state.fulfillmentType === 'delivery' ? charter : null}
+        orderUrlBase={orderUrlBase}
         submitting={isPending}
         submitted={submitted}
-        onClose={() => setReviewStage(null)}
+        onClose={handleReviewClose}
         onConfirm={handleConfirmSubmit}
         onViewOrder={handleViewOrder}
         onDone={handleDone}

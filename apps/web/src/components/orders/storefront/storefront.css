@@ -2220,6 +2220,7 @@
   display: flex;
   gap: 8px;
   justify-content: center;
+  flex-wrap: wrap;
 }
 
 /* ---- Skeletons -------------------------------------------------------- */
@@ -2370,4 +2371,103 @@
   margin: 0;
   font-size: 11px;
   color: var(--sf-ink-4);
+}
+
+/* Delivery-request assistant: the popup-blocked fallback panel. Lives inside
+   the success screen's .acts row, so it spans the full width beneath the
+   buttons rather than sitting in the flex line with them. */
+.sp-storefront .sf-fallback {
+  flex-basis: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--sf-line, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sp-storefront .sf-fallback p {
+  margin: 0 0 8px;
+}
+
+.sp-storefront .sf-fallback-text {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid var(--sf-line, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  resize: vertical;
+}
+
+/* Delivery-request preview: the recipient block. Rendered as a definition
+   list, never as inputs — employees must not be able to edit either address,
+   and a field that LOOKS editable invites the attempt.
+
+   NOT scoped under .sp-storefront: the Radix dialog this lives in portals to
+   document.body, outside the storefront wrapper. The sf-fallback-text and
+   sf-btn-* rules used inside the same dialog ARE scoped that way and still
+   apply there because DialogContent itself carries the sp-storefront class. */
+.sf-recip {
+  margin-top: 12px;
+}
+
+.sf-recip-h {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+
+.sf-recip dl {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.sf-recip dl > div {
+  display: contents;
+}
+
+.sf-recip dt {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.sf-recip dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sf-recip-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+/* Delivery-request assistant notices. There is no ui/alert.tsx in this repo
+   (zero imports of @/components/ui/alert), so this reuses the house inline
+   banner shape without importing Tailwind semantics into hand-rolled CSS. */
+.sf-note {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.sf-note-warn {
+  padding: 8px 10px;
+  border: 1px solid rgba(180, 83, 9, 0.4);
+  background: rgba(180, 83, 9, 0.08);
+  border-radius: 6px;
+  opacity: 1;
 }
