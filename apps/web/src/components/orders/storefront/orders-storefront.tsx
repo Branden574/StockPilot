@@ -90,8 +90,6 @@ export interface OrdersStorefrontProps {
   viewerRole: string;
   viewerName: string | null;
   viewerEmail: string;
-  /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
-  orderUrlBase: string;
   /**
    * `organizations.timezone`, resolved server-side via `getCachedOrgTimezone`
    * and never empty — the delivery-request draft prints the needed-by date in
@@ -204,7 +202,6 @@ function StorefrontShell({
   viewerRole,
   viewerName,
   viewerEmail,
-  orderUrlBase,
   orgTimezone,
 }: OrdersStorefrontProps) {
   const router = useRouter();
@@ -565,7 +562,6 @@ function StorefrontShell({
             setReviewStage={setReviewStage}
             submitted={submitted}
             setSubmitted={setSubmitted}
-            orderUrlBase={orderUrlBase}
             orgTimezone={orgTimezone}
           />
         </React.Suspense>
@@ -588,7 +584,6 @@ interface StorefrontCatalogProps {
   setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
   submitted: SubmittedOrder;
   setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
-  orderUrlBase: string;
   orgTimezone: string;
 }
 
@@ -603,7 +598,6 @@ function StorefrontCatalog({
   setReviewStage,
   submitted,
   setSubmitted,
-  orderUrlBase,
   orgTimezone,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
@@ -1188,7 +1182,6 @@ function StorefrontCatalog({
         }}
         neededBy={state.neededBy}
         destination={state.fulfillmentType === 'delivery' ? charter : null}
-        orderUrlBase={orderUrlBase}
         submitting={isPending}
         submitted={submitted}
         onClose={handleReviewClose}

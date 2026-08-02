@@ -6,20 +6,10 @@ import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
-import { env } from '@/lib/env';
-import { SITE_URL } from '@/lib/site';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
 } from '@/server/loaders/orders-new-catalog';
-
-// Absolute origin for the order deep link the delivery-request assistant
-// mails out (see storefront-overlays ReviewModalProps.orderUrlBase). Must
-// NEVER be empty — a bare "/dashboard/orders/<uuid>" isn't clickable from an
-// email client. env.NEXT_PUBLIC_APP_URL already strips a trailing slash and
-// defaults to a non-empty value; SITE_URL is the belt-and-suspenders fallback
-// if that value is ever somehow blank.
-const ORDER_URL_BASE = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '') || SITE_URL;
 
 // NOTE (perf plan P3): the cached data loaders deliberately live in
 // src/server/loaders/orders-new-catalog.ts, NOT here. unstable_cache's
@@ -124,7 +114,6 @@ export default async function NewOrderPage({
       viewerRole={ctx.role}
       viewerName={ctx.fullName}
       viewerEmail={ctx.email}
-      orderUrlBase={ORDER_URL_BASE}
       orgTimezone={orgTimezone}
     />
   );

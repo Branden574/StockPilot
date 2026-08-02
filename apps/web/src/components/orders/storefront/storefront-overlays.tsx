@@ -213,8 +213,6 @@ interface ReviewModalProps {
    * draft must then print no destination at all rather than an empty block.
    */
   destination: StorefrontCharter | null;
-  /** Absolute origin for the order deep link, e.g. 'https://app.example.com'. */
-  orderUrlBase: string;
   submitting: boolean;
   /** Set once the order is created — drives the success reference line. */
   submitted: { id: string; orderNumber: number | null; unitCount: number } | null;
@@ -232,7 +230,6 @@ export function ReviewModal({
   summary,
   neededBy,
   destination,
-  orderUrlBase,
   submitting,
   submitted,
   onClose,
@@ -498,7 +495,6 @@ export function ReviewModal({
                   input={{
                     orderId: submitted.id,
                     orderNumber: submitted.orderNumber,
-                    orderUrlBase,
                     fulfillmentType: summary.method,
                     warehouseName: summary.warehouseName,
                     destination,

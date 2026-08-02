@@ -30,7 +30,6 @@ function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryReque
   return {
     orderId: 'b3f1c2d4-1111-2222-3333-444455556666',
     orderNumber: 49,
-    orderUrlBase: 'https://app.stockpilotusa.com',
     fulfillmentType: 'delivery',
     warehouseName: 'DC4',
     destination: {
@@ -784,7 +783,7 @@ describe('DeliveryRequestAction — honesty', () => {
 
     render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
     expect(screen.getByTestId('delivery-request-condensed')).toHaveTextContent(
-      'This order is too large to fit in a compose link, so the draft carries a summary and a link to the full order. Copy the details instead to include every line.',
+      'This order is too large to fit in a compose link, so the draft carries a summary. Copy the details instead to include every line.',
     );
   });
 
