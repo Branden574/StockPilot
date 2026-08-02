@@ -29,10 +29,16 @@ begin;
 
 select plan(12);
 
+-- NOTE: psql \set does NOT honour a trailing `-- comment` — it folds that
+-- text into the variable's VALUE, which then corrupts every SQL statement the
+-- variable is substituted into. Descriptions therefore live on their own lines.
+-- u_owner   = active owner            -> INCLUDED by _notify_recipients
+-- u_mgr_dis = DISABLED manager        -> EXCLUDED (the guard under test)
+-- u_staff   = active staff            -> excluded by role (control, not disable)
 \set org       '\'03130000-0000-0000-0000-000000000001\''
-\set u_owner   '\'03130000-0000-0000-0000-0000000000a1\''  -- active, owner  -> INCLUDED
-\set u_mgr_dis '\'03130000-0000-0000-0000-0000000000a2\''  -- DISABLED, manager -> EXCLUDED
-\set u_staff   '\'03130000-0000-0000-0000-0000000000a3\''  -- active, staff  -> excluded (role, not disable — control)
+\set u_owner   '\'03130000-0000-0000-0000-0000000000a1\''
+\set u_mgr_dis '\'03130000-0000-0000-0000-0000000000a2\''
+\set u_staff   '\'03130000-0000-0000-0000-0000000000a3\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:u_owner,   'owner@n313.test',   '{"full_name":"Active Owner"}'::jsonb),
