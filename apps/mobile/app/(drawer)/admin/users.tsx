@@ -22,6 +22,7 @@ import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { shouldShowDisabledBadge } from '@/lib/user-admin-badges';
 
 interface UserRow {
   user_id: string;
@@ -33,6 +34,12 @@ interface UserRow {
     full_name: string | null;
     avatar_url: string | null;
     email: string | null;
+    // Set when a platform god-admin disabled this account (mig 0308).
+    // STATUS ONLY — disabled_reason/disabled_by are never fetched here;
+    // 0311 keeps those columns service-role-only, and this screen has no
+    // business showing a colleague's disable reason or who disabled them.
+    // Disable doesn't remove org membership, so the row stays listed.
+    disabled_at: string | null;
   } | null;
 }
 
@@ -100,7 +107,7 @@ export default function UsersAdmin() {
     if (userIds.length > 0) {
       const { data: profiles, error: profilesErr } = await supabase
         .from('user_profiles')
-        .select('id, full_name, avatar_url, email')
+        .select('id, full_name, avatar_url, email, disabled_at')
         .in('id', userIds);
       if (profilesErr) {
         console.warn('[admin/users] profile fetch failed:', profilesErr.message);
@@ -112,6 +119,7 @@ export default function UsersAdmin() {
             full_name: (p.full_name as string | null) ?? null,
             avatar_url: (p.avatar_url as string | null) ?? null,
             email: (p.email as string | null) ?? null,
+            disabled_at: (p.disabled_at as string | null) ?? null,
           },
         ]),
       );
@@ -243,6 +251,11 @@ function UserCard({
 }) {
   const { c } = useTheme();
   const pending = !user.accepted_at;
+  // Screen-level `isAdmin` gate (see UsersAdmin above) already decides who
+  // reaches this card at all — same predicate the row's edit affordance
+  // (canEdit below) relies on. No further per-row gate needed for a status
+  // pill that isn't itself an admin action.
+  const disabled = shouldShowDisabledBadge(user.profile);
   const name = user.profile?.full_name ?? user.profile?.email ?? user.invited_email ?? 'Unnamed';
   const email = user.profile?.email ?? user.invited_email;
   const avatar = user.profile?.avatar_url ?? null;
@@ -312,6 +325,7 @@ function UserCard({
             ) : (
               <Pill status={pill.status}>{pill.label}</Pill>
             )}
+            {disabled ? <Pill status="crit">DISABLED</Pill> : null}
             {pending ? <Pill status="warn">PENDING</Pill> : null}
           </View>
           {canEdit ? (

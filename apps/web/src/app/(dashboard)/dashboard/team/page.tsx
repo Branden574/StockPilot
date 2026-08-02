@@ -122,6 +122,10 @@ export default async function TeamPage() {
           email: m.user?.email ?? '—',
           fullName: m.user?.full_name ?? null,
           avatarUrl: m.user?.avatar_url ?? null,
+          // Status only — never disabled_reason/disabled_by (0311 keeps
+          // those service-role-only). Membership survives a disable, so the
+          // member stays in this list; the Team page just marks them.
+          disabledAt: m.user?.disabled_at ?? null,
           warehouseId: m.warehouse_id,
           charterIds: m.charter_ids,
           allWarehouses: m.all_warehouses,

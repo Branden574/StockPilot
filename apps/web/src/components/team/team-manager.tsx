@@ -86,6 +86,11 @@ interface Member {
   /** Marked delivery driver — only these members populate the
    *  Assign-delivery picker on orders. */
   isDriver: boolean;
+  /** Set when a platform god-admin disabled this account (mig 0308).
+   *  STATUS ONLY — disabled_reason/disabled_by are never sent to this page
+   *  (0311 keeps them service-role-only). Disable doesn't remove
+   *  membership, so a disabled member still appears in this list. */
+  disabledAt: string | null;
 }
 
 interface PendingInvite {
@@ -252,6 +257,15 @@ function MemberRow({
     .join('');
 
   const canManage = (currentUserRole === 'owner' || currentUserRole === 'admin') && member.role !== 'owner';
+  // Same admin-only predicate that gates the row's action menu and the
+  // "Invite member" button — status-only visibility (never the reason or
+  // who disabled them; those columns aren't sent to this page at all, see
+  // TeamService.listMembers). Deliberately WITHOUT canManage's
+  // `member.role !== 'owner'` exclusion: that exclusion exists so admins
+  // can't act on an owner's row, not to hide an owner's disabled status
+  // from them — an org owner can be disabled by a platform god-admin same
+  // as anyone else.
+  const canSeeDisabledStatus = currentUserRole === 'owner' || currentUserRole === 'admin';
   // Only the owner can hand off the role, and only to an accepted (non-owner) member.
   const canTransferOwnership =
     currentUserRole === 'owner' && member.role !== 'owner' && member.acceptedAt !== null;
@@ -378,7 +392,17 @@ function MemberRow({
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{accessLabel}</TableCell>
       <TableCell className="text-xs text-muted-foreground">
-        {member.acceptedAt ? 'Active' : 'Invited'}
+        <div className="flex items-center gap-1.5">
+          <span>{member.acceptedAt ? 'Active' : 'Invited'}</span>
+          {canSeeDisabledStatus && member.disabledAt && (
+            <span
+              title={`Disabled ${new Date(member.disabledAt).toLocaleString()}`}
+              className="inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300"
+            >
+              Disabled
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell
         className="text-right text-xs text-muted-foreground"

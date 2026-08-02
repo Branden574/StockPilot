@@ -46,7 +46,7 @@ export class TeamService {
       .select(
         `
         id, role, invited_at, accepted_at, created_at, user_id, is_delivery_driver, all_warehouses,
-        user:user_id (id, email, full_name, avatar_url)
+        user:user_id (id, email, full_name, avatar_url, disabled_at)
       `,
       )
       .eq('organization_id', this.ctx.organizationId)
@@ -75,6 +75,14 @@ export class TeamService {
                 email: (userObj as { email: string }).email,
                 full_name: ((userObj as { full_name?: string | null }).full_name ?? null) as string | null,
                 avatar_url: ((userObj as { avatar_url?: string | null }).avatar_url ?? null) as string | null,
+                // Status-only (mig 0308 + 0311): WHEN the account was
+                // disabled, never why or by whom — disabled_reason/
+                // disabled_by are dropped from the authenticated column
+                // grant by 0311, but disabled_at stays readable so org-mates
+                // (via user_profiles_select_orgmates RLS) can see this.
+                disabled_at: ((userObj as { disabled_at?: string | null }).disabled_at ?? null) as
+                  | string
+                  | null,
               }
             : null,
         // Populated below from user_warehouse_assignments. A member's charters
