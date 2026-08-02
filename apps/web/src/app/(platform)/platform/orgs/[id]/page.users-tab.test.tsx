@@ -80,7 +80,7 @@ function armMembers(over: Partial<{ members: unknown[]; total: number; page: num
   });
 }
 
-async function renderUsersTab(query: Record<string, string> = {}) {
+async function renderUsersTab(query: Record<string, string | string[]> = {}) {
   const tree = await PlatformOrgDetailPage({
     params: Promise.resolve({ id: ORG }),
     searchParams: Promise.resolve({ tab: 'users', ...query }),
@@ -142,5 +142,30 @@ describe('platform org detail — Users tab reachability', () => {
     await renderUsersTab({ q: 'zzz' });
 
     expect(screen.getByText(/no members match/i)).toBeInTheDocument();
+  });
+
+  it('still offers a way back when the requested page comes back empty (dead-end URL guard)', async () => {
+    // getOrgMembers clamps a genuinely out-of-range page server-side, but
+    // PostgREST returns 200/empty (not an error) at exactly offset ===
+    // total — a legitimate empty LAST page. The tab used to render only
+    // "No members." in that branch, with the pager (including Previous)
+    // nested inside the non-empty branch — a dead end with no link back to
+    // page 1.
+    armMembers({ members: [], total: 120, page: 3, pageCount: 3, search: null });
+    await renderUsersTab({ page: '3' });
+
+    expect(screen.getByText(/no members\./i)).toBeInTheDocument();
+    const prev = screen.getByRole('link', { name: /previous/i });
+    expect(prev.getAttribute('href')).toContain('tab=users');
+  });
+
+  it('does not throw on a repeated ?q=, which Next.js hands back as a string[]', async () => {
+    armMembers({ total: 60, page: 1, pageCount: 2, search: 'ada' });
+
+    await expect(renderUsersTab({ q: ['ada', 'again'] })).resolves.toBeTruthy();
+
+    // Only the first value reaches the service — same "take the first
+    // element" contract as the other firstParam call sites in the app.
+    expect(h.getOrgMembers).toHaveBeenCalledWith(ORG, expect.objectContaining({ search: 'ada' }));
   });
 });

@@ -35,6 +35,33 @@ export async function createNotification(
 ): Promise<string | null> {
   try {
     const admin = createAdminClient();
+
+    // The account-disable program (migs 0308-0311) blocks READS via RLS,
+    // but this insert runs as service-role and the 0028 AFTER-INSERT
+    // trigger fans out to push unconditionally — so a user disabled for
+    // suspected compromise kept getting lock-screen push banners carrying
+    // PO numbers, low-stock SKUs and deep links. This is the ONE insert
+    // path every caller in the codebase funnels through, so one point-read
+    // here closes the gap for all of them rather than requiring each call
+    // site to remember it. A failed read is treated as "unknown, not
+    // disabled" (fail OPEN): this function's contract is best-effort
+    // delivery that never throws, and an unreadable profile is a read
+    // error, not evidence of a disable.
+    const { data: profile, error: profileError } = await admin
+      .from('user_profiles')
+      .select('disabled_at')
+      .eq('id', args.userId)
+      .maybeSingle();
+    if (profileError) {
+      void reportError(new Error(profileError.message), {
+        tag: 'notifications.create_disabled_check',
+        extra: { userId: args.userId },
+      });
+    }
+    if ((profile as { disabled_at: string | null } | null)?.disabled_at) {
+      return null;
+    }
+
     const { data, error } = await admin
       .from('notifications')
       .insert({

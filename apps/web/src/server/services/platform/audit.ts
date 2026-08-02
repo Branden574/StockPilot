@@ -106,6 +106,19 @@ export function auditDetailReason(detail: Record<string, unknown>): string | nul
 }
 
 /**
+ * Whether this row records a press that lost the race to a peer admin's
+ * concurrent transition (see account-status.ts CONVERGENCE). `action` alone
+ * (e.g. `user_disabled`) cannot tell that apart from a real disable — both
+ * write the same action value — so a query or a screen that wants to
+ * exclude superseded presses needs this predicate rather than reaching into
+ * `detail.superseded` ad hoc, the same reasoning `auditDetailReason` above
+ * already applies to `detail.reason`.
+ */
+export function auditDetailSuperseded(detail: Record<string, unknown>): boolean {
+  return detail.superseded === true;
+}
+
+/**
  * Reads the audit feed for the Audit screen (Phase 4). Optionally filter by
  * target org. Service-role read; the caller must already have passed
  * `requirePlatformAdmin()`.

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import {
   auditDetailReason,
+  auditDetailSuperseded,
   listPlatformAudit,
   type PlatformAuditAction,
 } from '@/server/services/platform/audit';
@@ -81,13 +82,27 @@ export default async function PlatformAuditPage({
             ) : (
               rows.map((r) => {
                 const reason = auditDetailReason(r.detail);
+                // `action` alone reads identically for a real disable and a
+                // press that lost the race to a peer admin's concurrent
+                // transition (account-status.ts CONVERGENCE) — both write
+                // `user_disabled`/`user_reenabled`. Surfacing it here means
+                // an operator scanning this table doesn't have to open the
+                // row's raw detail to tell them apart.
+                const superseded = auditDetailSuperseded(r.detail);
                 return (
                   <tr key={r.id} className="border-b border-border last:border-0">
                     <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
                       {new Date(r.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{r.actorEmail}</td>
-                    <td className="px-4 py-2.5 font-medium">{ACTION_LABEL[r.action] ?? r.action}</td>
+                    <td className="px-4 py-2.5 font-medium">
+                      {ACTION_LABEL[r.action] ?? r.action}
+                      {superseded ? (
+                        <span className="ml-1.5 text-[11px] font-normal text-[var(--ed-ink-4)]">
+                          (superseded)
+                        </span>
+                      ) : null}
+                    </td>
                     {/* Email when it resolves, uuid when it does not — never a
                         blank cell for a row that names a user. */}
                     <td

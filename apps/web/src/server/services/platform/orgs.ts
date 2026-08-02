@@ -437,37 +437,61 @@ export async function getOrgMembers(
     Math.max(Math.floor(options.pageSize ?? MEMBERS_PAGE_SIZE), 1),
     DETAIL_PREVIEW_LIMIT,
   );
-  const page = Math.max(Math.floor(options.page ?? 1), 1);
-  const from = (page - 1) * pageSize;
+  const requestedPage = Math.max(Math.floor(options.page ?? 1), 1);
 
   const embed = search
     ? 'user_profiles:user_id!inner (email, full_name, disabled_at)'
     : 'user_profiles:user_id (email, full_name, disabled_at)';
 
-  let query = admin
-    .from('organization_members')
-    .select(`user_id, role, accepted_at, ${embed}`, { count: 'exact' })
-    .eq('organization_id', orgId)
-    .not('accepted_at', 'is', null)
-    .is('impersonation_expires_at', null) // real members only, not "act as" grants
-    .order('accepted_at', { ascending: true })
-    // Tiebreaker. Bulk-invited members share an accepted_at to the
-    // microsecond; without a stable second key Postgres may order those ties
-    // differently for the page-1 and page-2 queries, which drops a member out
-    // of both — the same invisible loss, one layer down.
-    .order('user_id', { ascending: true })
-    .range(from, from + pageSize - 1);
+  const runQuery = (pageToFetch: number) => {
+    const from = (pageToFetch - 1) * pageSize;
+    let query = admin
+      .from('organization_members')
+      .select(`user_id, role, accepted_at, ${embed}`, { count: 'exact' })
+      .eq('organization_id', orgId)
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null) // real members only, not "act as" grants
+      .order('accepted_at', { ascending: true })
+      // Tiebreaker. Bulk-invited members share an accepted_at to the
+      // microsecond; without a stable second key Postgres may order those ties
+      // differently for the page-1 and page-2 queries, which drops a member out
+      // of both — the same invisible loss, one layer down.
+      .order('user_id', { ascending: true })
+      .range(from, from + pageSize - 1);
 
-  if (search) {
-    // ilike on email OR full name. Escape PostgREST's or() metacharacters —
-    // a bare comma or paren would otherwise be read as filter syntax.
-    const safe = search.replace(/[%,()]/g, ' ');
-    query = query.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`, {
-      referencedTable: 'user_profiles',
-    });
+    if (search) {
+      // ilike on email OR full name. Escape PostgREST's or() metacharacters —
+      // a bare comma or paren would otherwise be read as filter syntax.
+      const safe = search.replace(/[%,()]/g, ' ');
+      query = query.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`, {
+        referencedTable: 'user_profiles',
+      });
+    }
+    return query;
+  };
+
+  let page = requestedPage;
+  let { data, error, count } = await runQuery(page);
+
+  // An out-of-range page (a stale URL, a bookmark, or a search that just
+  // shrank the result set) asks PostgREST for an offset past the last row
+  // it has — it answers with 416/PGRST103 instead of an empty page. Left
+  // unhandled that throws out of this function and, since there is no
+  // error.tsx under (platform), 500s the WHOLE org-detail page — on the one
+  // surface that can disable an account.
+  //
+  // Re-fetching page 1 on that one error code is the simpler of the two
+  // options considered: counting first (a `head: true` count query before
+  // every real fetch) would cost a SECOND round trip on every call, not
+  // just the rare out-of-range one, to compute the last valid page up
+  // front. Parsing the last-valid-page out of PGRST103's error TEXT is
+  // fragile (it is a human sentence, not a contract). Retrying at page 1
+  // costs a second round trip only in the rare case that needs one, and
+  // page 1 can never itself be out of range (offset 0 is always <= total).
+  if (error && (error as { code?: string }).code === 'PGRST103') {
+    page = 1;
+    ({ data, error, count } = await runQuery(page));
   }
-
-  const { data, error, count } = await query;
   if (error) throw new Error(error.message);
 
   const total = count ?? 0;

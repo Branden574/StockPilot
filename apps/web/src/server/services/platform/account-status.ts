@@ -355,8 +355,11 @@ export async function disableUserAccount(
     detail: {
       reason,
       reason_category: parsed.data.category,
-      // `null`, not 0/false, when the revoke was never attempted — "not tried"
-      // and "tried and revoked nothing" are different facts about this row.
+      // sessions_revoked is always a plain count — 0 whether the revoke was
+      // never attempted (superseded) or attempted and revoked nothing. The
+      // "not tried" vs "tried and revoked nothing" distinction lives on the
+      // NEXT field instead: sessions_revoke_ok is `null`, not true/false,
+      // exactly when the revoke was never attempted.
       sessions_revoked: revoked?.sessionIds.length ?? 0,
       sessions_revoke_ok: revoked?.ok ?? null,
       banned,

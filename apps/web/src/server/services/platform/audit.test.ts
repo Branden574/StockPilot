@@ -40,7 +40,12 @@ vi.mock('@/lib/supabase/admin', () => ({
   }),
 }));
 
-import { auditDetailReason, listPlatformAudit, recordPlatformAudit } from './audit';
+import {
+  auditDetailReason,
+  auditDetailSuperseded,
+  listPlatformAudit,
+  recordPlatformAudit,
+} from './audit';
 
 const INPUT = {
   actorUserId: '22222222-2222-2222-2222-222222222222',
@@ -237,5 +242,31 @@ describe('auditDetailReason', () => {
     expect(auditDetailReason({ reason: { category: 'other' } })).toBeNull();
     expect(auditDetailReason({ reason: 42 })).toBeNull();
     expect(auditDetailReason({ reason: null })).toBeNull();
+  });
+});
+
+/**
+ * `action` alone (e.g. 'user_disabled') cannot tell a real disable apart
+ * from a press that lost the race to a peer admin's concurrent transition —
+ * both write the SAME action value (see account-status.ts CONVERGENCE).
+ * `detail.superseded` is the only place that distinction lives, so a reader
+ * needs the same one-predicate treatment `auditDetailReason` already gives
+ * `detail.reason` — otherwise every consumer re-derives its own
+ * `detail.superseded === true` and one of them eventually gets it wrong.
+ */
+describe('auditDetailSuperseded', () => {
+  it('reads true off a superseded disable/re-enable row', () => {
+    expect(auditDetailSuperseded({ superseded: true, resulting_disabled: false })).toBe(true);
+  });
+
+  it('reads false off an ordinary row', () => {
+    expect(auditDetailSuperseded({ superseded: false })).toBe(false);
+  });
+
+  it('treats a missing or non-boolean value as not superseded', () => {
+    expect(auditDetailSuperseded({})).toBe(false);
+    expect(auditDetailSuperseded({ superseded: 'true' })).toBe(false);
+    expect(auditDetailSuperseded({ superseded: 1 })).toBe(false);
+    expect(auditDetailSuperseded({ superseded: null })).toBe(false);
   });
 });

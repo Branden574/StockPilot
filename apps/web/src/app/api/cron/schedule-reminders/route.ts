@@ -170,13 +170,24 @@ export async function GET(req: Request) {
 
       // Emails need addresses; one batch lookup for all recipients.
       // (full_name feeds the greeting only — recipient selection unchanged.)
+      // disabled_at rides along on the SAME lookup: a disabled account must
+      // get neither the push nor the email. createNotification refuses a
+      // disabled recipient on its own (the single insert choke point), but
+      // this loop ALSO calls sendEmail directly below, bypassing that
+      // choke point entirely — so the check is repeated here, against data
+      // already in hand, no extra round trip.
       const { data: profiles } = await admin
         .from('user_profiles')
-        .select('id, email, full_name')
+        .select('id, email, full_name, disabled_at')
         .in('id', [...userIds]);
       const profileById = new Map(
         (
-          (profiles ?? []) as { id: string; email: string | null; full_name: string | null }[]
+          (profiles ?? []) as {
+            id: string;
+            email: string | null;
+            full_name: string | null;
+            disabled_at: string | null;
+          }[]
         ).map((p) => [p.id, p]),
       );
       // Per-user prefs (0258), house fail-open pattern: missing row or null
@@ -196,6 +207,8 @@ export async function GET(req: Request) {
       );
 
       for (const uid of userIds) {
+        const profile = profileById.get(uid);
+        if (profile?.disabled_at) continue;
         const pref = prefById.get(uid);
         const wantsPush = pref?.push_schedule_reminders !== false;
         const wantsEmail = pref?.email_schedule_reminders !== false;
@@ -212,7 +225,6 @@ export async function GET(req: Request) {
             metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
           });
         }
-        const profile = profileById.get(uid);
         const email = profile?.email;
         if (email && wantsEmail) {
           const params: ScheduleReminderParams = {

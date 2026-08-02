@@ -109,6 +109,13 @@ export async function GET(req: Request) {
       `,
         )
         .eq('email_digest_optin', true)
+        // A disabled account must not receive the digest — RLS blocks its
+        // reads, but this cron runs as service-role and would otherwise
+        // build the recipient set with no regard for the disable program
+        // (migs 0308-0311). One predicate on the base table, no extra
+        // round trip. (Re-checked per-recipient below too, immediately
+        // before send — see that comment for why.)
+        .is('disabled_at', null)
         .not('organization_members.accepted_at', 'is', null)
         .order('id', { ascending: true })
         .range(from, to),
@@ -170,13 +177,17 @@ export async function GET(req: Request) {
         const fullPayload = await getDigestData(admin, orgId);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
         for (const { userId, email: to, name, sections } of group.recipients) {
-          // Re-check membership + opt-in IMMEDIATELY before sending.
-          // The recipient set was assembled at the top of this run — for
-          // a large fleet that gap can be tens of seconds. If the user
-          // toggled the digest off, or was removed from the org, we
-          // must not deliver. Two cheap point reads guard both axes:
+          // Re-check membership + opt-in + disabled-status IMMEDIATELY
+          // before sending. The recipient set was assembled at the top of
+          // this run — for a large fleet that gap can be tens of seconds.
+          // If the user toggled the digest off, was removed from the org,
+          // or was disabled, we must not deliver. Two cheap point reads
+          // guard all three axes:
           //   1) organization_members still active for (org, user)
-          //   2) user_profiles.email_digest_optin still true
+          //   2) user_profiles.email_digest_optin still true, and
+          //      user_profiles.disabled_at still null — the SAME row the
+          //      initial pull already filtered on, re-read here to close
+          //      the gap rather than as a new round trip.
           const [membershipRes, profileRes] = await Promise.all([
             admin
               .from('organization_members')
@@ -186,19 +197,25 @@ export async function GET(req: Request) {
               .maybeSingle(),
             admin
               .from('user_profiles')
-              .select('email_digest_optin')
+              .select('email_digest_optin, disabled_at')
               .eq('id', userId)
               .maybeSingle(),
           ]);
           const membership = membershipRes.data as
             | { user_id: string; accepted_at: string | null }
             | null;
-          const profile = profileRes.data as { email_digest_optin: boolean | null } | null;
+          const profile = profileRes.data as
+            | { email_digest_optin: boolean | null; disabled_at: string | null }
+            | null;
           if (!membership || !membership.accepted_at) {
             skipped += 1;
             continue;
           }
           if (!profile || profile.email_digest_optin === false) {
+            skipped += 1;
+            continue;
+          }
+          if (profile.disabled_at) {
             skipped += 1;
             continue;
           }
