@@ -555,10 +555,11 @@ describe('buildDeliveryRequestDraft — recipients', () => {
 });
 
 describe('buildDeliveryRequestDraft — subject', () => {
-  it('is ONE format carrying the canonical order number and the destination', () => {
+  it('is ONE format carrying just the destination — owner decision 2026-08-02 dropped the order number from the subject', () => {
     expect(buildDeliveryRequestDraft(makeDraftInput()).subject).toBe(
-      'Delivery Request — StockPilot Order SO-000049 — CVW Clovis',
+      'Delivery Request — CVW Clovis',
     );
+    expect(buildDeliveryRequestDraft(makeDraftInput()).subject).not.toContain('StockPilot Order');
   });
 
   it('uses the SAME format for pickup, with the warehouse as the location', () => {
@@ -569,7 +570,7 @@ describe('buildDeliveryRequestDraft — subject', () => {
     const draft = buildDeliveryRequestDraft(
       makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
     );
-    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — DC4');
+    expect(draft.subject).toBe('Delivery Request — DC4');
   });
 
   it('falls back to the warehouse when a delivery order somehow has no site', () => {
@@ -577,15 +578,27 @@ describe('buildDeliveryRequestDraft — subject', () => {
     // delivery rows have delivery_charter_id = NULL. New orders cannot reach
     // this state, but the builder must not print "undefined".
     const draft = buildDeliveryRequestDraft(makeDraftInput({ destination: null }));
-    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — DC4');
+    expect(draft.subject).toBe('Delivery Request — DC4');
     expect(draft.subject).not.toContain('undefined');
     expect(draft.subject).not.toContain('null');
   });
 
-  it('degrades honestly when the order number is missing', () => {
-    const draft = buildDeliveryRequestDraft(makeDraftInput({ orderNumber: null }));
-    expect(draft.subject).toBe('Delivery Request — StockPilot Order b3f1c2d4 — CVW Clovis');
-    expect(draft.subject).not.toContain('SO-');
+  it('no longer varies with the order number — the number lives in the body only (owner decision 2026-08-02)', () => {
+    // The subject used to carry the order handle (SO-000049, or a bare
+    // fallback prefix when the number was missing) and degrade honestly
+    // when it was absent. Now the subject never carries it at all, so a
+    // missing order number changes nothing about the subject; the honest
+    // fallback behavior lives entirely in the body's `Order:` line (see
+    // "sanitizes a newline embedded in the order id before it reaches the
+    // body" below).
+    const withNumber = buildDeliveryRequestDraft(makeDraftInput()).subject;
+    const withoutNumber = buildDeliveryRequestDraft(
+      makeDraftInput({ orderNumber: null }),
+    ).subject;
+    expect(withoutNumber).toBe(withNumber);
+    expect(withoutNumber).toBe('Delivery Request — CVW Clovis');
+    expect(withoutNumber).not.toContain('SO-');
+    expect(withoutNumber).not.toContain('b3f1c2d4');
   });
 
   it('is a single line — a newline in a subject is a header-injection shape', () => {
@@ -679,9 +692,15 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).not.toContain('/dashboard/orders/');
   });
 
-  it('states the real status — a fresh internal order is pending approval, not approved', () => {
+  it('no longer states an order status line — owner decision 2026-08-02 removed it as redundant noise', () => {
+    // The status line was a mount-time snapshot ("Pending approval") that
+    // could go stale between when the draft opened and when DC4 read the
+    // email; the owner cut it rather than caveat it. The order number
+    // remains findable in the body's own `Order:` line, so the status claim
+    // was the only thing removed here.
     const { body } = buildDeliveryRequestDraft(makeDraftInput());
-    expect(body).toContain('Order status in StockPilot: Pending approval');
+    expect(body).not.toContain('Order status in StockPilot');
+    expect(body).toContain('Order: SO-000049');
     for (const claim of ['approved', 'reserved', 'scheduled', 'ticket']) {
       expect(body.toLowerCase()).not.toContain(`is ${claim}`);
     }
@@ -807,9 +826,7 @@ describe('buildDeliveryRequestDraft — honest placeholders for empty-string inp
     const draft = buildDeliveryRequestDraft(
       makeDraftInput({ warehouseName: '   ', destination: null }),
     );
-    expect(draft.subject).toBe(
-      'Delivery Request — StockPilot Order SO-000049 — (warehouse not recorded)',
-    );
+    expect(draft.subject).toBe('Delivery Request — (warehouse not recorded)');
   });
 
   it('uses an honest placeholder when the requester is all whitespace and no email is known', () => {
@@ -887,7 +904,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
     expect(draft.to).toBe('dc4@learn4life.org');
     expect(draft.cc).toBe('arosas@cvwest.org');
-    expect(draft.subject).toBe('Delivery Request — StockPilot Order SO-000049 — CVW Clovis');
+    expect(draft.subject).toBe('Delivery Request — CVW Clovis');
     expect(draft.condensed).toBe(true);
     expect(draft.body).toContain('ITEMS (2 lines, 7 units)');
   });

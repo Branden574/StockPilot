@@ -191,7 +191,11 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const decoded = decodeCompose(rawUrl);
     expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
-    expect(decoded.subject).toContain('SO-000049');
+    // The subject no longer carries the order number (owner decision
+    // 2026-08-02) — it lives in the body's Order: line only.
+    expect(decoded.subject).toBe('Delivery Request — CVW Clovis');
+    expect(decoded.subject).not.toContain('SO-000049');
+    expect(decoded.body).toContain('Order: SO-000049');
     expect(decoded.body).toContain('CVW Clovis');
   });
 
@@ -400,7 +404,8 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     const copied = String(writeText.mock.calls[0]![0]);
     expect(copied).toContain('TO: dc4@learn4life.org');
     expect(copied).toContain('CC: arosas@cvwest.org');
-    expect(copied).toContain('SUBJECT: Delivery Request — StockPilot Order SO-000049');
+    expect(copied).toContain('SUBJECT: Delivery Request — CVW Clovis');
+    expect(copied).not.toContain('StockPilot Order');
     expect(copied).toContain('MESSAGE:');
   });
 
@@ -548,8 +553,16 @@ describe('DeliveryRequestAction — preview dialog', () => {
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent('Delivery Request — StockPilot Order SO-000049');
-    expect(dialog).toHaveTextContent('CVW Clovis');
+    // Scoped to the SUBJECT paragraph specifically (an exact-text match,
+    // not a substring toHaveTextContent check): the dialog's own DELIVERY
+    // REQUEST body heading sits right next to the Order: line once
+    // adjacent block text collapses whitespace, so a whole-dialog
+    // `not.toHaveTextContent('StockPilot Order')` would false-positive on
+    // "...StockPilot" + "Order: SO-000049" butting together. Asserting the
+    // subject paragraph's own exact text proves the number is gone from
+    // the subject without that collision.
+    expect(within(dialog).getByText('Delivery Request — CVW Clovis')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('Order: SO-000049');
     expect(dialog).toHaveTextContent('1295 Shaw Ave');
   });
 
