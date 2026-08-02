@@ -46,10 +46,16 @@ const apiSrc = read('./api.ts');
 const gate = read('./use-account-gate.ts');
 const revocation = read('./use-session-revocation.ts');
 const evictionSrc = read('./account-eviction.ts');
+const stateSrc = read('./account-disabled-state.ts');
+const rememberedIdentitySrc = read('./remembered-identity.ts');
+const queueSrc = read('./queue.ts');
+const rejectedWorkScreen = read('../../app/(drawer)/settings/rejected-work.tsx');
 
 describe('the eviction listener is mounted where every screen can see it', () => {
   it('RootGate owns useSessionRevocation', () => {
-    expect(rootLayout).toContain("import { useSessionRevocation } from '@/lib/use-session-revocation'");
+    expect(rootLayout).toContain(
+      "import { useSessionRevocation } from '@/lib/use-session-revocation'",
+    );
     expect(rootLayout).toContain('useSessionRevocation(session?.user?.id ?? null');
   });
 
@@ -133,7 +139,7 @@ describe('a revoked device can still find out what happened', () => {
 });
 
 /**
- * THE UNAUTHENTICATED DATA-DESTRUCTION BUG.
+ * THE UNAUTHENTICATED DATA-DESTRUCTION BUG, AND ITS OVER-CORRECTION.
  *
  * The eviction terminally rejects THIS DEVICE's offline outbox and wipes its
  * cache. It hung off the transition into `disabled` alone — and one path into
@@ -144,25 +150,63 @@ describe('a revoked device can still find out what happened', () => {
  * instead" on the biometric lock (signOutToFallback, which deliberately does
  * not wipe), that work routinely belongs to a different, healthy user.
  *
- * The screen may still be raised from either path. The EVICTION may only follow
- * a verdict attributed to this device's own session.
+ * The first fix (eb3c7e3c) admitted only 'session' evidence — a verdict about
+ * the live session THIS device holds — and refused 'sign-in' outright. That
+ * over-corrected: after a platform disable the device's OWN owner, relaunching
+ * an offline or closed phone, converges on the sign-in screen too (see
+ * use-account-gate.ts's design note), and a blanket refusal left their own
+ * outbox and cached org data on the device forever — nothing else clears them.
+ *
+ * remembered-identity.ts is what lets the sign-in path earn 'session' evidence
+ * HONESTLY instead of either extreme: it compares the typed address against
+ * this device's own durable memory of who last held a session here. A match
+ * means the device is hearing about its own disable; anything else — a
+ * stranger's guess, or a device with no memory of this address at all — gets
+ * the screen only.
  */
 describe('only a verdict about THIS device may destroy its queued work', () => {
-  it('the sign-in rejection is attributed to the sign-in, not to the session', () => {
+  it('the sign-in branch consults the remembered identity, not the bare typed email', () => {
+    expect(flat(authContext)).toContain(
+      "import { getRememberedIdentity, matchesRememberedIdentity, normalizeIdentityEmail, rememberIdentity, } from './remembered-identity';",
+    );
+    const bannedBranch = authContext.slice(
+      authContext.indexOf("code === 'user_banned'"),
+      authContext.indexOf('return { error: ACCOUNT_DISABLED_MESSAGE };'),
+    );
+    expect(bannedBranch).toContain('getRememberedIdentity()');
+    expect(bannedBranch).toContain('matchesRememberedIdentity(');
+  });
+
+  it("a match earns 'session'; anything else earns 'sign-in' — both literally present", () => {
+    expect(authContext).toContain("setAccountDisabled(true, 'session')");
     expect(authContext).toContain("setAccountDisabled(true, 'sign-in')");
+    // Never the bare, unattributed form — every call must say WHOSE verdict it is.
     expect(code(authContext)).not.toContain('setAccountDisabled(true)');
   });
 
   it('the eviction asks the precondition, not just the gate state', () => {
-    expect(gate).toContain("import {");
+    expect(gate).toContain('import {');
     expect(gate).toContain('shouldRunEviction');
     expect(gate).toContain('getDisableEvidence');
     expect(flat(gate)).toContain(
-      'shouldRunEviction({ state, evidence: getDisableEvidence(), alreadyEvicting: evicting.current, })',
+      'shouldRunEviction({ state, evidence, alreadyEvicting: evicting.current, })',
     );
     // The bare state check is exactly what was wrong: it cannot tell a verdict
     // about this device from an email somebody typed.
     expect(code(gate)).not.toContain("if (state !== 'disabled' || evicting.current) return;");
+  });
+
+  it('evidence is mirrored into React state, not read fresh inside the effect', () => {
+    // getDisableEvidence() read directly inside the eviction effect would miss
+    // a STRENGTHEN-only update (M-1): setAccountGateState's repeat-verdict
+    // branch can upgrade 'sign-in' to 'session' without the gate STATE
+    // changing, and React bails out of a setState call whose value is
+    // unchanged — the effect would never re-run. Tracking evidence as its own
+    // piece of state, updated by the same subscription, is what makes the
+    // notification in account-disabled-state.ts actually reach a re-render.
+    expect(gate).toContain('React.useState<DisableEvidence | null>(getDisableEvidence)');
+    const evictionEffect = gate.slice(gate.indexOf('shouldRunEviction({'));
+    expect(evictionEffect).toContain('[state, evidence, onEvicted]');
   });
 
   it('a successful password grant takes a stale gate back down', () => {
@@ -172,6 +216,27 @@ describe('only a verdict about THIS device may destroy its queued work', () => {
     // with the disabled screen.
     const signInFn = authContext.slice(authContext.indexOf("const signIn: AuthState['signIn']"));
     expect(signInFn).toContain('resetAccountDisabled();');
+  });
+
+  it("a successful sign-in refreshes this device's remembered identity", () => {
+    const signInFn = authContext.slice(authContext.indexOf("const signIn: AuthState['signIn']"));
+    expect(signInFn).toContain('rememberIdentity(');
+  });
+
+  it('the outbox is rejected before the wipe, even in the eviction that follows a sign-in match', () => {
+    // Task 11's ordering fix: rejectAllPending must run BEFORE wipeForSignOut,
+    // or wipeForSignOut's `delete ... where status <> 'rejected'` destroys the
+    // queued work outright instead of terminally (but visibly) parking it —
+    // exactly the loss this whole feature exists to prevent.
+    const clearCaches = gate.slice(
+      gate.indexOf('clearCaches: async'),
+      gate.indexOf('clearAccountStorage:'),
+    );
+    expect(clearCaches.indexOf('rejectAllPending')).toBeGreaterThan(-1);
+    expect(clearCaches.indexOf('wipeForSignOut()')).toBeGreaterThan(-1);
+    expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
+      clearCaches.indexOf('wipeForSignOut()'),
+    );
   });
 });
 
@@ -277,7 +342,9 @@ describe('the paths that can raise the gate', () => {
     // The rejection tolerance moved INTO probeAndSettle (a thrown probe
     // classifies as 'unknown', which changes nothing) so the hydrate path can
     // no longer forget its own try/catch.
-    expect(evictionSrc).toContain('// A rejected probe is inconclusive, never evidence of anything.');
+    expect(evictionSrc).toContain(
+      '// A rejected probe is inconclusive, never evidence of anything.',
+    );
   });
 
   it('never AWAITS the cold-launch probe — the hydrate path owns `loading`', () => {
@@ -297,7 +364,9 @@ describe('the paths that can raise the gate', () => {
     // user who chose to leave still gets the marketing screen.
     expect(authContext).toContain('markSessionEnded();');
     expect((authContext.match(/clearSessionEnded\(\);/g) ?? []).length).toBe(2);
-    const signOutFns = authContext.slice(authContext.indexOf("const signOut: AuthState['signOut']"));
+    const signOutFns = authContext.slice(
+      authContext.indexOf("const signOut: AuthState['signOut']"),
+    );
     expect(signOutFns).toContain('clearSessionEnded();');
   });
 
@@ -358,5 +427,104 @@ describe('the eviction the gate runs', () => {
     // useSync → syncNow → api(), and every 401 there rings the bus.
     expect(code(gate)).not.toContain('AppState');
     expect(code(gate)).not.toContain('addEventListener');
+  });
+});
+
+/**
+ * THE REMEMBERED IDENTITY SURVIVES BOTH WIPES.
+ *
+ * remembered-identity.ts backs the sign-in match with expo-secure-store — the
+ * same backend biometric.ts and scanner-tip-flag.ts already use — precisely
+ * because wipeForSignOut only touches SQLite (db.ts) and the eviction's
+ * clearAccountStorage step only touches AsyncStorage `workspace.*` keys
+ * (account-eviction.ts's ACCOUNT_SCOPED_STORAGE_PREFIXES). Neither reaches the
+ * Keychain/Keystore, so nothing has to re-record after either wipe.
+ */
+describe('the remembered identity is not wiped by the paths that clear everything else', () => {
+  it('uses expo-secure-store, the durable-prefs backend already in this codebase', () => {
+    expect(rememberedIdentitySrc).toContain("import * as SecureStore from 'expo-secure-store'");
+  });
+
+  it('wipeForSignOut never mentions SecureStore or the identity key', () => {
+    const dbSrc = read('./db.ts');
+    expect(dbSrc).not.toContain('SecureStore');
+  });
+
+  it('the eviction only clears AsyncStorage workspace keys, never SecureStore', () => {
+    expect(evictionSrc).not.toContain('SecureStore');
+    expect(gate).not.toContain('remembered-identity');
+  });
+});
+
+/**
+ * M-1 FIX WIRING — a strengthened verdict must notify, and the notification
+ * must reach a re-render. See account-disabled-state.test.ts for the pure
+ * behavior and the note above for why mirroring evidence into React state is
+ * what makes the notification effective rather than merely symbolic.
+ */
+describe('M-1: a strengthened verdict must be able to arm the eviction', () => {
+  it('setAccountGateState notifies gateListeners on a real strengthen', () => {
+    const repeatBranch = stateSrc.slice(
+      stateSrc.indexOf('if (state === next)'),
+      stateSrc.indexOf('const wasDisabled = state ==='),
+    );
+    expect(repeatBranch).toContain("how === 'session'");
+    expect(repeatBranch).toContain('for (const l of gateListeners) l(next);');
+  });
+});
+
+/**
+ * THE STALE SCREEN COMMENT.
+ *
+ * eb3c7e3c deleted AccountStatusUnverifiedScreen outright; a comment above
+ * AccountDisabledScreen still described it as though it were rendered "below".
+ * This checks the RAW source (unlike the `code()`-stripped check above, which
+ * only guards against a real re-introduction of the deleted export) so the
+ * dangling comment itself cannot come back either.
+ */
+describe('no stale reference to the deleted transient screen remains', () => {
+  it('the raw source, comments included, no longer names it', () => {
+    expect(screen).not.toContain('AccountStatusUnverifiedScreen');
+  });
+});
+
+/**
+ * MINOR (a) — a bulk rejection must not leave SQLite free to keep an
+ * undefined subset of the 200-row cap. rejectAllPending stamps every row with
+ * the SAME last_attempt_at, so the cap's ORDER BY needs tiebreakers or a
+ * single eviction that rejects thousands of rows at once has no defined
+ * "newest 200".
+ */
+describe('the rejected-row retention cap has a deterministic order', () => {
+  it('the excess-trim query tiebreaks on created_at then id', () => {
+    const pruneFn = queueSrc.slice(queueSrc.indexOf('export async function pruneRejected'));
+    expect(pruneFn).toContain(
+      'order by coalesce(last_attempt_at, created_at) desc, created_at desc, id desc',
+    );
+  });
+});
+
+/**
+ * MINOR (b) — listRejected() defaulted to 100 while REJECTED_KEEP_MAX is 200
+ * and the Settings row's counter (countRejected()) is unbounded, so between
+ * 101 and 200 rejected rows the header read "187 never sent" beside a list
+ * capped at 100. The screen now asks for the true retention ceiling.
+ */
+describe('the Unsent-work list and its header count agree', () => {
+  it('the screen passes REJECTED_KEEP_MAX to listRejected', () => {
+    expect(rejectedWorkScreen).toContain('REJECTED_KEEP_MAX');
+    expect(rejectedWorkScreen).toContain('listRejected(REJECTED_KEEP_MAX)');
+  });
+});
+
+/**
+ * MINOR (d) — a pruneRejected() failure logged as '[init] db init failed'
+ * even when initDb() itself had already succeeded, misdirecting anyone
+ * debugging a prune issue toward the wrong subsystem.
+ */
+describe('the init failure log names the subsystem that actually failed', () => {
+  it('distinguishes a prune failure from a db-init failure', () => {
+    expect(rootLayout).toContain("'[init] db init failed'");
+    expect(rootLayout).toContain("'[init] rejected-work prune failed'");
   });
 });

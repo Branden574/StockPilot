@@ -48,8 +48,14 @@ function RootLayout() {
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // Tracks which of the two awaits below actually failed. Both used to
+      // share one catch labelled "db init failed", so a pruneRejected()
+      // failure — the DB itself opened fine — was misreported as a db-init
+      // problem, sending anyone debugging it toward the wrong subsystem.
+      let dbReady = false;
       try {
         await initDb();
+        dbReady = true;
         // RETENTION for terminally rejected offline work. Those rows are kept
         // on purpose (wipeForSignOut spares them) so the operator and support
         // can still see what was never sent — but "kept" cannot mean "kept
@@ -58,7 +64,7 @@ function RootLayout() {
         // past every later sign-in. Best-effort and never fatal.
         await pruneRejected();
       } catch (e) {
-        console.warn('[init] db init failed', e);
+        console.warn(dbReady ? '[init] rejected-work prune failed' : '[init] db init failed', e);
       }
       if (!cancelled) {
         cycleCountSync.start();
@@ -90,9 +96,7 @@ function RootLayout() {
     // shift every line of copy. On a cold launch use the splash's dark
     // paper so there's no light flash before the (dark) branded splash.
     return (
-      <View
-        style={{ flex: 1, backgroundColor: isCold ? '#0c0d0a' : palette('light').paper }}
-      />
+      <View style={{ flex: 1, backgroundColor: isCold ? '#0c0d0a' : palette('light').paper }} />
     );
   }
 
@@ -224,10 +228,7 @@ function RootGate() {
         <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="order/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
-        <Stack.Screen
-          name="cycle-count/scan/[id]"
-          options={{ presentation: 'fullScreenModal' }}
-        />
+        <Stack.Screen name="cycle-count/scan/[id]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="size-count/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="size-count/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="size-count/capture" options={{ presentation: 'card' }} />

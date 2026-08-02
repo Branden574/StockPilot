@@ -20,6 +20,12 @@ import {
   setBiometricEnabledForUser,
 } from './biometric';
 import { wipeForSignOut } from './db';
+import {
+  getRememberedIdentity,
+  matchesRememberedIdentity,
+  normalizeIdentityEmail,
+  rememberIdentity,
+} from './remembered-identity';
 import { supabase } from './supabase';
 
 import { ACCOUNT_DISABLED_MESSAGE } from '@stockpilot/core';
@@ -164,6 +170,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setAccountGateState(gate);
           });
 
+          // Refresh this device's memory of who holds a session on it — the
+          // sign-in path's user_banned rejection compares a later typed
+          // address against exactly this record (see remembered-identity.ts).
+          // Fire-and-forget: never rejects, and must not hold up `loading`
+          // any more than the probe above does.
+          void rememberIdentity({
+            userId: s.user.id,
+            email: s.user.email ? normalizeIdentityEmail(s.user.email) : null,
+          });
+
           let enabled = false;
           try {
             enabled = await isBiometricEnabledForUser(s.user.id);
@@ -274,7 +290,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // — work that, after "Use password instead" on the biometric lock,
       // routinely belongs to a different and perfectly healthy user.
       if ((error as { code?: string }).code === 'user_banned') {
-        setAccountDisabled(true, 'sign-in');
+        // WHOSE verdict this is. GoTrue evaluates the ban BEFORE the
+        // password, so this branch is reached by ANY typed password on a
+        // disabled address — a passer-by who merely knows a colleague's email
+        // gets here exactly as easily as the account's own owner. The
+        // remembered identity (remembered-identity.ts) is this device's own
+        // durable memory of who last held a session here, refreshed at every
+        // hydrate and sign-out — it is what lets a device converge on
+        // 'session' evidence HONESTLY instead of either extreme: trusting
+        // every typed email (the original data-loss bug) or trusting none of
+        // them (the over-correction this fix replaces). A relaunched device
+        // whose own owner is retyping their own now-disabled password is
+        // exactly the scenario use-account-gate.ts's design note describes as
+        // "the ONE path that can still confirm a disable outright" — this is
+        // what lets that path earn the eviction rather than only the screen.
+        const remembered = await getRememberedIdentity();
+        if (matchesRememberedIdentity(email, remembered)) {
+          // This device has held a session for this exact address before —
+          // the disable it is hearing about is its own. Full eviction:
+          // the outbox is terminally rejected and the cache is wiped
+          // (use-account-gate.ts).
+          setAccountDisabled(true, 'session');
+        } else {
+          // ATTRIBUTED 'sign-in', and that is the whole point. It may raise
+          // the screen; it may NOT drive the eviction, which terminally
+          // rejects the offline outbox — work that, after "Use password
+          // instead" on the biometric lock, routinely belongs to a different
+          // and perfectly healthy user.
+          setAccountDisabled(true, 'sign-in');
+        }
         return { error: ACCOUNT_DISABLED_MESSAGE };
       }
       return { error: error.message };
@@ -285,6 +329,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // identity-server blip) is demonstrably stale and must come down, or the
     // healthy user who just signed in would meet the disabled screen.
     resetAccountDisabled();
+    // Refresh this device's remembered identity. Deliberately email-only here
+    // (userId left null) — the fuller record with userId is written at every
+    // hydrate/sign-out, which already has the full user object in hand; this
+    // path only has to guarantee the email is current, and the email is the
+    // only field the match above ever reads (see remembered-identity.ts).
+    await rememberIdentity({ userId: null, email: normalizeIdentityEmail(email) });
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
@@ -319,6 +369,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut: AuthState['signOut'] = async () => {
+    // Refresh this device's remembered identity BEFORE the session goes —
+    // this is a deliberate exit, but the record must stay current for
+    // whoever this device confirms a disable for next (remembered-identity.ts).
+    if (session?.user) {
+      await rememberIdentity({
+        userId: session.user.id,
+        email: session.user.email ? normalizeIdentityEmail(session.user.email) : null,
+      });
+    }
     // Global scope revokes every refresh token for the user — kills
     // sessions on the web tabs + any other devices. Mirrors the
     // server action's behavior in apps/web/src/server/actions/auth.ts.
@@ -334,6 +393,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOutToFallback: AuthState['signOutToFallback'] = async () => {
+    // Same reasoning as signOut above: keep the remembered identity current
+    // for whoever retypes a password on this device next.
+    if (session?.user) {
+      await rememberIdentity({
+        userId: session.user.id,
+        email: session.user.email ? normalizeIdentityEmail(session.user.email) : null,
+      });
+    }
     // Local-only sign-out: clears the on-device session so the
     // sign-in screen renders, but does NOT revoke the user's other
     // sessions (web, other phone). Used when the user fails the

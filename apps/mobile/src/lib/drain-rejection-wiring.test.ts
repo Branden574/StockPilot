@@ -31,8 +31,7 @@ import { describe, expect, it } from 'vitest';
 const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8');
 
 /** Comments explain the rules; only the CODE can satisfy them. */
-const code = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 /** Collapse formatting so a prettier line-break cannot fail a wiring pin. */
 const flat = (src: string) => code(src).replace(/\s+/g, ' ');
@@ -91,9 +90,7 @@ describe('engine 1 — sync.ts drainQueue', () => {
 describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => {
   it('classifies its failures with the SAME predicate as engine 1', () => {
     expect(cycleSync).toContain("import { classifyDrainFailure } from './drain-failure'");
-    expect(cycleSync).toContain(
-      "import { getAccountDisabled } from './account-disabled-state'",
-    );
+    expect(cycleSync).toContain("import { getAccountDisabled } from './account-disabled-state'");
     expect(classifies(cycleSync)).toBe(true);
   });
 
@@ -127,9 +124,7 @@ describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => 
 
 describe('rejected is TERMINAL — no drain may ever re-read it', () => {
   it('engine 1 selectors skip it', () => {
-    expect(queue).toContain(
-      "select * from pending_actions where status in ('pending','failed')",
-    );
+    expect(queue).toContain("select * from pending_actions where status in ('pending','failed')");
     expect(code(queue)).not.toMatch(/where status in \([^)]*'rejected'/);
   });
 
@@ -147,9 +142,7 @@ describe('rejected is TERMINAL — no drain may ever re-read it', () => {
   });
 
   it('the startup reclaim resurrects only orphaned in-flight rows, never rejected ones', () => {
-    expect(db).toContain(
-      "update pending_actions set status = 'pending' where status = 'sending'",
-    );
+    expect(db).toContain("update pending_actions set status = 'pending' where status = 'sending'");
     expect(code(db)).not.toMatch(/set status = 'pending' where status = 'rejected'/);
   });
 });
@@ -183,7 +176,11 @@ describe('the local record survives', () => {
     expect(settingsScreen).toContain("import { countRejected } from '@/lib/queue'");
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
     expect(rejectedScreen).toContain("from '@/lib/queue'");
-    expect(rejectedScreen).toContain('listRejected()');
+    // Asks for the true retention ceiling (REJECTED_KEEP_MAX), not
+    // listRejected's smaller internal default — otherwise the Settings row's
+    // unbounded countRejected() and this list disagree between 101 and 200
+    // rejected rows.
+    expect(rejectedScreen).toContain('listRejected(REJECTED_KEEP_MAX)');
     // The reason each row carries, in the operator's own vocabulary.
     expect(rejectedScreen).toContain('pendingActionLabel(row.kind)');
     expect(rejectedScreen).toContain('row.lastError');
@@ -220,9 +217,7 @@ describe('the local record survives', () => {
   });
 
   it('widens the status union rather than lying about the row state', () => {
-    expect(queue).toContain(
-      "status: 'pending' | 'sending' | 'ok' | 'failed' | 'rejected'",
-    );
+    expect(queue).toContain("status: 'pending' | 'sending' | 'ok' | 'failed' | 'rejected'");
   });
 
   it('costs no SCHEMA_VERSION bump — a bump DROPS the outbox we are protecting', () => {

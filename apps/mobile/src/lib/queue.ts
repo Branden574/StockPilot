@@ -216,6 +216,14 @@ export async function countRejected(): Promise<number> {
  *      back to when the work was queued);
  *   2. beyond the newest REJECTED_KEEP_MAX, whatever their age.
  *
+ * The "newest" ordering needs tiebreakers. rejectAllPending stamps EVERY row
+ * of a single eviction with the identical `last_attempt_at` (they were all
+ * rejected in the same UPDATE), so a bulk rejection that parks more than
+ * REJECTED_KEEP_MAX rows would otherwise hand SQLite a tie across all of them
+ * for the "top N" cut — free to keep any undefined subset, and free to change
+ * its answer between runs. created_at (set individually, at enqueue time) and
+ * id (monotonic) both break the tie deterministically.
+ *
  * Runs at cold launch (app/_layout.tsx). Returns how many rows it removed.
  */
 export async function pruneRejected(now: number = Date.now()): Promise<number> {
@@ -232,7 +240,7 @@ export async function pruneRejected(now: number = Date.now()): Promise<number> {
         and id not in (
           select id from pending_actions
            where status = 'rejected'
-           order by coalesce(last_attempt_at, created_at) desc
+           order by coalesce(last_attempt_at, created_at) desc, created_at desc, id desc
            limit ?
         )`,
     [REJECTED_KEEP_MAX],

@@ -23,8 +23,9 @@ import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/co
  * account.
  *
  * This screen is for a CONFIRMED disable only. A status the server could not
- * read renders AccountStatusUnverifiedScreen below instead, exactly as the web
- * guard throws rather than redirecting here.
+ * read renders NOTHING of this file's — see the note below for why there is
+ * no transient twin any more (eb3c7e3c deleted the one that used to render
+ * here for that case).
  *
  * Sign out uses signOutToFallback (scope 'local'): a global sign-out would try
  * to reach GoTrue with a banned user's token, and this device is already

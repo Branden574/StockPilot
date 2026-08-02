@@ -7,6 +7,7 @@ import {
   setAccountGateState,
   subscribeAccountGate,
   type AccountGateState,
+  type DisableEvidence,
 } from './account-disabled-state';
 import {
   accountScopedStorageKeys,
@@ -98,6 +99,19 @@ export interface AccountGate {
 export function useAccountGate(options: { onEvicted: () => void }): AccountGate {
   const { onEvicted } = options;
   const [state, setState] = React.useState<AccountGateState>(getAccountGateState);
+  // Mirrored as its own piece of React state, not read fresh from the module
+  // inside the eviction effect below. account-disabled-state.ts's
+  // setAccountGateState can STRENGTHEN a repeat 'disabled' verdict from
+  // 'sign-in' to 'session' (the sign-in screen raised the screen first; a
+  // corroborated probe or broadcast confirms it is really this device's own
+  // session afterwards) WITHOUT the gate STATE itself changing. React bails
+  // out of a setState call whose value is unchanged, so `state` above would
+  // stay the same 'disabled' string and the effect would never re-run if it
+  // read evidence by calling getDisableEvidence() directly — the strengthen
+  // notification would arrive with nothing downstream able to act on it.
+  // Tracking it here, updated by the same subscription, is what lets that
+  // notification actually reach a re-render.
+  const [evidence, setEvidence] = React.useState<DisableEvidence | null>(getDisableEvidence);
   const evicting = React.useRef(false);
 
   React.useEffect(() => {
@@ -105,7 +119,11 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     // can land between this component's first render and this effect, and a
     // missed transition would leave a disabled account inside the app.
     setState(getAccountGateState());
-    return subscribeAccountGate(setState);
+    setEvidence(getDisableEvidence());
+    return subscribeAccountGate((next) => {
+      setState(next);
+      setEvidence(getDisableEvidence());
+    });
   }, []);
 
   /**
@@ -203,7 +221,7 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     if (
       !shouldRunEviction({
         state,
-        evidence: getDisableEvidence(),
+        evidence,
         alreadyEvicting: evicting.current,
       })
     ) {
@@ -254,7 +272,7 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         console.warn('[account-gate] eviction finished with failed steps', failed);
       }
     })();
-  }, [state, onEvicted]);
+  }, [state, evidence, onEvicted]);
 
   // A gate that leaves `disabled` (the user signed out of the disabled screen)
   // re-arms the eviction for the next account on this device.
