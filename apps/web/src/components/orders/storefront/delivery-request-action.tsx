@@ -270,7 +270,8 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       */}
       <p className="sf-note" data-testid="delivery-request-notice">
         This opens a draft email. StockPilot does not send it and does not create a ticket. Review
-        the message and press Send in your mail app.
+        the message and press Send in your mail app. If Outlook opens without the draft, sign in
+        and press the button again.
       </p>
 
       {draftCount > 1 && (

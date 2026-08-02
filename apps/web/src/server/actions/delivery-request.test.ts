@@ -71,6 +71,7 @@ describe('recordDeliveryRequestDraftedAction', () => {
     const serialized = JSON.stringify(auditSpy.mock.calls[0]![0]);
     for (const forbidden of [
       'outlook.office.com',
+      'outlook.cloud.microsoft',
       'mailto:',
       'DELIVERY REQUEST',
       'Shaw Ave',

@@ -187,7 +187,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     expect(open).toHaveBeenCalledTimes(1);
     const rawUrl = open.mock.calls[0]![0] as string;
     const url = new URL(rawUrl);
-    expect(url.origin + url.pathname).toBe('https://outlook.office.com/mail/deeplink/compose');
+    expect(url.origin + url.pathname).toBe('https://outlook.cloud.microsoft/mail/deeplink/compose');
     const decoded = decodeCompose(rawUrl);
     expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
@@ -735,7 +735,7 @@ describe('DeliveryRequestAction — honesty', () => {
     render(<DeliveryRequestAction input={makeInput()} />);
     const notice = screen.getByTestId('delivery-request-notice');
     expect(notice).toHaveTextContent(
-      'This opens a draft email. StockPilot does not send it and does not create a ticket. Review the message and press Send in your mail app.',
+      'This opens a draft email. StockPilot does not send it and does not create a ticket. Review the message and press Send in your mail app. If Outlook opens without the draft, sign in and press the button again.',
     );
   });
 
