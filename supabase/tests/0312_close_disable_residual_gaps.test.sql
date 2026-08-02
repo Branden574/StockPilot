@@ -28,7 +28,7 @@
 
 begin;
 
-select plan(24);
+select plan(28);
 
 -- ============================================================================
 -- 1. storage.objects — user-avatars write policies preserve the original
@@ -42,12 +42,24 @@ select plan(24);
 -- semantically-identical policy. This mirrors the repo's own idiom for the
 -- same bucket family (0260_support_ticket_attachments.test.sql:103-104 uses
 -- `like '%foldername%'` for the same reason). Each policy is asserted to
--- contain BOTH 'foldername' (the untouched original ownership predicate,
--- which also proves auth.uid() is still compared against it) AND
--- 'disabled_at' (the new guard) — recurring bug #24 is exactly the case where
--- the second is present and the first silently is not.
+-- contain all three of: 'user-avatars' (the bucket_id scoping — without this
+-- pin a regression that dropped the bucket guard, letting the disabled check
+-- leak to other buckets, would go uncaught), 'foldername' (the original
+-- folder-ownership predicate), and 'disabled_at' (the new guard). Substring
+-- presence of 'foldername' shows the ownership term survived but does not by
+-- itself prove the `= auth.uid()` comparison is intact — the migration text is
+-- verified correct for that by inspection; these substring pins guard against
+-- the recurring bug #24 case where the new guard is present and an original
+-- conjunct silently is not.
 
 -- "user-avatars own write" — INSERT, with_check only.
+select matches(
+  (select with_check from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname = 'user-avatars own write'),
+  'user-avatars',
+  'user-avatars own write: bucket_id scoping is preserved'
+);
 select matches(
   (select with_check from pg_policies
     where schemaname = 'storage' and tablename = 'objects'
@@ -68,6 +80,13 @@ select matches(
   (select qual from pg_policies
     where schemaname = 'storage' and tablename = 'objects'
       and policyname = 'user-avatars own update'),
+  'user-avatars',
+  'user-avatars own update: USING preserves the bucket_id scoping'
+);
+select matches(
+  (select qual from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname = 'user-avatars own update'),
   'foldername',
   'user-avatars own update: USING preserves the folder-ownership predicate'
 );
@@ -77,6 +96,13 @@ select matches(
       and policyname = 'user-avatars own update'),
   'disabled_at',
   'user-avatars own update: USING gained the disabled_at guard'
+);
+select matches(
+  (select with_check from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname = 'user-avatars own update'),
+  'user-avatars',
+  'user-avatars own update: WITH CHECK preserves the bucket_id scoping'
 );
 select matches(
   (select with_check from pg_policies
@@ -94,6 +120,13 @@ select matches(
 );
 
 -- "user-avatars own delete" — DELETE, using only.
+select matches(
+  (select qual from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname = 'user-avatars own delete'),
+  'user-avatars',
+  'user-avatars own delete: bucket_id scoping is preserved'
+);
 select matches(
   (select qual from pg_policies
     where schemaname = 'storage' and tablename = 'objects'
