@@ -377,9 +377,6 @@ export interface DeliveryRequestDraft {
   unitCount: number;
 }
 
-/** A fresh internal order is inserted as 'pending_approval' — never claim more. */
-const DRAFT_STATUS_LABEL = 'Pending approval';
-
 const CONDENSED_DISCLOSURE =
   'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.';
 
@@ -461,9 +458,7 @@ export function buildDeliveryRequestDraft(
 
   const siteName = site ? toPlainTextLine(site.name) : '';
   const subjectLocation = siteName || warehouseLabel;
-  const subject = toPlainTextLine(
-    `Delivery Request — StockPilot Order ${handle} — ${subjectLocation}`,
-  );
+  const subject = toPlainTextLine(`Delivery Request — ${subjectLocation}`);
 
   // Blocks are assembled as an array and joined with a blank line, so an
   // omitted block leaves no trace — no heading, no stray blank line, and never
@@ -477,7 +472,6 @@ export function buildDeliveryRequestDraft(
       `Order: ${toPlainTextLine(handle)}`,
       `Requested by: ${requesterLabel}`,
       `Fulfillment method: ${isPickup ? 'Pickup / will-call' : 'Delivery'}`,
-      `Order status in StockPilot: ${DRAFT_STATUS_LABEL}`,
     ].join('\n'),
   );
 
