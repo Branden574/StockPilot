@@ -1036,7 +1036,7 @@ function decodeCompose(url: string): { to: string; cc: string; subject: string; 
 describe('buildOutlookComposeUrl', () => {
   it('targets the OWA deep-link compose endpoint, unchanged by the mailtouri rewrite', () => {
     const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
-    expect(url.origin).toBe('https://outlook.office.com');
+    expect(url.origin).toBe('https://outlook.cloud.microsoft');
     expect(url.pathname).toBe('/mail/deeplink/compose');
   });
 

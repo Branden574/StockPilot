@@ -551,8 +551,8 @@ export function buildDeliveryRequestDraft(
  * Outlook Web compose deep link. Greenfield: the repo had no OWA link, no
  * shared mailto builder and no clipboard helper before this feature.
  *
- * The org runs managed Microsoft 365, so outlook.office.com is the work-account
- * host (outlook.live.com is the consumer one and would land a work user on the
+ * The org runs managed Microsoft 365, so this must be the work-account host
+ * (outlook.live.com is the consumer one and would land a work user on the
  * wrong tenant).
  *
  * CORRECTION (2026-08-01): this endpoint originally received plain `to` /
@@ -563,8 +563,18 @@ export function buildDeliveryRequestDraft(
  * `cc=` on `mail/deeplink/compose` is effectively unimplemented. See
  * `buildOutlookComposeUrl` below for the fix (the `mailtouri` form) and its
  * own tenant-verification note.
+ *
+ * CORRECTION (2026-08-02): the host moved from outlook.office.com to
+ * outlook.cloud.microsoft — Microsoft's go-forward unified Outlook Web
+ * domain. The owner hit the failure live: office.com now bounces through a
+ * domain-migration redirect (an auth-code hop to cloud.microsoft) that DROPS
+ * the compose path entirely, landing the user on their bare inbox with no
+ * draft. The same mailtouri link on outlook.cloud.microsoft was
+ * tenant-verified to open the prefilled compose (candidate E). Landing on
+ * the canonical domain also removes the one redirect layer that ate the
+ * intent, which is what makes the link survive a cold session.
  */
-export const OUTLOOK_COMPOSE_BASE = 'https://outlook.office.com/mail/deeplink/compose';
+export const OUTLOOK_COMPOSE_BASE = 'https://outlook.cloud.microsoft/mail/deeplink/compose';
 
 /**
  * Conservative ceiling for a compose link, in characters.
