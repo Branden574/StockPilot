@@ -335,8 +335,6 @@ export interface DeliveryRequestInput {
   orderId: string;
   /** `order_requests.order_number`, or null when it did not reach the client. */
   orderNumber: number | null;
-  /** Absolute origin, no trailing slash, e.g. 'https://app.stockpilotusa.com'. '' disables the link. */
-  orderUrlBase: string;
   fulfillmentType: 'pickup' | 'delivery';
   /** Origin warehouse display name. */
   warehouseName: string;
@@ -382,11 +380,8 @@ export interface DeliveryRequestDraft {
 /** A fresh internal order is inserted as 'pending_approval' — never claim more. */
 const DRAFT_STATUS_LABEL = 'Pending approval';
 
-const NON_CLAIM_FOOTER =
-  'Drafted in StockPilot. StockPilot did not send this message and has not created a ticket.';
-
 const CONDENSED_DISCLOSURE =
-  'This message was shortened because the full item list did not fit in a compose link. The complete order is at the link above.';
+  'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.';
 
 /** "SO-000049" when the number is real, else a visibly non-SO handle. */
 function orderHandle(orderNumber: number | null, orderId: string): string {
@@ -438,7 +433,7 @@ function neededByLine(neededByLocal: string, tz: string): string | null {
  * carry the body in the query string, practical limits land around 2,000
  * characters, and truncation is SILENT — the client opens with half a body and
  * the employee sends it. Condensed mode drops the per-line list and the street
- * address, keeps the counts, the site and the link, and SAYS SO in the body.
+ * address, keeps the counts and the site, and SAYS SO in the body.
  */
 export function buildDeliveryRequestDraft(
   input: DeliveryRequestInput,
@@ -469,10 +464,6 @@ export function buildDeliveryRequestDraft(
   const subject = toPlainTextLine(
     `Delivery Request — StockPilot Order ${handle} — ${subjectLocation}`,
   );
-
-  const orderUrl = input.orderUrlBase
-    ? `${input.orderUrlBase.replace(/\/+$/, '')}/dashboard/orders/${input.orderId}`
-    : '';
 
   // Blocks are assembled as an array and joined with a blank line, so an
   // omitted block leaves no trace — no heading, no stray blank line, and never
@@ -539,11 +530,6 @@ export function buildDeliveryRequestDraft(
   const notes = toPlainTextLine(input.notes);
   if (notes && !condensed) blocks.push(`ORDER NOTES\n${notes}`);
 
-  // orderId (and by extension orderUrl, which embeds it) is the other input
-  // string that reaches the body without going through toPlainTextLine —
-  // sanitize at the point of use so a newline in the id can't survive into
-  // the link line.
-  if (orderUrl) blocks.push(`Order link: ${toPlainTextLine(orderUrl)}`);
   if (condensed) {
     // Condensed mode drops ORDER NOTES silently (see above); say so in the
     // same disclosure block rather than letting a real requester note
@@ -551,11 +537,10 @@ export function buildDeliveryRequestDraft(
     // contiguous — callers still assert on it with toContain.
     blocks.push(
       notes
-        ? `${CONDENSED_DISCLOSURE} Order notes were also omitted and are available at the link above.`
+        ? `${CONDENSED_DISCLOSURE} Order notes were also omitted and are available in StockPilot.`
         : CONDENSED_DISCLOSURE,
     );
   }
-  blocks.push(NON_CLAIM_FOOTER);
 
   return {
     to: DELIVERY_REQUEST_EMAIL.to,
@@ -765,8 +750,8 @@ export interface PreparedDeliveryRequest {
  *
  * Degrading deliberately is the whole point: silent truncation by the mail
  * client is invisible to us and to the employee, so we shorten the LINK, say so
- * in the body, and keep the complete detail on the clipboard path and behind
- * the order link.
+ * in the body, and keep the complete detail on the clipboard path — the one
+ * path with no URL-length limit.
  */
 export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
   const full = buildDeliveryRequestDraft(input);

@@ -312,17 +312,17 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         (Finding 1). `draft.condensed` alone is not enough: it is true
         whenever the FULL draft didn't fit a compose link, regardless of
         whether the condensed links themselves fit. When they do fit
-        (condensed && linkFits), the summary-plus-order-link path really is
-        available, so the original sentence stands. When even the condensed
-        links are too long (!linkFits — which only happens when condensed is
-        also true, see prepareDeliveryRequest), nothing can be prefilled
-        safely, so this must say the same thing the oversized fallback panel
-        says, before AND after any click.
+        (condensed && linkFits), the summary path really is available, so
+        the original sentence stands. When even the condensed links are too
+        long (!linkFits — which only happens when condensed is also true,
+        see prepareDeliveryRequest), nothing can be prefilled safely, so
+        this must say the same thing the oversized fallback panel says,
+        before AND after any click.
       */}
       {prepared.draft.condensed && prepared.linkFits && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
-          This order is too large to fit in a compose link, so the draft carries a summary and a
-          link to the full order. Copy the details instead to include every line.
+          This order is too large to fit in a compose link, so the draft carries a summary. Copy
+          the details instead to include every line.
         </p>
       )}
 

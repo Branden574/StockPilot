@@ -57,7 +57,6 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       code: 'CVW-CLO',
       address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
     },
-    orderUrlBase: 'https://app.stockpilotusa.com',
     submitting: false,
     submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
     onClose: vi.fn(),
@@ -138,7 +137,6 @@ describe('ReviewModal success stage', () => {
         }}
         neededBy=""
         destination={null}
-        orderUrlBase=""
         submitting={false}
         submitted={null}
         onClose={vi.fn()}
@@ -210,7 +208,6 @@ describe('ReviewModal accessibility', () => {
       },
       neededBy: '',
       destination: null,
-      orderUrlBase: '',
       submitting: false,
       submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
       onClose: vi.fn(),
@@ -281,7 +278,6 @@ describe('ReviewModal accessibility', () => {
       },
       neededBy: '',
       destination: null,
-      orderUrlBase: '',
       submitting: false,
       submitted: null,
       onClose: vi.fn(),
