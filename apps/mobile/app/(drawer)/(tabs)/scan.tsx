@@ -1,4 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { X } from 'lucide-react-native';
@@ -467,16 +468,15 @@ export default function Scan() {
         maxEdge: 1600,
         quality: 0.8,
       });
-      const blob = await (await fetch(resizedUri)).blob();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error('failed to read image'));
-        reader.onload = () => {
-          const dataUrl = String(reader.result ?? '');
-          const comma = dataUrl.indexOf(',');
-          resolve(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl);
-        };
-        reader.readAsDataURL(blob);
+      // Read the resized file straight to base64 with expo-file-system (the
+      // same idiom document-scanner.ts uses). The previous
+      // fetch(uri).blob() + FileReader.readAsDataURL chain allocated a native
+      // blob and read it back through RCTFileReaderModule — the fragile
+      // native module behind a production EXC_BAD_ACCESS (Sentry a8109a24,
+      // 2026-08-02, blob read racing blob deallocation). Reading the file
+      // directly never creates a native blob at all.
+      const base64 = await FileSystem.readAsStringAsync(resizedUri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
 
       const vision = await api<{
@@ -495,7 +495,9 @@ export default function Scan() {
         method: 'POST',
         body: {
           imageBase64: base64,
-          mimeType: blob.type || `image/${ext}`,
+          // resizeForUpload normalizes the extension to 'jpg', whose real
+          // MIME type is image/jpeg ('image/jpg' is not a registered type).
+          mimeType: ext === 'jpg' ? 'image/jpeg' : `image/${ext}`,
         },
       });
 
