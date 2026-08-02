@@ -199,6 +199,40 @@ describe('GET /api/cron/schedule-reminders', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  it('sends neither push nor email to a disabled recipient, but still reaches an active one on the same event', async () => {
+    // The account-disable program (migs 0308-0311) blocks reads via RLS,
+    // but this cron runs as service-role and previously ignored
+    // disabled_at entirely — a disabled manager kept getting the reminder
+    // push AND the reminder email for every upcoming event in the org.
+    const stub = stubFor([eventIn(0.5)], {
+      'user_profiles.select': {
+        data: [
+          {
+            id: 'user-assignee',
+            email: 'assignee@l4l.example',
+            full_name: 'Theo Marsh',
+            disabled_at: null,
+          },
+          {
+            id: 'user-manager',
+            email: 'manager@l4l.example',
+            full_name: 'Dana Reyes',
+            disabled_at: '2026-07-30T00:00:00Z',
+          },
+        ],
+        error: null,
+      },
+    });
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(createNotificationMock).toHaveBeenCalledTimes(1);
+    expect(createNotificationMock.mock.calls[0]![0]).toMatchObject({ userId: 'user-assignee' });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0]![0].to).toBe('assignee@l4l.example');
+  });
+
   it('respects an explicit email opt-out but keeps push (pref gating unchanged)', async () => {
     const stub = stubFor([eventIn(0.5)], {
       'notification_preferences.select': {

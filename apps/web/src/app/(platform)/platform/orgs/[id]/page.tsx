@@ -31,12 +31,25 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'billing', label: 'Billing' },
 ];
 
+/**
+ * Next.js hands a repeated `?key=a&key=b` query param back as `string[]`,
+ * not `string` — a shape none of this page's searchParams fields were ever
+ * typed for. Same idiom as `firstParam` in app/r/confirm/page.tsx.
+ */
+function firstParam(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
 export default async function PlatformOrgDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; q?: string; page?: string }>;
+  searchParams: Promise<{
+    tab?: string | string[];
+    q?: string | string[];
+    page?: string | string[];
+  }>;
 }) {
   // In-page gate — see note in (platform)/platform/page.tsx. The layout's
   // requirePlatformAdmin can't stop this page body (it renders in parallel),
@@ -48,9 +61,13 @@ export default async function PlatformOrgDetailPage({
 
   const { id } = await params;
   const { tab: tabParam, q, page: pageParam } = await searchParams;
-  const tab: Tab = (TABS.find((t) => t.key === tabParam)?.key ?? 'overview') as Tab;
-  const search = q?.trim() ? q.trim() : null;
-  const usersPage = Number.parseInt(pageParam ?? '1', 10);
+  const tab: Tab = (TABS.find((t) => t.key === firstParam(tabParam))?.key ?? 'overview') as Tab;
+  // A repeated `?q=` (a stray double-submit, a hand-edited URL) gives
+  // Next.js a string[] here, not a string — the old `q?: string` type was
+  // never enforced at runtime and `q?.trim()` throws on an array.
+  const qSingle = firstParam(q);
+  const search = qSingle?.trim() ? qSingle.trim() : null;
+  const usersPage = Number.parseInt(firstParam(pageParam) ?? '1', 10);
 
   const overview = await getOrgOverview(id);
   if (!overview) notFound();
@@ -291,37 +308,48 @@ async function UsersTab({
           {result.search ? `No members match “${result.search}”.` : 'No members.'}
         </p>
       ) : (
-        <>
-          <MembersTable members={members} />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* The bound, stated. This tab used to render nothing here at all,
-                which is what made 50 unreachable accounts invisible. */}
-            <p className="text-[12px] text-[var(--ed-ink-4)]">
-              Showing {first}–{last} of {total} member{total === 1 ? '' : 's'}
-              {result.search ? ` matching “${result.search}”` : ''} · page {result.page} of{' '}
-              {pageCount}
-            </p>
-            {pageCount > 1 ? (
-              <div className="flex items-center gap-2 text-[12.5px]">
-                {result.page > 1 ? (
-                  <Link href={hrefFor(result.page - 1)} className="font-medium hover:underline">
-                    ← Previous
-                  </Link>
-                ) : (
-                  <span className="text-[var(--ed-ink-4)]">← Previous</span>
-                )}
-                {result.page < pageCount ? (
-                  <Link href={hrefFor(result.page + 1)} className="font-medium hover:underline">
-                    Next →
-                  </Link>
-                ) : (
-                  <span className="text-[var(--ed-ink-4)]">Next →</span>
-                )}
-              </div>
-            ) : null}
-          </div>
-        </>
+        <MembersTable members={members} />
       )}
+
+      {/*
+        Rendered OUTSIDE the members.length check, deliberately: getOrgMembers
+        clamps a genuinely out-of-range page server-side, but PostgREST
+        returns 200/empty (not an error) at exactly offset === total — a
+        legitimate empty LAST page (e.g. a search just shrank the result
+        set out from under a page the operator was already on). This used
+        to live inside the non-empty branch, so an empty page rendered bare
+        "No members." with no pager and no Previous link — a dead end with
+        no way back to page 1.
+      */}
+      {total > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* The bound, stated. This tab used to render nothing here at all,
+              which is what made 50 unreachable accounts invisible. */}
+          <p className="text-[12px] text-[var(--ed-ink-4)]">
+            Showing {first}–{last} of {total} member{total === 1 ? '' : 's'}
+            {result.search ? ` matching “${result.search}”` : ''} · page {result.page} of{' '}
+            {pageCount}
+          </p>
+          {pageCount > 1 ? (
+            <div className="flex items-center gap-2 text-[12.5px]">
+              {result.page > 1 ? (
+                <Link href={hrefFor(result.page - 1)} className="font-medium hover:underline">
+                  ← Previous
+                </Link>
+              ) : (
+                <span className="text-[var(--ed-ink-4)]">← Previous</span>
+              )}
+              {result.page < pageCount ? (
+                <Link href={hrefFor(result.page + 1)} className="font-medium hover:underline">
+                  Next →
+                </Link>
+              ) : (
+                <span className="text-[var(--ed-ink-4)]">Next →</span>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

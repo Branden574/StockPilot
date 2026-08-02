@@ -437,40 +437,90 @@ export async function getOrgMembers(
     Math.max(Math.floor(options.pageSize ?? MEMBERS_PAGE_SIZE), 1),
     DETAIL_PREVIEW_LIMIT,
   );
-  const page = Math.max(Math.floor(options.page ?? 1), 1);
-  const from = (page - 1) * pageSize;
+  // A hostile or malformed `?page=` (a huge digit string, a negative
+  // number, `NaN` from `?page=abc` after the caller's own parseInt) must
+  // never reach range() as a raw offset. Number.isFinite catches NaN AND
+  // Infinity; Math.floor/Math.max catch fractional and negative — but the
+  // UPPER bound is deliberately NOT clamped here. A page far beyond the
+  // real page count is clamped below, against an ACTUAL count, not an
+  // arbitrary ceiling.
+  const rawRequestedPage = Math.floor(options.page ?? 1);
+  const requestedPage = Number.isFinite(rawRequestedPage) ? Math.max(rawRequestedPage, 1) : 1;
 
   const embed = search
     ? 'user_profiles:user_id!inner (email, full_name, disabled_at)'
     : 'user_profiles:user_id (email, full_name, disabled_at)';
 
-  let query = admin
-    .from('organization_members')
-    .select(`user_id, role, accepted_at, ${embed}`, { count: 'exact' })
-    .eq('organization_id', orgId)
-    .not('accepted_at', 'is', null)
-    .is('impersonation_expires_at', null) // real members only, not "act as" grants
-    .order('accepted_at', { ascending: true })
-    // Tiebreaker. Bulk-invited members share an accepted_at to the
-    // microsecond; without a stable second key Postgres may order those ties
-    // differently for the page-1 and page-2 queries, which drops a member out
-    // of both — the same invisible loss, one layer down.
-    .order('user_id', { ascending: true })
-    .range(from, from + pageSize - 1);
+  const baseQuery = (opts: { head: boolean }) => {
+    let query = admin
+      .from('organization_members')
+      .select(`user_id, role, accepted_at, ${embed}`, { count: 'exact', head: opts.head })
+      .eq('organization_id', orgId)
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null); // real members only, not "act as" grants
 
-  if (search) {
-    // ilike on email OR full name. Escape PostgREST's or() metacharacters —
-    // a bare comma or paren would otherwise be read as filter syntax.
-    const safe = search.replace(/[%,()]/g, ' ');
-    query = query.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`, {
-      referencedTable: 'user_profiles',
-    });
+    if (search) {
+      // ilike on email OR full name. Escape PostgREST's or() metacharacters —
+      // a bare comma or paren would otherwise be read as filter syntax.
+      const safe = search.replace(/[%,()]/g, ' ');
+      query = query.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`, {
+        referencedTable: 'user_profiles',
+      });
+    }
+    return query;
+  };
+
+  const runDataQuery = (pageToFetch: number) => {
+    const from = (pageToFetch - 1) * pageSize;
+    return baseQuery({ head: false })
+      .order('accepted_at', { ascending: true })
+      // Tiebreaker. Bulk-invited members share an accepted_at to the
+      // microsecond; without a stable second key Postgres may order those ties
+      // differently for the page-1 and page-2 queries, which drops a member out
+      // of both — the same invisible loss, one layer down.
+      .order('user_id', { ascending: true })
+      .range(from, from + pageSize - 1);
+  };
+
+  // COUNT-FIRST: clamp the requested page against a REAL total before it is
+  // ever turned into a range() offset. A prior version of this function
+  // attempted the requested page directly and caught PGRST103 (PostgREST's
+  // 416 for an out-of-range offset), retrying at page 1 on that one error
+  // code. That left two holes count-first closes: (1) a pathologically
+  // large `?page=` (e.g. 999999999999) could overflow Postgres's own
+  // integer handling on the way to becoming an offset — a DIFFERENT error
+  // than PGRST103, which no catch on that one code could have masked; (2)
+  // at exactly offset === total, PostgREST returns 200/empty (not an
+  // error), so the retry never ran and the UI could render "page 3 of 2".
+  // Clamping BEFORE the data query means the hostile number and the
+  // exact-multiple boundary both resolve to a legitimate page — the raw
+  // requested value never becomes an offset at all.
+  const { count: headCount, error: headError } = await baseQuery({ head: true });
+  if (headError) throw new Error(headError.message);
+
+  const total0 = headCount ?? 0;
+  const pageCount0 = Math.max(1, Math.ceil(total0 / pageSize));
+  let page = Math.min(requestedPage, pageCount0);
+
+  let { data, error, count } = await runDataQuery(page);
+
+  // Belt-and-braces, not the primary defense: total can still shift between
+  // the count-first read above and this one (e.g. a concurrent bulk
+  // removal mid-request). If that narrow race still produces an
+  // out-of-range offset, fall back to page 1 rather than 500 — there is no
+  // error.tsx under (platform) to catch it otherwise, on the one surface
+  // that can disable an account.
+  if (error && (error as { code?: string }).code === 'PGRST103') {
+    page = 1;
+    ({ data, error, count } = await runDataQuery(page));
   }
-
-  const { data, error, count } = await query;
   if (error) throw new Error(error.message);
 
-  const total = count ?? 0;
+  // The data query's OWN count is the freshest available and is what the
+  // rows just fetched actually correspond to; the count-first read is only
+  // a fallback for the (should-never-happen) case a driver returns no count
+  // on the second query.
+  const total = count ?? total0;
   const members = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     type Profile = { email: string; full_name: string | null; disabled_at: string | null };
     const prof = r.user_profiles as Profile | Profile[] | null;
@@ -485,12 +535,20 @@ export async function getOrgMembers(
     };
   });
 
+  // pageCount is deliberately floored by `page` too, not just derived from
+  // `total` alone: the two round trips above (count, then data) cannot be
+  // made atomic over REST, so a total that shrinks in the gap between them
+  // could otherwise still print "page 2 of 1" in an astronomically narrow
+  // race. This makes `page <= pageCount` an ALGEBRAIC guarantee rather than
+  // one that merely holds in the common case.
+  const pageCount = Math.max(1, Math.ceil(total / pageSize), page);
+
   return {
     members,
     total,
     page,
     pageSize,
-    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    pageCount,
     search,
   };
 }
