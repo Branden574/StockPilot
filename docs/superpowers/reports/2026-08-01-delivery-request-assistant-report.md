@@ -108,6 +108,32 @@ Each of these is a data-**capture** gap, not a rendering gap — closing any of 
 
 **Post-report fix wave (commit `2cfa41a4`).** The preview dialog's own "Copy the details" button calls the same `handleCopy` as the fallback panel, but reaching a clipboard-denied or clipboard-absent browser from inside the dialog never touches `handleOpen` — so `fallbackReason` stays `null` and the panel that used to be the textarea's only render site never mounts. The manual-copy `<textarea>` and the `announcement` live region are now each rendered a SECOND time inside `DialogContent`, fed by the same `manualText`/`announcement` state as the panel copies below them — the textarea is reachable regardless of which surface (panel or dialog) the failed copy happened on, and a copy triggered from inside the dialog is announced even though Radix's modal mode `aria-hide`s the always-mounted region outside the portal while the dialog is open.
 
+**CORRECTION (2026-08-01, branch `fix/outlook-compose-mailtouri`).** The plain-param form described above (`to`/`cc`/`subject`/`body` as separate query parameters) has been replaced, in two steps.
+
+*Step 1 (commit `bde3ab87`).* The owner tested the plain-param URL against the real L4L Microsoft 365 tenant and found Outlook Web opened the compose window with To, Subject and Body populated but Cc silently empty — Andrew (`arosas@cvwest.org`), a mandatory CC, never received the request; Microsoft Q&A confirms a plain `cc=` on `mail/deeplink/compose` is effectively unimplemented, not a bug specific to this app. `mailtouri` is the parameter OWA hands to the browser's registered mailto: protocol handler, whose parser must honor `cc` per RFC 6068; the owner hand-verified that form in the same tenant and confirmed both To and Cc populate correctly, with subject and body intact.
+
+*Step 2 (commit `815615e0`, current shipped shape).* A second tenant test showed OWA's `mailtouri` parser also accepts a name-addr ("Name <addr>") in the To PATH position, producing chips that read 'Fresno Warehouse DC4 <dc4@learn4life.org>' (To) and 'Andrew Rosas <arosas@cvwest.org>' (Cc), correct addresses underneath — so `buildOutlookComposeUrl` no longer reuses `buildMailtoUrl`'s output. It now builds its own inner mailto: URI directly:
+
+```ts
+export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
+  const toNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>`;
+  const ccNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>`;
+  const query = encodeDraftQuery({
+    cc: ccNameAddr,
+    subject: draft.subject,
+    body: draft.body,
+  });
+  const innerMailto = `mailto:${encodeURIComponent(toNameAddr)}?${query}`;
+  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(innerMailto)}`;
+}
+```
+
+The To PATH segment is `encodeURIComponent` of the name-addr string built from the new `DELIVERY_REQUEST_EMAIL_NAMES` constant (`apps/web/src/lib/site.ts`) and the routing address from `DELIVERY_REQUEST_EMAIL`; the Cc value carries the same name-addr shape through the existing `encodeDraftQuery`, so it still rides in the RFC-6068-legal hfield-value position. Two encoding layers total — one building this inner URI, one wrapping it as the `mailtouri` value — each applied exactly once, same non-double-encoding shape as step 1.
+
+One RFC correction of our own: name-addr itself is RFC 5322 mailbox syntax, not RFC 6068. RFC 6068's `mailto:` scheme admits a name-addr only as the VALUE of an hfield (`to=`/`cc=` in the query string) — it does not define name-addr in path position at all. Putting the To name-addr in the path, as this builder does, is therefore an **OWA `mailtouri` parser extension beyond the RFC**, tenant-verified 2026-08-01, not a documented part of RFC 6068 itself.
+
+That distinction sets the hard boundary: the display-name treatment is **OWA-only**. `buildMailtoUrl` — the popup-blocked desktop `mailto:` fallback — stays unchanged and bare-address, plain RFC 6068, because nothing says a generic `mailto:` consumer (desktop Outlook, Apple Mail, Thunderbird) would parse a path-position name-addr the same way OWA's `mailtouri` handler does; that combination was never tested. `buildClipboardText` and every on-screen recipient label likewise stay bare addresses — the owner-pinned strings, unaffected by the new constant.
+
 ---
 
 ## F. Status accuracy
@@ -184,7 +210,7 @@ Four more, found in the course of this implementation and not in the original br
 
 5. **The destination address is a best-effort render of owner-maintained data**, reproduced verbatim, typos included — `formatSiteAddressLines` (`storefront-logic.ts:276`) explicitly does not correct anything, and its own doc comment notes that the KVA Tulare charter's stored address really does say "Calfornia." Silently correcting a site address inside a delivery instruction was judged a worse failure than reproducing the owner's data as entered.
 6. **4 of 16 production charters have no address at all** (`address = null`); the assistant omits the whole `DELIVERY DESTINATION` address sub-block for those (site name/code only) rather than printing an empty "Address:" line that would imply the system captured something it did not.
-7. **Whether Outlook Web honors the `cc` deep-link parameter in the organization's managed tenant is unverified, owner-owed QA** — see Section G's two NOT RUN items.
+7. ~~**Whether Outlook Web honors the `cc` deep-link parameter in the organization's managed tenant is unverified, owner-owed QA** — see Section G's two NOT RUN items.~~ **RESOLVED (2026-08-01).** The owner ran the QA this item called for, against the real L4L tenant, and it failed: the plain `cc=` param was silently dropped. The fix (branch `fix/outlook-compose-mailtouri`, see Section E's correction above) switched to the `mailtouri=` form, which the owner then re-verified in the same tenant — Cc now populates correctly alongside To, Subject and Body. This limitation no longer applies.
 8. **The success surface is React component state, not persisted or routed.** `previewOpen`, `fallbackReason`, `draftCount`, and every other piece of this feature's state lives inside `DeliveryRequestAction`, which is only ever mounted inside the success stage of the review modal. A page refresh — or simply closing the modal and navigating away — makes the assistant unreachable for that order; there is no way back to it short of Section I's recommended durable second home.
 
 Additional limitations, inherent to the design and disclosed rather than hidden:

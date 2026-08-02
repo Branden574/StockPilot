@@ -5,7 +5,7 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } from '@/lib/site';
 import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '@/lib/timezone';
 
 import type { CartLineState, CatalogItem, CharterAddress, StorefrontCharter } from '../v2/types';
@@ -575,6 +575,15 @@ export function buildDeliveryRequestDraft(
  * The org runs managed Microsoft 365, so outlook.office.com is the work-account
  * host (outlook.live.com is the consumer one and would land a work user on the
  * wrong tenant).
+ *
+ * CORRECTION (2026-08-01): this endpoint originally received plain `to` /
+ * `cc` / `subject` / `body` query params. The owner tested that shape
+ * against the real L4L tenant and found Outlook Web honors `to`, `subject`
+ * and `body` but SILENTLY DROPS `cc` — Andrew (arosas@cvwest.org, a
+ * mandatory CC) never landed in the Cc line. Microsoft Q&A confirms a plain
+ * `cc=` on `mail/deeplink/compose` is effectively unimplemented. See
+ * `buildOutlookComposeUrl` below for the fix (the `mailtouri` form) and its
+ * own tenant-verification note.
  */
 export const OUTLOOK_COMPOSE_BASE = 'https://outlook.office.com/mail/deeplink/compose';
 
@@ -606,25 +615,84 @@ function encodeDraftQuery(params: Record<string, string>): string {
 }
 
 /**
- * Encoded EXACTLY ONCE, via `encodeDraftQuery` — never `URLSearchParams`,
- * whose `application/x-www-form-urlencoded` output turns every space into a
- * literal '+'. That reads fine to a web query parser but not to this link's
- * own mailto: fallback or to desktop Outlook, Apple Mail and Thunderbird,
- * which give '+' no space meaning under RFC 6068 and would render the whole
- * draft as "Delivery+Request+...". `encodeDraftQuery` emits %20 instead,
- * which both kinds of decoder read correctly. Nothing is pre-encoded on the
- * way in, and nothing is encoded again on the way out — double-encoding is
- * the other classic failure here, producing a body full of literal %20 that
- * the recipient has to read through.
+ * Builds its OWN inner mailto: URI — deliberately NOT `buildMailtoUrl`'s
+ * output — then wraps it in OWA's `mailtouri` param, NOT plain
+ * `to`/`cc`/`subject`/`body` query params.
+ *
+ * HISTORY: this originally built `${OUTLOOK_COMPOSE_BASE}?to=...&cc=...&
+ * subject=...&body=...`, each value encoded once via `encodeDraftQuery`. The
+ * owner tested that exact URL against the real L4L Microsoft 365 tenant
+ * (2026-08-01): Outlook Web opened the compose window with To, Subject and
+ * Body populated correctly, but Cc was EMPTY — Andrew (arosas@cvwest.org, a
+ * mandatory CC) silently never received the request. Microsoft Q&A confirms
+ * plain `cc=` on `mail/deeplink/compose` is effectively unimplemented; this
+ * was not a bug in this codebase, it is how the endpoint behaves.
+ *
+ * FIX: `mailtouri` is the parameter OWA uses to hand the URL to the
+ * browser's registered mailto: protocol handler — that handler's parser
+ * must honor `cc` per RFC 6068, and the owner hand-tested this exact form
+ * in the same tenant and confirmed BOTH To and Cc populate correctly, with
+ * subject and body intact.
+ *
+ * DISPLAY NAMES (2026-08-01, second tenant test): the owner then verified
+ * that this same `mailtouri` parser also handles name-addr forms ("Name
+ * <addr>") cleanly IN THE PATH POSITION — his test URL produced OWA compose
+ * chips reading 'Fresno Warehouse DC4 <dc4@learn4life.org>' (To) and
+ * 'Andrew Rosas <arosas@cvwest.org>' (Cc), correct addresses underneath.
+ *
+ * CORRECTION on the RFC: name-addr itself is RFC 5322 mailbox syntax, not
+ * RFC 6068. RFC 6068 (the mailto: URI scheme) admits a name-addr string
+ * only as the VALUE of an hfield like `to=` or `cc=` in the query string —
+ * it does not define name-addr in the PATH position at all. Putting a
+ * name-addr there, as this function does for the To address, is an OWA
+ * `mailtouri` PARSER EXTENSION beyond the RFC, tenant-verified 2026-08-01,
+ * not a documented part of RFC 6068 itself. That is exactly why the
+ * boundary below exists: nothing says a generic RFC 6068 `mailto:` consumer
+ * — including desktop mail clients — would parse a path-position name-addr
+ * the same way.
+ *
+ * So this function builds its own inner mailto: URI rather than reusing
+ * `buildMailtoUrl`'s: the To PATH segment is `encodeURIComponent` of
+ * `` `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>` `` (spaces become
+ * `%20`, angle brackets `%3C`/`%3E`), and the Cc query value — passed
+ * through the same `encodeDraftQuery` used for subject/body, so it rides in
+ * the RFC-6068-legal hfield-value position — is
+ * `` `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>` ``. The NAMES come
+ * only from the frozen `DELIVERY_REQUEST_EMAIL_NAMES` constant (`@/lib/site`,
+ * which also documents why they must stay free of RFC 5322 specials like
+ * `,`) — cosmetic labels, never routing truth; `draft.to`/`draft.cc` (from
+ * `DELIVERY_REQUEST_EMAIL`) remain the only addresses that actually
+ * determine where mail goes.
+ *
+ * BOUNDARY (deliberate, do not extend): this name-addr treatment is
+ * OWA-ONLY. `buildMailtoUrl` — the popup-blocked desktop `mailto:` fallback
+ * — stays PLAIN-ADDRESS RFC 6068, because the path-position name-addr this
+ * function relies on is an OWA parser extension, and desktop clients'
+ * handling of it (Outlook desktop, Apple Mail, Thunderbird) was never
+ * tested and is unverified; only the tenant-verified OWA path carries
+ * names. `buildClipboardText` and every on-screen recipient label likewise
+ * keep bare addresses — those are the owner-pinned strings, unaffected by
+ * this constant.
+ *
+ * The resulting mailto: URI — `mailto:<encoded name-addr To>?cc=<encoded
+ * name-addr Cc>&subject=...&body=...` — is wrapped in `encodeURIComponent`
+ * EXACTLY ONCE as the `mailtouri` value. That is two encoding layers total
+ * — one building this inner URI, one wrapping it here — each applied
+ * exactly once; see `decodeCompose` in storefront-logic.test.ts for the
+ * reference two-step decode (its `to` needs an explicit
+ * `decodeURIComponent` now, since the path segment is no longer a bare,
+ * unencoded address).
  */
 export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
+  const toNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>`;
+  const ccNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>`;
   const query = encodeDraftQuery({
-    to: draft.to,
-    cc: draft.cc,
+    cc: ccNameAddr,
     subject: draft.subject,
     body: draft.body,
   });
-  return `${OUTLOOK_COMPOSE_BASE}?${query}`;
+  const innerMailto = `mailto:${encodeURIComponent(toNameAddr)}?${query}`;
+  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(innerMailto)}`;
 }
 
 /**

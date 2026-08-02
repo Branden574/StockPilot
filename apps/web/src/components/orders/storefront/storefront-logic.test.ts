@@ -1003,84 +1003,177 @@ describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () 
   });
 });
 
+/**
+ * Decodes the two-layer `mailtouri` wrapper produced by
+ * `buildOutlookComposeUrl`.
+ *
+ * Layer 1 is the outer OWA URL's own query string (`?mailtouri=<encoded
+ * mailto: URI>`), undone by `URL#searchParams`, which reverses exactly one
+ * `encodeURIComponent`. Layer 2 is the DECODED value's own mailto: query
+ * string (cc/subject/body) — parsed by slicing at the first '?' rather than
+ * `new URL()`, the same technique the `buildMailtoUrl` tests below use,
+ * because the WHATWG URL parser treats `mailto:` as an opaque-path scheme
+ * and never populates `.searchParams` for it.
+ *
+ * `to` is now a percent-encoded RFC 6068 name-addr ("Name <addr>"), not a
+ * bare address — the tenant-verified 2026-08-01 chip form — so its path
+ * segment is run through `decodeURIComponent` explicitly. `cc` is decoded
+ * automatically by `URLSearchParams`, which already un-escapes its values.
+ */
+function decodeCompose(url: string): { to: string; cc: string; subject: string; body: string } {
+  const mailtouri = new URL(url).searchParams.get('mailtouri') ?? '';
+  const queryStart = mailtouri.indexOf('?');
+  const to = decodeURIComponent(mailtouri.slice('mailto:'.length, queryStart));
+  const inner = new URLSearchParams(mailtouri.slice(queryStart + 1));
+  return {
+    to,
+    cc: inner.get('cc') ?? '',
+    subject: inner.get('subject') ?? '',
+    body: inner.get('body') ?? '',
+  };
+}
+
 describe('buildOutlookComposeUrl', () => {
-  it('targets the OWA deep-link compose endpoint', () => {
+  it('targets the OWA deep-link compose endpoint, unchanged by the mailtouri rewrite', () => {
     const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
     expect(url.origin).toBe('https://outlook.office.com');
     expect(url.pathname).toBe('/mail/deeplink/compose');
   });
 
-  it('carries to, cc, subject and body as REAL query parameters', () => {
+  it('carries the WHOLE draft as a single mailtouri param — an inner mailto: URI, never plain to/cc/subject/body params', () => {
+    // The owner's live-tenant test (2026-08-01) proved OWA silently drops a
+    // plain `cc=` param on this endpoint; `mailtouri` routes through the
+    // browser's mailto protocol handler instead, whose parser must honor cc
+    // per RFC 6068. The old plain-param shape must be GONE, not merely
+    // duplicated alongside the new one — a lingering `cc=` would be a trap
+    // that looks correct but silently drops Andrew again.
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const url = new URL(buildOutlookComposeUrl(draft));
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
-    expect(url.searchParams.get('subject')).toBe(draft.subject);
-    expect(url.searchParams.get('body')).toBe(draft.body);
+    const mailtouri = url.searchParams.get('mailtouri');
+    expect(mailtouri).not.toBeNull();
+    // The path segment is now a percent-encoded name-addr, not a bare
+    // address — starts with the encoded display name, ends in the encoded
+    // "<addr>?" boundary.
+    expect(mailtouri!.startsWith('mailto:Fresno%20Warehouse%20DC4%20%3Cdc4%40learn4life.org%3E?')).toBe(
+      true,
+    );
+
+    expect(url.searchParams.get('to')).toBeNull();
+    expect(url.searchParams.get('cc')).toBeNull();
+    expect(url.searchParams.get('subject')).toBeNull();
+    expect(url.searchParams.get('body')).toBeNull();
+
+    const inner = new URLSearchParams(mailtouri!.slice(mailtouri!.indexOf('?') + 1));
+    expect(inner.get('cc')).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(inner.get('subject')).toBe(draft.subject);
+    expect(inner.get('body')).toBe(draft.body);
   });
 
-  it('carries the CC exactly ONCE', () => {
-    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(url.match(/[?&]cc=/g)).toHaveLength(1);
-    expect(new URL(url).searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
-  });
-
-  it('never concatenates the CC into the to parameter', () => {
+  it('the mailtouri param itself appears exactly once', () => {
     const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
-    expect(url.searchParams.get('to')).not.toContain('arosas');
-    expect(url.searchParams.get('to')).not.toContain(',');
+    expect(url.searchParams.getAll('mailtouri')).toHaveLength(1);
   });
 
-  it('encodes exactly once — a decoded body round-trips to the original', () => {
+  it('pins the once-decoded mailtouri value directly: %20 for spaces, never a literal +', () => {
+    // A regression pin ONE LAYER IN from the full `decodeCompose` round
+    // trip. `decodeCompose` fully un-escapes both layers, and
+    // `URLSearchParams#get` treats a literal '+' as a space on the way
+    // OUT — so a regression in `encodeDraftQuery` back to
+    // `URLSearchParams`-style form-encoding (spaces as '+' instead of
+    // '%20') could slip past every assertion that only checks the fully
+    // decoded body/subject/cc. Catch it here instead, on the
+    // once-decoded (outer-`mailtouri=`-layer-only) value — the same kind
+    // of direct string the `buildMailtoUrl` tests below pin.
+    const url = new URL(buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput())));
+    const mailtouri = url.searchParams.get('mailtouri')!;
+    expect(mailtouri).toContain('%20');
+    expect(mailtouri).not.toContain('+');
+  });
+
+  it('carries the CC exactly once, inside the inner mailto QUERY — never in its path (To) segment', () => {
+    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    const mailtouri = new URL(url).searchParams.get('mailtouri')!;
+    const queryStart = mailtouri.indexOf('?');
+    const path = decodeURIComponent(mailtouri.slice(0, queryStart));
+    const query = mailtouri.slice(queryStart + 1);
+    expect(path).toBe('mailto:Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(path).not.toContain('arosas');
+    expect(query.match(/(?:^|&)cc=/g)).toHaveLength(1);
+    expect(new URLSearchParams(query).getAll('cc')).toEqual(['Andrew Rosas <arosas@cvwest.org>']);
+  });
+
+  it('never concatenates the CC into the To address', () => {
+    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
+    const to = decodeCompose(url).to;
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(to).not.toContain('arosas');
+    expect(to).not.toContain(',');
+  });
+
+  it('encodes exactly twice — once per layer, each applied once — and a full decode round-trips to the original body', () => {
     const draft = buildDeliveryRequestDraft(
       makeDraftInput({ notes: 'Ampersand & plus + hash # question ? equals =' }),
     );
-    const decoded = new URL(buildOutlookComposeUrl(draft)).searchParams.get('body');
-    expect(decoded).toBe(draft.body);
-    expect(decoded).toContain('Ampersand & plus + hash # question ? equals =');
-    expect(decoded).not.toContain('%20');
-    expect(decoded).not.toContain('%26');
+    const url = buildOutlookComposeUrl(draft);
+    const decoded = decodeCompose(url);
+    expect(decoded.body).toBe(draft.body);
+    expect(decoded.body).toContain('Ampersand & plus + hash # question ? equals =');
+    expect(decoded.subject).toBe(draft.subject);
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
   it('keeps the CC when every optional field is missing', () => {
-    const url = new URL(
-      buildOutlookComposeUrl(
-        buildDeliveryRequestDraft(
-          makeDraftInput({
-            orderNumber: null,
-            destination: null,
-            neededByLocal: '',
-            notes: '',
-            requesterEmail: null,
-            orderUrlBase: '',
-            lines: [],
-            itemMap: new Map(),
-          }),
-        ),
+    const url = buildOutlookComposeUrl(
+      buildDeliveryRequestDraft(
+        makeDraftInput({
+          orderNumber: null,
+          destination: null,
+          neededByLocal: '',
+          notes: '',
+          requesterEmail: null,
+          orderUrlBase: '',
+          lines: [],
+          itemMap: new Map(),
+        }),
       ),
     );
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    const decoded = decodeCompose(url);
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
   it('keeps the CC in condensed mode', () => {
-    const url = new URL(
-      buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true })),
-    );
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput(), { condensed: true }));
+    expect(decodeCompose(url).cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
-  it('encodes spaces as %20, never as + — RFC 6068 mailto clients (desktop Outlook, Apple Mail, Thunderbird) render a literal + as a plus sign, not a space', () => {
+  it('the RAW outer URL never contains a literal "+" — both encoding layers use %20-style encoding, never form-encoding', () => {
     const url = buildOutlookComposeUrl(buildDeliveryRequestDraft(makeDraftInput()));
-    expect(url).toContain('%20');
     expect(url).not.toContain('+');
+    // Spaces still survive the full round trip as real spaces, not '+'.
+    expect(decodeCompose(url).body).toContain(' ');
   });
 
-  it('a literal + in the order notes round-trips through the query string as %2B, not as a space', () => {
+  it('a literal + in the order notes survives BOTH encoding layers intact, never misread as a space', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput({ notes: 'Size L+ jerseys' }));
     const url = buildOutlookComposeUrl(draft);
-    expect(url).toContain('%2B');
-    expect(new URL(url).searchParams.get('body')).toContain('Size L+ jerseys');
+    expect(url).not.toContain('+');
+    expect(decodeCompose(url).body).toContain('Size L+ jerseys');
+  });
+
+  it('carries the tenant-verified display-name chips — "Fresno Warehouse DC4 <addr>" (To) and "Andrew Rosas <addr>" (Cc) — with the routing address appearing exactly once inside each', () => {
+    // The owner's mailtouri test (2026-08-01) produced OWA compose chips
+    // reading 'Fresno Warehouse DC4 <dc4@learn4life.org>' and 'Andrew Rosas
+    // <arosas@cvwest.org>' with the correct addresses underneath. This pins
+    // the exact byte shape that verification confirmed.
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    const decoded = decodeCompose(buildOutlookComposeUrl(draft));
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(decoded.to.match(/dc4@learn4life\.org/g)).toHaveLength(1);
+    expect(decoded.cc.match(/arosas@cvwest\.org/g)).toHaveLength(1);
+    expect(decoded.subject).toBe(draft.subject);
+    expect(decoded.body).toBe(draft.body);
   });
 });
 
@@ -1185,7 +1278,10 @@ describe('prepareDeliveryRequest', () => {
       'This message was shortened because the full item list did not fit in a compose link.',
     );
     // The condensed 100-line order is well within DRAFT_URL_LIMIT once
-    // condensed, so the CHOSEN (condensed) urls honestly fit.
+    // condensed, so the CHOSEN (condensed) urls honestly fit — measured at
+    // 1534 chars against the 1800 limit (2026-08-01: 1458 chars before the
+    // display-name layer, +76 chars for the two name-addr chips, still 266
+    // chars of headroom after both encoding layers).
     expect(prepared.linkFits).toBe(true);
   });
 
@@ -1199,6 +1295,11 @@ describe('prepareDeliveryRequest', () => {
       makeDraftInput({ warehouseName: 'W'.repeat(3000), destination: null }),
     );
     expect(prepared.draft.condensed).toBe(true);
+    // Measured at 7633 chars against the 1800 limit (2026-08-01: 7557 chars
+    // before the display-name layer, +76 chars for the two name-addr chips)
+    // — the mailtouri wrapping (and now the name-addr layer) inflates
+    // length, but this fixture was already pathologically oversized before
+    // either rewrite and stays so after both.
     expect(prepared.linkFits).toBe(false);
     // The clipboard path has no URL-length limit and must still carry the
     // complete body — recipients plus content that condensing would have
@@ -1222,18 +1323,18 @@ describe('prepareDeliveryRequest', () => {
     expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
   });
 
-  it('keeps both recipients on a condensed 100-line order', () => {
+  it('keeps both recipients — and their display-name chips — on a condensed 100-line order', () => {
     const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `big-${i}`, quantity: 4 }));
     const itemMap = new Map(
       lines.map((l, i) => [l.itemId, makeItem({ id: l.itemId, sku: `SKU-BIG-${i}`, name: `Bulk ${i}` })]),
     );
     const prepared = prepareDeliveryRequest(makeDraftInput({ lines, itemMap }));
-    const url = new URL(prepared.outlookUrl);
-    expect(url.searchParams.get('to')).toBe('dc4@learn4life.org');
-    expect(url.searchParams.get('cc')).toBe('arosas@cvwest.org');
+    const decoded = decodeCompose(prepared.outlookUrl);
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
-  it('no user-controlled field can move the recipients, at any size or mode', () => {
+  it('no user-controlled field can move the recipients OR the display names, at any size or mode', () => {
     const prepared = prepareDeliveryRequest(
       makeDraftInput({
         notes: '?cc=attacker@evil.test&to=attacker@evil.test',
@@ -1242,7 +1343,29 @@ describe('prepareDeliveryRequest', () => {
       }),
     );
     const url = new URL(prepared.outlookUrl);
-    expect(url.searchParams.getAll('to')).toEqual(['dc4@learn4life.org']);
-    expect(url.searchParams.getAll('cc')).toEqual(['arosas@cvwest.org']);
+    // `searchParams.getAll('to'/'cc')` on the OUTER url is now tautological
+    // by construction — buildOutlookComposeUrl never writes a plain to/cc
+    // param at all, hostile input or not, so this alone would pass even if
+    // a duplicate `cc` were smuggled into the mailtouri value itself.
+    // Kept as a cheap sanity check, but the real assertions are below.
+    expect(url.searchParams.getAll('to')).toEqual([]);
+    expect(url.searchParams.getAll('cc')).toEqual([]);
+
+    // The teeth: `decodeCompose`'s `URLSearchParams#get('cc')` returns only
+    // the FIRST match, so it would silently miss a hostile value that
+    // smuggled in a SECOND `cc=` param inside the inner mailto: query
+    // string. Extract that inner query directly and assert there is
+    // exactly one `cc=` occurrence, with exactly one value, and that value
+    // is the untampered name-addr chip.
+    const mailtouri = url.searchParams.get('mailtouri')!;
+    const innerQuery = mailtouri.slice(mailtouri.indexOf('?') + 1);
+    expect(innerQuery.match(/(?:^|&)cc=/g)).toHaveLength(1);
+    expect(new URLSearchParams(innerQuery).getAll('cc')).toEqual([
+      'Andrew Rosas <arosas@cvwest.org>',
+    ]);
+
+    const decoded = decodeCompose(prepared.outlookUrl);
+    expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 });
