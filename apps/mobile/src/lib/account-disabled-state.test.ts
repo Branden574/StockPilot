@@ -161,3 +161,60 @@ describe('how the disabled verdict was established', () => {
     expect(getDisableEvidence()).toBeNull();
   });
 });
+
+/**
+ * M-1 — THE STRENGTHEN-MUST-NOTIFY TRAP.
+ *
+ * A repeat 'disabled' verdict that upgrades 'sign-in' evidence to 'session'
+ * (the sign-in screen raised the screen first; a corroborated probe or
+ * broadcast confirms it is really this device's own session afterwards) used
+ * to return silently — no gateListeners call at all. use-account-gate.ts's
+ * eviction effect depends on React state; without a notification here it can
+ * never learn the verdict strengthened, and a legitimately evictable device
+ * would sit on the disabled screen forever with its outbox never rejected.
+ */
+describe('a strengthened verdict must notify gate listeners', () => {
+  beforeEach(() => __resetAccountGateForTests());
+
+  it('notifies when a repeat disabled verdict upgrades sign-in to session', () => {
+    setAccountDisabled(true, 'sign-in');
+    const seen = vi.fn();
+    subscribeAccountGate(seen);
+
+    setAccountGateState('disabled', 'session');
+
+    expect(getDisableEvidence()).toBe('session');
+    expect(seen).toHaveBeenCalledWith('disabled');
+  });
+
+  it('does not re-notify when the repeat verdict already carries session evidence', () => {
+    setAccountDisabled(true, 'session');
+    const seen = vi.fn();
+    subscribeAccountGate(seen);
+
+    setAccountGateState('disabled', 'session');
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('does not notify a repeat verdict that stays (or would weaken to) sign-in', () => {
+    setAccountDisabled(true, 'sign-in');
+    const seen = vi.fn();
+    subscribeAccountGate(seen);
+
+    setAccountGateState('disabled', 'sign-in');
+
+    expect(getDisableEvidence()).toBe('sign-in');
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('never wakes the boolean subscribers on a strengthen — the boolean did not move', () => {
+    setAccountDisabled(true, 'sign-in');
+    const seen = vi.fn();
+    subscribeAccountDisabled(seen);
+
+    setAccountGateState('disabled', 'session');
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+});

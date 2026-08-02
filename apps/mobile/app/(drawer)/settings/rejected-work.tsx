@@ -11,6 +11,7 @@ import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { clearRejected, listRejected, type PendingActionRow } from '@/lib/queue';
 import {
   pendingActionLabel,
+  REJECTED_KEEP_MAX,
   REJECTED_RETENTION_DAYS,
   rejectedWhen,
 } from '@/lib/rejected-work';
@@ -41,7 +42,12 @@ export default function RejectedWorkScreen() {
 
   const load = React.useCallback(async () => {
     try {
-      setRows(await listRejected());
+      // Match the true retention ceiling (REJECTED_KEEP_MAX, pruned to at cold
+      // launch), not listRejected's smaller internal default — otherwise the
+      // Settings row's unbounded countRejected() and this list disagree
+      // anywhere between 101 and 200 rejected rows: a header reading "187
+      // never sent" over a list capped at 100.
+      setRows(await listRejected(REJECTED_KEEP_MAX));
     } catch (e) {
       console.warn('[rejected-work] could not read the outbox', e);
       setRows([]);
@@ -109,9 +115,8 @@ export default function RejectedWorkScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Body muted size={14} style={{ marginTop: 6 }}>
-          Changes saved on this device that could never be sent to the server.
-          They were not applied to your inventory. If they still matter, enter
-          them again.
+          Changes saved on this device that could never be sent to the server. They were not applied
+          to your inventory. If they still matter, enter them again.
         </Body>
 
         {rows === null ? (
@@ -125,8 +130,8 @@ export default function RejectedWorkScreen() {
             <View style={styles.empty}>
               <Body>Nothing was left unsent.</Body>
               <Body muted size={13.5} style={{ marginTop: 6 }}>
-                Everything you have saved on this device has either synced or is
-                still queued to sync.
+                Everything you have saved on this device has either synced or is still queued to
+                sync.
               </Body>
             </View>
           </Card>

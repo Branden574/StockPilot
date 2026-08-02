@@ -81,7 +81,19 @@ export function setAccountGateState(
     // own session may confirm it afterwards. It can never weaken it: 'sign-in'
     // must not overwrite 'session', or a passer-by could disarm nothing and
     // re-arm nothing but would muddy the one input the eviction trusts.
-    if (next === 'disabled' && how === 'session') evidence = 'session';
+    //
+    // MUST still notify gateListeners on a REAL strengthen (M-1). Returning
+    // silently here, as this used to, meant a verdict that arrived as
+    // 'sign-in' and was only later corroborated as 'session' could never arm
+    // the eviction: use-account-gate.ts mirrors this module's evidence into
+    // its own React state precisely so a strengthen-only update — the gate
+    // STATE stays 'disabled', only the evidence moves — can still re-run the
+    // eviction effect, and that mirroring only ever hears about a change
+    // through this notification.
+    if (next === 'disabled' && how === 'session' && evidence !== 'session') {
+      evidence = 'session';
+      for (const l of gateListeners) l(next);
+    }
     return;
   }
   const wasDisabled = state === 'disabled';
