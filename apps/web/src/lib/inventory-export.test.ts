@@ -32,7 +32,11 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ChartersService } from '@/server/services/charters';
-import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from './inventory-export';
+import {
+  buildInventoryExportRows,
+  buildInventoryExportSourceRows,
+  INVENTORY_EXPORT_HEADERS,
+} from './inventory-export';
 
 const ctx = {} as never;
 
@@ -202,5 +206,110 @@ describe('buildInventoryExportRows', () => {
     const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
     expect(res.rows[0]!.isbn).toBe('0262033844');
     expect(typeof res.rows[0]!.isbn).toBe('string');
+  });
+});
+
+describe('buildInventoryExportSourceRows', () => {
+  it('returns a typed source row with resolved lookups and combined storage labels', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [
+        {
+          ...sampleItem,
+          item_type: 'book',
+          barcode: '9780262033848',
+          custom_fields: {
+            author: 'Cormen',
+            book_grade: 'College',
+            book_rack_number: '38',
+            book_rack_row: 'A',
+            book_crate_color: 'blue',
+            book_crate_number: '12',
+          },
+        },
+      ],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.id).toBe('i1');
+    expect(r.itemType).toBe('book');
+    expect(r.isbn).toBe('9780262033848');
+    expect(r.author).toBe('Cormen');
+    expect(r.grade).toBe('College');
+    expect(r.rackNumber).toBe('38');
+    expect(r.rackRow).toBe('A');
+    expect(r.rackLabel).toBe('38-A');
+    expect(r.crateColor).toBe('blue');
+    expect(r.crateNumber).toBe('12');
+    expect(r.crateLabel).toBe('Blue 12');
+    expect(r.category).toBe('Electronics');
+    expect(r.charter).toBe('Visalia');
+    expect(res.slug).toBe('books');
+  });
+
+  it('never populates image data — that is the caller\'s explicit opt-in', async () => {
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.image).toBeNull();
+  });
+
+  it('says Generic for a null charter, exactly like the flat row builder', async () => {
+    listMock.mockResolvedValueOnce({ items: [{ ...sampleItem, charter_id: null }], total: 1 });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.charter).toBe('Generic');
+  });
+
+  it('emits empty strings rather than null or undefined for every text field', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [
+        {
+          ...sampleItem,
+          barcode: null,
+          category_id: null,
+          primary_location_id: null,
+          supplier_id: null,
+          warehouse_id: null,
+          custom_fields: null,
+        },
+      ],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    const r = res.rows[0]!;
+    for (const key of [
+      'barcode',
+      'category',
+      'primaryLocation',
+      'supplier',
+      'warehouse',
+      'author',
+      'isbn',
+      'grade',
+      'rackNumber',
+      'rackRow',
+      'crateColor',
+      'crateNumber',
+      'rackLabel',
+      'crateLabel',
+    ] as const) {
+      expect(r[key], `${key} was ${String(r[key])}`).toBe('');
+    }
+  });
+
+  it('keeps the flat legacy row builder byte-compatible with what it returned before', async () => {
+    // R1: /api/inventory/export.csv and its consumers must not move.
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.headers).toEqual([...INVENTORY_EXPORT_HEADERS]);
+    expect(Object.keys(res.rows[0]!).sort()).toEqual([...INVENTORY_EXPORT_HEADERS].sort());
+  });
+
+  it('uses the same list() arguments as the flat builder for every scope', async () => {
+    await buildInventoryExportSourceRows(ctx, {
+      scope: 'selected',
+      itemType: 'all',
+      ids: ['i1'],
+    });
+    expect(listMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['i1'], status: 'all', expected: 'any' }),
+    );
   });
 });
