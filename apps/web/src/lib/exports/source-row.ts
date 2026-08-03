@@ -56,7 +56,27 @@ export interface InventoryExportSourceRow {
   rackRow: string;
   crateColor: string;
   crateNumber: string;
-  /** Combined display forms from readBookStorage: '38-A' and 'Blue 12'. */
+  /**
+   * Combined display forms from readBookStorage: '38-A' and 'Blue 12'.
+   *
+   * POPULATION CONTRACT (Task 4 review finding 4): `readBookStorage` in
+   * `lib/book-storage.ts` returns `BookStorageInfo.rackLabel` /
+   * `.crateLabel` typed `string | null` (null when neither rack piece is set,
+   * or when there's no crate number). These two fields are non-nullable
+   * `string` here on purpose — every other resolved-name field on this row
+   * is a plain '' when absent (see this interface's own top-level doc:
+   * "resolved names; '' when unset or when the lookup failed closed"), and
+   * `field-registry.ts`'s value extractors read these fields directly with
+   * no null-guard of their own. Whichever later task builds the real
+   * source-row (reading `readBookStorage` and mapping its output onto this
+   * shape) MUST coerce `null -> ''` for both fields before returning the
+   * row — e.g. `rackLabel: storage.rackLabel ?? ''`. Assigning the raw
+   * `string | null` straight through would fail typecheck at a direct
+   * object-literal assignment site, but that guarantee does not survive a
+   * looser construction path (a partial object built up field-by-field, a
+   * cast, a generic mapper) — this comment is the contract of record so the
+   * later implementer hits it here, not in a buried review report.
+   */
   rackLabel: string;
   crateLabel: string;
   createdAt: string;

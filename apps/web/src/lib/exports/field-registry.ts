@@ -218,8 +218,20 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfSupported: true,
     defaultForBooks: true,
     defaultForItems: true,
+    // FIX-WAVE (Task 4 review): the reviewer fed this registry's OWN default
+    // presets (BOOKS_DEFAULT_FIELD_KEYS, ITEMS_DEFAULT_FIELD_KEYS) through the
+    // real fitColumnWidths allocator + header-metrics formula and found "On
+    // hand" overflowing its own header box by -2.13pt in BOTH — the exact
+    // defect Task 1's fix-wave already found and fixed in BOOKS_PDF_COLUMNS
+    // (inventory-pdf-columns.ts), which this floor had regressed. Same
+    // derivation:
+    //   minWidth = ceil(headerWidth('On hand') + 2*REPORT_CELL_PADDING_PT + 2)
+    //            = ceil(40.128 + 6 + 2) = ceil(48.128) = 49
+    // matching the 49pt floor inventory-pdf-columns.ts and report-configs.ts
+    // already use for this exact label. Permanently guarded by
+    // registry-preset-fit.test.ts (../pdf/registry-preset-fit.test.ts).
     pdfWidth: 0.9,
-    pdfMinWidth: 44,
+    pdfMinWidth: 49,
     pdfMaxWidth: 70,
     align: 'right',
     cellType: 'number',
@@ -323,6 +335,23 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfSupported: true,
     defaultForBooks: false,
     defaultForItems: true,
+    // KEPT at 1.2, NOT aligned to ITEMS_PDF_COLUMNS's 1.4 (Task 4 review
+    // finding 3): widening this weight to 1.4 was the naive fix, but
+    // measuring it against this registry's OWN ITEMS_DEFAULT_FIELD_KEYS
+    // preset (10 fields: name/sku/barcode/quantity_on_hand/category/
+    // primary_location/warehouse/supplier/charter/status) — a more crowded
+    // row than ITEMS_PDF_COLUMNS's plain 7-column set — shows why the
+    // registry needs the narrower value. At 1.4, charter takes enough extra
+    // proportional surplus from its neighbours that `warehouse` (pdfMinWidth
+    // 62) gets squeezed down to its own floor and its header ("WAREHOUSE",
+    // needs 56.49pt) overflows that floor by a measured -0.49pt — a real,
+    // reproducible regression caught by registry-preset-fit.test.ts, not a
+    // guess. At 1.2, the same preset gives every column (including
+    // `warehouse`, margin 4.65pt) a real positive margin. ITEMS_PDF_COLUMNS's
+    // plain 7-column row has enough surplus per column that 1.4 never causes
+    // it a problem, which is why that file and this field can legitimately
+    // differ. If a future preset change removes fields and frees up surplus,
+    // re-derive rather than assuming 1.4 is now safe.
     pdfWidth: 1.2,
     pdfMinWidth: 52,
     align: 'left',
@@ -425,8 +454,25 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfSupported: true,
     defaultForBooks: true,
     defaultForItems: false,
+    // Derived, not guessed (Task 4 review finding 3): registry carried 40,
+    // inventory-pdf-columns.ts's BOOKS_PDF_COLUMNS carried 38 for the same
+    // GRADE header — an unexplained drift, and Task 2's fix-wave already
+    // flagged 38's real margin as thin (1.11pt, eroded from 2.40pt by the
+    // isbn-width fix). The real floor, using the same formula as isbn/on-hand:
+    //   headerWidth('Grade') = width('GRADE', Helvetica-Bold, 8pt)
+    //                            + 5*REPORT_HEADER_LETTER_SPACING_PT
+    //                         = 28.888 + 2.0 = 30.888
+    //   minWidth = ceil(30.888 + 2*REPORT_CELL_PADDING_PT + 2)
+    //            = ceil(30.888 + 6 + 2) = ceil(38.888) = 39
+    // 39 clears both existing GRADE columns with a real (>=2pt) margin —
+    // 2.11pt in BOOKS_PDF_COLUMNS (up from 1.11pt) and 2.11pt in this
+    // registry's own BOOKS_DEFAULT_FIELD_KEYS preset — where 38 or 40 each
+    // leave one of the two thinner or, in 40's case, off the shared
+    // derivation entirely. inventory-pdf-columns.ts's BOOKS_PDF_COLUMNS.grade
+    // is updated to the same 39 so the two files agree. Guarded by
+    // registry-preset-fit.test.ts and export-pdf-headers-fit.test.ts.
     pdfWidth: 0.8,
-    pdfMinWidth: 40,
+    pdfMinWidth: 39,
     align: 'left',
     cellType: 'text',
     wrap: false,
