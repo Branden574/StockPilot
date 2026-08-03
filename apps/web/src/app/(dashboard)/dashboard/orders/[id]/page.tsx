@@ -419,9 +419,15 @@ export default async function OrderDetailPage({
   ]);
 
   let viewerCanPick = true;
-  if (isPickingStatus && warehouseAccess) {
-    const hasWhWrite =
-      warehouseAccess.hasAllAccess || warehouseAccess.writableIds.includes(request.warehouse_id);
+  if (isPickingStatus) {
+    // Fail CLOSED if the batched access read is ever absent for a picking
+    // order: a pick-authorization hint must not default to permissive just
+    // because slot 1's gate drifted from this consumer (review finding).
+    // Today warehouseAccess is always non-null when isPickingStatus, so this
+    // is behavior-identical; the backend re-checks on assign regardless.
+    const hasWhWrite = warehouseAccess
+      ? warehouseAccess.hasAllAccess || warehouseAccess.writableIds.includes(request.warehouse_id)
+      : false;
     viewerCanPick =
       (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
   }
