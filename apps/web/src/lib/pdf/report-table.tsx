@@ -102,6 +102,11 @@ const IMAGE_COL_WIDTH = REPORT_IMAGE_COL_WIDTH_PT;
 export const REPORT_HEADER_FONT_SIZE_PT = 8;
 /** reportStyles.headerCell letterSpacing, same reason. */
 export const REPORT_HEADER_LETTER_SPACING_PT = 0.4;
+/** reportStyles.cell font size (body/value text), exported so a VALUE-width
+ *  fit check (e.g. the ISBN column's minWidth floor) measures the exact
+ *  number the renderer uses instead of a copy that can drift. Body cells
+ *  carry no letterSpacing/textTransform, unlike the header cell above. */
+export const REPORT_BODY_FONT_SIZE_PT = 8.5;
 
 const reportStyles = StyleSheet.create({
   sectionWrap: {
@@ -156,9 +161,9 @@ const reportStyles = StyleSheet.create({
     alignItems: 'center',
   },
   cell: {
-    fontSize: 8.5,
+    fontSize: REPORT_BODY_FONT_SIZE_PT,
     color: PDF_COLORS.ink,
-    paddingHorizontal: 3,
+    paddingHorizontal: REPORT_CELL_PADDING_PT,
   },
   cellRight: { textAlign: 'right' },
   cellCenter: { textAlign: 'center' },

@@ -23,9 +23,22 @@ import type { ReportColumn } from './report-table';
 export const BOOKS_PDF_COLUMNS: ReportColumn[] = [
   { key: 'name', label: 'Title', width: 3, minWidth: 90 },
   { key: 'sku', label: 'SKU', width: 1.4, minWidth: 52, wrap: false },
-  // ISBN is fixed and readable and must NEVER be truncated (Brief section 11).
-  // 13 digits at 8.5pt Helvetica is 61.5pt; 66 leaves room for the cell padding.
-  { key: 'isbn', label: 'ISBN', width: 1.6, minWidth: 66, wrap: false },
+  // ISBN is fixed and readable and must NEVER be truncated (Brief section
+  // 11). VALUE-based derivation, not a header-width guess: the widest
+  // realistic ISBN is NOT the plain 13-digit string — `inventory_items.barcode`
+  // (which doubles as the book ISBN) has no digit-only guard anywhere a human
+  // can type it (packages/core/src/schemas/inventory.ts's Zod schema is
+  // `z.string().max(128).trim()`, no regex; item-form.tsx's ISBN input has no
+  // onChange stripping). Only the automated paths — barcode scanner, Google
+  // Books lookup, bulk book import — normalize hyphens out. A person typing
+  // the ISBN straight off a book's back cover, "978-1-234-56789-7" (the
+  // standard 5-group ISBN-13 hyphenation, 13 digits + 4 hyphens = 17 chars),
+  // saves it verbatim. That value measures 72.76pt at REPORT_BODY_FONT_SIZE_PT
+  // (8.5pt Helvetica; report-table.tsx's reportStyles.cell) — wider than the
+  // 61.44pt an unhyphenated 13-digit string would need. Floor derivation:
+  //   minWidth = ceil(72.76 + 2*REPORT_CELL_PADDING_PT + 2)   // 2*3pt gutter + 2pt safety
+  //            = ceil(72.76 + 6 + 2) = ceil(80.76) = 81
+  { key: 'isbn', label: 'ISBN', width: 1.6, minWidth: 81, wrap: false },
   { key: 'author', label: 'Author', width: 1.6, minWidth: 62 },
   { key: 'grade', label: 'Grade', width: 0.8, minWidth: 38 },
   // FIX-WAVE (Controller rider on Task 1's re-review): the exhaustive sweep

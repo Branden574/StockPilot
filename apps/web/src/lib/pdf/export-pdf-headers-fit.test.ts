@@ -4,7 +4,11 @@ import { width } from '@/test/pdf-font-metrics';
 
 import { fitColumnWidths, LETTER_LANDSCAPE_CONTENT_WIDTH_PT, REPORT_CELL_PADDING_PT } from './column-fit';
 import { BOOKS_PDF_COLUMNS, ITEMS_PDF_COLUMNS } from './inventory-pdf-columns';
-import { REPORT_HEADER_FONT_SIZE_PT, REPORT_HEADER_LETTER_SPACING_PT } from './report-table';
+import {
+  REPORT_BODY_FONT_SIZE_PT,
+  REPORT_HEADER_FONT_SIZE_PT,
+  REPORT_HEADER_LETTER_SPACING_PT,
+} from './report-table';
 
 /**
  * Permanent regression net for the /api/inventory/export PDF column sets
@@ -51,6 +55,33 @@ function headerWidth(label: string): number {
     shown.length * REPORT_HEADER_LETTER_SPACING_PT
   );
 }
+
+/**
+ * Width of a rendered BODY cell value — plain Helvetica at
+ * REPORT_BODY_FONT_SIZE_PT, no uppercase transform and no letterSpacing
+ * (reportStyles.cell carries neither, unlike reportStyles.headerCell).
+ */
+function valueWidth(value: string): number {
+  return width(value, 'Helvetica', REPORT_BODY_FONT_SIZE_PT);
+}
+
+/**
+ * The worst-case ISBN value the isbn column must never truncate or wrap.
+ *
+ * A plain 13-digit ISBN-13 ("9781234567897") measures 61.44pt at
+ * REPORT_BODY_FONT_SIZE_PT — but `inventory_items.barcode` (which doubles as
+ * the book ISBN, inventory-export.ts) has NO digit-only guard anywhere a
+ * human can type it: the Zod schema is `z.string().max(128).trim()` with no
+ * regex (packages/core/src/schemas/inventory.ts), and item-form.tsx's ISBN
+ * input registers straight onto it with no onChange stripping — only the
+ * *automated* paths (barcode scanner, Google Books lookup, bulk book import)
+ * normalize hyphens out via normalizeIsbn()/isbnVariants(). A person typing
+ * the ISBN exactly as printed on a book's back cover — "978-1-234-56789-7",
+ * the standard 5-group EAN/ISBN-13 hyphenation — saves verbatim. That is 13
+ * digits + 4 hyphens = 17 characters, and is the real worst case, not the
+ * unhyphenated 13-digit string.
+ */
+const WORST_CASE_ISBN_VALUE = '978-1-234-56789-7';
 
 const EXPORT_PDF_COLUMN_SETS = {
   'books (BOOKS_PDF_COLUMNS)': BOOKS_PDF_COLUMNS,
@@ -102,5 +133,22 @@ describe('the fix-wave column keeps a real, measured margin', () => {
     const box = widths[i]! - REPORT_CELL_PADDING_PT * 2;
     const margin = box - headerWidth('On hand');
     expect(margin).toBeGreaterThanOrEqual(SAFETY_MARGIN_PT - 1e-6);
+  });
+});
+
+describe('the isbn column holds its own worst-case VALUE, not just its header', () => {
+  // BOOKS_PDF_COLUMNS is `wrap: false`, so a value wider than the content box
+  // truncates or wraps into a garbled second line instead of shrinking — the
+  // minWidth floor has to be sized against the widest VALUE the column can
+  // ever actually render, not just the 4-letter header "ISBN".
+  it('books: isbn column\'s content box fits the worst-case ISBN value at body font size', () => {
+    const widths = fitColumnWidths(BOOKS_PDF_COLUMNS, LETTER_LANDSCAPE_CONTENT_WIDTH_PT);
+    const i = BOOKS_PDF_COLUMNS.findIndex((c) => c.key === 'isbn');
+    const box = widths[i]! - REPORT_CELL_PADDING_PT * 2;
+    const needed = valueWidth(WORST_CASE_ISBN_VALUE);
+    expect(
+      needed <= box,
+      `isbn column: worst-case value "${WORST_CASE_ISBN_VALUE}" needs ${needed.toFixed(2)}pt but its content box is ${box.toFixed(2)}pt`,
+    ).toBe(true);
   });
 });

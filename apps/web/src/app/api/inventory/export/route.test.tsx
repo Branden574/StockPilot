@@ -50,7 +50,11 @@ import { POST } from './route';
 
 function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer') {
   const stub = makeSupabaseStub({
-    'organizations.select': { data: [{ name: 'Demo Co', logo_url: null }], error: null },
+    // A real `.maybeSingle()` call resolves to a SINGLE row object (or null),
+    // never an array — the fixture now matches that shape exactly instead of
+    // relying on makeSupabaseStub's array-unwrap leniency for `.maybeSingle()`
+    // to make an array-shaped fixture behave as intended (fixture fidelity).
+    'organizations.select': { data: { name: 'Demo Co', logo_url: null }, error: null },
   });
   return {
     organizationId: 'org-1',
@@ -144,6 +148,9 @@ describe('POST /api/inventory/export — the Books PDF carries ISBN', () => {
     );
     expect(res.status).toBe(200);
     expect(pdfColumns().map((c) => c.key)).toContain('isbn');
+    // The resolved org name (fixture: buildCtx's 'organizations.select' stub)
+    // reaches the PDF as a prop, not just a placeholder fallback.
+    expect(capturedElement?.props.orgName).toBe('Demo Co');
   });
 
   it('puts ISBN right after the title and SKU, where a book is identified', async () => {
