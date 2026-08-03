@@ -19,6 +19,7 @@ import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import {
   countingUnitLabel,
@@ -2170,7 +2171,7 @@ export function InventoryTable({
                           className="text-[11px] italic text-[var(--ed-ink-4)]"
                           title="Generic stock — any charter serviced by this warehouse can use it"
                         >
-                          Generic
+                          {GENERIC_CHARTER_LABEL}
                         </span>
                       );
                     })()}
@@ -2908,7 +2909,7 @@ function SkuGroupHeaderRow({
                 {charter.code ?? charter.name}
               </span>
             ) : (
-              <span className="text-[11px] italic text-[var(--ed-ink-4)]">Generic</span>
+              <span className="text-[11px] italic text-[var(--ed-ink-4)]">{GENERIC_CHARTER_LABEL}</span>
             );
           })()
         ) : (
@@ -2916,7 +2917,7 @@ function SkuGroupHeaderRow({
             className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Generic stock — any charter serviced by this warehouse can use it"
           >
-            Generic
+            {GENERIC_CHARTER_LABEL}
           </span>
         )}
       </td>
@@ -3278,7 +3279,7 @@ function StyleGroupHeaderRow({
                 {charter.code ?? charter.name}
               </span>
             ) : (
-              <span className="text-[11px] italic text-[var(--ed-ink-4)]">Generic</span>
+              <span className="text-[11px] italic text-[var(--ed-ink-4)]">{GENERIC_CHARTER_LABEL}</span>
             );
           })()
         ) : (
@@ -3286,7 +3287,7 @@ function StyleGroupHeaderRow({
             className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Generic stock — any charter serviced by this warehouse can use it"
           >
-            Generic
+            {GENERIC_CHARTER_LABEL}
           </span>
         )}
       </td>

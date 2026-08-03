@@ -1,0 +1,57 @@
+import type { ReportColumn } from './report-table';
+
+/**
+ * Curated PDF column sets for the inventory export.
+ *
+ * A PDF cannot carry the full 25-column CSV dump legibly, so it has always used
+ * a hand-picked subset — but the subset lived inline in the route and applied
+ * to books and items alike, which is how the Books PDF shipped with no ISBN
+ * even though every row object already carried one (Audit BUG 2).
+ *
+ * Every column now declares a point minimum. Without one, a low-weight column
+ * gets squeezed until its header touches its neighbour, which is what printed
+ * "ON HANDCATEGORY" (Audit BUG 1). The minimums are the widest realistic
+ * header/content each column must show at 8pt bold / 8.5pt regular, and
+ * report-table-fit.test.ts holds them to it.
+ *
+ * PHASE NOTE: this file is the Phase A repair. Phase C replaces it with columns
+ * derived from the field registry and the user's chosen field order; keep the
+ * widths, they are the tuned starting point the registry inherits.
+ */
+
+/** Books: Title, SKU, ISBN first — the three ways a book is identified. */
+export const BOOKS_PDF_COLUMNS: ReportColumn[] = [
+  { key: 'name', label: 'Title', width: 3, minWidth: 90 },
+  { key: 'sku', label: 'SKU', width: 1.4, minWidth: 52, wrap: false },
+  // ISBN is fixed and readable and must NEVER be truncated (Brief section 11).
+  // 13 digits at 8.5pt Helvetica is 61.5pt; 66 leaves room for the cell padding.
+  { key: 'isbn', label: 'ISBN', width: 1.6, minWidth: 66, wrap: false },
+  { key: 'author', label: 'Author', width: 1.6, minWidth: 62 },
+  { key: 'grade', label: 'Grade', width: 0.8, minWidth: 38 },
+  // FIX-WAVE (Controller rider on Task 1's re-review): the exhaustive sweep
+  // this rider requires found "On hand" overflowing its own header box here
+  // by -1.82pt once fed through the real allocator at this section's actual
+  // column set (a 10-column Books row leaves less surplus per column than the
+  // 7-column set the brief's minWidth:44 was eyeballed against). Derived
+  // exactly as Task 1's fix-wave did:
+  //   minWidth = ceil(headerWidth('On hand') + 2*REPORT_CELL_PADDING_PT + 2)
+  //            = ceil(40.13 + 6 + 2) = ceil(48.13) = 49
+  // matching the same 49pt floor report-configs.ts already uses for this
+  // exact label in dead-stock/reorder-forecast/velocity-class.
+  { key: 'quantity_on_hand', label: 'On hand', align: 'right', width: 0.9, minWidth: 49, maxWidth: 70 },
+  { key: 'category', label: 'Category', width: 1.4, minWidth: 58 },
+  { key: 'primary_location', label: 'Location', width: 1.4, minWidth: 58 },
+  { key: 'charter', label: 'Charter', width: 1.2, minWidth: 52 },
+  { key: 'status', label: 'Status', width: 1, minWidth: 46 },
+];
+
+/** Items: the pre-existing set, now with minimums and no book-only fields. */
+export const ITEMS_PDF_COLUMNS: ReportColumn[] = [
+  { key: 'name', label: 'Name', width: 3, minWidth: 90 },
+  { key: 'sku', label: 'SKU', width: 1.4, minWidth: 52, wrap: false },
+  { key: 'quantity_on_hand', label: 'On hand', align: 'right', width: 0.9, minWidth: 44, maxWidth: 70 },
+  { key: 'category', label: 'Category', width: 1.4, minWidth: 58 },
+  { key: 'primary_location', label: 'Location', width: 1.4, minWidth: 58 },
+  { key: 'charter', label: 'Charter', width: 1.4, minWidth: 52 },
+  { key: 'status', label: 'Status', width: 1, minWidth: 46 },
+];

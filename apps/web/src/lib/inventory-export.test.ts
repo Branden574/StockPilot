@@ -143,4 +143,64 @@ describe('buildInventoryExportRows', () => {
     const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
     expect(res.truncated).toBe(true);
   });
+
+  it('renders a NULL charter as "Generic", matching the inventory list page', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, charter_id: null }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.charter).toBe('Generic');
+  });
+
+  it('leaves the charter blank when the id is set but the lookup failed closed', async () => {
+    chartersList.mockRejectedValueOnce(new Error('module_disabled: charters'));
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.charter).toBe('');
+  });
+
+  it('derives a book ISBN from the barcode', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', barcode: '9780262033848' }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
+    expect(res.rows[0]!.isbn).toBe('9780262033848');
+  });
+
+  it('falls back through the legacy custom_fields ISBN keys, in order', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [
+        {
+          ...sampleItem,
+          item_type: 'book',
+          barcode: null,
+          custom_fields: { isbn13: '9780262033848', isbn10: '0262033844' },
+        },
+      ],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
+    expect(res.rows[0]!.isbn).toBe('9780262033848');
+  });
+
+  it('never puts an ISBN on a non-book row', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'product', barcode: '012345678905' }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'product' });
+    expect(res.rows[0]!.isbn).toBe('');
+    expect(res.rows[0]!.barcode).toBe('012345678905');
+  });
+
+  it('keeps a leading-zero ISBN as a string — never a number', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', barcode: '0262033844' }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
+    expect(res.rows[0]!.isbn).toBe('0262033844');
+    expect(typeof res.rows[0]!.isbn).toBe('string');
+  });
 });
