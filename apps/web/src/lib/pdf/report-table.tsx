@@ -1,6 +1,13 @@
 import { Document, Image, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
+import {
+  fitColumnWidths,
+  LETTER_LANDSCAPE_CONTENT_WIDTH_PT,
+  REPORT_CELL_PADDING_PT,
+  REPORT_IMAGE_COL_GAP_PT,
+  REPORT_IMAGE_COL_WIDTH_PT,
+} from './column-fit';
 import { pdfStyles, PDF_COLORS } from './styles';
 
 /**
@@ -29,9 +36,21 @@ export interface ReportColumn {
   label: string;
   /** Default 'left'. Number columns should use 'right'. */
   align?: ReportColumnAlign;
-  /** Relative width unit. Sums across columns and divides the available
-   *  table width. Default 1 for every unset column. */
+  /** Relative weight. Decides how SURPLUS width is shared once every
+   *  column's minWidth is satisfied. Default 1 for every unset column. */
   width?: number;
+  /** Hard floor in POINTS. Without one, a low-weight column can be squeezed
+   *  until its header overlaps its neighbour — which is exactly how the Books
+   *  export shipped "ON HANDCATEGORY". Optional so the seven existing report
+   *  sections keep their current behaviour untouched. */
+  minWidth?: number;
+  /** Ceiling in POINTS. A 3-digit quantity gains nothing from a 120pt box. */
+  maxWidth?: number;
+  /** Default true. False documents that the column carries an identifier
+   *  (SKU, ISBN, barcode) that must never be broken across lines — enforced by
+   *  giving it a minWidth wide enough for its worst case, since @react-pdf has
+   *  no no-wrap flag. */
+  wrap?: boolean;
 }
 
 export interface ReportRow {
@@ -68,11 +87,21 @@ export interface ReportTablePdfProps {
   sections: ReportSection[];
   /** Footer note printed below the last section (e.g. row totals). */
   footerNote?: string;
+  /** Inner row width in points. Defaults to the landscape-LETTER page this
+   *  component renders (792 - 80 page padding - 8 row padding = 704). Exposed
+   *  so a caller on a different page size can hand the allocator the truth. */
+  contentWidthPt?: number;
 }
 
 // ── Styles ───────────────────────────────────────────────────────────
 
-const IMAGE_COL_WIDTH = 22; // pt
+const IMAGE_COL_WIDTH = REPORT_IMAGE_COL_WIDTH_PT;
+
+/** reportStyles.headerCell font size, exported so the fit test measures the
+ *  same number the renderer uses instead of a copy that can drift. */
+export const REPORT_HEADER_FONT_SIZE_PT = 8;
+/** reportStyles.headerCell letterSpacing, same reason. */
+export const REPORT_HEADER_LETTER_SPACING_PT = 0.4;
 
 const reportStyles = StyleSheet.create({
   sectionWrap: {
@@ -104,11 +133,18 @@ const reportStyles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   headerCell: {
-    fontSize: 8,
+    fontSize: REPORT_HEADER_FONT_SIZE_PT,
     fontFamily: 'Helvetica-Bold',
     color: PDF_COLORS.ink3,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: REPORT_HEADER_LETTER_SPACING_PT,
+    // THE HEADER COLLISION FIX. The body `cell` style has carried
+    // paddingHorizontal: 3 since day one; the header cell had none, so two
+    // adjacent header labels rendered edge to edge and "ON HAND" + "CATEGORY"
+    // printed as "ON HANDCATEGORY". Matching the body padding gives every
+    // header a 6pt gutter from its neighbour AND keeps header text aligned
+    // with the body text underneath it.
+    paddingHorizontal: REPORT_CELL_PADDING_PT,
   },
   row: {
     flexDirection: 'row',
@@ -128,7 +164,7 @@ const reportStyles = StyleSheet.create({
   cellCenter: { textAlign: 'center' },
   imageCell: {
     width: IMAGE_COL_WIDTH,
-    marginRight: 4,
+    marginRight: REPORT_IMAGE_COL_GAP_PT,
     flexShrink: 0,
   },
   thumb: {
@@ -156,10 +192,6 @@ const reportStyles = StyleSheet.create({
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function flexForColumn(col: ReportColumn): number {
-  return col.width ?? 1;
-}
-
 function alignStyle(align: ReportColumnAlign | undefined) {
   // Return an empty object rather than null so the consumer can spread
   // / pass to the Style array without tripping @react-pdf/renderer's
@@ -176,9 +208,22 @@ function renderCellValue(value: string | number | null | undefined): string {
 
 // ── Section ─────────────────────────────────────────────────────────
 
-function SectionView({ section }: { section: ReportSection }) {
+function SectionView({
+  section,
+  contentWidthPt,
+}: {
+  section: ReportSection;
+  contentWidthPt: number;
+}) {
   const showImages = !!section.imageColumn;
-  const totalFlex = section.columns.reduce((sum, c) => sum + flexForColumn(c), 0);
+  // Explicit point widths, not flex ratios: yoga's ratio split has no floor, so
+  // a low-weight column could be squeezed until its header overlapped the next
+  // one. fitColumnWidths honours each column's minWidth and only shares the
+  // surplus by weight. Columns with no minWidth (every existing report) get
+  // exactly the proportional split they had before.
+  const available =
+    contentWidthPt - (showImages ? IMAGE_COL_WIDTH + REPORT_IMAGE_COL_GAP_PT : 0);
+  const widths = fitColumnWidths(section.columns, available);
 
   return (
     <View style={reportStyles.sectionWrap}>
@@ -189,12 +234,12 @@ function SectionView({ section }: { section: ReportSection }) {
         {/* Header row */}
         <View style={reportStyles.headerRow}>
           {showImages ? <View style={reportStyles.imageCell} /> : null}
-          {section.columns.map((col) => (
+          {section.columns.map((col, i) => (
             <Text
               key={col.key}
               style={[
                 reportStyles.headerCell,
-                { flex: flexForColumn(col) / totalFlex },
+                { width: widths[i] ?? 0, flexGrow: 0, flexShrink: 0 },
                 alignStyle(col.align),
               ]}
             >
@@ -223,12 +268,12 @@ function SectionView({ section }: { section: ReportSection }) {
                   )}
                 </View>
               ) : null}
-              {section.columns.map((col) => (
+              {section.columns.map((col, i) => (
                 <Text
                   key={col.key}
                   style={[
                     reportStyles.cell,
-                    { flex: flexForColumn(col) / totalFlex },
+                    { width: widths[i] ?? 0, flexGrow: 0, flexShrink: 0 },
                     alignStyle(col.align),
                   ]}
                 >
@@ -252,6 +297,7 @@ export function ReportTablePdf({
   subtitle,
   sections,
   footerNote,
+  contentWidthPt = LETTER_LANDSCAPE_CONTENT_WIDTH_PT,
 }: ReportTablePdfProps) {
   return (
     <Document>
@@ -263,7 +309,7 @@ export function ReportTablePdf({
           subtitle={subtitle}
         />
         {sections.map((section, idx) => (
-          <SectionView key={idx} section={section} />
+          <SectionView key={idx} section={section} contentWidthPt={contentWidthPt} />
         ))}
         {footerNote ? <Text style={reportStyles.footerNote}>{footerNote}</Text> : null}
       </Page>
