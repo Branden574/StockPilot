@@ -6,6 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
+import { REPORT_PDF_SECTIONS } from '@/lib/pdf/report-configs';
 import {
   ReportTablePdf,
   type ReportSection,
@@ -130,16 +131,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'name', label: 'Name', width: 32 },
-            { key: 'warehouse', label: 'Warehouse', width: 14 },
-            { key: 'category', label: 'Category', width: 12 },
-            { key: 'qty', label: 'On hand', align: 'right', width: 8 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 10 },
-            { key: 'value', label: 'Value', align: 'right', width: 10 },
-          ],
+          ...REPORT_PDF_SECTIONS['inventory-valuation']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -166,12 +158,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          title: 'By movement type',
-          columns: [
-            { key: 'type', label: 'Movement type', width: 30 },
-            { key: 'count', label: 'Movements', align: 'right', width: 12 },
-            { key: 'total', label: 'Total units (gross)', align: 'right', width: 14 },
-          ],
+          ...REPORT_PDF_SECTIONS['stock-movements']![0]!,
           rows: data.byType.map((t): ReportRow => ({
             cells: {
               type: t.movementType,
@@ -181,16 +168,7 @@ export async function GET(
           })),
         },
         {
-          title: 'Top movers',
-          imageColumn: true,
-          columns: [
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'name', label: 'Name', width: 30 },
-            { key: 'movements', label: 'Movements', align: 'right', width: 10 },
-            { key: 'in', label: 'Units in', align: 'right', width: 10 },
-            { key: 'out', label: 'Units out', align: 'right', width: 10 },
-            { key: 'net', label: 'Net change', align: 'right', width: 10 },
-          ],
+          ...REPORT_PDF_SECTIONS['stock-movements']![1]!,
           rows: data.topMovers.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -213,18 +191,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'name', label: 'Name', width: 28 },
-            { key: 'warehouse', label: 'Warehouse', width: 14 },
-            { key: 'qty', label: 'On hand', align: 'right', width: 8 },
-            { key: 'reorder_at', label: 'Reorder at', align: 'right', width: 9 },
-            { key: 'reorder_qty', label: 'Reorder qty', align: 'right', width: 9 },
-            { key: 'deficit', label: 'Deficit', align: 'right', width: 8 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 9 },
-            { key: 'est', label: 'Est. cost', align: 'right', width: 10 },
-          ],
+          ...REPORT_PDF_SECTIONS['reorder-forecast']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -251,17 +218,7 @@ export async function GET(
       suffix = `${days}d`;
       sections = [
         {
-          columns: [
-            { key: 'supplier', label: 'Supplier', width: 22 },
-            { key: 'pos', label: 'POs', align: 'right', width: 6 },
-            { key: 'open_pos', label: 'Open POs', align: 'right', width: 8 },
-            { key: 'open_value', label: 'Open value', align: 'right', width: 11 },
-            { key: 'spend', label: 'Spend', align: 'right', width: 11 },
-            { key: 'on_time', label: 'On-time', align: 'right', width: 8 },
-            { key: 'lead', label: 'Avg lead', align: 'right', width: 8 },
-            { key: 'fill', label: 'Fill rate', align: 'right', width: 8 },
-            { key: 'last', label: 'Last received', align: 'right', width: 12 },
-          ],
+          ...REPORT_PDF_SECTIONS['supplier-scorecard']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             cells: {
               supplier: r.supplierName,
@@ -290,19 +247,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'class', label: 'Class', align: 'center', width: 6 },
-            { key: 'sku', label: 'SKU', width: 12 },
-            { key: 'name', label: 'Name', width: 26 },
-            { key: 'warehouse', label: 'Warehouse', width: 12 },
-            { key: 'category', label: 'Category', width: 12 },
-            { key: 'qty', label: 'On hand', align: 'right', width: 8 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 9 },
-            { key: 'units_out', label: 'Units out', align: 'right', width: 9 },
-            { key: 'value_out', label: 'Value out', align: 'right', width: 10 },
-            { key: 'last_out', label: 'Last out', align: 'right', width: 10 },
-          ],
+          ...REPORT_PDF_SECTIONS['velocity-class']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -331,18 +276,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'name', label: 'Name', width: 26 },
-            { key: 'warehouse', label: 'Warehouse', width: 12 },
-            { key: 'category', label: 'Category', width: 12 },
-            { key: 'qty', label: 'On hand', align: 'right', width: 8 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 9 },
-            { key: 'carry', label: 'Carrying value', align: 'right', width: 11 },
-            { key: 'age', label: 'Age (days)', align: 'right', width: 8 },
-            { key: 'stagnant', label: 'Stagnant', align: 'right', width: 8 },
-          ],
+          ...REPORT_PDF_SECTIONS['dead-stock']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -368,15 +302,7 @@ export async function GET(
       suffix = `${days}d`;
       sections = [
         {
-          columns: [
-            { key: 'bundle', label: 'Bundle', width: 28 },
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'runs', label: 'Runs', align: 'right', width: 8 },
-            { key: 'kits', label: 'Kits out', align: 'right', width: 9 },
-            { key: 'value', label: 'Component value out', align: 'right', width: 14 },
-            { key: 'top', label: 'Top warehouse', width: 14 },
-            { key: 'last', label: 'Last run', align: 'right', width: 12 },
-          ],
+          ...REPORT_PDF_SECTIONS['bundle-activity']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             cells: {
               bundle: r.bundleName,
@@ -401,14 +327,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'sku', label: 'SKU', width: 14 },
-            { key: 'item', label: 'Item', width: 34 },
-            { key: 'events', label: 'Shortage events', align: 'right', width: 14 },
-            { key: 'short', label: 'Units short', align: 'right', width: 12 },
-            { key: 'last', label: 'Last short at', align: 'right', width: 12 },
-          ],
+          ...REPORT_PDF_SECTIONS['bundle-shortages']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -432,17 +351,7 @@ export async function GET(
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
-          imageColumn: true,
-          columns: [
-            { key: 'when', label: 'When', width: 12 },
-            { key: 'sku', label: 'SKU', width: 12 },
-            { key: 'item', label: 'Item', width: 24 },
-            { key: 'units', label: 'Units', align: 'right', width: 7 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 9 },
-            { key: 'cost', label: 'Cost impact', align: 'right', width: 11 },
-            { key: 'reason', label: 'Reason', width: 12 },
-            { key: 'notes', label: 'Notes', width: 16 },
-          ],
+          ...REPORT_PDF_SECTIONS['shrinkage']![0]!,
           rows: data.rows.map((r): ReportRow => ({
             imageUrl: thumbs.get(r.itemId) ?? null,
             cells: {
@@ -504,12 +413,7 @@ export async function GET(
 
       sections = [
         {
-          columns: [
-            { key: 'supplier', label: 'Supplier', width: 28 },
-            { key: 'date', label: 'Date', width: 14 },
-            { key: 'unit', label: 'Unit cost', align: 'right', width: 14 },
-            { key: 'source', label: 'Source', align: 'center', width: 10 },
-          ],
+          ...REPORT_PDF_SECTIONS['item-cost-history']![0]!,
           rows: allPoints.map((p): ReportRow => ({
             cells: {
               supplier: p.supplier,

@@ -7,6 +7,7 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
+import { formatCharterCell } from '@/lib/charter-display';
 
 export const INVENTORY_EXPORT_HEADERS = [
   'name',
@@ -154,7 +155,7 @@ export async function buildInventoryExportRows(
       primary_location: i.primary_location_id ? (locMap.get(i.primary_location_id) ?? '') : '',
       supplier: i.supplier_id ? (supMap.get(i.supplier_id) ?? '') : '',
       warehouse: i.warehouse_id ? (whMap.get(i.warehouse_id) ?? '') : '',
-      charter: i.charter_id ? (chMap.get(i.charter_id) ?? '') : '',
+      charter: formatCharterCell(i.charter_id, chMap),
       tracking_type: i.tracking_type,
       author: str('author'),
       // For books, ISBN is the barcode — the form labels the same column

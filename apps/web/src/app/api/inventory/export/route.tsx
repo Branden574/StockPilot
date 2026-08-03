@@ -14,7 +14,8 @@ import {
   type InventoryExportFilters,
 } from '@/lib/inventory-export';
 import { toInventoryXlsx } from '@/lib/inventory-export-xlsx';
-import { ReportTablePdf, type ReportColumn } from '@/lib/pdf/report-table';
+import { ReportTablePdf } from '@/lib/pdf/report-table';
+import { BOOKS_PDF_COLUMNS, ITEMS_PDF_COLUMNS } from '@/lib/pdf/inventory-pdf-columns';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
 
@@ -50,18 +51,6 @@ const bodySchema = z.object({
     })
     .optional(),
 });
-
-// Curated, readable subset for the PDF (the full 25-column dump only makes
-// sense as CSV/Excel; a PDF needs to fit the page).
-const PDF_COLUMNS: ReportColumn[] = [
-  { key: 'name', label: 'Name', width: 3 },
-  { key: 'sku', label: 'SKU', width: 1.4 },
-  { key: 'quantity_on_hand', label: 'On hand', align: 'right', width: 0.9 },
-  { key: 'category', label: 'Category', width: 1.4 },
-  { key: 'primary_location', label: 'Location', width: 1.4 },
-  { key: 'charter', label: 'Charter', width: 1.4 },
-  { key: 'status', label: 'Status', width: 1 },
-];
 
 function exportFilename(slug: string, scope: string, ext: string): string {
   const date = new Date().toISOString().slice(0, 10);
@@ -163,7 +152,7 @@ export async function POST(request: NextRequest) {
         subtitle={`${scope} · ${result.rows.length} item${result.rows.length === 1 ? '' : 's'}${result.truncated ? ` (first 10000 of ${result.total})` : ''}`}
         sections={[
           {
-            columns: PDF_COLUMNS,
+            columns: result.slug === 'books' ? BOOKS_PDF_COLUMNS : ITEMS_PDF_COLUMNS,
             rows: result.rows.map((r) => ({ cells: r })),
           },
         ]}
