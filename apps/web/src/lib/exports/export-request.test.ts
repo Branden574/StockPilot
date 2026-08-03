@@ -259,3 +259,36 @@ describe('exportItemTypeKind', () => {
     expect(exportItemTypeKind('product')).toBe('other');
   });
 });
+
+describe('inventoryExportRequestSchema — strictness (review fix)', () => {
+  // Zod's default object mode is "strip": unknown keys are silently dropped.
+  // Global Constraint 4 demands unknown keys REJECT at the schema level too,
+  // at every nesting depth — a stripped key is a silent lie about what the
+  // server honoured.
+  const base = { format: 'pdf', scope: 'filtered' } as const;
+
+  it('rejects an unknown top-level key', () => {
+    const res = inventoryExportRequestSchema.safeParse({ ...base, extraKey: true });
+    expect(res.success).toBe(false);
+  });
+
+  it('rejects an unknown key inside options', () => {
+    const res = inventoryExportRequestSchema.safeParse({ ...base, options: { bogus: 1 } });
+    expect(res.success).toBe(false);
+  });
+
+  it('rejects an unknown key inside options.pdf and options.xlsx', () => {
+    expect(
+      inventoryExportRequestSchema.safeParse({ ...base, options: { pdf: { notAKey: 1 } } }).success,
+    ).toBe(false);
+    expect(
+      inventoryExportRequestSchema.safeParse({ ...base, options: { xlsx: { nope: true } } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown key inside filters', () => {
+    const res = inventoryExportRequestSchema.safeParse({ ...base, filters: { madeUp: 'x' } });
+    expect(res.success).toBe(false);
+  });
+});

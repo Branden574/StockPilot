@@ -34,7 +34,7 @@ const filtersSchema = z.object({
   categoryIds: z.array(z.string()).optional(),
   locationIds: z.array(z.string()).optional(),
   charterIds: z.array(z.string()).optional(),
-});
+}).strict();
 
 const pdfOptionsSchema = z
   .object({
@@ -49,6 +49,7 @@ const pdfOptionsSchema = z
     pageNumbers: z.boolean().default(true),
     wrapText: z.boolean().default(true),
   })
+  .strict()
   .default({});
 
 const xlsxOptionsSchema = z
@@ -57,6 +58,7 @@ const xlsxOptionsSchema = z
     autoFilter: z.boolean().default(true),
     includeSummarySheet: z.boolean().default(false),
   })
+  .strict()
   .default({});
 
 const optionsSchema = z
@@ -69,6 +71,7 @@ const optionsSchema = z
     pdf: pdfOptionsSchema,
     xlsx: xlsxOptionsSchema,
   })
+  .strict()
   .default({});
 
 export const inventoryExportRequestSchema = z.object({
@@ -80,7 +83,7 @@ export const inventoryExportRequestSchema = z.object({
   /** Absent = use the registry defaults for this item type. */
   fields: z.array(z.string()).min(1).max(INVENTORY_EXPORT_MAX_FIELDS).optional(),
   options: optionsSchema,
-});
+}).strict();
 
 export type InventoryExportRequestParsed = z.output<typeof inventoryExportRequestSchema>;
 export type InventoryExportOptions = InventoryExportRequestParsed['options'];
