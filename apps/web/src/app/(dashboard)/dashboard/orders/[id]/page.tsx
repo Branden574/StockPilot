@@ -95,6 +95,12 @@ export default async function OrderDetailPage({
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
 
+  // ---- Sync gates (no I/O). Every boolean the Tier-2 batch below needs to
+  // decide WHICH round trips to fire is derived here, purely from ctx +
+  // request/lines — none of it depends on anything async, so computing it
+  // up front costs nothing and lets every independent read be dispatched in
+  // one Promise.all instead of one-at-a-time. ----
+
   // Proof-of-delivery attachments. Managers+ can upload/delete once the order
   // is out for delivery / completed; everyone with order access can view.
   const canManageAttachments = isManagerOrAbove(ctx.role);
@@ -154,21 +160,6 @@ export default async function OrderDetailPage({
   const isPickingStatus =
     request.status === 'pick_slip_generated' ||
     request.status === 'picking_in_progress';
-
-  // Picking claim/lock — whether THIS viewer can actually pick THIS order:
-  // they hold the pick permission (manager+ or items:update) AND have write
-  // access to the order's warehouse. Feeds the shared state machine so the
-  // panel never advertises a Claim/Pick/Complete/Release the backend (which
-  // checks both) would reject. Only the picking phase reads it, so the extra
-  // warehouse-access query is paid there only (it's cheap + request-cached).
-  let viewerCanPick = true;
-  if (isPickingStatus) {
-    const wa = await getWarehouseAccess(ctx);
-    const hasWhWrite =
-      wa.hasAllAccess || wa.writableIds.includes(request.warehouse_id);
-    viewerCanPick =
-      (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
-  }
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (canApprove ||
@@ -176,73 +167,291 @@ export default async function OrderDetailPage({
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
-  // Stock-awareness for the two statuses whose actions depend on availability:
-  //  - pending_approval → isShortStock: would a strict approve fall short?
-  //    Drives the "Approve partial" offer. Lines are GROUPED per item first —
-  //    two lines of the same item must be judged against their combined demand,
-  //    or a duplicate-item order slips past the check line-by-line.
-  //  - backordered → hasFulfillableStock: does ANY still-owed item have stock
-  //    available to pick? Drives whether "Resume fulfillment" is offered.
-  // Both read available = on_hand − Σ(active reservations). Only computed for
-  // a manager on the relevant status, so the extra read is rare.
-  let isShortStock = false;
-  let hasFulfillableStock = false;
+  // Stock-awareness gate for the two statuses whose actions depend on
+  // availability: pending_approval → isShortStock (would a strict approve
+  // fall short?); backordered → hasFulfillableStock (does any still-owed item
+  // have stock to pick?). Only a manager on the relevant status pays for the
+  // reservations read fired below.
   const needsStockCheck =
     canApprove &&
     (request.status === 'pending_approval' || request.status === 'backordered') &&
     lines.length > 0;
-  if (needsStockCheck) {
-    const itemIds = [
-      ...new Set(
-        lines.map((l) => l.item?.id).filter((x): x is string => Boolean(x)),
-      ),
-    ];
-    if (itemIds.length > 0) {
-      const supabase = await createClient();
-      const { data: resvRows } = await supabase
-        .from('stock_reservations')
-        .select('item_id, quantity')
-        .in('item_id', itemIds)
-        .is('released_at', null);
-      const reservedByItem = new Map<string, number>();
-      for (const r of (resvRows ?? []) as { item_id: string; quantity: number }[]) {
-        reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity || 0));
-      }
-      // Group demand per item: requested (approval check) and owed (resume check).
-      const demandByItem = new Map<string, { requested: number; owed: number; onHand: number }>();
-      for (const l of lines) {
-        const itemId = l.item?.id;
-        if (!itemId) continue;
-        const entry = demandByItem.get(itemId) ?? {
-          requested: 0,
-          owed: 0,
-          onHand: Number(l.item?.quantity_on_hand ?? 0),
-        };
-        entry.requested += Number(l.quantity_requested) || 0;
-        entry.owed += Math.max(
-          0,
-          (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-        );
-        demandByItem.set(itemId, entry);
-      }
-      for (const [itemId, d] of demandByItem) {
-        const available = Math.max(0, d.onHand - (reservedByItem.get(itemId) ?? 0));
-        if (request.status === 'pending_approval' && d.requested > available) {
-          isShortStock = true;
-        }
-        if (request.status === 'backordered' && d.owed > 0 && available > 0) {
-          hasFulfillableStock = true;
-        }
-      }
-    }
-  }
 
   // Live tracking: the assigned driver can stream location only while in transit.
-  const showLiveTrackingShare =
+  const liveTrackingGate =
     isAssignedDriver &&
     request.fulfillment_type === 'delivery' &&
-    request.status === 'in_transit' &&
-    (await checkModuleAccess('live_tracking')).enabled;
+    request.status === 'in_transit';
+
+  // Phase 4 — candidate drivers for the AssignDeliveryDialog only need
+  // loading when the dialog can actually render: a canApprove viewer on a
+  // staged_for_delivery order. Every other status skips the round-trip.
+  const driversGate = canApprove && request.status === 'staged_for_delivery';
+
+  // Carrier shipping (EasyPost). showShippingPanel needs no round trip — the
+  // panel renders (and self-hides via its own GET when no shipment exists)
+  // for anyone on a shippable delivery order. Only canBuyLabel needs the
+  // module-enabled check, and only for a manager who could act on it.
+  const SHIPPABLE_STATUSES: OrderRequestStatus[] = [
+    'staged_for_delivery',
+    'in_transit',
+    'completed',
+  ];
+  const showShippingPanel =
+    request.fulfillment_type === 'delivery' &&
+    Boolean(request.delivery_charter_id) &&
+    SHIPPABLE_STATUSES.includes(request.status);
+  const shippingModuleGate = showShippingPanel && can(ctx, 'shipping:manage');
+
+  // Returns (RMA). 'completed' is the live terminal status; 'delivered' is a
+  // legacy value some older rows still carry (compared as a raw string since
+  // it's no longer in the OrderRequestStatus union). The off-by-default
+  // `returns` module is only checked for a viewer who could act on it either
+  // way — staff with returns:manage (the CreateReturnDialog) or the requester
+  // themselves (the self-service return-portal link).
+  const orderIsReturnable =
+    request.status === 'completed' || (request.status as string) === 'delivered';
+  const returnsModuleGate =
+    orderIsReturnable && (can(ctx, 'returns:manage') || isOwnRequest);
+
+  // ---- Tier 2: every independent round trip the render might need, fired
+  // together instead of one-at-a-time. Each slot is gated by a sync boolean
+  // above and resolves to a cheap placeholder when its gate is false, so a
+  // status that needs none of this pays nothing extra — no gate here was
+  // loosened into an unconditional ("speculative") fetch; every one of them
+  // fires exactly when the original sequential code would have fired it.
+  // None of these promises reads another's result — the one read that
+  // genuinely depends on a result from this batch (returnable lines, gated on
+  // returnsModuleEnabled) stays a separate awaited step below, after this
+  // batch resolves. Same authorization decisions in the same relative order;
+  // only the wall-clock dispatch changed from sequential to concurrent. ----
+  const [
+    warehouseAccess,
+    stockCheck,
+    liveTrackingAccess,
+    drivers,
+    pickerResult,
+    shippingAccess,
+    returnsAccess,
+  ] = await Promise.all([
+    // Picking claim/lock — whether THIS viewer can actually pick THIS order.
+    // Only the picking phase reads it, so the extra warehouse-access query is
+    // paid there only (it's cheap + request-cached via React.cache()).
+    isPickingStatus ? getWarehouseAccess(ctx) : Promise.resolve(null),
+
+    // Stock-awareness read: available = on_hand − Σ(active reservations),
+    // grouped PER ITEM first — two lines of the same item must be judged
+    // against their combined demand, or a duplicate-item order slips past
+    // the check line-by-line.
+    needsStockCheck
+      ? (async () => {
+          const itemIds = [
+            ...new Set(
+              lines.map((l) => l.item?.id).filter((x): x is string => Boolean(x)),
+            ),
+          ];
+          if (itemIds.length === 0) {
+            return { isShortStock: false, hasFulfillableStock: false };
+          }
+          const supabase = await createClient();
+          const { data: resvRows } = await supabase
+            .from('stock_reservations')
+            .select('item_id, quantity')
+            .in('item_id', itemIds)
+            .is('released_at', null);
+          const reservedByItem = new Map<string, number>();
+          for (const r of (resvRows ?? []) as { item_id: string; quantity: number }[]) {
+            reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity || 0));
+          }
+          // Group demand per item: requested (approval check) and owed (resume check).
+          const demandByItem = new Map<string, { requested: number; owed: number; onHand: number }>();
+          for (const l of lines) {
+            const itemId = l.item?.id;
+            if (!itemId) continue;
+            const entry = demandByItem.get(itemId) ?? {
+              requested: 0,
+              owed: 0,
+              onHand: Number(l.item?.quantity_on_hand ?? 0),
+            };
+            entry.requested += Number(l.quantity_requested) || 0;
+            entry.owed += Math.max(
+              0,
+              (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+            );
+            demandByItem.set(itemId, entry);
+          }
+          let isShortStock = false;
+          let hasFulfillableStock = false;
+          for (const [itemId, d] of demandByItem) {
+            const available = Math.max(0, d.onHand - (reservedByItem.get(itemId) ?? 0));
+            if (request.status === 'pending_approval' && d.requested > available) {
+              isShortStock = true;
+            }
+            if (request.status === 'backordered' && d.owed > 0 && available > 0) {
+              hasFulfillableStock = true;
+            }
+          }
+          return { isShortStock, hasFulfillableStock };
+        })()
+      : Promise.resolve(null),
+
+    liveTrackingGate ? checkModuleAccess('live_tracking') : Promise.resolve(null),
+
+    // Phase 4 — active org members as candidate drivers for the
+    // AssignDeliveryDialog.
+    driversGate
+      ? (async () => {
+          const supabase = await createClient();
+          const { data: members } = await supabase
+            .from('organization_members')
+            .select('user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)')
+            .eq('organization_id', ctx.organizationId)
+            .not('accepted_at', 'is', null);
+          type MemberRow = {
+            user_id: string;
+            is_delivery_driver: boolean | null;
+            user:
+              | { id: string; full_name: string | null; email: string }
+              | { id: string; full_name: string | null; email: string }[]
+              | null;
+          };
+          const allStaff = ((members ?? []) as MemberRow[]).flatMap((m) => {
+            const u = Array.isArray(m.user) ? m.user[0] : m.user;
+            if (!u || typeof u.email !== 'string') return [];
+            return [
+              {
+                userId: u.id,
+                fullName: u.full_name ?? null,
+                email: u.email,
+                isDriver: Boolean(m.is_delivery_driver),
+              },
+            ];
+          });
+          // Only members MARKED as delivery drivers (Team page toggle). Fallback to
+          // all staff while an org has nobody marked yet, so the dialog never
+          // renders an empty picker on day one.
+          const marked = allStaff.filter((m) => m.isDriver);
+          return (marked.length > 0 ? marked : allStaff)
+            .map(({ userId, fullName, email }) => ({ userId, fullName, email }))
+            .sort((a, b) => (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email));
+        })()
+      : Promise.resolve<DriverOption[]>([]),
+
+    // Picking claim/lock — candidate pickers for the AssignPickerDialog
+    // (manager+ reassign only) plus the assigned picker's display name for
+    // the chip. Same active-members list as `drivers`; only paid on orders in
+    // the picking phase.
+    isPickingStatus
+      ? (async () => {
+          const supabase = await createClient();
+          if (canApprove) {
+            // Only offer pickers who can actually pick at THIS warehouse: managers+
+            // (all-warehouse access) OR members explicitly assigned to
+            // request.warehouse_id. Without this filter AssignPickerDialog could
+            // propose an assignee the backend's assign_picking (which checks
+            // warehouse write) would then reject — an authorize-then-reject UI.
+            const [membersRes, assignmentsRes] = await Promise.all([
+              supabase
+                .from('organization_members')
+                .select('user_id, role, user:user_profiles!user_id (id, full_name, email)')
+                .eq('organization_id', ctx.organizationId)
+                .not('accepted_at', 'is', null),
+              supabase
+                .from('user_warehouse_assignments')
+                .select('user_id')
+                .eq('organization_id', ctx.organizationId)
+                .eq('warehouse_id', request.warehouse_id),
+            ]);
+            const assignedUserIds = new Set(
+              ((assignmentsRes.data ?? []) as { user_id: string }[]).map((a) => a.user_id),
+            );
+            type MemberRow = {
+              user_id: string;
+              role: Role;
+              user:
+                | { id: string; full_name: string | null; email: string }
+                | { id: string; full_name: string | null; email: string }[]
+                | null;
+            };
+            // Resolve the full member list first so the assigned-picker chip name
+            // stays correct even if that picker no longer qualifies for the roster
+            // (e.g. their warehouse assignment was later removed).
+            const rawMembers = ((membersRes.data ?? []) as MemberRow[]).flatMap((m) => {
+              const u = Array.isArray(m.user) ? m.user[0] : m.user;
+              if (!u || typeof u.email !== 'string') return [];
+              return [{ userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email }];
+            });
+            const pickers = rawMembers
+              .filter((m) => isManagerOrAbove(m.role) || assignedUserIds.has(m.userId))
+              .map((m) => ({ userId: m.userId, fullName: m.fullName, email: m.email }))
+              .sort((a, b) =>
+                (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
+              );
+            let assignedPickerName: string | null = null;
+            if (request.assigned_picker_id) {
+              const match = rawMembers.find((m) => m.userId === request.assigned_picker_id);
+              assignedPickerName = match ? (match.fullName ?? match.email) : null;
+            }
+            return { pickers, assignedPickerName };
+          }
+          if (request.assigned_picker_id) {
+            // Non-manager viewer (the assigned picker or a bystander) only needs the
+            // picker's name for the chip, not the full candidate roster.
+            const { data: pk } = await supabase
+              .from('user_profiles')
+              .select('full_name, email')
+              .eq('id', request.assigned_picker_id)
+              .maybeSingle();
+            const assignedPickerName = pk
+              ? (pk.full_name as string | null)?.trim() ||
+                (pk.email as string | null) ||
+                null
+              : null;
+            return { pickers: [] as DriverOption[], assignedPickerName };
+          }
+          return { pickers: [] as DriverOption[], assignedPickerName: null as string | null };
+        })()
+      : Promise.resolve({ pickers: [] as DriverOption[], assignedPickerName: null as string | null }),
+
+    shippingModuleGate ? checkModuleAccess('shipping') : Promise.resolve(null),
+
+    returnsModuleGate ? checkModuleAccess('returns') : Promise.resolve(null),
+  ]);
+
+  let viewerCanPick = true;
+  if (isPickingStatus && warehouseAccess) {
+    const hasWhWrite =
+      warehouseAccess.hasAllAccess || warehouseAccess.writableIds.includes(request.warehouse_id);
+    viewerCanPick =
+      (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
+  }
+  const isShortStock = stockCheck?.isShortStock ?? false;
+  const hasFulfillableStock = stockCheck?.hasFulfillableStock ?? false;
+  const showLiveTrackingShare = liveTrackingGate && (liveTrackingAccess?.enabled ?? false);
+  const { pickers, assignedPickerName } = pickerResult;
+  const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
+  const returnsModuleEnabled = returnsModuleGate && (returnsAccess?.enabled ?? false);
+
+  // Tier 3 — the returnable-lines read genuinely depends on the Tier-2
+  // module check above (returnsModuleEnabled), so it can't join that batch:
+  // it stays a separate awaited step. This is the one query in the whole page
+  // that could have been fetched speculatively (dropping the dependency and
+  // firing it alongside Tier 2, gating only the render) — decided AGAINST,
+  // because the `returns` module defaults OFF, so on the common org a
+  // speculative fetch here would add a round trip to every returnable order
+  // to save one only on orders where returns happens to be on AND the module
+  // check also passes. Kept conditional, in the smallest tier where its
+  // condition (returnsModuleEnabled) is actually known.
+  let returnableLines: ReturnableLine[] = [];
+  if (can(ctx, 'returns:manage') && orderIsReturnable && returnsModuleEnabled) {
+    try {
+      const rmaSvc = await RMAService.forCurrentUser();
+      returnableLines = await rmaSvc.returnableLinesForOrder(id);
+    } catch {
+      returnableLines = [];
+    }
+  }
+  const canCreateReturn = returnableLines.length > 0;
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
   // request is at a status where the service actually accepts the call.
@@ -274,172 +483,6 @@ export default async function OrderDetailPage({
     (s, r) => s + (Number(r.quantity) || 0),
     0,
   );
-
-  // Phase 4 — load active org members as candidate drivers for the
-  // AssignDeliveryDialog. The dialog only renders when
-  // status === 'staged_for_delivery' AND the viewer can act on the
-  // panel (manager+). For every other status (the common case —
-  // pending_approval / approved / pick / pack / pickup / completed /
-  // etc.) we skip the round-trip entirely.
-  let drivers: DriverOption[] = [];
-  if (canApprove && request.status === 'staged_for_delivery') {
-    const supabase = await createClient();
-    const { data: members } = await supabase
-      .from('organization_members')
-      .select('user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)')
-      .eq('organization_id', ctx.organizationId)
-      .not('accepted_at', 'is', null);
-    type MemberRow = {
-      user_id: string;
-      is_delivery_driver: boolean | null;
-      user:
-        | { id: string; full_name: string | null; email: string }
-        | { id: string; full_name: string | null; email: string }[]
-        | null;
-    };
-    const allStaff = ((members ?? []) as MemberRow[]).flatMap((m) => {
-      const u = Array.isArray(m.user) ? m.user[0] : m.user;
-      if (!u || typeof u.email !== 'string') return [];
-      return [
-        {
-          userId: u.id,
-          fullName: u.full_name ?? null,
-          email: u.email,
-          isDriver: Boolean(m.is_delivery_driver),
-        },
-      ];
-    });
-    // Only members MARKED as delivery drivers (Team page toggle). Fallback to
-    // all staff while an org has nobody marked yet, so the dialog never
-    // renders an empty picker on day one.
-    const marked = allStaff.filter((m) => m.isDriver);
-    drivers = (marked.length > 0 ? marked : allStaff)
-      .map(({ userId, fullName, email }) => ({ userId, fullName, email }))
-      .sort((a, b) => (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email));
-  }
-
-  // Picking claim/lock — candidate pickers for the AssignPickerDialog (manager+
-  // reassign only) plus the assigned picker's display name for the chip. Same
-  // active-members list as `drivers`; only paid on orders in the picking phase.
-  let pickers: DriverOption[] = [];
-  let assignedPickerName: string | null = null;
-  if (isPickingStatus) {
-    const supabase = await createClient();
-    if (canApprove) {
-      // Only offer pickers who can actually pick at THIS warehouse: managers+
-      // (all-warehouse access) OR members explicitly assigned to
-      // request.warehouse_id. Without this filter AssignPickerDialog could
-      // propose an assignee the backend's assign_picking (which checks
-      // warehouse write) would then reject — an authorize-then-reject UI.
-      const [membersRes, assignmentsRes] = await Promise.all([
-        supabase
-          .from('organization_members')
-          .select('user_id, role, user:user_profiles!user_id (id, full_name, email)')
-          .eq('organization_id', ctx.organizationId)
-          .not('accepted_at', 'is', null),
-        supabase
-          .from('user_warehouse_assignments')
-          .select('user_id')
-          .eq('organization_id', ctx.organizationId)
-          .eq('warehouse_id', request.warehouse_id),
-      ]);
-      const assignedUserIds = new Set(
-        ((assignmentsRes.data ?? []) as { user_id: string }[]).map((a) => a.user_id),
-      );
-      type MemberRow = {
-        user_id: string;
-        role: Role;
-        user:
-          | { id: string; full_name: string | null; email: string }
-          | { id: string; full_name: string | null; email: string }[]
-          | null;
-      };
-      // Resolve the full member list first so the assigned-picker chip name
-      // stays correct even if that picker no longer qualifies for the roster
-      // (e.g. their warehouse assignment was later removed).
-      const rawMembers = ((membersRes.data ?? []) as MemberRow[]).flatMap((m) => {
-        const u = Array.isArray(m.user) ? m.user[0] : m.user;
-        if (!u || typeof u.email !== 'string') return [];
-        return [{ userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email }];
-      });
-      pickers = rawMembers
-        .filter((m) => isManagerOrAbove(m.role) || assignedUserIds.has(m.userId))
-        .map((m) => ({ userId: m.userId, fullName: m.fullName, email: m.email }))
-        .sort((a, b) =>
-          (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
-        );
-      if (request.assigned_picker_id) {
-        const match = rawMembers.find((m) => m.userId === request.assigned_picker_id);
-        assignedPickerName = match ? (match.fullName ?? match.email) : null;
-      }
-    } else if (request.assigned_picker_id) {
-      // Non-manager viewer (the assigned picker or a bystander) only needs the
-      // picker's name for the chip, not the full candidate roster.
-      const { data: pk } = await supabase
-        .from('user_profiles')
-        .select('full_name, email')
-        .eq('id', request.assigned_picker_id)
-        .maybeSingle();
-      assignedPickerName = pk
-        ? (pk.full_name as string | null)?.trim() ||
-          (pk.email as string | null) ||
-          null
-        : null;
-    }
-  }
-
-  // Carrier shipping (EasyPost). The Buy-label affordance only makes sense for
-  // a delivery order that has reached staging, when the viewer can manage
-  // shipping (owner/admin with the `shipping` module on). We only pay for the
-  // module_enabled RPC + permission check on delivery orders at/after staging;
-  // every other order skips the round-trip. The panel still renders a read-only
-  // tracking section (via its own GET) whenever a shipment already exists, even
-  // for non-managers — it self-hides when the GET returns nothing.
-  const SHIPPABLE_STATUSES: OrderRequestStatus[] = [
-    'staged_for_delivery',
-    'in_transit',
-    'completed',
-  ];
-  let canBuyLabel = false;
-  let showShippingPanel = false;
-  if (
-    request.fulfillment_type === 'delivery' &&
-    request.delivery_charter_id &&
-    SHIPPABLE_STATUSES.includes(request.status)
-  ) {
-    showShippingPanel = true;
-    if (can(ctx, 'shipping:manage')) {
-      const shippingAccess = await checkModuleAccess('shipping');
-      canBuyLabel = shippingAccess.enabled;
-    }
-  }
-
-  // Returns (RMA). The "Create return" affordance only makes sense on a
-  // returnable order (completed / legacy delivered) when the viewer can manage
-  // returns AND the off-by-default `returns` module is on. We only pay for the
-  // module-enabled RPC + the returnable-lines read on those orders; everything
-  // else skips the round-trip. The dialog is hidden when no lines remain
-  // returnable (already fully returned).
-  // 'completed' is the live terminal status; 'delivered' is a legacy value
-  // some older rows still carry (compared as a raw string since it's no longer
-  // in the OrderRequestStatus union). The service is authoritative either way.
-  const orderIsReturnable =
-    request.status === 'completed' || (request.status as string) === 'delivered';
-  let returnableLines: ReturnableLine[] = [];
-  let returnsModuleEnabled = false;
-  if (orderIsReturnable && (can(ctx, 'returns:manage') || isOwnRequest)) {
-    const returnsAccess = await checkModuleAccess('returns');
-    returnsModuleEnabled = returnsAccess.enabled;
-  }
-  if (can(ctx, 'returns:manage') && orderIsReturnable && returnsModuleEnabled) {
-    try {
-      const rmaSvc = await RMAService.forCurrentUser();
-      returnableLines = await rmaSvc.returnableLinesForOrder(id);
-    } catch {
-      returnableLines = [];
-    }
-  }
-  const canCreateReturn = returnableLines.length > 0;
 
   // Returns-access Unit A: the REQUESTER'S own self-service affordance. A
   // requester without returns:manage never sees the staff CreateReturnDialog,
