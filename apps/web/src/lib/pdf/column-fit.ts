@@ -74,7 +74,14 @@ export function fitColumnWidths(
   const locked = new Array<boolean>(n).fill(false);
   let remaining = availableWidthPt;
 
-  // At most one column locks per pass, so n + 1 passes always converge.
+  // A pass can lock more than one column at once (every free column whose
+  // share misses its clamp in the same pass locks together, before
+  // freeWeight/remaining are recomputed) — this loop does not lock exactly
+  // one per iteration. The n + 1 bound still holds worst-case: each pass
+  // that makes progress locks at least one previously-free column, and
+  // there are only n columns to lock, so at most n passes can change
+  // anything before the (n+1)th pass finds nothing left to do and exits via
+  // `if (!changed) break`.
   for (let pass = 0; pass <= n; pass++) {
     const free: number[] = [];
     let freeWeight = 0;
