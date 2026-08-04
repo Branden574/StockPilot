@@ -246,8 +246,18 @@ describe('ExportBuilderDialog — submission', () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
-  // Deferred to Task 15 (export-builder-fields.tsx): needs the real
-  // Title/SKU/ISBN field checkboxes, and ExportBuilderFields is a null stub
-  // until that task fills it in. Un-skip in Task 15's step 4.
-  it.todo('blocks export and explains why when no identifying field is selected');
+  it('blocks export and explains why when no identifying field is selected', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    // The default books preset carries three identifying fields (Title,
+    // ISBN, SKU) — uncheck all three via the real field-picker checkboxes
+    // Task 15 built, leaving none.
+    await user.click(screen.getByRole('checkbox', { name: 'Title' }));
+    await user.click(screen.getByRole('checkbox', { name: 'ISBN' }));
+    await user.click(screen.getByRole('checkbox', { name: 'SKU' }));
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Include at least one identifying field: Name, SKU, ISBN or Barcode.',
+    );
+    expect(screen.getByRole('button', { name: 'Export file' })).toHaveProperty('disabled', true);
+  });
 });
