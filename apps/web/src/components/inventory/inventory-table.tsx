@@ -3534,7 +3534,7 @@ export function MultiSelectFilter({
   );
 }
 
-function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
+export function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
   const [scope, setScope] = React.useState<'filtered' | 'all' | null>(null);
 
   // "filtered" carries the active params (q, sort, cat[], loc[], stock,
