@@ -175,3 +175,42 @@ describe('ExportBuilderPreview — readiness', () => {
     ).toBeNull();
   });
 });
+
+describe('ExportBuilderPreview — sample row cap', () => {
+  // Self-mutation check: the component slices sample rows to show only the first
+  // 5. The original fixture supplied only 2 rows, so this cap was never tested —
+  // changing slice(0, 5) to slice(0, 2) or removing it entirely would pass all
+  // existing tests. This test provides a fixture with 7 rows and verifies that
+  // exactly 5 render, catching mutations to the slice threshold.
+  it('renders exactly the first 5 sample rows, not all rows or a different cap', () => {
+    const sevenRowPreview: ExportPreviewResponse = {
+      total: 111,
+      truncated: false,
+      slug: 'books',
+      sampleRows: [
+        sampleRow({ id: 'i-1', name: 'Introduction to Algorithms', isbn: '9780262033848' }),
+        sampleRow({ id: 'i-2', name: 'Discrete Mathematics', isbn: '9780201379624' }),
+        sampleRow({ id: 'i-3', name: 'The Art of Computer Programming', isbn: '9780201896830' }),
+        sampleRow({ id: 'i-4', name: 'Structure and Interpretation', isbn: '9780262011632' }),
+        sampleRow({ id: 'i-5', name: 'A Concrete Introduction', isbn: '9780130279996' }),
+        sampleRow({ id: 'i-6', name: 'Concrete Mathematics', isbn: '9780201558020' }),
+        sampleRow({ id: 'i-7', name: 'The Pragmatic Programmer', isbn: '9780135957059' }),
+      ],
+      readiness: { rows: 111, withIsbn: 97, missingIsbn: 14, withImage: 84, missingImage: 27 },
+    };
+
+    renderPreview({ preview: sevenRowPreview });
+    const table = screen.getByRole('table', { name: 'Export preview' });
+
+    // Verify that rows 1–5 are present
+    expect(within(table).getByText('Introduction to Algorithms')).toBeTruthy();
+    expect(within(table).getByText('Discrete Mathematics')).toBeTruthy();
+    expect(within(table).getByText('The Art of Computer Programming')).toBeTruthy();
+    expect(within(table).getByText('Structure and Interpretation')).toBeTruthy();
+    expect(within(table).getByText('A Concrete Introduction')).toBeTruthy();
+
+    // Verify that row 6 (and row 7) are NOT rendered
+    expect(within(table).queryByText('Concrete Mathematics')).toBeNull();
+    expect(within(table).queryByText('The Pragmatic Programmer')).toBeNull();
+  });
+});
