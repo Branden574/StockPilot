@@ -143,4 +143,35 @@ describe('ExportBuilderPreview — readiness', () => {
       screen.getByText('Only the first 10,000 records are included in this export.'),
     ).toBeTruthy();
   });
+
+  // Self-mutation check: hardcoding PREVIEW's own readiness numbers (97/111,
+  // 84/111, 14, 27) into the component still passed every test above, because
+  // those literals happen to equal the fixture's real values — a tautology
+  // that would hide a "computed instead of read from the response" bug. This
+  // test uses numbers no plausible literal would coincidentally match, so it
+  // only passes if the panel actually reads `preview.readiness`.
+  it('renders the readiness numbers from the response, not any fixed value', () => {
+    renderPreview({
+      preview: {
+        ...PREVIEW,
+        readiness: { rows: 583, withIsbn: 71, missingIsbn: 512, withImage: 9, missingImage: 574 },
+      },
+    });
+    const panel = screen.getByRole('group', { name: 'Export readiness' });
+    expect(panel.textContent).toContain('71 of 583 books have an ISBN');
+    expect(panel.textContent).toContain('512 missing ISBN');
+    expect(panel.textContent).toContain('9 of 583 have a cover');
+    expect(panel.textContent).toContain('574 missing cover');
+  });
+
+  // Self-mutation check: the brief's own truncation test only covers the
+  // positive case. Without this negative case, a mutant that always renders
+  // the "first 10,000" note (dropping the `preview.truncated` guard entirely)
+  // still passed the whole suite above.
+  it('omits the truncation note when the export was not truncated', () => {
+    renderPreview();
+    expect(
+      screen.queryByText('Only the first 10,000 records are included in this export.'),
+    ).toBeNull();
+  });
 });
