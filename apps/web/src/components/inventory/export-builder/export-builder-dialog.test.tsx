@@ -417,6 +417,18 @@ describe('ExportBuilderDialog — accessibility and small screens', () => {
     expect(className).toContain('overflow-y-auto');
   });
 
+  it('overrides the shared DialogContent max-w-lg clamp so the width class takes effect', () => {
+    // The shared ui/dialog DialogContent bakes in `max-w-lg` (512px). Without a
+    // call-site max-w override, tailwind-merge keeps that clamp and the
+    // `w-[min(...)]` class silently never applies — the dialog shipped at
+    // 512px wide until this was caught on a real display.
+    renderDialog();
+    const dialog = screen.getByRole('dialog', { name: 'Customize export' });
+    const className = dialog.getAttribute('class') ?? '';
+    expect(className).toContain('max-w-[min(');
+    expect(className).not.toContain('max-w-lg');
+  });
+
   it('cannot be dismissed mid-export', async () => {
     const user = userEvent.setup();
     // Definite-assignment `let x!: T`, not `T | null` (same house idiom as
