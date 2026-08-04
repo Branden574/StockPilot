@@ -145,10 +145,56 @@ async function fetchOne(
     const contentType = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
     const extension = ALLOWED_CONTENT_TYPES.get(contentType);
     if (!extension) return null;
+    // Cheap fast path: an HONESTLY declared oversized body is rejected
+    // without even opening the stream.
     const declared = Number(res.headers.get('content-length') ?? '0');
     if (declared > MAX_EMBEDDED_IMAGE_BYTES) return null;
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength === 0 || buf.byteLength > MAX_EMBEDDED_IMAGE_BYTES) return null;
+
+    // HARD cap. `content-length` cannot be trusted on its own: it can be
+    // absent, zero, or (from a hostile or merely misconfigured origin)
+    // understated. Buffering the whole body first via res.arrayBuffer() and
+    // checking size only afterward — the previous approach — lets an
+    // attacker force this serverless function to hold an unbounded body in
+    // memory before the check ever runs. Instead, stream the body and bail
+    // out the instant the running total crosses the cap, so we never hold
+    // more than MAX_EMBEDDED_IMAGE_BYTES plus at most one in-flight chunk.
+    const reader = res.body?.getReader();
+    if (!reader) {
+      // Some runtimes/mocks don't expose a real ReadableStream body (a
+      // Response built without one, or certain test doubles). Real fetch()
+      // responses in this codebase's runtimes (Node/undici locally, the
+      // platform's edge/node fetch in production) always provide res.body,
+      // so this branch is a documented fallback, not the common path — it
+      // keeps the POST-download size check as a backstop but is NOT hardened
+      // against an oversized body the way the streaming path above is.
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.byteLength === 0 || buf.byteLength > MAX_EMBEDDED_IMAGE_BYTES) return null;
+      return { data: buf, extension };
+    }
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      chunks.push(value);
+      total += value.byteLength;
+      if (total > MAX_EMBEDDED_IMAGE_BYTES) {
+        // Release the reader and tear down the connection immediately —
+        // never keep pulling once we know the body is oversized.
+        controller.abort();
+        await reader.cancel();
+        return null;
+      }
+    }
+    if (total === 0) return null;
+    const buf = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      buf.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
     return { data: buf, extension };
   } catch {
     // Timeout, DNS, reset, abort. Never log — the URL carries a signed token.
@@ -176,22 +222,64 @@ export async function fetchExportImageBytes(
   let totalBytes = 0;
   let budgetSpent = false;
 
+  // Per-request URL cache, scoped to THIS call only — a plain local Map,
+  // deliberately NOT module-level state. Two rows commonly resolve to the
+  // identical signed URL (e.g. a shared cover image), and without this a
+  // duplicate would burn a second concurrency slot on a redundant fetch AND
+  // double-count its bytes against MAX_TOTAL_EMBEDDED_IMAGE_BYTES. A
+  // module-level cache would be worse than no cache at all: it would leak
+  // image bytes — and the signed URLs themselves — across unrelated export
+  // requests and across different ORGANIZATIONS, since nothing here is keyed
+  // by org or request. That is a tenant-isolation bug, not a missed
+  // optimization, so this cache must be created fresh on every call and go
+  // out of scope when the call returns. Both a successful fetch and a
+  // definitive skip (null) are memoized, so a repeated URL costs nothing
+  // either way.
+  const cache = new Map<string, EmbeddedImage | null>();
+  const inFlight = new Map<string, Promise<EmbeddedImage | null>>();
+
+  // Resolves a URL through the cache. Only the caller that actually CREATES
+  // the in-flight promise (the "owner") is allowed to charge its bytes
+  // against the total budget below — every other caller for the same URL,
+  // however many, is a "waiter" that reuses the result for free. The
+  // owner/waiter decision is made with a synchronous check-then-set (no
+  // `await` in between), so it stays correct even with several concurrent
+  // workers racing on the same duplicate URL.
+  const resolveUrl = (url: string): { promise: Promise<EmbeddedImage | null>; isOwner: boolean } => {
+    if (cache.has(url)) {
+      return { promise: Promise.resolve(cache.get(url) ?? null), isOwner: false };
+    }
+    const existing = inFlight.get(url);
+    if (existing) return { promise: existing, isOwner: false };
+    const promise = fetchOne(url, fetchImpl).then((image) => {
+      cache.set(url, image);
+      return image;
+    });
+    inFlight.set(url, promise);
+    return { promise, isOwner: true };
+  };
+
   let cursor = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
       const index = cursor++;
       if (index >= entries.length || budgetSpent) return;
       const [id, url] = entries[index]!;
-      const image = await fetchOne(url, fetchImpl);
+      const { promise, isOwner } = resolveUrl(url);
+      const image = await promise;
       if (!image) {
         skipped++;
         continue;
       }
-      if (totalBytes + image.data.byteLength > MAX_TOTAL_EMBEDDED_IMAGE_BYTES) {
-        budgetSpent = true;
-        return;
+      if (isOwner) {
+        // Only charge the total budget once per de-duplicated URL — a
+        // waiter reusing a cached image must NOT add its bytes again.
+        if (totalBytes + image.data.byteLength > MAX_TOTAL_EMBEDDED_IMAGE_BYTES) {
+          budgetSpent = true;
+          return;
+        }
+        totalBytes += image.data.byteLength;
       }
-      totalBytes += image.data.byteLength;
       images.set(id, image);
     }
   };

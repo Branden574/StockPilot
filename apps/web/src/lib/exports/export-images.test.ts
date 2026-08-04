@@ -13,7 +13,10 @@ import {
   EXPORT_IMAGE_TARGET_WIDTH_PX,
   EXPORT_TOO_MANY_IMAGES_MESSAGE,
   fetchExportImageBytes,
+  IMAGE_FETCH_CONCURRENCY,
+  IMAGE_FETCH_TIMEOUT_MS,
   MAX_EMBEDDED_IMAGE_BYTES,
+  MAX_TOTAL_EMBEDDED_IMAGE_BYTES,
 } from './export-images';
 import { inventoryExportRequestSchema, resolveExportFields } from './export-request';
 import type { InventoryExportSourceRow } from './source-row';
@@ -69,6 +72,37 @@ function jpegResponse(bytes: number, contentType = 'image/jpeg'): Response {
     status: 200,
     headers: { 'content-type': contentType, 'content-length': String(bytes) },
   });
+}
+
+/**
+ * Builds a Response whose body is a real ReadableStream we can instrument.
+ * `pulledSizes` records the size of every chunk the underlying source was
+ * actually asked to produce — this is how the streaming tests prove the
+ * implementation stopped EARLY (never pulled the whole body) rather than
+ * merely rejecting an already-fully-buffered oversized array.
+ */
+function streamedResponse(
+  chunkSizes: number[],
+  opts: { contentType?: string; contentLength?: string } = {},
+): { response: Response; pulledSizes: number[] } {
+  const pulledSizes: number[] = [];
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index >= chunkSizes.length) {
+        controller.close();
+        return;
+      }
+      const size = chunkSizes[index]!;
+      index++;
+      pulledSizes.push(size);
+      controller.enqueue(new Uint8Array(size));
+    },
+  });
+  const headers: Record<string, string> = { 'content-type': opts.contentType ?? 'image/jpeg' };
+  if (opts.contentLength !== undefined) headers['content-length'] = opts.contentLength;
+  const response = new Response(stream, { status: 200, headers });
+  return { response, pulledSizes };
 }
 
 beforeEach(() => {
@@ -217,6 +251,161 @@ describe('fetchExportImageBytes', () => {
     }
     warn.mockRestore();
     error.mockRestore();
+  });
+});
+
+/**
+ * Finding 1 (Important, fix wave): the byte cap must be HARD. Before this
+ * fix, `fetchOne` only rejected pre-download when `content-length` was
+ * present AND accurate; if the header was missing, zero, or understated,
+ * the whole body was buffered via `res.arrayBuffer()` before the
+ * post-download size check ran. A hostile or misconfigured origin could
+ * force this serverless function to buffer an unbounded body in memory.
+ * These tests prove the guard now stops READING the stream early — not
+ * just that it eventually rejects the fully-buffered result.
+ */
+describe('fetchExportImageBytes — hard byte cap (streaming)', () => {
+  it('content-length ABSENT + oversized body: image is skipped and the stream is abandoned early', async () => {
+    // 5 chunks of 300KB. The 512KB (MAX_EMBEDDED_IMAGE_BYTES) cap is
+    // crossed partway through chunk 2 (300KB + 300KB = 600KB > 512KB), so a
+    // hard guard must never reach chunk 5.
+    const chunkSizes = [300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024];
+    const { response, pulledSizes } = streamedResponse(chunkSizes); // no content-length header at all
+    const fetchImpl = vi.fn(async () => response);
+    const { images, skipped } = await fetchExportImageBytes(
+      new Map([['a', 'https://signed.example/a.jpg']]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    expect(images.has('a')).toBe(false);
+    expect(skipped).toBe(1);
+    // The hard proof: the implementation must not have pulled every chunk.
+    // A soft (post-buffer) cap would drain the whole 5-chunk stream first.
+    expect(pulledSizes.length).toBeLessThan(chunkSizes.length);
+  });
+
+  it('content-length UNDERSTATED (declares small, body is large): skipped, stream abandoned early', async () => {
+    const chunkSizes = [300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024];
+    const { response, pulledSizes } = streamedResponse(chunkSizes, { contentLength: '100' });
+    const fetchImpl = vi.fn(async () => response);
+    const { images, skipped } = await fetchExportImageBytes(
+      new Map([['a', 'https://signed.example/a.jpg']]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    expect(images.has('a')).toBe(false);
+    expect(skipped).toBe(1);
+    expect(pulledSizes.length).toBeLessThan(chunkSizes.length);
+  });
+
+  it('a normal small image still succeeds unchanged (no regression)', async () => {
+    // Multiple small chunks below the cap — proves the streamed
+    // reassembly produces byte-identical, correctly sized output.
+    const chunkSizes = [40 * 1024, 40 * 1024, 20 * 1024];
+    const { response } = streamedResponse(chunkSizes);
+    const fetchImpl = vi.fn(async () => response);
+    const { images, skipped } = await fetchExportImageBytes(
+      new Map([['a', 'https://signed.example/a.jpg']]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    expect(skipped).toBe(0);
+    expect(images.get('a')!.extension).toBe('jpeg');
+    expect(images.get('a')!.data.byteLength).toBe(100 * 1024);
+  });
+});
+
+/**
+ * Finding 2 (Important, fix wave): per-request URL cache. Two rows can
+ * resolve to the identical signed URL (e.g. a shared cover image). Without
+ * a cache, each duplicate wastes a concurrency slot on a redundant network
+ * call AND double-counts its bytes against MAX_TOTAL_EMBEDDED_IMAGE_BYTES.
+ */
+describe('fetchExportImageBytes — per-request URL cache', () => {
+  it('two rows sharing one image URL: exactly ONE fetch call, both rows get the image', async () => {
+    const fetchImpl = vi.fn(async () => jpegResponse(1024));
+    const { images, skipped } = await fetchExportImageBytes(
+      new Map([
+        ['row-a', 'https://signed.example/shared.jpg'],
+        ['row-b', 'https://signed.example/shared.jpg'],
+      ]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(images.has('row-a')).toBe(true);
+    expect(images.has('row-b')).toBe(true);
+    expect(images.get('row-a')!.data.byteLength).toBe(1024);
+    expect(images.get('row-b')!.data.byteLength).toBe(1024);
+    expect(skipped).toBe(0);
+  });
+
+  it('charges a de-duplicated URL against the total budget ONCE, not per row', async () => {
+    // Each row's image sits just under the PER-IMAGE cap (512KB), so there
+    // is no way to demonstrate the double-counting bug with only two rows
+    // — 2 x 512KB is nowhere near the 24MB total cap. Instead this uses
+    // enough rows sharing ONE url that charging it once per OCCURRENCE
+    // (the bug) blows the total cap and starts silently dropping rows,
+    // while charging it once per URL (the fix) leaves ~98% of the budget
+    // untouched. Real exported constants throughout — no overrides.
+    const perImageBytes = 500 * 1024; // under MAX_EMBEDDED_IMAGE_BYTES (512KB)
+    const rowCount = 50; // 50 * 500KB ≈ 24.4MB > MAX_TOTAL_EMBEDDED_IMAGE_BYTES (24MB)
+    expect(rowCount * perImageBytes).toBeGreaterThan(MAX_TOTAL_EMBEDDED_IMAGE_BYTES);
+    expect(perImageBytes).toBeLessThan(MAX_EMBEDDED_IMAGE_BYTES);
+
+    const fetchImpl = vi.fn(async () => jpegResponse(perImageBytes));
+    const sharedUrl = 'https://signed.example/shared-budget.jpg';
+    const urls = new Map(
+      Array.from({ length: rowCount }, (_, i) => [`row-${i}`, sharedUrl] as const),
+    );
+    const { images, truncated } = await fetchExportImageBytes(urls, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(images.size).toBe(rowCount);
+    expect(truncated).toBe(false);
+  });
+});
+
+describe('fetchExportImageBytes — coverage gaps (Minor, fix wave)', () => {
+  it('aborts a hung fetch once IMAGE_FETCH_TIMEOUT_MS elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+            // Never resolves on its own — simulates a hung connection.
+          }),
+      );
+      const pending = fetchExportImageBytes(
+        new Map([['a', 'https://signed.example/a.jpg']]),
+        { fetchImpl: fetchImpl as unknown as typeof fetch },
+      );
+      await vi.advanceTimersByTimeAsync(IMAGE_FETCH_TIMEOUT_MS);
+      const { images, skipped } = await pending;
+      expect(images.size).toBe(0);
+      expect(skipped).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never runs more than IMAGE_FETCH_CONCURRENCY fetches at once', async () => {
+    let current = 0;
+    let max = 0;
+    const fetchImpl = vi.fn(async () => {
+      current++;
+      max = Math.max(max, current);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      current--;
+      return jpegResponse(256);
+    });
+    const urls = new Map(
+      Array.from({ length: 20 }, (_, i) => [`i${i}`, `https://signed.example/${i}.jpg`] as const),
+    );
+    await fetchExportImageBytes(urls, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(max).toBeLessThanOrEqual(IMAGE_FETCH_CONCURRENCY);
+    expect(max).toBeGreaterThan(1);
   });
 });
 
