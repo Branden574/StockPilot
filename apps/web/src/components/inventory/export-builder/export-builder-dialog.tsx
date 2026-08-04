@@ -306,6 +306,7 @@ export function ExportBuilderDialog({
             itemTypeKind={itemTypeKind}
             onToggle={(key) => setState((s) => toggleField(s, key))}
             onMove={(key, direction) => setState((s) => moveField(s, key, direction))}
+            busy={busy}
           />
           <div className="flex flex-col gap-3">
             {/* Per-format settings */}

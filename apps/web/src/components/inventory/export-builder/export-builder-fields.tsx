@@ -54,6 +54,20 @@ export interface ExportBuilderFieldsProps {
   itemTypeKind: 'book' | 'other';
   onToggle: (key: InventoryExportFieldKey) => void;
   onMove: (key: InventoryExportFieldKey, direction: 'up' | 'down' | 'top' | 'bottom') => void;
+  /**
+   * True while the dialog's own export is in flight.
+   *
+   * The dialog mounts its OWN `role="status"` region for the export stage
+   * ("Preparing…"/"Downloading…") the moment busy goes true. This
+   * component's move announcement ("X moved to…") is a SEPARATE
+   * `role="status"` region that, once a user has reordered a field, stays
+   * mounted indefinitely — nothing here ever clears it. Left alone, both
+   * regions hold content at once as soon as a reorder is followed by an
+   * export, which is two competing live-region announcements screen reader
+   * users hear simultaneously. Suppressing this region while busy keeps the
+   * invariant that at most one status region has content at a time.
+   */
+  busy?: boolean;
 }
 
 export function ExportBuilderFields({
@@ -61,6 +75,7 @@ export function ExportBuilderFields({
   itemTypeKind,
   onToggle,
   onMove,
+  busy = false,
 }: ExportBuilderFieldsProps) {
   const [query, setQuery] = React.useState('');
   const [announcement, setAnnouncement] = React.useState('');
@@ -282,7 +297,7 @@ export function ExportBuilderFields({
             </li>
           ))}
         </ol>
-        {announcement ? (
+        {announcement && !busy ? (
           <p role="status" aria-live="polite" className="sr-only">
             {announcement}
           </p>

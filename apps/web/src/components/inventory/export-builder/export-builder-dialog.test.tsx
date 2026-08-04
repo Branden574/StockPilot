@@ -224,6 +224,39 @@ describe('ExportBuilderDialog — submission', () => {
     release();
   });
 
+  it('leaves only the stage announcement live after a reorder is followed by an export', async () => {
+    // Reproduces the reviewer's sequence: reorder a field first (mounting the
+    // field-picker's own "X moved to…" `role="status"` region), THEN start an
+    // export (mounting the dialog's OWN `role="status"` stage region). Same
+    // manually-held-promise idiom as "announces the stage it is actually in"
+    // above — a plain resolved mock would let `finally` clear `stage` back to
+    // null before this test can observe the overlap.
+    const user = userEvent.setup();
+    let release!: () => void;
+    downloadSpy.mockImplementationOnce(async (_req: unknown, opts: unknown) => {
+      (opts as { onStage: (s: string) => void }).onStage('preparing');
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: /move title to top/i }));
+    // The field picker's own announcement is live, on its own, before export
+    // ever starts — confirms this test actually set up the collision.
+    expect(screen.getByRole('status').textContent).toContain('Title');
+
+    await user.click(screen.getByRole('button', { name: 'Export file' }));
+    await waitFor(() => {
+      const nonEmptyStatuses = screen
+        .getAllByRole('status')
+        .filter((el) => (el.textContent ?? '').trim().length > 0);
+      expect(nonEmptyStatuses).toHaveLength(1);
+      expect(nonEmptyStatuses[0]!.textContent).toContain('Preparing 111 books');
+    });
+    release();
+  });
+
   it('keeps every setting and shows the error INSIDE the dialog when the export fails', async () => {
     const user = userEvent.setup();
     downloadSpy.mockRejectedValueOnce(new Error('Too many exports — please wait a few minutes.'));
