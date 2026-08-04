@@ -165,6 +165,19 @@ describe('buildExportPdfRows', () => {
       buildExportPdfRows([makeSource()], makeLayout(), fields, { showImages: false })[0]!.imageUrl,
     ).toBeNull();
   });
+
+  it('renders an undefined value as an em dash', () => {
+    const undefinedField = {
+      ...fields[0]!,
+      key: 'isbn' as const,
+      value: () => undefined as unknown as string,
+    };
+    const customFields = [undefinedField];
+    const rows = buildExportPdfRows([makeSource()], makeLayout(), customFields, {
+      showImages: true,
+    });
+    expect(rows[0]!.cells.isbn).toBe(EXPORT_PDF_EM_DASH);
+  });
 });
 
 describe('InventoryExportPdf — table mode', () => {
