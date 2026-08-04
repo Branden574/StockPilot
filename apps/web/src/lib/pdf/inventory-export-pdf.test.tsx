@@ -6,6 +6,7 @@ import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
 import {
   buildExportPdfRows,
+  CATALOG_CARD_MIN_HEIGHT_PT,
   CATALOG_COVER_PT,
   EXPORT_PDF_EM_DASH,
   InventoryExportPdf,
@@ -378,6 +379,77 @@ describe('InventoryExportPdf — book catalog mode', () => {
     for (const t of texts) {
       expect(t).not.toContain('undefined');
       expect(t).not.toContain('null');
+    }
+  });
+
+  it('pins both exported constants against literal numbers', () => {
+    expect(CATALOG_COVER_PT).toEqual({
+      1: { widthPt: 84, heightPt: 112 },
+      2: { widthPt: 66, heightPt: 88 },
+      3: { widthPt: 50, heightPt: 68 },
+    });
+    expect(CATALOG_CARD_MIN_HEIGHT_PT).toEqual({
+      1: 132,
+      2: 116,
+      3: 96,
+    });
+  });
+
+  it('renders the card minHeight style matching CATALOG_CARD_MIN_HEIGHT_PT for each column', () => {
+    for (const columns of [1, 2, 3] as const) {
+      const tree = catalogRender(columns);
+      // Find the outer card wrapper with data-card
+      const cardOuter = [...walk(tree)].find(
+        (el) => (el.props as { 'data-card'?: boolean })['data-card'] === true,
+      );
+      expect(cardOuter).toBeDefined();
+      // The inner card View is the first child (View element inside the cardOuter)
+      // It carries the minHeight in its style array
+      let innerCardFound = false;
+      if (cardOuter?.props.children) {
+        const children = cardOuter.props.children as unknown;
+        if (Array.isArray(children)) {
+          for (const child of children) {
+            if (
+              child &&
+              typeof child === 'object' &&
+              'type' in child &&
+              'props' in child &&
+              (child as { type?: unknown }).type === 'VIEW'
+            ) {
+              const style = (child as { props?: { style?: unknown } }).props?.style as
+                | Array<Record<string, unknown>>
+                | undefined;
+              if (style && Array.isArray(style)) {
+                const merged = Object.assign({}, ...style) as { minHeight?: number };
+                if (merged.minHeight !== undefined) {
+                  expect(merged.minHeight).toBe(CATALOG_CARD_MIN_HEIGHT_PT[columns]);
+                  innerCardFound = true;
+                  break;
+                }
+              }
+            }
+          }
+        } else if (
+          children &&
+          typeof children === 'object' &&
+          'type' in children &&
+          'props' in children
+        ) {
+          const child = children as { type?: unknown; props?: { style?: unknown } };
+          if (child.type === 'VIEW') {
+            const style = child.props?.style as Array<Record<string, unknown>> | undefined;
+            if (style && Array.isArray(style)) {
+              const merged = Object.assign({}, ...style) as { minHeight?: number };
+              if (merged.minHeight !== undefined) {
+                expect(merged.minHeight).toBe(CATALOG_CARD_MIN_HEIGHT_PT[columns]);
+                innerCardFound = true;
+              }
+            }
+          }
+        }
+      }
+      expect(innerCardFound).toBe(true);
     }
   });
 });
