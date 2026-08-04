@@ -87,6 +87,25 @@ describe('ExportBuilderFields — listing', () => {
     await user.type(screen.getByRole('searchbox', { name: 'Search fields' }), 'zzz');
     expect(screen.getByText('No fields match that search.')).toBeTruthy();
   });
+
+  it('never filters the Column order list — only the picker checkboxes above it', async () => {
+    const user = userEvent.setup();
+    renderFields();
+    const chosen = screen.getByRole('list', { name: 'Selected fields, in export order' });
+    const beforeCount = within(chosen).getAllByRole('listitem').length;
+
+    // A query that excludes an already-selected field (Title is selected by
+    // default for a books export, and "zzz" matches nothing).
+    await user.type(screen.getByRole('searchbox', { name: 'Search fields' }), 'zzz');
+    expect(screen.getByText('No fields match that search.')).toBeTruthy();
+
+    // The picker above is empty, but the order list is a different data
+    // source (state.fieldKeys, not the filtered `available` list) and must
+    // still show every selected field, Title included.
+    const afterItems = within(chosen).getAllByRole('listitem');
+    expect(afterItems).toHaveLength(beforeCount);
+    expect(afterItems[1]!.textContent).toContain('Title');
+  });
 });
 
 describe('ExportBuilderFields — selection', () => {
@@ -169,6 +188,32 @@ describe('ExportBuilderFields — keyboard reordering', () => {
     renderFields();
     await user.click(screen.getByRole('button', { name: /move title to top/i }));
     expect(screen.getByRole('status').textContent).toContain('Title');
+  });
+
+  it('moves a mid-list field down by exactly one position', async () => {
+    // `renderFields()`'s mocked onMove never actually reorders anything, so
+    // proving the resulting ORDER (not just that onMove was called with
+    // 'down') needs the real, stateful harness — same reasoning as the
+    // focus-retention tests below. Default books order is Cover, Title,
+    // ISBN, SKU, Author, … (pinned by the "shows the selected fields in
+    // OUTPUT order" test above); Title sits mid-list, not at either end, so
+    // this exercises the real down branch rather than a boundary no-op.
+    const user = userEvent.setup();
+    render(<FieldsHarness itemTypeKind="book" />);
+    const chosen = screen.getByRole('list', { name: 'Selected fields, in export order' });
+    const before = within(chosen).getAllByRole('listitem').map((li) => li.textContent);
+    expect(before[1]).toContain('Title');
+    expect(before[2]).toContain('ISBN');
+
+    await user.click(screen.getByRole('button', { name: /move title down/i }));
+
+    const after = within(chosen).getAllByRole('listitem').map((li) => li.textContent);
+    // Title and ISBN swapped places — a move of exactly one slot, not two.
+    expect(after[1]).toContain('ISBN');
+    expect(after[2]).toContain('Title');
+    // Nothing outside the swapped pair shifted.
+    expect(after[0]).toBe(before[0]);
+    expect(after.slice(3)).toEqual(before.slice(3));
   });
 });
 

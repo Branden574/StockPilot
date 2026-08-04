@@ -64,6 +64,21 @@ describe('moveField', () => {
     expect(s.fieldKeys.at(-2)).toBe(original[2]);
   });
 
+  it('moves a mid-list field down by exactly one position', () => {
+    // The test above never exercises a successful `down` move on its own —
+    // it only reaches `down` indirectly via the boundary no-op below. Pin
+    // the actual order math for a real down move: swapping index 1 and 2,
+    // and nothing beyond that pair, so `from + 1` (correct) can't quietly
+    // regress to `from + 2` or similar and still pass.
+    const s = initialExportBuilderState('other');
+    const original = [...s.fieldKeys];
+    const moved = moveField(s, original[1]!, 'down');
+    expect(moved.fieldKeys[1]).toBe(original[2]);
+    expect(moved.fieldKeys[2]).toBe(original[1]);
+    expect(moved.fieldKeys[0]).toBe(original[0]);
+    expect(moved.fieldKeys.slice(3)).toEqual(original.slice(3));
+  });
+
   it('is a no-op at the ends and for a field that is not selected', () => {
     const s = initialExportBuilderState('other');
     expect(moveField(s, s.fieldKeys[0]!, 'up').fieldKeys).toEqual(s.fieldKeys);
