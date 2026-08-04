@@ -107,12 +107,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Same thumbnail pipeline the order picker uses — prefers stored
-  // thumb_path, falls back to transformed master, falls back to
-  // bulk-import custom_fields.thumbnail_url. unstable_cache layer
-  // means the second request is near-instant.
+  // BROWSER display, not PDF: this strip is rendered client-side in the
+  // Quick-add picker, so it wants primaryImagesForBrowserDisplay (plain
+  // signed thumb — browsers decode WebP natively) rather than the PDF/Excel
+  // variant, which pays for a transform re-encode this consumer doesn't
+  // need. Prefers stored thumb_path, falls back to transformed master,
+  // falls back to bulk-import custom_fields.thumbnail_url. unstable_cache
+  // layer means the second request is near-instant.
   const imagesSvc = new ItemImagesService(ctx);
-  const imageUrlByItem = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+  const imageUrlByItem = await imagesSvc.primaryImagesForBrowserDisplay(itemIds, 200);
 
   // Preserve the RPC's count-desc ordering by walking `top` (not items).
   // Items dropped along the way (archived between RPC + select) just

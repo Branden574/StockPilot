@@ -399,29 +399,21 @@ export class ItemImagesService {
   }
 
   /**
-   * Returns a Map<itemId, smallSignedUrl> sized for PDF rendering.
-   *
-   * Per-item resolution order:
-   *   1. If the row has `thumb_path` (uploads after 0122) — sign the
-   *      stored 200px WebP directly. Fastest path.
-   *   2. Otherwise — sign the master path WITH Supabase Storage's
-   *      transform option (width: targetWidth, resize: cover). This
-   *      asks Supabase's image-transformations service to resize on
-   *      the fly so the fetched bytes are still small even though
-   *      no pre-resized variant exists in storage.
-   *
-   * Either way the caller receives a URL that, when fetched, returns
-   * a ~20-50 KB image — small enough to embed in a PDF without
-   * blowing up the request. Rows whose item has no `item_images` row
-   * at all simply don't appear in the result map; the caller renders
-   * a placeholder.
-   *
-   * `targetWidth` defaults to 200 to match the stored thumb_path
-   * dimension and the typical PDF thumbnail cell (22pt × ~2x density).
+   * Shared implementation behind {@link primaryImagesForPdfRendering} and
+   * {@link primaryImagesForBrowserDisplay}. Both callers need the exact same
+   * `item_images` row pick (one per item, primary-first) and the exact same
+   * Phase 2 `custom_fields.thumbnail_url` fallback for items with no
+   * `item_images` row at all (bulk-imported books) — they differ ONLY in how
+   * a picked row resolves to a signed URL, which is why that piece is the
+   * one thing passed in as `resolveRow` rather than duplicated per method.
    */
-  async primaryImagesForPdfRendering(
+  private async resolvePrimaryImageUrls(
     itemIds: string[],
-    targetWidth = 200,
+    resolveRow: (row: {
+      item_id: string;
+      storage_path: string;
+      thumb_path: string | null;
+    }) => Promise<string | null>,
   ): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
@@ -444,36 +436,14 @@ export class ItemImagesService {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
-    // Phase 1 — sign every `item_images` row through the TRANSFORM signer,
-    // never the plain one. Every stored thumb in this system is WebP, which
-    // @react-pdf/renderer cannot decode (blank image) and the Excel
-    // embedder's PNG/JPEG sniff rejects. The Supabase transform endpoint
-    // re-encodes on the way out — WebP in becomes PNG out, JPEG stays JPEG,
-    // for a server-side fetch (verified against production storage
-    // 2026-08-04) — so a transformed URL is the only form every PDF/Excel
-    // consumer can actually render. Transform the small THUMB by preference:
-    // transforming the 2048px master on demand is the exact stall/failure
-    // mode the media audit reverted (see NOTE above), while a ~200px thumb
-    // re-encodes in ~0.5s cold and pennies warm. Master transform is the
-    // no-thumb fallback; the plain-signed thumb is kept only as a last
-    // resort when both transform signs fail. URLs cached 25 days via
-    // unstable_cache.
+    // Phase 1 — resolve each picked row to a signed URL via the
+    // caller-supplied chain (transform-first for PDF/Excel, plain-first for
+    // browsers — see the two public wrappers below for why they differ).
+    // `targetWidth` isn't a parameter here — each public wrapper closes over
+    // its own in `resolveRow` since only their transform legs need it.
     const signed = await Promise.all(
       [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url =
-          (row.thumb_path
-            ? await getCachedItemImageTransformedSignedUrl(
-                row.thumb_path,
-                targetWidth,
-              )
-            : null) ??
-          (await getCachedItemImageTransformedSignedUrl(
-            row.storage_path,
-            targetWidth,
-          )) ??
-          (row.thumb_path
-            ? await getCachedItemImageSignedUrl(row.thumb_path)
-            : null);
+        const url = await resolveRow(row);
         return url ? ([itemId, url] as const) : null;
       }),
     );
@@ -488,7 +458,7 @@ export class ItemImagesService {
     // (the ISBN importer in apps/web/src/server/actions/books-bulk-import.ts
     // line 79) store the cover URL there instead of creating an
     // item_images row. Without this fallback the entire books portion
-    // of every PDF would show placeholder squares.
+    // of every PDF/list would show placeholder squares.
     //
     // These URLs are typically public CDN links (Google Books,
     // Open Library, archive.org); no signing required.
@@ -517,14 +487,110 @@ export class ItemImagesService {
   }
 
   /**
+   * Returns a Map<itemId, smallSignedUrl> sized for PDF/Excel rendering.
+   * USE THIS FOR: react-pdf `<Image>` sources and the Excel image embedder
+   * (export-images.ts) — anything that fetches the bytes SERVER-SIDE and
+   * decodes them outside a browser.
+   *
+   * Per-item resolution order — TRANSFORM-FIRST, never the plain signer as
+   * the first attempt:
+   *   1. transform(thumb_path) — re-encode the stored 200px WebP through
+   *      Supabase Storage's transform endpoint (width: targetWidth,
+   *      resize: cover).
+   *   2. transform(storage_path) — same re-encode against the 2048px
+   *      master, when there is no thumb_path (pre-0122 uploads).
+   *   3. plain(thumb_path) — last-resort, only when both transform signs
+   *      fail (e.g. the transform service itself is down).
+   *
+   * WHY transform-first: every stored thumb in this system is WebP, which
+   * @react-pdf/renderer cannot decode (blank image) and the Excel embedder's
+   * PNG/JPEG sniff rejects outright. The Supabase transform endpoint
+   * re-encodes on the way out — WebP in becomes PNG out, JPEG stays JPEG,
+   * for a server-side fetch (verified against production storage
+   * 2026-08-04) — so a transformed URL is the only form every PDF/Excel
+   * consumer can actually render. Transforming the small THUMB by
+   * preference avoids transforming the 2048px master on demand, the exact
+   * stall/failure mode the media audit reverted (see the NOTE above this
+   * class). URLs cached 25 days via unstable_cache.
+   *
+   * Do NOT point a browser `<img>`/next/image consumer at this — browsers
+   * decode WebP natively for free, so paying for a PNG re-encode here is
+   * pure waste. Use {@link primaryImagesForBrowserDisplay} instead.
+   *
+   * Rows whose item has no `item_images` row at all fall through to the
+   * `custom_fields.thumbnail_url` fallback (Phase 2, shared with the
+   * browser variant); still-unresolved rows simply don't appear in the
+   * result map and the caller renders a placeholder.
+   *
+   * `targetWidth` defaults to 200 to match the stored thumb_path dimension
+   * and the typical PDF thumbnail cell (22pt × ~2x density).
+   */
+  async primaryImagesForPdfRendering(
+    itemIds: string[],
+    targetWidth = 200,
+  ): Promise<Map<string, string>> {
+    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
+      return (
+        (row.thumb_path
+          ? await getCachedItemImageTransformedSignedUrl(row.thumb_path, targetWidth)
+          : null) ??
+        (await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth)) ??
+        (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path) : null)
+      );
+    });
+  }
+
+  /**
+   * Returns a Map<itemId, smallSignedUrl> for BROWSER-rendered image strips
+   * (e.g. the orders storefront quick-add row) — a do-not-regress perf
+   * surface. USE THIS FOR: any `<img>`/next/image consumer that decodes the
+   * bytes client-side.
+   *
+   * Per-item resolution order — PLAIN-first, the inverse of the PDF/Excel
+   * variant:
+   *   1. plain(thumb_path) — sign the stored 200px WebP directly, no
+   *      transform round-trip. Cheapest possible path.
+   *   2. transform(storage_path) — only when the row has no thumb_path
+   *      (pre-0122 uploads), asking Supabase to resize the 2048px master
+   *      down to `targetWidth` on the fly.
+   *
+   * WHY plain-first: browsers decode WebP natively, so signing the stored
+   * thumb as-is is strictly cheaper than routing it through the transform
+   * endpoint for a PNG re-encode nobody needs — that re-encode exists
+   * ONLY to satisfy PDF/Excel renderers that can't handle WebP (see
+   * {@link primaryImagesForPdfRendering}). This is the ORIGINAL resolution
+   * chain this service used before the PDF/Excel path needed a
+   * transform-first fix; it stays correct and unchanged for browsers.
+   *
+   * Rows whose item has no `item_images` row at all fall through to the
+   * `custom_fields.thumbnail_url` fallback (Phase 2, shared with the PDF
+   * variant); still-unresolved rows simply don't appear in the result map.
+   *
+   * `targetWidth` defaults to 200, matching the stored thumb_path
+   * dimension — only exercised on the no-thumb transform fallback leg.
+   */
+  async primaryImagesForBrowserDisplay(
+    itemIds: string[],
+    targetWidth = 200,
+  ): Promise<Map<string, string>> {
+    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
+      return row.thumb_path
+        ? await getCachedItemImageSignedUrl(row.thumb_path)
+        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
+    });
+  }
+
+  /**
    * Primary image URL per item pointing at the SHARP source — the master
    * (`storage_path`, capped 2048px WebP) rather than the 200-400px
    * pre-generated thumb. The PUBLIC catalog renders these through next/image,
    * whose optimizer downscales + re-encodes to the exact ~240px card cell, so
    * a large source yields a crisp retina card at a small delivered byte size.
-   * The thumb path stays right for PDF rendering and the internal picker
-   * (react-pdf can't optimize; the picker wants pre-baked thumbs) — those keep
-   * {@link primaryImagesForPdfRendering}. Falls back to
+   * The thumb path stays right for PDF/Excel rendering (react-pdf can't
+   * optimize, and needs a decodable format anyway) — that surface keeps
+   * {@link primaryImagesForPdfRendering}. Other browser-side thumb consumers
+   * want {@link primaryImagesForBrowserDisplay} or the list-page-oriented
+   * primaryImagesWithThumbsForItems instead. Falls back to
    * `custom_fields.thumbnail_url` (external ISBN covers) for items with no
    * `item_images` row, same as the PDF signer.
    */

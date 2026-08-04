@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { width } from '@/test/pdf-font-metrics';
+import { safeWidth, width } from '@/test/pdf-font-metrics';
 import { REPORT_CELL_PADDING_PT } from '@/lib/pdf/column-fit';
 import {
   REPORT_BODY_FONT_SIZE_PT,
@@ -570,5 +570,32 @@ describe('estimateExportPdfPages', () => {
     const one = estimateExportPdfPages(l, 90, { catalogColumns: 1 });
     const three = estimateExportPdfPages(l, 90, { catalogColumns: 3 });
     expect(three.max).toBeLessThan(one.max);
+  });
+});
+
+/**
+ * safeWidth vs width — unknown-glyph contract (helvetica-metrics.ts). No
+ * dedicated metrics test file exists yet, so this lives here per the fix
+ * wave's instruction to fall back to pdf-layout.test.ts. `pdf-layout.ts`
+ * measures REAL, arbitrary user-typed values (SKUs, barcodes — see the
+ * "value-derived identifier widths" suite above) via `safeWidth`
+ * specifically BECAUSE that data can contain glyphs outside the pinned
+ * Helvetica AFM table (e.g. CJK characters in a pasted SKU) and a thrown
+ * error there would 500 the whole export. `width` stays throw-on-unknown
+ * so CI catches real gaps in the metric table. This test pins that
+ * contrast so a future "helpfully" unify the two functions can't silently
+ * reintroduce the 500.
+ */
+describe('safeWidth vs width — unknown glyph contract (helvetica-metrics.ts)', () => {
+  const UNKNOWN_GLYPH_TEXT = '中文 unknown glyphs';
+
+  it('width throws on unknown glyphs', () => {
+    expect(() => width(UNKNOWN_GLYPH_TEXT, 'Helvetica', 8.5)).toThrow();
+  });
+
+  it('safeWidth never throws on the same input and returns a finite, positive number', () => {
+    const w = safeWidth(UNKNOWN_GLYPH_TEXT, 'Helvetica', 8.5);
+    expect(Number.isFinite(w)).toBe(true);
+    expect(w).toBeGreaterThan(0);
   });
 });

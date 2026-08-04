@@ -155,6 +155,217 @@ describe('ItemImagesService.signedUrls (batched signing)', () => {
   });
 });
 
+/**
+ * Fix wave (2026-08-04, review of the transform-re-encode fix): pins the
+ * resolver-chain CONTRAST between the two public entry points that share
+ * `resolvePrimaryImageUrls` — PDF/Excel rendering must sign transform(thumb)
+ * first (falling back to transform(master), then plain(thumb) last) because
+ * @react-pdf/renderer and the Excel embedder can't decode WebP, while browser
+ * display must sign plain(thumb) first (the ORIGINAL pre-fix chain) because
+ * browsers decode WebP natively and a transform round-trip there is pure
+ * waste. Swapping either chain's order is exactly the regression this guards.
+ *
+ * Cache note: `next/cache`'s `unstable_cache` is mocked to a pass-through
+ * identity function at the top of this file, so `signItemImageTransformed`/
+ * `signItemImageMaster` run as plain un-cached functions here — every call
+ * reaches `createSignedUrlMock` for real, nothing is served from Next's Data
+ * Cache. Separately, `primaryImagesForPdfRendering`/`primaryImagesForBrowserDisplay`
+ * call the per-path signers directly rather than through `signedUrls()`, so
+ * they never touch the in-process success memo or the batch-sign map either
+ * (those are `signedUrls()`-only plumbing — see that describe block above).
+ * Net effect: no cross-test cache state to defeat call recording here. Unique
+ * per-test item/path names are still used anyway, matching this file's
+ * existing convention, so a future change that DOES route these methods
+ * through `signedUrls()` fails loudly here instead of silently passing on
+ * stale memoized URLs.
+ */
+describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
+  describe('primaryImagesForPdfRendering — transform(thumb) → transform(master) → plain(thumb)', () => {
+    it('signs transform(thumb) first and stops there on success', async () => {
+      const stub = makeSupabaseStub({
+        'item_images.select': {
+          data: [
+            {
+              item_id: 'item-pdf-ok',
+              storage_path: 'org-1/items/item-pdf-ok/master.jpg',
+              thumb_path: 'org-1/items/item-pdf-ok/thumb.webp',
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+          error: null,
+        },
+      });
+      const service = new ItemImagesService(
+        makeServiceContext(stub.client, { organizationId: 'org-1' }),
+      );
+      createSignedUrlMock.mockResolvedValueOnce({
+        data: { signedUrl: 'https://signed/pdf-ok-thumb-transform' },
+        error: null,
+      });
+
+      const map = await service.primaryImagesForPdfRendering(['item-pdf-ok'], 200);
+
+      expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
+      const [path, , options] = createSignedUrlMock.mock.calls[0]!;
+      expect(path).toBe('org-1/items/item-pdf-ok/thumb.webp');
+      expect(options).toEqual(
+        expect.objectContaining({ transform: expect.objectContaining({ width: 200 }) }),
+      );
+      expect(map.get('item-pdf-ok')).toBe('https://signed/pdf-ok-thumb-transform');
+    });
+
+    it('falls back to transform(master) when transform(thumb) errors', async () => {
+      const stub = makeSupabaseStub({
+        'item_images.select': {
+          data: [
+            {
+              item_id: 'item-pdf-fallback1',
+              storage_path: 'org-1/items/item-pdf-fallback1/master.jpg',
+              thumb_path: 'org-1/items/item-pdf-fallback1/thumb.webp',
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+          error: null,
+        },
+      });
+      const service = new ItemImagesService(
+        makeServiceContext(stub.client, { organizationId: 'org-1' }),
+      );
+      createSignedUrlMock
+        .mockResolvedValueOnce({ data: null, error: { message: 'transform(thumb) failed' } })
+        .mockResolvedValueOnce({
+          data: { signedUrl: 'https://signed/pdf-fallback1-master-transform' },
+          error: null,
+        });
+
+      const map = await service.primaryImagesForPdfRendering(['item-pdf-fallback1'], 200);
+
+      expect(createSignedUrlMock).toHaveBeenCalledTimes(2);
+      const [firstPath, , firstOptions] = createSignedUrlMock.mock.calls[0]!;
+      const [secondPath, , secondOptions] = createSignedUrlMock.mock.calls[1]!;
+      expect(firstPath).toBe('org-1/items/item-pdf-fallback1/thumb.webp');
+      expect(firstOptions).toEqual(expect.objectContaining({ transform: expect.anything() }));
+      expect(secondPath).toBe('org-1/items/item-pdf-fallback1/master.jpg');
+      expect(secondOptions).toEqual(expect.objectContaining({ transform: expect.anything() }));
+      expect(map.get('item-pdf-fallback1')).toBe(
+        'https://signed/pdf-fallback1-master-transform',
+      );
+    });
+
+    it('falls back to plain(thumb) LAST, only once both transform signs fail', async () => {
+      const stub = makeSupabaseStub({
+        'item_images.select': {
+          data: [
+            {
+              item_id: 'item-pdf-fallback2',
+              storage_path: 'org-1/items/item-pdf-fallback2/master.jpg',
+              thumb_path: 'org-1/items/item-pdf-fallback2/thumb.webp',
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+          error: null,
+        },
+      });
+      const service = new ItemImagesService(
+        makeServiceContext(stub.client, { organizationId: 'org-1' }),
+      );
+      createSignedUrlMock
+        .mockResolvedValueOnce({ data: null, error: { message: 'transform(thumb) failed' } })
+        .mockResolvedValueOnce({ data: null, error: { message: 'transform(master) failed' } })
+        .mockResolvedValueOnce({
+          data: { signedUrl: 'https://signed/pdf-fallback2-plain-thumb' },
+          error: null,
+        });
+
+      const map = await service.primaryImagesForPdfRendering(['item-pdf-fallback2'], 200);
+
+      expect(createSignedUrlMock).toHaveBeenCalledTimes(3);
+      const thirdCall = createSignedUrlMock.mock.calls[2]!;
+      expect(thirdCall[0]).toBe('org-1/items/item-pdf-fallback2/thumb.webp');
+      // The plain signer calls createSignedUrl(path, ttl) — NO third
+      // options argument — which is exactly what distinguishes "plain" from
+      // "transform" in this mock, since both routes share one signing fn.
+      expect(thirdCall.length).toBe(2);
+      expect(map.get('item-pdf-fallback2')).toBe(
+        'https://signed/pdf-fallback2-plain-thumb',
+      );
+    });
+  });
+
+  describe('primaryImagesForBrowserDisplay — plain(thumb) → transform(master), the ORIGINAL pre-fix chain', () => {
+    it('signs plain(thumb) first, with no transform options, and never touches transform', async () => {
+      const stub = makeSupabaseStub({
+        'item_images.select': {
+          data: [
+            {
+              item_id: 'item-browser-ok',
+              storage_path: 'org-1/items/item-browser-ok/master.jpg',
+              thumb_path: 'org-1/items/item-browser-ok/thumb.webp',
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+          error: null,
+        },
+      });
+      const service = new ItemImagesService(
+        makeServiceContext(stub.client, { organizationId: 'org-1' }),
+      );
+      createSignedUrlMock.mockResolvedValueOnce({
+        data: { signedUrl: 'https://signed/browser-ok-plain-thumb' },
+        error: null,
+      });
+
+      const map = await service.primaryImagesForBrowserDisplay(['item-browser-ok'], 200);
+
+      expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
+      const call = createSignedUrlMock.mock.calls[0]!;
+      expect(call[0]).toBe('org-1/items/item-browser-ok/thumb.webp');
+      expect(call.length).toBe(2); // plain signer — no transform options arg
+      expect(map.get('item-browser-ok')).toBe('https://signed/browser-ok-plain-thumb');
+    });
+
+    it('falls back to transform(master) only when the row has no thumb_path at all', async () => {
+      const stub = makeSupabaseStub({
+        'item_images.select': {
+          data: [
+            {
+              item_id: 'item-browser-nothumb',
+              storage_path: 'org-1/items/item-browser-nothumb/master.jpg',
+              thumb_path: null,
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+          error: null,
+        },
+      });
+      const service = new ItemImagesService(
+        makeServiceContext(stub.client, { organizationId: 'org-1' }),
+      );
+      createSignedUrlMock.mockResolvedValueOnce({
+        data: { signedUrl: 'https://signed/browser-nothumb-master-transform' },
+        error: null,
+      });
+
+      const map = await service.primaryImagesForBrowserDisplay(['item-browser-nothumb'], 200);
+
+      expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
+      const [path, , options] = createSignedUrlMock.mock.calls[0]!;
+      expect(path).toBe('org-1/items/item-browser-nothumb/master.jpg');
+      expect(options).toEqual(
+        expect.objectContaining({ transform: expect.objectContaining({ width: 200 }) }),
+      );
+      expect(map.get('item-browser-nothumb')).toBe(
+        'https://signed/browser-nothumb-master-transform',
+      );
+    });
+  });
+});
+
 // Movement/Activity P2 Task 1e: record()/remove() had ZERO audit capture —
 // a photo add/remove never showed up anywhere in the item's history. Both
 // now emit 'inventory.item.updated' (no new AuditEvent — this phase is
