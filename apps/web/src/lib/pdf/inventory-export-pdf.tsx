@@ -87,6 +87,14 @@ const styles = StyleSheet.create({
     color: PDF_COLORS.ink,
     paddingHorizontal: REPORT_CELL_PADDING_PT,
   },
+  /** Identifier cells: their width is value-derived (pdf-layout sizes the
+   *  column to the widest real value, capped), and this clip is the
+   *  last-resort net for values past the cap — @react-pdf never clips Text
+   *  overflow on its own, which is how a long SKU used to paint across the
+   *  neighbouring column's em dash. */
+  cellClip: {
+    overflow: 'hidden',
+  },
   cellRight: { textAlign: 'right' },
   cellCenter: { textAlign: 'center' },
   imageCell: {
@@ -235,18 +243,30 @@ function TableBody({ layout, rows }: { layout: ExportPdfLayout; rows: InventoryE
               )}
             </View>
           ) : null}
-          {layout.columns.map((col) => (
-            <Text
-              key={col.key}
-              style={[
-                styles.cell,
-                { width: col.widthPt, flexGrow: 0, flexShrink: 0 },
-                alignStyle(col.align),
-              ]}
-            >
-              {row.cells[col.key] ?? EXPORT_PDF_EM_DASH}
-            </Text>
-          ))}
+          {layout.columns.map((col) =>
+            col.clip ? (
+              <View
+                key={col.key}
+                data-clip
+                style={[styles.cellClip, { width: col.widthPt, flexGrow: 0, flexShrink: 0 }]}
+              >
+                <Text style={[styles.cell, { width: col.widthPt }, alignStyle(col.align)]}>
+                  {row.cells[col.key] ?? EXPORT_PDF_EM_DASH}
+                </Text>
+              </View>
+            ) : (
+              <Text
+                key={col.key}
+                style={[
+                  styles.cell,
+                  { width: col.widthPt, flexGrow: 0, flexShrink: 0 },
+                  alignStyle(col.align),
+                ]}
+              >
+                {row.cells[col.key] ?? EXPORT_PDF_EM_DASH}
+              </Text>
+            ),
+          )}
         </View>
       ))}
     </>

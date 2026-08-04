@@ -444,18 +444,36 @@ export class ItemImagesService {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
-    // Phase 1 — sign each `item_images` row's preferred URL. Stored
-    // thumbs go through the plain signer (no transform). Masters get
-    // the transform signer so Supabase resizes on the way out. Both
-    // paths cached 25 days via unstable_cache.
+    // Phase 1 — sign every `item_images` row through the TRANSFORM signer,
+    // never the plain one. Every stored thumb in this system is WebP, which
+    // @react-pdf/renderer cannot decode (blank image) and the Excel
+    // embedder's PNG/JPEG sniff rejects. The Supabase transform endpoint
+    // re-encodes on the way out — WebP in becomes PNG out, JPEG stays JPEG,
+    // for a server-side fetch (verified against production storage
+    // 2026-08-04) — so a transformed URL is the only form every PDF/Excel
+    // consumer can actually render. Transform the small THUMB by preference:
+    // transforming the 2048px master on demand is the exact stall/failure
+    // mode the media audit reverted (see NOTE above), while a ~200px thumb
+    // re-encodes in ~0.5s cold and pennies warm. Master transform is the
+    // no-thumb fallback; the plain-signed thumb is kept only as a last
+    // resort when both transform signs fail. URLs cached 25 days via
+    // unstable_cache.
     const signed = await Promise.all(
       [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url = row.thumb_path
-          ? await getCachedItemImageSignedUrl(row.thumb_path)
-          : await getCachedItemImageTransformedSignedUrl(
-              row.storage_path,
-              targetWidth,
-            );
+        const url =
+          (row.thumb_path
+            ? await getCachedItemImageTransformedSignedUrl(
+                row.thumb_path,
+                targetWidth,
+              )
+            : null) ??
+          (await getCachedItemImageTransformedSignedUrl(
+            row.storage_path,
+            targetWidth,
+          )) ??
+          (row.thumb_path
+            ? await getCachedItemImageSignedUrl(row.thumb_path)
+            : null);
         return url ? ([itemId, url] as const) : null;
       }),
     );

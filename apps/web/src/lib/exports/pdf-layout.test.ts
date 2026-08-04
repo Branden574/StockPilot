@@ -17,12 +17,14 @@ import {
 import {
   computeExportPdfLayout,
   estimateExportPdfPages,
+  IDENTIFIER_RESERVE_CAP_PT,
   IMAGE_CELL_PT,
   TOO_MANY_COLUMNS_THRESHOLD,
   tooManyColumnsWarning,
   type ExportImageSize,
   type PdfOrientation,
 } from './pdf-layout';
+import type { InventoryExportSourceRow } from './source-row';
 
 /** Same formula the three permanent fit nets use (report-headers-fit.test.ts,
  *  export-pdf-headers-fit.test.ts, registry-preset-fit.test.ts): Helvetica-Bold
@@ -452,6 +454,100 @@ describe('computeExportPdfLayout — warnings', () => {
 
     const legal = layoutFor(keys, { orientation: 'landscape', paperSize: 'legal' });
     expect(legal.overflow).toBe(false);
+  });
+});
+
+function makeSource(overrides: Partial<InventoryExportSourceRow> = {}): InventoryExportSourceRow {
+  return {
+    id: 'i-1',
+    itemType: 'other',
+    name: 'Verify Pegasus 41 - 11',
+    sku: 'SP-OMHQF-C8H-11',
+    barcode: '',
+    status: 'active',
+    quantityOnHand: 5,
+    reorderPoint: 0,
+    reorderQuantity: 0,
+    unitCost: 10,
+    retailPrice: 20,
+    category: 'Shoes',
+    primaryLocation: '',
+    supplier: '',
+    warehouse: 'Demo Distribution Center',
+    charter: 'Generic',
+    trackingType: 'none',
+    author: '',
+    isbn: '',
+    grade: '',
+    rackNumber: '',
+    rackRow: '',
+    crateColor: '',
+    crateNumber: '',
+    rackLabel: '',
+    crateLabel: '',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-02T00:00:00Z',
+    image: null,
+    legacyRawBookFields: {
+      grade: '',
+      rackNumber: '',
+      rackRow: '',
+      crateColor: '',
+      crateNumber: '',
+    },
+    ...overrides,
+  };
+}
+
+describe('computeExportPdfLayout — value-derived identifier widths (the long-SKU overlap fix)', () => {
+  const ITEM_KEYS: InventoryExportFieldKey[] = ['name', 'sku', 'barcode', 'quantity_on_hand', 'category', 'status'];
+
+  it('widens the SKU column to fit the widest real value plus padding', () => {
+    // The Demo-walk repro: SP-OMHQF-C8H-11 painted across the barcode
+    // column's em dash because the registry's fixed sku minimum was
+    // narrower than the value and identifiers never wrap.
+    const value = 'SP-OMHQF-C8H-11';
+    const withoutRows = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    const withRows = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: value })],
+    });
+    const skuWithout = withoutRows.columns.find((c) => c.key === 'sku')!.widthPt;
+    const skuWith = withRows.columns.find((c) => c.key === 'sku')!.widthPt;
+    const needed =
+      valueWidth(value) + REPORT_CELL_PADDING_PT * 2;
+    expect(skuWith).toBeGreaterThan(skuWithout);
+    expect(skuWith).toBeGreaterThanOrEqual(needed);
+  });
+
+  it('never reserves past the cap for a pathological value, and never shrinks below the registry minimum', () => {
+    const monster = 'X'.repeat(80);
+    const l = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: monster })],
+    });
+    const sku = l.columns.find((c) => c.key === 'sku')!;
+    expect(sku.widthPt).toBeLessThanOrEqual(IDENTIFIER_RESERVE_CAP_PT);
+    const short = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: 'A1' })],
+    });
+    const shortSku = short.columns.find((c) => c.key === 'sku')!.widthPt;
+    const noRows = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    expect(shortSku).toBe(noRows.columns.find((c) => c.key === 'sku')!.widthPt);
+  });
+
+  it('pins the cap literal so the contract cannot drift silently', () => {
+    expect(IDENTIFIER_RESERVE_CAP_PT).toBe(150);
+  });
+
+  it('marks identifier columns clip and ordinary columns not', () => {
+    const l = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    const byKey = new Map(l.columns.map((c) => [c.key, c.clip]));
+    expect(byKey.get('sku')).toBe(true);
+    expect(byKey.get('barcode')).toBe(true);
+    expect(byKey.get('name')).toBe(false);
+    expect(byKey.get('category')).toBe(false);
   });
 });
 

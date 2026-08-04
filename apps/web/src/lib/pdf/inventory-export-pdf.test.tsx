@@ -302,6 +302,48 @@ describe('InventoryExportPdf — table mode', () => {
   });
 });
 
+describe('InventoryExportPdf — identifier cell clipping (long-SKU overlap fix)', () => {
+  it('wraps identifier cells in an overflow-hidden clip view; ordinary cells stay bare Text', () => {
+    const layout = computeExportPdfLayout({
+      fields,
+      itemTypeKind: 'book',
+      includeImages: false,
+      imageSize: 'medium',
+      orientation: 'landscape',
+      paperSize: 'letter',
+      density: 'comfortable',
+      wrapText: true,
+      layout: 'table',
+      catalogColumns: 2,
+    });
+    const tree = InventoryExportPdf({
+      orgName: 'Demo Co',
+      orgLogoUrl: null,
+      title: 'Books export',
+      subtitle: 'all - 1 book',
+      layout,
+      rows: buildExportPdfRows([makeSource()], layout, fields, { showImages: false }),
+      repeatHeaders: true,
+      pageNumbers: true,
+    });
+    const clips = [...walk(tree)].filter(
+      (el) => (el.props as { 'data-clip'?: boolean })['data-clip'] === true,
+    );
+    // The default books field set carries two identifier columns here (isbn,
+    // sku) — every identifier cell must clip, and only identifier cells.
+    const identifierCount = layout.columns.filter((c) => c.clip).length;
+    expect(identifierCount).toBeGreaterThan(0);
+    expect(clips).toHaveLength(identifierCount);
+    for (const clip of clips) {
+      const style = Object.assign(
+        {},
+        ...(Array.isArray(clip.props.style) ? clip.props.style : [clip.props.style]),
+      ) as { overflow?: string };
+      expect(style.overflow).toBe('hidden');
+    }
+  });
+});
+
 describe('InventoryExportPdf — book catalog mode', () => {
   const catalogRender = (columns: 1 | 2 | 3, rowOverrides: Partial<InventoryExportSourceRow> = {}) => {
     const layout = computeExportPdfLayout({

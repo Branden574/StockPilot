@@ -1,12 +1,16 @@
 import {
   fitColumnWidths,
+  REPORT_BODY_FONT_SIZE_PT,
+  REPORT_CELL_PADDING_PT,
   REPORT_IMAGE_COL_GAP_PT,
   REPORT_PAGE_PADDING_PT,
   REPORT_ROW_PADDING_PT,
   type FitColumn,
 } from '@/lib/pdf/column-fit';
+import { safeWidth } from '@/lib/pdf/helvetica-metrics';
 
 import { fieldHeading, type InventoryExportField } from './field-registry';
+import type { InventoryExportSourceRow } from './source-row';
 
 /**
  * PDF geometry for the export builder (Brief sections 11 and 13).
@@ -87,6 +91,12 @@ export interface ExportPdfColumn {
   align: 'left' | 'right' | 'center';
   widthPt: number;
   wrap: boolean;
+  /** Identifier columns clip at their box edge as a last-resort safety net:
+   *  their width is value-derived (see identifierValueMinimums) so clipping
+   *  only ever engages past IDENTIFIER_RESERVE_CAP_PT, where the alternative
+   *  is painting over the neighbouring column (the long-SKU overlap the
+   *  2026-08-04 Demo walk photographed). */
+  clip: boolean;
 }
 
 export interface ExportPdfLayout {
@@ -120,6 +130,12 @@ export interface ComputeExportPdfLayoutInput {
   wrapText: boolean;
   layout: 'table' | 'catalog';
   catalogColumns: 1 | 2 | 3;
+  /** When provided, identifier column widths are derived from the widest
+   *  ACTUAL value in the export (capped), instead of the registry's fixed
+   *  pdfMinWidth guess. The server route always passes the real rows. The
+   *  dialog's client-side call estimates without rows — its warnings are
+   *  advisory and the server's allocation is authoritative. */
+  rows?: readonly InventoryExportSourceRow[];
 }
 
 function contentWidthFor(paperSize: PaperSize, orientation: PdfOrientation): number {
@@ -207,22 +223,66 @@ interface ColumnAllocation {
  * do with negative width, and Brief section 13 only requires blocking
  * "when nothing readable is possible" — this still returns positive widths.
  */
+/** Widest identifier reservation we will ever make. Past this, a value is
+ *  pathological (a barcode pasted with garbage) and the column clips instead
+ *  of eating the whole page. 150pt fits a ~34-character SKU at cell size. */
+export const IDENTIFIER_RESERVE_CAP_PT = 150;
+
+/**
+ * Per-identifier-column effective minimum width, derived from the widest
+ * actual value in `rows` (measured with the same Helvetica advance-width
+ * table the fit tests use, at the renderer's cell size) — never below the
+ * registry's pdfMinWidth, never above IDENTIFIER_RESERVE_CAP_PT. This is the
+ * long-SKU overlap fix: identifiers never wrap, and @react-pdf does not clip
+ * overflow, so a value wider than the registry's fixed guess used to paint
+ * across the neighbouring column. Sizing the column to the data removes the
+ * overlap in every realistic case; the cap plus cell-level clipping (see
+ * ExportPdfColumn.clip) bounds the pathological ones.
+ */
+function identifierValueMinimums(
+  tableFields: readonly InventoryExportField[],
+  rows: readonly InventoryExportSourceRow[] | undefined,
+): Map<string, number> {
+  const byKey = new Map<string, number>();
+  if (!rows || rows.length === 0) return byKey;
+  for (const f of tableFields) {
+    if (f.identifier !== true) continue;
+    let widest = 0;
+    for (const row of rows) {
+      const value = f.value(row);
+      if (!value) continue;
+      const w = safeWidth(String(value), 'Helvetica', REPORT_BODY_FONT_SIZE_PT);
+      if (w > widest) widest = w;
+    }
+    if (widest <= 0) continue;
+    const effective = Math.min(
+      IDENTIFIER_RESERVE_CAP_PT,
+      Math.max(f.pdfMinWidth, Math.ceil(widest) + REPORT_CELL_PADDING_PT * 2 + 1),
+    );
+    if (effective > f.pdfMinWidth) byKey.set(f.key, effective);
+  }
+  return byKey;
+}
+
 function allocateColumnWidths(
   tableFields: readonly InventoryExportField[],
   availableForFieldsPt: number,
+  identifierMinByKey?: ReadonlyMap<string, number>,
 ): ColumnAllocation {
   const identifierFields = tableFields.filter((f) => f.identifier === true);
   const wrappableFields = tableFields.filter((f) => f.identifier !== true);
-  const identifierReservePt = identifierFields.reduce((sum, f) => sum + f.pdfMinWidth, 0);
+  const reserveFor = (f: InventoryExportField) =>
+    identifierMinByKey?.get(f.key) ?? f.pdfMinWidth;
+  const identifierReservePt = identifierFields.reduce((sum, f) => sum + reserveFor(f), 0);
 
   const widthByKey = new Map<string, number>();
 
   if (identifierReservePt > availableForFieldsPt) {
     const scale = availableForFieldsPt > 0 ? availableForFieldsPt / identifierReservePt : 0;
-    for (const f of identifierFields) widthByKey.set(f.key, f.pdfMinWidth * scale);
+    for (const f of identifierFields) widthByKey.set(f.key, reserveFor(f) * scale);
     for (const f of wrappableFields) widthByKey.set(f.key, 0);
   } else {
-    for (const f of identifierFields) widthByKey.set(f.key, f.pdfMinWidth);
+    for (const f of identifierFields) widthByKey.set(f.key, reserveFor(f));
     const remainderPt = availableForFieldsPt - identifierReservePt;
     const fitInput: FitColumn[] = wrappableFields.map((f) => ({
       key: f.key,
@@ -251,9 +311,13 @@ function fieldsFitAt(
   imageReservePt: number,
   paperSize: PaperSize,
   orientation: PdfOrientation,
+  identifierMinByKey?: ReadonlyMap<string, number>,
 ): boolean {
   const availableForFieldsPt = Math.max(0, contentWidthFor(paperSize, orientation) - imageReservePt);
-  return allocateColumnWidths(tableFields, availableForFieldsPt).offendingKeys.length === 0;
+  return (
+    allocateColumnWidths(tableFields, availableForFieldsPt, identifierMinByKey).offendingKeys
+      .length === 0
+  );
 }
 
 /**
@@ -274,12 +338,19 @@ function overflowRemedies(
   imageReservePt: number,
   orientation: PdfOrientation,
   paperSize: PaperSize,
+  identifierMinByKey?: ReadonlyMap<string, number>,
 ): string[] {
   const remedies: string[] = [];
-  if (orientation === 'portrait' && fieldsFitAt(tableFields, imageReservePt, paperSize, 'landscape')) {
+  if (
+    orientation === 'portrait' &&
+    fieldsFitAt(tableFields, imageReservePt, paperSize, 'landscape', identifierMinByKey)
+  ) {
     remedies.push('landscape orientation');
   }
-  if (paperSize !== 'legal' && fieldsFitAt(tableFields, imageReservePt, 'legal', orientation)) {
+  if (
+    paperSize !== 'legal' &&
+    fieldsFitAt(tableFields, imageReservePt, 'legal', orientation, identifierMinByKey)
+  ) {
     remedies.push('Legal paper');
   }
   return remedies;
@@ -308,8 +379,12 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
 
   const imageColumnWidthPt = showImages ? IMAGE_CELL_PT[input.imageSize].widthPt : 0;
   const imageReservePt = showImages ? imageColumnWidthPt + REPORT_IMAGE_COL_GAP_PT : 0;
+  const identifierMinByKey = identifierValueMinimums(tableFields, input.rows);
   const requiredWidthPt =
-    tableFields.reduce((sum, f) => sum + f.pdfMinWidth, 0) + imageReservePt;
+    tableFields.reduce(
+      (sum, f) => sum + (identifierMinByKey.get(f.key) ?? f.pdfMinWidth),
+      0,
+    ) + imageReservePt;
 
   const orientation =
     input.orientation === 'auto' ? autoOrientation(input, requiredWidthPt) : input.orientation;
@@ -321,7 +396,11 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
   // fitColumnWidths, so the scale-down branch below can shrink the
   // wrappable columns without ever also shrinking an identifier.
   const availableForFieldsPt = Math.max(0, contentWidthPt - imageReservePt);
-  const { widthByKey, offendingKeys } = allocateColumnWidths(tableFields, availableForFieldsPt);
+  const { widthByKey, offendingKeys } = allocateColumnWidths(
+    tableFields,
+    availableForFieldsPt,
+    identifierMinByKey,
+  );
 
   const columns: ExportPdfColumn[] = tableFields.map((f) => ({
     key: f.key,
@@ -330,8 +409,9 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
     widthPt: widthByKey.get(f.key) ?? 0,
     // wrapText off means every column truncates EXCEPT the ones whose own
     // definition forbids it (ISBN, SKU, barcode) — those stay unwrapped and
-    // untruncated, which their minimum width guarantees.
+    // untruncated, which their (value-derived) minimum width guarantees.
     wrap: input.wrapText ? f.wrap : false,
+    clip: f.identifier === true,
   }));
 
   const density = DENSITY_PT[input.density];
@@ -357,7 +437,13 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
     const offendingLabels = columns
       .filter((c) => offendingKeys.includes(c.key))
       .map((c) => c.label);
-    const remedies = overflowRemedies(tableFields, imageReservePt, orientation, input.paperSize);
+    const remedies = overflowRemedies(
+      tableFields,
+      imageReservePt,
+      orientation,
+      input.paperSize,
+      identifierMinByKey,
+    );
     warnings.push(overflowWarning(offendingLabels, remedies));
   }
 
