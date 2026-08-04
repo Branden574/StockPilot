@@ -262,7 +262,7 @@ export function ExportBuilderDialog({
   return (
     <Dialog open={open} onOpenChange={busy ? () => {} : onOpenChange}>
       <DialogContent
-        className="flex max-h-[92vh] w-[min(1180px,96vw)] flex-col gap-4 overflow-y-auto"
+        className="flex max-h-[92vh] w-[min(1180px,96vw)] max-w-[min(1180px,96vw)] flex-col gap-4 overflow-y-auto"
         onOpenAutoFocus={() => {
           triggerElRef.current = document.activeElement as HTMLElement | null;
         }}
