@@ -81,6 +81,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
     // session-aware render of the layout — router.refresh() alone left
     // users on the same URL where the gate could fire again.
     if (typeof window !== 'undefined') {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate HARD navigation (new 16.3 rule): enrollment changes the session's AAL, and only a full document load re-runs middleware + server layouts with the new session. router.push()/refresh() left users where the enroll gate re-fired.
       window.location.assign('/dashboard');
     } else {
       router.refresh();
