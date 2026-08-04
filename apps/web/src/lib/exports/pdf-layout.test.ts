@@ -423,6 +423,36 @@ describe('computeExportPdfLayout — warnings', () => {
     // Never blocks: the brief says block only when nothing readable is possible.
     expect(l.columns).toHaveLength(24);
   });
+
+  /**
+   * CONTROLLER RIDER (Task 9 re-review of Task 8): `overflowRemedies` offers
+   * "Legal paper" as a remedy (its own code comment above), but until now no
+   * test actually drove a scenario down that branch — every existing overflow
+   * test here uses `paperSize: 'letter'` throughout, or the 24-field/portrait
+   * scenario immediately above, whose overflow is wide enough that even Legal
+   * wouldn't clear it (`fieldsFitAt` for Legal would still find offending
+   * keys, so the remedy is never offered and that branch stays unexercised).
+   * The reviewer's own trial run found the real trigger: BOOKS_DEFAULT_FIELD_KEYS
+   * minus its image field, plus barcode and warehouse — 13 fields, no image —
+   * at orientation 'landscape' overflows Letter (13 columns squeeze several
+   * labels below their own minimum) but fits cleanly once the SAME set is
+   * measured against Legal's wider landscape content width. Both halves are
+   * asserted so the branch is genuinely covered, not merely reached.
+   */
+  it('recommends Legal paper for a field set that overflows Letter landscape but fits Legal landscape', () => {
+    const keys: InventoryExportFieldKey[] = [
+      ...BOOKS_DEFAULT_FIELD_KEYS.filter((k) => k !== 'image'),
+      'barcode',
+      'warehouse',
+    ];
+
+    const letter = layoutFor(keys, { orientation: 'landscape', paperSize: 'letter' });
+    expect(letter.overflow).toBe(true);
+    expect(letter.warnings.some((w) => w.includes('Legal paper'))).toBe(true);
+
+    const legal = layoutFor(keys, { orientation: 'landscape', paperSize: 'legal' });
+    expect(legal.overflow).toBe(false);
+  });
 });
 
 describe('estimateExportPdfPages', () => {

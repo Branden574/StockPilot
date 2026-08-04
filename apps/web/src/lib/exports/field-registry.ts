@@ -94,6 +94,13 @@ export interface InventoryExportField {
    * identifier. Read by the layout engine as `field.identifier`, so a future
    * identifier field (e.g. a model number) only needs this flag set here,
    * never a hardcoded key list in the engine.
+   *
+   * Not the same thing as `IDENTIFYING_FIELD_KEYS` (defined further down this
+   * file, consumed by export-request.ts's "at least one of these must be
+   * selected" validator — a set that includes `name`): that one is about the
+   * FILE identifying something to a human; this one is about a single
+   * COLUMN's width never being allowed to truncate. Unrelated despite the
+   * near-identical names.
    */
   identifier?: boolean;
   /**
