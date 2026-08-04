@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
@@ -257,6 +258,33 @@ describe('ExportBuilderDialog — submission', () => {
     release();
   });
 
+  it('does not let a stale reorder announcement reappear once a failed export finishes', async () => {
+    // Carry-forward gap from the reviewer's pass above: the previous test
+    // proves the reorder announcement is SUPPRESSED while `busy` is true, but
+    // export-builder-fields.tsx's `announcement && !busy` gate only ever
+    // hides that stale text — it is never cleared. Once `busy` flips back to
+    // false (a FAILED export does exactly that, right in front of the user,
+    // dialog still open), the old "Title moved to the top." text would
+    // reappear and re-announce itself to a screen reader for no reason. The
+    // dialog resets the field picker (a fresh mount, not a state patch) the
+    // moment an export attempt starts, which clears it before the fetch
+    // rejection is even known.
+    const user = userEvent.setup();
+    downloadSpy.mockRejectedValueOnce(new Error('Too many exports — please wait a few minutes.'));
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: /move title to top/i }));
+    expect(screen.getByRole('status').textContent).toContain('Title');
+
+    await user.click(screen.getByRole('button', { name: 'Export file' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Too many exports'));
+
+    const nonEmptyStatuses = screen
+      .queryAllByRole('status')
+      .filter((el) => (el.textContent ?? '').trim().length > 0);
+    expect(nonEmptyStatuses).toHaveLength(0);
+  });
+
   it('keeps every setting and shows the error INSIDE the dialog when the export fails', async () => {
     const user = userEvent.setup();
     downloadSpy.mockRejectedValueOnce(new Error('Too many exports — please wait a few minutes.'));
@@ -292,5 +320,117 @@ describe('ExportBuilderDialog — submission', () => {
       'Include at least one identifying field: Name, SKU, ISBN or Barcode.',
     );
     expect(screen.getByRole('button', { name: 'Export file' })).toHaveProperty('disabled', true);
+  });
+});
+
+describe('ExportBuilderDialog — preview fetch lifecycle', () => {
+  it('aborts an in-flight preview fetch when the dialog unmounts', async () => {
+    // Carry-forward gap: the preview effect has threaded an AbortController's
+    // signal into fetchExportPreview since Task 14, with `return () =>
+    // controller.abort();` as its cleanup — but nothing ever asserted that the
+    // cleanup runs. Without it, a superseded or unmounted dialog's preview
+    // fetch stays in flight and can call setState on an unmounted component,
+    // or a later request can lose a race with an earlier, slower one.
+    let capturedSignal: AbortSignal | undefined;
+    previewSpy.mockImplementationOnce(async (_req: unknown, signal: unknown) => {
+      capturedSignal = signal as AbortSignal | undefined;
+      // Never resolves inside the test — if the cleanup did not abort it,
+      // there would be nothing here to observe the difference.
+      return new Promise(() => {});
+    });
+    const { unmount } = render(
+      <ExportBuilderDialog
+        open
+        onOpenChange={vi.fn()}
+        scope="filtered"
+        itemType="book"
+        filters={{ q: 'algebra' }}
+        rowCountHint={111}
+      />,
+    );
+    await waitFor(() => expect(capturedSignal).toBeDefined());
+    expect(capturedSignal?.aborted).toBe(false);
+    unmount();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
+describe('ExportBuilderDialog — accessibility and small screens', () => {
+  it('returns focus to the trigger when it closes', async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [open, setOpen] = React.useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Export
+          </button>
+          <ExportBuilderDialog
+            open={open}
+            onOpenChange={setOpen}
+            scope="filtered"
+            itemType="book"
+            rowCountHint={111}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole('button', { name: 'Export' });
+    await user.click(trigger);
+    await screen.findByRole('dialog', { name: 'Customize export' });
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('every interactive control has an accessible name', () => {
+    renderDialog();
+    for (const el of [
+      ...screen.getAllByRole('button'),
+      ...screen.getAllByRole('checkbox'),
+      ...screen.getAllByRole('radio'),
+      ...screen.getAllByRole('combobox'),
+    ]) {
+      const name = el.getAttribute('aria-label') ?? el.textContent ?? '';
+      expect(name.trim().length, el.outerHTML.slice(0, 80)).toBeGreaterThan(0);
+    }
+  });
+
+  it('states state with text, never with colour alone', () => {
+    renderDialog();
+    // The selected format card carries aria-checked; the field checkboxes carry
+    // aria-checked. Neither relies on a class to convey state.
+    expect(
+      screen.getAllByRole('radio').every((el) => el.getAttribute('aria-checked') !== null),
+    ).toBe(true);
+    expect(
+      screen.getAllByRole('checkbox').every((el) => el.getAttribute('aria-checked') !== null),
+    ).toBe(true);
+  });
+
+  it('keeps the dialog reachable on a narrow viewport — no fixed desktop width', () => {
+    renderDialog();
+    const dialog = screen.getByRole('dialog', { name: 'Customize export' });
+    const className = dialog.getAttribute('class') ?? '';
+    expect(className).toContain('w-[min(');
+    expect(className).toContain('max-h-');
+    expect(className).toContain('overflow-y-auto');
+  });
+
+  it('cannot be dismissed mid-export', async () => {
+    const user = userEvent.setup();
+    // Definite-assignment `let x!: T`, not `T | null` (same house idiom as
+    // the "prevents a duplicate submission" test above) — this repo's strict
+    // tsconfig does not credit the reassignment inside the Promise executor
+    // closure below, so `T | null` narrows to `never` at the call site.
+    let release!: () => void;
+    downloadSpy.mockImplementationOnce(
+      async () => new Promise<void>((resolve) => { release = resolve; }),
+    );
+    const { onOpenChange } = renderDialog();
+    await user.click(screen.getByRole('button', { name: 'Export file' }));
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    release();
   });
 });

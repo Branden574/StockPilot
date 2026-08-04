@@ -143,9 +143,34 @@ export function ExportBuilderDialog({
   const [stage, setStage] = React.useState<ExportStage | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [presets, setPresets] = React.useState<ExportPreset[]>(() => presetsFor(itemTypeKind));
+  // Remounts ExportBuilderFields at the start of every export attempt so its
+  // own internal "X moved to…" reorder announcement (a role="status" region
+  // that field-picker never clears once set) cannot re-surface once `busy`
+  // drops back to false — which a FAILED export does, right in front of the
+  // user, while a stale announcement from an earlier reorder is still sitting
+  // in state. Bumping this key is a full unmount+remount, which resets that
+  // component's internal state (the announcement AND the field search box)
+  // without needing a resettable prop on export-builder-fields.tsx itself.
+  const [fieldsResetKey, setFieldsResetKey] = React.useState(0);
 
   const rowCount = preview?.total ?? rowCountHint;
   const validation = validateExportBuilder(state);
+
+  // Focus restore on close (Brief 26): the trigger is always a plain button
+  // in the CALLER (inventory-table.tsx's ExportMenu, bulk-actions.tsx, or a
+  // test harness) — never a <DialogTrigger> rendered by this component — so
+  // Radix's own context.triggerRef (the target its default onCloseAutoFocus
+  // focuses) is never populated and that default restore silently no-ops,
+  // dropping focus to <body> on close (Escape included). Same fix as
+  // delivery-request-action.tsx's preview dialog (Bug 2), adapted for a
+  // trigger that lives in a DIFFERENT component: onOpenAutoFocus fires the
+  // instant the content mounts, BEFORE Radix's own FocusScope has moved
+  // focus into it, so document.activeElement there is still whatever was
+  // focused right before the dialog opened. Read it in that callback (not
+  // during render — a ref write during render is only sanctioned for
+  // one-time lazy init, and react-hooks/refs correctly flags anything more
+  // than that), then hand it back on close.
+  const triggerElRef = React.useRef<HTMLElement | null>(null);
 
   // One preview fetch per scope/filter change — NOT per field toggle. The
   // sample rows are formatted locally through the registry, so changing fields
@@ -202,6 +227,7 @@ export function ExportBuilderDialog({
     if (busy || !validation.ok) return;
     setBusy(true);
     setError(null);
+    setFieldsResetKey((k) => k + 1);
     try {
       await downloadInventoryExport(
         toExportRequest(state, {
@@ -235,7 +261,16 @@ export function ExportBuilderDialog({
 
   return (
     <Dialog open={open} onOpenChange={busy ? () => {} : onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-[min(980px,96vw)] flex-col gap-4 overflow-y-auto">
+      <DialogContent
+        className="flex max-h-[92vh] w-[min(980px,96vw)] flex-col gap-4 overflow-y-auto"
+        onOpenAutoFocus={() => {
+          triggerElRef.current = document.activeElement as HTMLElement | null;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          triggerElRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Customize export</DialogTitle>
           <DialogDescription>
@@ -302,6 +337,7 @@ export function ExportBuilderDialog({
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ExportBuilderFields
+            key={fieldsResetKey}
             state={state}
             itemTypeKind={itemTypeKind}
             onToggle={(key) => setState((s) => toggleField(s, key))}
