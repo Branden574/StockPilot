@@ -76,9 +76,26 @@ export interface InventoryExportField {
   pdfMaxWidth?: number;
   align: 'left' | 'right' | 'center';
   cellType: InventoryExportCellType;
-  /** False = an identifier that must never break across lines. Enforced by
-   *  pdfMinWidth, since @react-pdf has no no-wrap flag. */
+  /** False = this column's value must never wrap across lines (short codes,
+   *  numbers, dates, single-word statuses). Enforced by pdfMinWidth, since
+   *  @react-pdf has no no-wrap flag. NOT every wrap:false field is an
+   *  "identifier" for PDF layout purposes (grade/rack/crate/status/dates/
+   *  money are all wrap:false but ordinary columns) — see `identifier` below
+   *  for the narrower set. */
   wrap: boolean;
+  /**
+   * True for the fixed-format identifier columns Brief section 11 singles
+   * out as never-truncate (ISBN by name; SKU and barcode held to the same
+   * bar as the same kind of fixed code). Unlike an ordinary wrap:false
+   * field, an identifier column's pdfMinWidth is reserved off the top of
+   * the available width in `computeExportPdfLayout` (pdf-layout.ts), BEFORE
+   * fitColumnWidths ever runs — so the proportional/scale-down allocation
+   * that shrinks ordinary columns under overflow can never also shrink an
+   * identifier. Read by the layout engine as `field.identifier`, so a future
+   * identifier field (e.g. a model number) only needs this flag set here,
+   * never a hardcoded key list in the engine.
+   */
+  identifier?: boolean;
   /**
    * Permission required to include this field.
    *
@@ -155,6 +172,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     align: 'left',
     cellType: 'text',
     wrap: false,
+    identifier: true,
     value: (r) => r.sku,
   },
   {
@@ -172,6 +190,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     align: 'left',
     cellType: 'text',
     wrap: false,
+    identifier: true,
     value: (r) => r.barcode,
   },
   {
@@ -425,6 +444,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     align: 'left',
     cellType: 'text',
     wrap: false,
+    identifier: true,
     value: (r) => r.isbn,
   },
   {

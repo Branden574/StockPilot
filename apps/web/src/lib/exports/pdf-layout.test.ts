@@ -2,15 +2,56 @@ import { describe, expect, it } from 'vitest';
 
 import { width } from '@/test/pdf-font-metrics';
 import { REPORT_CELL_PADDING_PT } from '@/lib/pdf/column-fit';
+import {
+  REPORT_BODY_FONT_SIZE_PT,
+  REPORT_HEADER_FONT_SIZE_PT,
+  REPORT_HEADER_LETTER_SPACING_PT,
+} from '@/lib/pdf/report-table';
 
-import { getExportField, type InventoryExportFieldKey } from './field-registry';
+import {
+  BOOKS_DEFAULT_FIELD_KEYS,
+  getExportField,
+  ITEMS_DEFAULT_FIELD_KEYS,
+  type InventoryExportFieldKey,
+} from './field-registry';
 import {
   computeExportPdfLayout,
   estimateExportPdfPages,
   IMAGE_CELL_PT,
   TOO_MANY_COLUMNS_THRESHOLD,
   tooManyColumnsWarning,
+  type ExportImageSize,
+  type PdfOrientation,
 } from './pdf-layout';
+
+/** Same formula the three permanent fit nets use (report-headers-fit.test.ts,
+ *  export-pdf-headers-fit.test.ts, registry-preset-fit.test.ts): Helvetica-Bold
+ *  advance widths at REPORT_HEADER_FONT_SIZE_PT, uppercase, plus letter
+ *  spacing per character — @react-pdf applies textTransform before measuring. */
+function headerWidth(label: string): number {
+  const shown = label.toUpperCase();
+  return (
+    width(shown, 'Helvetica-Bold', REPORT_HEADER_FONT_SIZE_PT) +
+    shown.length * REPORT_HEADER_LETTER_SPACING_PT
+  );
+}
+
+/** Width of a rendered BODY cell value — plain Helvetica, no uppercase, no
+ *  letter spacing (matches valueWidth in export-pdf-headers-fit.test.ts). */
+function valueWidth(value: string): number {
+  return width(value, 'Helvetica', REPORT_BODY_FONT_SIZE_PT);
+}
+
+/**
+ * The worst-case ISBN value the isbn column must never truncate (Brief
+ * section 11: "NEVER truncate ISBN"). Same derivation as field-registry.ts's
+ * isbn.pdfMinWidth comment and export-pdf-headers-fit.test.ts's
+ * WORST_CASE_ISBN_VALUE: inventory_items.barcode has no digit-only guard
+ * anywhere a human can type it, so a person typing the ISBN exactly as
+ * printed on a book's back cover ("978-1-234-56789-7", 13 digits + 4
+ * hyphens = 17 characters) saves it verbatim.
+ */
+const WORST_CASE_ISBN_VALUE = '978-1-234-56789-7';
 
 const fields = (keys: InventoryExportFieldKey[]) => keys.map((k) => getExportField(k)!);
 
@@ -106,6 +147,151 @@ describe('computeExportPdfLayout — columns', () => {
   });
 });
 
+/**
+ * CRITICAL 1 (Task 8 review): the existing "fits every header" test above
+ * only ever exercises `orientation: 'auto'` at `imageSize: 'medium'`, which
+ * resolves to landscape for the 12-field Books default — it never once
+ * calls the function with `orientation: 'portrait'`, the exact input that
+ * reproduces the ON HAND/CATEGORY header collision (grade -7.15pt,
+ * quantity_on_hand -8.76pt, category -10.31pt, rack -0.20pt, crate -2.00pt,
+ * primary_location -6.75pt, status -5.32pt against their header boxes, at
+ * imageSize large — same overflow at small/medium, so it's orientation-
+ * driven, not image-size-driven). Portrait is one of the three orientations
+ * Brief section 11 exposes (`'auto' | 'portrait' | 'landscape'`), applied to
+ * the registry's own unmodified default preset — an ordinary input.
+ *
+ * This suite sweeps every imageSize x orientation combination (3 x 3) for
+ * BOTH default presets through the REAL `computeExportPdfLayout`, and
+ * requires one of two outcomes for every header: it fits its content box, OR
+ * the layout honestly reports `overflow: true` with a warning that NAMES the
+ * offending columns. A layout that silently overflows with no warning, or a
+ * warning that never says which columns, is the exact failure this program
+ * exists to prevent.
+ */
+describe('computeExportPdfLayout — header fit across every image size x orientation (Brief section 11)', () => {
+  const IMAGE_SIZES: ExportImageSize[] = ['small', 'medium', 'large'];
+  const ORIENTATIONS: Array<'auto' | PdfOrientation> = ['auto', 'portrait', 'landscape'];
+
+  const PRESETS: Record<
+    string,
+    { keys: readonly InventoryExportFieldKey[]; itemType: 'book' | 'other' }
+  > = {
+    'BOOKS_DEFAULT_FIELD_KEYS (books)': { keys: BOOKS_DEFAULT_FIELD_KEYS, itemType: 'book' },
+    'ITEMS_DEFAULT_FIELD_KEYS (items)': { keys: ITEMS_DEFAULT_FIELD_KEYS, itemType: 'other' },
+  };
+
+  for (const [presetLabel, { keys, itemType }] of Object.entries(PRESETS)) {
+    for (const imageSize of IMAGE_SIZES) {
+      for (const orientation of ORIENTATIONS) {
+        it(`${presetLabel} @ imageSize=${imageSize} orientation=${orientation}: every header fits, or overflow names the offending columns`, () => {
+          const l = computeExportPdfLayout({
+            fields: [...keys].map((k) => getExportField(k)!),
+            itemTypeKind: itemType,
+            includeImages: keys.includes('image'),
+            imageSize,
+            orientation,
+            paperSize: 'letter',
+            density: 'comfortable',
+            wrapText: true,
+            layout: 'table',
+            catalogColumns: 2,
+          });
+
+          const offending: string[] = [];
+          for (const col of l.columns) {
+            const needed = headerWidth(col.label);
+            const box = col.widthPt - REPORT_CELL_PADDING_PT * 2;
+            if (needed > box) offending.push(col.label);
+          }
+
+          if (offending.length === 0) return;
+
+          expect(
+            l.overflow,
+            `${presetLabel} @ ${imageSize}/${orientation}: ${offending.join(', ')} overflow their header box but layout.overflow is false`,
+          ).toBe(true);
+          const warningText = l.warnings.join(' | ');
+          for (const label of offending) {
+            expect(
+              warningText,
+              `${presetLabel} @ ${imageSize}/${orientation}: no warning names the offending column "${label}" (warnings: ${JSON.stringify(l.warnings)})`,
+            ).toContain(label);
+          }
+        });
+      }
+    }
+  }
+});
+
+/**
+ * CRITICAL 2 (Task 8 review): `fitColumnWidths`' scale-down branch has no
+ * concept of `wrap: false` identifier columns, so it shrinks ISBN exactly
+ * like a prose column once minimums don't fit — reproduced by the reviewer
+ * against the shipped engine's own widest-field-set (ISBN 63.24pt, box
+ * 57.24pt) and 24-field/portrait/large (ISBN 27.64pt, box 21.64pt)
+ * scenarios, both well under the 72.76pt a real 17-character hyphenated
+ * ISBN needs. Brief section 11: "NEVER truncate ISBN."
+ */
+describe('computeExportPdfLayout — ISBN never squeezed below its worst-case value (Brief section 11)', () => {
+  const worstCaseNeeded = valueWidth(WORST_CASE_ISBN_VALUE);
+
+  function isbnBox(
+    keys: readonly InventoryExportFieldKey[],
+    imageSize: ExportImageSize,
+    orientation: 'auto' | PdfOrientation,
+  ): number {
+    const l = computeExportPdfLayout({
+      fields: keys.map((k) => getExportField(k)!),
+      itemTypeKind: 'book',
+      includeImages: keys.includes('image'),
+      imageSize,
+      orientation,
+      paperSize: 'letter',
+      density: 'comfortable',
+      wrapText: true,
+      layout: 'table',
+      catalogColumns: 2,
+    });
+    const isbn = l.columns.find((c) => c.key === 'isbn');
+    if (!isbn) throw new Error('isbn column missing from a books preset');
+    return isbn.widthPt - REPORT_CELL_PADDING_PT * 2;
+  }
+
+  const IMAGE_SIZES: ExportImageSize[] = ['small', 'medium', 'large'];
+  const ORIENTATIONS: Array<'auto' | PdfOrientation> = ['auto', 'portrait', 'landscape'];
+
+  for (const imageSize of IMAGE_SIZES) {
+    for (const orientation of ORIENTATIONS) {
+      it(`Books default @ imageSize=${imageSize} orientation=${orientation}: isbn box holds the worst-case value`, () => {
+        expect(
+          isbnBox(BOOKS_DEFAULT, imageSize, orientation),
+        ).toBeGreaterThanOrEqual(worstCaseNeeded);
+      });
+    }
+  }
+
+  it('widest field set: isbn box holds the worst-case value', () => {
+    const keys: InventoryExportFieldKey[] = [
+      ...BOOKS_DEFAULT,
+      'barcode',
+      'warehouse',
+      'supplier',
+      'charter',
+    ];
+    expect(isbnBox(keys, 'medium', 'auto')).toBeGreaterThanOrEqual(worstCaseNeeded);
+  });
+
+  it('24-field scenario (portrait, large image): isbn box holds the worst-case value', () => {
+    const keys: InventoryExportFieldKey[] = [
+      'image', 'name', 'isbn', 'sku', 'author', 'grade', 'quantity_on_hand', 'category',
+      'rack', 'crate', 'primary_location', 'status', 'barcode', 'warehouse', 'supplier',
+      'charter', 'item_type', 'tracking_type', 'reorder_point', 'reorder_quantity',
+      'unit_cost', 'retail_price', 'inventory_value', 'created_at', 'updated_at',
+    ];
+    expect(isbnBox(keys, 'large', 'portrait')).toBeGreaterThanOrEqual(worstCaseNeeded);
+  });
+});
+
 describe('computeExportPdfLayout — orientation', () => {
   it('picks portrait for a short, imageless field set', () => {
     expect(layoutFor(['name', 'isbn', 'sku']).orientation).toBe('portrait');
@@ -115,9 +301,38 @@ describe('computeExportPdfLayout — orientation', () => {
     expect(layoutFor(BOOKS_DEFAULT).orientation).toBe('landscape');
   });
 
-  it('honours an explicit choice over auto', () => {
-    expect(layoutFor(BOOKS_DEFAULT, { orientation: 'portrait' }).orientation).toBe('portrait');
-    expect(layoutFor(['name'], { orientation: 'landscape' }).orientation).toBe('landscape');
+  it('honours an explicit choice over auto, and computes real geometry for it (not just the label)', () => {
+    // Forcing portrait on the 12-field Books default is exactly the input
+    // that can't fit (CRITICAL 1): asserting only `.orientation === 'portrait'`
+    // and stopping there — as this test used to — discards the geometry the
+    // call just computed and would pass even if that geometry silently
+    // collided headers. Portrait's own page dimensions plus a real,
+    // non-silent overflow report (never a bare 'orientation' echo) are the
+    // actual contract an explicit choice has to honour.
+    const portrait = layoutFor(BOOKS_DEFAULT, { orientation: 'portrait' });
+    expect(portrait.orientation).toBe('portrait');
+    expect(portrait.pageWidthPt).toBe(612);
+    expect(portrait.pageHeightPt).toBe(792);
+    expect(portrait.contentWidthPt).toBeLessThan(
+      layoutFor(BOOKS_DEFAULT, { orientation: 'landscape' }).contentWidthPt,
+    );
+    expect(portrait.columns).toHaveLength(11);
+    for (const col of portrait.columns) {
+      expect(col.widthPt, `${col.key} got a non-positive width`).toBeGreaterThan(0);
+    }
+    // The 12-field Books default cannot fit portrait's content width (see
+    // the dedicated overflow suite below) — an honest explicit choice
+    // reports that rather than quietly returning as if it fit.
+    expect(portrait.overflow).toBe(true);
+    expect(portrait.warnings.length).toBeGreaterThan(0);
+
+    const landscape = layoutFor(['name'], { orientation: 'landscape' });
+    expect(landscape.orientation).toBe('landscape');
+    expect(landscape.pageWidthPt).toBe(792);
+    expect(landscape.pageHeightPt).toBe(612);
+    expect(landscape.columns).toHaveLength(1);
+    expect(landscape.columns[0]!.widthPt).toBeGreaterThan(0);
+    expect(landscape.overflow).toBe(false);
   });
 
   it('gives Legal its extra length in portrait and extra width in landscape', () => {

@@ -16,9 +16,21 @@ import { fieldHeading, type InventoryExportField } from './field-registry';
  * same function to lay the document out. One implementation, so what the user
  * was warned about is what they get.
  *
- * The column-fitting order the brief specifies is followed literally:
- *   available width -> margins -> image column reserve -> field minimum widths
- *   -> weighted allocation of the surplus -> wrap long text -> warn when wide.
+ * The column-fitting order follows Brief section 13, with identifier columns
+ * (ISBN, SKU, barcode — `field.identifier` in the registry) pulled out for
+ * the reason the section names ("keep identifiers readable"): available
+ * width -> margins -> image column reserve -> identifier columns' fixed
+ * minimum widths reserved off the top -> weighted allocation of the
+ * remainder across the wrappable columns (scaling down together if even
+ * their minimums don't fit) -> wrap long text -> warn when too wide, naming
+ * the columns that got squeezed. Identifiers are reserved BEFORE the
+ * wrappable columns' allocation, not merely checked "readable" afterward as
+ * the brief's prose order literally reads — `fitColumnWidths`' scale-down
+ * has no concept of identifier vs. prose column, so anything fed through it
+ * together shrinks together, which is exactly how ISBN used to get
+ * truncated. Keeping identifiers out of that call is the only way to make
+ * "never truncate ISBN" (section 11) actually hold once the overflow branch
+ * engages.
  */
 
 export type PaperSize = 'letter' | 'legal';
@@ -125,6 +137,40 @@ function contentWidthFor(paperSize: PaperSize, orientation: PdfOrientation): num
  *              there are at most five columns; anything wider goes landscape,
  *              because portrait plus six columns is where headers start
  *              colliding
+ *
+ * Brief section 11 lists this decision's inputs as "column count, images,
+ * image size, title lengths, catalog mode." Two of those five get an honest
+ * note here rather than silent, unexamined presence in `requiredWidthPt`:
+ *
+ * - Image size DOES feed `requiredWidthPt` (via `imageReservePt`, added by
+ *   the caller before this runs) and so is genuinely read here — but for the
+ *   CURRENT registry it never changes the outcome. The five heaviest
+ *   non-image fields anywhere in EXPORT_FIELDS (name 90 + isbn 81 +
+ *   inventory_value 68 + reorder_quantity 66 + any 62pt field) sum to at
+ *   most ~367pt; even the largest image reserve (52pt, the `large` tier)
+ *   only pushes that to ~419pt, still well under Letter-portrait's 524pt
+ *   content width. No real <=5-column selection can make `portraitFits`
+ *   true at one image size and false at another today. Left in because it
+ *   is structurally correct (a wider image reserve genuinely is less width
+ *   left for columns) and becomes load-bearing the moment a future field's
+ *   `pdfMinWidth` grows or the 5-column carve-out is loosened — but it is
+ *   not doing anything today, and treating it as load-bearing without
+ *   saying so would hide that from the next person who touches this
+ *   threshold.
+ * - "Title lengths" has deliberately NOT been wired as a separate signal.
+ *   This function only ever sees field SELECTION, never row data — it runs
+ *   before any export is generated, so the dialog can preview a layout
+ *   before a single row is fetched — so there is no actual title text here
+ *   to measure. The one thing that stands in for "how much room does this
+ *   selection's prose need" is each field's own `pdfMinWidth`, and `name`'s
+ *   (90, the highest of any field) is already summed into `requiredWidthPt`
+ *   above. A second "does the selection include a long-text field" boolean
+ *   would either duplicate that same number — every wrap:true field
+ *   (name/author/category/location/warehouse/charter/supplier) already
+ *   contributes its own `pdfMinWidth` to the identical sum — or would need
+ *   actual cell values this function structurally cannot see. Brief section
+ *   11's "title lengths" is folded into the minimum-width sum already
+ *   present, not a missing input.
  */
 function autoOrientation(
   input: ComputeExportPdfLayoutInput,
@@ -136,6 +182,124 @@ function autoOrientation(
   const columnCount = input.fields.filter((f) => f.key !== 'image').length;
   const portraitFits = requiredWidthPt <= contentWidthFor(input.paperSize, 'portrait');
   return portraitFits && columnCount <= 5 ? 'portrait' : 'landscape';
+}
+
+interface ColumnAllocation {
+  widthByKey: Map<string, number>;
+  /** Keys whose final width fell below their own registry `pdfMinWidth` —
+   *  the guarantee that width was derived to keep the header (and, for
+   *  identifier columns, the worst-case value) readable. */
+  offendingKeys: string[];
+}
+
+/**
+ * Allocate `availableForFieldsPt` across `tableFields`, identifier columns
+ * first (CRITICAL 2 fix).
+ *
+ * Identifier columns (`field.identifier` — ISBN, SKU, barcode today, read
+ * off the registry rather than hardcoded here) reserve their true
+ * `pdfMinWidth` off the top and never enter `fitColumnWidths`, so the
+ * allocator's proportional scale-down — which has no concept of "this
+ * column must never truncate" — can never touch them. Only in the
+ * genuinely-unreadable case (identifiers alone wider than the available
+ * width) do they shrink too, scaled down together exactly like
+ * `fitColumnWidths`' own overflow branch; there is nothing more useful to
+ * do with negative width, and Brief section 13 only requires blocking
+ * "when nothing readable is possible" — this still returns positive widths.
+ */
+function allocateColumnWidths(
+  tableFields: readonly InventoryExportField[],
+  availableForFieldsPt: number,
+): ColumnAllocation {
+  const identifierFields = tableFields.filter((f) => f.identifier === true);
+  const wrappableFields = tableFields.filter((f) => f.identifier !== true);
+  const identifierReservePt = identifierFields.reduce((sum, f) => sum + f.pdfMinWidth, 0);
+
+  const widthByKey = new Map<string, number>();
+
+  if (identifierReservePt > availableForFieldsPt) {
+    const scale = availableForFieldsPt > 0 ? availableForFieldsPt / identifierReservePt : 0;
+    for (const f of identifierFields) widthByKey.set(f.key, f.pdfMinWidth * scale);
+    for (const f of wrappableFields) widthByKey.set(f.key, 0);
+  } else {
+    for (const f of identifierFields) widthByKey.set(f.key, f.pdfMinWidth);
+    const remainderPt = availableForFieldsPt - identifierReservePt;
+    const fitInput: FitColumn[] = wrappableFields.map((f) => ({
+      key: f.key,
+      width: f.pdfWidth,
+      minWidth: f.pdfMinWidth,
+      maxWidth: f.pdfMaxWidth,
+    }));
+    const widths = fitColumnWidths(fitInput, remainderPt);
+    wrappableFields.forEach((f, i) => widthByKey.set(f.key, widths[i] ?? 0));
+  }
+
+  const offendingKeys = tableFields
+    .filter((f) => (widthByKey.get(f.key) ?? 0) < f.pdfMinWidth - 1e-6)
+    .map((f) => f.key);
+
+  return { widthByKey, offendingKeys };
+}
+
+/**
+ * Whether `tableFields` clears every column's minimum (no offending keys) at
+ * `orientation`/`paperSize`, used only to decide whether the overflow
+ * warning can honestly recommend one of them (Brief section 13's remedies).
+ */
+function fieldsFitAt(
+  tableFields: readonly InventoryExportField[],
+  imageReservePt: number,
+  paperSize: PaperSize,
+  orientation: PdfOrientation,
+): boolean {
+  const availableForFieldsPt = Math.max(0, contentWidthFor(paperSize, orientation) - imageReservePt);
+  return allocateColumnWidths(tableFields, availableForFieldsPt).offendingKeys.length === 0;
+}
+
+/**
+ * Remedies from Brief section 13 ("switch to landscape, use Legal, remove
+ * fields, or export to Excel") that would ACTUALLY fix this exact field
+ * set — checked by trial allocation, not assumed. Landscape is only ever
+ * offered as a remedy for a portrait overflow: landscape's content width is
+ * never narrower than portrait's at the same paper size, so if landscape
+ * still overflowed there would be nothing landscape could offer that
+ * portrait couldn't. Legal is only offered when it is not already the
+ * paper size in use, and only when it actually widens the relevant
+ * dimension — Legal's PORTRAIT width equals Letter's (only the height
+ * grows), so Legal is correctly never recommended for a portrait-width
+ * overflow.
+ */
+function overflowRemedies(
+  tableFields: readonly InventoryExportField[],
+  imageReservePt: number,
+  orientation: PdfOrientation,
+  paperSize: PaperSize,
+): string[] {
+  const remedies: string[] = [];
+  if (orientation === 'portrait' && fieldsFitAt(tableFields, imageReservePt, paperSize, 'landscape')) {
+    remedies.push('landscape orientation');
+  }
+  if (paperSize !== 'legal' && fieldsFitAt(tableFields, imageReservePt, 'legal', orientation)) {
+    remedies.push('Legal paper');
+  }
+  return remedies;
+}
+
+/**
+ * The overflow warning, made actionable (Task 8 review, CRITICAL 1): names
+ * the columns that actually got squeezed below their registry minimum —
+ * never a generic "some columns" with nothing to point at — and, when the
+ * SAME field set would clear every column in a different orientation or
+ * paper size, says so, echoing Brief section 13's own remedies.
+ */
+function overflowWarning(offendingLabels: readonly string[], remedies: readonly string[]): string {
+  const list = offendingLabels.join(', ');
+  const verb = offendingLabels.length === 1 ? 'is' : 'are';
+  const tail =
+    remedies.length > 0
+      ? `Switch to ${remedies.join(' or ')} to fit every column, or remove fields.`
+      : 'Remove fields or export to Excel for the complete dataset.';
+  return `${list} ${verb} narrower than readable at this size. ${tail}`;
 }
 
 export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): ExportPdfLayout {
@@ -152,19 +316,18 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
   const page = PAPER_SIZE_PT[input.paperSize][orientation];
   const contentWidthPt = contentWidthFor(input.paperSize, orientation);
 
-  const fitInput: FitColumn[] = tableFields.map((f) => ({
-    key: f.key,
-    width: f.pdfWidth,
-    minWidth: f.pdfMinWidth,
-    maxWidth: f.pdfMaxWidth,
-  }));
-  const widths = fitColumnWidths(fitInput, Math.max(0, contentWidthPt - imageReservePt));
+  // CRITICAL 2 fix: identifier columns (ISBN, SKU, barcode) reserve their
+  // fixed pdfMinWidth off the top, before the wrappable columns ever reach
+  // fitColumnWidths, so the scale-down branch below can shrink the
+  // wrappable columns without ever also shrinking an identifier.
+  const availableForFieldsPt = Math.max(0, contentWidthPt - imageReservePt);
+  const { widthByKey, offendingKeys } = allocateColumnWidths(tableFields, availableForFieldsPt);
 
-  const columns: ExportPdfColumn[] = tableFields.map((f, i) => ({
+  const columns: ExportPdfColumn[] = tableFields.map((f) => ({
     key: f.key,
     label: fieldHeading(f, { format: 'pdf', itemType: input.itemTypeKind }),
     align: f.align,
-    widthPt: widths[i] ?? 0,
+    widthPt: widthByKey.get(f.key) ?? 0,
     // wrapText off means every column truncates EXCEPT the ones whose own
     // definition forbids it (ISBN, SKU, barcode) — those stay unwrapped and
     // untruncated, which their minimum width guarantees.
@@ -181,15 +344,21 @@ export function computeExportPdfLayout(input: ComputeExportPdfLayoutInput): Expo
     page.heightPt - REPORT_PAGE_PADDING_PT * 2 - HEADER_BLOCK_PT - TABLE_HEADER_ROW_PT;
   const estimatedRowsPerPage = Math.max(1, Math.floor(usableHeightPt / rowHeightPt));
 
-  const overflow = requiredWidthPt > contentWidthPt;
+  // CRITICAL 1 fix: overflow is now derived from the REAL allocation (did
+  // any column actually land below its own guaranteed-to-fit minimum),
+  // never a coarse sum-vs-content-width proxy that can miss (or over-flag)
+  // individual columns.
+  const overflow = offendingKeys.length > 0;
   const warnings: string[] = [];
   if (columns.length >= TOO_MANY_COLUMNS_THRESHOLD) {
     warnings.push(tooManyColumnsWarning(columns.length));
   }
   if (overflow) {
-    warnings.push(
-      'Some columns are narrower than their contents need. Remove fields, switch to Legal paper, or use landscape orientation.',
-    );
+    const offendingLabels = columns
+      .filter((c) => offendingKeys.includes(c.key))
+      .map((c) => c.label);
+    const remedies = overflowRemedies(tableFields, imageReservePt, orientation, input.paperSize);
+    warnings.push(overflowWarning(offendingLabels, remedies));
   }
 
   return {
