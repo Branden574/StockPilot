@@ -1755,52 +1755,18 @@ export class InventoryService {
       }
     }
 
-    // ── Manual auto-place (owner request 2026-08-04) ────────────────────────
-    // "type a rack, enter a starting quantity, the stock lands on that rack"
-    // — no Unplaced/awaiting-put-away chip for a hand-typed item. MANUAL path
-    // ONLY: `opts.awaitingFirstReceipt` marks the PO-driven creation paths
-    // (createItemsFromPoLines / the PO custom-line branches in
-    // PurchaseOrdersService), `opts.source === 'import'` marks the PO-import
-    // approve path (po-imports-lines.ts, which also always sets
-    // awaitingFirstReceipt), and `opts.planSlot` marks the CSV bulk importer
-    // (server/actions/import.ts — it never sends `source`, so planSlot is
-    // its only tell). None of those get this: PO/receiving keep their
-    // put-away step, and bulk/import paths are unchanged for now. An
-    // explicit `input.primaryLocationId` from the caller also wins outright
-    // — this only fills in a location the caller left unset.
-    //
-    // WHY primary_location_id, not the 'initial' stock_movements row below:
-    // `tg_seed_initial_level` (migration 0199) is an AFTER INSERT trigger on
-    // inventory_items — NOT a trigger keyed off stock_movements.to_location_id
-    // — that seeds the item's FIRST item_stock_levels holding. It prefers
-    // `new.primary_location_id` when it is a real, non-staging location in
-    // the item's org/warehouse; otherwise it falls through to the
-    // warehouse's Unplaced bucket, which is exactly the amber "awaiting
-    // put-away" state this feature exists to skip. Verified by reading
-    // 0199's SQL, not assumed — the stock_movements insert below is a
-    // ledger entry only and plays no part in seeding the level, though its
-    // `to_location_id` is still pointed at the resolved rack so the ledger
-    // reads true.
-    let resolvedPrimaryLocationId = input.primaryLocationId ?? null;
+    // MANUAL-create-only guards, computed here so both the placement block
+    // below AND its doc comment can reference them. `opts.awaitingFirstReceipt`
+    // marks the PO-driven creation paths (createItemsFromPoLines / the PO
+    // custom-line branches in PurchaseOrdersService), `opts.source === 'import'`
+    // marks the PO-import approve path (po-imports-lines.ts, which also always
+    // sets awaitingFirstReceipt), and `opts.planSlot` marks the CSV bulk
+    // importer (server/actions/import.ts — it never sends `source`, so
+    // planSlot is its only tell). None of those get auto-place: PO/receiving
+    // keep their put-away step, and bulk/import paths are unchanged for now.
     const isManualCreatePath =
       !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
     const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
-    if (
-      isManualCreatePath &&
-      !resolvedPrimaryLocationId &&
-      input.quantityOnHand > 0 &&
-      typedBinLabel
-    ) {
-      const parts = parseRackLabel(typedBinLabel);
-      const rackName = formatRackLabel(parts) || typedBinLabel;
-      const rackId = await this.findOrCreateRackLocation(
-        resolvedWarehouseId,
-        parts.number,
-        parts.row,
-        rackName,
-      );
-      if (rackId) resolvedPrimaryLocationId = rackId;
-    }
 
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
@@ -1815,7 +1781,7 @@ export class InventoryService {
         description: input.description ?? null,
         category_id: input.categoryId ?? null,
         supplier_id: input.supplierId ?? null,
-        primary_location_id: resolvedPrimaryLocationId,
+        primary_location_id: input.primaryLocationId ?? null,
         unit_cost: input.unitCost,
         retail_price: input.retailPrice,
         quantity_on_hand: input.quantityOnHand,
@@ -1882,7 +1848,50 @@ export class InventoryService {
         previous_quantity: 0,
         new_quantity: input.quantityOnHand,
         user_id: this.ctx.userId,
-        to_location_id: resolvedPrimaryLocationId,
+        to_location_id: input.primaryLocationId ?? null,
+      });
+    }
+
+    // ── Manual auto-place (owner request 2026-08-04) ────────────────────────
+    // "type a rack, enter a starting quantity, the stock lands on that rack"
+    // — no Unplaced/awaiting-put-away chip for a hand-typed item.
+    //
+    // Deliberately does NOT touch `primary_location_id` or the 'initial'
+    // movement's `to_location_id` above — both stay exactly what they were
+    // before this feature existed. `primary_location_id` is read far beyond
+    // the seeding trigger: the location FILTER (instant-mode.ts) checks it
+    // against a SITES-ONLY set, exports resolve it unscoped into a "Primary
+    // location" column, and pickers/forms all assume a site. Stamping a rack
+    // id onto it made auto-placed items vanish from every location-filtered
+    // view and leak a duplicate rack label into exports — caught in review.
+    //
+    // Instead: let `tg_seed_initial_level` (migration 0199, the AFTER INSERT
+    // trigger that actually seeds the item's first item_stock_levels row)
+    // seed the level exactly as it does today — at `primary_location_id` if
+    // the caller set a real one, else the warehouse's Unplaced bucket — and
+    // THEN reuse the bulk "Set rack" placement path: resolve-or-create the
+    // typed rack (findOrCreateRackLocation — the SAME helper, SAME dedup,
+    // SAME 23505-race retry the bulk fix uses) and transferStock the
+    // freshly-seeded holding onto it. One shared placement code path, a
+    // truthful ledger ('initial' → 'transfer', exactly what a human put-away
+    // writes), and zero change to what primary_location_id means anywhere
+    // else in the app.
+    //
+    // FAIL-SOFT: awaited with a catch-all — any failure (rack resolve/create,
+    // the holdings read, or the transfer itself) leaves the item created with
+    // its stock exactly where the trigger put it (today's behavior). A
+    // placement hiccup must never undo or block a create that already
+    // succeeded.
+    if (isManualCreatePath && input.quantityOnHand > 0 && typedBinLabel) {
+      await this.placeManualCreateOnRack(
+        data.id as string,
+        resolvedWarehouseId,
+        typedBinLabel,
+      ).catch((e) => {
+        console.error('[manual create] auto-place failed', {
+          itemId: data.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
       });
     }
 
@@ -4373,6 +4382,67 @@ export class InventoryService {
         error: e instanceof Error ? e.message : String(e),
       });
       return null;
+    }
+  }
+
+  /**
+   * Manual item creation's auto-place (owner request 2026-08-04) — called
+   * AFTER the item row and its 'initial' stock_movements ledger entry both
+   * already committed successfully. `tg_seed_initial_level` has, by this
+   * point, already seeded the item's item_stock_levels holding (at
+   * `primary_location_id` if the caller set a real one, else the
+   * warehouse's Unplaced bucket) — this method finds that holding and
+   * PHYSICALLY MOVES it onto the typed rack via transferStock, mirroring
+   * exactly what `placeItemsOntoRackByName` (the bulk "Set rack" auto-place)
+   * does for existing items: resolve-or-create through the SAME
+   * `findOrCreateRackLocation`, then transfer, never a raw level write.
+   *
+   * Never touches `primary_location_id` or any other item column — the
+   * item's declared primary location is a separate concern from where its
+   * physical stock currently sits (the same separation the rest of the app
+   * already relies on since migration 0192 moved stock accounting off
+   * primary_location_id and onto item_stock_levels).
+   *
+   * Callers MUST treat this as fail-soft (see the .catch() at the call
+   * site): every failure here — the rack not resolving, the holdings read
+   * coming back empty, a single transfer throwing — simply leaves the
+   * item's stock wherever the trigger originally put it. It never throws
+   * out of its own accord for anything BUT what it cannot recover from
+   * (propagated so the caller's catch logs it once, not per-holding).
+   */
+  private async placeManualCreateOnRack(
+    itemId: string,
+    warehouseId: string,
+    rawLabel: string,
+  ): Promise<void> {
+    const parts = parseRackLabel(rawLabel);
+    const rackName = formatRackLabel(parts) || rawLabel;
+    const rackId = await this.findOrCreateRackLocation(
+      warehouseId,
+      parts.number,
+      parts.row,
+      rackName,
+    );
+    if (!rackId) return;
+
+    const { data: holdings } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('location_id, quantity')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', itemId)
+      .gt('quantity', 0);
+    const rows = (holdings ?? []) as Array<{ location_id: string; quantity: number }>;
+    for (const row of rows) {
+      // Already on the resolved rack (e.g. the caller's own primaryLocationId
+      // happened to BE this rack) — nothing to move.
+      if (row.location_id === rackId) continue;
+      await this.transferStock({
+        itemId,
+        fromLocationId: row.location_id,
+        toLocationId: rackId,
+        quantity: Number(row.quantity),
+        notes: `Placed on rack ${rackName} at creation`,
+      });
     }
   }
 

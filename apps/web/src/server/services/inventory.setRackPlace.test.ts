@@ -20,6 +20,29 @@ import { InventoryService } from './inventory';
 
 beforeEach(() => vi.clearAllMocks());
 
+/**
+ * The supabase mock RECORDS every query-builder method call (and its args)
+ * against the holdings query, but its canned `data` is returned regardless
+ * of what filters were actually chained — it does not simulate PostgREST
+ * filtering. So a test asserting only on the OUTCOME (which holdings moved)
+ * cannot tell "the code fetched broadly and classified in JS" apart from
+ * "the code still filters `.in('locations.kind', […])` at the DB level" —
+ * both produce the same canned rows in this mock. This inspects the
+ * RECORDED chain directly: true if any call against
+ * `item_stock_levels.select` filtered on a `locations.kind` argument (the
+ * exact shape that silently drops NULL/site rows — see the method's doc in
+ * inventory.ts). Used to prove the DB-side filter is actually gone, not
+ * just that today's canned fixtures happen to still pass.
+ */
+function holdingsQueryFiltersOnLocationsKind(
+  stub: ReturnType<typeof makeSupabaseStub>,
+): boolean {
+  const args = stub.chainArgs.get('item_stock_levels.select') ?? [];
+  return args.some(
+    (callArgs) => typeof callArgs[0] === 'string' && callArgs[0].startsWith('locations.kind'),
+  );
+}
+
 describe('bulkUpdate set_rack — places stock, not just a label', () => {
   it('transfers each item\'s staging holding onto the named rack', async () => {
     const stub = makeSupabaseStub({
@@ -388,6 +411,12 @@ describe('bulkUpdate set_rack — NULL-kind (site) holdings are "not yet placed"
       p_to_location_id: 'rack-28a',
       p_quantity: 2,
     });
+    // Proves the fix is real, not just that this fixture's canned rows
+    // happen to pass — the mock replays `data` regardless of chained
+    // filters, so an outcome-only assertion can't tell "fetched broadly,
+    // classified in JS" apart from "still filters .in('locations.kind',
+    // […])" (which would ALSO return this canned NULL-kind row here).
+    expect(holdingsQueryFiltersOnLocationsKind(stub)).toBe(false);
   });
 
   it('a NULL-kind holding moves, but a split pair of existing rack/crate holdings for a DIFFERENT item stays untouched', async () => {
@@ -445,6 +474,7 @@ describe('bulkUpdate set_rack — NULL-kind (site) holdings are "not yet placed"
     expect(
       transfers.some((c) => (c.args as Record<string, unknown>).p_item_id === 'item-split'),
     ).toBe(false);
+    expect(holdingsQueryFiltersOnLocationsKind(stub)).toBe(false);
   });
 
   it('placement failure (rack cannot be resolved/created) still leaves the label written', async () => {
