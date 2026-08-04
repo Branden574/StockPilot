@@ -152,7 +152,7 @@ export function ExportBuilderFields({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search fields"
-          className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-[12.5px]"
+          className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-[13.5px]"
         />
         <button
           type="button"
@@ -166,7 +166,7 @@ export function ExportBuilderFields({
               }
             }
           }}
-          className="text-[12px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+          className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
         >
           Select all
         </button>
@@ -181,25 +181,25 @@ export function ExportBuilderFields({
               if (key !== keep) onToggle(key);
             }
           }}
-          className="text-[12px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+          className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
         >
           Clear optional
         </button>
       </div>
 
       {warnings.length > 0 ? (
-        <p role="alert" className="text-[12px] text-[var(--ed-warn,#8a6d00)]">
+        <p role="alert" className="text-[13px] text-[var(--ed-warn,#8a6d00)]">
           {warnings[0]}
         </p>
       ) : null}
 
       <div className="max-h-[240px] overflow-y-auto rounded-md border border-border p-2">
         {visibleGroups.length === 0 ? (
-          <p className="p-2 text-[12px] text-[var(--ed-ink-4)]">No fields match that search.</p>
+          <p className="p-2 text-[13px] text-[var(--ed-ink-4)]">No fields match that search.</p>
         ) : (
           visibleGroups.map(({ group, fields }) => (
             <div key={group} role="group" aria-label={GROUP_LABELS[group]} className="mb-2">
-              <p className="px-1 py-1 text-[11px] uppercase tracking-wide text-[var(--ed-ink-4)]">
+              <p className="px-1 py-1 text-[12px] uppercase tracking-wide text-[var(--ed-ink-4)]">
                 {GROUP_LABELS[group]}
               </p>
               {fields.map((field) => {
@@ -215,7 +215,7 @@ export function ExportBuilderFields({
                     aria-label={headingFor(field)}
                     disabled={disabledByCap}
                     onClick={() => onToggle(field.key)}
-                    className="flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-[12.5px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-[13.5px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <span
                       aria-hidden
@@ -237,7 +237,7 @@ export function ExportBuilderFields({
       </div>
 
       <div>
-        <p className="mb-1 text-[11px] uppercase tracking-wide text-[var(--ed-ink-4)]">
+        <p className="mb-1 text-[12px] uppercase tracking-wide text-[var(--ed-ink-4)]">
           Column order
         </p>
         <ol
@@ -252,9 +252,9 @@ export function ExportBuilderFields({
                 else rowRefs.current.delete(field.key);
               }}
               tabIndex={-1}
-              className="flex items-center gap-2 text-[12.5px]"
+              className="flex items-center gap-2 text-[13.5px]"
             >
-              <span className="w-5 text-right font-mono text-[11px] text-[var(--ed-ink-4)]">
+              <span className="w-5 text-right font-mono text-[12px] text-[var(--ed-ink-4)]">
                 {index + 1}
               </span>
               <span className="flex-1">{headingFor(field)}</span>
