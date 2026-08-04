@@ -78,7 +78,13 @@ function sourceRow(id: string, isbn: string) {
     crateLabel: '',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
-    image: null,
+    // A REAL signed image, not null: without this, the preview route's
+    // image-nulling (`.map((r) => ({ ...r, image: null })`) has nothing to
+    // strip, and 'never returns an image URL in the sample rows' below would
+    // pass even if that line were deleted (Fix wave 1, tautological-guard
+    // finding). The shape mirrors InventoryExportImage exactly (source-row.ts)
+    // — thumbnailUrl only, no masterUrl field exists on that type.
+    image: { thumbnailUrl: `https://cdn.example.com/covers/${id}.jpg?token=SECRET` },
     legacyRawBookFields: {
       grade: '',
       rackNumber: '',

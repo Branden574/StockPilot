@@ -96,8 +96,14 @@ export async function POST(request: NextRequest) {
     // case is behavior-neutral for CSV output and leaves every EXPLICIT
     // request (the future Phase D dialog always sends `fields`) hitting the
     // real rejection, unchanged.
+    // Only coerce when the client did NOT itself send an imageMode: an
+    // explicit `options.imageMode: 'embedded'` is a stated choice, and
+    // silently downgrading it to 'url' would hide the caller's real request
+    // instead of 400ing through resolveExportFields's own rejection path.
+    const clientSentImageMode =
+      (json as { options?: { imageMode?: unknown } } | null)?.options?.imageMode !== undefined;
     const options =
-      format === 'csv' && !parsed.data.fields
+      format === 'csv' && !parsed.data.fields && !clientSentImageMode
         ? { ...rawOptions, imageMode: 'url' as const }
         : rawOptions;
 

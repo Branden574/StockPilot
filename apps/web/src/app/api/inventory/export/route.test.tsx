@@ -414,6 +414,57 @@ describe('POST /api/inventory/export — the field list is honoured and validate
   });
 });
 
+// ADDITIVE (Fix wave 1, not in the brief's verbatim suite): pins the CSV
+// imageMode coercion's narrowness — it must fire ONLY when the client sent
+// neither `fields` nor an explicit `options.imageMode`. Without these, a
+// client that explicitly asks for 'embedded' on a CSV export would be
+// silently downgraded to 'url' instead of getting the 400 that tells them
+// CSV cannot embed images.
+describe('POST /api/inventory/export — CSV imageMode coercion is narrow', () => {
+  it('400s an explicit fields+embedded CSV request instead of silently downgrading it', async () => {
+    stubSourceRows();
+    // No explicit `options.imageMode` here on purpose: the schema default is
+    // already 'embedded' (export-request.ts), so the PARSED request is
+    // identical either way, but sending it explicitly would ALSO trip the
+    // clientSentImageMode gate and mask whether the `!parsed.data.fields`
+    // gate alone is doing its job — this body isolates that gate: an
+    // explicit field list (containing `image`) must still be rejected on
+    // CSV, the same as it always was, and the coercion must never touch it.
+    const res = await POST(
+      buildRequest({
+        format: 'csv',
+        scope: 'all',
+        itemType: 'book',
+        fields: ['image', 'name'],
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('400s a bare CSV request (no fields) that explicitly asks for embedded images', async () => {
+    stubSourceRows();
+    // itemType: 'book' so the registry default field list actually leads with
+    // `image` (BOOKS_DEFAULT_FIELD_KEYS) — the 'all'/'other' default list
+    // omits image entirely, which would make imagesRequested false and the
+    // request pass with no rejection regardless of imageMode, testing nothing.
+    const res = await POST(
+      buildRequest({
+        format: 'csv',
+        scope: 'all',
+        itemType: 'book',
+        options: { imageMode: 'embedded' },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('still lets the bare pre-builder CSV request (no fields, no options) through at 200', async () => {
+    stubSourceRows();
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all', itemType: 'book' }));
+    expect(res.status).toBe(200);
+  });
+});
+
 // ADDITIVE (Task 13 test-hygiene sweep, not in the brief's verbatim suite):
 // none of the brief's own tests assert Content-Type or the file EXTENSION in
 // Content-Disposition per format — every one of them checks status/body/a
