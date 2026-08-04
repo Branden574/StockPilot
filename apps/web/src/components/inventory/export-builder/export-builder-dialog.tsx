@@ -108,7 +108,7 @@ function Checkbox({
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      className="inline-flex items-center gap-2 text-[12.5px] text-[var(--ed-ink-2)]"
+      className="inline-flex items-center gap-2 text-[13.5px] text-[var(--ed-ink-2)]"
     >
       <span
         aria-hidden
@@ -262,7 +262,7 @@ export function ExportBuilderDialog({
   return (
     <Dialog open={open} onOpenChange={busy ? () => {} : onOpenChange}>
       <DialogContent
-        className="flex max-h-[92vh] w-[min(980px,96vw)] flex-col gap-4 overflow-y-auto"
+        className="flex max-h-[92vh] w-[min(1180px,96vw)] flex-col gap-4 overflow-y-auto"
         onOpenAutoFocus={() => {
           triggerElRef.current = document.activeElement as HTMLElement | null;
         }}
@@ -280,7 +280,7 @@ export function ExportBuilderDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <p className="text-[12.5px] font-medium text-[var(--ed-ink-2)]">
+        <p className="text-[13.5px] font-medium text-[var(--ed-ink-2)]">
           {scopeSummary({ scope, count: rowCount, itemTypeKind })}
         </p>
 
@@ -299,8 +299,8 @@ export function ExportBuilderDialog({
                   : 'border-border bg-background hover:border-[var(--ed-line-strong)]'
               }`}
             >
-              <span className="block text-[13px] font-medium">{f.label}</span>
-              <span className="mt-1 block text-[11.5px] text-[var(--ed-ink-3)]">
+              <span className="block text-[14px] font-medium">{f.label}</span>
+              <span className="mt-1 block text-[12.5px] text-[var(--ed-ink-3)]">
                 {f.description}
               </span>
             </button>
@@ -329,7 +329,7 @@ export function ExportBuilderDialog({
           <button
             type="button"
             onClick={() => setState((s) => restoreDefaults(s, itemTypeKind))}
-            className="text-[12px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+            className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
           >
             Restore recommended defaults
           </button>
@@ -347,7 +347,7 @@ export function ExportBuilderDialog({
           <div className="flex flex-col gap-3">
             {/* Per-format settings */}
             <fieldset className="rounded-md border border-border p-3">
-              <legend className="px-1 text-[11.5px] font-medium text-[var(--ed-ink-3)]">
+              <legend className="px-1 text-[12.5px] font-medium text-[var(--ed-ink-3)]">
                 {state.format === 'pdf'
                   ? 'PDF layout'
                   : state.format === 'xlsx'
@@ -370,7 +370,7 @@ export function ExportBuilderDialog({
                 )}
 
                 {state.format !== 'csv' && state.fieldKeys.includes('image') ? (
-                  <label className="flex items-center gap-2 text-[12px]">
+                  <label className="flex items-center gap-2 text-[13px]">
                     Image size
                     <select
                       aria-label="Image size"
@@ -393,7 +393,7 @@ export function ExportBuilderDialog({
 
                 {state.format === 'pdf' ? (
                   <>
-                    <label className="flex items-center gap-2 text-[12px]">
+                    <label className="flex items-center gap-2 text-[13px]">
                       Paper size
                       <select
                         aria-label="Paper size"
@@ -411,7 +411,7 @@ export function ExportBuilderDialog({
                         <option value="legal">Legal</option>
                       </select>
                     </label>
-                    <label className="flex items-center gap-2 text-[12px]">
+                    <label className="flex items-center gap-2 text-[13px]">
                       Orientation
                       <select
                         aria-label="Orientation"
@@ -432,7 +432,7 @@ export function ExportBuilderDialog({
                         <option value="landscape">Landscape</option>
                       </select>
                     </label>
-                    <label className="flex items-center gap-2 text-[12px]">
+                    <label className="flex items-center gap-2 text-[13px]">
                       Row density
                       <select
                         aria-label="Row density"
@@ -457,7 +457,7 @@ export function ExportBuilderDialog({
                       </select>
                     </label>
                     {itemTypeKind === 'book' ? (
-                      <label className="flex items-center gap-2 text-[12px]">
+                      <label className="flex items-center gap-2 text-[13px]">
                         Layout
                         <select
                           aria-label="Layout"
@@ -550,22 +550,22 @@ export function ExportBuilderDialog({
           </div>
         </div>
 
-        <p className="text-[11.5px] text-[var(--ed-ink-3)]">
+        <p className="text-[12.5px] text-[var(--ed-ink-3)]">
           {builderSummaryParts({ state, itemTypeKind, rowCount }).join(' · ')}
         </p>
 
         {!validation.ok ? (
-          <p role="alert" className="text-[12px] text-[var(--ed-danger,#b3261e)]">
+          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
             {validation.message}
           </p>
         ) : null}
         {error ? (
-          <p role="alert" className="text-[12px] text-[var(--ed-danger,#b3261e)]">
+          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
             {error}
           </p>
         ) : null}
         {stageLabel ? (
-          <p role="status" aria-live="polite" className="text-[12px] text-[var(--ed-ink-3)]">
+          <p role="status" aria-live="polite" className="text-[13px] text-[var(--ed-ink-3)]">
             {stageLabel}
             {state.fieldKeys.includes('image')
               ? ' Cover images make this slower.'

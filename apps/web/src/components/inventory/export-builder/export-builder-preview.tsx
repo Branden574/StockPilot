@@ -49,9 +49,9 @@ export function ExportBuilderPreview({
     <div className="flex flex-col gap-3">
       <div className="overflow-x-auto rounded-md border border-border">
         {preview === null ? (
-          <p className="p-3 text-[12px] text-[var(--ed-ink-4)]">Loading a sample of this export…</p>
+          <p className="p-3 text-[13px] text-[var(--ed-ink-4)]">Loading a sample of this export…</p>
         ) : (
-          <table aria-label="Export preview" className="w-full text-[11.5px]">
+          <table aria-label="Export preview" className="w-full text-[12.5px]">
             <thead>
               <tr className="bg-muted text-left">
                 {fields.map((field) => (
@@ -92,7 +92,7 @@ export function ExportBuilderPreview({
         <div
           role="group"
           aria-label="Export readiness"
-          className="rounded-md border border-border p-2 text-[12px] text-[var(--ed-ink-3)]"
+          className="rounded-md border border-border p-2 text-[13px] text-[var(--ed-ink-3)]"
         >
           <p>
             {preview.readiness.withIsbn} of {preview.readiness.rows} {noun} have an ISBN
@@ -110,7 +110,7 @@ export function ExportBuilderPreview({
           ) : null}
           {/* Never a blocker: a missing cover or ISBN is a data gap, not an
               export error, and the file prints a placeholder either way. */}
-          <p className="mt-1 text-[11px] text-[var(--ed-ink-4)]">
+          <p className="mt-1 text-[12px] text-[var(--ed-ink-4)]">
             Missing values are left blank in the file. They never stop an export.
           </p>
           {preview.truncated ? (
@@ -120,7 +120,7 @@ export function ExportBuilderPreview({
       ) : null}
 
       {rowCount !== null && preview === null ? (
-        <p className="text-[11.5px] text-[var(--ed-ink-4)]">{rowCount} {noun} on screen.</p>
+        <p className="text-[12.5px] text-[var(--ed-ink-4)]">{rowCount} {noun} on screen.</p>
       ) : null}
     </div>
   );
