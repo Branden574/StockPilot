@@ -264,8 +264,9 @@ describe('toInventoryXlsx — images', () => {
 
   it('pins embedded image anchors to the correct cell: col=picture index, row=data row', async () => {
     // Regression hardening: ensure that image anchors are tied to the actual row/column,
-    // not hardcoded to (0,0). Field order: image is at index 0, so pictureIndex=0.
+    // not hardcoded to (0,0). Field order places image at index 1 (after name), so pictureIndex=1.
     const wb = await build({
+      fields: fieldsFor(['name', 'image', 'isbn', 'sku']),
       imageMode: 'embedded',
       rows: [
         makeRow({
@@ -288,11 +289,11 @@ describe('toInventoryXlsx — images', () => {
     const images = ws.getImages();
     expect(images).toHaveLength(2);
 
-    // Field order places 'image' at the first position, so pictureIndex = 0.
+    // Field order: name at 0, image at 1, so pictureIndex = 1.
     // Row numbering: header is row 0, first data row is row 1, second data row is row 2.
     const expectedAnchors = [
-      { col: 0, row: 1 }, // First data row (row 2 in Excel, row=1 in anchor)
-      { col: 0, row: 2 }, // Second data row (row 3 in Excel, row=2 in anchor)
+      { col: 1, row: 1 }, // First data row (row 2 in Excel, row=1 in anchor)
+      { col: 1, row: 2 }, // Second data row (row 3 in Excel, row=2 in anchor)
     ];
 
     images.forEach((img, idx) => {
