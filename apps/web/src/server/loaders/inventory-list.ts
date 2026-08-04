@@ -253,8 +253,10 @@ function isDefaultScalar(v: string | string[] | undefined): boolean {
 
 /**
  * The columns shared by cached-payload rows and final table rows — the
- * same columns InventoryService.list() returns for the pages (its
- * select list verbatim) plus the derived placement fields.
+ * same columns InventoryService.list() returns for the pages, plus the
+ * derived placement fields. NOT byte-for-byte verbatim: see the
+ * ITEM_SELECT_COLUMNS comment below for the one intentional omission
+ * (reorder_quantity — no consumer of this loader reads it).
  */
 interface InventoryListRowBase {
   id: string;
@@ -460,8 +462,19 @@ function adminReadContext(organizationId: string): ServiceContext {
   };
 }
 
-// Verbatim copy of InventoryService.list()'s select list so cached rows
-// carry exactly the columns the live path ships.
+// Copy of InventoryService.list()'s select list so cached rows carry
+// exactly the columns the live path ships — WITH ONE DELIBERATE OMISSION:
+// InventoryService.list() also selects `reorder_quantity` (added by
+// fix(inventory): stop exporting a reorder quantity that is always zero,
+// solely to unblock the export builder's "Reorder quantity" column). This
+// loader's only consumer is the default inventory/books list view
+// (InventoryListRowBase below → inventory-table.tsx), which has no
+// "Reorder quantity" column and reads no such field. This is a hot,
+// 60s-cached, do-not-regress list path (perf memory), so an unused column
+// is left off on purpose rather than copied in "to stay verbatim" — every
+// other column here IS a byte-for-byte match. Add reorder_quantity here
+// ONLY when a real consumer of loadInventoryList needs it, and update
+// InventoryListRowBase + the comment above it at the same time.
 const ITEM_SELECT_COLUMNS =
   'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by';
 

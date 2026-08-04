@@ -189,6 +189,11 @@ export async function buildInventoryExportSourceRows(
         i.item_type === 'book'
           ? (i.barcode ?? '') || str('isbn') || str('isbn13') || str('isbn10')
           : '',
+      // TRIMMED, for the new builder pipeline (field-registry.ts → CSV/XLSX/
+      // PDF field exports + the dialog's live preview). readBookStorage's
+      // strOrNull trims and collapses whitespace-only to null on purpose —
+      // rackLabel/crateLabel composition below depends on it. The legacy flat
+      // CSV does NOT read these; see legacyRawBookFields below.
       grade: storage.grade ?? '',
       rackNumber: storage.rackNumber ?? '',
       rackRow: storage.rackRow ?? '',
@@ -199,6 +204,19 @@ export async function buildInventoryExportSourceRows(
       createdAt: i.created_at,
       updatedAt: i.updated_at,
       image: null,
+      // UNTRIMMED, LEGACY-ONLY (Global Constraint 2 / R1). Read with the same
+      // local str() the pre-Task-6 flat builder used, not readBookStorage —
+      // /api/inventory/export.csv is contractually byte-identical forever, so
+      // a stored ' College ' must still export ' College ', not 'College'.
+      // Only buildInventoryExportRows's projection below may read this; see
+      // this property's doc in source-row.ts.
+      legacyRawBookFields: {
+        grade: str('book_grade'),
+        rackNumber: str('book_rack_number'),
+        rackRow: str('book_rack_row'),
+        crateColor: str('book_crate_color'),
+        crateNumber: str('book_crate_number'),
+      },
     };
   });
 
@@ -242,11 +260,19 @@ export async function buildInventoryExportRows(
     tracking_type: r.trackingType,
     author: r.author,
     isbn: r.isbn,
-    grade: r.grade,
-    rack_number: r.rackNumber,
-    rack_row: r.rackRow,
-    crate_color: r.crateColor,
-    crate_number: r.crateNumber,
+    // R1 (Global Constraint 2, review finding 1): read the UNTRIMMED
+    // legacyRawBookFields here, not r.grade/r.rackNumber/etc. — those five
+    // are readBookStorage's TRIMMED values for the new builder pipeline
+    // (field-registry.ts). This projection is /api/inventory/export.csv's
+    // contract and must stay byte-identical to what it emitted before Task
+    // 6's refactor, whitespace and all. Do not "helpfully" switch these back
+    // to the trimmed fields — that reintroduces the exact regression this
+    // comment is guarding against.
+    grade: r.legacyRawBookFields.grade,
+    rack_number: r.legacyRawBookFields.rackNumber,
+    rack_row: r.legacyRawBookFields.rackRow,
+    crate_color: r.legacyRawBookFields.crateColor,
+    crate_number: r.legacyRawBookFields.crateNumber,
     created_at: r.createdAt,
     updated_at: r.updatedAt,
   }));

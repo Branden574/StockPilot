@@ -83,4 +83,28 @@ export interface InventoryExportSourceRow {
   updatedAt: string;
   /** Null unless the request asked for images. A plain CSV never populates it. */
   image: InventoryExportImage | null;
+  /**
+   * LEGACY-ONLY, R1 (Global Constraint 2 review finding 1). `readBookStorage`
+   * (above) TRIMS and collapses whitespace-only to null via `strOrNull` — the
+   * right behavior for the new builder pipeline, since `rackLabel`/
+   * `crateLabel` composition already depends on trimmed pieces. But
+   * `/api/inventory/export.csv`'s flat projection (`buildInventoryExportRows`
+   * in inventory-export.ts) predates that trimming and is contractually
+   * frozen byte-identical forever: it must keep reading these five exactly as
+   * they're stored, untrimmed, the way its original local `str()` helper did.
+   * These five carry that untrimmed read so the legacy projection has
+   * something to read WITHOUT re-querying InventoryService.list() or
+   * re-parsing custom_fields itself. Nothing else should read this — every
+   * other consumer (field-registry.ts, and therefore CSV/XLSX/PDF field
+   * exports and the dialog's live preview) uses the trimmed fields above, on
+   * purpose. Do not "helpfully" unify the two; they serve different
+   * contracts.
+   */
+  legacyRawBookFields: {
+    grade: string;
+    rackNumber: string;
+    rackRow: string;
+    crateColor: string;
+    crateNumber: string;
+  };
 }

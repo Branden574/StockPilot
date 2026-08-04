@@ -322,3 +322,51 @@ describe('buildInventoryExportSourceRows', () => {
     );
   });
 });
+
+describe('legacy CSV byte-identical guarantee for the five book-storage columns (R1)', () => {
+  // Finding 1: Task 6's refactor made buildInventoryExportRows a projection
+  // over buildInventoryExportSourceRows, which reads grade/rack/crate via
+  // readBookStorage — and readBookStorage's strOrNull TRIMS. The pre-Task-6
+  // legacy builder read these five with a local untrimmed `str()` helper.
+  // A whitespace-padded custom_fields value therefore used to survive into
+  // the legacy CSV verbatim and, after the refactor, silently lost its
+  // padding. This is the regression net: it must RED on the legacy
+  // assertions before the fix, and stay green after.
+  const whitespaceCustomFields = {
+    book_grade: ' College ',
+    book_rack_number: ' 38 ',
+    book_rack_row: ' A ',
+    book_crate_color: ' blue ',
+    book_crate_number: ' 12 ',
+  };
+
+  it('preserves untrimmed whitespace in the legacy flat projection', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', custom_fields: whitespaceCustomFields }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.grade).toBe(' College ');
+    expect(r.rack_number).toBe(' 38 ');
+    expect(r.rack_row).toBe(' A ');
+    expect(r.crate_color).toBe(' blue ');
+    expect(r.crate_number).toBe(' 12 ');
+  });
+
+  it('trims the same fields on the source row, and composes rackLabel/crateLabel from the trimmed values', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', custom_fields: whitespaceCustomFields }],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.grade).toBe('College');
+    expect(r.rackNumber).toBe('38');
+    expect(r.rackRow).toBe('A');
+    expect(r.crateColor).toBe('blue');
+    expect(r.crateNumber).toBe('12');
+    expect(r.rackLabel).toBe('38-A');
+    expect(r.crateLabel).toBe('Blue 12');
+  });
+});

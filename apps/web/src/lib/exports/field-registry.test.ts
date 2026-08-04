@@ -46,6 +46,15 @@ function makeRow(overrides: Partial<InventoryExportSourceRow> = {}): InventoryEx
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-02T00:00:00Z',
     image: null,
+    // Legacy-only (see source-row.ts) — the field registry never reads this,
+    // but the row shape requires it.
+    legacyRawBookFields: {
+      grade: 'College',
+      rackNumber: '38',
+      rackRow: 'A',
+      crateColor: 'blue',
+      crateNumber: '12',
+    },
     ...overrides,
   };
 }
