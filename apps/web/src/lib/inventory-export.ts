@@ -168,7 +168,10 @@ export async function buildInventoryExportSourceRows(
       status: i.status,
       quantityOnHand: i.quantity_on_hand,
       reorderPoint: i.reorder_point,
-      reorderQuantity: (i as unknown as { reorder_quantity?: number }).reorder_quantity ?? 0,
+      // Both columns are `numeric not null default 0` — never SQL NULL — so
+      // read straight through like reorder_point. 0 is a real configured
+      // value here, not "unset"; it must print, not blank out.
+      reorderQuantity: i.reorder_quantity,
       unitCost: i.unit_cost ?? null,
       retailPrice: i.retail_price ?? null,
       category: i.category_id ? (catMap.get(i.category_id) ?? '') : '',

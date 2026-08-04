@@ -49,6 +49,7 @@ const sampleItem = {
   status: 'active',
   quantity_on_hand: 100,
   reorder_point: 5,
+  reorder_quantity: 25,
   unit_cost: 10,
   retail_price: 20,
   category_id: 'c1',
@@ -245,6 +246,14 @@ describe('buildInventoryExportSourceRows', () => {
     expect(r.category).toBe('Electronics');
     expect(r.charter).toBe('Visalia');
     expect(res.slug).toBe('books');
+  });
+
+  it('carries a non-zero reorder quantity through from the service row, same as reorder point ' +
+    '(it must never be silently defaulted to 0 — that was the export-builder bug)', async () => {
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    const r = res.rows[0]!;
+    expect(r.reorderPoint).toBe(5);
+    expect(r.reorderQuantity).toBe(25);
   });
 
   it('never populates image data — that is the caller\'s explicit opt-in', async () => {
