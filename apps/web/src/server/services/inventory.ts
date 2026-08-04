@@ -7,6 +7,7 @@ import {
   getWarehouseAccess,
   ForbiddenError,
 } from '@/lib/auth/warehouse';
+import { isRackShelfLocation } from '@/lib/locations/groups';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
@@ -1754,6 +1755,19 @@ export class InventoryService {
       }
     }
 
+    // MANUAL-create-only guards, computed here so both the placement block
+    // below AND its doc comment can reference them. `opts.awaitingFirstReceipt`
+    // marks the PO-driven creation paths (createItemsFromPoLines / the PO
+    // custom-line branches in PurchaseOrdersService), `opts.source === 'import'`
+    // marks the PO-import approve path (po-imports-lines.ts, which also always
+    // sets awaitingFirstReceipt), and `opts.planSlot` marks the CSV bulk
+    // importer (server/actions/import.ts — it never sends `source`, so
+    // planSlot is its only tell). None of those get auto-place: PO/receiving
+    // keep their put-away step, and bulk/import paths are unchanged for now.
+    const isManualCreatePath =
+      !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
+    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .insert({
@@ -1835,6 +1849,49 @@ export class InventoryService {
         new_quantity: input.quantityOnHand,
         user_id: this.ctx.userId,
         to_location_id: input.primaryLocationId ?? null,
+      });
+    }
+
+    // ── Manual auto-place (owner request 2026-08-04) ────────────────────────
+    // "type a rack, enter a starting quantity, the stock lands on that rack"
+    // — no Unplaced/awaiting-put-away chip for a hand-typed item.
+    //
+    // Deliberately does NOT touch `primary_location_id` or the 'initial'
+    // movement's `to_location_id` above — both stay exactly what they were
+    // before this feature existed. `primary_location_id` is read far beyond
+    // the seeding trigger: the location FILTER (instant-mode.ts) checks it
+    // against a SITES-ONLY set, exports resolve it unscoped into a "Primary
+    // location" column, and pickers/forms all assume a site. Stamping a rack
+    // id onto it made auto-placed items vanish from every location-filtered
+    // view and leak a duplicate rack label into exports — caught in review.
+    //
+    // Instead: let `tg_seed_initial_level` (migration 0199, the AFTER INSERT
+    // trigger that actually seeds the item's first item_stock_levels row)
+    // seed the level exactly as it does today — at `primary_location_id` if
+    // the caller set a real one, else the warehouse's Unplaced bucket — and
+    // THEN reuse the bulk "Set rack" placement path: resolve-or-create the
+    // typed rack (findOrCreateRackLocation — the SAME helper, SAME dedup,
+    // SAME 23505-race retry the bulk fix uses) and transferStock the
+    // freshly-seeded holding onto it. One shared placement code path, a
+    // truthful ledger ('initial' → 'transfer', exactly what a human put-away
+    // writes), and zero change to what primary_location_id means anywhere
+    // else in the app.
+    //
+    // FAIL-SOFT: awaited with a catch-all — any failure (rack resolve/create,
+    // the holdings read, or the transfer itself) leaves the item created with
+    // its stock exactly where the trigger put it (today's behavior). A
+    // placement hiccup must never undo or block a create that already
+    // succeeded.
+    if (isManualCreatePath && input.quantityOnHand > 0 && typedBinLabel) {
+      await this.placeManualCreateOnRack(
+        data.id as string,
+        resolvedWarehouseId,
+        typedBinLabel,
+      ).catch((e) => {
+        console.error('[manual create] auto-place failed', {
+          itemId: data.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
       });
     }
 
@@ -3499,7 +3556,7 @@ export class InventoryService {
      * acknowledgeStock. Ignored for every other op.
      */
     acknowledgeStock?: boolean;
-  }): Promise<{ ok: number; skipped: number }> {
+  }): Promise<{ ok: number; skipped: number; placed?: number }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
     if (input.ids.length > 500) {
@@ -3616,19 +3673,25 @@ export class InventoryService {
         );
       }
       // Beyond writing the rack LABEL above, ACTUALLY PLACE the selected items'
-      // not-yet-placed (staging/unplaced) stock onto that rack — so bulk
-      // "Set rack" moves stock out of staging in ONE action (the label alone
-      // never moved anything, which is the reported bug). Only when a rack is
-      // given (clearing the rack just clears the label). Best-effort: a
-      // placement hiccup must not undo the label set, so failures are logged.
+      // not-yet-placed stock onto that rack — so bulk "Set rack" moves stock
+      // in ONE action (the label alone never moved anything, which is the
+      // reported bug). Only when a rack is given (clearing the rack just
+      // clears the label). Best-effort: a placement hiccup must not undo the
+      // label set, so failures are logged and `placed` just stays 0.
+      let placed = 0;
       if (composedBin) {
-        await this.placeItemsOntoRackByName(allowedIds, num, row, composedBin).catch((e) => {
-          console.error('[bulkUpdate set_rack] bulk placement failed', e);
-        });
+        placed = await this.placeItemsOntoRackByName(allowedIds, num, row, composedBin).catch(
+          (e) => {
+            console.error('[bulkUpdate set_rack] bulk placement failed', e);
+            return 0;
+          },
+        );
       }
       // RLS filtered the gap (if any). Surface it in `skipped` so the
-      // "Updated X · Skipped Y" toast remains truthful.
-      return { ok, skipped: skipped + (allowedIds.length - ok) };
+      // "Updated X · Skipped Y" toast remains truthful. `placed` reports how
+      // many holdings actually physically moved, for callers that want to
+      // confirm Set rack did more than relabel.
+      return { ok, skipped: skipped + (allowedIds.length - ok), placed };
     }
 
     // Tag ops bypass the inventory_items row update — they only touch
@@ -4077,24 +4140,40 @@ export class InventoryService {
    * the rest still place.
    *
    * Two cases, both driven off ONE holdings query:
-   *  - staging/unplaced — the item's NOT-YET-PLACED stock. Always moved
-   *    (this was the original fix — Set rack used to only write the label).
-   *  - rack/crate (Unit B) — stock ALREADY placed on a rack/crate. Moved
-   *    ONLY when the item has exactly one such holding (its whole in-stock
-   *    quantity sits on a single rack, so retargeting it is unambiguous).
-   *    An item with >1 rack/crate holding (a split placement) is left
-   *    completely alone here — the bulk op carries no fromLocationId, so
-   *    guessing which placement (or how much) to move would be wrong. The
-   *    label write in the caller still applies; the client warns the user
-   *    to use Transfer for those. NEVER move a split item's stock.
+   *  - NOT already a rack/crate/area/shelf/bin placement (staging, unplaced,
+   *    OR a plain SITE holding — `locations.kind` NULL, per
+   *    `isRackShelfLocation`/groups.ts) — the item's NOT-YET-PLACED stock.
+   *    Always moved (this was the original fix — Set rack used to only
+   *    write the label). Owner report 2026-08-03: three DC4 items with
+   *    2/2/3 units sitting directly on the DC4 SITE (a NULL-kind location,
+   *    not the dedicated 'unplaced' bucket) stayed put after "Set rack
+   *    28-A" — the query used to filter `.in('locations.kind', ['staging',
+   *    'unplaced', 'rack', 'crate'])`, which silently drops NULL-kind rows
+   *    (`kind IN (...)` is never true for a NULL column — the same class of
+   *    bug fixed for the placed draw-down query by migration 0292). Fixed by
+   *    dropping the DB-side kind filter (fetch every holding, `.gt('quantity',
+   *    0)` only) and bucketing in JS with the shared classifier instead, so a
+   *    NULL/site holding is never silently excluded again.
+   *  - rack/crate/area/shelf/bin (Unit B) — stock ALREADY placed on a fine-
+   *    grained placement (`isRackShelfLocation`). Moved ONLY when the item
+   *    has exactly one such holding (its whole in-stock quantity sits on a
+   *    single placement, so retargeting it is unambiguous). An item with >1
+   *    such holding (a split placement) is left completely alone here — the
+   *    bulk op carries no fromLocationId, so guessing which placement (or
+   *    how much) to move would be wrong. The label write in the caller
+   *    still applies; the client warns the user to use Transfer for those.
+   *    NEVER move a split item's stock.
+   *
+   * Returns the number of holdings actually moved (0 if nothing needed
+   * placing, or every move failed/no-opped) so the caller can report it.
    */
   private async placeItemsOntoRackByName(
     itemIds: string[],
     num: string | null,
     row: string | null,
     name: string,
-  ): Promise<void> {
-    if (itemIds.length === 0 || !num) return;
+  ): Promise<number> {
+    if (itemIds.length === 0 || !num) return 0;
 
     const { data: items } = await this.ctx.supabase
       .from('inventory_items')
@@ -4104,34 +4183,36 @@ export class InventoryService {
     const rows = (items ?? []) as Array<{ id: string; warehouse_id: string | null }>;
     const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
 
-    // ONE query covers both cases above — the `locations` embed carries the
-    // `kind` (to bucket staging/unplaced vs rack/crate) and `warehouse_id`
-    // (so a rack/crate holding resolves its destination against the
-    // warehouse it's PHYSICALLY in, not necessarily the item's declared
-    // warehouse_id).
+    // ONE query covers both cases above — the `locations` embed carries
+    // `kind`/`type` (to bucket "not yet placed" vs "already on a fine-grained
+    // placement" via isRackShelfLocation) and `warehouse_id` (so an already-
+    // placed holding resolves its destination against the warehouse it's
+    // PHYSICALLY in, not necessarily the item's declared warehouse_id).
+    // Deliberately NO `.in('locations.kind', …)` filter here — see the
+    // method doc: that pattern silently drops NULL-kind (site) rows.
     const { data: holdings } = await this.ctx.supabase
       .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(kind, warehouse_id)')
+      .select('item_id, location_id, quantity, locations!inner(kind, type, warehouse_id)')
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', itemIds)
-      .in('locations.kind', ['staging', 'unplaced', 'rack', 'crate'])
       .gt('quantity', 0);
     const allHoldings = (holdings ?? []) as unknown as Array<{
       item_id: string;
       location_id: string;
       quantity: number;
-      locations: { kind: string; warehouse_id: string | null } | null;
+      locations: { kind: string | null; type: string | null; warehouse_id: string | null } | null;
     }>;
 
-    const levels = allHoldings.filter(
-      (h) => h.locations?.kind === 'staging' || h.locations?.kind === 'unplaced',
-    );
+    const isAlreadyPlaced = (h: (typeof allHoldings)[number]) =>
+      h.locations != null && isRackShelfLocation(h.locations);
 
-    // Group rack/crate holdings by item so a split placement (>1 distinct
-    // holding with qty>0) can be told apart from a single one.
+    const levels = allHoldings.filter((h) => !isAlreadyPlaced(h));
+
+    // Group already-placed holdings by item so a split placement (>1
+    // distinct holding with qty>0) can be told apart from a single one.
     const rackHoldingsByItem = new Map<string, typeof allHoldings>();
     for (const h of allHoldings) {
-      if (h.locations?.kind !== 'rack' && h.locations?.kind !== 'crate') continue;
+      if (!isAlreadyPlaced(h)) continue;
       const arr = rackHoldingsByItem.get(h.item_id) ?? [];
       arr.push(h);
       rackHoldingsByItem.set(h.item_id, arr);
@@ -4153,10 +4234,10 @@ export class InventoryService {
       });
     }
 
-    if (levels.length === 0 && singleRackMoves.length === 0) return;
+    if (levels.length === 0 && singleRackMoves.length === 0) return 0;
 
     // Resolve (find or create) the destination rack ONCE per warehouse —
-    // shared by both the staging/unplaced auto-place and the single-rack
+    // shared by both the not-yet-placed auto-place and the single-holding
     // move below.
     const warehouseIds = new Set<string>();
     for (const wh of rows.map((r) => r.warehouse_id)) if (wh) warehouseIds.add(wh);
@@ -4166,6 +4247,8 @@ export class InventoryService {
       const rackId = await this.findOrCreateRackLocation(wh, num, row, name);
       if (rackId) rackByWh.set(wh, rackId);
     }
+
+    let placedCount = 0;
 
     // Run the per-holding transfers CONCURRENTLY (in capped chunks) instead of
     // one-at-a-time — a 13-item bulk Set rack was ~13 sequential RPC round-trips
@@ -4187,6 +4270,7 @@ export class InventoryService {
               quantity: Number(h.quantity),
               notes: `Placed on rack ${name} (bulk Set rack)`,
             });
+            placedCount += 1;
           } catch (e) {
             console.error('[set_rack place] transfer failed', {
               item: h.item_id,
@@ -4197,11 +4281,11 @@ export class InventoryService {
       );
     }
 
-    // Single-placement rack/crate holdings (Unit B): the item's whole
-    // in-stock quantity already sits on exactly one rack/crate, so retarget
-    // it — PHYSICALLY MOVE via transfer_stock (never a raw stock-level
-    // write), same as the staging/unplaced path above. Idempotent: already
-    // on the resolved target → no-op.
+    // Single-placement fine-grained holdings (Unit B): the item's whole
+    // in-stock quantity already sits on exactly one such placement, so
+    // retarget it — PHYSICALLY MOVE via transfer_stock (never a raw
+    // stock-level write), same as the not-yet-placed path above.
+    // Idempotent: already on the resolved target → no-op.
     for (let i = 0; i < singleRackMoves.length; i += CONCURRENCY) {
       await Promise.all(
         singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
@@ -4215,6 +4299,7 @@ export class InventoryService {
               quantity: mv.quantity,
               notes: `Moved to rack ${name} (bulk Set rack)`,
             });
+            placedCount += 1;
           } catch (e) {
             console.error('[set_rack move] transfer failed', {
               item: mv.item_id,
@@ -4224,22 +4309,41 @@ export class InventoryService {
         }),
       );
     }
+
+    return placedCount;
   }
 
   /** Find an existing rack/crate location named `name` in the warehouse, or
    *  create a rack (rack_number/row set) if absent. Returns its id, or null on
-   *  a create failure (e.g. missing locations:manage) so placement degrades.
+   *  a create failure so placement degrades — racks are exempt from the
+   *  plan's site-count limit (isSiteLocation, see locations.planLimit.test.ts
+   *  and the 2026-07-07 fix), so the realistic failures here are a missing
+   *  `locations:manage` grant, a malformed label, or a DB hiccup, and NONE of
+   *  them may ever fail the caller (bulk "Set rack" or manual item create).
    *  Delegates to LocationsService.findOrCreateRackOrCrate — the SAME
    *  case-insensitive dedup used by the interactive Transfer/Put-away
-   *  "new rack" actions, so both creation paths agree with each other and
-   *  with the unique index added by migration 0270. */
+   *  "new rack" actions and by InventoryService.create()'s manual auto-place,
+   *  so every rack-creating surface agrees with each other and with the
+   *  unique index added by migration 0270.
+   *
+   *  RACE: findOrCreateRackOrCrate resolves-then-creates, not atomically, so
+   *  two concurrent callers minting the identical (warehouse, name, kind) can
+   *  both miss the resolve step and both attempt the insert — the loser
+   *  23505s against migration 0270's `locations_unique_active_name` unique
+   *  index. That is not a real failure (both callers wanted the same rack),
+   *  so this retries the WHOLE resolve-or-create exactly once; by then the
+   *  winner's row is committed and visible, so the retry's resolve step
+   *  finds it instead of attempting a second insert (same idiom as
+   *  ProductGroupsService.findOrCreate re-reading on a 23505). Any OTHER
+   *  error, on either attempt, gives up and returns null rather than
+   *  looping. */
   private async findOrCreateRackLocation(
     warehouseId: string,
     num: string,
     row: string | null,
     name: string,
   ): Promise<string | null> {
-    try {
+    const attempt = async () => {
       const loc = await new LocationsService(this.ctx).findOrCreateRackOrCrate({
         name,
         type: 'shelf',
@@ -4249,13 +4353,96 @@ export class InventoryService {
         rackRow: row,
       });
       return (loc as { id: string }).id;
+    };
+    try {
+      return await attempt();
     } catch (e) {
-      console.error('[set_rack place] rack create failed', {
+      // `internal_error` scrubs the raw Postgres text off `.message` (S13 —
+      // see ServiceError's constructor) so the constraint name has to be
+      // read off `.internalDetail` instead, not `.message`.
+      const isDedupRace =
+        e instanceof ServiceError &&
+        e.code === 'internal_error' &&
+        (e.internalDetail ?? '').includes('locations_unique_active_name');
+      if (isDedupRace) {
+        try {
+          return await attempt();
+        } catch (e2) {
+          console.error('[rack place] rack create retry failed', {
+            warehouseId,
+            name,
+            error: e2 instanceof Error ? e2.message : String(e2),
+          });
+          return null;
+        }
+      }
+      console.error('[rack place] rack create failed', {
         warehouseId,
         name,
         error: e instanceof Error ? e.message : String(e),
       });
       return null;
+    }
+  }
+
+  /**
+   * Manual item creation's auto-place (owner request 2026-08-04) — called
+   * AFTER the item row and its 'initial' stock_movements ledger entry both
+   * already committed successfully. `tg_seed_initial_level` has, by this
+   * point, already seeded the item's item_stock_levels holding (at
+   * `primary_location_id` if the caller set a real one, else the
+   * warehouse's Unplaced bucket) — this method finds that holding and
+   * PHYSICALLY MOVES it onto the typed rack via transferStock, mirroring
+   * exactly what `placeItemsOntoRackByName` (the bulk "Set rack" auto-place)
+   * does for existing items: resolve-or-create through the SAME
+   * `findOrCreateRackLocation`, then transfer, never a raw level write.
+   *
+   * Never touches `primary_location_id` or any other item column — the
+   * item's declared primary location is a separate concern from where its
+   * physical stock currently sits (the same separation the rest of the app
+   * already relies on since migration 0192 moved stock accounting off
+   * primary_location_id and onto item_stock_levels).
+   *
+   * Callers MUST treat this as fail-soft (see the .catch() at the call
+   * site): every failure here — the rack not resolving, the holdings read
+   * coming back empty, a single transfer throwing — simply leaves the
+   * item's stock wherever the trigger originally put it. It never throws
+   * out of its own accord for anything BUT what it cannot recover from
+   * (propagated so the caller's catch logs it once, not per-holding).
+   */
+  private async placeManualCreateOnRack(
+    itemId: string,
+    warehouseId: string,
+    rawLabel: string,
+  ): Promise<void> {
+    const parts = parseRackLabel(rawLabel);
+    const rackName = formatRackLabel(parts) || rawLabel;
+    const rackId = await this.findOrCreateRackLocation(
+      warehouseId,
+      parts.number,
+      parts.row,
+      rackName,
+    );
+    if (!rackId) return;
+
+    const { data: holdings } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('location_id, quantity')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', itemId)
+      .gt('quantity', 0);
+    const rows = (holdings ?? []) as Array<{ location_id: string; quantity: number }>;
+    for (const row of rows) {
+      // Already on the resolved rack (e.g. the caller's own primaryLocationId
+      // happened to BE this rack) — nothing to move.
+      if (row.location_id === rackId) continue;
+      await this.transferStock({
+        itemId,
+        fromLocationId: row.location_id,
+        toLocationId: rackId,
+        quantity: Number(row.quantity),
+        notes: `Placed on rack ${rackName} at creation`,
+      });
     }
   }
 

@@ -222,7 +222,7 @@ export async function bulkUpdateInventoryAction(input: {
   // Deliberate archive-with-stock override for a bulk archive / set_status
   // 'archived' batch. Ignored for every other op.
   acknowledgeStock?: boolean;
-}): Promise<ActionResult<{ ok: number; skipped: number }>> {
+}): Promise<ActionResult<{ ok: number; skipped: number; placed?: number }>> {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
     return err('validation_error', 'No items selected');
   }

@@ -20,6 +20,29 @@ import { InventoryService } from './inventory';
 
 beforeEach(() => vi.clearAllMocks());
 
+/**
+ * The supabase mock RECORDS every query-builder method call (and its args)
+ * against the holdings query, but its canned `data` is returned regardless
+ * of what filters were actually chained — it does not simulate PostgREST
+ * filtering. So a test asserting only on the OUTCOME (which holdings moved)
+ * cannot tell "the code fetched broadly and classified in JS" apart from
+ * "the code still filters `.in('locations.kind', […])` at the DB level" —
+ * both produce the same canned rows in this mock. This inspects the
+ * RECORDED chain directly: true if any call against
+ * `item_stock_levels.select` filtered on a `locations.kind` argument (the
+ * exact shape that silently drops NULL/site rows — see the method's doc in
+ * inventory.ts). Used to prove the DB-side filter is actually gone, not
+ * just that today's canned fixtures happen to still pass.
+ */
+function holdingsQueryFiltersOnLocationsKind(
+  stub: ReturnType<typeof makeSupabaseStub>,
+): boolean {
+  const args = stub.chainArgs.get('item_stock_levels.select') ?? [];
+  return args.some(
+    (callArgs) => typeof callArgs[0] === 'string' && callArgs[0].startsWith('locations.kind'),
+  );
+}
+
 describe('bulkUpdate set_rack — places stock, not just a label', () => {
   it('transfers each item\'s staging holding onto the named rack', async () => {
     const stub = makeSupabaseStub({
@@ -337,5 +360,154 @@ describe('bulkUpdate set_rack — Unit B: moves a single existing rack/crate hol
         }),
       }),
     );
+  });
+});
+
+// Owner report 2026-08-03: three DC4 items with 2/2/3 units unplaced stayed
+// "Unplaced/awaiting put-away" after running Set rack '28-A'. Root cause:
+// the holdings query used to filter `.in('locations.kind', ['staging',
+// 'unplaced', 'rack', 'crate'])` — `kind IN (...)` is never true for a NULL
+// column, so stock sitting directly on a SITE (locations.kind IS NULL, per
+// `reference_locations_kind_null_is_a_site`) was silently excluded from
+// BOTH buckets and the function no-opped for those items. Fixed by dropping
+// the DB-side kind filter and classifying in JS with `isRackShelfLocation`
+// (groups.ts) instead, so a NULL-kind row is never silently dropped again.
+describe('bulkUpdate set_rack — NULL-kind (site) holdings are "not yet placed" too', () => {
+  it('a holding at a NULL-kind SITE location is treated as unplaced and moved to the rack, with a movement recorded', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-1' }], error: null },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      // item-1's stock sits directly on the DC4 SITE — kind NULL, not the
+      // dedicated 'unplaced' bucket. This is the exact shape that no-opped.
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-1',
+            location_id: 'dc4-site',
+            quantity: 2,
+            locations: { kind: null, type: null, warehouse_id: 'wh-1' },
+          },
+        ],
+        error: null,
+      },
+      'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
+      'rpc:transfer_stock': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.ok).toBe(1);
+    // `placed` reports the physical move happened, not just the label.
+    expect(res.placed).toBe(1);
+    const transfer = stub.rpcCalls.find((c) => c.name === 'transfer_stock');
+    expect(transfer).toBeDefined();
+    expect(transfer!.args).toMatchObject({
+      p_item_id: 'item-1',
+      p_from_location_id: 'dc4-site',
+      p_to_location_id: 'rack-28a',
+      p_quantity: 2,
+    });
+    // Proves the fix is real, not just that this fixture's canned rows
+    // happen to pass — the mock replays `data` regardless of chained
+    // filters, so an outcome-only assertion can't tell "fetched broadly,
+    // classified in JS" apart from "still filters .in('locations.kind',
+    // […])" (which would ALSO return this canned NULL-kind row here).
+    expect(holdingsQueryFiltersOnLocationsKind(stub)).toBe(false);
+  });
+
+  it('a NULL-kind holding moves, but a split pair of existing rack/crate holdings for a DIFFERENT item stays untouched', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'item-unplaced', warehouse_id: 'wh-1' },
+          { id: 'item-split', warehouse_id: 'wh-1' },
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_rack': { data: 2, error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-unplaced',
+            location_id: 'dc4-site',
+            quantity: 3,
+            locations: { kind: null, type: null, warehouse_id: 'wh-1' },
+          },
+          {
+            item_id: 'item-split',
+            location_id: 'rack-a',
+            quantity: 2,
+            locations: { kind: 'rack', type: 'shelf', warehouse_id: 'wh-1' },
+          },
+          {
+            item_id: 'item-split',
+            location_id: 'crate-b',
+            quantity: 4,
+            locations: { kind: 'crate', type: null, warehouse_id: 'wh-1' },
+          },
+        ],
+        error: null,
+      },
+      'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
+      'rpc:transfer_stock': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-unplaced', 'item-split'],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.placed).toBe(1);
+    const transfers = stub.rpcCalls.filter((c) => c.name === 'transfer_stock');
+    expect(transfers).toHaveLength(1);
+    expect(transfers[0]!.args).toMatchObject({
+      p_item_id: 'item-unplaced',
+      p_from_location_id: 'dc4-site',
+      p_to_location_id: 'rack-28a',
+    });
+    // item-split's two holdings are a split placement — neither moves.
+    expect(
+      transfers.some((c) => (c.args as Record<string, unknown>).p_item_id === 'item-split'),
+    ).toBe(false);
+    expect(holdingsQueryFiltersOnLocationsKind(stub)).toBe(false);
+  });
+
+  it('placement failure (rack cannot be resolved/created) still leaves the label written', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-1' }], error: null },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-1',
+            location_id: 'dc4-site',
+            quantity: 2,
+            locations: { kind: null, type: null, warehouse_id: 'wh-1' },
+          },
+        ],
+        error: null,
+      },
+      // Resolve finds nothing AND the create fails outright (not a 23505
+      // race) — placement degrades to a no-op.
+      'locations.select': { data: [], error: null },
+      'locations.insert': { data: null, error: { message: 'boom' } },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.ok).toBe(1);
+    expect(res.placed).toBe(0);
+    // The label RPC still ran and succeeded.
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_rack')).toBe(true);
+    expect(stub.rpcCalls.some((c) => c.name === 'transfer_stock')).toBe(false);
   });
 });
