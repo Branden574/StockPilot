@@ -368,7 +368,7 @@ Cached:    2 cached, 3 total
   Time:    21.66s
 ```
 
-**PASS** — 0 errors, 34 warnings (exact count). Phase A's own gate recorded 30 warnings from this same tail; the +4 delta is additional pre-existing `react-hooks/set-state-in-effect`-family warnings earlier in the untruncated log (above the `tail -30` window) plus the same trailing set of `Unused eslint-disable directive` warnings shown above, all in files this program's Phases B-E did not touch. 0 errors satisfies the gate; the warning-count drift is noted here rather than silently dropped.
+**PASS** — 0 errors, 34 warnings (exact count). Phase A's own gate recorded 30 warnings from this same tail; the +4 delta is all NEW, and all four land in this program's own `export-builder-dialog.tsx` — 181:5 `react-hooks/set-state-in-effect` (`setPresets(presetsFor(itemTypeKind))` called directly inside the preview effect), plus three `react-hooks/exhaustive-deps` findings on the same effect's dependency array (~line 200): one missing-deps (`filters` and `selectedIds` not listed) and two complex-expression-in-dependency-array flags on the `JSON.stringify(filters)` / `JSON.stringify(selectedIds)` entries used to key the effect off value instead of identity. These come from the deliberate commented serialization pattern plus the setPresets-in-effect call documented at that call site, not from any file Phases B-E left untouched. 0 errors satisfies the gate; the four new warnings are carried as a named fast-follow rather than silently dropped (see the report's §I ledgered-minors block).
 
 #### 4. `pnpm --filter @stockpilot/web build 2>&1 | tail -30`
 
@@ -412,7 +412,7 @@ Cached:    2 cached, 3 total
 |---|---|
 | `pnpm --filter @stockpilot/web test` | **PASS** — 428 files / 4811 tests, 0 failures |
 | `pnpm typecheck` | **PASS** — 0 errors, all 3 packages (cache hit replay of a real clean result) |
-| `pnpm lint` | **PASS** — 0 errors, 34 warnings (pre-existing, unrelated files) |
+| `pnpm lint` | **PASS** — 0 errors, 34 warnings (30 pre-existing + 4 new, all in this program's `export-builder-dialog.tsx`, fast-follow) |
 | `pnpm --filter @stockpilot/web build` | **PASS** — compiled, full route table emitted |
 
 ### Step 2: Invariant checks (verbatim output + classification)
