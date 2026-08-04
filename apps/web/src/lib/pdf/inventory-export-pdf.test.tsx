@@ -4,7 +4,12 @@ import { getExportField, type InventoryExportFieldKey } from '@/lib/exports/fiel
 import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
-import { buildExportPdfRows, EXPORT_PDF_EM_DASH, InventoryExportPdf } from './inventory-export-pdf';
+import {
+  buildExportPdfRows,
+  CATALOG_COVER_PT,
+  EXPORT_PDF_EM_DASH,
+  InventoryExportPdf,
+} from './inventory-export-pdf';
 
 /**
  * These assertions run over the ELEMENT TREE, not a rendered PDF. react-pdf's
@@ -280,5 +285,99 @@ describe('InventoryExportPdf — table mode', () => {
     const layout = makeLayout({ paperSize: 'legal', orientation: 'portrait' });
     const page = elementsOfType(render({ layout }), 'PAGE')[0]!;
     expect(page.props.size).toEqual({ width: 612, height: 1008 });
+  });
+});
+
+describe('InventoryExportPdf — book catalog mode', () => {
+  const catalogRender = (columns: 1 | 2 | 3, rowOverrides: Partial<InventoryExportSourceRow> = {}) => {
+    const layout = computeExportPdfLayout({
+      fields,
+      itemTypeKind: 'book',
+      includeImages: true,
+      imageSize: 'large',
+      orientation: 'auto',
+      paperSize: 'letter',
+      density: 'image-friendly',
+      wrapText: true,
+      layout: 'catalog',
+      catalogColumns: columns,
+    });
+    const sources = [makeSource(rowOverrides), makeSource({ ...rowOverrides, id: 'i-2' })];
+    return InventoryExportPdf({
+      orgName: 'Demo Co',
+      orgLogoUrl: null,
+      title: 'Books catalog',
+      subtitle: 'filtered - 2 books',
+      layout,
+      rows: buildExportPdfRows(sources, layout, fields, { showImages: true }),
+      repeatHeaders: false,
+      pageNumbers: true,
+      catalog: { columns, fields, itemTypeKind: 'book' },
+    });
+  };
+
+  it('renders one card per row, never a table header', () => {
+    const tree = catalogRender(2);
+    const cards = [...walk(tree)].filter(
+      (el) => (el.props as { 'data-card'?: boolean })['data-card'] === true,
+    );
+    expect(cards).toHaveLength(2);
+    expect(textContent(tree)).not.toContain('ON HAND');
+  });
+
+  it('keeps every card whole rather than splitting it across a page', () => {
+    const cards = [...walk(catalogRender(2))].filter(
+      (el) => (el.props as { 'data-card'?: boolean })['data-card'] === true,
+    );
+    for (const card of cards) expect(card.props.wrap).toBe(false);
+  });
+
+  it('shows the cover at the catalog size with objectFit contain', () => {
+    const image = elementsOfType(catalogRender(2), 'IMAGE')[0]!;
+    const style = Object.assign({}, ...(image.props.style as Array<Record<string, unknown>>)) as {
+      objectFit?: string;
+      width?: number;
+      height?: number;
+    };
+    expect(style.objectFit).toBe('contain');
+    expect(style.width).toBe(CATALOG_COVER_PT[2].widthPt);
+    expect(style.height).toBe(CATALOG_COVER_PT[2].heightPt);
+  });
+
+  it('prints the ISBN clearly, labelled, inside each card', () => {
+    const texts = textContent(catalogRender(2));
+    expect(texts).toContain('ISBN');
+    expect(texts).toContain('9780262033848');
+  });
+
+  it('uses a consistent placeholder for a book with no cover', () => {
+    const tree = catalogRender(2, { image: null });
+    const placeholders = [...walk(tree)].filter(
+      (el) => (el.props as { 'data-placeholder'?: boolean })['data-placeholder'] === true,
+    );
+    expect(placeholders).toHaveLength(2);
+    expect(elementsOfType(tree, 'IMAGE')).toHaveLength(0);
+  });
+
+  it('sizes each card to its share of the row for 1, 2 and 3 columns', () => {
+    for (const columns of [1, 2, 3] as const) {
+      const card = [...walk(catalogRender(columns))].find(
+        (el) => (el.props as { 'data-card'?: boolean })['data-card'] === true,
+      )!;
+      const style = Object.assign({}, ...(card.props.style as Array<Record<string, unknown>>)) as {
+        width?: string;
+      };
+      expect(style.width).toBe(`${(100 / columns).toFixed(4)}%`);
+    }
+  });
+
+  it('never prints undefined for a book missing every optional field', () => {
+    const texts = textContent(
+      catalogRender(2, { author: '', grade: '', rackLabel: '', crateLabel: '', isbn: '' }),
+    );
+    for (const t of texts) {
+      expect(t).not.toContain('undefined');
+      expect(t).not.toContain('null');
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 
-import type { InventoryExportField } from '@/lib/exports/field-registry';
+import { fieldHeading, type InventoryExportField } from '@/lib/exports/field-registry';
 import type { ExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
@@ -253,19 +253,143 @@ function TableBody({ layout, rows }: { layout: ExportPdfLayout; rows: InventoryE
   );
 }
 
-/** Replaced by the real card grid in the catalog task. */
+/** Card geometry per catalog column count. */
+export const CATALOG_CARD_MIN_HEIGHT_PT: Record<1 | 2 | 3, number> = {
+  1: 132,
+  2: 116,
+  3: 96,
+};
+
+/**
+ * Cover box per catalog column count. Portrait proportions (3:4) because a book
+ * cover is taller than it is wide; objectFit contain keeps a square or
+ * landscape cover undistorted inside the same box.
+ */
+export const CATALOG_COVER_PT: Record<1 | 2 | 3, { widthPt: number; heightPt: number }> = {
+  1: { widthPt: 84, heightPt: 112 },
+  2: { widthPt: 66, heightPt: 88 },
+  3: { widthPt: 50, heightPt: 68 },
+};
+
+const catalogStyles = StyleSheet.create({
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
+  cardOuter: {
+    padding: 4,
+  },
+  card: {
+    flexDirection: 'row',
+    borderWidth: 0.5,
+    borderColor: PDF_COLORS.line,
+    borderStyle: 'solid',
+    borderRadius: 3,
+    padding: 6,
+  },
+  cardBody: {
+    flexGrow: 1,
+    flexShrink: 1,
+    paddingLeft: 6,
+  },
+  cardTitle: {
+    fontSize: 9.5,
+    fontFamily: 'Helvetica-Bold',
+    color: PDF_COLORS.ink,
+    marginBottom: 3,
+  },
+  cardLine: {
+    flexDirection: 'row',
+    marginTop: 1.5,
+  },
+  cardLabel: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    color: PDF_COLORS.ink4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    width: 54,
+  },
+  cardValue: {
+    fontSize: 8.5,
+    color: PDF_COLORS.ink2,
+    flexGrow: 1,
+    flexShrink: 1,
+  },
+});
+
+/**
+ * Book catalog layout (Brief section 12): a card per book with a large cover
+ * and the identity fields beside it. Cards never split across a page.
+ *
+ * The card's first line is the title (the `name` field), rendered large; every
+ * other selected field prints as a labelled line, so the same field selection
+ * drives the table AND the catalog with no second configuration.
+ */
 function CatalogBody({
-  layout,
   rows,
+  catalog,
 }: {
   layout: ExportPdfLayout;
   rows: InventoryExportPdfRow[];
   catalog: InventoryExportCatalogOptions;
 }) {
+  if (rows.length === 0) {
+    return <Text style={styles.emptyState}>No items matched this export.</Text>;
+  }
+  const cover = CATALOG_COVER_PT[catalog.columns];
+  const cardWidth = `${(100 / catalog.columns).toFixed(4)}%`;
+  const detailFields = catalog.fields.filter((f) => f.key !== 'image' && f.key !== 'name');
+
   return (
-    <View style={styles.table}>
-      <TableHeader layout={layout} fixed={false} />
-      <TableBody layout={layout} rows={rows} />
+    <View style={catalogStyles.grid}>
+      {rows.map((row, idx) => (
+        <View
+          key={idx}
+          wrap={false}
+          data-card
+          style={[catalogStyles.cardOuter, { width: cardWidth }]}
+        >
+          <View
+            style={[
+              catalogStyles.card,
+              { minHeight: CATALOG_CARD_MIN_HEIGHT_PT[catalog.columns] },
+            ]}
+          >
+            <View style={{ width: cover.widthPt, flexShrink: 0 }}>
+              {row.imageUrl ? (
+                // eslint-disable-next-line jsx-a11y/alt-text
+                <Image
+                  src={row.imageUrl}
+                  style={[styles.thumb, { width: cover.widthPt, height: cover.heightPt }]}
+                />
+              ) : (
+                <View
+                  data-placeholder
+                  style={[
+                    styles.thumbPlaceholder,
+                    { width: cover.widthPt, height: cover.heightPt },
+                  ]}
+                />
+              )}
+            </View>
+            <View style={catalogStyles.cardBody}>
+              <Text style={catalogStyles.cardTitle}>{row.cells.name ?? EXPORT_PDF_EM_DASH}</Text>
+              {detailFields.map((field) => (
+                <View key={field.key} style={catalogStyles.cardLine}>
+                  <Text style={catalogStyles.cardLabel}>
+                    {fieldHeading(field, { format: 'pdf', itemType: catalog.itemTypeKind })}
+                  </Text>
+                  <Text style={catalogStyles.cardValue}>
+                    {row.cells[field.key] ?? EXPORT_PDF_EM_DASH}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
