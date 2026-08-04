@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { width } from '@/test/pdf-font-metrics';
+import { safeWidth, width } from '@/test/pdf-font-metrics';
 import { REPORT_CELL_PADDING_PT } from '@/lib/pdf/column-fit';
 import {
   REPORT_BODY_FONT_SIZE_PT,
@@ -17,12 +17,14 @@ import {
 import {
   computeExportPdfLayout,
   estimateExportPdfPages,
+  IDENTIFIER_RESERVE_CAP_PT,
   IMAGE_CELL_PT,
   TOO_MANY_COLUMNS_THRESHOLD,
   tooManyColumnsWarning,
   type ExportImageSize,
   type PdfOrientation,
 } from './pdf-layout';
+import type { InventoryExportSourceRow } from './source-row';
 
 /** Same formula the three permanent fit nets use (report-headers-fit.test.ts,
  *  export-pdf-headers-fit.test.ts, registry-preset-fit.test.ts): Helvetica-Bold
@@ -455,6 +457,100 @@ describe('computeExportPdfLayout — warnings', () => {
   });
 });
 
+function makeSource(overrides: Partial<InventoryExportSourceRow> = {}): InventoryExportSourceRow {
+  return {
+    id: 'i-1',
+    itemType: 'other',
+    name: 'Verify Pegasus 41 - 11',
+    sku: 'SP-OMHQF-C8H-11',
+    barcode: '',
+    status: 'active',
+    quantityOnHand: 5,
+    reorderPoint: 0,
+    reorderQuantity: 0,
+    unitCost: 10,
+    retailPrice: 20,
+    category: 'Shoes',
+    primaryLocation: '',
+    supplier: '',
+    warehouse: 'Demo Distribution Center',
+    charter: 'Generic',
+    trackingType: 'none',
+    author: '',
+    isbn: '',
+    grade: '',
+    rackNumber: '',
+    rackRow: '',
+    crateColor: '',
+    crateNumber: '',
+    rackLabel: '',
+    crateLabel: '',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-02T00:00:00Z',
+    image: null,
+    legacyRawBookFields: {
+      grade: '',
+      rackNumber: '',
+      rackRow: '',
+      crateColor: '',
+      crateNumber: '',
+    },
+    ...overrides,
+  };
+}
+
+describe('computeExportPdfLayout — value-derived identifier widths (the long-SKU overlap fix)', () => {
+  const ITEM_KEYS: InventoryExportFieldKey[] = ['name', 'sku', 'barcode', 'quantity_on_hand', 'category', 'status'];
+
+  it('widens the SKU column to fit the widest real value plus padding', () => {
+    // The Demo-walk repro: SP-OMHQF-C8H-11 painted across the barcode
+    // column's em dash because the registry's fixed sku minimum was
+    // narrower than the value and identifiers never wrap.
+    const value = 'SP-OMHQF-C8H-11';
+    const withoutRows = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    const withRows = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: value })],
+    });
+    const skuWithout = withoutRows.columns.find((c) => c.key === 'sku')!.widthPt;
+    const skuWith = withRows.columns.find((c) => c.key === 'sku')!.widthPt;
+    const needed =
+      valueWidth(value) + REPORT_CELL_PADDING_PT * 2;
+    expect(skuWith).toBeGreaterThan(skuWithout);
+    expect(skuWith).toBeGreaterThanOrEqual(needed);
+  });
+
+  it('never reserves past the cap for a pathological value, and never shrinks below the registry minimum', () => {
+    const monster = 'X'.repeat(80);
+    const l = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: monster })],
+    });
+    const sku = l.columns.find((c) => c.key === 'sku')!;
+    expect(sku.widthPt).toBeLessThanOrEqual(IDENTIFIER_RESERVE_CAP_PT);
+    const short = layoutFor(ITEM_KEYS, {
+      itemTypeKind: 'other',
+      rows: [makeSource({ sku: 'A1' })],
+    });
+    const shortSku = short.columns.find((c) => c.key === 'sku')!.widthPt;
+    const noRows = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    expect(shortSku).toBe(noRows.columns.find((c) => c.key === 'sku')!.widthPt);
+  });
+
+  it('pins the cap literal so the contract cannot drift silently', () => {
+    expect(IDENTIFIER_RESERVE_CAP_PT).toBe(150);
+  });
+
+  it('marks identifier columns clip and ordinary columns not', () => {
+    const l = layoutFor(ITEM_KEYS, { itemTypeKind: 'other' });
+    const byKey = new Map(l.columns.map((c) => [c.key, c.clip]));
+    expect(byKey.get('sku')).toBe(true);
+    expect(byKey.get('barcode')).toBe(true);
+    expect(byKey.get('name')).toBe(false);
+    expect(byKey.get('category')).toBe(false);
+  });
+});
+
 describe('estimateExportPdfPages', () => {
   it('is a labelled range, never a single fake number', () => {
     const l = layoutFor(BOOKS_DEFAULT);
@@ -474,5 +570,32 @@ describe('estimateExportPdfPages', () => {
     const one = estimateExportPdfPages(l, 90, { catalogColumns: 1 });
     const three = estimateExportPdfPages(l, 90, { catalogColumns: 3 });
     expect(three.max).toBeLessThan(one.max);
+  });
+});
+
+/**
+ * safeWidth vs width — unknown-glyph contract (helvetica-metrics.ts). No
+ * dedicated metrics test file exists yet, so this lives here per the fix
+ * wave's instruction to fall back to pdf-layout.test.ts. `pdf-layout.ts`
+ * measures REAL, arbitrary user-typed values (SKUs, barcodes — see the
+ * "value-derived identifier widths" suite above) via `safeWidth`
+ * specifically BECAUSE that data can contain glyphs outside the pinned
+ * Helvetica AFM table (e.g. CJK characters in a pasted SKU) and a thrown
+ * error there would 500 the whole export. `width` stays throw-on-unknown
+ * so CI catches real gaps in the metric table. This test pins that
+ * contrast so a future "helpfully" unify the two functions can't silently
+ * reintroduce the 500.
+ */
+describe('safeWidth vs width — unknown glyph contract (helvetica-metrics.ts)', () => {
+  const UNKNOWN_GLYPH_TEXT = '中文 unknown glyphs';
+
+  it('width throws on unknown glyphs', () => {
+    expect(() => width(UNKNOWN_GLYPH_TEXT, 'Helvetica', 8.5)).toThrow();
+  });
+
+  it('safeWidth never throws on the same input and returns a finite, positive number', () => {
+    const w = safeWidth(UNKNOWN_GLYPH_TEXT, 'Helvetica', 8.5);
+    expect(Number.isFinite(w)).toBe(true);
+    expect(w).toBeGreaterThan(0);
   });
 });

@@ -229,6 +229,9 @@ export async function POST(request: NextRequest) {
       wrapText: options.pdf.wrapText,
       layout: options.pdf.layout,
       catalogColumns: options.pdf.catalogColumns,
+      // Identifier columns size to the widest REAL value in this export
+      // (capped) — the long-SKU overlap fix.
+      rows: result.rows,
     });
     const showImages = layout.imageColumnWidthPt > 0 || options.pdf.layout === 'catalog';
     const pdfRows = buildExportPdfRows(result.rows, layout, fields, {

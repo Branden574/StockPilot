@@ -33,6 +33,12 @@ export interface FitColumn {
 export const REPORT_PAGE_PADDING_PT = 40;
 export const REPORT_ROW_PADDING_PT = 4;
 export const REPORT_CELL_PADDING_PT = 3;
+/** reportStyles.cell font size (body/value text). Lives HERE, not in
+ *  report-table.tsx, because this module is the browser-safe geometry seam
+ *  (no @react-pdf import) and pdf-layout.ts measures real identifier values
+ *  at this size. report-table re-exports it so the renderer and the
+ *  measurement can never drift apart. */
+export const REPORT_BODY_FONT_SIZE_PT = 8.5;
 export const REPORT_IMAGE_COL_WIDTH_PT = 22;
 export const REPORT_IMAGE_COL_GAP_PT = 4;
 export const LETTER_LANDSCAPE_CONTENT_WIDTH_PT =

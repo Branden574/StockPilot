@@ -102,11 +102,12 @@ const IMAGE_COL_WIDTH = REPORT_IMAGE_COL_WIDTH_PT;
 export const REPORT_HEADER_FONT_SIZE_PT = 8;
 /** reportStyles.headerCell letterSpacing, same reason. */
 export const REPORT_HEADER_LETTER_SPACING_PT = 0.4;
-/** reportStyles.cell font size (body/value text), exported so a VALUE-width
- *  fit check (e.g. the ISBN column's minWidth floor) measures the exact
- *  number the renderer uses instead of a copy that can drift. Body cells
- *  carry no letterSpacing/textTransform, unlike the header cell above. */
-export const REPORT_BODY_FONT_SIZE_PT = 8.5;
+/** reportStyles.cell font size (body/value text) — the definition moved to
+ *  column-fit.ts (the browser-safe geometry seam) so pdf-layout.ts can
+ *  measure identifier values at the exact renderer size without importing
+ *  @react-pdf. Re-exported here so existing imports keep working. */
+import { REPORT_BODY_FONT_SIZE_PT } from './column-fit';
+export { REPORT_BODY_FONT_SIZE_PT };
 
 const reportStyles = StyleSheet.create({
   sectionWrap: {
