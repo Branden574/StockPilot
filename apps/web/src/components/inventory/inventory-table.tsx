@@ -1808,6 +1808,12 @@ export function InventoryTable({
             locations={locations}
             tags={tags}
             canSetPublicVisibility={canSetPublicVisibility}
+            // Books tab and Items tab share this table (see the onCycleCount
+            // itemType inference below) — thread the same signal into the
+            // bulk Export dialog so a books bulk-selection gets ISBN/Author/
+            // Grade/Rack/Crate fields and the catalog layout instead of the
+            // generic "items" experience.
+            itemType={showBookFields ? 'book' : 'all'}
             onClear={() => setSelected(new Set())}
             // Instant mode holds the FULL dataset, so cross-page selections
             // resolve against it; server mode keeps today's page-row scan.

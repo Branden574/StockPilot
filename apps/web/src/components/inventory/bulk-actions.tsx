@@ -47,7 +47,10 @@ import {
   type ItemPublicVisibility,
 } from '@/server/actions/item-visibility';
 import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
-import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
+import {
+  ExportBuilderDialog,
+  type ExportBuilderDialogProps,
+} from './export-builder/export-builder-dialog';
 
 export interface BulkActionsCategory {
   id: string;
@@ -98,6 +101,13 @@ interface BulkActionsProps {
       action. Pages pass can(ctx, 'public_links:manage'); the server action
       re-asserts. Default false → hidden for older callers. */
   canSetPublicVisibility?: boolean;
+  /** Threaded straight to ExportBuilderDialog's itemType. inventory-table.tsx
+      (the only caller with a Books tab) passes 'book' when showBookFields is
+      true; every other caller defaults to 'all'. Without this the Books page's
+      bulk export always ran the generic "items" experience — no ISBN/Author/
+      Grade/Rack/Crate fields, no catalog layout, "Name" instead of "Title",
+      covers off, and an `inventory-` filename slug. */
+  itemType?: ExportBuilderDialogProps['itemType'];
 }
 
 type ActiveDialog =
@@ -129,6 +139,7 @@ export function BulkActions({
   hasSplitRackSelection,
   onCycleCount,
   canSetPublicVisibility = false,
+  itemType = 'all',
 }: BulkActionsProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
@@ -431,7 +442,7 @@ export function BulkActions({
         open={exportOpen}
         onOpenChange={setExportOpen}
         scope="selected"
-        itemType="all"
+        itemType={itemType}
         selectedIds={selectedIds}
         rowCountHint={selectedIds.length}
       />

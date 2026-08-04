@@ -59,6 +59,7 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        itemType="all"
       />,
     );
 
@@ -87,6 +88,7 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
         tags={[]}
         onClear={() => {}}
         onCycleCount={() => {}}
+        itemType="all"
       />,
     );
 
@@ -119,6 +121,29 @@ describe('BulkActions -> ExportBuilderDialog wiring (Task 17 caller pinning)', (
 
     expect(exportDialogSpy).toHaveBeenCalledWith(
       expect.objectContaining({ selectedIds: ['only-one'], rowCountHint: 1 }),
+    );
+  });
+
+  it('threads itemType "book" to the dialog (Books-page bulk export regression guard)', () => {
+    render(
+      <BulkActions
+        selectedIds={['book-1', 'book-2']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        itemType="book"
+      />,
+    );
+
+    // inventory-table.tsx passes itemType="book" on the Books tab
+    // (showBookFields=true) so a bulk-selected export still offers
+    // ISBN/Author/Grade/Rack/Crate fields and the catalog layout instead of
+    // silently falling back to the generic "items" experience.
+    expect(exportDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ itemType: 'book' }),
     );
   });
 });
