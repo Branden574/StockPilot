@@ -19,6 +19,7 @@ import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import {
@@ -46,7 +47,7 @@ import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { ImageHoverPreview, prewarmPreviewImages } from '@/components/ui/image-hover-preview';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { downloadInventoryExport, type InventoryExportRequest } from '@/lib/download-export';
+import type { InventoryExportRequest } from '@/lib/download-export';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
@@ -1807,6 +1808,12 @@ export function InventoryTable({
             locations={locations}
             tags={tags}
             canSetPublicVisibility={canSetPublicVisibility}
+            // Books tab and Items tab share this table (see the onCycleCount
+            // itemType inference below) — thread the same signal into the
+            // bulk Export dialog so a books bulk-selection gets ISBN/Author/
+            // Grade/Rack/Crate fields and the catalog layout instead of the
+            // generic "items" experience.
+            itemType={showBookFields ? 'book' : 'all'}
             onClear={() => setSelected(new Set())}
             // Instant mode holds the FULL dataset, so cross-page selections
             // resolve against it; server mode keeps today's page-row scan.
@@ -3533,41 +3540,8 @@ export function MultiSelectFilter({
   );
 }
 
-const EXPORT_FORMATS: Array<{ format: 'csv' | 'xlsx' | 'pdf'; label: string }> = [
-  { format: 'xlsx', label: 'Excel' },
-  { format: 'pdf', label: 'PDF' },
-  { format: 'csv', label: 'CSV' },
-];
-
-function ExportFormatRow({
-  busy,
-  onPick,
-}: {
-  busy: boolean;
-  onPick: (format: 'csv' | 'xlsx' | 'pdf') => void;
-}) {
-  return (
-    <div className="mt-1 flex gap-1">
-      {EXPORT_FORMATS.map((f) => (
-        <button
-          key={f.format}
-          type="button"
-          disabled={busy}
-          onClick={() => onPick(f.format)}
-          className="border-border bg-background hover:bg-muted flex-1 rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
-        >
-          {f.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
-  const [open, setOpen] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-
-  const itemTypeArg = itemType as InventoryExportRequest['itemType'];
+export function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
+  const [scope, setScope] = React.useState<'filtered' | 'all' | null>(null);
 
   // "filtered" carries the active params (q, sort, cat[], loc[], stock,
   // status, expected). ?expected=1 (the Expected chip view, mig 0277) must
@@ -3584,55 +3558,57 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
     charterIds: params.getAll('charter').filter(Boolean),
   });
 
-  async function run(scope: 'filtered' | 'all', format: 'csv' | 'xlsx' | 'pdf') {
-    setBusy(true);
-    try {
-      await downloadInventoryExport({
-        format,
-        scope,
-        itemType: itemTypeArg,
-        ...(scope === 'filtered' ? { filters: filtersFromParams() } : {}),
-      });
-      setOpen(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Export failed.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
-          aria-label="Export"
-        >
-          <Download className="h-3 w-3" />
-          <span className="font-medium">Export</span>
-          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-[240px] p-2">
-        <div className="flex flex-col gap-3">
-          <div>
-            <div className="px-0.5 text-[12.5px] font-medium">Export filtered</div>
-            <div className="px-0.5 text-[11px] text-[var(--ed-ink-4)]">
-              What's currently visible
-            </div>
-            <ExportFormatRow busy={busy} onPick={(f) => run('filtered', f)} />
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+            aria-label="Export"
+          >
+            <Download className="h-3 w-3" />
+            <span className="font-medium">Export</span>
+            <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[240px] p-2">
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => setScope('filtered')}
+              className="rounded-sm px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+            >
+              <span className="block font-medium">Export filtered</span>
+              <span className="block text-[11px] text-[var(--ed-ink-4)]">
+                What&apos;s currently visible
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope('all')}
+              className="rounded-sm px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+            >
+              <span className="block font-medium">Export all</span>
+              <span className="block text-[11px] text-[var(--ed-ink-4)]">
+                Full {itemType === 'book' ? 'books' : 'inventory'} dump
+              </span>
+            </button>
           </div>
-          <div>
-            <div className="px-0.5 text-[12.5px] font-medium">Export all</div>
-            <div className="px-0.5 text-[11px] text-[var(--ed-ink-4)]">
-              Full {itemType === 'book' ? 'books' : 'inventory'} dump
-            </div>
-            <ExportFormatRow busy={busy} onPick={(f) => run('all', f)} />
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+      {scope ? (
+        <ExportBuilderDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setScope(null);
+          }}
+          scope={scope}
+          itemType={itemType as InventoryExportRequest['itemType'] & string}
+          filters={scope === 'filtered' ? filtersFromParams() : undefined}
+        />
+      ) : null}
+    </>
   );
 }
 

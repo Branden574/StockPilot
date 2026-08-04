@@ -101,6 +101,21 @@ describe('InventoryService.list', () => {
     );
   });
 
+  it('selects reorder_quantity alongside reorder_point (export-builder bug: the column ' +
+    'existed but the select string never asked for it, so every export always read 0)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.list();
+
+    const allArgs = stub.chainArgsAll.get('inventory_items.select') ?? [];
+    const mainArgs = allArgs[0] ?? [];
+    const selectString = mainArgs[0]?.[0] as string;
+    expect(selectString).toContain('reorder_quantity');
+  });
+
   it('skips item_type filter when itemType is "all"', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },

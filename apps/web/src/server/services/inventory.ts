@@ -499,7 +499,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by',
+        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by',
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -917,6 +917,11 @@ export class InventoryService {
         status: 'active' | 'archived' | 'discontinued';
         quantity_on_hand: number;
         reorder_point: number;
+        // inventory_items.reorder_quantity is numeric(14,4) not null default 0,
+        // same as reorder_point — never SQL NULL, so 0 is a genuine configured
+        // value and must be read straight through (no `?? 0` masking a
+        // missing column, see lib/inventory-export.ts).
+        reorder_quantity: number;
         unit_cost: number;
         retail_price: number;
         category_id: string | null;

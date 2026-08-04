@@ -32,7 +32,11 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ChartersService } from '@/server/services/charters';
-import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from './inventory-export';
+import {
+  buildInventoryExportRows,
+  buildInventoryExportSourceRows,
+  INVENTORY_EXPORT_HEADERS,
+} from './inventory-export';
 
 const ctx = {} as never;
 
@@ -45,6 +49,7 @@ const sampleItem = {
   status: 'active',
   quantity_on_hand: 100,
   reorder_point: 5,
+  reorder_quantity: 25,
   unit_cost: 10,
   retail_price: 20,
   category_id: 'c1',
@@ -202,5 +207,166 @@ describe('buildInventoryExportRows', () => {
     const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
     expect(res.rows[0]!.isbn).toBe('0262033844');
     expect(typeof res.rows[0]!.isbn).toBe('string');
+  });
+});
+
+describe('buildInventoryExportSourceRows', () => {
+  it('returns a typed source row with resolved lookups and combined storage labels', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [
+        {
+          ...sampleItem,
+          item_type: 'book',
+          barcode: '9780262033848',
+          custom_fields: {
+            author: 'Cormen',
+            book_grade: 'College',
+            book_rack_number: '38',
+            book_rack_row: 'A',
+            book_crate_color: 'blue',
+            book_crate_number: '12',
+          },
+        },
+      ],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.id).toBe('i1');
+    expect(r.itemType).toBe('book');
+    expect(r.isbn).toBe('9780262033848');
+    expect(r.author).toBe('Cormen');
+    expect(r.grade).toBe('College');
+    expect(r.rackNumber).toBe('38');
+    expect(r.rackRow).toBe('A');
+    expect(r.rackLabel).toBe('38-A');
+    expect(r.crateColor).toBe('blue');
+    expect(r.crateNumber).toBe('12');
+    expect(r.crateLabel).toBe('Blue 12');
+    expect(r.category).toBe('Electronics');
+    expect(r.charter).toBe('Visalia');
+    expect(res.slug).toBe('books');
+  });
+
+  it('carries a non-zero reorder quantity through from the service row, same as reorder point ' +
+    '(it must never be silently defaulted to 0 — that was the export-builder bug)', async () => {
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    const r = res.rows[0]!;
+    expect(r.reorderPoint).toBe(5);
+    expect(r.reorderQuantity).toBe(25);
+  });
+
+  it('never populates image data — that is the caller\'s explicit opt-in', async () => {
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.image).toBeNull();
+  });
+
+  it('says Generic for a null charter, exactly like the flat row builder', async () => {
+    listMock.mockResolvedValueOnce({ items: [{ ...sampleItem, charter_id: null }], total: 1 });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows[0]!.charter).toBe('Generic');
+  });
+
+  it('emits empty strings rather than null or undefined for every text field', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [
+        {
+          ...sampleItem,
+          barcode: null,
+          category_id: null,
+          primary_location_id: null,
+          supplier_id: null,
+          warehouse_id: null,
+          custom_fields: null,
+        },
+      ],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'all' });
+    const r = res.rows[0]!;
+    for (const key of [
+      'barcode',
+      'category',
+      'primaryLocation',
+      'supplier',
+      'warehouse',
+      'author',
+      'isbn',
+      'grade',
+      'rackNumber',
+      'rackRow',
+      'crateColor',
+      'crateNumber',
+      'rackLabel',
+      'crateLabel',
+    ] as const) {
+      expect(r[key], `${key} was ${String(r[key])}`).toBe('');
+    }
+  });
+
+  it('keeps the flat legacy row builder byte-compatible with what it returned before', async () => {
+    // R1: /api/inventory/export.csv and its consumers must not move.
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.headers).toEqual([...INVENTORY_EXPORT_HEADERS]);
+    expect(Object.keys(res.rows[0]!).sort()).toEqual([...INVENTORY_EXPORT_HEADERS].sort());
+  });
+
+  it('uses the same list() arguments as the flat builder for every scope', async () => {
+    await buildInventoryExportSourceRows(ctx, {
+      scope: 'selected',
+      itemType: 'all',
+      ids: ['i1'],
+    });
+    expect(listMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['i1'], status: 'all', expected: 'any' }),
+    );
+  });
+});
+
+describe('legacy CSV byte-identical guarantee for the five book-storage columns (R1)', () => {
+  // Finding 1: Task 6's refactor made buildInventoryExportRows a projection
+  // over buildInventoryExportSourceRows, which reads grade/rack/crate via
+  // readBookStorage — and readBookStorage's strOrNull TRIMS. The pre-Task-6
+  // legacy builder read these five with a local untrimmed `str()` helper.
+  // A whitespace-padded custom_fields value therefore used to survive into
+  // the legacy CSV verbatim and, after the refactor, silently lost its
+  // padding. This is the regression net: it must RED on the legacy
+  // assertions before the fix, and stay green after.
+  const whitespaceCustomFields = {
+    book_grade: ' College ',
+    book_rack_number: ' 38 ',
+    book_rack_row: ' A ',
+    book_crate_color: ' blue ',
+    book_crate_number: ' 12 ',
+  };
+
+  it('preserves untrimmed whitespace in the legacy flat projection', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', custom_fields: whitespaceCustomFields }],
+      total: 1,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.grade).toBe(' College ');
+    expect(r.rack_number).toBe(' 38 ');
+    expect(r.rack_row).toBe(' A ');
+    expect(r.crate_color).toBe(' blue ');
+    expect(r.crate_number).toBe(' 12 ');
+  });
+
+  it('trims the same fields on the source row, and composes rackLabel/crateLabel from the trimmed values', async () => {
+    listMock.mockResolvedValueOnce({
+      items: [{ ...sampleItem, item_type: 'book', custom_fields: whitespaceCustomFields }],
+      total: 1,
+    });
+    const res = await buildInventoryExportSourceRows(ctx, { scope: 'all', itemType: 'book' });
+    const r = res.rows[0]!;
+    expect(r.grade).toBe('College');
+    expect(r.rackNumber).toBe('38');
+    expect(r.rackRow).toBe('A');
+    expect(r.crateColor).toBe('blue');
+    expect(r.crateNumber).toBe('12');
+    expect(r.rackLabel).toBe('38-A');
+    expect(r.crateLabel).toBe('Blue 12');
   });
 });

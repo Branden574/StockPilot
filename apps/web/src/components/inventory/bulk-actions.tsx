@@ -31,8 +31,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { downloadInventoryExport } from '@/lib/download-export';
 import {
   Select,
   SelectContent,
@@ -49,6 +47,10 @@ import {
   type ItemPublicVisibility,
 } from '@/server/actions/item-visibility';
 import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
+import {
+  ExportBuilderDialog,
+  type ExportBuilderDialogProps,
+} from './export-builder/export-builder-dialog';
 
 export interface BulkActionsCategory {
   id: string;
@@ -99,6 +101,13 @@ interface BulkActionsProps {
       action. Pages pass can(ctx, 'public_links:manage'); the server action
       re-asserts. Default false → hidden for older callers. */
   canSetPublicVisibility?: boolean;
+  /** Threaded straight to ExportBuilderDialog's itemType. inventory-table.tsx
+      (the only caller with a Books tab) passes 'book' when showBookFields is
+      true; every other caller defaults to 'all'. Without this the Books page's
+      bulk export always ran the generic "items" experience — no ISBN/Author/
+      Grade/Rack/Crate fields, no catalog layout, "Name" instead of "Title",
+      covers off, and an `inventory-` filename slug. */
+  itemType?: ExportBuilderDialogProps['itemType'];
 }
 
 type ActiveDialog =
@@ -130,6 +139,7 @@ export function BulkActions({
   hasSplitRackSelection,
   onCycleCount,
   canSetPublicVisibility = false,
+  itemType = 'all',
 }: BulkActionsProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
@@ -166,18 +176,7 @@ export function BulkActions({
 
   const count = selectedIds.length;
   const [draftBusy, setDraftBusy] = React.useState(false);
-  const [exportBusy, setExportBusy] = React.useState(false);
-
-  async function exportSelected(format: 'csv' | 'xlsx' | 'pdf') {
-    setExportBusy(true);
-    try {
-      await downloadInventoryExport({ format, scope: 'selected', ids: selectedIds });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Export failed.');
-    } finally {
-      setExportBusy(false);
-    }
-  }
+  const [exportOpen, setExportOpen] = React.useState(false);
 
   async function createDraftPos() {
     setDraftBusy(true);
@@ -307,40 +306,13 @@ export function BulkActions({
         </a>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              disabled={exportBusy}
-              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground disabled:opacity-60"
-            >
-              {exportBusy ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Download className="h-3 w-3" />
-              )}{' '}
-              Export
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-[180px] p-2">
-            <div className="mb-1 px-0.5 text-[11px] text-[var(--ed-ink-4)]">
-              Export {count} selected
-            </div>
-            <div className="flex gap-1">
-              {(['xlsx', 'pdf', 'csv'] as const).map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  disabled={exportBusy}
-                  onClick={() => exportSelected(f)}
-                  className="flex-1 rounded-sm border border-border bg-background px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
-                >
-                  {f === 'xlsx' ? 'Excel' : f === 'pdf' ? 'PDF' : 'CSV'}
-                </button>
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
+        <button
+          type="button"
+          onClick={() => setExportOpen(true)}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <Download className="h-3 w-3" /> Export
+        </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <button
@@ -465,6 +437,15 @@ export function BulkActions({
           <X className="h-3 w-3" /> Clear
         </button>
       </div>
+
+      <ExportBuilderDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        scope="selected"
+        itemType={itemType}
+        selectedIds={selectedIds}
+        rowCountHint={selectedIds.length}
+      />
 
       {/* Archive confirmation */}
       <DestructiveConfirm

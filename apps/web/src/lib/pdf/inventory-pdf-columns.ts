@@ -40,7 +40,19 @@ export const BOOKS_PDF_COLUMNS: ReportColumn[] = [
   //            = ceil(72.76 + 6 + 2) = ceil(80.76) = 81
   { key: 'isbn', label: 'ISBN', width: 1.6, minWidth: 81, wrap: false },
   { key: 'author', label: 'Author', width: 1.6, minWidth: 62 },
-  { key: 'grade', label: 'Grade', width: 0.8, minWidth: 38 },
+  // FIX-WAVE (Task 4 review, finding 3): 38 was an unexplained drift from
+  // field-registry.ts's grade.pdfMinWidth (40) — Task 2's own fix-wave had
+  // already flagged this exact column's margin as thin (1.11pt, eroded from
+  // 2.40pt by the isbn-width fix). Re-derived from the header alone, same
+  // formula as isbn/quantity_on_hand:
+  //   headerWidth('Grade') = width('GRADE', Helvetica-Bold, 8pt)
+  //                            + 5*REPORT_HEADER_LETTER_SPACING_PT
+  //                         = 28.888 + 2.0 = 30.888
+  //   minWidth = ceil(30.888 + 2*REPORT_CELL_PADDING_PT + 2)
+  //            = ceil(30.888 + 6 + 2) = ceil(38.888) = 39
+  // 39 raises the real margin here to 2.11pt (was 1.11pt) and matches
+  // field-registry.ts's grade.pdfMinWidth, which is now also 39.
+  { key: 'grade', label: 'Grade', width: 0.8, minWidth: 39 },
   // FIX-WAVE (Controller rider on Task 1's re-review): the exhaustive sweep
   // this rider requires found "On hand" overflowing its own header box here
   // by -1.82pt once fed through the real allocator at this section's actual
