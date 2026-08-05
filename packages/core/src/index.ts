@@ -39,4 +39,5 @@ export * from './email/outlook-compose';
 export * from './maintenance/constants';
 export * from './maintenance/mr-number';
 export * from './maintenance/text';
+export * from './maintenance/email';
 export * from './schemas/maintenance';
