@@ -19,11 +19,14 @@ vi.mock('@/lib/rate-limit', () => ({
 // download/createSignedUploadUrl (po-imports.parse-suggest.test.ts's own
 // comment: "the shared makeSupabaseStub doesn't implement it"), so the admin
 // client is mocked directly here, same shape as item-images.test.ts.
-const { createAdminClientMock, downloadMock, adminRemoveMock, adminCreateSignedUrlMock } = vi.hoisted(() => ({
+const { createAdminClientMock, downloadMock, adminRemoveMock, adminCreateSignedUrlsMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   downloadMock: vi.fn(),
   adminRemoveMock: vi.fn(),
-  adminCreateSignedUrlMock: vi.fn(),
+  // Minor 11 — signedViewUrls batches via createSignedUrls(paths, ttl)
+  // instead of one createSignedUrl call per row; the mock matches the real
+  // storage-js shape: { data: {error,path,signedUrl}[], error }.
+  adminCreateSignedUrlsMock: vi.fn(),
 }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
@@ -87,23 +90,36 @@ function blobFor(bytes: Uint8Array) {
 const REQ_ID = '11111111-1111-4111-8111-111111111111';
 const OPEN_REQUEST_ROW = { id: REQ_ID, requester_user_id: 'user-test', archived_at: null, cancelled_at: null };
 
+/** A syntactically valid `crypto.randomUUID()`-shaped uuid — the strict
+ *  finalize path validator (Critical 1a) now REQUIRES this exact shape
+ *  between the request segment and the extension, so every finalize test
+ *  that expects to reach the download/sniff/insert path must use one
+ *  instead of an arbitrary short token like "abc". */
+const UUID_1 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
 beforeEach(() => {
   vi.clearAllMocks();
   downloadMock.mockReset();
   adminRemoveMock.mockReset();
-  adminCreateSignedUrlMock.mockReset();
+  adminCreateSignedUrlsMock.mockReset();
   createAdminClientMock.mockReturnValue({
     storage: {
       from: vi.fn(() => ({
         download: downloadMock,
         remove: adminRemoveMock,
-        createSignedUrl: adminCreateSignedUrlMock,
+        createSignedUrls: adminCreateSignedUrlsMock,
       })),
     },
   });
   downloadMock.mockResolvedValue({ data: null, error: { message: 'not stubbed for this test' } });
   adminRemoveMock.mockResolvedValue({ data: null, error: null });
-  adminCreateSignedUrlMock.mockResolvedValue({ data: { signedUrl: 'https://mock/view-signed' }, error: null });
+  // Default: sign whatever paths were asked for, echoing each one back with
+  // a stable stub URL — matches the real batch response shape (one entry
+  // per requested path, keyed by `path`).
+  adminCreateSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
+    data: paths.map((path) => ({ error: null, path, signedUrl: 'https://mock/view-signed' })),
+    error: null,
+  }));
 });
 
 describe('createUploadUrl (mint)', () => {
@@ -258,11 +274,12 @@ describe('finalize', () => {
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
     });
 
-    const path = `${ctx.organizationId}/${REQ_ID}/abc.png`;
-    const thumbPath = `${ctx.organizationId}/${REQ_ID}/abc-thumb.webp`;
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    // CRITICAL 1c: thumbPath is not a finalize() input at all anymore — the
+    // service derives it from `path`, same directory, `-thumb.webp` suffix.
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
     const res = await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
       path,
-      thumbPath,
       originalFilename: 'break-room.png',
       declaredMime: 'image/png',
     });
@@ -276,15 +293,38 @@ describe('finalize', () => {
     expect(insert.width).toBe(2);
     expect(insert.height).toBe(3);
     expect(insert.storage_path).toBe(path);
-    expect(insert.thumbnail_path).toBe(thumbPath);
+    expect(insert.thumbnail_path).toBe(derivedThumbPath);
     expect(insert.organization_id).toBe(ctx.organizationId);
     expect(insert.maintenance_request_id).toBe(REQ_ID);
     expect(insert.uploaded_by).toBe(ctx.userId);
+    // Important 7 — safe_filename comes from sanitizeFilenameSegment, never
+    // the raw original_filename verbatim.
+    expect(insert.safe_filename).toBe('break-room-png');
 
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'maintenance_request.attachment_added', entityId: REQ_ID }),
       ctx,
     );
+  });
+
+  it('Important 7 — safe_filename is sanitized: a path-traversal-shaped original_filename never reaches the insert verbatim', async () => {
+    const bytes = pngBytes(2, 3);
+    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+      'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+    await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+      path,
+      originalFilename: '../../etc/passwd.jpg',
+      declaredMime: 'image/png',
+    });
+
+    const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.original_filename).toBe('../../etc/passwd.jpg');
+    expect(insert.safe_filename).toBe('etc-passwd-jpg');
   });
 
   it('MUTATION GUARD — REJECTS a body whose magic bytes are not an image (photo test 6): deletes the uploaded object and throws validation_error invalid_image, writing NO row', async () => {
@@ -293,20 +333,20 @@ describe('finalize', () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
-    const path = `${ctx.organizationId}/${REQ_ID}/abc.png`;
-    const thumbPath = `${ctx.organizationId}/${REQ_ID}/abc-thumb.webp`;
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
 
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
         path,
-        thumbPath,
         originalFilename: 'fake.png',
         declaredMime: 'image/png',
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
 
-    // Storage-delete-on-reject, pinned via call recording (both master + thumb).
-    expect(adminRemoveMock).toHaveBeenCalledWith([path, thumbPath]);
+    // Storage-delete-on-reject, pinned via call recording (both master + the
+    // derived thumb).
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
     expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
@@ -316,18 +356,18 @@ describe('finalize', () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
-    const path = `${ctx.organizationId}/${REQ_ID}/abc.png`;
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
 
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
         path,
-        thumbPath: null,
         originalFilename: 'renamed.png', // a real JPEG, renamed .png
         declaredMime: 'image/png',
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
 
-    expect(adminRemoveMock).toHaveBeenCalledWith([path]);
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
     expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
@@ -338,28 +378,36 @@ describe('finalize', () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
-    const path = `${ctx.organizationId}/${REQ_ID}/big.png`;
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
 
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
         path,
-        thumbPath: null,
         originalFilename: 'big.png',
         declaredMime: 'image/png',
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
-    expect(adminRemoveMock).toHaveBeenCalledWith([path]);
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
     expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
-  it('re-asserts the org prefix on `path` — a forged path throws forbidden BEFORE any storage call', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
-    });
+  // ── CRITICAL 1/2 — path-traversal past the org/bucket boundary ───────────
+  // The old guard was `args.path.startsWith(prefix)`. @supabase/storage-js
+  // interpolates `path` straight into a fetch() URL; the WHATWG URL parser
+  // strips `..`/`%2e%2e` segments BEFORE the request leaves Node, so a path
+  // like `org/req/../../victim-org/victim-req/photo.png` passed startsWith,
+  // downloaded with the SERVICE-ROLE client (bypassing RLS), and was then
+  // stored and signed. Each test below pins ONE independent dimension of the
+  // fix, so a regression in any single dimension fails its own test instead
+  // of hiding behind a compound assertion (the original test varied org AND
+  // request together, which let two separate mutations both survive).
+
+  it('MUTATION GUARD (r2) — a path whose org segment is a DIFFERENT (validly-shaped) org than ctx.organizationId is forbidden, even though the request segment and uuid.ext are perfectly well-formed', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
-        path: 'other-org/x/y.jpg',
-        thumbPath: null,
+        path: `other-org/${REQ_ID}/${UUID_1}.jpg`,
         originalFilename: 'x.jpg',
         declaredMime: 'image/jpeg',
       }),
@@ -368,16 +416,88 @@ describe('finalize', () => {
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
+  it('MUTATION GUARD (r7) — a path whose request segment is a DIFFERENT (validly-shaped) request than the one being finalized against is forbidden, even though the org segment and uuid.ext are perfectly well-formed', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+    const otherReqId = '22222222-2222-4222-8222-222222222222';
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path: `${ctx.organizationId}/${otherReqId}/${UUID_1}.jpg`,
+        originalFilename: 'x.jpg',
+        declaredMime: 'image/jpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION GUARD — a literal ".." traversal segment is rejected BEFORE any storage call (the proven exploit)', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path: `${ctx.organizationId}/${REQ_ID}/../../victim-org/victim-req/${UUID_1}.jpg`,
+        originalFilename: 'x.jpg',
+        declaredMime: 'image/jpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION GUARD — a %2e%2e-encoded traversal segment is rejected (this is the variant that escapes the BUCKET entirely once Storage decodes it server-side, e.g. into item-images)', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path: `${ctx.organizationId}/${REQ_ID}/%2e%2e/%2e%2e/item-images/some-org/some-item/cover.jpg`,
+        originalFilename: 'x.jpg',
+        declaredMime: 'image/jpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a path with the right org/request prefix but a non-uuid filename (strict shape, not just a prefix match)', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path: `${ctx.organizationId}/${REQ_ID}/not-a-uuid.jpg`,
+        originalFilename: 'x.jpg',
+        declaredMime: 'image/jpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION GUARD — cap re-check: rejects finalize once the request already holds MAINTENANCE_MAX_PHOTOS attachments, and rolls back the uploaded object (Important 3 — a mint-time count check alone is bypassable: 0315 lets any accepted org member PUT directly to storage, and mint itself can be called MAINTENANCE_MAX_PHOTOS times concurrently before any of them finalizes)', async () => {
+    const bytes = pngBytes(2, 3);
+    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+      'maintenance_request_attachments.select': { data: [], error: null, count: MAINTENANCE_MAX_PHOTOS },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
+
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'x.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
+    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+  });
+
   it('never writes a row when the object was never actually uploaded (download fails) — no phantom rows', async () => {
     downloadMock.mockResolvedValue({ data: null, error: { message: 'The resource was not found' } });
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
-    const path = `${ctx.organizationId}/${REQ_ID}/ghost.jpg`;
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.jpg`;
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
         path,
-        thumbPath: null,
         originalFilename: 'ghost.jpg',
         declaredMime: 'image/jpeg',
       }),
@@ -399,8 +519,7 @@ describe('finalize', () => {
     );
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
-        path: `${ctx.organizationId}/${REQ_ID}/abc.png`,
-        thumbPath: null,
+        path: `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`,
         originalFilename: 'x.png',
         declaredMime: 'image/png',
       }),
@@ -417,8 +536,7 @@ describe('finalize', () => {
     });
     await expect(
       new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
-        path: `${ctx.organizationId}/${REQ_ID}/abc.png`,
-        thumbPath: null,
+        path: `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`,
         originalFilename: 'x.png',
         declaredMime: 'image/png',
       }),
@@ -473,6 +591,25 @@ describe('remove', () => {
     });
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
+
+  it('MUTATION GUARD (r14) — requires maintenance_requests:submit before touching the row: a caller without it is rejected BEFORE any read, storage removal, or audit', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_request_attachments.select': {
+          data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+          error: null,
+        },
+        'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+      },
+      { permissions: new Set([]) },
+    );
+    await expect(new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(stub.fromCalls).not.toContain('maintenance_request_attachments');
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
 });
 
 describe('signedViewUrls', () => {
@@ -512,14 +649,62 @@ describe('signedViewUrls', () => {
     // ADMIN client used (never ctx.supabase — RLS-scoped visibility already
     // happened via the row select above; signing is org-agnostic).
     expect(createAdminClientMock).toHaveBeenCalled();
-    // 1-hour TTL, literal-pinned.
-    expect(adminCreateSignedUrlMock).toHaveBeenCalledWith('org-test/req/a.jpg', 3600);
-    expect(adminCreateSignedUrlMock).toHaveBeenCalledWith('org-test/req/a-thumb.webp', 3600);
+    // Minor 11 — ONE batched createSignedUrls call covering both the master
+    // and the thumb path, 1-hour TTL, literal-pinned. Not a per-row call.
+    expect(adminCreateSignedUrlsMock).toHaveBeenCalledTimes(1);
+    expect(adminCreateSignedUrlsMock).toHaveBeenCalledWith(
+      ['org-test/req/a.jpg', 'org-test/req/a-thumb.webp'],
+      3600,
+    );
     void stub;
   });
 
+  it('batches every master + thumb path across MULTIPLE rows into a single createSignedUrls call', async () => {
+    const { ctx } = build({
+      'maintenance_request_attachments.select': {
+        data: [
+          { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: 'org-test/req/a-thumb.webp', original_filename: 'a.jpg', width: 1, height: 1 },
+          { id: 'att-2', storage_path: 'org-test/req/b.jpg', thumbnail_path: null, original_filename: 'b.jpg', width: null, height: null },
+        ],
+        error: null,
+      },
+    });
+    const res = await new MaintenanceAttachmentsService(ctx).signedViewUrls(REQ_ID);
+    expect(res).toHaveLength(2);
+    expect(adminCreateSignedUrlsMock).toHaveBeenCalledTimes(1);
+    expect(adminCreateSignedUrlsMock).toHaveBeenCalledWith(
+      ['org-test/req/a.jpg', 'org-test/req/a-thumb.webp', 'org-test/req/b.jpg'],
+      3600,
+    );
+  });
+
+  it('an empty result never calls storage at all', async () => {
+    const { ctx } = build({
+      'maintenance_request_attachments.select': { data: [], error: null },
+    });
+    const res = await new MaintenanceAttachmentsService(ctx).signedViewUrls(REQ_ID);
+    expect(res).toEqual([]);
+    expect(adminCreateSignedUrlsMock).not.toHaveBeenCalled();
+  });
+
   it('THROWS on a signing failure — never returns a broken/partial URL (recurring bug #6)', async () => {
-    adminCreateSignedUrlMock.mockResolvedValueOnce({ data: null, error: { message: 'quota exceeded' } });
+    adminCreateSignedUrlsMock.mockResolvedValueOnce({ data: null, error: { message: 'quota exceeded' } });
+    const { ctx } = build({
+      'maintenance_request_attachments.select': {
+        data: [{ id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null, original_filename: 'p.jpg', width: null, height: null }],
+        error: null,
+      },
+    });
+    await expect(new MaintenanceAttachmentsService(ctx).signedViewUrls(REQ_ID)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
+  it('THROWS when the master path is missing from a partial batch response, even though the call itself succeeded', async () => {
+    adminCreateSignedUrlsMock.mockResolvedValueOnce({
+      data: [{ error: 'not found', path: 'org-test/req/a.jpg', signedUrl: null }],
+      error: null,
+    });
     const { ctx } = build({
       'maintenance_request_attachments.select': {
         data: [{ id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null, original_filename: 'p.jpg', width: null, height: null }],

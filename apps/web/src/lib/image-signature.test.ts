@@ -81,4 +81,60 @@ describe('sniffImage', () => {
     const noSof = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00]);
     expect(sniffImage(noSof)).toBeNull();
   });
+
+  it('MUTATION GUARD (r6) — a RIFF file that is NOT WEBP (a real RIFF/WAVE prefix) is rejected: all four fourcc bytes must match, not just the outer RIFF wrapper', () => {
+    // A real RIFF/WAVE header shape: 'RIFF' + size + 'WAVE' (the audio
+    // container that shares WEBP's outer RIFF wrapper). A sniffer that
+    // dropped the fourcc check (kept only the 'RIFF' bytes) would wrongly
+    // accept this as WEBP.
+    const riffWave = new Uint8Array(16);
+    riffWave.set([0x52, 0x49, 0x46, 0x46], 0); // 'RIFF'
+    riffWave.set([0x24, 0x00, 0x00, 0x00], 4); // chunk size (arbitrary, real-shaped)
+    riffWave.set([0x57, 0x41, 0x56, 0x45], 8); // 'WAVE' — NOT 'WEBP'
+    expect(sniffImage(riffWave)).toBeNull();
+  });
+
+  it('MUTATION GUARD (r11) — a body sharing only the first TWO PNG signature bytes (\\x89P) is rejected: the full 8-byte signature must match, not a truncated prefix', () => {
+    // Bytes 0-1 match the start of the PNG signature; nothing after does —
+    // bytes 2-7 are garbage, NOT the real 0x4e470d0a1a0a tail. Width/height
+    // are set to real, valid values (2, 3) at the normal IHDR offsets so
+    // this fixture is rejected ONLY by the signature check, never by the
+    // (unrelated) dimension-range guard — a mutant that checked just these
+    // first two bytes would otherwise still classify this as a valid PNG.
+    const twoByteMagic = pngBytes(2, 3);
+    twoByteMagic.set([0x89, 0x50, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 0);
+    expect(sniffImage(twoByteMagic)).toBeNull();
+  });
+
+  it('a body with the correct 8-byte PNG signature but a non-IHDR (or garbage) first chunk tag is rejected', () => {
+    const wrongChunk = pngBytes(2, 3);
+    // Overwrite the IHDR tag at bytes 12-15 with garbage, signature intact.
+    wrongChunk.set([0xde, 0xad, 0xbe, 0xef], 12);
+    expect(sniffImage(wrongChunk)).toBeNull();
+  });
+
+  it('Important 6 — a PNG reporting a dimension outside the 1..2147483647 int4 range is rejected, not passed through (a corrupted/adversarial IHDR reporting 4294967295 would otherwise overflow the `width`/`height` integer columns at INSERT and surface as a raw 500)', () => {
+    const huge = pngBytes(2, 3);
+    new DataView(huge.buffer).setUint32(16, 0xffffffff); // width = 4294967295
+    expect(sniffImage(huge)).toBeNull();
+  });
+
+  it('a PNG reporting a zero dimension is rejected', () => {
+    const zeroWidth = pngBytes(0, 3);
+    expect(sniffImage(zeroWidth)).toBeNull();
+  });
+
+  it('a JPEG SOF segment reporting a zero dimension is rejected (Minor 8 — consistent with the PNG/overflow rejection, not passed through with null dims)', () => {
+    const zeroDim = jpegBytes(0, 5);
+    expect(sniffImage(zeroDim)).toBeNull();
+  });
+
+  it('Minor 8 — a legitimate JPEG padded with 0xFF fill bytes before its SOF marker is still correctly sniffed (ITU T.81 §B.1.1.2: fill bytes before a marker are legal, real encoders emit them)', () => {
+    // SOI, then THREE extra 0xFF fill bytes, then the real marker byte
+    // (0xC0 = SOF0), then the same segment body jpegBytes() uses.
+    const withFill = new Uint8Array([
+      0xff, 0xd8, 0xff, 0xff, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00,
+    ]);
+    expect(sniffImage(withFill)).toEqual({ kind: 'jpeg', width: 4, height: 5 });
+  });
 });

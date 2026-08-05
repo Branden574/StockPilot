@@ -15,10 +15,17 @@ export const dynamic = 'force-dynamic';
  * records the row. A body that fails the sniff is deleted server-side and
  * this returns 400 { error: 'invalid_image' } — the route contract every
  * upload UI (web Task 13, mobile Task 19) is built against.
+ *
+ * CRITICAL 1c (security fix wave, Task 9 review): `thumbPath` is NOT part of
+ * this contract. The service derives it deterministically from `path`
+ * server-side — accepting it from the client was an unnecessary second
+ * place for a hostile path to slip through the org/request boundary check.
+ * Tasks 13/19 (web/mobile upload UI) must NOT send a thumbPath field; the
+ * mint response's `thumbPath` is still correct to PUT the actual thumbnail
+ * bytes to, since it is the exact path the service re-derives at finalize.
  */
 const finalizeSchema = z.object({
   path: z.string().min(1).max(500),
-  thumbPath: z.string().max(500).nullish(),
   originalFilename: z.string().trim().min(1).max(300),
   declaredMime: z.enum(['image/png', 'image/jpeg', 'image/webp']),
 });
@@ -49,7 +56,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const res = await new MaintenanceAttachmentsService(ctx).finalize(id, {
       path: parsed.data.path,
-      thumbPath: parsed.data.thumbPath ?? null,
       originalFilename: parsed.data.originalFilename,
       declaredMime: parsed.data.declaredMime,
     });
