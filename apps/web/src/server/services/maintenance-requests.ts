@@ -489,7 +489,7 @@ export class MaintenanceRequestsService {
       // I2: cross-org tampering check, same shape as cycle-counts.ts's
       // assign(). The FK is to auth.users, NOT organization_members, so
       // without this a foreign-org uuid the caller happens to know is a
-      // perfectly valid write — it would silently route the ticket (and
+      // perfectly valid write — it would silently route the request (and
       // the "assigned to you" notification + detail-page display) to
       // someone outside this organization entirely.
       const { data: member, error: mErr } = await this.db

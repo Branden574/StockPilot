@@ -528,7 +528,14 @@ describe('archive', () => {
 
   it('M1: refuses to archive an already-CANCELLED request instead of stamping both closed states on one row', async () => {
     const { ctx } = build(
-      { 'maintenance_requests.select': { data: { cancelled_at: '2026-01-01T00:00:00Z' }, error: null } },
+      {
+        'maintenance_requests.select': { data: { cancelled_at: '2026-01-01T00:00:00Z' }, error: null },
+        // A SUCCEEDING update fixture, deliberately: without it the mock's
+        // zero-row default lets the generic C2 guard throw the same
+        // 'conflict' this test expects, masking deletion of the specific
+        // already-cancelled guard (re-review mutation T survived on that).
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await expect(new MaintenanceRequestsService(ctx).archive('r1')).rejects.toMatchObject({ code: 'conflict' });
@@ -888,6 +895,10 @@ describe('recordDraftOpened', () => {
           data: { ...BASE_ROW, archived_at: '2026-01-01T00:00:00Z', status: 'archived' },
           error: null,
         },
+        // Succeeding update fixture on purpose — see the M1 archive test:
+        // without it, deleting the closed-state guard still throws the same
+        // 'conflict' via the generic C2 zero-row guard (mutation G survived).
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:submit']) },
     );
