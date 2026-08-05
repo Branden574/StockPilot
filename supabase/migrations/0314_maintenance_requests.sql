@@ -179,6 +179,13 @@ create index if not exists maintenance_requests_org_requester_idx
 create index if not exists maintenance_requests_org_status_idx
   on public.maintenance_requests (organization_id, status);
 
+-- updated_at maintenance (tg_set_updated_at convention, 0001; nearest
+-- precedent 0261_public_request_links.sql:117-119).
+drop trigger if exists trg_maintenance_requests_updated_at on public.maintenance_requests;
+create trigger trg_maintenance_requests_updated_at
+  before update on public.maintenance_requests
+  for each row execute function public.tg_set_updated_at();
+
 -- ── 5) maintenance_request_attachments ──────────────────────────────────────
 create table if not exists public.maintenance_request_attachments (
   id                     uuid primary key default gen_random_uuid(),
@@ -215,6 +222,8 @@ create table if not exists public.maintenance_request_notes (
 
 create index if not exists maintenance_request_notes_req_idx
   on public.maintenance_request_notes (maintenance_request_id, created_at);
+create index if not exists maintenance_request_notes_org_idx
+  on public.maintenance_request_notes (organization_id);
 
 -- ── 7) maintenance_request_share_links (0261 token pattern, request-scoped) ─
 create table if not exists public.maintenance_request_share_links (
@@ -231,6 +240,14 @@ create table if not exists public.maintenance_request_share_links (
 
 create index if not exists maintenance_request_share_links_req_idx
   on public.maintenance_request_share_links (maintenance_request_id);
+create index if not exists maintenance_request_share_links_org_idx
+  on public.maintenance_request_share_links (organization_id);
+
+-- One ACTIVE share link per request (Task 10's ensureActiveLink relies on
+-- this to make "get-or-create the active link" race-safe).
+create unique index if not exists maintenance_request_share_links_one_active_uniq
+  on public.maintenance_request_share_links (maintenance_request_id)
+  where active;
 
 -- ── 8) RLS ──────────────────────────────────────────────────────────────────
 -- Every helper-function call inside a USING/WITH CHECK predicate below is
@@ -300,7 +317,7 @@ create policy maintenance_request_attachments_select on public.maintenance_reque
     exists (
       select 1 from public.maintenance_requests r
        where r.id = maintenance_request_id
-         and r.organization_id = organization_id
+         and r.organization_id = maintenance_request_attachments.organization_id
          and (
            (r.requester_user_id = (select auth.uid()) and (select public.has_org_role(r.organization_id, 'viewer')))
            or (select public.has_permission(r.organization_id, 'maintenance_requests:read_all'))
@@ -317,7 +334,7 @@ create policy maintenance_request_attachments_insert on public.maintenance_reque
     and exists (
       select 1 from public.maintenance_requests r
        where r.id = maintenance_request_id
-         and r.organization_id = organization_id
+         and r.organization_id = maintenance_request_attachments.organization_id
          and r.archived_at is null and r.cancelled_at is null
          and (
            r.requester_user_id = (select auth.uid())
@@ -333,7 +350,7 @@ create policy maintenance_request_attachments_delete on public.maintenance_reque
     exists (
       select 1 from public.maintenance_requests r
        where r.id = maintenance_request_id
-         and r.organization_id = organization_id
+         and r.organization_id = maintenance_request_attachments.organization_id
          and r.archived_at is null and r.cancelled_at is null
          and (
            r.requester_user_id = (select auth.uid())
@@ -344,10 +361,21 @@ create policy maintenance_request_attachments_delete on public.maintenance_reque
   );
 
 -- Notes: manage-only in BOTH directions (brief: requester must never read
--- internal notes; read_all explicitly excludes notes).
+-- internal notes; read_all explicitly excludes notes). Both policies also
+-- require the parent request to actually live in the SAME org as the note
+-- (Global Constraint 6) — without this, a manage-holder in org P could key a
+-- note's organization_id to their own org while pointing maintenance_request_id
+-- at a request that actually belongs to a different org.
 create policy maintenance_request_notes_select on public.maintenance_request_notes
   for select to authenticated
-  using ((select public.has_permission(organization_id, 'maintenance_requests:manage')));
+  using (
+    (select public.has_permission(organization_id, 'maintenance_requests:manage'))
+    and exists (
+      select 1 from public.maintenance_requests r
+       where r.id = maintenance_request_id
+         and r.organization_id = maintenance_request_notes.organization_id
+    )
+  );
 
 create policy maintenance_request_notes_insert on public.maintenance_request_notes
   for insert to authenticated
@@ -355,13 +383,26 @@ create policy maintenance_request_notes_insert on public.maintenance_request_not
     author_user_id = (select auth.uid())
     and (select public.has_permission(organization_id, 'maintenance_requests:manage'))
     and (select public.module_enabled(organization_id, 'maintenance_requests'))
+    and exists (
+      select 1 from public.maintenance_requests r
+       where r.id = maintenance_request_id
+         and r.organization_id = maintenance_request_notes.organization_id
+    )
   );
 
 -- Share links: tokens are secrets. SELECT for manage only; ALL writes happen
 -- through the service-role client (no authenticated write policies at all).
+-- Same parent-consistency guard as notes above.
 create policy maintenance_request_share_links_select on public.maintenance_request_share_links
   for select to authenticated
-  using ((select public.has_permission(organization_id, 'maintenance_requests:manage')));
+  using (
+    (select public.has_permission(organization_id, 'maintenance_requests:manage'))
+    and exists (
+      select 1 from public.maintenance_requests r
+       where r.id = maintenance_request_id
+         and r.organization_id = maintenance_request_share_links.organization_id
+    )
+  );
 
 -- ── 9) Notification preference columns (0265 recipe) ────────────────────────
 alter table public.notification_preferences
