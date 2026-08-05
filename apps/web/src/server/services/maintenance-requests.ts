@@ -6,6 +6,7 @@ import {
   formatOrderNumber,
   maintenanceRequestFormSchema,
   parseMaintenanceRequestNumber,
+  uuidSchema,
   type MaintenanceEmailInput,
   type MaintenancePriority,
   type MaintenanceStatus,
@@ -300,6 +301,19 @@ export class MaintenanceRequestsService {
     if (!r) throw new ServiceError('not_found', 'Maintenance request not found');
 
     const row = r as Record<string, unknown>;
+    // I1: zero-query defense in depth. RLS (0314 maintenance_requests_select)
+    // already scopes this SELECT to requester-own OR read_all OR manage —
+    // the row is in hand, so assert the SAME boundary here rather than
+    // trusting RLS as the only enforcement layer. not_found, never
+    // forbidden: an unauthorized caller must not learn a foreign request
+    // even exists. Every write method below routes through get() first, so
+    // this closes the same hole for update()/cancel()/recordDraftOpened()/
+    // emailInput() too — each still layers its OWN manage-vs-requester
+    // decision on top for the narrower "can VIEW but not EDIT" case (e.g. a
+    // read_all holder who isn't the requester and isn't a manage-holder).
+    if (!this.canReadAll() && (row.requester_user_id as string | null) !== this.ctx.userId) {
+      throw new ServiceError('not_found', 'Maintenance request not found');
+    }
     const base = this.toListRow(row);
     return {
       ...base,
@@ -346,12 +360,26 @@ export class MaintenanceRequestsService {
       if (col) updates[col] = value ?? null;
     }
 
-    const { error } = await this.db
+    const { data, error } = await this.db
       .from('maintenance_requests')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // C2: fail CLOSED, not open. get() above already confirmed this id
+    // exists, is in-org, and is readable/editable by this caller — so a
+    // zero-row result here means RLS refused the WRITE itself (the row's
+    // archived_at/cancelled_at flipped between that read and this write, or
+    // a permission changed mid-request). That is a state-changed conflict,
+    // not a missing/foreign row — get() already ruled the latter out.
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This request changed state and can no longer be edited this way. Reload and try again.',
+      );
+    }
 
     await audit(
       {
@@ -370,13 +398,45 @@ export class MaintenanceRequestsService {
   async archive(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     assertPermission(this.ctx, 'maintenance_requests:manage');
+
+    // M1: refuse archiving an already-CANCELLED request rather than
+    // silently ending up with BOTH archived_at and cancelled_at set on the
+    // same row — two closed-state timestamps on one request is a history
+    // nothing downstream can make sense of. Narrow pre-read (status column
+    // only), same shape as cycle-counts.ts's assign() header check —
+    // archive() had NO existence check at all before this fix, so a
+    // missing row here is genuinely not_found, not a race.
+    const { data: header, error: hErr } = await this.db
+      .from('maintenance_requests')
+      .select('cancelled_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Maintenance request not found.');
+    if ((header as { cancelled_at: string | null }).cancelled_at) {
+      throw new ServiceError('conflict', 'This request is cancelled and cannot be archived.');
+    }
+
     const now = new Date().toISOString();
-    const { error } = await this.db
+    const { data, error } = await this.db
       .from('maintenance_requests')
       .update({ status: 'archived', archived_at: now, updated_at: now })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // C2: the pre-read above already confirmed the row exists — a zero-row
+    // result here means it changed state (or the module got disabled)
+    // between that read and this write. Conflict, not not_found: the row
+    // is still there, just no longer writable the way this caller expects.
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This request changed state and can no longer be archived this way. Reload and try again.',
+      );
+    }
     await audit({ event: 'maintenance_request.archived', entityType: 'maintenance_request', entityId: id }, this.ctx);
   }
 
@@ -391,12 +451,24 @@ export class MaintenanceRequestsService {
     }
     if (detail.archivedAt) throw new ServiceError('conflict', 'This request is archived.');
     const now = new Date().toISOString();
-    const { error } = await this.db
+    const { data, error } = await this.db
       .from('maintenance_requests')
       .update({ status: 'cancelled', cancelled_at: now, updated_at: now })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // C2: get() above already confirmed existence and the archivedAt check
+    // just passed — a zero-row result here means the row's state moved
+    // between that read and this write (e.g. someone else archived it, or
+    // a repeat cancel raced itself). Conflict, not not_found.
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This request changed state and can no longer be cancelled this way. Reload and try again.',
+      );
+    }
     await audit({ event: 'maintenance_request.cancelled', entityType: 'maintenance_request', entityId: id }, this.ctx);
   }
 
@@ -405,12 +477,47 @@ export class MaintenanceRequestsService {
   async assignLocalOwner(id: string, userId: string | null): Promise<void> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     assertPermission(this.ctx, 'maintenance_requests:manage');
-    const { error } = await this.db
+
+    if (userId !== null) {
+      // I2: uuid-shape validation FIRST — the column's only constraint is a
+      // FK to auth.users(id), so without this a garbage string reaches
+      // Postgres and comes back as an opaque 22P02 internal_error instead
+      // of a clear, actionable validation_error.
+      if (!uuidSchema.safeParse(userId).success) {
+        throw new ServiceError('validation_error', 'That is not a valid user id.');
+      }
+      // I2: cross-org tampering check, same shape as cycle-counts.ts's
+      // assign(). The FK is to auth.users, NOT organization_members, so
+      // without this a foreign-org uuid the caller happens to know is a
+      // perfectly valid write — it would silently route the ticket (and
+      // the "assigned to you" notification + detail-page display) to
+      // someone outside this organization entirely.
+      const { data: member, error: mErr } = await this.db
+        .from('organization_members')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', userId)
+        .not('accepted_at', 'is', null)
+        .maybeSingle();
+      if (mErr) throw new ServiceError('internal_error', mErr.message);
+      if (!member) {
+        throw new ServiceError('validation_error', 'That user is not an active member of this organization.');
+      }
+    }
+
+    const { data, error } = await this.db
       .from('maintenance_requests')
       .update({ local_owner_user_id: userId, updated_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // C2: assignLocalOwner() never pre-reads the row (unlike update()/
+    // cancel()/recordDraftOpened(), which route through get() first) — a
+    // zero-row result here is the FIRST and only existence signal this
+    // method gets, so a stale/foreign id reads as not_found, not conflict.
+    if (!data) throw new ServiceError('not_found', 'Maintenance request not found.');
     await audit(
       {
         event: 'maintenance_request.owner_assigned',
@@ -431,6 +538,21 @@ export class MaintenanceRequestsService {
     if (!text || text.length > 4000) {
       throw new ServiceError('validation_error', 'Notes must be 1 to 4,000 characters.');
     }
+
+    // M3: confirm the parent exists in THIS org before inserting. Without
+    // this, a foreign/stale id trips the notes INSERT RLS policy's `exists
+    // (... maintenance_requests r ...)` check and comes back as an opaque
+    // internal_error instead of a clear not_found — narrow read, same shape
+    // as archive()'s pre-check above.
+    const { data: parent, error: pErr } = await this.db
+      .from('maintenance_requests')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (pErr) throw new ServiceError('internal_error', pErr.message);
+    if (!parent) throw new ServiceError('not_found', 'Maintenance request not found.');
+
     const { data, error } = await this.db
       .from('maintenance_request_notes')
       .insert({
@@ -459,7 +581,10 @@ export class MaintenanceRequestsService {
       .select('id, author_user_id, body, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('maintenance_request_id', id)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      // M4: an internal notes thread has no pagination UI — cap it so a
+      // pathological request can't pull an unbounded row set.
+      .limit(500);
     if (error) throw new ServiceError('internal_error', error.message);
     return ((data ?? []) as Record<string, unknown>[]).map((n) => ({
       id: n.id as string,
@@ -476,9 +601,32 @@ export class MaintenanceRequestsService {
   async recordDraftOpened(id: string): Promise<{ openCount: number }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     const detail = await this.get(id);
+
+    // C1: get() only decided whether this caller may VIEW the row (owner OR
+    // read_all/manage — I1). Recording a draft-open is a WRITE, and 0314's
+    // UPDATE policy is narrower than that: the requester may write ONLY
+    // while archived_at/cancelled_at are both null, and a plain read_all
+    // holder who is neither the requester nor a manage-holder has no write
+    // path at all. Without this explicit decision, that combination
+    // reached the .update() below, RLS matched 0 rows, `error` came back
+    // null (a no-op UPDATE is not a Postgres error), and the method
+    // returned an openCount that was never persisted while audit()
+    // recorded a draft_opened event for a mutation that never happened.
+    const isManager = can(this.ctx, 'maintenance_requests:manage');
+    if (!isManager && detail.requesterUserId !== this.ctx.userId) {
+      throw new ServiceError('forbidden', 'Not your request.');
+    }
+    // C1: closed-state guard mirroring RLS's `using` clause — the
+    // requester's own write path there requires archived_at IS NULL AND
+    // cancelled_at IS NULL; manage/manager bypasses it entirely, same as
+    // update()'s identical guard.
+    if (!isManager && (detail.archivedAt || detail.cancelledAt)) {
+      throw new ServiceError('conflict', 'This request is closed and can no longer be edited.');
+    }
+
     const openCount = detail.outlookDraftOpenCount + 1;
     const now = new Date().toISOString();
-    const { error } = await this.db
+    const { data, error } = await this.db
       .from('maintenance_requests')
       .update({
         outlook_draft_opened_at: detail.outlookDraftOpenedAt ?? now,
@@ -487,8 +635,20 @@ export class MaintenanceRequestsService {
         updated_at: now,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // C2: the checks above already confirmed existence + writability — a
+    // zero-row result here means state moved between that read and this
+    // write. Conflict, not not_found. Audit only fires AFTER this guard, so
+    // a phantom mutation is never recorded as though it happened.
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This request changed state and can no longer be edited this way. Reload and try again.',
+      );
+    }
     await audit(
       {
         event: 'maintenance_request.draft_opened',

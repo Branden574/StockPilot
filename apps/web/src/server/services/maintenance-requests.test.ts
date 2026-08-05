@@ -90,6 +90,12 @@ const BASE_ROW = {
   maintenance_request_attachments: [{ count: 0 }],
 };
 
+/** Valid-shaped UUID stand-ins for assignLocalOwner's userId param — I2
+ *  adds real uuidSchema validation there, so unlike every other id in this
+ *  file ('r1', 'note1', ...), these two specifically must parse as UUIDs. */
+const VALID_USER_UUID = '22222222-2222-4222-8222-222222222222';
+const OTHER_ORG_USER_UUID = '33333333-3333-4333-8333-333333333333';
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -317,9 +323,33 @@ describe('list', () => {
 });
 
 describe('get', () => {
-  it('throws not_found when RLS/organization scoping returns no row', async () => {
-    const { ctx } = build({ 'maintenance_requests.select': { data: null, error: null } });
+  it('throws not_found when RLS/organization scoping returns no row, and pins the org + id filters behind it', async () => {
+    const { stub, ctx } = build({ 'maintenance_requests.select': { data: null, error: null } });
     await expect(new MaintenanceRequestsService(ctx).get('missing')).rejects.toMatchObject({ code: 'not_found' });
+    // I3: without these two recorded filters, this test would still pass
+    // even if get() dropped its org/id scoping entirely — the mock ignores
+    // filters and just returns whatever `data` was canned regardless of
+    // what was actually asked for.
+    expect(stub.chainArgs.get('maintenance_requests.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('maintenance_requests.select')).toContainEqual(['id', 'missing']);
+  });
+
+  it('I1: an unauthorized employee (no read_all/manage, not the requester) cannot view someone else\'s request — not_found, not forbidden', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    // not_found, never forbidden: an unauthorized caller must not learn
+    // that a foreign request even exists.
+    await expect(new MaintenanceRequestsService(ctx).get('r1')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('I1: a read_all holder CAN view a request that is not their own', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:read_all']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).get('r1')).resolves.toMatchObject({ id: 'r1' });
   });
 
   it('maps every detail field off the real 0314 column names', async () => {
@@ -346,11 +376,11 @@ describe('get', () => {
 });
 
 describe('update', () => {
-  it('requester edits an allowed field on their OWN pre-archive request', async () => {
+  it('requester edits an allowed field on their OWN pre-archive request, pinning the org + id filters on the write', async () => {
     const { stub, ctx } = build(
       {
         'maintenance_requests.select': { data: BASE_ROW, error: null },
-        'maintenance_requests.update': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:submit']) },
     );
@@ -358,13 +388,34 @@ describe('update', () => {
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
     expect(patch.subject).toBe('Broken chair leg — urgent');
     expect(patch.updated_at).toBeTruthy();
+    // I3: the org + id filters that scope this write — without them
+    // recorded, this test would still pass even if update() dropped its
+    // org/id `.eq()` scoping entirely.
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
   });
 
-  it('forbids editing a request that is not the caller\'s own and the caller lacks manage', async () => {
+  it('I1: a caller with no view access to someone else\'s request gets not_found before update() even reaches its own gate', async () => {
     const { ctx } = build(
       { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
       { permissions: new Set(['maintenance_requests:submit']) },
     );
+    // Was 'forbidden' pre-I1: get()'s own read-scope check (no read_all/
+    // manage, not the requester) now fires first and reports not_found —
+    // an unauthorized caller must not learn a foreign request even exists.
+    await expect(
+      new MaintenanceRequestsService(ctx).update('r1', { subject: 'Someone else\'s request' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('a read_all holder who is not the requester and lacks manage can VIEW but not EDIT — forbidden from update()\'s own gate', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:read_all']) },
+    );
+    // read_all satisfies get()'s I1 view check, so the rejection here
+    // proves update()'s OWN isManager/isRequester decision is still reached
+    // and still enforced — not just subsumed by get()'s broader gate.
     await expect(
       new MaintenanceRequestsService(ctx).update('r1', { subject: 'Someone else\'s request' }),
     ).rejects.toMatchObject({ code: 'forbidden' });
@@ -392,7 +443,7 @@ describe('update', () => {
           data: { ...BASE_ROW, requester_user_id: 'other-user', archived_at: '2026-01-01T00:00:00Z', status: 'archived' },
           error: null,
         },
-        'maintenance_requests.update': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
@@ -410,6 +461,28 @@ describe('update', () => {
       code: 'validation_error',
     });
   });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of reporting a false success', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'maintenance_requests.update': { data: null, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(
+      new MaintenanceRequestsService(ctx).update('r1', { subject: 'Still trying to fix it' }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    // A phantom success would have audited a write that never happened.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('I4 MUTATION GUARD: rejects when the module is disabled', async () => {
+    const { ctx } = build({}, { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS), permissions: new Set(['maintenance_requests:manage']) });
+    await expect(new MaintenanceRequestsService(ctx).update('r1', { subject: 'x' })).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+  });
 });
 
 describe('archive', () => {
@@ -418,9 +491,12 @@ describe('archive', () => {
     await expect(new MaintenanceRequestsService(ctx).archive('r1')).rejects.toMatchObject({ code: 'forbidden' });
   });
 
-  it('MUTATION GUARD (status lockstep, plan C1): sets status="archived" AND archived_at TOGETHER in one write', async () => {
+  it('MUTATION GUARD (status lockstep, plan C1): sets status="archived" AND archived_at TOGETHER in one write, pinning the org + id filters', async () => {
     const { stub, ctx } = build(
-      { 'maintenance_requests.update': { data: null, error: null } },
+      {
+        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).archive('r1');
@@ -430,11 +506,17 @@ describe('archive', () => {
     expect(patch.status).toBe('archived');
     expect(patch.archived_at).toBeTruthy();
     expect(patch.updated_at).toBeTruthy();
+    // I3: the org + id filters that scope this write.
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
   });
 
   it('audits maintenance_request.archived', async () => {
     const { ctx } = build(
-      { 'maintenance_requests.update': { data: null, error: null } },
+      {
+        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).archive('r1');
@@ -442,6 +524,36 @@ describe('archive', () => {
       expect.objectContaining({ event: 'maintenance_request.archived', entityId: 'r1' }),
       ctx,
     );
+  });
+
+  it('M1: refuses to archive an already-CANCELLED request instead of stamping both closed states on one row', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { cancelled_at: '2026-01-01T00:00:00Z' }, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).archive('r1')).rejects.toMatchObject({ code: 'conflict' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('archive on a stale/foreign id throws not_found (no existence check existed before this fix)', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: null, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).archive('missing')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row update (stale/foreign id at write time) throws instead of reporting a false success', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.update': { data: null, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).archive('r1')).rejects.toMatchObject({ code: 'conflict' });
+    // A phantom success would have audited a write that never happened.
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('MUTATION GUARD: rejects when the module is disabled', async () => {
@@ -458,7 +570,10 @@ describe('archive', () => {
 describe('cancel', () => {
   it('the requester cancels their OWN pre-archive request (ownership path, not manage)', async () => {
     const { stub, ctx } = build(
-      { 'maintenance_requests.select': { data: BASE_ROW, error: null }, 'maintenance_requests.update': { data: null, error: null } },
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:submit']) },
     );
     await new MaintenanceRequestsService(ctx).cancel('r1');
@@ -471,7 +586,7 @@ describe('cancel', () => {
     const { stub, ctx } = build(
       {
         'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null },
-        'maintenance_requests.update': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
@@ -480,10 +595,19 @@ describe('cancel', () => {
     expect(patch.status).toBe('cancelled');
   });
 
-  it('forbids a non-owner, non-manager from cancelling', async () => {
+  it('I1: a caller with no view access to someone else\'s request gets not_found before cancel() even reaches its own gate', async () => {
     const { ctx } = build(
       { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
       { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    // Was 'forbidden' pre-I1 — see the identical note on update()'s test.
+    await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('a read_all holder who is not the requester and lacks manage can VIEW but not CANCEL — forbidden from cancel()\'s own gate', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:read_all']) },
     );
     await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'forbidden' });
   });
@@ -500,38 +624,101 @@ describe('cancel', () => {
     );
     await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'conflict' });
   });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of reporting a false success', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: BASE_ROW, error: null },
+      'maintenance_requests.update': { data: null, error: null },
+    });
+    await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'conflict' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('I4 MUTATION GUARD: rejects when the module is disabled', async () => {
+    const { ctx } = build({}, { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS), permissions: new Set(['maintenance_requests:manage']) });
+    await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+  });
 });
 
 describe('assignLocalOwner', () => {
   it('requires manage — forbidden otherwise', async () => {
     const { ctx } = build({}, { permissions: new Set(['maintenance_requests:submit']) });
-    await expect(new MaintenanceRequestsService(ctx).assignLocalOwner('r1', 'u2')).rejects.toMatchObject({
+    await expect(new MaintenanceRequestsService(ctx).assignLocalOwner('r1', VALID_USER_UUID)).rejects.toMatchObject({
       code: 'forbidden',
     });
   });
 
-  it('sets local_owner_user_id and audits owner_assigned', async () => {
+  it('sets local_owner_user_id and audits owner_assigned, pinning the org + id filters on the write', async () => {
     const { stub, ctx } = build(
-      { 'maintenance_requests.update': { data: null, error: null } },
+      {
+        'organization_members.select': { data: { id: 'm1' }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
-    await new MaintenanceRequestsService(ctx).assignLocalOwner('r1', 'u2');
+    await new MaintenanceRequestsService(ctx).assignLocalOwner('r1', VALID_USER_UUID);
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
-    expect(patch.local_owner_user_id).toBe('u2');
+    expect(patch.local_owner_user_id).toBe(VALID_USER_UUID);
+    // I3: the org + id filters that scope this write.
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'maintenance_request.owner_assigned', entityId: 'r1' }),
       ctx,
     );
   });
 
-  it('can clear the local owner with null', async () => {
+  it('can clear the local owner with null (no uuid/membership check needed to clear)', async () => {
     const { stub, ctx } = build(
-      { 'maintenance_requests.update': { data: null, error: null } },
+      { 'maintenance_requests.update': { data: { id: 'r1' }, error: null } },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).assignLocalOwner('r1', null);
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
     expect(patch.local_owner_user_id).toBeNull();
+  });
+
+  it('I2: rejects a garbage (non-uuid) userId with validation_error, never an opaque DB error', async () => {
+    const { ctx } = build({}, { permissions: new Set(['maintenance_requests:manage']) });
+    await expect(new MaintenanceRequestsService(ctx).assignLocalOwner('r1', 'not-a-uuid')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+  });
+
+  it('I2: rejects a well-formed uuid that is not an accepted member of THIS organization (cross-org tampering guard)', async () => {
+    const { ctx } = build(
+      { 'organization_members.select': { data: null, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(
+      new MaintenanceRequestsService(ctx).assignLocalOwner('r1', OTHER_ORG_USER_UUID),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws not_found instead of reporting a false success', async () => {
+    const { ctx } = build(
+      {
+        'organization_members.select': { data: { id: 'm1' }, error: null },
+        'maintenance_requests.update': { data: null, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(
+      new MaintenanceRequestsService(ctx).assignLocalOwner('r1', VALID_USER_UUID),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION GUARD: rejects when the module is disabled', async () => {
+    const { ctx } = build(
+      {},
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS), permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).assignLocalOwner('r1', null)).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
   });
 });
 
@@ -545,7 +732,10 @@ describe('addNote / listNotes', () => {
 
   it('addNote inserts a note scoped to org + request and audits note_added', async () => {
     const { stub, ctx } = build(
-      { 'maintenance_request_notes.insert': { data: { id: 'note1' }, error: null } },
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'maintenance_request_notes.insert': { data: { id: 'note1' }, error: null },
+      },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     const res = await new MaintenanceRequestsService(ctx).addNote('r1', '  Called facilities.  ');
@@ -559,6 +749,29 @@ describe('addNote / listNotes', () => {
       expect.objectContaining({ event: 'maintenance_request.note_added', entityId: 'r1' }),
       ctx,
     );
+  });
+
+  it('addNote M3: rejects a foreign/stale parent id with not_found, not an opaque insert error', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: null, error: null },
+        'maintenance_request_notes.insert': { data: { id: 'note1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).addNote('missing', 'Called facilities.')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
+  it('addNote MUTATION GUARD: rejects when the module is disabled', async () => {
+    const { ctx } = build(
+      {},
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS), permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).addNote('r1', 'Called facilities.')).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
   });
 
   it('addNote rejects an empty/whitespace-only body', async () => {
@@ -582,8 +795,8 @@ describe('addNote / listNotes', () => {
     });
   });
 
-  it('listNotes maps rows in chronological order', async () => {
-    const { ctx } = build(
+  it('listNotes maps rows in chronological order and pins the org + maintenance_request_id filters', async () => {
+    const { stub, ctx } = build(
       {
         'maintenance_request_notes.select': {
           data: [{ id: 'n1', author_user_id: 'u2', body: 'Called facilities.', created_at: '2026-08-01T00:00:00Z' }],
@@ -596,6 +809,13 @@ describe('addNote / listNotes', () => {
     expect(notes).toEqual([
       { id: 'n1', authorUserId: 'u2', body: 'Called facilities.', createdAt: '2026-08-01T00:00:00Z' },
     ]);
+    // I3: without these two recorded filters, this test would still pass
+    // even if listNotes() dropped its org/parent scoping entirely.
+    expect(stub.chainArgs.get('maintenance_request_notes.select')).toContainEqual([
+      'organization_id',
+      ctx.organizationId,
+    ]);
+    expect(stub.chainArgs.get('maintenance_request_notes.select')).toContainEqual(['maintenance_request_id', 'r1']);
   });
 
   it('listNotes READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — notes are part of request history too', async () => {
@@ -611,10 +831,10 @@ describe('addNote / listNotes', () => {
 });
 
 describe('recordDraftOpened', () => {
-  it('stamps first-open time once, increments the count, moves saved -> draft_opened, audits draft OPENED (never sent)', async () => {
+  it('stamps first-open time once, increments the count, moves saved -> draft_opened, audits draft OPENED (never sent), pins org + id filters', async () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: BASE_ROW, error: null },
-      'maintenance_requests.update': { data: null, error: null },
+      'maintenance_requests.update': { data: { id: 'r1' }, error: null },
     });
     const res = await new MaintenanceRequestsService(ctx).recordDraftOpened('r1');
     expect(res.openCount).toBe(1);
@@ -622,6 +842,9 @@ describe('recordDraftOpened', () => {
     expect(patch.status).toBe('draft_opened');
     expect(patch.outlook_draft_open_count).toBe(1);
     expect(patch.outlook_draft_opened_at).toBeTruthy();
+    // I3: the org + id filters that scope this write.
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
     const evt = vi.mocked(audit).mock.calls[0]![0];
     expect(evt.event).toBe('maintenance_request.draft_opened');
     expect(JSON.stringify(evt)).not.toMatch(/\bsent\b|\bticket\b/i);
@@ -634,7 +857,7 @@ describe('recordDraftOpened', () => {
         data: { ...BASE_ROW, status: 'draft_opened', outlook_draft_opened_at: FIRST_OPEN, outlook_draft_open_count: 1 },
         error: null,
       },
-      'maintenance_requests.update': { data: null, error: null },
+      'maintenance_requests.update': { data: { id: 'r1' }, error: null },
     });
     const res = await new MaintenanceRequestsService(ctx).recordDraftOpened('r1');
     expect(res.openCount).toBe(2);
@@ -642,6 +865,65 @@ describe('recordDraftOpened', () => {
     expect(patch.outlook_draft_opened_at).toBe(FIRST_OPEN);
     expect(patch.outlook_draft_open_count).toBe(2);
     expect(patch.status).toBe('draft_opened');
+  });
+
+  it('C1 AUTHZ GUARD: a read_all-only member (neither requester nor manage-holder) cannot record a draft-open — forbidden', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:read_all']) },
+    );
+    // read_all satisfies get()'s I1 view check (canReadAll), so this proves
+    // recordDraftOpened()'s OWN explicit manage-vs-requester decision is the
+    // thing doing the blocking here — get()'s broader gate would let this
+    // caller straight through.
+    await expect(new MaintenanceRequestsService(ctx).recordDraftOpened('r1')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('C1 CLOSED-STATE GUARD: the requester cannot record a draft-open on their OWN archived request', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, archived_at: '2026-01-01T00:00:00Z', status: 'archived' },
+          error: null,
+        },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).recordDraftOpened('r1')).rejects.toMatchObject({
+      code: 'conflict',
+    });
+  });
+
+  it('a manage-holder MAY record a draft-open on an archived request (closed-state guard is requester-only, mirrors RLS)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, requester_user_id: 'other-user', archived_at: '2026-01-01T00:00:00Z', status: 'archived' },
+          error: null,
+        },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    const res = await new MaintenanceRequestsService(ctx).recordDraftOpened('r1');
+    expect(res.openCount).toBe(1);
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.status).toBe('archived');
+  });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of returning an openCount that was never persisted', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: BASE_ROW, error: null },
+      'maintenance_requests.update': { data: null, error: null },
+    });
+    await expect(new MaintenanceRequestsService(ctx).recordDraftOpened('r1')).rejects.toMatchObject({
+      code: 'conflict',
+    });
+    // Audit only fires AFTER the row-count guard — a phantom mutation must
+    // never be recorded as though it happened.
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('MUTATION GUARD: rejects when the module is disabled', async () => {
@@ -654,7 +936,7 @@ describe('recordDraftOpened', () => {
 
 describe('emailInput', () => {
   it('snapshots the related item SERVER-side and builds the app URL from the APP_URL convention, never window.location', async () => {
-    const { ctx } = build({
+    const { stub, ctx } = build({
       'maintenance_requests.select': {
         data: { ...BASE_ROW, subject: 'AC broken', related_item_id: 'i1', maintenance_request_attachments: [{ count: 2 }] },
         error: null,
@@ -675,6 +957,11 @@ describe('emailInput', () => {
     });
     expect(input.photoCount).toBe(2);
     expect(audit).not.toHaveBeenCalled();
+    // I3: the related-item org filter — without it recorded, this test
+    // would still pass even if emailInput() dropped its org scoping on the
+    // inventory_items lookup entirely.
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['id', 'i1']);
   });
 
   it('snapshots the related order via requester_name (0044_order_requests.sql — real column, not "requested_for")', async () => {
