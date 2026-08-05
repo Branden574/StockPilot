@@ -56,6 +56,12 @@ create policy "maintenance-photos org write"
       select organization_id from public.organization_members
        where user_id = (select auth.uid()) and accepted_at is not null
     )
+    -- Redundant TODAY by design: the membership subquery above already excludes
+    -- disabled sessions, because organization_members_select gates through
+    -- is_org_member(), whose 0310 body checks disabled_at — a disabled user
+    -- reads zero membership rows. This clause is a deliberate hedge so the
+    -- storage boundary survives any future loosening of that deeper mechanism;
+    -- it is not the load-bearing disabled-account block (review, Task 2).
     and not exists (
       select 1 from public.user_profiles up
        where up.id = (select auth.uid()) and up.disabled_at is not null
