@@ -22,11 +22,16 @@
  * covered by the plan's numbered test list (section 31): only the labelled
  * `Heading` / `Label: value` content, the reply-thread sentence and the
  * footer are ever asserted. So this module follows the DELIVERY-REQUEST
- * precedent's actual body convention instead (storefront-logic.ts:466-537:
- * `HEADING\nLabel: value` with no blank line after the heading, a blank
+ * precedent's actual body convention (storefront-logic.ts:466-537: a blank
  * line only BETWEEN different top-level blocks, no greeting, no sign-off)
- * — same information, denser encoding. A maximally-detailed request (every
- * optional field populated at once, matching the brief's own worked
+ * — same information, denser encoding than the brief's greeting/sign-off
+ * wrapper — EXCEPT for one piece of §15's own sectioning that the review's
+ * fix wave restored at zero net cost: a blank line after every heading
+ * (`section()` below), which the delivery precedent omits but which costs
+ * exactly as many characters as the also-restored §15 plain 'MAINTENANCE
+ * REQUEST' heading (dropping the '— StockPilot' suffix) saves — see the
+ * fix-wave-1 report entry for the exact wash. A maximally-detailed request
+ * (every optional field populated at once, matching the brief's own worked
  * example) still legitimately exceeds the link budget and condenses; that
  * is the condense mechanism doing exactly its job, not a bug.
  *
@@ -98,8 +103,36 @@ export interface PreparedMaintenanceEmail {
 export const MAINTENANCE_CONDENSED_DISCLOSURE =
   'This message was shortened because the full request details did not fit in a compose link. The complete request is in StockPilot under the request number above.';
 
-const SUBJECT_PREFIX_RE = /^\[StockPilot Maintenance [^\]]*\]\s*/i;
-const CONDENSED_DESCRIPTION_CHARS = 350;
+// Leading Re:/Fwd: reply-chain markers (case-insensitive, allowed to repeat —
+// "Re: Fwd: Re:") are stripped along with the bracket itself, and the space
+// between 'Maintenance' and the bracket's contents is optional so a
+// requestNumber-less prefix (`[StockPilot Maintenance]`, Fix 2b) still
+// dedupes. This regex is applied in a LOOP (see `stripSubjectPrefix` below),
+// not once, so a prefix pasted twice collapses to exactly one.
+const SUBJECT_PREFIX_RE = /^(?:(?:re|fwd):\s*)*\[StockPilot Maintenance ?[^\]]*\]\s*/i;
+// Brief says 400; the file previously shipped 350 as a measured, tighter
+// budget. Re-measured at 400 through the REAL, double-encoding
+// composeOutlookWebUrl transport after the fix-wave-1 formatting changes
+// above (post Fix 1/2): condensed FULL_INPUT (short description, doesn't
+// even reach the 350 truncation point) -> outlookUrl 1,262; condensed LONG
+// (brief's ~5,200-char oversized fixture) -> outlookUrl 1,707 / mailtoUrl
+// 1,263 — both comfortably under the shared 1,800 `DRAFT_URL_LIMIT`. Since
+// neither overflows at 400, the brief's number governs (see fix-wave-1
+// report for the full measurement table, including the 350 baseline).
+const CONDENSED_DESCRIPTION_CHARS = 400;
+
+/** Strip `SUBJECT_PREFIX_RE` repeatedly until nothing more matches, so a
+ *  requester who pastes an already-prefixed subject twice (or replies to a
+ *  reply) still ends up with exactly ONE `[StockPilot Maintenance ...]`
+ *  prefix in the final built subject. */
+function stripSubjectPrefix(subject: string): string {
+  let result = subject;
+  for (;;) {
+    const next = result.replace(SUBJECT_PREFIX_RE, '');
+    if (next === result) return next;
+    result = next;
+  }
+}
 
 const PRIORITY_LABELS: Record<MaintenancePriority, string> = {
   low: 'Low',
@@ -108,20 +141,27 @@ const PRIORITY_LABELS: Record<MaintenancePriority, string> = {
   urgent: 'Urgent',
 };
 
+/** Trims a nullable/undefined value down to a real string, or ''. Shared by
+ *  `line()` and by the subject/footer's requestNumber guard so every field
+ *  omits itself under the same rule: no `undefined`, no `null`, no bare
+ *  label/prefix for a blank value. */
+function cleanValue(value: string | null | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /** 'Label: value' only when the value is real — blocks omit empty lines
  *  entirely (never `undefined`, never `null`, never a bare label). */
 function line(label: string, value: string | null | undefined): string | null {
-  const v = typeof value === 'string' ? value.trim() : '';
+  const v = cleanValue(value);
   return v ? `${label}: ${v}` : null;
 }
 
-/** `HEADING\nLabel: value\n...` — the real delivery-request convention
- *  (storefront-logic.ts:466-537), not the brief's illustrative blank line
- *  after the heading. Returns null (not a heading with nothing under it)
- *  when every line was empty, so an omitted block leaves no trace. */
+/** `HEADING\n\nLabel: value\n...` — §15's own sectioning (a blank line after
+ *  every heading). Returns null (not a heading with nothing under it) when
+ *  every line was empty, so an omitted block leaves no trace. */
 function section(heading: string, lines: (string | null)[]): string | null {
   const real = lines.filter((l): l is string => Boolean(l));
-  return real.length ? [heading, ...real].join('\n') : null;
+  return real.length ? [heading, '', ...real].join('\n') : null;
 }
 
 /** Never truncate mid-sentence: cut at the last word boundary inside the
@@ -140,7 +180,12 @@ function photosSection(
   shareUrl: string | null,
   condensed: boolean,
 ): string | null {
-  if (photoCount <= 0) return null;
+  // `!(photoCount > 0)` rather than `photoCount <= 0`: every comparison
+  // against NaN is false, so a NaN/undefined `photoCount` (Task 8 feeds this
+  // from DB data) makes `photoCount <= 0` false too — failing OPEN and
+  // rendering 'NaN photos were uploaded...'. Negating `> 0` instead makes the
+  // NaN/undefined case fail CLOSED (section omitted).
+  if (!(photoCount > 0)) return null;
   if (condensed) {
     // Audit Q13's preserve list: "one link" — the count and the
     // attach-in-Outlook reminder are dropped first, along with everything
@@ -160,8 +205,14 @@ export function buildMaintenanceEmailDraft(
   opts: { condensed?: boolean } = {},
 ): MaintenanceEmailDraft {
   const condensed = opts.condensed === true;
-  const cleanSubject = sanitizeSubjectLine(input.subject).replace(SUBJECT_PREFIX_RE, '');
-  const subject = `[StockPilot Maintenance ${input.requestNumber}] ${cleanSubject}`;
+  const cleanSubject = stripSubjectPrefix(sanitizeSubjectLine(input.subject));
+  // Same guard as every other field (`cleanValue`/`line`): a blank
+  // requestNumber omits the bracket prefix entirely rather than emitting a
+  // bare '[StockPilot Maintenance ] ' label.
+  const requestNumber = cleanValue(input.requestNumber);
+  const subject = requestNumber
+    ? `[StockPilot Maintenance ${requestNumber}] ${cleanSubject}`
+    : cleanSubject;
 
   const rawDescription = sanitizeDescriptionBlock(input.description);
   const description = condensed ? condenseDescription(rawDescription) : rawDescription;
@@ -173,7 +224,7 @@ export function buildMaintenanceEmailDraft(
   const blocks: (string | null)[] = [];
 
   blocks.push(
-    section('MAINTENANCE REQUEST — StockPilot', [
+    section('MAINTENANCE REQUEST', [
       line('StockPilot Request', input.requestNumber),
       condensed ? null : line('Issue', cleanSubject),
       condensed ? null : line('Category', input.category),
@@ -204,30 +255,48 @@ export function buildMaintenanceEmailDraft(
   if (condensed) blocks.push(MAINTENANCE_CONDENSED_DISCLOSURE);
 
   if (!condensed) {
-    const related: (string | null)[] = [];
+    // Each related-record type (item/order/rental) is its own GROUP,
+    // separated from the next by a blank line under the shared heading —
+    // never glued line-to-line the way REQUESTER/LOCATION's flat field lists
+    // are, since item/order/rental are logically distinct records that can
+    // all be present at once.
+    const groups: (string | null)[] = [];
     if (input.relatedItem) {
-      related.push(
-        line('Item', input.relatedItem.name),
-        line('SKU', input.relatedItem.sku),
-        line('Model Number', input.relatedItem.modelNumber),
-        line('StockPilot Item', input.relatedItem.url),
+      groups.push(
+        [
+          line('Item', input.relatedItem.name),
+          line('SKU', input.relatedItem.sku),
+          line('Model Number', input.relatedItem.modelNumber),
+          line('StockPilot Item', input.relatedItem.url),
+        ]
+          .filter((l): l is string => Boolean(l))
+          .join('\n') || null,
       );
     }
     if (input.relatedOrder) {
-      related.push(
-        line('Order', input.relatedOrder.handle),
-        line('Requested for', input.relatedOrder.requestedFor),
-        line('StockPilot Order', input.relatedOrder.url),
+      groups.push(
+        [
+          line('Order', input.relatedOrder.handle),
+          line('Requested for', input.relatedOrder.requestedFor),
+          line('StockPilot Order', input.relatedOrder.url),
+        ]
+          .filter((l): l is string => Boolean(l))
+          .join('\n') || null,
       );
     }
     if (input.relatedRental) {
-      related.push(
-        line('Rental of', input.relatedRental.itemNames.filter(Boolean).join(', ') || null),
-        line('Borrower', input.relatedRental.borrowerName),
-        line('StockPilot Rental', input.relatedRental.url),
+      groups.push(
+        [
+          line('Rental of', input.relatedRental.itemNames.filter(Boolean).join(', ') || null),
+          line('Borrower', input.relatedRental.borrowerName),
+          line('StockPilot Rental', input.relatedRental.url),
+        ]
+          .filter((l): l is string => Boolean(l))
+          .join('\n') || null,
       );
     }
-    blocks.push(section('RELATED STOCKPILOT RECORD', related));
+    const realGroups = groups.filter((g): g is string => Boolean(g));
+    blocks.push(realGroups.length ? section('RELATED STOCKPILOT RECORD', [realGroups.join('\n\n')]) : null);
   }
 
   blocks.push(photosSection(input.photoCount, input.shareUrl, condensed));
@@ -241,7 +310,14 @@ export function buildMaintenanceEmailDraft(
     );
   }
 
-  blocks.push(['Generated from StockPilot.', `StockPilot Request: ${input.requestNumber}`].join('\n'));
+  // Same guard as the subject prefix: a blank requestNumber omits the
+  // footer's 'StockPilot Request: ' line entirely rather than printing a
+  // bare, valueless label. 'Generated from StockPilot.' always survives.
+  blocks.push(
+    ['Generated from StockPilot.', line('StockPilot Request', input.requestNumber)]
+      .filter((l): l is string => Boolean(l))
+      .join('\n'),
+  );
 
   const body = blocks.filter((b): b is string => Boolean(b)).join('\n\n');
 

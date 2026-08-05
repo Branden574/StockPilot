@@ -313,13 +313,14 @@ describe('prepareMaintenanceEmail — condense policy (audit Q13)', () => {
 
 describe('mutation self-check: condense-first, never truncate-first', () => {
   it('a moderately-sized request is NEVER condensed even though its description alone exceeds the condensed truncation budget', () => {
-    // 255 chars: comfortably inside the description-truncation budget (350)
-    // used by condensed mode, but this also proves condensing is decided by
+    // 255 chars: comfortably inside the description-truncation budget (400,
+    // fix wave 1 (2d) — see CONDENSED_DESCRIPTION_CHARS's own comment) used
+    // by condensed mode, but this also proves condensing is decided by
     // MEASURING THE URL, not by description length — a naive implementation
     // that truncates whenever description.length is "long" would condense
-    // this input even though the full compose links fit easily (measured at
-    // outlookUrl.length === 1729, 71 chars of headroom under the 1800
-    // limit). Built on MODERATE_INPUT (not FULL_INPUT): FULL_INPUT is
+    // this input even though the full compose links fit easily (re-measured
+    // after fix wave 1 at outlookUrl.length === 1714, 86 chars of headroom
+    // under the 1800 limit). Built on MODERATE_INPUT (not FULL_INPUT): FULL_INPUT is
     // deliberately the maximal, every-field-populated case and legitimately
     // condenses on size alone (see "measured reality" above) — this test
     // isolates the description-length question from that overall-size
@@ -334,7 +335,10 @@ describe('mutation self-check: condense-first, never truncate-first', () => {
     const originalDescription = 'Detail line. '.repeat(400);
     const LONG = { ...FULL_INPUT, description: originalDescription };
     const condensedDraft = buildMaintenanceEmailDraft(LONG, { condensed: true });
-    const match = condensedDraft.body.match(/ISSUE DESCRIPTION\n([\s\S]*?)\n\n/);
+    // Fix wave 1 (1b): `section()` now emits a blank line after every
+    // heading (§15's own sectioning), so the description sits two newlines
+    // after 'ISSUE DESCRIPTION', not one.
+    const match = condensedDraft.body.match(/ISSUE DESCRIPTION\n\n([\s\S]*?)\n\n/);
     expect(match).not.toBeNull();
     const description = match?.[1] ?? '';
     expect(description.endsWith('...')).toBe(true);
@@ -424,6 +428,86 @@ describe('type-level: the builder accepts NO recipient input', () => {
   });
 });
 
+describe('fix wave 1 (2a): NaN-safe photoCount guard', () => {
+  it('a NaN photoCount (bad DB data feeding this from Task 8) omits PHOTOS entirely — never renders "NaN photos..."', () => {
+    const b = buildMaintenanceEmailDraft({ ...FULL_INPUT, photoCount: NaN }).body;
+    expect(b).not.toContain('PHOTOS');
+    expect(b).not.toContain('NaN');
+  });
+});
+
+describe('fix wave 1 (2b): a blank requestNumber omits the bracket prefix and the footer request-number line', () => {
+  it('subject has no bracket prefix at all when requestNumber is blank — never a bare "[StockPilot Maintenance ] "', () => {
+    const d = buildMaintenanceEmailDraft({ ...MINIMAL_INPUT, requestNumber: '' });
+    expect(d.subject).toBe('Door hinge squeaks badly');
+    expect(d.subject).not.toContain('StockPilot Maintenance');
+    expect(d.subject).not.toContain('[');
+  });
+
+  it('footer omits the "StockPilot Request:" line when requestNumber is blank/whitespace-only, but keeps "Generated from StockPilot."', () => {
+    const d = buildMaintenanceEmailDraft({ ...MINIMAL_INPUT, requestNumber: '   ' });
+    expect(d.body).not.toContain('StockPilot Request:');
+    expect(d.body.trim().endsWith('Generated from StockPilot.')).toBe(true);
+  });
+});
+
+describe('fix wave 1 (2c): subject-prefix dedup handles Re:/Fwd:, a pasted-twice prefix, and an optional space, via a loop', () => {
+  it('"[StockPilot Maintenance] AC broken" (no space before the bracket) still dedupes to exactly one prefix', () => {
+    const d = buildMaintenanceEmailDraft({ ...FULL_INPUT, subject: '[StockPilot Maintenance] AC broken' });
+    expect(d.subject.match(/\[StockPilot Maintenance/g)?.length).toBe(1);
+    expect(d.subject).toBe('[StockPilot Maintenance MR-2026-000123] AC broken');
+  });
+
+  it('a prefix pasted twice collapses to exactly one (proves the LOOP, not a single replace)', () => {
+    const d = buildMaintenanceEmailDraft({
+      ...FULL_INPUT,
+      subject:
+        '[StockPilot Maintenance MR-2026-000123] [StockPilot Maintenance MR-2026-000123] Air conditioner is not working in Room 204',
+    });
+    expect(d.subject.match(/\[StockPilot Maintenance/g)?.length).toBe(1);
+    expect(d.subject).toBe('[StockPilot Maintenance MR-2026-000123] Air conditioner is not working in Room 204');
+  });
+
+  it('"Re: [StockPilot Maintenance MR-1] AC broken" — a leading reply-chain marker on an already-prefixed subject still dedupes to exactly one', () => {
+    const d = buildMaintenanceEmailDraft({ ...FULL_INPUT, subject: 'Re: [StockPilot Maintenance MR-1] AC broken' });
+    expect(d.subject.match(/\[StockPilot Maintenance/g)?.length).toBe(1);
+    expect(d.subject).toBe('[StockPilot Maintenance MR-2026-000123] AC broken');
+  });
+});
+
+describe('fix wave 1 (2e): related-record groups (item/order/rental) are blank-line separated under the shared heading', () => {
+  it('item + order + rental all present at once are separated by a blank line, never glued line-to-line', () => {
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedItem: {
+        name: 'Wall-mounted HVAC unit',
+        sku: 'HVAC-WALL-204',
+        modelNumber: 'ACX-9000',
+        url: 'https://stockpilotusa.com/dashboard/inventory/11111111-1111-1111-1111-111111111111',
+      },
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: 'Room 12 teacher',
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+      relatedRental: {
+        itemNames: ['Projector', 'HDMI cable'],
+        borrowerName: 'Sam Lee',
+        url: 'https://stockpilotusa.com/dashboard/rentals/33333333-3333-3333-3333-333333333333',
+      },
+    }).body;
+    expect(body).toContain(
+      'StockPilot Item: https://stockpilotusa.com/dashboard/inventory/11111111-1111-1111-1111-111111111111\n\nOrder: SO-000021',
+    );
+    expect(body).toContain(
+      'StockPilot Order: https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222\n\nRental of: Projector, HDMI cable',
+    );
+    // Never three-in-a-row — that would mean an extra stray blank line leaked
+    // in alongside the intentional group separator:
+    expect(body).not.toMatch(/\n{3,}/);
+  });
+});
+
 describe('golden — one complete, fully-populated email, literal-pinned', () => {
   // FULL_INPUT has every optional field populated at once — the maximal
   // case — and, per the "measured reality" test above, that legitimately
@@ -433,15 +517,24 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
   // hardcoded literal AND by decoding the Outlook URL back apart.
   const EXPECTED_SUBJECT =
     '[StockPilot Maintenance MR-2026-000123] Air conditioner is not working in Room 204';
+  // Fix wave 1 (1a/1b): plain 'MAINTENANCE REQUEST' heading (no '— StockPilot'
+  // suffix) + a blank line after every heading (§15's own sectioning) — a
+  // byte-for-byte wash: (1a) saves the 35 chars (1b) costs on this exact
+  // fixture (both the heading text and every section() call site changed,
+  // so this golden was fully re-measured through the real transport, not
+  // hand-patched).
   const EXPECTED_CONDENSED_BODY = [
-    'MAINTENANCE REQUEST — StockPilot',
+    'MAINTENANCE REQUEST',
+    '',
     'StockPilot Request: MR-2026-000123',
     '',
     'REQUESTER',
+    '',
     'Name: Jane Smith',
     'Site: Fresno Learning Center',
     '',
     'ISSUE DESCRIPTION',
+    '',
     'The air conditioner has been blowing warm air since yesterday afternoon.\nThe room is becoming too warm for normal use.',
     '',
     MAINTENANCE_CONDENSED_DISCLOSURE,
@@ -466,7 +559,7 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
     // derived from OUTLOOK_COMPOSE_BASE or from calling the module under
     // test to build the expectation):
     expect(prepared.outlookUrl).toBe(
-      'https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E%3Fcc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000123%255D%2520Air%2520conditioner%2520is%2520not%2520working%2520in%2520Room%2520204%26body%3DMAINTENANCE%2520REQUEST%2520%25E2%2580%2594%2520StockPilot%250AStockPilot%2520Request%253A%2520MR-2026-000123%250A%250AREQUESTER%250AName%253A%2520Jane%2520Smith%250ASite%253A%2520Fresno%2520Learning%2520Center%250A%250AISSUE%2520DESCRIPTION%250AThe%2520air%2520conditioner%2520has%2520been%2520blowing%2520warm%2520air%2520since%2520yesterday%2520afternoon.%250AThe%2520room%2520is%2520becoming%2520too%2520warm%2520for%2520normal%2520use.%250A%250AThis%2520message%2520was%2520shortened%2520because%2520the%2520full%2520request%2520details%2520did%2520not%2520fit%2520in%2520a%2520compose%2520link.%2520The%2520complete%2520request%2520is%2520in%2520StockPilot%2520under%2520the%2520request%2520number%2520above.%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttps%253A%252F%252Fstockpilotusa.com%252Fm%252Fabcdef1234567890%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000123',
+      'https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E%3Fcc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000123%255D%2520Air%2520conditioner%2520is%2520not%2520working%2520in%2520Room%2520204%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000123%250A%250AREQUESTER%250A%250AName%253A%2520Jane%2520Smith%250ASite%253A%2520Fresno%2520Learning%2520Center%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520air%2520conditioner%2520has%2520been%2520blowing%2520warm%2520air%2520since%2520yesterday%2520afternoon.%250AThe%2520room%2520is%2520becoming%2520too%2520warm%2520for%2520normal%2520use.%250A%250AThis%2520message%2520was%2520shortened%2520because%2520the%2520full%2520request%2520details%2520did%2520not%2520fit%2520in%2520a%2520compose%2520link.%2520The%2520complete%2520request%2520is%2520in%2520StockPilot%2520under%2520the%2520request%2520number%2520above.%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttps%253A%252F%252Fstockpilotusa.com%252Fm%252Fabcdef1234567890%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000123',
     );
     const { to, params } = decodeCompose(prepared.outlookUrl);
     expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
@@ -475,7 +568,7 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
     expect(params.body).toBe(prepared.draft.body);
 
     expect(prepared.mailtoUrl).toBe(
-      'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=%5BStockPilot%20Maintenance%20MR-2026-000123%5D%20Air%20conditioner%20is%20not%20working%20in%20Room%20204&body=MAINTENANCE%20REQUEST%20%E2%80%94%20StockPilot%0AStockPilot%20Request%3A%20MR-2026-000123%0A%0AREQUESTER%0AName%3A%20Jane%20Smith%0ASite%3A%20Fresno%20Learning%20Center%0A%0AISSUE%20DESCRIPTION%0AThe%20air%20conditioner%20has%20been%20blowing%20warm%20air%20since%20yesterday%20afternoon.%0AThe%20room%20is%20becoming%20too%20warm%20for%20normal%20use.%0A%0AThis%20message%20was%20shortened%20because%20the%20full%20request%20details%20did%20not%20fit%20in%20a%20compose%20link.%20The%20complete%20request%20is%20in%20StockPilot%20under%20the%20request%20number%20above.%0A%0APHOTOS%0AView%20request%20photos%3A%0Ahttps%3A%2F%2Fstockpilotusa.com%2Fm%2Fabcdef1234567890%0A%0AGenerated%20from%20StockPilot.%0AStockPilot%20Request%3A%20MR-2026-000123',
+      'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=%5BStockPilot%20Maintenance%20MR-2026-000123%5D%20Air%20conditioner%20is%20not%20working%20in%20Room%20204&body=MAINTENANCE%20REQUEST%0A%0AStockPilot%20Request%3A%20MR-2026-000123%0A%0AREQUESTER%0A%0AName%3A%20Jane%20Smith%0ASite%3A%20Fresno%20Learning%20Center%0A%0AISSUE%20DESCRIPTION%0A%0AThe%20air%20conditioner%20has%20been%20blowing%20warm%20air%20since%20yesterday%20afternoon.%0AThe%20room%20is%20becoming%20too%20warm%20for%20normal%20use.%0A%0AThis%20message%20was%20shortened%20because%20the%20full%20request%20details%20did%20not%20fit%20in%20a%20compose%20link.%20The%20complete%20request%20is%20in%20StockPilot%20under%20the%20request%20number%20above.%0A%0APHOTOS%0AView%20request%20photos%3A%0Ahttps%3A%2F%2Fstockpilotusa.com%2Fm%2Fabcdef1234567890%0A%0AGenerated%20from%20StockPilot.%0AStockPilot%20Request%3A%20MR-2026-000123',
     );
 
     expect(prepared.clipboardText).toBe(
@@ -490,7 +583,7 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
         buildMaintenanceEmailDraft(FULL_INPUT).body,
       ].join('\n'),
     );
-    expect(prepared.clipboardText).toContain('LOCATION\nBuilding: Main Building');
+    expect(prepared.clipboardText).toContain('LOCATION\n\nBuilding: Main Building');
     expect(prepared.clipboardText).toContain('RELATED STOCKPILOT RECORD');
     expect(prepared.clipboardText).toContain('ADDITIONAL ACCESS INFORMATION');
   });
@@ -502,7 +595,8 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
 
     expect(prepared.draft.body).toBe(
       [
-        'MAINTENANCE REQUEST — StockPilot',
+        'MAINTENANCE REQUEST',
+        '',
         'StockPilot Request: MR-2026-000123',
         'Issue: Air conditioner is not working in Room 204',
         'Category: Heating or air conditioning',
@@ -510,6 +604,7 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
         'Submitted: August 5, 2026 at 9:15 AM',
         '',
         'REQUESTER',
+        '',
         'Name: Jane Smith',
         'Email: jane.smith@learn4life.org',
         'Phone: (555) 555-0199',
@@ -517,10 +612,12 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
         'Department: Operations',
         '',
         'LOCATION',
+        '',
         'Building: Main Building',
         'Room or Area: Room 204',
         '',
         'ISSUE DESCRIPTION',
+        '',
         'The air conditioner has been blowing warm air since yesterday afternoon.\nThe room is becoming too warm for normal use.',
         '',
         'Please reply to this email thread for updates so the responses remain attached to the same Zendesk ticket.',

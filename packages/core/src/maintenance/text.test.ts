@@ -56,7 +56,8 @@ describe('sanitizeDescriptionBlock (newline-PRESERVING — audit Q14)', () => {
     expect(sanitizeDescriptionBlock('a   b')).toBe('a   b');
   });
 
-  it('strips a tab like the rest of C0 (brief regex: only LF, U+000A, is spared)', () => {
-    expect(sanitizeDescriptionBlock('a\tb')).toBe('ab');
+  it('replaces a tab with a single space rather than deleting it (fix wave 1: deleting glued adjacent words together)', () => {
+    expect(sanitizeDescriptionBlock('a\tb')).toBe('a b');
+    expect(sanitizeDescriptionBlock('plus\ttab')).toBe('plus tab');
   });
 });
