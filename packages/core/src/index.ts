@@ -35,3 +35,4 @@ export * from './orders/order-number';
 export * from './orders/pick-shortfall';
 export * from './b2b/pricing-mode';
 export * from './auth/account-status';
+export * from './email/outlook-compose';
