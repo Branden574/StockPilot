@@ -147,6 +147,49 @@ describe('PERMISSION_GROUP_ORDER', () => {
   });
 });
 
+describe('maintenance permissions', () => {
+  const FOUR = [
+    'maintenance_requests:submit',
+    'maintenance_requests:read_all',
+    'maintenance_requests:manage',
+    'maintenance_requests:configure',
+  ] as const;
+
+  it('registers exactly the four maintenance permission strings (literal pins)', () => {
+    for (const p of FOUR) expect(PERMISSIONS).toContain(p);
+  });
+
+  it('role defaults mirror migration 0314 exactly (8 seeded rows)', () => {
+    expect(ROLE_PERMISSIONS.viewer).toContain('maintenance_requests:submit');
+    expect(ROLE_PERMISSIONS.staff).toContain('maintenance_requests:submit');
+    expect(ROLE_PERMISSIONS.manager).toContain('maintenance_requests:submit');
+    expect(ROLE_PERMISSIONS.manager).toContain('maintenance_requests:read_all');
+    expect(ROLE_PERMISSIONS.manager).toContain('maintenance_requests:manage');
+    expect(ROLE_PERMISSIONS.admin).toContain('maintenance_requests:read_all');
+    expect(ROLE_PERMISSIONS.admin).toContain('maintenance_requests:manage');
+    // staff/viewer never see all requests or manage them by default:
+    expect(ROLE_PERMISSIONS.staff).not.toContain('maintenance_requests:read_all');
+    expect(ROLE_PERMISSIONS.viewer).not.toContain('maintenance_requests:read_all');
+  });
+
+  it('configure is owner-only: admin does NOT derive it (controller adjudication C2)', () => {
+    expect(ROLE_PERMISSIONS.admin).not.toContain('maintenance_requests:configure');
+    expect(effectivePermissions('owner').has('maintenance_requests:configure')).toBe(true);
+    expect(effectivePermissions('admin').has('maintenance_requests:configure')).toBe(false);
+  });
+
+  it('submit/read_all/manage are fully grantable; configure is not', () => {
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('maintenance_requests:submit')).toBe(true);
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('maintenance_requests:read_all')).toBe(true);
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('maintenance_requests:manage')).toBe(true);
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('maintenance_requests:configure')).toBe(false);
+  });
+
+  it('every maintenance permission has meta in the Maintenance group', () => {
+    for (const p of FOUR) expect(PERMISSION_META[p].group).toBe('Maintenance');
+  });
+});
+
 describe('movements:edit_notes defaults', () => {
   it('manager has it by default', () => {
     expect(hasPermission('manager', 'movements:edit_notes')).toBe(true);

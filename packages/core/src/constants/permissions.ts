@@ -113,6 +113,17 @@ export const PERMISSIONS = [
   // profiles and size scales, override product grouping, and change an
   // item's tracking mode. Gated by the off-by-default `sports` module.
   'sports:manage',
+  // Maintenance requests (maintenance_requests module — L4L only for now).
+  // submit: create + view own + reopen own draft + add photos pre-archive.
+  // read_all: see every request in the org (NOT internal notes, NOT config).
+  // manage: assign a local StockPilot owner, internal notes, archive/correct.
+  //   "Local owner" is a STOCKPILOT coordinator — never a Zendesk assignee.
+  // configure: owner-only (filtered from admin below) — access grants,
+  //   categories, notification audiences, share-link-in-email toggle.
+  'maintenance_requests:submit',
+  'maintenance_requests:read_all',
+  'maintenance_requests:manage',
+  'maintenance_requests:configure',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -121,7 +132,9 @@ const ALL_PERMISSIONS: Permission[] = [...PERMISSIONS];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: ALL_PERMISSIONS,
-  admin: ALL_PERMISSIONS.filter((p) => p !== 'billing:manage'),
+  admin: ALL_PERMISSIONS.filter(
+    (p) => p !== 'billing:manage' && p !== 'maintenance_requests:configure',
+  ),
   manager: [
     'members:read',
     'members:assign_categories',
@@ -165,6 +178,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'returns:read',
     'returns:manage',
     'sports:manage',
+    'maintenance_requests:submit',
+    'maintenance_requests:read_all',
+    'maintenance_requests:manage',
   ],
   staff: [
     'members:read',
@@ -189,6 +205,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:request',
     'rentals:read',
     'rentals:create',
+    'maintenance_requests:submit',
   ],
   viewer: [
     'members:read',
@@ -198,6 +215,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'suppliers:read',
     'purchase_orders:read',
     'orders:request',
+    'maintenance_requests:submit',
   ],
 };
 
@@ -337,6 +355,12 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // Sports module — the write-path RLS in 0294 uses has_permission(), so a
   // grant is fully effective end-to-end.
   'sports:manage',
+  // Maintenance requests (mig 0314) — RLS is has_permission-based from day
+  // one, so grants are fully effective end-to-end. configure stays out:
+  // owner-only by design (C2), not a rollout gap.
+  'maintenance_requests:submit',
+  'maintenance_requests:read_all',
+  'maintenance_requests:manage',
 ]);
 
 /**
@@ -623,6 +647,27 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description:
       'Create sports categories and subcategories, edit tracking profiles and size scales, override product grouping, and change an item tracking mode.',
   },
+
+  'maintenance_requests:submit': {
+    group: 'Maintenance',
+    label: 'Submit maintenance requests',
+    description: 'Create maintenance requests, view own requests and photos, reopen the email draft.',
+  },
+  'maintenance_requests:read_all': {
+    group: 'Maintenance',
+    label: 'View all maintenance requests',
+    description: 'See every maintenance request in the organization, with search and filters.',
+  },
+  'maintenance_requests:manage': {
+    group: 'Maintenance',
+    label: 'Manage maintenance requests',
+    description: 'Assign a StockPilot owner, add internal notes, archive or correct requests.',
+  },
+  'maintenance_requests:configure': {
+    group: 'Maintenance',
+    label: 'Configure maintenance requests',
+    description: 'Owner only: access grants, categories, notification audiences, share-link settings.',
+  },
 };
 
 // Every group used in PERMISSION_META must appear here. The two consumers
@@ -644,6 +689,7 @@ export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
   'Cycle counts',
   'Bundles',
   'Schedule',
+  'Maintenance',
   'Reports',
   'Members',
   'Organization',
