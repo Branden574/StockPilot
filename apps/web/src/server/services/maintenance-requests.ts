@@ -218,7 +218,10 @@ export class MaintenanceRequestsService {
     limit?: number;
     offset?: number;
   }): Promise<MaintenanceRequestListRow[]> {
-    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // NOT module-gated (0314 Q3, mirrored verbatim in the
+    // maintenance_requests_select RLS policy's own comment): request
+    // history stays visible after the module is disabled. Only WRITES are
+    // gated — do not "restore" this call.
     if (args.scope === 'all' && !this.canReadAll()) {
       throw new ServiceError('forbidden', 'Missing permission: maintenance_requests:read_all');
     }
@@ -282,7 +285,11 @@ export class MaintenanceRequestsService {
   }
 
   async get(id: string): Promise<MaintenanceRequestDetail> {
-    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // NOT module-gated (0314 Q3) — same reasoning as list(): history reads
+    // survive a module disable. update()/cancel()/recordDraftOpened() all
+    // call this internally but each carries its OWN assertModuleEnabled at
+    // the top of the write method, so every write path is still gated —
+    // do not "restore" this call.
     const { data: r, error } = await this.db
       .from('maintenance_requests')
       .select('*, charters!charter_id(name), maintenance_request_attachments(count)')
@@ -442,7 +449,10 @@ export class MaintenanceRequestsService {
   async listNotes(
     id: string,
   ): Promise<{ id: string; authorUserId: string | null; body: string; createdAt: string }[]> {
-    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // NOT module-gated (0314 Q3): notes are part of request history, and a
+    // manage-holder still needs to read them (triage, wind-down) after a
+    // disable. The manage permission check below is untouched — do not
+    // "restore" the module gate here.
     assertPermission(this.ctx, 'maintenance_requests:manage');
     const { data, error } = await this.db
       .from('maintenance_request_notes')
@@ -494,7 +504,13 @@ export class MaintenanceRequestsService {
   /** Assembles the pure-builder input SERVER-side: related-record facts are
    *  snapshotted from the database (never client payloads), and record URLs
    *  use the APP_URL convention (never window.location — there is no window
-   *  here). Read-only: never writes, never audits. */
+   *  here). Read-only: never writes, never audits.
+   *
+   *  NOT module-gated (0314 Q3, by extension of get()): this only renders
+   *  text off data get() already exposes post-disable, and the requester
+   *  could copy the same content straight off the detail page — gating the
+   *  render would just be theater on top of an already-readable read. Do
+   *  not add an assertModuleEnabled call here. */
   async emailInput(id: string, opts: { shareUrl: string | null }): Promise<MaintenanceEmailInput> {
     const detail = await this.get(id);
     const requestNumber =

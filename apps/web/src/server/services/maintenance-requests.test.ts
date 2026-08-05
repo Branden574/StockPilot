@@ -288,11 +288,18 @@ describe('list', () => {
     expect(result.map((r) => r.id)).toEqual(['a', 'b']);
   });
 
-  it('MUTATION GUARD: rejects when the module is disabled', async () => {
-    const { ctx } = build({}, { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) });
-    await expect(new MaintenanceRequestsService(ctx).list({ scope: 'mine' })).rejects.toMatchObject({
-      code: 'module_disabled',
-    });
+  // Was "rejects when the module is disabled" (asserted `module_disabled`).
+  // Fix wave 1 (controller adjudication on 0314 Q3): list() is a READ, and
+  // 0314's own SELECT-policy comment says history stays visible after a
+  // disable — that made the old assertion's MEANING wrong, not just its
+  // code path. Re-pointed to prove the opposite: this is now the pin that
+  // keeps the SQL comment true.
+  it('READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — request history stays visible after a disable', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: [], error: null } },
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).list({ scope: 'mine' })).resolves.toEqual([]);
   });
 
   it('maps a row including nested charter name and attachment count', async () => {
@@ -327,6 +334,14 @@ describe('get', () => {
     expect(detail.outlookDraftOpenCount).toBe(2);
     expect(detail.archivedAt).toBeNull();
     expect(detail.cancelledAt).toBeNull();
+  });
+
+  it('READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — request history stays visible after a disable', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: BASE_ROW, error: null } },
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).get('r1')).resolves.toMatchObject({ id: 'r1' });
   });
 });
 
@@ -582,6 +597,17 @@ describe('addNote / listNotes', () => {
       { id: 'n1', authorUserId: 'u2', body: 'Called facilities.', createdAt: '2026-08-01T00:00:00Z' },
     ]);
   });
+
+  it('listNotes READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — notes are part of request history too', async () => {
+    const { ctx } = build(
+      { 'maintenance_request_notes.select': { data: [], error: null } },
+      {
+        enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS),
+        permissions: new Set(['maintenance_requests:manage']),
+      },
+    );
+    await expect(new MaintenanceRequestsService(ctx).listNotes('r1')).resolves.toEqual([]);
+  });
 });
 
 describe('recordDraftOpened', () => {
@@ -708,5 +734,18 @@ describe('emailInput', () => {
       shareUrl: 'https://stockpilotusa.com/r/abc',
     });
     expect(input.shareUrl).toBe('https://stockpilotusa.com/r/abc');
+  });
+
+  it('READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — renders text off data get() already exposes post-disable', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': { data: { timezone: null }, error: null },
+      },
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null })).resolves.toMatchObject({
+      requestNumber: expect.any(String),
+    });
   });
 });
