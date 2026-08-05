@@ -300,7 +300,25 @@ export type AuditEvent =
   | 'recurring_po_template.created'
   | 'recurring_po_template.updated'
   | 'recurring_po_template.toggled'
-  | 'recurring_po_template.deleted';
+  | 'recurring_po_template.deleted'
+  /**
+   * Maintenance requests (maintenance_requests module). draft_opened records
+   * that a prefilled email DRAFT was OPENED and nothing more — StockPilot
+   * cannot observe Send, delivery, or Zendesk ticket creation. Never widen
+   * these events' meanings. No migration: audit_logs.event is un-CHECKed text.
+   */
+  | 'maintenance_request.created'
+  | 'maintenance_request.updated'
+  | 'maintenance_request.draft_opened'
+  | 'maintenance_request.archived'
+  | 'maintenance_request.cancelled'
+  | 'maintenance_request.owner_assigned'
+  | 'maintenance_request.note_added'
+  | 'maintenance_request.attachment_added'
+  | 'maintenance_request.attachment_removed'
+  | 'maintenance_request.share_link_created'
+  | 'maintenance_request.share_link_revoked'
+  | 'maintenance_request.settings_updated';
 
 interface AuditPayload {
   event: AuditEvent;

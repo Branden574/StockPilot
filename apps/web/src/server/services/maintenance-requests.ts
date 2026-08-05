@@ -1,0 +1,608 @@
+import 'server-only';
+
+import {
+  can,
+  formatMaintenanceRequestNumber,
+  formatOrderNumber,
+  maintenanceRequestFormSchema,
+  parseMaintenanceRequestNumber,
+  type MaintenanceEmailInput,
+  type MaintenancePriority,
+  type MaintenanceStatus,
+} from '@stockpilot/core';
+
+import { checkRateLimit } from '@/lib/rate-limit';
+import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
+
+import { audit } from './audit';
+import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+
+// Same fallback the rest of the app uses when building an absolute app URL
+// server-side (order-requests.ts:2378/3220) — never window.location, since
+// this runs in Server Actions/API routes with no browser context.
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
+
+const LIST_COLUMNS =
+  'id, request_number, created_at, subject, status, priority, category, requester_user_id, requester_name_snapshot, local_owner_user_id, outlook_draft_opened_at, charter_id';
+
+export interface MaintenanceRequestListRow {
+  id: string;
+  requestNumber: number;
+  createdAt: string;
+  subject: string;
+  status: MaintenanceStatus;
+  priority: MaintenancePriority;
+  category: string | null;
+  siteName: string | null;
+  requesterName: string;
+  requesterUserId: string | null;
+  photoCount: number;
+  draftOpened: boolean;
+  localOwnerUserId: string | null;
+}
+
+export interface MaintenanceRequestDetail extends MaintenanceRequestListRow {
+  description: string;
+  requesterEmail: string | null;
+  requesterPhone: string | null;
+  charterId: string | null;
+  warehouseId: string | null;
+  building: string | null;
+  roomOrArea: string | null;
+  department: string | null;
+  accessInstructions: string | null;
+  relatedItemId: string | null;
+  relatedOrderRequestId: string | null;
+  relatedRentalId: string | null;
+  relatedLocationId: string | null;
+  outlookDraftOpenedAt: string | null;
+  outlookDraftOpenCount: number;
+  archivedAt: string | null;
+  cancelledAt: string | null;
+  updatedAt: string;
+}
+
+/**
+ * Fields a REQUESTER may edit on their own pre-archive request. Everything
+ * else (owner assignment, status flips, counters) is manage/service-only and
+ * lives in dedicated methods (assignLocalOwner/archive/cancel/
+ * recordDraftOpened) that never accept a client patch — RLS enforces the ROW
+ * boundary (0314 maintenance_requests_update), this list enforces the FIELD
+ * boundary within `update()`. Every key in maintenanceRequestFormSchema is
+ * currently requester-editable pre-archive; this set exists so a FUTURE
+ * schema field that should stay manage-only has somewhere to be excluded
+ * from without touching the update() control flow.
+ */
+const REQUESTER_EDITABLE = new Set([
+  'subject',
+  'description',
+  'category',
+  'priority',
+  'charterId',
+  'warehouseId',
+  'building',
+  'roomOrArea',
+  'department',
+  'accessInstructions',
+  'requesterPhone',
+  'relatedItemId',
+  'relatedOrderRequestId',
+  'relatedRentalId',
+  'relatedLocationId',
+]);
+
+/** camelCase form field -> snake_case column, shared by update()'s allow-list
+ *  filtering and the actual patch object it builds. */
+const COLUMN_FOR_FIELD: Record<string, string> = {
+  subject: 'subject',
+  description: 'description',
+  category: 'category',
+  priority: 'priority',
+  charterId: 'charter_id',
+  warehouseId: 'warehouse_id',
+  building: 'building',
+  roomOrArea: 'room_or_area',
+  department: 'department',
+  accessInstructions: 'access_instructions',
+  requesterPhone: 'requester_phone_snapshot',
+  relatedItemId: 'related_item_id',
+  relatedOrderRequestId: 'related_order_request_id',
+  relatedRentalId: 'related_rental_id',
+  relatedLocationId: 'related_location_id',
+};
+
+export class MaintenanceRequestsService {
+  constructor(private readonly ctx: ServiceContext) {}
+
+  private get db() {
+    return this.ctx.supabase;
+  }
+
+  private canReadAll(): boolean {
+    return can(this.ctx, 'maintenance_requests:read_all') || can(this.ctx, 'maintenance_requests:manage');
+  }
+
+  async create(input: unknown): Promise<{ id: string; requestNumber: number; createdAt: string }> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:submit');
+
+    // `.strict()` at every depth of maintenanceRequestFormSchema (packages/
+    // core/src/schemas/maintenance.ts) means a client body carrying a
+    // requester-identity-shaped key (requesterName, requesterEmail — neither
+    // is a field on this schema) is a hard REJECTION here, before any of
+    // that data could ever reach the snapshot below. requesterPhone IS a
+    // real schema field: it is contact info the requester supplies, not an
+    // identity claim, and there is no profile column to source it from (see
+    // the snapshot comment below) — matches the order_requests.requester_phone
+    // precedent (order-requests.ts's create path takes it straight from
+    // client input too).
+    const parsed = maintenanceRequestFormSchema.safeParse(input);
+    if (!parsed.success) {
+      throw new ServiceError('validation_error', parsed.error.issues[0]?.message ?? 'Please check the form.');
+    }
+    const v = parsed.data;
+
+    const limit = await checkRateLimit(`maintenance:create:${this.ctx.userId}`, 20, 60 * 60 * 1000, 'closed');
+    if (!limit.allowed) {
+      throw new ServiceError('conflict', 'Too many maintenance requests in the last hour. Please try again later.');
+    }
+
+    // Identity snapshots come from the AUTHENTICATED PROFILE, never the
+    // client body — brief §7. user_profiles has no `phone` column (0001
+    // init: id/email/full_name/avatar_url/default_organization_id only), so
+    // requester_phone_snapshot is the one snapshot field that legitimately
+    // comes from client input (see the schema-strictness comment above).
+    const { data: profile } = await this.db
+      .from('user_profiles')
+      .select('full_name, email')
+      .eq('id', this.ctx.userId)
+      .maybeSingle();
+    const fullName = (profile?.full_name as string | null | undefined)?.trim();
+    const email = (profile?.email as string | null | undefined) ?? null;
+
+    const { data: row, error } = await this.db
+      .from('maintenance_requests')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        requester_user_id: this.ctx.userId,
+        requester_name_snapshot: fullName || email || 'Unknown requester',
+        requester_email_snapshot: email,
+        requester_phone_snapshot: v.requesterPhone ?? null,
+        subject: v.subject,
+        description: v.description,
+        category: v.category ?? null,
+        priority: v.priority,
+        charter_id: v.charterId ?? null,
+        warehouse_id: v.warehouseId ?? null,
+        building: v.building ?? null,
+        room_or_area: v.roomOrArea ?? null,
+        department: v.department ?? null,
+        access_instructions: v.accessInstructions ?? null,
+        related_item_id: v.relatedItemId ?? null,
+        related_order_request_id: v.relatedOrderRequestId ?? null,
+        related_rental_id: v.relatedRentalId ?? null,
+        related_location_id: v.relatedLocationId ?? null,
+        status: 'saved',
+      })
+      .select('id, request_number, created_at')
+      .single();
+    if (error || !row) throw new ServiceError('internal_error', error?.message ?? 'Could not save the request.');
+
+    await audit(
+      {
+        event: 'maintenance_request.created',
+        entityType: 'maintenance_request',
+        entityId: row.id as string,
+        extra: {
+          request_number: row.request_number,
+          priority: v.priority,
+          category: v.category ?? null,
+          has_related_item: Boolean(v.relatedItemId),
+          // NEVER the description, subject, phone, or a compose URL (GC 27).
+        },
+      },
+      this.ctx,
+    );
+
+    return {
+      id: row.id as string,
+      requestNumber: row.request_number as number,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  async list(args: {
+    scope: 'mine' | 'all';
+    q?: string;
+    status?: MaintenanceStatus | 'active';
+    limit?: number;
+    offset?: number;
+  }): Promise<MaintenanceRequestListRow[]> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    if (args.scope === 'all' && !this.canReadAll()) {
+      throw new ServiceError('forbidden', 'Missing permission: maintenance_requests:read_all');
+    }
+
+    const offset = args.offset ?? 0;
+    let q = this.db
+      .from('maintenance_requests')
+      .select(`${LIST_COLUMNS}, charters!charter_id(name), maintenance_request_attachments(count)`)
+      .eq('organization_id', this.ctx.organizationId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + Math.min(args.limit ?? 50, 100) - 1);
+
+    if (args.scope === 'mine') q = q.eq('requester_user_id', this.ctx.userId);
+    if (args.status && args.status !== 'active') q = q.eq('status', args.status);
+
+    if (args.q?.trim()) {
+      const handle = parseMaintenanceRequestNumber(args.q);
+      if (handle) {
+        q = q.eq('request_number', handle);
+      } else {
+        // Same sanitization as the inventory search (inventory.ts): strip
+        // characters that would let a term escape its .or() clause and cap
+        // length, rather than the narrower [%,]-only strip.
+        const term = args.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+        if (term.trim()) {
+          q = q.or(`subject.ilike.%${term}%,description.ilike.%${term}%,requester_name_snapshot.ilike.%${term}%`);
+        }
+      }
+    }
+
+    const { data, error } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    let rows = (data ?? []) as Record<string, unknown>[];
+    // 'active' excludes archived/cancelled JS-SIDE — never PostgREST
+    // not.in, which silently drops NULL rows (recurring pattern #23).
+    if (args.status === 'active') {
+      rows = rows.filter((r) => r.status === 'saved' || r.status === 'draft_opened');
+    }
+    return rows.map((r) => this.toListRow(r));
+  }
+
+  private toListRow(r: Record<string, unknown>): MaintenanceRequestListRow {
+    const charter = r.charters as { name?: string } | null;
+    const att = r.maintenance_request_attachments as { count?: number }[] | null;
+    return {
+      id: r.id as string,
+      requestNumber: r.request_number as number,
+      createdAt: r.created_at as string,
+      subject: r.subject as string,
+      status: r.status as MaintenanceStatus,
+      priority: r.priority as MaintenancePriority,
+      category: (r.category as string | null) ?? null,
+      siteName: charter?.name ?? null,
+      requesterName: r.requester_name_snapshot as string,
+      requesterUserId: (r.requester_user_id as string | null) ?? null,
+      photoCount: att?.[0]?.count ?? 0,
+      draftOpened: Boolean(r.outlook_draft_opened_at),
+      localOwnerUserId: (r.local_owner_user_id as string | null) ?? null,
+    };
+  }
+
+  async get(id: string): Promise<MaintenanceRequestDetail> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    const { data: r, error } = await this.db
+      .from('maintenance_requests')
+      .select('*, charters!charter_id(name), maintenance_request_attachments(count)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!r) throw new ServiceError('not_found', 'Maintenance request not found');
+
+    const row = r as Record<string, unknown>;
+    const base = this.toListRow(row);
+    return {
+      ...base,
+      description: row.description as string,
+      requesterEmail: (row.requester_email_snapshot as string | null) ?? null,
+      requesterPhone: (row.requester_phone_snapshot as string | null) ?? null,
+      charterId: (row.charter_id as string | null) ?? null,
+      warehouseId: (row.warehouse_id as string | null) ?? null,
+      building: (row.building as string | null) ?? null,
+      roomOrArea: (row.room_or_area as string | null) ?? null,
+      department: (row.department as string | null) ?? null,
+      accessInstructions: (row.access_instructions as string | null) ?? null,
+      relatedItemId: (row.related_item_id as string | null) ?? null,
+      relatedOrderRequestId: (row.related_order_request_id as string | null) ?? null,
+      relatedRentalId: (row.related_rental_id as string | null) ?? null,
+      relatedLocationId: (row.related_location_id as string | null) ?? null,
+      outlookDraftOpenedAt: (row.outlook_draft_opened_at as string | null) ?? null,
+      outlookDraftOpenCount: (row.outlook_draft_open_count as number) ?? 0,
+      archivedAt: (row.archived_at as string | null) ?? null,
+      cancelledAt: (row.cancelled_at as string | null) ?? null,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  async update(id: string, patch: unknown): Promise<void> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    const detail = await this.get(id);
+    const isManager = can(this.ctx, 'maintenance_requests:manage');
+    const isRequester = detail.requesterUserId === this.ctx.userId;
+    if (!isManager && !isRequester) throw new ServiceError('forbidden', 'Not your request.');
+    if (!isManager && (detail.archivedAt || detail.cancelledAt)) {
+      throw new ServiceError('conflict', 'This request is closed and can no longer be edited.');
+    }
+
+    const parsed = maintenanceRequestFormSchema.partial().safeParse(patch);
+    if (!parsed.success) {
+      throw new ServiceError('validation_error', parsed.error.issues[0]?.message ?? 'Please check the form.');
+    }
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    for (const [key, value] of Object.entries(parsed.data as Record<string, unknown>)) {
+      if (value === undefined) continue;
+      if (!isManager && !REQUESTER_EDITABLE.has(key)) continue;
+      const col = COLUMN_FOR_FIELD[key];
+      if (col) updates[col] = value ?? null;
+    }
+
+    const { error } = await this.db
+      .from('maintenance_requests')
+      .update(updates)
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit(
+      {
+        event: 'maintenance_request.updated',
+        entityType: 'maintenance_request',
+        entityId: id,
+        extra: { changed_keys: Object.keys(updates).filter((k) => k !== 'updated_at') },
+      },
+      this.ctx,
+    );
+  }
+
+  /** manage-only. Sets status + archived_at TOGETHER, in one write — the DB
+   *  has no lockstep trigger by design (plan C1), so this service owns
+   *  keeping the two consistent on every transition. */
+  async archive(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:manage');
+    const now = new Date().toISOString();
+    const { error } = await this.db
+      .from('maintenance_requests')
+      .update({ status: 'archived', archived_at: now, updated_at: now })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit({ event: 'maintenance_request.archived', entityType: 'maintenance_request', entityId: id }, this.ctx);
+  }
+
+  /** Requester's OWN pre-archive request, or manage. Same lockstep
+   *  discipline as archive(): status + cancelled_at in one write. */
+  async cancel(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    const detail = await this.get(id);
+    const isManager = can(this.ctx, 'maintenance_requests:manage');
+    if (!isManager && detail.requesterUserId !== this.ctx.userId) {
+      throw new ServiceError('forbidden', 'Not your request.');
+    }
+    if (detail.archivedAt) throw new ServiceError('conflict', 'This request is archived.');
+    const now = new Date().toISOString();
+    const { error } = await this.db
+      .from('maintenance_requests')
+      .update({ status: 'cancelled', cancelled_at: now, updated_at: now })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit({ event: 'maintenance_request.cancelled', entityType: 'maintenance_request', entityId: id }, this.ctx);
+  }
+
+  /** manage-only. "Local owner" is a StockPilot coordinator, never a
+   *  Zendesk assignee (permissions.ts doc comment). */
+  async assignLocalOwner(id: string, userId: string | null): Promise<void> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:manage');
+    const { error } = await this.db
+      .from('maintenance_requests')
+      .update({ local_owner_user_id: userId, updated_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit(
+      {
+        event: 'maintenance_request.owner_assigned',
+        entityType: 'maintenance_request',
+        entityId: id,
+        extra: { local_owner_user_id: userId },
+      },
+      this.ctx,
+    );
+  }
+
+  /** manage-only internal note — NEVER visible to the requester, NEVER
+   *  synced anywhere (0314: notes RLS is manage-only in both directions). */
+  async addNote(id: string, body: string): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:manage');
+    const text = body.trim();
+    if (!text || text.length > 4000) {
+      throw new ServiceError('validation_error', 'Notes must be 1 to 4,000 characters.');
+    }
+    const { data, error } = await this.db
+      .from('maintenance_request_notes')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        maintenance_request_id: id,
+        author_user_id: this.ctx.userId,
+        body: text,
+      })
+      .select('id')
+      .single();
+    if (error || !data) throw new ServiceError('internal_error', error?.message ?? 'Could not add the note.');
+    await audit({ event: 'maintenance_request.note_added', entityType: 'maintenance_request', entityId: id }, this.ctx);
+    return { id: data.id as string };
+  }
+
+  async listNotes(
+    id: string,
+  ): Promise<{ id: string; authorUserId: string | null; body: string; createdAt: string }[]> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:manage');
+    const { data, error } = await this.db
+      .from('maintenance_request_notes')
+      .select('id, author_user_id, body, created_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('maintenance_request_id', id)
+      .order('created_at', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+    return ((data ?? []) as Record<string, unknown>[]).map((n) => ({
+      id: n.id as string,
+      authorUserId: (n.author_user_id as string | null) ?? null,
+      body: n.body as string,
+      createdAt: n.created_at as string,
+    }));
+  }
+
+  /** Records that a DRAFT WAS OPENED. Nothing more is knowable (brief §20/
+   *  21) — StockPilot cannot observe Send, delivery, or Zendesk ticket
+   *  creation. The first-open timestamp is sticky; only the count moves on
+   *  a re-open. */
+  async recordDraftOpened(id: string): Promise<{ openCount: number }> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    const detail = await this.get(id);
+    const openCount = detail.outlookDraftOpenCount + 1;
+    const now = new Date().toISOString();
+    const { error } = await this.db
+      .from('maintenance_requests')
+      .update({
+        outlook_draft_opened_at: detail.outlookDraftOpenedAt ?? now,
+        outlook_draft_open_count: openCount,
+        status: detail.status === 'saved' ? 'draft_opened' : detail.status,
+        updated_at: now,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit(
+      {
+        event: 'maintenance_request.draft_opened',
+        entityType: 'maintenance_request',
+        entityId: id,
+        extra: { open_count: openCount },
+      },
+      this.ctx,
+    );
+    return { openCount };
+  }
+
+  /** Assembles the pure-builder input SERVER-side: related-record facts are
+   *  snapshotted from the database (never client payloads), and record URLs
+   *  use the APP_URL convention (never window.location — there is no window
+   *  here). Read-only: never writes, never audits. */
+  async emailInput(id: string, opts: { shareUrl: string | null }): Promise<MaintenanceEmailInput> {
+    const detail = await this.get(id);
+    const requestNumber =
+      formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
+
+    let relatedItem: MaintenanceEmailInput['relatedItem'] = null;
+    if (detail.relatedItemId) {
+      const { data: item } = await this.db
+        .from('inventory_items')
+        .select('id, name, sku, model_number')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', detail.relatedItemId)
+        .maybeSingle();
+      if (item) {
+        relatedItem = {
+          name: item.name as string,
+          sku: (item.sku as string | null) ?? null,
+          modelNumber: (item.model_number as string | null) ?? null,
+          url: `${APP_URL}/dashboard/inventory/${item.id}`,
+        };
+      }
+    }
+
+    let relatedOrder: MaintenanceEmailInput['relatedOrder'] = null;
+    if (detail.relatedOrderRequestId) {
+      // order_requests has no `requested_for` column (0044_order_requests.sql
+      // defines requester_name/requester_email/requester_user_id) — the
+      // brief's sketch named the wrong column; requester_name is the real
+      // "who this order is for" field or-requests.ts reads elsewhere.
+      const { data: order } = await this.db
+        .from('order_requests')
+        .select('id, order_number, requester_name')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', detail.relatedOrderRequestId)
+        .maybeSingle();
+      if (order) {
+        relatedOrder = {
+          handle: formatOrderNumber(order.order_number as number | null) ?? (order.id as string).slice(0, 8).toUpperCase(),
+          requestedFor: (order.requester_name as string | null) ?? null,
+          url: `${APP_URL}/dashboard/orders/${order.id}`,
+        };
+      }
+    }
+
+    let relatedRental: MaintenanceEmailInput['relatedRental'] = null;
+    if (detail.relatedRentalId) {
+      // 0131_rentals.sql: rental line items live in `rental_lines`
+      // (rental_id, item_id, quantity), NOT `rental_items` — the brief's
+      // sketch used the wrong table name. borrower_name IS a real, always-
+      // populated column on `rentals` itself (0131:40-41), so no embed is
+      // needed for that half.
+      const { data: rental } = await this.db
+        .from('rentals')
+        .select('id, borrower_name, rental_lines(inventory_items(name))')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', detail.relatedRentalId)
+        .maybeSingle();
+      if (rental) {
+        // Cast through `unknown` first: with Database=any, supabase-js's
+        // select-string parser infers a structurally different (and
+        // incompatible) shape for a nested embed than the real PostgREST
+        // response, so a direct `as` is rejected as a "may be a mistake"
+        // conversion — same reason every other row in this file is cast
+        // via `Record<string, unknown>` rather than trusting inference.
+        const lines =
+          (rental.rental_lines as unknown as { inventory_items: { name: string } | null }[] | null) ?? [];
+        const items = lines.map((l) => l.inventory_items?.name).filter((n): n is string => Boolean(n));
+        relatedRental = {
+          itemNames: items,
+          borrowerName: (rental.borrower_name as string | null) ?? null,
+          url: `${APP_URL}/dashboard/rentals/${rental.id}`,
+        };
+      }
+    }
+
+    // Org timezone display for the Submitted line. Read via ctx.supabase
+    // (user-authed, RLS-scoped to the caller's own org) rather than the
+    // admin-client-backed getCachedOrgTimezone() dashboard-layout helper —
+    // a service has no reason to escalate for a column any org member can
+    // already read about their own org.
+    const { data: org } = await this.db
+      .from('organizations')
+      .select('timezone')
+      .eq('id', this.ctx.organizationId)
+      .maybeSingle();
+    const tz = (org?.timezone as string | null) || ORG_TIMEZONE_DEFAULT;
+    const submittedAtDisplay = formatOrgDateTime(detail.createdAt, { dateStyle: 'long', timeStyle: 'short' }, tz);
+
+    return {
+      requestNumber,
+      subject: detail.subject,
+      description: detail.description,
+      category: detail.category,
+      priority: detail.priority,
+      submittedAtDisplay,
+      requesterName: detail.requesterName,
+      requesterEmail: detail.requesterEmail,
+      requesterPhone: detail.requesterPhone,
+      siteName: detail.siteName,
+      department: detail.department,
+      building: detail.building,
+      roomOrArea: detail.roomOrArea,
+      accessInstructions: detail.accessInstructions,
+      relatedItem,
+      relatedOrder,
+      relatedRental,
+      photoCount: detail.photoCount,
+      shareUrl: opts.shareUrl,
+    };
+  }
+}
