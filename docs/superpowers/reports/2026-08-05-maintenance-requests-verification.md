@@ -674,3 +674,24 @@ inventory-table pagination client-mode 7). Typecheck clean x3 (web, mobile,
 core). ESLint clean on the three touched files. Byte-hygiene grep -aPn
 clean. package.json/pnpm-lock.yaml untouched. `pnpm --filter web build`
 exit 0. Working tree clean after commit.
+
+## Ship log — 2026-08-06 (executed post-merge)
+
+All times UTC. Sequence per the ship checklist; no-send rules held throughout (zero window.open calls across the entire production walk, patch installed via context init script before any page load).
+
+1. 17:57 — `supabase db push --linked`: migrations 0314, 0315, 0316 applied to prod (xizpqmhhslgzbuqtjubv). NOTICE on 0315's drop-policy-if-exists was the expected first-run no-op. `migration list` confirms local/remote parity through 0316.
+2. PR #73 opened; CI rollup ALL GREEN (Vercel, GitGuardian, Preview Comments); merged as 95ba14da (merge commit, repo convention).
+3. Deploy verified live via the new cron route (404 before, 401 after — auth guard working). Canonical domain stockpilotusa.com; curl 429s on other routes are the known bot-protection edge challenge, not the app.
+4. Mobile OTA published via `pnpm release:ota` (production channel) + Sentry source maps uploaded. Pre-flight confirmed EXPO_PUBLIC_SUPABASE_URL in the release env points at prod.
+5. L4L enable: NOT run by the controller — organization_modules row for 63c13e64-92a6-4ea4-9936-6a2c26a85b4a ("L4L North Region", prod-verified as the org owning the DC4 sites) was found already enabled at 18:04:45 UTC, ~7 minutes after the migration seeded it false. Enabled by the owner via the UI. arosas@cvwest.org confirmed an accepted admin; admin role defaults include submit/read_all/manage (configure is owner-only by design), so no per-user grant was needed.
+6. Demo Co prod walk (module temp-enabled 18:52:30, SQL recorded):
+   - Module nav + list page render; first-visit tour auto-offer appeared; tour started, advanced steps 1-4, gracefully skipped the rowless step-5 target and completed (runtime tour proof on prod).
+   - Request created via the real form: MR-2026-000001, site North Campus, review screen shows subject/site/To/CC read-only.
+   - Photo uploaded on the detail panel: Photos (1/8), zero errors, thumbnail served from a signed maintenance-photos URL with the org-prefixed path (prod mint→PUT→finalize proven).
+   - List WITH a row renders — no error boundary, 1 table row, pager present (the Task 25 RSC pagination fix proven in production).
+   - Copy Email Details: clipboard payload verified (To dc4@learn4life.org, CC arosas@cvwest.org, MR number, subject, /m/ share link; 1,070 chars); honest "copied" toast; no window opened.
+   - Request CANCELLED (status Cancelled) BEFORE the module disable, per the final review's cron amendment.
+   - Module disabled (SQL recorded): nav entry gone, route shows the module-not-enabled fallback.
+7. Not exercised in prod, by rule: Open in Outlook, the mailto path, any real send. Covered by string-level tests, the local intercepted walk, and Task 14 component tests. Owner hand-test on the live L4L tenant remains the final step (step 8): one real request, owner reviews the draft and decides whether to send.
+
+Open post-ship items: fast-follow PR (serializable Pagination for movements + purchase-orders/imports, module-enabled filter on the reminder cron, mobile blocked-copy wording); device checks (OTA pickup, notification tap-through); first cron firing after 16:00 UTC tomorrow.
