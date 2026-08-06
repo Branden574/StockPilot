@@ -16,34 +16,11 @@ import { formatRelative } from '@/lib/utils';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
-import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
+import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
 
 import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detail-client';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Whether this org wants a share link folded into the compose email — the
- * exact same org-setting read as the mobile REST parity route
- * (api/v1/maintenance-requests/[id]/route.ts's own `shareLinksEnabled`).
- * Kept as a second, page-local copy rather than a shared export: both call
- * sites are small, self-contained reads with no other coupling, and each
- * page/route owns its own request shape already. See that route's doc
- * comment for the full default-ON rationale.
- */
-async function shareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
-  const { data } = await ctx.supabase
-    .from('organization_modules')
-    .select('settings')
-    .eq('organization_id', ctx.organizationId)
-    .eq('module_id', 'maintenance_requests')
-    .maybeSingle();
-  const settings = (data as { settings?: unknown } | null)?.settings as
-    | { includeShareLinksInEmail?: boolean }
-    | null
-    | undefined;
-  return settings?.includeShareLinksInEmail !== false;
-}
 
 /** organization_members embedding user_profiles!user_id, filtered to
  *  accepted members — same query cycle-counts/new/page.tsx:36-57 uses for
@@ -135,7 +112,7 @@ export default async function MaintenanceRequestDetailPage({
   // attempt degrades to shareLink: null; a non-ServiceError (a real bug)
   // still propagates to the error boundary, same as the route.
   let shareLink: MaintenanceShareLinkInfo | null = null;
-  if (photos.length > 0 && (await shareLinksEnabled(ctx))) {
+  if (photos.length > 0 && (await maintenanceShareLinksEnabled(ctx))) {
     try {
       shareLink = await new MaintenanceShareLinksService(ctx).ensureActiveLink(id);
     } catch (shareErr) {

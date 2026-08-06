@@ -34,6 +34,9 @@ export const NOTIFICATION_PREF_KEYS = [
   'push_maintenance_urgent_request',
   'push_maintenance_assigned',
   'push_maintenance_draft_reminder',
+  // Requester-facing close-out ping (Maintenance Resolved spec §7) — fires
+  // once when a manage-holder marks the requester's own request resolved.
+  'push_maintenance_resolved',
 ] as const;
 
 export type NotificationPrefKey = (typeof NOTIFICATION_PREF_KEYS)[number];

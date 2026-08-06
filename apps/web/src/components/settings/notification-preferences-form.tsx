@@ -127,6 +127,12 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'In-app reminder when you opened an email draft for a maintenance request but StockPilot cannot confirm send.',
     group: 'push',
   },
+  {
+    key: 'push_maintenance_resolved',
+    label: 'Maintenance request resolved',
+    hint: 'In-app notification when a maintenance request you submitted is marked resolved.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {

@@ -91,6 +91,26 @@ export async function cancelMaintenanceRequestAction(id: string): Promise<Action
   }
 }
 
+/** manage-only (service-enforced). `values` is the resolve-dialog's raw
+ *  input — the service re-parses it with maintenanceResolveSchema; this
+ *  action never validates the shape itself, matching every other
+ *  values-pass-through action in this file. */
+export async function resolveMaintenanceRequestAction(
+  id: string,
+  values: unknown,
+): Promise<ActionResult<object>> {
+  try {
+    assertValidId(id);
+    const ctx = await withContext();
+    await new MaintenanceRequestsService(ctx).resolve(id, values);
+    revalidatePath('/dashboard/maintenance');
+    revalidatePath(`/dashboard/maintenance/${id}`);
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function assignMaintenanceOwnerAction(
   id: string,
   userId: string | null,

@@ -62,7 +62,15 @@ const signedViewUrls = vi.fn();
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
 
 const ensureActiveLink = vi.fn();
-vi.mock('@/server/services/maintenance-share-links', () => ({ MaintenanceShareLinksService: vi.fn() }));
+// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+// maintenanceShareLinksEnabled stays the REAL implementation, which reads
+// `ctx.supabase`'s own 'organization_modules.select' canning, the exact
+// org-setting read this page used to duplicate locally before Task 4 lifted
+// it into this shared module.
+vi.mock('@/server/services/maintenance-share-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/services/maintenance-share-links')>();
+  return { ...actual, MaintenanceShareLinksService: vi.fn() };
+});
 
 // Every server action any nested client component might call — none of
 // these fire on a plain render, but importing the REAL module would pull in

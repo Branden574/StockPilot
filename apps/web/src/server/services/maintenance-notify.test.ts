@@ -427,6 +427,89 @@ describe('notifyMaintenanceEvent — insert shape, link, and NO push call', () =
     expect(inserts[0]!.title).toBe('A photo on MR-2026-000006 could not be saved');
   });
 
+  it("'resolved' targets a single user, gated by push_maintenance_resolved — fail-open on a missing row (Maintenance Resolved, Task 4)", async () => {
+    const stub = buildAdmin({ prefRows: [] });
+
+    await notifyMaintenanceEvent({
+      organizationId: ORG,
+      event: 'resolved',
+      requestId: 'req-10',
+      requestHandle: 'MR-2026-000010',
+      subject: 'Broken chair',
+      actorUserId: 'manager-1',
+      targetUserId: 'requester-1',
+    });
+
+    const inserts = (stub.chainArgsAll.get('notifications.insert') ?? []).map(
+      (callArgs) => callArgs[0]![0] as Record<string, unknown>,
+    );
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]!.user_id).toBe('requester-1');
+    expect(inserts[0]!.link).toBe('/dashboard/maintenance/req-10');
+  });
+
+  it("'resolved' mutes on an explicit push_maintenance_resolved: false — LITERAL column-name pin (EVENT_PREF_KEY.resolved)", async () => {
+    const stub = buildAdmin({
+      prefRows: [{ user_id: 'requester-1', push_maintenance_resolved: false }],
+    });
+
+    await notifyMaintenanceEvent({
+      organizationId: ORG,
+      event: 'resolved',
+      requestId: 'req-11',
+      requestHandle: 'MR-2026-000011',
+      subject: 'x',
+      actorUserId: 'manager-1',
+      targetUserId: 'requester-1',
+    });
+
+    expect(stub.chainsAll.has('notifications.insert')).toBe(false);
+  });
+
+  it("'resolved' is UNAFFECTED by every OTHER maintenance pref being false — proves the column read is push_maintenance_resolved specifically, not an aliased/shared key", async () => {
+    const stub = buildAdmin({
+      prefRows: [
+        {
+          user_id: 'requester-1',
+          push_maintenance_new_request: false,
+          push_maintenance_urgent_request: false,
+          push_maintenance_assigned: false,
+          push_maintenance_draft_reminder: false,
+        },
+      ],
+    });
+
+    await notifyMaintenanceEvent({
+      organizationId: ORG,
+      event: 'resolved',
+      requestId: 'req-12',
+      requestHandle: 'MR-2026-000012',
+      subject: 'x',
+      actorUserId: 'manager-1',
+      targetUserId: 'requester-1',
+    });
+
+    const inserts = (stub.chainArgsAll.get('notifications.insert') ?? []).map(
+      (callArgs) => callArgs[0]![0] as Record<string, unknown>,
+    );
+    expect(inserts).toHaveLength(1);
+  });
+
+  it('title literal: "Maintenance request MR-2026-000123 marked resolved"', async () => {
+    const stub = buildAdmin({});
+    await notifyMaintenanceEvent({
+      organizationId: ORG,
+      event: 'resolved',
+      requestId: 'req-13',
+      requestHandle: 'MR-2026-000123',
+      subject: 'x',
+      actorUserId: 'manager-1',
+      targetUserId: 'requester-1',
+    });
+    const insert = stub.chainArgsAll.get('notifications.insert')![0]![0]![0] as Record<string, unknown>;
+    expect(insert.title).toBe('Maintenance request MR-2026-000123 marked resolved');
+  });
+
   it('never throws even when the admin client itself is unusable — resolves and reports, does not reject', async () => {
     adminHolder.client = undefined; // createAdminClient() returning something with no .from at all
 
@@ -454,5 +537,12 @@ describe('§20 sweep — no false-confirmation language anywhere in this module\
     expect(/andrew notified/i.test(src)).toBe(false);
     expect(/ticket assigned/i.test(src)).toBe(false);
     expect(/email sent/i.test(src)).toBe(false);
+    // Maintenance Resolved (GC 4) — this surface's own new forbidden
+    // phrases, swept the same way: never claim a Zendesk-side outcome this
+    // module cannot observe. T4-M5 mutation target: a titleFor rewrite that
+    // slips one of these in must fail this sweep.
+    expect(/ticket closed/i.test(src)).toBe(false);
+    expect(/ticket resolved/i.test(src)).toBe(false);
+    expect(/zendesk/i.test(src)).toBe(false);
   });
 });

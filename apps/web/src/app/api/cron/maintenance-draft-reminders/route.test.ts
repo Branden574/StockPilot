@@ -141,7 +141,7 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // Eligibility predicate, pinned via call-recording (the mock replays
     // canned rows without applying real PostgREST filters).
     const selectChain = stub.chains.get('maintenance_requests.select');
-    expect(selectChain).toEqual(['select', 'eq', 'lt', 'is', 'is', 'is', 'in', 'limit']);
+    expect(selectChain).toEqual(['select', 'eq', 'lt', 'is', 'is', 'is', 'is', 'in', 'limit']);
     const selectArgs = stub.chainArgs.get('maintenance_requests.select') ?? [];
     expect(selectArgs[selectChain!.indexOf('eq')]).toEqual(['status', 'saved']);
     expect(selectArgs[selectChain!.indexOf('lt')]?.[0]).toBe('created_at');
@@ -151,10 +151,14 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     expect(selectArgs[3]).toEqual(['draft_reminder_sent_at', null]);
     expect(selectArgs[4]).toEqual(['archived_at', null]);
     expect(selectArgs[5]).toEqual(['cancelled_at', null]);
+    // Maintenance Resolved (Task 4) defensive hedge — the reminders query
+    // chain now includes .is('resolved_at', null) alongside the existing
+    // saved/archived/cancelled pins.
+    expect(selectArgs[6]).toEqual(['resolved_at', null]);
     // Module-gate fast-follow: the eligibility SELECT is filtered to the
     // module-enabled org allowlist BEFORE the row limit.
-    expect(selectArgs[6]).toEqual(['organization_id', ['org-1']]);
-    expect(selectArgs[7]).toEqual([200]);
+    expect(selectArgs[7]).toEqual(['organization_id', ['org-1']]);
+    expect(selectArgs[8]).toEqual([200]);
 
     // The module allowlist query itself: enabled orgs for this module only.
     const modChain = stub.chains.get('organization_modules.select');

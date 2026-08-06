@@ -15,7 +15,16 @@ import { GET, PATCH } from './route';
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/server/services/maintenance-requests', () => ({ MaintenanceRequestsService: vi.fn() }));
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
-vi.mock('@/server/services/maintenance-share-links', () => ({ MaintenanceShareLinksService: vi.fn() }));
+// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+// maintenanceShareLinksEnabled stays the REAL implementation, which reads
+// `ctx.supabase`'s own 'organization_modules.select' canning (already
+// configured per-test via buildCtx({ settings })), the exact org-setting
+// read this route used to duplicate locally before Task 4 lifted it into
+// this shared module.
+vi.mock('@/server/services/maintenance-share-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/services/maintenance-share-links')>();
+  return { ...actual, MaintenanceShareLinksService: vi.fn() };
+});
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';

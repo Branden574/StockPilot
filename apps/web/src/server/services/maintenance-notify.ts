@@ -30,7 +30,8 @@ export type MaintenanceNotifyEvent =
   | 'urgent_request'
   | 'assigned'
   | 'draft_reminder'
-  | 'photo_rejected';
+  | 'photo_rejected'
+  | 'resolved';
 
 /** The narrowed 3-state set Task 16's settings action persists
  *  (organization_modules.settings.notifyAudience, keyed by userId). */
@@ -58,6 +59,7 @@ const EVENT_PREF_KEY: Partial<Record<MaintenanceNotifyEvent, NotificationPrefKey
   urgent_request: 'push_maintenance_urgent_request',
   assigned: 'push_maintenance_assigned',
   draft_reminder: 'push_maintenance_draft_reminder',
+  resolved: 'push_maintenance_resolved',
 };
 
 function titleFor(event: MaintenanceNotifyEvent, requestHandle: string): string {
@@ -72,6 +74,8 @@ function titleFor(event: MaintenanceNotifyEvent, requestHandle: string): string 
       return `Reminder: finish your ${requestHandle} draft`;
     case 'photo_rejected':
       return `A photo on ${requestHandle} could not be saved`;
+    case 'resolved':
+      return `Maintenance request ${requestHandle} marked resolved`;
     default: {
       const _exhaustive: never = event;
       throw new Error(`Unhandled maintenance notify event: ${String(_exhaustive)}`);
@@ -241,9 +245,12 @@ export async function resolveMaintenanceAudience(args: {
  *
  * `new_request`/`urgent_request` fan out to the permission-resolved audience
  * (`resolveMaintenanceAudience`, which already applies the pref gate).
- * `assigned`/`draft_reminder`/`photo_rejected` target a single
+ * `assigned`/`draft_reminder`/`photo_rejected`/`resolved` target a single
  * `targetUserId`, gated by that event's own pref column when one exists
  * (fail-open: missing row notifies, only an explicit `false` mutes).
+ * `resolved` targets the REQUESTER only — the caller (resolve()) is
+ * responsible for never passing a `targetUserId` equal to the resolver
+ * (self-resolve suppression lives at the call site, not here).
  *
  * The link is always `/dashboard/maintenance/${requestId}` — this exact
  * shape is what Task 18's mobile web-path-rewrite rules translate into a

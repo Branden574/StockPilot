@@ -35,12 +35,12 @@ function secretsEqual(a: string, b: string): boolean {
  * shape ({ ok, remindersSent }).
  *
  * Eligibility: status = 'saved', created_at older than 24h,
- * draft_reminder_sent_at is null, not archived/cancelled, AND the owning
- * org still has the maintenance_requests module enabled. The `status`
- * enum and the `archived_at`/`cancelled_at` timestamps are always written
- * TOGETHER in the same update (archive()/cancel() in
- * server/services/maintenance-requests.ts), so `status = 'saved'` already
- * implies both timestamps are null — the extra `.is(...)` pair below is
+ * draft_reminder_sent_at is null, not archived/cancelled/resolved, AND the
+ * owning org still has the maintenance_requests module enabled. The `status`
+ * enum and the `archived_at`/`cancelled_at`/`resolved_at` timestamps are
+ * always written TOGETHER in the same update (archive()/cancel()/resolve()
+ * in server/services/maintenance-requests.ts), so `status = 'saved'` already
+ * implies all three timestamps are null — the extra `.is(...)` trio below is
  * belt-and-suspenders, matching the same double-guard 0314's own RLS
  * policies apply everywhere else on this table, not a distinct case the
  * status filter misses.
@@ -132,6 +132,13 @@ export async function GET(req: Request) {
     .is('draft_reminder_sent_at', null)
     .is('archived_at', null)
     .is('cancelled_at', null)
+    // Defensive hedge (Maintenance Resolved): resolve() already moves status
+    // off 'saved' on every resolution, so the `status = 'saved'` filter above
+    // already excludes a resolved row in practice — this is belt-and-
+    // suspenders against a future write path that touches resolved_at
+    // without also flipping status, matching the same double-guard posture
+    // the archived_at/cancelled_at pair above already applies.
+    .is('resolved_at', null)
     .in('organization_id', enabledOrgIds)
     .limit(200);
   if (error) {

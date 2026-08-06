@@ -312,6 +312,10 @@ export type AuditEvent =
   | 'maintenance_request.draft_opened'
   | 'maintenance_request.archived'
   | 'maintenance_request.cancelled'
+  // Maintenance Resolved (spec docs/superpowers/specs/2026-08-06-
+  // maintenance-resolved-design.md). extra is { has_note, proof_photo_count }
+  // — NEVER the note text itself (GC 16/27 posture).
+  | 'maintenance_request.resolved'
   | 'maintenance_request.owner_assigned'
   | 'maintenance_request.note_added'
   | 'maintenance_request.attachment_added'

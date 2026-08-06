@@ -224,6 +224,37 @@ async function fetchValidAttachments(
   return ((data ?? []) as AttachmentRow[]).filter(isValidAttachmentRow);
 }
 
+/**
+ * Whether this org wants a share link folded into the compose email / the
+ * resolution email — the ONE reader of `organization_modules.settings.
+ * includeShareLinksInEmail` (previously three independent private copies:
+ * the web detail page, the mobile REST parity route, and now resolve()'s
+ * own need to decide whether to mint a link before the at-most-once email
+ * fires). `organization_modules.settings` is an unconstrained jsonb blob
+ * (0144), so an absent key or a missing row both mean "never configured"
+ * and default ON, matching every other module settings reader in this
+ * codebase (packages/core/src/b2b/pricing-mode.ts's own precedent). A plain
+ * read, not a permission check — the real authorization for MINTING a link
+ * still lives entirely in `ensureActiveLink` (requester+submit, or manage);
+ * this only decides whether a caller even asks. Reads via `ctx.supabase`
+ * (RLS-scoped, user-authed) — same client every existing call site already
+ * used, never the admin client, since any org member can read their own
+ * org's module settings.
+ */
+export async function maintenanceShareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
+  const { data } = await ctx.supabase
+    .from('organization_modules')
+    .select('settings')
+    .eq('organization_id', ctx.organizationId)
+    .eq('module_id', 'maintenance_requests')
+    .maybeSingle();
+  const settings = (data as { settings?: unknown } | null)?.settings as
+    | { includeShareLinksInEmail?: boolean }
+    | null
+    | undefined;
+  return settings?.includeShareLinksInEmail !== false;
+}
+
 export class MaintenanceShareLinksService {
   constructor(private readonly ctx: ServiceContext) {}
 
