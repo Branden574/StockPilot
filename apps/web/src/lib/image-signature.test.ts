@@ -106,6 +106,19 @@ describe('sniffImage', () => {
     expect(sniffImage(twoByteMagic)).toBeNull();
   });
 
+  it('MUTATION GUARD (r11 extended) — a body sharing only the first FOUR PNG signature bytes (bytes 0-3 match, bytes 4-7 are garbage) is rejected: the full 8-byte signature must match, not a 4-byte prefix', () => {
+    // Bytes 0-3 match the start of the PNG signature (0x89 0x50 0x4E 0x47);
+    // bytes 4-7 are garbage (0x00 0x00 0x00 0x00), NOT the real 0x0d 0x0a
+    // 0x1a 0x0a tail. IHDR chunk tag is intact at 12-15, and dimensions are
+    // valid (2, 3) — so this fixture is rejected ONLY by the signature check
+    // (bytes 4-7), never by the unrelated IHDR-tag or dimension guards. A
+    // mutant that checked only the first 4 bytes (shortening the signature
+    // requirement) would wrongly accept this as a valid PNG.
+    const fourByteMagic = pngBytes(2, 3);
+    fourByteMagic.set([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00], 0);
+    expect(sniffImage(fourByteMagic)).toBeNull();
+  });
+
   it('a body with the correct 8-byte PNG signature but a non-IHDR (or garbage) first chunk tag is rejected', () => {
     const wrongChunk = pngBytes(2, 3);
     // Overwrite the IHDR tag at bytes 12-15 with garbage, signature intact.

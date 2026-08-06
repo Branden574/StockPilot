@@ -15,6 +15,8 @@ export const dynamic = 'force-dynamic';
  * to Storage with the returned signed URLs, then calls the finalize route
  * (../finalize/route.ts), which is where the bytes actually get verified.
  * This route never sees photo bytes at all.
+ *
+ * Route contract: returns 409 conflict on rate-limit (not 429).
  */
 const mintSchema = z.object({
   fileExt: z.string().trim().min(1).max(5),

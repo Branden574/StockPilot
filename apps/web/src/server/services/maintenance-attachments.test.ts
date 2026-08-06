@@ -489,6 +489,34 @@ describe('finalize', () => {
     expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
+  it('MUTATION GUARD (data-loss guard) — 23505 duplicate storage_path: throws conflict without removing storage (the winning row still references it), never deletes the object', async () => {
+    const bytes = pngBytes(2, 3);
+    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    const { ctx } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+      'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
+      'maintenance_request_attachments.insert': {
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint "maintenance_request_attachments_org_path_uniq"' },
+      },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'duplicate.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toMatchObject({ code: 'conflict', message: 'This photo was already recorded.' });
+
+    // Critical: adminRemove must NOT be called. The storage object still
+    // belongs to whichever insert won the race — deleting it would be
+    // data-loss if the other insert finalized and the row now references this
+    // path.
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+  });
+
   it('never writes a row when the object was never actually uploaded (download fails) — no phantom rows', async () => {
     downloadMock.mockResolvedValue({ data: null, error: { message: 'The resource was not found' } });
     const { stub, ctx } = build({
@@ -577,6 +605,29 @@ describe('remove', () => {
 
     await expect(new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1')).rejects.toMatchObject({
       code: 'conflict',
+    });
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('Minor 12 — when DELETE affects zero rows due to a closed request (archived_at or cancelled_at set), uses the same specific message as the ownership gate', async () => {
+    const { ctx } = build({
+      'maintenance_request_attachments.select': {
+        data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+        error: null,
+      },
+      // Pre-read found the row, but delete affects zero rows.
+      'maintenance_request_attachments.delete': { data: null, error: null },
+      // Parent request is archived — the cause of the RLS refusal.
+      'maintenance_requests.select': {
+        data: { id: REQ_ID, archived_at: '2026-08-01T00:00:00Z', cancelled_at: null },
+        error: null,
+      },
+    });
+
+    await expect(new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is closed; photos can no longer change.',
     });
     expect(adminRemoveMock).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
