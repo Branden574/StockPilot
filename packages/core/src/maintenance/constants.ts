@@ -45,13 +45,19 @@ export const MAINTENANCE_CATEGORIES = [
 export const MAINTENANCE_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export type MaintenancePriority = (typeof MAINTENANCE_PRIORITIES)[number];
 
-export type MaintenanceStatus = 'saved' | 'draft_opened' | 'archived' | 'cancelled';
+export type MaintenanceStatus = 'saved' | 'draft_opened' | 'resolved' | 'archived' | 'cancelled';
 
-/** The ONLY status vocabulary (brief section 20). Never 'sent', never
- *  'ticket created' — StockPilot cannot observe either. */
+/** The ONLY status vocabulary (brief section 20; 'resolved' added by the
+ *  Maintenance Resolved program, spec §1.1/§11). Never 'sent', never
+ *  'ticket created' — StockPilot cannot observe either. 'resolved' is
+ *  legitimate because it describes a StockPilot-local record a human made,
+ *  not an observation of Zendesk. Insertion order between draft_opened and
+ *  archived is load-bearing: the web pill order and the REST route's
+ *  STATUS_VALUES both derive from this record's key order (spec §1.1). */
 export const MAINTENANCE_STATUS_LABELS: Record<MaintenanceStatus, string> = {
   saved: 'Saved',
   draft_opened: 'Email draft opened',
+  resolved: 'Resolved',
   archived: 'Archived',
   cancelled: 'Cancelled',
 };
@@ -59,3 +65,15 @@ export const MAINTENANCE_STATUS_LABELS: Record<MaintenanceStatus, string> = {
 export const MAINTENANCE_MAX_PHOTOS = 8;
 export const MAINTENANCE_MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 export const MAINTENANCE_SHARE_LINK_TTL_DAYS = 180;
+
+/** Attachment kinds (migration 0317): 'requester' is the shipped default for
+ *  photos attached at request-creation time; 'resolution' labels proof
+ *  photos a manage-holder attaches when closing out via resolve(). Literal
+ *  values — NEVER derived from the migration file (spec §2.2/§3.1). */
+export const MAINTENANCE_ATTACHMENT_KINDS = ['requester', 'resolution'] as const;
+export type MaintenanceAttachmentKind = (typeof MAINTENANCE_ATTACHMENT_KINDS)[number];
+
+/** Resolution note cap (spec §3.1); mirrors migration 0317's
+ *  `resolution_note` CHECK (length between 1 and 2000) — the zod schema is
+ *  the operative bound, the CHECK is the safety margin. */
+export const MAINTENANCE_RESOLUTION_NOTE_MAX = 2000;

@@ -10,6 +10,8 @@ import {
   MAINTENANCE_MAX_PHOTOS,
   MAINTENANCE_MAX_PHOTO_BYTES,
   MAINTENANCE_SHARE_LINK_TTL_DAYS,
+  MAINTENANCE_ATTACHMENT_KINDS,
+  MAINTENANCE_RESOLUTION_NOTE_MAX,
 } from './constants';
 
 /**
@@ -79,17 +81,28 @@ describe('maintenance recipient constants', () => {
   });
 });
 
-describe('status labels — the ONLY four states (brief section 20)', () => {
+describe('status labels — the ONLY five states (Maintenance Resolved spec §1.1/§11)', () => {
   it('pins the exact display strings', () => {
     expect(MAINTENANCE_STATUS_LABELS).toEqual({
       saved: 'Saved',
       draft_opened: 'Email draft opened',
+      resolved: 'Resolved',
       archived: 'Archived',
       cancelled: 'Cancelled',
     });
   });
 
-  it('never uses the forbidden confirmation vocabulary (Global Constraint 8)', () => {
+  it('pins insertion order — resolved lands BETWEEN draft_opened and archived (spec §1.1: the web pill order and STATUS_VALUES both derive from this key order)', () => {
+    expect(Object.keys(MAINTENANCE_STATUS_LABELS)).toEqual([
+      'saved',
+      'draft_opened',
+      'resolved',
+      'archived',
+      'cancelled',
+    ]);
+  });
+
+  it('never uses the forbidden confirmation vocabulary (Global Constraint 8, extended by GC 4/spec §11)', () => {
     const all = Object.values(MAINTENANCE_STATUS_LABELS).join(' | ');
     for (const banned of [
       'Ticket created',
@@ -98,18 +111,35 @@ describe('status labels — the ONLY four states (brief section 20)', () => {
       'Andrew notified',
       'Ticket assigned',
       'Email sent',
+      'Ticket closed',
+      'Ticket resolved',
+      'Zendesk ticket closed',
+      'Zendesk ticket updated',
+      'Zendesk ticket resolved',
+      'Issue verified fixed',
     ]) {
       expect(all).not.toContain(banned);
     }
   });
 
-  it('has exactly four states — no fifth status sneaks in', () => {
+  it('has exactly five states — no sixth status sneaks in', () => {
     expect(Object.keys(MAINTENANCE_STATUS_LABELS).sort()).toEqual([
       'archived',
       'cancelled',
       'draft_opened',
+      'resolved',
       'saved',
     ]);
+  });
+});
+
+describe('attachment kinds (migration 0317, spec §2.2/§3.1)', () => {
+  it('pins the exact two kind literals, in order', () => {
+    expect(MAINTENANCE_ATTACHMENT_KINDS).toEqual(['requester', 'resolution']);
+  });
+
+  it('pins the resolution note cap', () => {
+    expect(MAINTENANCE_RESOLUTION_NOTE_MAX).toBe(2000);
   });
 });
 

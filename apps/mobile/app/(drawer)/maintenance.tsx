@@ -62,6 +62,7 @@ import { useTheme } from '@/lib/use-theme';
 const STATUS_PILL: Record<MaintenanceStatus, 'default' | 'warn' | 'ok' | 'crit'> = {
   saved: 'default',
   draft_opened: 'warn',
+  resolved: 'ok',
   archived: 'default',
   cancelled: 'default',
 };
