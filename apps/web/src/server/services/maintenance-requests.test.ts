@@ -1148,12 +1148,14 @@ describe('archive', () => {
   it('D1 (owner-decided M1 REVERSAL): archive() now ACCEPTS an already-CANCELLED row — a cancelled request is nameable history, not a second closed state archive must refuse', async () => {
     const { stub, ctx } = build(
       {
-        'maintenance_requests.select': { data: { archived_at: null }, error: null },
+        'maintenance_requests.select': { data: { archived_at: null, cancelled_at: '2026-08-01T00:00:00Z' }, error: null },
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await expect(new MaintenanceRequestsService(ctx).archive('r1')).resolves.toBeUndefined();
+    // Pin the select to refuse regressions that widen the pre-read or re-add cancellation checks.
+    expect(stub.chainArgs.get('maintenance_requests.select')?.[0]?.[0]).toBe('archived_at');
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
     expect(patch.status).toBe('archived');
     expect(audit).toHaveBeenCalledWith(
@@ -1165,12 +1167,14 @@ describe('archive', () => {
   it('D1: archive() also ACCEPTS an already-RESOLVED row (the same re-bucket reasoning as the cancelled case)', async () => {
     const { stub, ctx } = build(
       {
-        'maintenance_requests.select': { data: { archived_at: null }, error: null },
+        'maintenance_requests.select': { data: { archived_at: null, resolved_at: '2026-08-01T00:00:00Z' }, error: null },
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await expect(new MaintenanceRequestsService(ctx).archive('r1')).resolves.toBeUndefined();
+    // Pin the select to refuse regressions that widen the pre-read or re-add resolution checks.
+    expect(stub.chainArgs.get('maintenance_requests.select')?.[0]?.[0]).toBe('archived_at');
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
     expect(patch.status).toBe('archived');
   });
