@@ -751,7 +751,9 @@ export class MaintenanceRequestsService {
 
     // Task 21: only a real assignment (never a clear-to-null) is worth a
     // ping — fire-and-forget, AFTER the audit write, same as create().
-    if (userId !== null) {
+    // Suppress self-assignment notifications to prevent a manager from being
+    // pinged about their own action.
+    if (userId !== null && userId !== this.ctx.userId) {
       this.emitNotify({
         organizationId: this.ctx.organizationId,
         event: 'assigned',

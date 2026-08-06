@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: vi.fn(),
+}));
 // checkRateLimit hits the DB via an RPC on the admin client; stub it so
 // create() tests run in isolation and can flip `allowed` per test.
 vi.mock('@/lib/rate-limit', () => ({
@@ -17,6 +20,14 @@ vi.mock('@/lib/rate-limit', () => ({
 const { createAdminClientMock } = vi.hoisted(() => ({ createAdminClientMock: vi.fn() }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
+}));
+// notifyMaintenanceEvent is fire-and-forget in emitNotify(), so mock it to
+// spy on calls without blocking the service method. Must return a resolved Promise.
+const { notifyMaintenanceEventMock } = vi.hoisted(() => ({
+  notifyMaintenanceEventMock: vi.fn(async () => undefined),
+}));
+vi.mock('@/server/services/maintenance-notify', () => ({
+  notifyMaintenanceEvent: notifyMaintenanceEventMock,
 }));
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
@@ -247,6 +258,44 @@ describe('create', () => {
     const payload = vi.mocked(audit).mock.calls[0]![0];
     expect(JSON.stringify(payload)).not.toContain('Blowing warm air');
     expect(JSON.stringify(payload)).not.toContain(VALID.subject);
+  });
+
+  it('REGRESSION: create() with normal priority invokes notifyMaintenanceEvent EXACTLY ONCE with event new_request', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': {
+        data: { id: 'r1', request_number: 42, created_at: '2026-08-05T16:15:00Z' },
+        error: null,
+      },
+    });
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).create(VALID);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(1);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'new_request',
+        requestId: 'r1',
+      }),
+    );
+  });
+
+  it('REGRESSION: create() with urgent priority invokes notifyMaintenanceEvent EXACTLY ONCE with event urgent_request', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': {
+        data: { id: 'r2', request_number: 43, created_at: '2026-08-05T16:20:00Z' },
+        error: null,
+      },
+    });
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).create({ ...VALID, priority: 'urgent' });
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(1);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'urgent_request',
+        requestId: 'r2',
+      }),
+    );
   });
 });
 
@@ -1199,6 +1248,45 @@ describe('assignLocalOwner', () => {
     await expect(new MaintenanceRequestsService(ctx).assignLocalOwner('r1', null)).rejects.toMatchObject({
       code: 'module_disabled',
     });
+  });
+
+  it('REGRESSION FIX 1: self-assignment (userId === ctx.userId) invokes notifyMaintenanceEvent ZERO times', async () => {
+    const { ctx } = build(
+      {
+        'organization_members.select': { data: { id: 'm1' }, error: null },
+        'maintenance_requests.update': {
+          data: { id: 'r1', request_number: 42, created_at: '2026-08-05T16:15:00Z', subject: 'AC broken' },
+          error: null,
+        },
+      },
+      { userId: VALID_USER_UUID, permissions: new Set(['maintenance_requests:manage']) },
+    );
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).assignLocalOwner('r1', VALID_USER_UUID);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('REGRESSION FIX 1: assigning to a different user invokes notifyMaintenanceEvent EXACTLY ONCE with event assigned', async () => {
+    const { ctx } = build(
+      {
+        'organization_members.select': { data: { id: 'm1' }, error: null },
+        'maintenance_requests.update': {
+          data: { id: 'r1', request_number: 42, created_at: '2026-08-05T16:15:00Z', subject: 'AC broken' },
+          error: null,
+        },
+      },
+      { userId: VALID_USER_UUID, permissions: new Set(['maintenance_requests:manage']) },
+    );
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).assignLocalOwner('r1', OTHER_ORG_USER_UUID);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(1);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'assigned',
+        requestId: 'r1',
+        targetUserId: OTHER_ORG_USER_UUID,
+      }),
+    );
   });
 });
 
