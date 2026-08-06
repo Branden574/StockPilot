@@ -286,3 +286,277 @@ No contract value was found unpinned.
   didn't ask for a CLI upgrade.
 - `git status --porcelain` after all seven gates and both sweep steps is still
   clean except for this new report file, confirming nothing else was touched.
+
+---
+
+# Task 25: Manual authed browser walk (the honest E2E)
+
+Branch: `feat/maintenance-requests`, HEAD `a37c064eecf6cf57d12cccef0e14d4b87b51901b`
+(clean tree at start). Run date: 2026-08-06, local stack only
+(`http://127.0.0.1:54321`, dev server `pnpm --filter web dev` on
+`http://localhost:3000`). Driven with Playwright MCP in headless Chromium. No
+Playwright CI gate exists and `location.assign` is unstubbable in real
+Chromium; this scripted walk plus the Task 14 component tests ARE the Brief
+S31 E2E.
+
+**NO-SEND posture, upheld throughout:** `window.open` was monkeypatched in
+the page context and PROVEN patched (non-native source, probe URL captured,
+zero pages opened) BEFORE every click of `Open in Outlook`. `Open in Default
+Email App` (the mailto path) was never clicked. `/m/<token>` URLs were opened
+only in browser tabs. No compose window, mail client, or external request to
+outlook.cloud.microsoft / learn4life.org / cvwest.org ever occurred (session
+network log audited: zero matches for outlook|microsoft|mailto|learn4life|cvwest).
+No email was sent or could have been sent.
+
+## Environment prep (all local)
+
+- Local stack was up (Task 24's reset). Seeded via psql + GoTrue admin API:
+  four users (`walk.requester@` / `walk.manager@` / `walk.staff2@test.local`
+  in org A "Acme Demo Co" as staff/manager/staff; `walk.outsider@test.local`
+  in new org B "Walk Org B"), one charter site for org A
+  (`Desert Cove High - DC4` — the maintenance form's Site picker reads
+  charters via `ChartersService.list()`, not locations), and the module
+  enable using the plan's exact SQL shape:
+  `update public.organization_modules set enabled = true where organization_id = <org A> and module_id = 'maintenance_requests';`
+  Org B left grandfathered OFF (verified `enabled = f`).
+- Photo fixtures: `walk-photo.heic` (real HEVC HEIF via `sips -s format heic`)
+  and `walk-photo-2.png` (320x240 PNG), in the session scratchpad.
+
+### Environment findings (not maintenance bugs, but they shaped the walk)
+
+1. **Stale local `SUPABASE_SERVICE_ROLE_KEY`** in
+   `~/Developer/stockpilot-env/apps/web/.env.local` (symlinked as
+   `apps/web/.env.local`): it is an `sb_secret_` key that does NOT match the
+   running local stack's secret. Result: every `createAdminClient()` path
+   failed while user-authed reads worked — the exact signature of the
+   2026-07-21 key-rotation outage, local edition. Symptoms observed before
+   diagnosis: photo finalize returned 400 `invalid_image` from its
+   download-failed branch (the object WAS uploaded and still existed — the
+   sniff-mismatch branch would have deleted it, which is how the branch was
+   identified), and `notifications.create_insert` RLS errors from
+   `notifyPhotoRejected`. Fix used: restarted the dev server with
+   `SUPABASE_SERVICE_ROLE_KEY`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` overridden in
+   process env (process env beats `.env.local`; no file was edited). OWNER
+   ACTION: refresh the local-stack keys in the stockpilot-env file.
+2. **Local-dev CSP blocks the browser->storage leg**: the CSP allows
+   `https://*.supabase.co` but the local stack is `http://127.0.0.1:54321`,
+   so client-side signed-URL PUTs (and the notifications poll + realtime WS)
+   are CSP-blocked in local dev. Prod URLs match the CSP; not a prod issue.
+   Workaround for the photo-upload checks: a parallel Playwright context with
+   `bypassCSP: true` sharing the same session cookies, driving the real,
+   unmodified UI. (First attempt — stripping the CSP header via route
+   interception — was abandoned: buffering the streamed document broke React
+   hydration; recorded below as the trigger of the draft-opened anomaly.)
+
+## The 20-check walk (Brief S31), plus controller checks 21-25
+
+1. **Sign in** — PASS. `/signin` as `walk.requester@test.local`, landed on
+   `/dashboard`.
+2. **Create a request** — PASS. `/dashboard/maintenance/new` (form gated by
+   module + `maintenance_requests:submit`). Save redirected to
+   `/dashboard/maintenance/<id>?review=1`; row `MR-2026-000001` created.
+3. **Custom subject typed** — PASS. "Walk E2E: HVAC compressor rattling
+   loudly".
+4. **Description typed** — PASS. Multi-sentence description (rooftop HVAC,
+   mounting bolts, fan bearings).
+5. **Site selected** — PASS. "Desert Cove High - DC4" (charter
+   `c0000000-...-00c1`). Empty-picker gotcha recorded: with no charters in
+   the org the Site select renders only "Select a site" — org needs at least
+   one charter.
+6. **Two photos uploaded, one HEIC** — PASS (via the bypassCSP context, real
+   UI, real product code end to end). HEIC was transcoded CLIENT-SIDE
+   (heic2any -> canvas pipeline) and stored as `image/webp`; the PNG stored
+   as `image/png` with sniffed dimensions 320x240. DB proof:
+   `maintenance_request_attachments` rows `walk-photo.heic | image/webp` and
+   `walk-photo-2.png | image/png | 320 | 240`. Mint -> signed PUT (master +
+   thumb) -> finalize all 200. Share link auto-minted on first photo
+   (token prefix `be79e0`, expires 2027-02-02 = 180 days). Screenshot:
+   scratchpad `walk-07-review-screen.png`.
+7. **Review screen shows all of it** — PASS. `?review=1` shows request
+   details (MR number, subject, priority, requester, site, building, room),
+   description, Photos (2) with thumbnails and per-photo signed download
+   links ("Download Photos for Outlook"), and the email preview (To/CC/
+   subject/body). The body was SHORTENED (URL budget) with an honest on-page
+   note; Copy Email Details is documented on-screen as always complete.
+8. **Exactly ONE request row exists** — PASS in the database
+   (`select count(*) from maintenance_requests` = 1; the duplicate-guard UI
+   dialog in check 25 also proves the single-draft posture). **FAIL in the
+   list UI** — see BUG 1: `/dashboard/maintenance` crashes whenever the list
+   has rows, so the "refresh the list" half of this check could not pass.
+9. **window.open patched, then click** — PASS. Patch installed in page
+   context and PROVEN first: `String(window.open)` no longer `[native code]`,
+   a probe call returned the stub object and logged INTERCEPTED, and
+   `context.pages().length` stayed 1. Then `Open in Outlook` clicked: exactly
+   one URL captured, nothing opened (still 1 page in context), success toast
+   shown ("Outlook opened with your maintenance request...").
+   Intercepted URL (share-link token REDACTED to its first 6 chars):
+
+   `https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E%3Fcc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E%26subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000001%255D%2520Walk%2520E2E%253A%2520HVAC%2520compressor%2520rattling%2520loudly%26body%3DMAINTENANCE%2520REQUEST%250A%250AStockPilot%2520Request%253A%2520MR-2026-000001%250A%250AREQUESTER%250A%250AName%253A%2520Walk%2520Requester%250ASite%253A%2520Desert%2520Cove%2520High%2520-%2520DC4%250A%250AISSUE%2520DESCRIPTION%250A%250AThe%2520rooftop%2520HVAC%2520compressor%2520above%2520Building%2520C%2520...%250A%250APHOTOS%250AView%2520request%2520photos%253A%250Ahttp%253A%252F%252Flocalhost%253A3000%252Fm%252Fbe79e0[REDACTED]%250A%250AGenerated%2520from%2520StockPilot.%250AStockPilot%2520Request%253A%2520MR-2026-000001`
+
+10. **To is double-encoded** — PASS. The URL contains, verbatim:
+    `dc4%2540learn4life.org` (inside
+    `mailto%3AFresno%2520Warehouse%2520DC4%2520%253Cdc4%2540learn4life.org%253E`).
+11. **CC in the cc field** — PASS. Verbatim:
+    `cc%3DAndrew%2520Rosas%2520%253Carosas%2540cvwest.org%253E`.
+12. **Subject param carries typed subject + MR number** — PASS. Verbatim:
+    `subject%3D%255BStockPilot%2520Maintenance%2520MR-2026-000001%255D%2520Walk%2520E2E%253A%2520HVAC%2520compressor%2520rattling%2520loudly`.
+13. **Body carries the description** — PASS ("The rooftop HVAC compressor
+    above Building C has been rattling loudly..." present in the body param;
+    body was the shortened variant, which still carries the full
+    description).
+14. **Body carries the `/m/<token>` share link** — PASS
+    (`http://localhost:3000/m/be79e0...`, token matches the DB row's prefix).
+15. **No email sent** — PASS. Nothing opened (patched stub returned a fake
+    handle; 1 page in context throughout; network log has zero external
+    mail-related requests). The draft-opened stamp is the only side effect.
+16. **Request shows `Email draft opened`** — PASS. Status badge on review
+    and detail; DB `status='draft_opened'`, `outlook_draft_opened_at` set,
+    `outlook_draft_open_count=1`; audit row
+    `maintenance_request.draft_opened` written; activity feed shows the
+    draft event.
+17. **Visible in My Requests** — **FAIL (BUG 1)**. The requester's
+    `/dashboard/maintenance` crashes to the error boundary because the list
+    now has a row. Service-level visibility is fine (the detail page renders
+    for the requester); the list UI is broken.
+18. **Manager sees it in All Requests** — **FAIL (BUG 1)**.
+    `?scope=all` as `walk.manager@` crashes identically. The manager CAN
+    open the detail URL directly (MR-2026-000001 renders, with manage-tier
+    controls), so read_all/manage RLS is proven; the list UI is broken.
+19. **Second staff CANNOT open the detail URL** — PASS. `walk.staff2@`
+    hitting the detail URL gets the 404 page (row invisible under RLS; no
+    existence leak, no 403 distinction). Staff2's own list renders fine
+    (empty — which also brackets BUG 1 to non-empty lists).
+20. **Second org gets no row** — PASS. `walk.outsider@` (org B): list shows
+    the module-not-enabled fallback (module OFF for org B), and the org-A
+    detail URL renders the same fallback — no row data, no existence leak.
+    (The brief's "detail 404s" is superseded by the module gate rendering
+    first for a module-off org; the isolation property holds. The
+    404-for-an-in-module-user case is proven by check 19.)
+
+### Controller-added checks
+
+21. **Tour from /dashboard/help** — PASS for the tour itself, **FAIL on a
+    non-empty list (BUG 1)**. The Help page lists "Maintenance requests - 5
+    steps" with a Start link -> `/dashboard/maintenance?tour=maintenance-requests`.
+    As the requester (1 row) the destination page crashes, so the tour
+    cannot render. As `walk.staff2@` (empty list) the tour DOES render its
+    step-1 card ("Report a facility or equipment issue...") and Next
+    advances to step 2 ("Start a new request...") — first runtime proof the
+    tour mounts and steps. Screenshots: scratchpad `walk-21-tour-step1.png`,
+    `walk-21-tour-step2.png`.
+22. **Module-off invisibility (org B)** — PASS. Sidebar nav contains no
+    Maintenance entry (absent, not disabled); no report-a-problem
+    affordances anywhere on the dashboard; direct `/dashboard/maintenance`
+    shows "Maintenance requests isn't enabled / This module isn't turned on
+    for your organization. / Ask an owner or admin to enable it."
+23. **Real-data `/m/<token>`** — PASS. The share URL from the REAL
+    form-created request (charter set by the form), opened in a FRESH
+    unauthenticated context: HTTP 200, renders "MR-2026-000001", the
+    subject, "Site: Desert Cove High - DC4" (the first unmocked proof of the
+    C1 charter-name chain), the description, Photos (2) with both images,
+    and the privacy note ("Internal notes are never shown here").
+    Screenshot: scratchpad `walk-23-share-page.png`.
+24. **Email input reality** — PASS. The intercepted URL's body carries the
+    REAL site name (`Site%253A%2520Desert%2520Cove%2520High%2520-%2520DC4`)
+    and the REAL MR number (`MR-2026-000001`) straight from the database
+    through the 2-hop PostgREST embeds — no nulls, values match the DB rows
+    exactly.
+25. **Duplicate + copy fallback + revoke** — PASS (all four parts).
+    - *Duplicate-draft dialog*: with persisted open-count 1, a second click
+      of `Open in Outlook` (patch re-proven after the intervening reload,
+      BEFORE the click) opened the confirm dialog — "Open another draft? / A
+      maintenance email draft was already opened for this request. Sending
+      multiple copies may create duplicate Zendesk tickets." — and NOTHING
+      was opened (zero interceptions while the dialog gated). Cancelled.
+    - *Copy fallback*: `Copy Email Details` wrote the COMPLETE email to the
+      clipboard (TO/CC/SUBJECT plus the full unshortened body: full
+      description, "PHOTOS / 2 photos were uploaded", the `/m/be79e0...`
+      link, the Zendesk reply-thread note). Content saved into a scratch
+      TEXT file (scratchpad `walk-copy-fallback.txt`) — never a mail client.
+    - *Share page in a fresh incognito context*: see check 23.
+    - *Revoke*: revoke is manage-only by design (requester panel shows
+      Copy-only; `canRevoke={false}` — matches the plan). As the manager:
+      Revoke -> confirm dialog ("The link stops granting photo access
+      immediately...") -> panel shows no active link -> the SAME
+      `/m/be79e0...` URL in a fresh unauthenticated context returns **HTTP
+      404**. Note: the detail page auto-minted a REPLACEMENT link ~250ms
+      after the revoke (new token, prefix `194576`) exactly as the confirm
+      dialog says it may; the revoked token stays dead.
+
+## BUG 1 (real, user-facing, found by this walk): non-empty maintenance list crashes
+
+`/dashboard/maintenance` renders `<Pagination ... hrefForPage={(n) => buildMaintenanceHref(...)} />`
+from the SERVER component page (`apps/web/src/app/(dashboard)/dashboard/maintenance/page.tsx:278`)
+into the `'use client'` `Pagination` (`apps/web/src/components/ui/pagination.tsx:1`).
+Passing a function across the RSC boundary throws
+`Functions cannot be passed directly to Client Components... <... page={1} hasNext={false} hrefForPage={function hrefForPage}>`
+(digest 3969804129), and the error boundary replaces the page. The pager
+block is gated on `visible.length > 0`, so: empty list renders fine, ANY
+list with rows crashes — for every persona (requester "My requests" and
+manager "All requests" both reproduced, multiple loads). This also blocks
+the tour on a non-empty list (check 21). Movements/PO-imports pass
+`hrefForPage` the same way but their server-mode pager rows are rarely
+rendered (movements defaults to instant/client mode), which is why the
+pattern never surfaced before. NOT fixed in this task per the brief —
+recorded for a fix task. Checks 8 (list half), 17, 18, and 21 (requester
+path) FAIL on this bug alone.
+
+## Anomaly investigated: one stray draft-opened stamp during environment debugging
+
+While debugging the CSP workaround (before the key fix), a route-interception
+experiment buffered the streamed document and broke React hydration on the
+MCP-driven page; several synthetic events (clicks on "Add photos",
+`setInputFiles`, a manual `change` dispatch) were delivered to that dead
+page. Immediately after the recovery reload, the dev log shows a single
+`recordMaintenanceDraftOpenedAction("5775d845-...")` invocation
+(walk-dev-server.log line 76) that stamped the row `draft_opened` at
+15:53:35 with NO audit row (the audit write needs the then-broken admin
+path) and NO click on any email button having been made. Forensics:
+- The action has exactly three entry points (the `/api/v1/.../draft-opened`
+  route — absent from the logs — and two click-gated paths in
+  `maintenance-email-action.tsx`).
+- Four controlled reproductions on healthy pages (2 plain loads of detail +
+  review with zero interaction, 2 failed-upload flows) never fired it, and
+  page loads never touch the parent row.
+- No popup, tab, or external request occurred at any point (single tab
+  throughout; network log clean).
+The stamp was reset via SQL and the REAL check-9 click later produced the
+organic stamp + audit pair. Conclusion: an artifact of delivering synthetic
+events to a hydration-broken page during environment debugging, not an
+organic product path; nothing about it involved a real window.open or any
+send. Residual uncertainty (which exact replayed event triggered it) is
+recorded honestly; it does not reproduce under any normal usage.
+
+## Explicitly NOT exercised (and why)
+
+1. **Real popup-blocked behavior beyond the stubbed probe.** The blocked
+   branch auto-fires `window.location.assign(mailtoUrl)` once per mount.
+   `location.assign` cannot be stubbed in real Chromium
+   (`Object.defineProperty` over `location` is refused), so a live
+   `window.open = () => null` probe would run an unpatched mailto
+   navigation. Per the brief this branch is verified ONLY by the Task 14
+   component tests (blocked panel copy, one-mailto-per-mount guard, both
+   recording paths).
+2. **The real mailto path (`Open in Default Email App`).** Never clicked, on
+   the same grounds: it navigates to a `mailto:` URL addressed to the REAL
+   dc4/arosas addresses and cannot be intercepted in-page. Covered by Task
+   14's component tests of `prepareMaintenanceEmail`'s mailto URL and the
+   manual-mailto handler.
+
+## Session artifacts (scratchpad only — not committed)
+
+`walk-07-review-screen.png`, `walk-21-tour-step1.png`,
+`walk-21-tour-step2.png`, `walk-23-share-page.png`,
+`walk-copy-fallback.txt`, `walk-dev-server.log`, `walk-dev-server-2.log`,
+fixtures (`walk-photo.heic`, `walk-photo-2.png`, `corrupt.png`).
+
+## Walk verdict
+
+21 of 25 checks PASS outright. Checks 8 (list half), 17, 18, and the
+requester path of 21 FAIL — all four on the single BUG 1 (server->client
+function prop crashes any non-empty maintenance list). Every email-safety
+property held: one intercepted compose URL with correct double-encoded
+recipients, subject, body, and share link; zero real opens; zero sends; the
+only side effect was the designed draft-opened stamp. The C1 charter chain,
+module gating, RLS isolation, HEIC transcode, share-link mint/expiry/revoke,
+duplicate guard, and copy fallback are all proven against real data.
