@@ -158,17 +158,43 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
     expect(b).not.toContain('Warehouse:');
     expect(b).not.toMatch(/\bnull\b/);
   });
-  it('(10) related order block renders when provided', () => {
+  it('(10) related order block renders when provided, including §8\'s delivery site + relevant item names (fix wave 2 / I2 — the two order fields the audit found missing)', () => {
     const withOrder = buildMaintenanceEmailDraft({
       ...MINIMAL_INPUT,
       relatedOrder: {
         handle: 'SO-000021',
         requestedFor: 'Room 12 teacher',
+        deliverySiteName: 'Fresno Learning Center',
+        itemNames: ['Copy paper', 'Dry erase markers'],
         url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
       },
     }).body;
     expect(withOrder).toContain('Order: SO-000021');
-    expect(withOrder).toContain('StockPilot Order: https://stockpilotusa.com/dashboard/orders/');
+    expect(withOrder).toContain('Requested for: Room 12 teacher');
+    expect(withOrder).toContain('Delivery Site: Fresno Learning Center');
+    // Placed BEFORE the StockPilot Order link line (mirrors how the
+    // relatedItem block's own Warehouse/Location fields sit before ITS
+    // link line) — pinning the exact adjacency proves the ordering, not
+    // just the lines' mere presence.
+    expect(withOrder).toContain(
+      'Items: Copy paper, Dry erase markers\nStockPilot Order: https://stockpilotusa.com/dashboard/orders/',
+    );
+  });
+  it('MUTATION GUARD (§8 / fix wave 2): Delivery Site and Items are each omitted individually when blank — never a bare label, never "null"', () => {
+    const b = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: [],
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(b).not.toContain('Delivery Site');
+    expect(b).not.toContain('Items:');
+    expect(b).not.toMatch(/\bnull\b/);
+    expect(b).toContain('Order: SO-000021\nStockPilot Order:');
   });
   it('related rental block identifies by borrower + items — never a fake R- handle (audit Q11)', () => {
     const withRental = buildMaintenanceEmailDraft({
@@ -509,6 +535,14 @@ describe('fix wave 1 (2e): related-record groups (item/order/rental) are blank-l
       relatedOrder: {
         handle: 'SO-000021',
         requestedFor: 'Room 12 teacher',
+        // Fix wave 2 (I2): left blank on purpose — this test's own job is
+        // the blank-line GROUP separator, not §8's order-field content
+        // (that's pinned separately above). Blank inputs here means neither
+        // new line renders, so 'StockPilot Order' stays the group's last
+        // line and this test's byte-pinned boundary below is unaffected by
+        // the I2 field addition.
+        deliverySiteName: null,
+        itemNames: [],
         url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
       },
       relatedRental: {

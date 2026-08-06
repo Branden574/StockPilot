@@ -65,7 +65,12 @@ describe('MaintenanceRequestForm', () => {
 
   it('(4) related item prepopulates from launch-point defaults and is shown to the user', () => {
     renderForm({ relatedItemId: '11111111-1111-1111-1111-111111111111' });
-    expect(screen.getByText(/linked record/i)).toBeInTheDocument();
+    // M3 (fix wave 2): the banner's copy was softened from an unconditional
+    // "will be included" promise to a conditional "if it matches" — the
+    // server may silently null a foreign-org id (resolveRelatedId). This
+    // match only pins that SOME pre-fill indicator renders, not the exact
+    // wording.
+    expect(screen.getByText(/related stockpilot record was pre-filled/i)).toBeInTheDocument();
   });
 
   it('(13) there is NO recipient field anywhere — To/CC are not user-editable', () => {

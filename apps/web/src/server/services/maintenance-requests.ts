@@ -60,6 +60,17 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
 const LIST_COLUMNS =
   'id, request_number, created_at, subject, status, priority, category, requester_user_id, requester_name_snapshot, local_owner_user_id, outlook_draft_opened_at, charter_id';
 
+/** Fix wave 2 (I2): caps the "relevant item names" list emailInput() builds
+ *  for a related order's §8 field list. An order can carry dozens of lines;
+ *  unlike the description (which prepareMaintenanceEmail's condense pass
+ *  trims via CONDENSED_DESCRIPTION_CHARS — packages/core/src/maintenance/
+ *  email.ts), this array is never condensed downstream, so an unbounded
+ *  list could push a routine order past the Outlook/mailto compose-link
+ *  length budget (DRAFT_URL_LIMIT) on its own. Capped here, before the
+ *  builder ever sees it, rather than in the builder — the builder has no
+ *  DB access to know how many lines existed beyond what it's handed. */
+const MAX_RELATED_ORDER_ITEM_NAMES = 10;
+
 export interface MaintenanceRequestListRow {
   id: string;
   requestNumber: number;
@@ -146,20 +157,42 @@ const COLUMN_FOR_FIELD: Record<string, string> = {
   relatedLocationId: 'related_location_id',
 };
 
-/** Fix wave 1: the same four related-id fields need the same
- *  resolveRelatedId() re-derivation in update() that create() already does
- *  (Task 17 / binding constraint 2) — the PATCH route
+/** Fix wave 1 + fix wave 2 (C1): the same shape of related-id field needs
+ *  the same resolveRelatedId() re-derivation in update() that create()
+ *  already does (Task 17 / binding constraint 2) — the PATCH route
  *  (api/v1/maintenance-requests/[id]/route.ts) forwards the body straight to
  *  update() with no re-parse, so this is the only enforcement point standing
- *  between a Bearer-token caller and a foreign-org related-record attach.
- *  Maps each camelCase field to the table resolveRelatedId() checks it
- *  against, so update()'s allow-list loop can special-case exactly these
- *  four keys without forking a second implementation of the lookup. */
-const RELATED_ID_TABLE: Record<string, 'inventory_items' | 'order_requests' | 'rentals' | 'locations'> = {
+ *  between a Bearer-token caller and a foreign-org attach. Maps each
+ *  camelCase field to the table resolveRelatedId() checks it against, so
+ *  update()'s allow-list loop can special-case exactly these six keys
+ *  without forking a second implementation of the lookup.
+ *
+ *  Fix wave 2 (C1): `charterId`/`warehouseId` joined the other four here.
+ *  They are NOT "related StockPilot records" the way item/order/rental/
+ *  location are (brief §8) — they are the request's own site/warehouse
+ *  columns — but the underlying vulnerability is identical: `charter_id`
+ *  and `warehouse_id` (migration 0314:117-118) are bare FKs with no
+ *  organization_id CHECK, `charterId`/`warehouseId` sit in the exact same
+ *  REQUESTER_EDITABLE / COLUMN_FOR_FIELD sets as the other four, and
+ *  dashboard/maintenance/new/page.tsx's `?charterId=` deep-link param only
+ *  UUID-shape-validates (`readUuidParam`), never org-scopes, before handing
+ *  it to the form as a default that persists in RHF state even when the
+ *  Site <select> renders blank for a value matching no option. Same
+ *  precedent order-requests.ts's create() already applies to
+ *  `deliveryCharterId` (re-deriving a client-supplied charter id against
+ *  this org before trusting it, order-requests.ts:894-906) — this is that
+ *  same discipline, generalized through the existing helper instead of a
+ *  second bespoke check. */
+const RELATED_ID_TABLE: Record<
+  string,
+  'inventory_items' | 'order_requests' | 'rentals' | 'locations' | 'charters' | 'warehouses'
+> = {
   relatedItemId: 'inventory_items',
   relatedOrderRequestId: 'order_requests',
   relatedRentalId: 'rentals',
   relatedLocationId: 'locations',
+  charterId: 'charters',
+  warehouseId: 'warehouses',
 };
 
 export class MaintenanceRequestsService {
@@ -173,16 +206,25 @@ export class MaintenanceRequestsService {
     return can(this.ctx, 'maintenance_requests:read_all') || can(this.ctx, 'maintenance_requests:manage');
   }
 
-  /** Task 17 / binding constraint 2: re-derives a client-supplied related-
-   *  record id against THIS org before it is ever attached to a request.
-   *  Returns the id unchanged when a row exists in `table` with a matching
-   *  `organization_id` — otherwise null. Never throws on a
-   *  foreign/nonexistent id (that is the intended degrade-gracefully
-   *  outcome, not an error); a genuine read failure still surfaces as
-   *  internal_error, matching every other read in this file. Skips the
-   *  round trip entirely when no id was supplied. */
+  /** Task 17 / binding constraint 2 (extended fix wave 2 / C1 to
+   *  `charters`/`warehouses`): re-derives a client-supplied id against THIS
+   *  org before it is ever attached to a request. Returns the id unchanged
+   *  when a row exists in `table` with a matching `organization_id` —
+   *  otherwise null. Never throws on a foreign/nonexistent id (that is the
+   *  intended degrade-gracefully outcome, not an error); a genuine read
+   *  failure still surfaces as internal_error, matching every other read in
+   *  this file. Skips the round trip entirely when no id was supplied.
+   *
+   *  M2: deliberately checks ONLY `organization_id` + `id`, never a
+   *  status/archived/deleted_at column on `table` — attaching an archived
+   *  item, a cancelled order, a closed rental, or an inactive charter/
+   *  warehouse that still belongs to THIS org is allowed on purpose. A
+   *  maintenance request about equipment can easily outlive the record it
+   *  references (the item gets archived while the ticket is still open),
+   *  and the org boundary is the only property this helper exists to
+   *  enforce. */
   private async resolveRelatedId(
-    table: 'inventory_items' | 'order_requests' | 'rentals' | 'locations',
+    table: 'inventory_items' | 'order_requests' | 'rentals' | 'locations' | 'charters' | 'warehouses',
     id: string | null | undefined,
   ): Promise<string | null> {
     if (!id) return null;
@@ -239,13 +281,26 @@ export class MaintenanceRequestsService {
     // request still saves — only that one attachment is dropped), it never
     // throws and it is never inserted verbatim. Same defense-in-depth shape
     // as assignLocalOwner's organization_members re-check (I2) below.
-    const [profileRes, relatedItemId, relatedOrderRequestId, relatedRentalId, relatedLocationId] =
+    //
+    // Fix wave 2 (C1): charterId/warehouseId get the IDENTICAL treatment.
+    // The new-request page's `?charterId=` deep-link param is exactly as
+    // untrustworthy as `?itemId=` — readUuidParam() only checks UUID shape,
+    // never org membership — and maintenance-request-form.tsx's Site
+    // <select> is `form.watch('charterId')`-controlled, so a value matching
+    // no rendered option still stays in RHF state and submits verbatim. A
+    // foreign-org charterId reaching this far unresolved would previously
+    // have persisted onto `charter_id`, which the share-link page later
+    // renders on an ANONYMOUS surface (maintenance-share-links.ts) — the
+    // reachable cross-tenant leak this fix wave closes.
+    const [profileRes, relatedItemId, relatedOrderRequestId, relatedRentalId, relatedLocationId, charterId, warehouseId] =
       await Promise.all([
         this.db.from('user_profiles').select('full_name, email').eq('id', this.ctx.userId).maybeSingle(),
         this.resolveRelatedId('inventory_items', v.relatedItemId),
         this.resolveRelatedId('order_requests', v.relatedOrderRequestId),
         this.resolveRelatedId('rentals', v.relatedRentalId),
         this.resolveRelatedId('locations', v.relatedLocationId),
+        this.resolveRelatedId('charters', v.charterId),
+        this.resolveRelatedId('warehouses', v.warehouseId),
       ]);
     const profile = profileRes.data;
     const fullName = (profile?.full_name as string | null | undefined)?.trim();
@@ -263,8 +318,11 @@ export class MaintenanceRequestsService {
         description: v.description,
         category: v.category ?? null,
         priority: v.priority,
-        charter_id: v.charterId ?? null,
-        warehouse_id: v.warehouseId ?? null,
+        // Fix wave 2 (C1): the RESOLVED (org-checked) values, never
+        // `v.charterId ?? null` / `v.warehouseId ?? null` verbatim — see the
+        // Promise.all comment above.
+        charter_id: charterId,
+        warehouse_id: warehouseId,
         building: v.building ?? null,
         room_or_area: v.roomOrArea ?? null,
         department: v.department ?? null,
@@ -446,15 +504,18 @@ export class MaintenanceRequestsService {
       throw new ServiceError('validation_error', parsed.error.issues[0]?.message ?? 'Please check the form.');
     }
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    // Fix wave 1: related-id fields are collected separately rather than
-    // written straight into `updates` like every other field below — each
-    // one still needs the SAME org re-derivation create() already applies
+    // Fix wave 1 (extended fix wave 2 / C1 to charterId/warehouseId):
+    // related-id fields are collected separately rather than written
+    // straight into `updates` like every other field below — each one
+    // still needs the SAME org re-derivation create() already applies
     // (Task 17 / binding constraint 2) before it can be trusted. A patched
-    // relatedItemId/relatedOrderRequestId/relatedRentalId/relatedLocationId
-    // is exactly as untrustworthy as one supplied at create time: the
-    // column's FK only proves the row exists SOMEWHERE, never that it
-    // belongs to THIS org, and the PATCH route forwards this body with no
-    // re-parse of its own.
+    // relatedItemId/relatedOrderRequestId/relatedRentalId/relatedLocationId/
+    // charterId/warehouseId is exactly as untrustworthy as one supplied at
+    // create time: the column's FK only proves the row exists SOMEWHERE,
+    // never that it belongs to THIS org, and the PATCH route forwards this
+    // body with no re-parse of its own. charterId/warehouseId reach this
+    // loop automatically once RELATED_ID_TABLE lists them — no separate
+    // code path to add here.
     const pendingRelatedIds: { key: string; table: (typeof RELATED_ID_TABLE)[string]; value: unknown }[] = [];
     for (const [key, value] of Object.entries(parsed.data as Record<string, unknown>)) {
       if (value === undefined) continue;
@@ -837,16 +898,40 @@ export class MaintenanceRequestsService {
       // defines requester_name/requester_email/requester_user_id) — the
       // brief's sketch named the wrong column; requester_name is the real
       // "who this order is for" field or-requests.ts reads elsewhere.
+      //
+      // Fix wave 2 (I2): extended with §8's remaining two order fields, in
+      // the SAME query (one extended embed, not a second round trip) — the
+      // same 2-hop shape the relatedRental block below already uses.
+      // `charters!delivery_charter_id(name)` (0110_orders_delivery_charter.
+      // sql:27-29) is the delivery site; `order_request_lines(inventory_
+      // items(name))` (0044_order_requests.sql:83) is the relevant item
+      // names.
       const { data: order } = await this.db
         .from('order_requests')
-        .select('id, order_number, requester_name')
+        .select(
+          'id, order_number, requester_name, charters!delivery_charter_id(name), order_request_lines(inventory_items(name))',
+        )
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', detail.relatedOrderRequestId)
         .maybeSingle();
       if (order) {
+        // Cast through `unknown` first: with Database=any, supabase-js's
+        // select-string parser infers a structurally different (and
+        // incompatible) shape for a nested embed than the real PostgREST
+        // response — same reason the relatedItem/relatedRental blocks in
+        // this method cast the same way.
+        const deliveryCharter = (order.charters as unknown as { name: string } | null) ?? null;
+        const lines =
+          (order.order_request_lines as unknown as { inventory_items: { name: string } | null }[] | null) ?? [];
+        const itemNames = lines
+          .map((l) => l.inventory_items?.name)
+          .filter((n): n is string => Boolean(n))
+          .slice(0, MAX_RELATED_ORDER_ITEM_NAMES);
         relatedOrder = {
           handle: formatOrderNumber(order.order_number as number | null) ?? (order.id as string).slice(0, 8).toUpperCase(),
           requestedFor: (order.requester_name as string | null) ?? null,
+          deliverySiteName: deliveryCharter?.name ?? null,
+          itemNames,
           url: `${APP_URL}/dashboard/orders/${order.id}`,
         };
       }

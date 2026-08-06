@@ -261,12 +261,19 @@ describe('create', () => {
  *  degrade gracefully instead — no throw, no cross-org attach, request
  *  still saves. relatedLocationId has no UI producer yet but shares the
  *  exact same insert path, so it gets the same guard.
+ *
+ *  Fix wave 2 (C1): charterId/warehouseId (0314:117-118) are the SAME
+ *  shape — bare cross-org FKs, reachable through the new-request page's own
+ *  `?charterId=` deep-link param (readUuidParam only checks UUID shape) —
+ *  so they get the identical describe-block treatment below.
  */
 describe('create — related-record ids are re-derived against THIS org, never trusted verbatim', () => {
   const ITEM_UUID = '44444444-4444-4444-8444-444444444444';
   const ORDER_UUID = '55555555-5555-4555-8555-555555555555';
   const RENTAL_UUID = '66666666-6666-4666-8666-666666666666';
   const LOCATION_UUID = '77777777-7777-4777-8777-777777777777';
+  const CHARTER_UUID = '88888888-8888-4888-8888-888888888888';
+  const WAREHOUSE_UUID = '99999999-9999-4999-8999-999999999999';
 
   it('attaches relatedItemId when the item exists in THIS org, and the org filter is genuinely applied (not just the returned row)', async () => {
     const { stub, ctx } = build({
@@ -390,6 +397,70 @@ describe('create — related-record ids are re-derived against THIS org, never t
     ).toBeNull();
   });
 
+  // Fix wave 2 (C1a). charterId/warehouseId are NOT "related StockPilot
+  // records" (brief §8) — they are the request's own site/warehouse
+  // columns — but the vulnerability shape is identical: a bare cross-org FK
+  // (0314:117-118), reachable via the new-request page's `?charterId=`
+  // deep-link param, which only UUID-shape-validates before handing it to
+  // the form as a default the Site <select> keeps in RHF state even when
+  // it renders blank. THE LEAK this closes: a foreign-org charterId
+  // persisting onto charter_id, later read back by
+  // maintenance-share-links.ts's ADMIN-client embed and rendered on the
+  // UNAUTHENTICATED /m/[token] page (C1's other half — see
+  // maintenance-share-links.test.ts for that layer's own tests).
+  it('MUTATION SELF-CHECK (C1): attaches charterId when it exists in THIS org, drops a FOREIGN-org charterId to null — never attached, no throw, the request still saves', async () => {
+    const inOrg = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'charters.select': { data: { id: CHARTER_UUID }, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(inOrg.ctx).create({ ...VALID, charterId: CHARTER_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>).charter_id,
+    ).toBe(CHARTER_UUID);
+    // I4: without these recorded, this test would still pass even if the
+    // org filter were dropped entirely from resolveRelatedId's lookup.
+    expect(inOrg.stub.chainArgs.get('charters.select')).toContainEqual(['organization_id', inOrg.ctx.organizationId]);
+    expect(inOrg.stub.chainArgs.get('charters.select')).toContainEqual(['id', CHARTER_UUID]);
+
+    const foreign = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      // Not found under THIS org's filter — stands in for "exists, but in a
+      // different org" exactly as well as "never existed" (the mock
+      // ignores filters when deciding what to return), matching every
+      // other cross-org test in this describe block.
+      'charters.select': { data: null, error: null },
+      'maintenance_requests.insert': { data: { id: 'r2', request_number: 2, created_at: 't' }, error: null },
+    });
+    const res = await new MaintenanceRequestsService(foreign.ctx).create({ ...VALID, charterId: CHARTER_UUID });
+    expect(res.id).toBe('r2');
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>).charter_id,
+    ).toBeNull();
+  });
+
+  it('MUTATION SELF-CHECK (C1): attaches warehouseId when it exists in THIS org, drops a FOREIGN-org warehouseId to null', async () => {
+    const inOrg = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'warehouses.select': { data: { id: WAREHOUSE_UUID }, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(inOrg.ctx).create({ ...VALID, warehouseId: WAREHOUSE_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>).warehouse_id,
+    ).toBe(WAREHOUSE_UUID);
+
+    const foreign = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'warehouses.select': { data: null, error: null },
+      'maintenance_requests.insert': { data: { id: 'r2', request_number: 2, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(foreign.ctx).create({ ...VALID, warehouseId: WAREHOUSE_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>).warehouse_id,
+    ).toBeNull();
+  });
+
   it('never queries a related-record table at all when no id was supplied — VALID alone stays a single-round-trip create', async () => {
     const { stub, ctx } = build({
       'user_profiles.select': { data: PROFILE, error: null },
@@ -400,6 +471,10 @@ describe('create — related-record ids are re-derived against THIS org, never t
     expect(stub.chainArgs.has('order_requests.select')).toBe(false);
     expect(stub.chainArgs.has('rentals.select')).toBe(false);
     expect(stub.chainArgs.has('locations.select')).toBe(false);
+    // Fix wave 2 (C1): charterId/warehouseId join the same no-op-when-absent
+    // contract — VALID carries neither, so neither table is even queried.
+    expect(stub.chainArgs.has('charters.select')).toBe(false);
+    expect(stub.chainArgs.has('warehouses.select')).toBe(false);
   });
 });
 
@@ -677,6 +752,8 @@ describe('update — related-record ids are re-derived against THIS org, never t
   const ORDER_UUID = '55555555-5555-4555-8555-555555555555';
   const RENTAL_UUID = '66666666-6666-4666-8666-666666666666';
   const LOCATION_UUID = '77777777-7777-4777-8777-777777777777';
+  const CHARTER_UUID = '88888888-8888-4888-8888-888888888888';
+  const WAREHOUSE_UUID = '99999999-9999-4999-8999-999999999999';
 
   it('a FOREIGN-org relatedItemId is dropped to null in the persisted patch — no throw, the rest of the patch still applies', async () => {
     const { stub, ctx } = build(
@@ -806,6 +883,78 @@ describe('update — related-record ids are re-derived against THIS org, never t
     expect(stub.chainArgs.has('order_requests.select')).toBe(false);
     expect(stub.chainArgs.has('rentals.select')).toBe(false);
     expect(stub.chainArgs.has('locations.select')).toBe(false);
+    // Fix wave 2 (C1): charterId/warehouseId join the same no-op-when-absent
+    // contract.
+    expect(stub.chainArgs.has('charters.select')).toBe(false);
+    expect(stub.chainArgs.has('warehouses.select')).toBe(false);
+  });
+
+  // Fix wave 2 (C1a) — PATCH is the WIDER exposure than create()'s
+  // deep-link: this route forwards the body with no re-parse of its own
+  // (see the route's own doc comment), so any Bearer-token holder patching
+  // their own (or, as a manager, any) request could already carry a
+  // foreign-org charterId/warehouseId straight through, no crafted deep-link
+  // required.
+  it('MUTATION SELF-CHECK (C1): a FOREIGN-org charterId is dropped to null in the persisted patch — no throw, the rest of the patch still applies', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'charters.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', {
+      subject: 'Still broken please fix',
+      charterId: CHARTER_UUID,
+    });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.charter_id).toBeNull();
+    expect(patch.subject).toBe('Still broken please fix');
+  });
+
+  it('a VALID same-org charterId persists unchanged, and the org filter is genuinely applied (not just the returned row)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'charters.select': { data: { id: CHARTER_UUID }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { charterId: CHARTER_UUID });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.charter_id).toBe(CHARTER_UUID);
+    expect(stub.chainArgs.get('charters.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('charters.select')).toContainEqual(['id', CHARTER_UUID]);
+  });
+
+  it('MUTATION SELF-CHECK (C1): a FOREIGN-org warehouseId is dropped to null; a VALID same-org warehouseId persists unchanged', async () => {
+    const foreign = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'warehouses.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(foreign.ctx).update('r1', { warehouseId: WAREHOUSE_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>).warehouse_id,
+    ).toBeNull();
+
+    const inOrg = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'warehouses.select': { data: { id: WAREHOUSE_UUID }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(inOrg.ctx).update('r1', { warehouseId: WAREHOUSE_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>).warehouse_id,
+    ).toBe(WAREHOUSE_UUID);
   });
 });
 
@@ -1335,11 +1484,20 @@ describe('emailInput', () => {
     });
   });
 
-  it('snapshots the related order via requester_name (0044_order_requests.sql — real column, not "requested_for")', async () => {
-    const { ctx } = build({
+  it('snapshots the related order via requester_name (0044_order_requests.sql — real column, not "requested_for"), plus §8\'s delivery site + relevant item names (fix wave 2 / I2)', async () => {
+    const { stub, ctx } = build({
       'maintenance_requests.select': { data: { ...BASE_ROW, related_order_request_id: 'o1' }, error: null },
       'order_requests.select': {
-        data: { id: 'o1', order_number: 49, requester_name: 'Ms. Rivera' },
+        data: {
+          id: 'o1',
+          order_number: 49,
+          requester_name: 'Ms. Rivera',
+          charters: { name: 'Fresno Learning Center' },
+          order_request_lines: [
+            { inventory_items: { name: 'Copy paper' } },
+            { inventory_items: { name: 'Dry erase markers' } },
+          ],
+        },
         error: null,
       },
       'organizations.select': { data: { timezone: null }, error: null },
@@ -1348,8 +1506,74 @@ describe('emailInput', () => {
     expect(input.relatedOrder).toEqual({
       handle: 'SO-000049',
       requestedFor: 'Ms. Rivera',
+      deliverySiteName: 'Fresno Learning Center',
+      itemNames: ['Copy paper', 'Dry erase markers'],
       url: expect.stringMatching(/\/dashboard\/orders\/o1$/),
     });
+    // I3-style filter pin: this is still the ONE order_requests query (an
+    // extended embed, not a second round trip) — org + id scoping intact.
+    expect(stub.chainArgs.get('order_requests.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('order_requests.select')).toContainEqual(['id', 'o1']);
+  });
+
+  it('MUTATION SELF-CHECK (I2): an order with no delivery charter and no lines degrades to null site / empty item list — never throws, never [object Object]', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_order_request_id: 'o1' }, error: null },
+      'order_requests.select': {
+        data: { id: 'o1', order_number: 49, requester_name: 'Ms. Rivera', charters: null, order_request_lines: [] },
+        error: null,
+      },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(input.relatedOrder).toEqual({
+      handle: 'SO-000049',
+      requestedFor: 'Ms. Rivera',
+      deliverySiteName: null,
+      itemNames: [],
+      url: expect.stringMatching(/\/dashboard\/orders\/o1$/),
+    });
+  });
+
+  it('MUTATION GUARD (I2): a line whose item was deleted (inventory_items null) is skipped, never rendered as a blank/undefined name', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_order_request_id: 'o1' }, error: null },
+      'order_requests.select': {
+        data: {
+          id: 'o1',
+          order_number: 49,
+          requester_name: 'Ms. Rivera',
+          charters: null,
+          order_request_lines: [{ inventory_items: null }, { inventory_items: { name: 'Copy paper' } }],
+        },
+        error: null,
+      },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(input.relatedOrder?.itemNames).toEqual(['Copy paper']);
+  });
+
+  it('MUTATION GUARD (I2): the item-name list is capped at MAX_RELATED_ORDER_ITEM_NAMES (10) — a 15-line order still hands the builder exactly 10 names', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_order_request_id: 'o1' }, error: null },
+      'order_requests.select': {
+        data: {
+          id: 'o1',
+          order_number: 49,
+          requester_name: 'Ms. Rivera',
+          charters: null,
+          order_request_lines: Array.from({ length: 15 }, (_, i) => ({
+            inventory_items: { name: `Item ${i + 1}` },
+          })),
+        },
+        error: null,
+      },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(input.relatedOrder?.itemNames).toHaveLength(10);
+    expect(input.relatedOrder?.itemNames).toEqual(Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`));
   });
 
   it('snapshots the related rental via rental_lines -> inventory_items (0131_rentals.sql — real table is rental_lines, not rental_items)', async () => {

@@ -84,7 +84,18 @@ export interface MaintenanceEmailInput {
     locationName: string | null;
     url: string | null;
   } | null;
-  relatedOrder: { handle: string; requestedFor: string | null; url: string | null } | null;
+  relatedOrder: {
+    handle: string;
+    requestedFor: string | null;
+    /** Fix wave 2 (I2) — master brief §8's order field list is "order
+     *  number, requester, delivery site, relevant item names, StockPilot
+     *  order link"; this and `itemNames` were the two missing fields. */
+    deliverySiteName: string | null;
+    /** Capped BEFORE it ever reaches this builder — see
+     *  maintenance-requests.ts's emailInput() for where and why. */
+    itemNames: string[];
+    url: string | null;
+  } | null;
   relatedRental: { itemNames: string[]; borrowerName: string | null; url: string | null } | null;
   photoCount: number;
   shareUrl: string | null;
@@ -292,6 +303,15 @@ export function buildMaintenanceEmailDraft(
         [
           line('Order', input.relatedOrder.handle),
           line('Requested for', input.relatedOrder.requestedFor),
+          // Fix wave 2 (I2) — §8's remaining two order fields, inserted
+          // BEFORE the StockPilot Order link line (mirroring how the
+          // relatedItem block above was extended with Warehouse/Location
+          // before ITS own StockPilot Item link line) so the byte-pinned
+          // "StockPilot Order: ...\n\nRental of: ..." group-boundary test
+          // (email.test.ts) stays true: StockPilot Order remains the LAST
+          // line of this group either way.
+          line('Delivery Site', input.relatedOrder.deliverySiteName),
+          line('Items', input.relatedOrder.itemNames.filter(Boolean).join(', ') || null),
           line('StockPilot Order', input.relatedOrder.url),
         ]
           .filter((l): l is string => Boolean(l))

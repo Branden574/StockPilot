@@ -355,6 +355,39 @@ export class MaintenanceShareLinksService {
 }
 
 /**
+ * Fix wave 2 (C1, layer b — defense in depth). Resolves a charter's NAME
+ * through a query that is ITSELF `organization_id`-scoped, never through an
+ * embed hanging off `maintenance_requests` (the OLD `charters!charter_id
+ * (name)` shape this replaced). Under the ADMIN client (RLS bypassed) a
+ * PostgREST embed follows the `charter_id` FK regardless of org — the outer
+ * `.eq('organization_id', ...)` on the `maintenance_requests` read scopes
+ * only THAT row, never the embedded `charters` row it points at. So even
+ * after layer (a)'s fix (MaintenanceRequestsService now re-derives
+ * charterId against org on every create/update), a row written BEFORE this
+ * fix shipped could still carry a foreign-org `charter_id`, and an embed
+ * would still hand this ANONYMOUS page's visitor another tenant's site
+ * name. A second, independently `organization_id`-scoped lookup cannot leak
+ * it: a `charter_id` belonging to a different org simply matches no row
+ * here and degrades to null — the same "unknown = null" posture every other
+ * lookup in this module already uses, never a thrown error (a charter
+ * lookup failure must not turn an otherwise-valid share link into a 404).
+ */
+async function resolveOrgScopedCharterName(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  charterId: string | null,
+): Promise<string | null> {
+  if (!charterId) return null;
+  const { data } = await admin
+    .from('charters')
+    .select('name')
+    .eq('organization_id', organizationId)
+    .eq('id', charterId)
+    .maybeSingle();
+  return (data as { name?: string } | null)?.name ?? null;
+}
+
+/**
  * Anonymous resolution — module-scoped function, no ServiceContext, because
  * the `/m/<token>` visitor has no StockPilot session at all. Builds on the
  * single resolver funnel (`resolveActiveShareRequest`) and returns an
@@ -372,7 +405,10 @@ export class MaintenanceShareLinksService {
  * RLS with. Every subsequent query is scoped by the RESOLVED link's OWN
  * `organization_id` + `maintenance_request_id` — never by anything else —
  * so a caller can never widen the query past the single request the token
- * actually names.
+ * actually names. `siteName` specifically goes through
+ * `resolveOrgScopedCharterName` (fix wave 2 / C1) rather than an embed on
+ * this SELECT — see that function's own doc comment for why an embed here
+ * is a cross-tenant disclosure, not just a style preference.
  */
 export async function resolveMaintenanceShareToken(
   token: string,
@@ -383,27 +419,25 @@ export async function resolveMaintenanceShareToken(
   const admin = createAdminClient();
   const { data: req } = await admin
     .from('maintenance_requests')
-    .select('request_number, created_at, subject, description, charters!charter_id(name)')
+    .select('request_number, created_at, subject, description, charter_id')
     .eq('id', resolved.maintenanceRequestId)
     .eq('organization_id', resolved.organizationId)
     .maybeSingle();
   if (!req) return null;
   const reqRow = req as Record<string, unknown>;
 
-  const attachments = await fetchValidAttachments(
-    admin,
-    resolved.organizationId,
-    resolved.maintenanceRequestId,
-  );
+  const [siteName, attachments] = await Promise.all([
+    resolveOrgScopedCharterName(admin, resolved.organizationId, (reqRow.charter_id as string | null) ?? null),
+    fetchValidAttachments(admin, resolved.organizationId, resolved.maintenanceRequestId),
+  ]);
   if (attachments === null) return null;
 
-  const charter = reqRow.charters as { name?: string } | null;
   return {
     requestNumber:
       formatMaintenanceRequestNumber(reqRow.request_number as number, reqRow.created_at as string) ?? 'MR',
     subject: reqRow.subject as string,
     description: reqRow.description as string,
-    siteName: charter?.name ?? null,
+    siteName,
     createdAt: reqRow.created_at as string,
     photos: attachments.map((a) => ({ filename: a.safe_filename })),
   };

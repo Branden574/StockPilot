@@ -530,12 +530,18 @@ describe('resolveMaintenanceShareToken', () => {
     active: true,
     expires_at: futureIso,
   };
+  // Fix wave 2 (C1b): `charter_id` is the raw FK column, never an embedded
+  // `charters` object — resolveMaintenanceShareToken resolves the site name
+  // through a SEPARATE, organization_id-scoped query
+  // (resolveOrgScopedCharterName), never through an embed on this row. See
+  // the "siteName resolution" describe block below for the tests proving
+  // that separation actually holds under a foreign-org charter_id.
   const REQ_ROW = {
     request_number: 42,
     created_at: '2026-08-01T12:00:00Z',
     subject: 'AC not working in Room 204',
     description: 'Blowing warm air since yesterday afternoon.',
-    charters: { name: 'Fresno DC4' },
+    charter_id: 'charter-1',
   };
 
   it('rejects a malformed token shape before ever touching the admin client', async () => {
@@ -720,6 +726,69 @@ describe('resolveMaintenanceShareToken', () => {
       'maintenance_request_attachments.select': { data: [], error: null },
     });
     await expect(resolveMaintenanceShareToken(TOKEN)).resolves.not.toBeNull();
+  });
+
+  /**
+   * Fix wave 2 (C1b — defense in depth at the READ). The OLD implementation
+   * embedded `charters!charter_id(name)` straight onto the
+   * `maintenance_requests` select: under the ADMIN client, an embed follows
+   * the `charter_id` FK regardless of org — the outer
+   * `.eq('organization_id', ...)` scopes only the `maintenance_requests`
+   * ROW, never the embedded `charters` row it points at. Layer (a)
+   * (MaintenanceRequestsService re-deriving charterId against org on every
+   * create/update, see maintenance-requests.test.ts's own C1 describe
+   * blocks) stops NEW foreign-org attaches, but a row written BEFORE that
+   * fix shipped could already carry a foreign-org charter_id — these tests
+   * simulate exactly that pre-fix row and prove the READ itself cannot leak
+   * it, independent of whether the WRITE side was ever patched.
+   */
+  describe('siteName resolution is org-scoped at the READ itself, independent of how charter_id got there (fix wave 2 / C1b)', () => {
+    it('resolves siteName through a SECOND, organization_id-scoped charters query — chainArgs-pinned so dropping that scoping would be caught even though the mock is otherwise filter-blind', async () => {
+      const adminStub = buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': { data: REQ_ROW, error: null },
+        'maintenance_request_attachments.select': { data: [], error: null },
+        'charters.select': { data: { name: 'Fresno DC4' }, error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.siteName).toBe('Fresno DC4');
+      const args = adminStub.chainArgs.get('charters.select')!;
+      expect(args).toContainEqual(['organization_id', LINK_ORG]);
+      expect(args).toContainEqual(['id', REQ_ROW.charter_id]);
+    });
+
+    it('C1 FIX — THE anonymous-page cross-tenant leak this closes: even when the maintenance_requests read carries an embedded charter name for a FOREIGN org (the exact shape the OLD `charters!charter_id(name)` embed would still produce for a pre-fix row, since an embed follows the FK regardless of org), the code never reads it — siteName comes ONLY from the org-scoped second query, which correctly finds no row for a charter_id belonging to another org', async () => {
+      buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': {
+          // Simulates exactly what `charters!charter_id(name)` would still
+          // return under the OLD implementation for a charter_id belonging
+          // to a DIFFERENT org than `resolved.organizationId` (LINK_ORG) —
+          // present on the row as if PostgREST had embedded it, unscoped.
+          data: { ...REQ_ROW, charters: { name: 'Some Other Tenant HQ' } },
+          error: null,
+        },
+        'maintenance_request_attachments.select': { data: [], error: null },
+        // The org-scoped charters lookup legitimately finds NOTHING for
+        // this charter_id under LINK_ORG — it belongs to another org. This
+        // is the mechanism that makes the fix work.
+        'charters.select': { data: null, error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.siteName).toBeNull();
+      expect(JSON.stringify(res)).not.toContain('Some Other Tenant HQ');
+    });
+
+    it('never queries charters at all when the request has no charter_id', async () => {
+      const adminStub = buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': { data: { ...REQ_ROW, charter_id: null }, error: null },
+        'maintenance_request_attachments.select': { data: [], error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.siteName).toBeNull();
+      expect(adminStub.chainArgs.has('charters.select')).toBe(false);
+    });
   });
 });
 

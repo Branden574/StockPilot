@@ -196,7 +196,15 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
 
       {hasLinkedRecord ? (
         <p className="rounded-md border border-dashed p-2 text-sm text-muted-foreground">
-          Linked record attached. The related StockPilot record will be included in the email automatically.
+          {/* M3: this banner only reflects what was LAUNCHED WITH, never
+              what the server actually kept — create() re-derives the id
+              against this org (resolveRelatedId) and silently drops it to
+              null on a mismatch, so an unconditional "will be included"
+              promise here can be wrong. "If it matches" makes that
+              possibility explicit instead of guaranteeing an attach the
+              server may not perform. */}
+          A related StockPilot record was pre-filled. If it matches a record in your organization, it will be
+          included in the email automatically.
         </p>
       ) : null}
 

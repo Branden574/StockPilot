@@ -108,10 +108,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
  *
  * Because this route forwards the body verbatim, update() is also the ONLY
  * place a patched relatedItemId/relatedOrderRequestId/relatedRentalId/
- * relatedLocationId gets re-derived against this org (resolveRelatedId, fix
- * wave 1) — do not "optimize" that resolution away as redundant with the
- * DB's bare FK, which only proves the row exists somewhere, not that it
- * belongs to this caller's org.
+ * relatedLocationId/charterId/warehouseId (all SIX, as of fix wave 2 / C1 —
+ * charterId/warehouseId joined the original four) gets re-derived against
+ * this org (resolveRelatedId, fix wave 1) — do not "optimize" that
+ * resolution away as redundant with the DB's bare FK, which only proves the
+ * row exists somewhere, not that it belongs to this caller's org.
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
