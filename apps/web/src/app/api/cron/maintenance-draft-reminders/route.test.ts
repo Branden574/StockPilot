@@ -93,6 +93,11 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
   });
 
   it('stamps draft_reminder_sent_at BEFORE createNotification and pins the eligibility query shape', async () => {
+    // FIX 1: Pin the 24h cutoff magnitude using fake timers
+    const fixedTime = new Date('2026-08-06T12:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+
     const rows = [draftRow()];
     const stub = stubFor(rows);
     adminHolder.client = stub.client;
@@ -108,7 +113,9 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     const selectArgs = stub.chainArgs.get('maintenance_requests.select') ?? [];
     expect(selectArgs[selectChain!.indexOf('eq')]).toEqual(['status', 'saved']);
     expect(selectArgs[selectChain!.indexOf('lt')]?.[0]).toBe('created_at');
-    expect(typeof selectArgs[selectChain!.indexOf('lt')]?.[1]).toBe('string');
+    // Pin the exact 24h cutoff: fixed time minus 24 hours
+    const expectedCutoff = new Date(fixedTime.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    expect(selectArgs[selectChain!.indexOf('lt')]?.[1]).toBe(expectedCutoff);
     expect(selectArgs[3]).toEqual(['draft_reminder_sent_at', null]);
     expect(selectArgs[4]).toEqual(['archived_at', null]);
     expect(selectArgs[5]).toEqual(['cancelled_at', null]);
@@ -133,6 +140,8 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
       userId: 'user-req',
       link: '/dashboard/maintenance/mr-1',
     });
+
+    vi.useRealTimers();
   });
 
   it('sends NOTHING when the guarded update matches 0 rows (another instance already won)', async () => {
@@ -195,5 +204,43 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
 
     await GET(buildRequest('Bearer test-cron-secret'));
     expect(createNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('FIX 2: null-requester guard—rows with no requester_user_id are stamped but produce zero notifications (continue, not abort)', async () => {
+    // Two rows: first has null requester, second is valid.
+    // Proves: (1) null-requester row gets stamped (update called), (2) no notification for it,
+    // (3) loop continues to next row, (4) second row DOES get notified.
+    const nullRequesterRow = draftRow({ id: 'mr-no-req', requester_user_id: null });
+    const validRow = draftRow({ id: 'mr-valid', requester_user_id: 'user-valid' });
+    const rows = [nullRequesterRow, validRow];
+
+    let updateCount = 0;
+    const stub = stubFor(rows, {
+      'maintenance_requests.update': () => {
+        updateCount++;
+        callOrder.push('update');
+        // Return the row that matches by id in the iteration.
+        const currentId = rows[updateCount - 1]?.id ?? 'mr-1';
+        return { data: [{ id: currentId }], error: null };
+      },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+
+    // Both rows should have been stamped (update called twice).
+    expect(updateCount).toBe(2);
+
+    // But only the valid row should trigger a notification (1 call, not 2).
+    expect(createNotificationMock).toHaveBeenCalledTimes(1);
+    const call = createNotificationMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.userId).toBe('user-valid');
+    expect(call.organizationId).toBe('org-1');
+
+    // Call order proves: stamp #1 (null-req row) → stamp #2 (valid row) → notify (valid only).
+    expect(callOrder).toContain('update');
+    expect(callOrder[callOrder.length - 1]).toBe('notify');
   });
 });
