@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { isSharePath } from '@/lib/share-paths';
 
 /**
  * Last-resort error boundary. Triggers when even the root layout itself
@@ -32,7 +33,9 @@ export default function GlobalError({
         body: JSON.stringify({
           message: error?.message,
           digest: error?.digest,
-          path: window.location.pathname,
+          // Share pages carry the token in the pathname; never ship it to the
+          // error webhook (GC 27). Mirrors the same guard in error.tsx.
+          path: isSharePath(window.location.pathname) ? null : window.location.pathname,
           boundary: 'global-error',
         }),
         keepalive: true,
