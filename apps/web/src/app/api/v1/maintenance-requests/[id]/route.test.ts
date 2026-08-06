@@ -208,6 +208,15 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
     expect(body.emailInput.shareUrl).toBeNull();
   });
 
+  it('surfaces a non-ServiceError failure from the share-link mint as 500, never a silent degraded read', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: true } }) as never);
+    ensureActiveLink.mockRejectedValueOnce(new Error('boom'));
+    const res = await GET(getReq(), { params: params(REQUEST_ID) });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe('internal_error');
+  });
+
   it('reports canManage true when the caller holds maintenance_requests:manage', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(
       buildCtx({ permissions: ['maintenance_requests:manage'], settings: {} }) as never,
