@@ -6,6 +6,7 @@ import { uuidSchema } from '@stockpilot/core';
 
 import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
+import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
 
 type ActionResult<T> = ({ ok: true } & T) | { error: { message: string } };
 
@@ -115,6 +116,25 @@ export async function addMaintenanceNoteAction(
     const res = await new MaintenanceRequestsService(ctx).addNote(id, body);
     revalidatePath(`/dashboard/maintenance/${id}`);
     return { ok: true, ...res };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** manage-only (service-enforced). Deactivates the request's current active
+ *  share link. The detail page mints-or-returns a link automatically on its
+ *  next load whenever the caller is eligible and the request still has
+ *  photos — this action only kills the CURRENT credential right away (e.g.
+ *  it leaked), it does not permanently disable link minting for the
+ *  request; the org-level `includeShareLinksInEmail` setting is the
+ *  mechanism for that. */
+export async function revokeMaintenanceShareLinkAction(id: string): Promise<ActionResult<object>> {
+  try {
+    assertValidId(id);
+    const ctx = await withContext();
+    await new MaintenanceShareLinksService(ctx).revoke(id);
+    revalidatePath(`/dashboard/maintenance/${id}`);
+    return { ok: true };
   } catch (e) {
     return fail(e);
   }
