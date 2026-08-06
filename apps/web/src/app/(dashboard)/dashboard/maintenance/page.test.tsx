@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
+import { MAINTENANCE_STATUS_LABELS } from '@stockpilot/core';
 
 // This page is the first surface an ordinary employee sees for maintenance
 // requests, so these tests pin the product rules that matter most: (1) the
@@ -236,6 +237,13 @@ describe('search — read_all/manage affordance only (brief section 22)', () => 
     render(await MaintenancePage(args({ scope: 'all', q: '  broken light  ' })));
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ q: 'broken light' }));
   });
+
+  it('server-side gate: submit-only caller with ?q=sneaky does NOT pass q to the service (FIX 1)', async () => {
+    setCtx('staff');
+    list.mockResolvedValueOnce([]);
+    render(await MaintenancePage(args({ q: 'sneaky' })));
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ q: undefined }));
+  });
 });
 
 describe('status filter', () => {
@@ -252,6 +260,18 @@ describe('status filter', () => {
     list.mockResolvedValueOnce([]);
     render(await MaintenancePage(args({ scope: 'all', status: 'deleted-forever' })));
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ status: undefined }));
+  });
+
+  it('derives pill labels from MAINTENANCE_STATUS_LABELS to prevent drift (FIX 2)', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([]);
+    render(await MaintenancePage(args({ scope: 'all' })));
+    // Assert that the rendered pill label for 'archived' matches MAINTENANCE_STATUS_LABELS,
+    // and also literal-pin the expected string so both a constant change and a derivation
+    // break are caught by this test.
+    const archivedPill = screen.getByRole('link', { name: 'Archived' });
+    expect(archivedPill).toHaveTextContent(MAINTENANCE_STATUS_LABELS.archived);
+    expect(MAINTENANCE_STATUS_LABELS.archived).toBe('Archived');
   });
 });
 
@@ -286,6 +306,18 @@ describe('pagination (list() has no count() sibling — hasNext via one extra fe
     list.mockResolvedValueOnce([]);
     render(await MaintenancePage(args({ scope: 'all', page: 'nope' })));
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 }));
+  });
+
+  it('page-2 link href contains active status and q params (FIX 3)', async () => {
+    setCtx('manager');
+    const rows = Array.from({ length: 26 }, (_, i) => row({ id: `r-${i}`, requestNumber: i + 1 }));
+    list.mockResolvedValueOnce(rows);
+    render(await MaintenancePage(args({ scope: 'all', status: 'saved', q: 'broken light' })));
+    const next = screen.getByRole('link', { name: /Next/ });
+    const href = next.getAttribute('href') ?? '';
+    expect(href).toContain('page=2');
+    expect(href).toContain('status=saved');
+    expect(href).toContain('q=broken');
   });
 });
 

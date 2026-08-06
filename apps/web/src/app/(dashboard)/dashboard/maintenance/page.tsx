@@ -14,7 +14,7 @@ import { formatRelative } from '@/lib/utils';
 import { withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 
-import { can, formatMaintenanceRequestNumber, type MaintenanceStatus } from '@stockpilot/core';
+import { can, formatMaintenanceRequestNumber, MAINTENANCE_STATUS_LABELS, type MaintenanceStatus } from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,11 +28,15 @@ export const dynamic = 'force-dynamic';
 const PAGE_SIZE = 25;
 
 const STATUS_FILTERS: Array<{ value: MaintenanceStatus | 'active'; label: string }> = [
+  // 'active' is a synthetic filter (saved + draft_opened) with no matching
+  // database status value — the only legitimate hand-typed label exception.
   { value: 'active', label: 'Active' },
-  { value: 'saved', label: 'Saved' },
-  { value: 'draft_opened', label: 'Email draft opened' },
-  { value: 'archived', label: 'Archived' },
-  { value: 'cancelled', label: 'Cancelled' },
+  // All other labels derive from MAINTENANCE_STATUS_LABELS to prevent drift
+  // (brief section 20 — the sole source of truth for status vocabulary).
+  ...(Object.entries(MAINTENANCE_STATUS_LABELS).map(([status, label]) => ({
+    value: status as MaintenanceStatus,
+    label,
+  })) as Array<{ value: MaintenanceStatus; label: string }>),
 ];
 const VALID_STATUSES = STATUS_FILTERS.map((f) => f.value);
 
@@ -93,9 +97,11 @@ export default async function MaintenancePage({
   const offset = (page - 1) * PAGE_SIZE;
 
   const svc = new MaintenanceRequestsService(ctx);
+  // Search restriction: only pass q to the service if the caller may use it
+  // (read_all/manage holders only — brief section 22).
   const rows = await svc.list({
     scope,
-    q: q || undefined,
+    q: canReadAll ? (q || undefined) : undefined,
     status,
     limit: PAGE_SIZE + 1,
     offset,
