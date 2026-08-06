@@ -923,15 +923,16 @@ export class MaintenanceRequestsService {
         const deliveryCharter = (order.charters as unknown as { name: string } | null) ?? null;
         const lines =
           (order.order_request_lines as unknown as { inventory_items: { name: string } | null }[] | null) ?? [];
-        const itemNames = lines
+        const allItemNames = lines
           .map((l) => l.inventory_items?.name)
-          .filter((n): n is string => Boolean(n))
-          .slice(0, MAX_RELATED_ORDER_ITEM_NAMES);
+          .filter((n): n is string => Boolean(n));
+        const itemNames = allItemNames.slice(0, MAX_RELATED_ORDER_ITEM_NAMES);
         relatedOrder = {
           handle: formatOrderNumber(order.order_number as number | null) ?? (order.id as string).slice(0, 8).toUpperCase(),
           requestedFor: (order.requester_name as string | null) ?? null,
           deliverySiteName: deliveryCharter?.name ?? null,
           itemNames,
+          totalItemCount: allItemNames.length,
           url: `${APP_URL}/dashboard/orders/${order.id}`,
         };
       }

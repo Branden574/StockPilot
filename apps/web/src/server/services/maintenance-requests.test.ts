@@ -1508,6 +1508,7 @@ describe('emailInput', () => {
       requestedFor: 'Ms. Rivera',
       deliverySiteName: 'Fresno Learning Center',
       itemNames: ['Copy paper', 'Dry erase markers'],
+      totalItemCount: 2,
       url: expect.stringMatching(/\/dashboard\/orders\/o1$/),
     });
     // I3-style filter pin: this is still the ONE order_requests query (an
@@ -1531,6 +1532,7 @@ describe('emailInput', () => {
       requestedFor: 'Ms. Rivera',
       deliverySiteName: null,
       itemNames: [],
+      totalItemCount: 0,
       url: expect.stringMatching(/\/dashboard\/orders\/o1$/),
     });
   });

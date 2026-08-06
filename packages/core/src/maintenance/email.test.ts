@@ -166,6 +166,7 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
         requestedFor: 'Room 12 teacher',
         deliverySiteName: 'Fresno Learning Center',
         itemNames: ['Copy paper', 'Dry erase markers'],
+        totalItemCount: 2,
         url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
       },
     }).body;
@@ -188,6 +189,7 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
         requestedFor: null,
         deliverySiteName: null,
         itemNames: [],
+        totalItemCount: 0,
         url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
       },
     }).body;
@@ -543,6 +545,7 @@ describe('fix wave 1 (2e): related-record groups (item/order/rental) are blank-l
         // the I2 field addition.
         deliverySiteName: null,
         itemNames: [],
+        totalItemCount: 0,
         url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
       },
       relatedRental: {
@@ -560,6 +563,142 @@ describe('fix wave 1 (2e): related-record groups (item/order/rental) are blank-l
     // Never three-in-a-row — that would mean an extra stray blank line leaked
     // in alongside the intentional group separator:
     expect(body).not.toMatch(/\n{3,}/);
+  });
+});
+
+describe('fix wave 3 (task 17): truncated order item names disclosure marker', () => {
+  it('15 item lines: exactly 10 names + marker showing 5 more', () => {
+    const fifteenItems = Array.from({ length: 15 }, (_, i) => `Item ${i + 1}`);
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: fifteenItems.slice(0, 10),
+        totalItemCount: 15,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(body).toContain('Items: Item 1, Item 2, Item 3, Item 4, Item 5, Item 6, Item 7, Item 8, Item 9, Item 10 (+5 more)');
+  });
+
+  it('exactly 10 item lines: names, NO marker', () => {
+    const tenItems = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: tenItems,
+        totalItemCount: 10,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(body).toContain('Items: Item 1, Item 2, Item 3, Item 4, Item 5, Item 6, Item 7, Item 8, Item 9, Item 10');
+    expect(body).not.toContain('(+');
+  });
+
+  it('3 item lines: names, no marker', () => {
+    const threeItems = ['Widget A', 'Widget B', 'Widget C'];
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: threeItems,
+        totalItemCount: 3,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(body).toContain('Items: Widget A, Widget B, Widget C');
+    expect(body).not.toContain('(+');
+  });
+
+  it('0 item lines: Items line omitted entirely', () => {
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: [],
+        totalItemCount: 0,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(body).not.toContain('Items:');
+  });
+
+  it('MUTATION CHECK #1: dropping the marker makes the 15-line test fail — marker is required for truncation', () => {
+    const fifteenItems = Array.from({ length: 15 }, (_, i) => `Item ${i + 1}`);
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: fifteenItems.slice(0, 10),
+        totalItemCount: 15,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    // Without the marker, this would fail:
+    expect(body).toContain('(+5 more)');
+  });
+
+  it('MUTATION CHECK #2: emitting marker unconditionally makes the exactly-10 test fail — marker omitted when nothing truncated', () => {
+    const tenItems = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: tenItems,
+        totalItemCount: 10,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    // With unconditional marker, this would fail:
+    expect(body).not.toContain('(+');
+  });
+
+  it('marker is omitted when blank/absent item names drop the Items line entirely (totalItemCount non-zero but itemNames empty)', () => {
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: [],
+        totalItemCount: 5,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    // No Items line at all, never a bare label with just the marker:
+    expect(body).not.toContain('Items:');
+    expect(body).not.toContain('(+');
+  });
+
+  it('marker appears even when some names in itemNames are blank (after filter)', () => {
+    // itemNames can include blanks (though the builder filters them); totalItemCount
+    // reflects the real count from the DB. This verifies the marker appears based on
+    // the totalItemCount vs filtered itemNames.length, not some other calculation.
+    const body = buildMaintenanceEmailDraft({
+      ...MINIMAL_INPUT,
+      relatedOrder: {
+        handle: 'SO-000021',
+        requestedFor: null,
+        deliverySiteName: null,
+        itemNames: ['Item 1', 'Item 2'],
+        totalItemCount: 5,
+        url: 'https://stockpilotusa.com/dashboard/orders/22222222-2222-2222-2222-222222222222',
+      },
+    }).body;
+    expect(body).toContain('Items: Item 1, Item 2 (+3 more)');
   });
 });
 

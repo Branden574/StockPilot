@@ -94,6 +94,10 @@ export interface MaintenanceEmailInput {
     /** Capped BEFORE it ever reaches this builder — see
      *  maintenance-requests.ts's emailInput() for where and why. */
     itemNames: string[];
+    /** The REAL count of order lines before slicing. The builder uses this
+     *  to append a marker (e.g. `(+5 more)`) when itemNames.length is less
+     *  than totalItemCount, disclosing truncation. */
+    totalItemCount: number;
     url: string | null;
   } | null;
   relatedRental: { itemNames: string[]; borrowerName: string | null; url: string | null } | null;
@@ -299,6 +303,20 @@ export function buildMaintenanceEmailDraft(
       );
     }
     if (input.relatedOrder) {
+      const itemsNames = input.relatedOrder.itemNames.filter(Boolean);
+      let itemsValue = itemsNames.join(', ') || null;
+      // Fix wave 3 (task-17-report): disclose truncated order item names.
+      // When the count exceeds what's displayed, append a marker showing how
+      // many more lines were truncated. Never emit the marker when everything
+      // fits (totalItemCount <= displayed count) or when blank/absent item
+      // names dropped the line entirely (itemsValue is null).
+      if (
+        itemsValue &&
+        input.relatedOrder.totalItemCount > itemsNames.length
+      ) {
+        const moreCount = input.relatedOrder.totalItemCount - itemsNames.length;
+        itemsValue = `${itemsValue} (+${moreCount} more)`;
+      }
       groups.push(
         [
           line('Order', input.relatedOrder.handle),
@@ -311,7 +329,7 @@ export function buildMaintenanceEmailDraft(
           // (email.test.ts) stays true: StockPilot Order remains the LAST
           // line of this group either way.
           line('Delivery Site', input.relatedOrder.deliverySiteName),
-          line('Items', input.relatedOrder.itemNames.filter(Boolean).join(', ') || null),
+          line('Items', itemsValue),
           line('StockPilot Order', input.relatedOrder.url),
         ]
           .filter((l): l is string => Boolean(l))
