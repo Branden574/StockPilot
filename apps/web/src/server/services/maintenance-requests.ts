@@ -12,12 +12,14 @@ import {
   type MaintenanceStatus,
 } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import { notifyMaintenanceEvent } from './maintenance-notify';
 
 /**
  * The ONLY audit_logs events the detail page's "StockPilot activity"
@@ -206,6 +208,22 @@ export class MaintenanceRequestsService {
     return can(this.ctx, 'maintenance_requests:read_all') || can(this.ctx, 'maintenance_requests:manage');
   }
 
+  /** Task 21: fire-and-forget notification emit, called AFTER the audit
+   *  write on every hook below. `notifyMaintenanceEvent` never throws on its
+   *  own (it reports and swallows internally), but the `.catch` here is the
+   *  belt-and-suspenders binding constraint 5 asks for — a notify failure
+   *  must never surface as an unhandled rejection or delay/fail the parent
+   *  write, which has already committed and returned by the time this
+   *  settles. */
+  private emitNotify(args: Parameters<typeof notifyMaintenanceEvent>[0]): void {
+    void notifyMaintenanceEvent(args).catch((err) => {
+      void reportError(err instanceof Error ? err : new Error(String(err)), {
+        tag: 'maintenance_notify.emit_failed',
+        extra: { event: args.event, requestId: args.requestId },
+      });
+    });
+  }
+
   /** Task 17 / binding constraint 2 (extended fix wave 2 / C1 to
    *  `charters`/`warehouses`): re-derives a client-supplied id against THIS
    *  org before it is ever attached to a request. Returns the id unchanged
@@ -355,6 +373,22 @@ export class MaintenanceRequestsService {
       },
       this.ctx,
     );
+
+    // Task 21: emit AFTER the audit write, fire-and-forget — never awaited,
+    // never allowed to fail or delay this create(). An urgent request uses
+    // the 'urgent_request' resolution (which already includes everyone
+    // configured 'all' OR 'urgent_only' — resolveMaintenanceAudience's own
+    // doc comment), never a second 'new_request' call on top of it.
+    this.emitNotify({
+      organizationId: this.ctx.organizationId,
+      event: v.priority === 'urgent' ? 'urgent_request' : 'new_request',
+      requestId: row.id as string,
+      requestHandle:
+        formatMaintenanceRequestNumber(row.request_number as number, row.created_at as string) ??
+        `MR-${(row.id as string).slice(0, 8)}`,
+      subject: v.subject,
+      actorUserId: this.ctx.userId,
+    });
 
     return {
       id: row.id as string,
@@ -690,10 +724,14 @@ export class MaintenanceRequestsService {
 
     const { data, error } = await this.db
       .from('maintenance_requests')
+      // request_number/created_at/subject ride along on the SAME write —
+      // Task 21's emit hook below needs them for the notification
+      // title/body, and this avoids a second round trip just to re-read
+      // what this update already touched.
       .update({ local_owner_user_id: userId, updated_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .select('id')
+      .select('id, request_number, created_at, subject')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     // C2: assignLocalOwner() never pre-reads the row (unlike update()/
@@ -710,6 +748,22 @@ export class MaintenanceRequestsService {
       },
       this.ctx,
     );
+
+    // Task 21: only a real assignment (never a clear-to-null) is worth a
+    // ping — fire-and-forget, AFTER the audit write, same as create().
+    if (userId !== null) {
+      this.emitNotify({
+        organizationId: this.ctx.organizationId,
+        event: 'assigned',
+        requestId: id,
+        requestHandle:
+          formatMaintenanceRequestNumber(data.request_number as number | null, data.created_at as string | null) ??
+          `MR-${id.slice(0, 8)}`,
+        subject: (data.subject as string | null) ?? '',
+        actorUserId: this.ctx.userId,
+        targetUserId: userId,
+      });
+    }
   }
 
   /** manage-only internal note — NEVER visible to the requester, NEVER

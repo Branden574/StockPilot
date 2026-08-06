@@ -1,7 +1,13 @@
 import 'server-only';
 
-import { can, MAINTENANCE_MAX_PHOTOS, MAINTENANCE_MAX_PHOTO_BYTES } from '@stockpilot/core';
+import {
+  can,
+  formatMaintenanceRequestNumber,
+  MAINTENANCE_MAX_PHOTOS,
+  MAINTENANCE_MAX_PHOTO_BYTES,
+} from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { sanitizeFilenameSegment } from '@/lib/exports/filename';
 import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -9,6 +15,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import { notifyMaintenanceEvent } from './maintenance-notify';
 
 /** Bucket id from migration 0315 — private, org-prefixed, no select policy.
  *  Every read is a short-lived signed URL minted server-side (never a raw
@@ -112,20 +119,36 @@ export class MaintenanceAttachmentsService {
    * policy (0315) only checks the org prefix, not per-request ownership —
    * this check is the ONLY place that boundary is enforced for a fresh
    * mint, since mint never touches the attachments table's RLS at all.
+   *
+   * Returns request_number/created_at/subject alongside the existence/
+   * ownership/open checks — Task 21's finalize() failure hook needs them for
+   * a photo_rejected notification title/body, and reading them here (they
+   * ride the SAME select this method already makes) avoids a second round
+   * trip just to re-fetch what this call already touched. createUploadUrl
+   * doesn't need them and simply ignores the return value.
    */
-  private async assertParentOwnedAndOpen(requestId: string): Promise<void> {
+  private async assertParentOwnedAndOpen(
+    requestId: string,
+  ): Promise<{ requestNumber: number | null; createdAt: string | null; subject: string | null }> {
     assertPermission(this.ctx, 'maintenance_requests:submit');
 
     const { data, error } = await this.ctx.supabase
       .from('maintenance_requests')
-      .select('id, requester_user_id, archived_at, cancelled_at')
+      .select('id, requester_user_id, archived_at, cancelled_at, request_number, created_at, subject')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', requestId)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Maintenance request not found');
 
-    const row = data as { requester_user_id: string | null; archived_at: string | null; cancelled_at: string | null };
+    const row = data as {
+      requester_user_id: string | null;
+      archived_at: string | null;
+      cancelled_at: string | null;
+      request_number: number | null;
+      created_at: string | null;
+      subject: string | null;
+    };
     const isManager = can(this.ctx, 'maintenance_requests:manage');
     if (!isManager && row.requester_user_id !== this.ctx.userId) {
       throw new ServiceError('forbidden', 'Not your request.');
@@ -133,6 +156,36 @@ export class MaintenanceAttachmentsService {
     if (row.archived_at || row.cancelled_at) {
       throw new ServiceError('conflict', 'This request is closed; photos can no longer change.');
     }
+    return {
+      requestNumber: row.request_number ?? null,
+      createdAt: row.created_at ?? null,
+      subject: row.subject ?? null,
+    };
+  }
+
+  /** Task 21: fire-and-forget photo_rejected notification to the uploader.
+   *  Never awaited by finalize() — a notify failure must never delay or
+   *  fail the (already-decided) invalid_image throw that follows it. */
+  private notifyPhotoRejected(
+    requestId: string,
+    parent: { requestNumber: number | null; createdAt: string | null; subject: string | null },
+  ): void {
+    const requestHandle =
+      formatMaintenanceRequestNumber(parent.requestNumber, parent.createdAt) ?? `MR-${requestId.slice(0, 8)}`;
+    void notifyMaintenanceEvent({
+      organizationId: this.ctx.organizationId,
+      event: 'photo_rejected',
+      requestId,
+      requestHandle,
+      subject: parent.subject ?? '',
+      actorUserId: this.ctx.userId,
+      targetUserId: this.ctx.userId,
+    }).catch((err) => {
+      void reportError(err instanceof Error ? err : new Error(String(err)), {
+        tag: 'maintenance_notify.emit_failed',
+        extra: { event: 'photo_rejected', requestId },
+      });
+    });
   }
 
   /** Server-minted signed-upload URL (audit Q8) — the client never talks to
@@ -207,7 +260,7 @@ export class MaintenanceAttachmentsService {
     args: { path: string; originalFilename: string; declaredMime: string },
   ): Promise<{ id: string; width: number | null; height: number | null }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
-    await this.assertParentOwnedAndOpen(requestId);
+    const parent = await this.assertParentOwnedAndOpen(requestId);
 
     // CRITICAL 1 — strict shape validation BEFORE any storage call. See
     // validateFinalizePath's own doc for why a prefix check is not enough.
@@ -224,7 +277,10 @@ export class MaintenanceAttachmentsService {
     // A download failure here also means "the object was never actually
     // uploaded" — the finalize-time existence check (no phantom rows for a
     // mint that was never followed by a real PUT). Nothing to remove.
-    if (dlErr || !blob) throw new ServiceError('validation_error', 'invalid_image');
+    if (dlErr || !blob) {
+      this.notifyPhotoRejected(requestId, parent);
+      throw new ServiceError('validation_error', 'invalid_image');
+    }
     const bytes = new Uint8Array(await blob.arrayBuffer());
 
     const sniffed = sniffImage(bytes);
@@ -232,6 +288,7 @@ export class MaintenanceAttachmentsService {
     const sizeOk = bytes.byteLength > 0 && bytes.byteLength <= MAINTENANCE_MAX_PHOTO_BYTES;
     if (!sniffed || !declaredOk || !sizeOk) {
       await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
+      this.notifyPhotoRejected(requestId, parent);
       throw new ServiceError('validation_error', 'invalid_image');
     }
 

@@ -103,6 +103,30 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'In-app alert when an out-of-stock item is auto-archived.',
     group: 'push',
   },
+  {
+    key: 'push_maintenance_new_request',
+    label: 'New maintenance requests',
+    hint: 'In-app notification when a new maintenance request is saved, if your account is set to receive it.',
+    group: 'push',
+  },
+  {
+    key: 'push_maintenance_urgent_request',
+    label: 'Urgent maintenance requests',
+    hint: 'In-app notification when an urgent maintenance request is saved, if your account is set to receive it.',
+    group: 'push',
+  },
+  {
+    key: 'push_maintenance_assigned',
+    label: 'Maintenance assigned to me',
+    hint: 'In-app notification when you are set as the local owner of a maintenance request.',
+    group: 'push',
+  },
+  {
+    key: 'push_maintenance_draft_reminder',
+    label: 'Maintenance draft reminders',
+    hint: 'In-app reminder when you opened an email draft for a maintenance request but StockPilot cannot confirm send.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {
