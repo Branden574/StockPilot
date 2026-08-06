@@ -47,3 +47,22 @@ describe('rewriteWebPath existing rules stay intact', () => {
     expect(rewriteWebPath('/dashboard/some-new-page')).toBe('/');
   });
 });
+
+// Maintenance requests (Task 18) got THREE native twins — detail, the
+// new-request form, and the list — for the notification doors Task 21 wires
+// up. Without these rules every one of them dead-ends on home through the
+// /dashboard/* catch-all, exactly the landmine 31 warns about.
+
+describe('maintenance deep links (all three notification doors route through here)', () => {
+  it('detail: /dashboard/maintenance/<uuid> -> /maintenance/<uuid>', () => {
+    expect(rewriteWebPath('/dashboard/maintenance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'))
+      .toBe('/maintenance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+  });
+  it('new: /dashboard/maintenance/new -> /maintenance/new', () => {
+    expect(rewriteWebPath('/dashboard/maintenance/new')).toBe('/maintenance/new');
+  });
+  it('list incl. query: /dashboard/maintenance?scope=all -> /maintenance', () => {
+    expect(rewriteWebPath('/dashboard/maintenance')).toBe('/maintenance');
+    expect(rewriteWebPath('/dashboard/maintenance?scope=all')).toBe('/maintenance');
+  });
+});

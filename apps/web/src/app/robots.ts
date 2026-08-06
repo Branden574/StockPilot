@@ -12,7 +12,9 @@ export default function robots(): MetadataRoute.Robots {
         // the token in the public Google cache and make it
         // enumerable. Same logic for /p/items/[id] — these are
         // legitimately public but we'd rather not be indexable.
-        disallow: ['/dashboard/', '/onboarding', '/auth/', '/api/', '/r/', '/p/'],
+        // /m/ is the public maintenance-request share page (Task 10) —
+        // same reasoning: the token lives in the URL itself.
+        disallow: ['/dashboard/', '/onboarding', '/auth/', '/api/', '/r/', '/p/', '/m/'],
       },
     ],
     sitemap: `${base}/sitemap.xml`,

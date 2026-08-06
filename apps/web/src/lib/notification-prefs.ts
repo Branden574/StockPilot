@@ -27,6 +27,13 @@ export const NOTIFICATION_PREF_KEYS = [
   'push_schedule_reminders',
   // Auto-archive-on-zero-stock cron notice opt-out (0267):
   'push_item_auto_archived',
+  // Maintenance requests (Task 21) — authorized-viewer broadcast opt-outs
+  // plus the requester's own draft-reminder ping. photo_rejected has no
+  // column: it is never mutable (maintenance-notify.ts's own doc comment).
+  'push_maintenance_new_request',
+  'push_maintenance_urgent_request',
+  'push_maintenance_assigned',
+  'push_maintenance_draft_reminder',
 ] as const;
 
 export type NotificationPrefKey = (typeof NOTIFICATION_PREF_KEYS)[number];

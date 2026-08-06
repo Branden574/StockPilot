@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 export const metadata: Metadata = { title: 'Settings' };
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 import { can } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
@@ -110,8 +111,29 @@ const INTEGRATIONS_SECTIONS = [
   { href: '/dashboard/settings/integrations', title: 'Integrations', description: 'Connect QuickBooks Online and other tools to export your data.' },
 ];
 
+// Maintenance requests — owner-only configuration (categories, notification
+// audience, photo-link-in-email toggle; the fixed recipients display
+// read-only). Per-user read_all/manage GRANTS route entirely through Roles
+// & permissions (the existing per-user override system) — this tile only
+// links there, it does not duplicate that matrix. Gated on BOTH
+// `maintenance_requests:configure` (owner-only by design, adjudication C2 —
+// filtered out of admin's derived permission set) AND the module actually
+// being enabled: maintenance_requests is `defaultOnFor: []` (off by
+// default), unlike every other tile in this hub today, so this is the
+// first tile here that needs a module-enabled check alongside its
+// permission check — a disabled module's settings shouldn't clutter
+// Settings for orgs that never turned it on.
+const MAINTENANCE_SECTIONS = [
+  {
+    href: '/dashboard/settings/maintenance',
+    title: 'Maintenance requests',
+    description: 'Categories, notification audiences, and photo link settings.',
+  },
+];
+
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
+  const maintenanceAccess = await checkModuleAccess('maintenance_requests');
   const sections = [
     ...BASE_SECTIONS,
     ...(can(ctx, 'billing:read') ? BILLING_SECTIONS : []),
@@ -126,6 +148,9 @@ export default async function SettingsPage() {
     ...(can(ctx, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
     ...(can(ctx, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
     ...(can(ctx, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
+    ...(maintenanceAccess.enabled && can(ctx, 'maintenance_requests:configure')
+      ? MAINTENANCE_SECTIONS
+      : []),
   ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">

@@ -573,8 +573,33 @@ export function buildDeliveryRequestDraft(
  * tenant-verified to open the prefilled compose (candidate E). Landing on
  * the canonical domain also removes the one redirect layer that ate the
  * intent, which is what makes the link survive a cold session.
+ *
+ * EXTRACTED (2026-08-05, maintenance-requests program, Task 5): this
+ * constant, `DRAFT_URL_LIMIT`, and the query-encoding rule (formerly this
+ * file's own private `encodeDraftQuery`: %20 for spaces, never '+' —
+ * URLSearchParams' form-encoding renders '+' literally in RFC 6068 clients
+ * like desktop Outlook, Apple Mail and Thunderbird) now live in
+ * `packages/core/src/email/outlook-compose.ts`, because mobile's ONLY
+ * workspace dependency is `@stockpilot/core` and the maintenance-requests
+ * feature composes Outlook links the same way. `buildOutlookComposeUrl`,
+ * `buildMailtoUrl` and `buildClipboardText` below are now thin delegating
+ * wrappers around the core `composeOutlookWebUrl` / `composeMailtoUrl` /
+ * `composeClipboardText`, supplying this feature's own mandatory `cc` and
+ * frozen `DELIVERY_REQUEST_EMAIL_NAMES`. Task 4 proved 13/13 byte-identical
+ * output for this exact delivery shape before this file was touched, so
+ * every mechanic documented above and below is reproduced verbatim by the
+ * core module — the four delivery pinning suites run against these
+ * wrappers unchanged, byte-identical.
  */
-export const OUTLOOK_COMPOSE_BASE = 'https://outlook.cloud.microsoft/mail/deeplink/compose';
+import {
+  OUTLOOK_COMPOSE_BASE as CORE_OUTLOOK_COMPOSE_BASE,
+  DRAFT_URL_LIMIT as CORE_DRAFT_URL_LIMIT,
+  composeOutlookWebUrl,
+  composeMailtoUrl,
+  composeClipboardText,
+} from '@stockpilot/core';
+
+export const OUTLOOK_COMPOSE_BASE = CORE_OUTLOOK_COMPOSE_BASE;
 
 /**
  * Conservative ceiling for a compose link, in characters.
@@ -585,23 +610,7 @@ export const OUTLOOK_COMPOSE_BASE = 'https://outlook.cloud.microsoft/mail/deepli
  * a body and the employee sends it). 1,800 leaves headroom for the tenant's own
  * redirect wrapper, which appends to the URL.
  */
-export const DRAFT_URL_LIMIT = 1800;
-
-/**
- * Build a query string with %20 for spaces, never '+'.
- *
- * URLSearchParams serializes per application/x-www-form-urlencoded, where a
- * space becomes '+'. Web query parsers decode that fine, but RFC 6068 gives
- * '+' no space meaning in mailto: URLs — desktop Outlook, Apple Mail and
- * Thunderbird render it literally, turning the whole draft into
- * "Delivery+Request+...". %20 is unambiguous: BOTH form-decoders and
- * RFC-style decoders read it as a space, so both transports use this.
- */
-function encodeDraftQuery(params: Record<string, string>): string {
-  return Object.entries(params)
-    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
-    .join('&');
-}
+export const DRAFT_URL_LIMIT = CORE_DRAFT_URL_LIMIT;
 
 /**
  * Builds its OWN inner mailto: URI — deliberately NOT `buildMailtoUrl`'s
@@ -644,7 +653,7 @@ function encodeDraftQuery(params: Record<string, string>): string {
  * `buildMailtoUrl`'s: the To PATH segment is `encodeURIComponent` of
  * `` `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>` `` (spaces become
  * `%20`, angle brackets `%3C`/`%3E`), and the Cc query value — passed
- * through the same `encodeDraftQuery` used for subject/body, so it rides in
+ * through the same %20-not-`+` encoding used for subject/body, so it rides in
  * the RFC-6068-legal hfield-value position — is
  * `` `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>` ``. The NAMES come
  * only from the frozen `DELIVERY_REQUEST_EMAIL_NAMES` constant (`@/lib/site`,
@@ -671,35 +680,40 @@ function encodeDraftQuery(params: Record<string, string>): string {
  * reference two-step decode (its `to` needs an explicit
  * `decodeURIComponent` now, since the path segment is no longer a bare,
  * unencoded address).
+ *
+ * DELEGATED (2026-08-05, Task 5): every mechanic above is now implemented
+ * by `composeOutlookWebUrl` in `packages/core/src/email/outlook-compose.ts`.
+ * This wrapper supplies the delivery-specific shape only — `draft.to`/
+ * `draft.cc` (the routing addresses) and the frozen
+ * `DELIVERY_REQUEST_EMAIL_NAMES` (the cosmetic display names) — and the
+ * core function performs exactly the steps described above.
  */
 export function buildOutlookComposeUrl(draft: DeliveryRequestDraft): string {
-  const toNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.to} <${draft.to}>`;
-  const ccNameAddr = `${DELIVERY_REQUEST_EMAIL_NAMES.cc} <${draft.cc}>`;
-  const query = encodeDraftQuery({
-    cc: ccNameAddr,
+  return composeOutlookWebUrl({
+    to: draft.to,
+    cc: draft.cc,
     subject: draft.subject,
     body: draft.body,
+    toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+    ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
   });
-  const innerMailto = `mailto:${encodeURIComponent(toNameAddr)}?${query}`;
-  return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(innerMailto)}`;
 }
 
 /**
  * mailto: fallback for when the popup is blocked or OWA is not the user's
  * client. The To address is the PATH; cc, subject and body are query
- * parameters, built with `encodeDraftQuery` so spaces are %20 rather than
- * '+' — RFC 6068 gives '+' no space meaning, and this is exactly the client
- * family (desktop Outlook, Apple Mail, Thunderbird) that renders it
- * literally instead of decoding it. Both recipients are still generated — a
- * mailto that drops the CC is non-compliant.
+ * parameters, built with %20-not-`+` encoding — RFC 6068 gives '+' no space
+ * meaning, and this is exactly the client family (desktop Outlook, Apple
+ * Mail, Thunderbird) that renders it literally instead of decoding it. Both
+ * recipients are still generated — a mailto that drops the CC is
+ * non-compliant.
+ *
+ * DELEGATED (2026-08-05, Task 5): implemented by `composeMailtoUrl` in
+ * `packages/core/src/email/outlook-compose.ts`. Bare addresses only, no
+ * display names — matching this file's pre-extraction behavior exactly.
  */
 export function buildMailtoUrl(draft: DeliveryRequestDraft): string {
-  const query = encodeDraftQuery({
-    cc: draft.cc,
-    subject: draft.subject,
-    body: draft.body,
-  });
-  return `mailto:${draft.to}?${query}`;
+  return composeMailtoUrl({ to: draft.to, cc: draft.cc, subject: draft.subject, body: draft.body });
 }
 
 /**
@@ -709,16 +723,12 @@ export function buildMailtoUrl(draft: DeliveryRequestDraft): string {
  *
  * Labelled blocks so the employee can build the message by hand, INCLUDING the
  * CC. Instructions that omit the CC are non-compliant.
+ *
+ * DELEGATED (2026-08-05, Task 5): implemented by `composeClipboardText` in
+ * `packages/core/src/email/outlook-compose.ts`.
  */
 export function buildClipboardText(draft: DeliveryRequestDraft): string {
-  return [
-    `TO: ${draft.to}`,
-    `CC: ${draft.cc}`,
-    `SUBJECT: ${draft.subject}`,
-    '',
-    'MESSAGE:',
-    draft.body,
-  ].join('\n');
+  return composeClipboardText({ to: draft.to, cc: draft.cc, subject: draft.subject, body: draft.body });
 }
 
 export interface PreparedDeliveryRequest {

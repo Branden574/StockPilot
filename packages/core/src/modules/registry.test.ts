@@ -141,7 +141,7 @@ describe('MODULE_REGISTRY', () => {
       '/settings', '/support', '/scan', '/zendesk', '/size-count/new',
       '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
       '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/reconciliation',
-      '/admin/audit',
+      '/admin/audit', '/maintenance',
     ]);
     for (const def of Object.values(MODULE_REGISTRY)) {
       for (const p of def.placements) {
@@ -161,5 +161,35 @@ describe('MODULE_REGISTRY', () => {
       for (const r of used)
         expect(perms.has(r), `module "${def.id}" uses requires "${r}" not in its permissions array`).toBe(true);
     }
+  });
+
+  describe('maintenance_requests module', () => {
+    it('is registered as an off-by-default optional module (the zendesk shape)', () => {
+      const def = MODULE_REGISTRY.maintenance_requests;
+      expect(def.tier).toBe('optional');
+      expect(def.defaultOnFor).toEqual([]);
+      expect(def.surfaces).toEqual(['web', 'mobile', 'api']);
+      expect(def.apiPrefixes).toContain('/api/v1/maintenance-requests');
+    });
+
+    it('never enters the default module set (landmine 22)', () => {
+      expect(DEFAULT_MODULE_IDS).not.toContain('maintenance_requests');
+    });
+
+    it('nav placements gate on requiresAnyOf so read_all-only users still see it', () => {
+      const def = MODULE_REGISTRY.maintenance_requests;
+      const web = def.placements.find((p) => p.surface === 'web_sidebar');
+      const mob = def.placements.find((p) => p.surface === 'mobile_drawer');
+      // LITERAL pins (Global Constraint 19): the strings, not the constants.
+      expect(web?.href).toBe('/dashboard/maintenance');
+      expect(mob?.href).toBe('/maintenance');
+      for (const p of [web, mob]) {
+        expect(p?.requiresAnyOf).toEqual([
+          'maintenance_requests:submit',
+          'maintenance_requests:read_all',
+          'maintenance_requests:manage',
+        ]);
+      }
+    });
   });
 });

@@ -55,6 +55,7 @@ export default function DrawerLayout() {
         options={{ drawerLabel: 'Notifications' }}
       />
       <Drawer.Screen name="team" options={{ drawerLabel: 'Team' }} />
+      <Drawer.Screen name="maintenance" options={{ drawerLabel: 'Maintenance' }} />
       <Drawer.Screen name="support" options={{ drawerLabel: 'Support & feedback' }} />
       <Drawer.Screen name="settings" options={{ drawerLabel: 'Settings' }} />
       <Drawer.Screen

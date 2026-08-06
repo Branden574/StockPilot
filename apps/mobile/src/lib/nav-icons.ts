@@ -29,6 +29,7 @@ import {
   Upload,
   Users,
   Warehouse,
+  Wrench,
 } from 'lucide-react-native';
 
 import { ZendeskLogo } from '@/components/zendesk-logo';
@@ -72,6 +73,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   // Staging (put-away worklist) — same icon name the web sidebar placement uses.
   LayoutList,
   FileLock,
+  Wrench,
   // Zendesk uses a custom react-native-svg mark (not in lucide); cast to
   // LucideIcon since it accepts the same { size, color } prop shape the
   // drawer renders with.

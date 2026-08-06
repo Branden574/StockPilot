@@ -1,0 +1,31 @@
+-- 0316_maintenance_attachment_path_uniq.sql
+--
+-- Security fix wave for Task 9 (attachments pipeline) — Important 3, cap
+-- bypass at finalize.
+--
+-- MAINTENANCE_MAX_PHOTOS is enforced entirely in the application layer
+-- (createUploadUrl's mint-time count check, and now finalize()'s live
+-- re-check immediately before the insert — see maintenance-attachments.ts).
+-- Neither of those checks stops the SAME storage object from backing MANY
+-- attachment rows: 0315's storage INSERT policy only checks the org prefix,
+-- so any accepted org member can PUT directly to a path and then call
+-- finalize() against it repeatedly (or two concurrent finalize calls can
+-- both pass the live count re-check before either has inserted), each time
+-- inserting a fresh row that points at the identical storage_path. Every
+-- extra row is a phantom photo — real storage usage does not grow, but the
+-- request's visible photo count (and the cap arithmetic built on
+-- `count(*) from maintenance_request_attachments where maintenance_request_id
+-- = ...`) does, unbounded.
+--
+-- Fix: a plain org-scoped uniqueness constraint on storage_path. One storage
+-- object backs at most one row, full stop. This is a hard DB-level guarantee
+-- that no application-layer re-check (however carefully placed) can be — the
+-- two application checks above narrow the race window; this index closes it.
+--
+-- Not CONCURRENTLY: maintenance_request_attachments is not yet live in any
+-- org (0314: 'maintenance_requests' module ships OFF everywhere; the L4L
+-- one-off enable happens at ship time, still pending). No production reads
+-- or writes exist against this table today, so a brief lock is free.
+
+create unique index if not exists maintenance_request_attachments_org_path_uniq
+  on public.maintenance_request_attachments (organization_id, storage_path);

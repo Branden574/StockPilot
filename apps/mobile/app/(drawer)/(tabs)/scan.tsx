@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -26,10 +26,13 @@ import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { CachedImage } from '@/components/ui/cached-image';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
 import { supabase } from '@/lib/supabase';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -151,6 +154,16 @@ const CRATE_HEX: Record<string, string> = {
 export default function Scan() {
   const router = useRouter();
   const { user } = useAuth();
+  const enabledModules = useEnabledModules();
+  const permissions = useEffectivePermissions();
+  // "Report a problem" launch point (Task 20, master brief §8/§25) — the
+  // SAME two-part gate as web's ReportProblemButton
+  // (report-problem-button.tsx: `moduleEnabled && canSubmit`), so a viewer
+  // who cannot submit never sees a button that only dead-ends on the
+  // destination screen's own re-gate.
+  const maintenanceEnabled = enabledModules.has('maintenance_requests');
+  const canReportProblem =
+    maintenanceEnabled && showWriteCta(permissions, 'maintenance_requests:submit');
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = React.useState(true);
   const [mode, setMode] = React.useState<'lookup' | 'cover'>('lookup');
@@ -894,6 +907,35 @@ export default function Scan() {
                 <Text style={styles.dismissLabel}>Scan another</Text>
               </Pressable>
             </View>
+
+            {canReportProblem ? (
+              <Pressable
+                style={styles.reportProblemBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/maintenance/new',
+                    // Deep-link HINT only (mirrors web's ReportProblemButton
+                    // doc comment) — the create route re-derives and
+                    // validates this id server-side (uuid shape + THIS org)
+                    // before it is ever attached to a request. Only the id
+                    // crosses the boundary; sku/name stay client-local
+                    // display data the server never trusts or re-reads from
+                    // here (binding constraint 6).
+                    params: { itemId: item.id },
+                    // .expo/types/router.d.ts is stale (regenerated only by
+                    // the Expo dev server) and predates Task 19's route —
+                    // same cast maintenance.tsx's own 'New' button already
+                    // needs for this identical reason (see that file). The
+                    // double cast (TS's own suggested escape hatch) is
+                    // required because an unregistered pathname doesn't
+                    // structurally overlap any registered route's object
+                    // shape, unlike the plain-string form.
+                  } as unknown as Href)
+                }
+              >
+                <Text style={styles.reportProblemLabel}>Report a problem</Text>
+              </Pressable>
+            ) : null}
           </ScrollView>
         </View>
       )}
@@ -1204,6 +1246,16 @@ const styles = StyleSheet.create({
   photoBtnLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
   dismiss: { flex: 1, alignItems: 'center', paddingVertical: 10 },
   dismissLabel: { color: theme.primary, fontSize: 13, fontWeight: '600' },
+  reportProblemBtn: {
+    marginTop: space.sm,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: theme.bgElevated,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+  },
+  reportProblemLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
   pickerTitle: { color: theme.text, fontSize: 17, fontWeight: '700' },
   pickerSubtitle: { color: theme.textMuted, fontSize: 13, marginTop: 4, marginBottom: space.md },
   pickerRow: {

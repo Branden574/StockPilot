@@ -36,6 +36,7 @@ import { MarketPricePanel } from '@/components/inventory/market-price-panel';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
+import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -267,6 +268,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const canDuplicateItem = can(ctx, 'items:create');
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canTransferStock = can(ctx, 'stock:transfer');
+  // "Report a problem" launch point (Task 17, master brief §8) — same
+  // sync-gate-first shape as priceTrackingEnabled below: the module RPC is
+  // only paid for a viewer who could actually use the button. This route
+  // covers items, books, AND rental-items (all three wrapping pages render
+  // this same ItemDetail), so the button always prefills relatedItemId.
+  const canReportProblem = can(ctx, 'maintenance_requests:submit');
   // Add/edit the free-text note on a movement row in the Movements/Activity
   // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
   // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
@@ -320,6 +327,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const itemBarcode = (item.barcode as string | null) ?? null;
   const { enabled: priceTrackingEnabled } = await checkModuleAccess('price_tracking');
   const showMarketPrice = priceTrackingEnabled && isLikelyIsbn(itemBarcode);
+  const { enabled: maintenanceRequestsEnabled } = canReportProblem
+    ? await checkModuleAccess('maintenance_requests')
+    : { enabled: false };
   const marketPriceObs = showMarketPrice
     ? await PriceTrackingService.forCurrentUser()
         .then((s) => s.getLatestObservation(item.id as string))
@@ -433,6 +443,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   canManageLocations={canManageLocations}
                 />
               )}
+              <ReportProblemButton
+                moduleEnabled={maintenanceRequestsEnabled}
+                canSubmit={canReportProblem}
+                prefill={{ itemId: id }}
+              />
             </div>
           </div>
         </div>

@@ -369,6 +369,38 @@ export const AI_TOUR: TourDefinition = {
   ],
 };
 
+export const MAINTENANCE_REQUESTS_TOUR: TourDefinition = {
+  id: 'maintenance-requests',
+  version: 1,
+  name: 'Maintenance requests',
+  steps: [
+    {
+      title: 'Report a facility or equipment issue',
+      body: 'Every request lives here — your own under My requests, or everyone’s under All requests if you can see them — filterable by status. Replies happen by email, not in this list.',
+    },
+    {
+      target: 'a[href="/dashboard/maintenance/new"]',
+      title: 'Start a new request',
+      body: 'Describe what is wrong, where, and how urgent it is. Saving assigns a request number right away — no email is required to create one.',
+      optional: true,
+    },
+    {
+      title: 'Just two required fields',
+      body: 'Subject and description are the only required fields. Site, building, room, category, and priority are optional, but filling them in helps the maintenance team respond faster.',
+    },
+    {
+      title: 'Review before you open Outlook',
+      body: 'Saving takes you to a review screen showing exactly what your email will contain — subject, details, and any photos. From there you open, review, and send it yourself; StockPilot never emails anyone automatically.',
+    },
+    {
+      target: 'table tbody tr',
+      title: 'A timeline for every request',
+      body: 'Open any row for full details plus a StockPilot activity timeline — when it was saved, when photos were added, and when the email was opened. That timeline is separate from your email conversation.',
+      optional: true,
+    },
+  ],
+};
+
 export const NAV_SETTINGS_TOUR: TourDefinition = {
   id: 'nav-settings',
   version: 1,

@@ -19,6 +19,13 @@ export interface Announcement {
 
 export const ANNOUNCEMENTS: Announcement[] = [
   {
+    id: 'maintenance-requests-2026-08',
+    date: '2026-08-06',
+    title: 'Maintenance requests',
+    body: 'Report facilities and equipment issues from StockPilot. Your request is saved with a request number, and StockPilot prepares the complete Outlook email for you to review and send.',
+    cta: { href: '/dashboard/maintenance', label: 'Report an issue' },
+  },
+  {
     id: 'support-feedback-2026-07',
     date: '2026-07-12',
     title: 'Support & feedback, right in the app',

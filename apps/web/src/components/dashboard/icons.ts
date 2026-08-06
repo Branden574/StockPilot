@@ -31,6 +31,7 @@ import {
   Upload,
   Users,
   Warehouse,
+  Wrench,
 } from 'lucide-react';
 
 import { ZendeskLogo } from './zendesk-logo';
@@ -76,5 +77,6 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   Upload,
   Users,
   Warehouse,
+  Wrench,
   Zendesk: ZendeskLogo,
 };

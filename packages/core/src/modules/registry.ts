@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning' | 'b2b_portal'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'instant_size_count' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk' | 'sports';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'instant_size_count' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk' | 'sports' | 'maintenance_requests';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -661,6 +661,32 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'Zendesk', href: '/dashboard/zendesk', iconName: 'Zendesk', defaultSortOrder: 900 },
       { surface: 'mobile_drawer', section: 'workspace', label: 'Zendesk', href: '/zendesk', iconName: 'Zendesk', defaultSortOrder: 900 },
+    ],
+  },
+
+  maintenance_requests: {
+    id: 'maintenance_requests',
+    tier: 'optional',
+    title: 'Maintenance requests',
+    dependsOn: [],
+    permissions: [
+      'maintenance_requests:submit',
+      'maintenance_requests:read_all',
+      'maintenance_requests:manage',
+      'maintenance_requests:configure',
+    ],
+    surfaces: ['web', 'mobile', 'api'],
+    apiPrefixes: ['/api/v1/maintenance-requests'],
+    ownsTables: [
+      'maintenance_requests',
+      'maintenance_request_attachments',
+      'maintenance_request_notes',
+      'maintenance_request_share_links',
+    ],
+    defaultOnFor: [],
+    placements: [
+      { surface: 'web_sidebar', section: 'workspace', label: 'Maintenance', href: '/dashboard/maintenance', iconName: 'Wrench', defaultSortOrder: 850, requiresAnyOf: ['maintenance_requests:submit', 'maintenance_requests:read_all', 'maintenance_requests:manage'] },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Maintenance', href: '/maintenance', iconName: 'Wrench', defaultSortOrder: 850, requiresAnyOf: ['maintenance_requests:submit', 'maintenance_requests:read_all', 'maintenance_requests:manage'] },
     ],
   },
 
