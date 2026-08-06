@@ -336,3 +336,166 @@ describe('app/maintenance/new.tsx charters picker hides archived sites', () => {
     expect(orgIdIndex).toBeLessThan(statusIndex);
   });
 });
+
+/**
+ * WIRING PINS for app/maintenance/[id].tsx (Task 20). Every DECISION this
+ * screen makes — transport selection, the R3 record-after-open ordering,
+ * the duplicate-draft gate, the condensed-notice gate — is delegated to
+ * `@/lib/maintenance-email-actions` and proven BEHAVIORALLY there
+ * (maintenance-email-actions.test.ts). What is left here is real, but
+ * narrower: that the screen actually WIRES those tested helpers in rather
+ * than reimplementing the decision inline or dropping the wiring. Same
+ * HONEST LIMITS as every other pin in this file — text assertions only,
+ * nothing executes; verify runtime behavior by hand-testing the detail
+ * screen in a staging org (open/reopen a draft, a condensed request, an
+ * oversized one).
+ */
+describe('app/maintenance/[id].tsx is wired to the tested email-action helpers + accurate language', () => {
+  const src = readFileSync(path.resolve(__dirname, '../../app/maintenance/[id].tsx'), 'utf8');
+
+  it('`enabled` is actually ASSIGNED FROM the shared module registry, not left dangling next to a hardcoded value', () => {
+    expect(src).toContain('useEnabledModules');
+    expect(src).toMatch(
+      /const\s+enabled\s*=\s*enabledModules\.has\(\s*['"]maintenance_requests['"]\s*\)\s*;/,
+    );
+  });
+
+  it('the load effect actually RETURNS when the module is off (or there is no id), before ever calling getMaintenanceRequest', () => {
+    const callSite = src.indexOf('await getMaintenanceRequest(');
+    expect(callSite).toBeGreaterThan(-1);
+    const guardMatch = src.match(/if\s*\(\s*!enabled\s*\|\|\s*!id\s*\)\s*\{([\s\S]*?)\}/);
+    expect(guardMatch).not.toBeNull();
+    expect(guardMatch![1]).toContain('return;');
+    const returnOffset = guardMatch!.index! + guardMatch![0].indexOf('return;');
+    expect(returnOffset).toBeLessThan(callSite);
+  });
+
+  it('the module-off render path actually RETURNS a gate screen before the loading/detail branches, and never claims an outcome', () => {
+    const offBranch = src.match(/if\s*\(\s*!enabled\s*\)\s*\{([\s\S]*?)\n\s{2}\}/);
+    expect(offBranch).not.toBeNull();
+    expect(offBranch![1]).toContain('return');
+    expect(offBranch![1]).toContain('GateScreen');
+  });
+
+  it('`handleOpenPress` gates the duplicate-draft Alert.alert on `shouldConfirmBeforeOpening(openCount)`, offers Cancel / Open Another Draft, and the confirm button actually calls runOpen (not a no-op)', () => {
+    const fnMatch = src.match(/function handleOpenPress\(transport: EmailTransport\) \{([\s\S]*?)\n {2}\}/);
+    expect(fnMatch).not.toBeNull();
+    const body = fnMatch![1];
+    expect(body).toContain('shouldConfirmBeforeOpening(openCount)');
+    expect(body).toContain("Alert.alert('Open another draft?', DUPLICATE_WARNING,");
+    expect(body).toContain("{ text: 'Cancel', style: 'cancel' }");
+    expect(body).toContain("{ text: 'Open Another Draft', onPress: () => void runOpen(transport) }");
+    // Not just present anywhere — this is the FIRST-open (no confirm) path,
+    // must still exist and must still call the same runOpen.
+    expect(body).toContain('void runOpen(transport);');
+  });
+
+  it('`runOpen` passes `recordDraftOpened` ONLY inside the onOpened callback given to `openMaintenanceDraft` — never called unconditionally, never before the open resolves', () => {
+    const fnMatch = src.match(/async function runOpen\(transport: EmailTransport\) \{([\s\S]*?)\n {2}\}/);
+    expect(fnMatch).not.toBeNull();
+    const body = fnMatch![1];
+    const openCallIdx = body.indexOf('const outcome = await openMaintenanceDraft(transport, prepared, () => {');
+    const recordIdx = body.indexOf('void recordDraftOpened(id)');
+    const setBusyFalseIdx = body.indexOf('setBusy(false);');
+    expect(openCallIdx).toBeGreaterThan(-1);
+    expect(recordIdx).toBeGreaterThan(openCallIdx);
+    expect(setBusyFalseIdx).toBeGreaterThan(recordIdx);
+  });
+
+  it('neither email button renders when `prepared.linkFits` is false — the oversized state is copy-only', () => {
+    expect(src).toMatch(/\{prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Outlook/);
+    expect(src).toMatch(/\{prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Default Email App/);
+    expect(src).toMatch(/\{!prepared\.linkFits \? \(\s*<Card[\s\S]{0,150}OVERSIZED_MESSAGE/);
+  });
+
+  it('the condensed notice is gated by the tested `shouldShowCondensedNotice` helper, actually assigned to a variable used in the render', () => {
+    expect(src).toMatch(/const\s+showCondensedNotice\s*=\s*shouldShowCondensedNotice\(prepared\)\s*;/);
+    expect(src).toMatch(/\{showCondensedNotice \? \(/);
+  });
+
+  it('the copy fallback is a SELECTABLE, non-editable TextInput (audit Q9 — no clipboard module in the binary)', () => {
+    expect(src).toMatch(
+      /<TextInput\s+multiline\s+editable=\{false\}\s+selectTextOnFocus\s+value=\{prepared\.clipboardText\}/,
+    );
+    // The literal "Press and hold..." copy lives in maintenance-email-
+    // actions.ts's COPY_HELPER_TEXT export (own test: exported copy is the
+    // literal, brief-pinned text) — this screen must render THAT constant,
+    // never a re-typed inline copy that could drift from it.
+    expect(src).toContain('{COPY_HELPER_TEXT}');
+  });
+
+  it('renders the detail-page StockPilot-activity note (web page.tsx\'s own verbatim sentence) — no fake ticket-conversation timeline', () => {
+    expect(src).toContain(
+      'Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here.',
+    );
+  });
+
+  it('never renders forbidden vocabulary implying an outcome StockPilot cannot observe (brief section 20)', () => {
+    const FORBIDDEN = [
+      'Ticket created',
+      'Request submitted to Zendesk',
+      'DC4 notified',
+      'Andrew notified',
+      'Ticket assigned',
+      'Email sent',
+    ];
+    for (const banned of FORBIDDEN) {
+      expect(src).not.toContain(banned);
+    }
+  });
+
+  it('derives status labels from MAINTENANCE_STATUS_LABELS, never a hand-copied literal', () => {
+    expect(src).toContain('MAINTENANCE_STATUS_LABELS');
+  });
+});
+
+/**
+ * WIRING PINS for the "Report a problem" launch points (Task 20). Both
+ * mirror web's `ReportProblemButton` gate exactly (moduleEnabled &&
+ * canSubmit) — a viewer who cannot submit must never see a button that only
+ * dead-ends on the destination screen's own re-gate, and an org with the
+ * module off must never see a dead affordance either.
+ */
+describe('scan.tsx "Report a problem" launch point', () => {
+  const src = readFileSync(
+    path.resolve(__dirname, '../../app/(drawer)/(tabs)/scan.tsx'),
+    'utf8',
+  );
+
+  it('`canReportProblem` is actually ASSIGNED FROM module-enabled AND submit-permission, not left dangling next to a hardcoded value', () => {
+    expect(src).toMatch(
+      /const\s+maintenanceEnabled\s*=\s*enabledModules\.has\(\s*['"]maintenance_requests['"]\s*\)\s*;/,
+    );
+    expect(src).toMatch(
+      /const\s+canReportProblem\s*=\s*\n\s*maintenanceEnabled\s*&&\s*showWriteCta\(permissions,\s*['"]maintenance_requests:submit['"]\s*\)\s*;/,
+    );
+  });
+
+  it('the button only renders behind `canReportProblem`, and pushes to /maintenance/new with the scanned item id — never sku/name (server re-derives, binding constraint 6)', () => {
+    const gateIdx = src.indexOf('{canReportProblem ? (');
+    expect(gateIdx).toBeGreaterThan(-1);
+    const pathnameIdx = src.indexOf("pathname: '/maintenance/new'", gateIdx);
+    const paramsIdx = src.indexOf('params: { itemId: item.id }', gateIdx);
+    expect(pathnameIdx).toBeGreaterThan(gateIdx);
+    expect(paramsIdx).toBeGreaterThan(pathnameIdx);
+  });
+});
+
+describe('item/[id].tsx "Report a problem" launch point', () => {
+  const src = readFileSync(path.resolve(__dirname, '../../app/item/[id].tsx'), 'utf8');
+
+  it('`canReportProblem` is actually ASSIGNED FROM module-enabled AND submit-permission, not left dangling next to a hardcoded value', () => {
+    expect(src).toMatch(
+      /const\s+canReportProblem\s*=\s*\n\s*enabledModules\.has\(\s*['"]maintenance_requests['"]\s*\)\s*&&\s*\n\s*showWriteCta\(permissions,\s*['"]maintenance_requests:submit['"]\s*\)\s*;/,
+    );
+  });
+
+  it('the button only renders behind `canReportProblem`, and pushes to /maintenance/new with THIS item\'s id — never sku/name (server re-derives, binding constraint 6)', () => {
+    const gateIdx = src.indexOf('{canReportProblem ? (');
+    expect(gateIdx).toBeGreaterThan(-1);
+    const pathnameIdx = src.indexOf("pathname: '/maintenance/new'", gateIdx);
+    const paramsIdx = src.indexOf('params: { itemId: item.id }', gateIdx);
+    expect(pathnameIdx).toBeGreaterThan(gateIdx);
+    expect(paramsIdx).toBeGreaterThan(pathnameIdx);
+  });
+});

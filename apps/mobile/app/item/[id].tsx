@@ -12,6 +12,7 @@ import {
   PackageMinus,
   Plus,
   RotateCcw,
+  Wrench,
 } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -52,6 +53,8 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -459,6 +462,15 @@ export default function ItemDetail() {
   // briefly over-shown control just 403s on save rather than leaking anything.
   const canEditNotes =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'movements:edit_notes'));
+  // "Report a problem" launch point (Task 20, master brief §8/§25) — the
+  // SAME two-part gate web's ReportProblemButton uses on this exact page's
+  // web twin (item-detail.tsx: `moduleEnabled && canReportProblem`), so a
+  // viewer who cannot submit never sees a button that only dead-ends on the
+  // destination screen's own re-gate.
+  const enabledModules = useEnabledModules();
+  const canReportProblem =
+    enabledModules.has('maintenance_requests') &&
+    showWriteCta(permissions, 'maintenance_requests:submit');
 
   // Optimistic reflect of a saved note edit across BOTH movement lists (the
   // Movements tab and the Activity tab keep independent arrays, and the same
@@ -1417,6 +1429,34 @@ export default function ItemDetail() {
                   style={{ marginTop: 10 }}
                 >
                   Remove from rack
+                </Button>
+              ) : null}
+              {canReportProblem ? (
+                <Button
+                  block
+                  variant="outline"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/maintenance/new',
+                      // Deep-link HINT only — MaintenanceRequestsService.create()
+                      // re-derives and validates this id server-side (uuid shape
+                      // + THIS org) before it is ever attached to a request
+                      // (binding constraint 6, mirrors web's ReportProblemButton
+                      // doc comment for this identical launch point).
+                      params: { itemId: item.id },
+                      // .expo/types/router.d.ts is stale (regenerated only by
+                      // the Expo dev server) and predates Task 19's route —
+                      // same cast maintenance.tsx's own 'New' button needs.
+                      // The double cast (TS's own suggested escape hatch) is
+                      // required because an unregistered pathname doesn't
+                      // structurally overlap any registered route's object
+                      // shape, unlike the plain-string form.
+                    } as unknown as Href)
+                  }
+                  leading={<Wrench size={16} color={c.ink} strokeWidth={1.5} />}
+                  style={{ marginTop: 10 }}
+                >
+                  Report a problem
                 </Button>
               ) : null}
               {/* Task 4 (Model B / SKU grouping clarity): quantity is a
