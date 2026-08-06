@@ -1,6 +1,8 @@
 import 'server-only';
 
-import { formatMaintenanceRequestNumber, MAINTENANCE_SHARE_LINK_TTL_DAYS } from '@stockpilot/core';
+import { createHash } from 'node:crypto';
+
+import { can, formatMaintenanceRequestNumber, MAINTENANCE_SHARE_LINK_TTL_DAYS } from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -13,32 +15,64 @@ import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContex
 // resolver below has no request context at all (anonymous caller).
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
 
-/** Bucket id from migration 0315 — same private, org-prefixed bucket Task 9's
- *  MaintenanceAttachmentsService reads. The anonymous share-page viewer has
- *  no ServiceContext (no session at all), so photo signing is re-implemented
- *  here directly on the ADMIN client rather than reusing that service. */
-const BUCKET = 'maintenance-photos';
+// Bucket id from migration 0315 — same private, org-prefixed bucket Task 9's
+// MaintenanceAttachmentsService reads. The anonymous share-page viewer has
+// no ServiceContext (no session at all); photo BYTES are streamed to it by
+// `/m/[token]/photo/[n]/route.ts` on the ADMIN client (its own BUCKET
+// constant — see `resolveMaintenanceSharePhoto` below). Nothing in THIS
+// file ever mints a signed URL for a photo (fix wave C1 — a signed URL's
+// query string embeds the bucket name plus the org/request/attachment
+// UUIDs verbatim, which is exactly the storage-path leak brief §10
+// forbids), so there is no bucket constant to declare here at all.
 
-/** In-app-equivalent TTL for a signed photo URL rendered on the public share
- *  page — same 1-hour window MaintenanceAttachmentsService.signedViewUrls
- *  uses for the authenticated detail page (VIEW_URL_TTL_SEC there). Short on
- *  purpose: the SHARE LINK itself (not this signed URL) is the long-lived,
- *  revocable credential a recipient holds — every page load mints fresh
- *  signed URLs, so nothing photo-shaped outlives a single view. */
-const PHOTO_SIGN_TTL_SEC = 60 * 60;
+/** The three (and only three) mime types migration 0314's
+ *  `maintenance_request_attachments.mime_type` CHECK constraint allows —
+ *  every row in the table already satisfies this at the DB layer; repeated
+ *  here only so the proxy route has a real TS union to switch on instead of
+ *  a bare `string`. */
+export type MaintenanceAttachmentMime = 'image/png' | 'image/jpeg' | 'image/webp';
 
 /** Matches organizations.public_request_token / public_request_links.token
  *  (migration 0261): 64 hex characters from `crypto.getRandomValues(32
  *  bytes)`. The DB column only constrains length (16-128); this regex is a
  *  stricter pre-DB-hit guard — every token this service ever mints is
- *  hex, so anything else is provably not a real token and short-circuits
- *  BEFORE the admin client (and its round trip) is ever touched. */
-const TOKEN_SHAPE = /^[0-9a-f]{16,128}$/i;
+ *  lowercase hex (`mintToken` below always lower-cases via `toString(16)`),
+ *  so anything else is provably not a real token and short-circuits BEFORE
+ *  the admin client (and its round trip) is ever touched. No `/i` flag
+ *  (fix wave m7): an uppercase-hex input can never match a token this
+ *  service actually minted, so accepting one here would only widen the
+ *  probe surface for free, not real callers.
+ */
+const TOKEN_SHAPE = /^[0-9a-f]{16,128}$/;
 
 function mintToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** SHA-256 hex digest of the FULL token — the rate-limit bucket key shared
+ *  by every public `/m/<token>` surface (the page AND the photo proxy route
+ *  key off the SAME bucket per token, fix wave C1/m6). Never a raw or
+ *  sliced token: a `rate_limit_buckets` row keyed by `token.slice(0, 32)`
+ *  persists a working CREDENTIAL FRAGMENT at rest (GC 27), and a 32-char
+ *  slice of a 64-char token keeps only half its entropy, so two distinct
+ *  minted tokens could theoretically collide onto the same bucket — one
+ *  visitor's rate-limit hit would then throttle a completely different
+ *  request's link. A full digest is irreversible and (practically)
+ *  collision-free, and this is the same `createHash('sha256')` convention
+ *  `/r/confirm/submit/route.ts` already uses for its own public token.
+ */
+export function hashShareToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function isExpired(expiresAt: string): boolean {
+  return new Date(expiresAt).getTime() <= Date.now();
+}
+
+function toShareLink(token: string, expiresAt: string): MaintenanceShareLink {
+  return { token, url: `${APP_URL}/m/${token}`, expiresAt };
 }
 
 export interface MaintenanceShareLink {
@@ -53,7 +87,108 @@ export interface ResolvedMaintenanceShare {
   description: string;
   siteName: string | null;
   createdAt: string;
-  photos: { url: string; thumbUrl: string | null; filename: string }[];
+  photos: { filename: string }[];
+}
+
+/** What the photo PROXY route needs for exactly one photo — the raw storage
+ *  path and the STORED (sniffed-at-upload) mime type. Deliberately a
+ *  SEPARATE, narrower type from `ResolvedMaintenanceShare`: the page-facing
+ *  projection above must stay genuinely storage-path-free (its own doc
+ *  comment and its test suite both pin that), so this type — and the
+ *  function that returns it — exist only for the one server-side caller
+ *  that legitimately needs a raw path: the proxy route streaming bytes on
+ *  the service-role client. Never pass this to anything that renders HTML. */
+export interface ResolvedMaintenanceSharePhoto {
+  storagePath: string;
+  mimeType: MaintenanceAttachmentMime;
+  filename: string;
+}
+
+interface AttachmentRow {
+  storage_path: string;
+  mime_type: string;
+  safe_filename: string;
+}
+
+const ALLOWED_MIME = new Set<string>(['image/png', 'image/jpeg', 'image/webp']);
+
+/** Defensive per-row validity check (fix wave m4 — "keep the per-photo skip
+ *  as-is"). Every column here is NOT NULL / CHECK-constrained at the DB
+ *  layer (migration 0314), so a row should never actually fail this in
+ *  practice; it exists so one malformed/legacy row can never crash or
+ *  block the rest of the list, mirroring the resilience the OLD
+ *  (signing-based) implementation had for a broken photo. Both
+ *  `resolveMaintenanceShareToken` and `resolveMaintenanceSharePhoto` apply
+ *  this SAME filter before indexing, so the Nth item in the page's photo
+ *  list and `GET /m/<token>/photo/<N>` always refer to the same photo. */
+function isValidAttachmentRow(row: AttachmentRow): boolean {
+  return (
+    typeof row.storage_path === 'string' &&
+    row.storage_path.length > 0 &&
+    typeof row.safe_filename === 'string' &&
+    row.safe_filename.length > 0 &&
+    ALLOWED_MIME.has(row.mime_type)
+  );
+}
+
+/**
+ * THE single resolver funnel (fix wave C1 doc note, formalized): the ONLY
+ * place a token gets checked against `maintenance_request_share_links` —
+ * shape, existence, `active`, `expires_at`. `resolveMaintenanceShareToken`
+ * (the page's projection) and `resolveMaintenanceSharePhoto` (the proxy
+ * route's raw-path lookup) both build on exactly this function; neither
+ * re-implements the check. A future hash-at-rest migration for the token
+ * column, or any other change to what "a valid link" means, only ever
+ * touches this one function.
+ *
+ * Every branch that isn't a full, valid, active, unexpired-token match
+ * returns the SAME generic `null` — unknown, revoked, and expired tokens
+ * are indistinguishable to every caller of this function (no timing-obvious
+ * branch, no distinct message).
+ */
+async function resolveActiveShareRequest(
+  token: string,
+): Promise<{ organizationId: string; maintenanceRequestId: string } | null> {
+  if (!TOKEN_SHAPE.test(token)) return null;
+
+  const admin = createAdminClient();
+  const { data: link } = await admin
+    .from('maintenance_request_share_links')
+    .select('maintenance_request_id, organization_id, active, expires_at')
+    .eq('token', token)
+    .maybeSingle();
+  if (!link) return null;
+  const row = link as {
+    maintenance_request_id: string;
+    organization_id: string;
+    active: boolean;
+    expires_at: string;
+  };
+  if (!row.active) return null;
+  if (isExpired(row.expires_at)) return null;
+
+  return { organizationId: row.organization_id, maintenanceRequestId: row.maintenance_request_id };
+}
+
+/** Every attachment row for a resolved (org, request) pair, ordered exactly
+ *  like the authenticated detail page (`sort_order`), and defensively
+ *  filtered (see `isValidAttachmentRow`). Shared by both public functions
+ *  below so their photo lists/indices can never drift apart. Returns `null`
+ *  on a query error (fix wave m4 — a whole-query failure must surface as
+ *  "this link doesn't resolve", never silently render as zero photos). */
+async function fetchValidAttachments(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  maintenanceRequestId: string,
+): Promise<AttachmentRow[] | null> {
+  const { data, error } = await admin
+    .from('maintenance_request_attachments')
+    .select('storage_path, mime_type, safe_filename')
+    .eq('maintenance_request_id', maintenanceRequestId)
+    .eq('organization_id', organizationId)
+    .order('sort_order', { ascending: true });
+  if (error) return null;
+  return ((data ?? []) as AttachmentRow[]).filter(isValidAttachmentRow);
 }
 
 export class MaintenanceShareLinksService {
@@ -68,27 +203,37 @@ export class MaintenanceShareLinksService {
    * (0314) — every write here runs on the ADMIN client, deliberately. The
    * READ that decides whether this caller may even ask for a link runs on
    * `ctx.supabase` (RLS-scoped): the 0314 `maintenance_requests_select`
-   * policy already answers "requester-own OR read_all OR manage", which is
-   * exactly this method's authorization boundary (brief section 5 — a
-   * requester needs their OWN request's link for the outgoing email; a
-   * read_all/manage holder needs it too). A caller RLS can't see gets a
-   * `not_found` here, never a `forbidden` — same "don't confirm a foreign
-   * row exists" posture as `MaintenanceRequestsService.get()`.
+   * policy already answers "requester-own OR read_all OR manage" for plain
+   * VISIBILITY — but minting a 180-day, unauthenticated, durable credential
+   * for that request is a materially bigger privilege than merely reading
+   * it (fix wave I3). A `read_all`-only holder can see every request in the
+   * org yet must not be able to hand a stranger a long-lived link to one
+   * they don't own; the gate below is `maintenance_requests:manage` UNLESS
+   * the caller is the request's OWN requester and still holds `submit` (the
+   * same low bar that let them create it in the first place). A caller RLS
+   * can't see gets a `not_found` here, never a `forbidden` — same "don't
+   * confirm a foreign row exists" posture as `MaintenanceRequestsService.get()`.
    */
   async ensureActiveLink(requestId: string): Promise<MaintenanceShareLink> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
 
     const { data: parent, error } = await this.ctx.supabase
       .from('maintenance_requests')
-      .select('id')
+      .select('id, requester_user_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', requestId)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!parent) throw new ServiceError('not_found', 'Maintenance request not found');
 
+    const row = parent as { id: string; requester_user_id: string | null };
+    const isOwningRequester =
+      row.requester_user_id === this.ctx.userId && can(this.ctx, 'maintenance_requests:submit');
+    if (!isOwningRequester) {
+      assertPermission(this.ctx, 'maintenance_requests:manage');
+    }
+
     const admin = createAdminClient();
-    const nowIso = new Date().toISOString();
 
     // Look for ANY currently-active row, regardless of expiry — the partial
     // unique index `maintenance_request_share_links_one_active_uniq` (0314)
@@ -105,19 +250,23 @@ export class MaintenanceShareLinksService {
     if (existingErr) throw new ServiceError('internal_error', existingErr.message);
 
     if (existing) {
-      const expired = new Date(existing.expires_at as string).getTime() <= Date.now();
-      if (!expired) {
-        return {
-          token: existing.token as string,
-          url: `${APP_URL}/m/${existing.token}`,
-          expiresAt: existing.expires_at as string,
-        };
+      const existingRow = existing as { token: string; expires_at: string };
+      if (!isExpired(existingRow.expires_at)) {
+        return toShareLink(existingRow.token, existingRow.expires_at);
       }
       // Stale: deactivate it before minting a fresh row, or the insert
-      // below 23505s against the partial unique index.
+      // below 23505s against the partial unique index. `revoked_at` stays
+      // NULL here on purpose (fix wave m3) — that column records an
+      // explicit `revoke()` call by a manage-holder; natural expiry is a
+      // different event and conflating the two would make the audit trail
+      // claim someone revoked a link that actually just lapsed on its own.
+      // `active=false` + `revoked_at IS NULL` + `expires_at` in the past is
+      // the "expired, never revoked" state; `revoked_at IS NOT NULL` is
+      // "someone killed it early" — `revoke()` below is the only writer of
+      // that column.
       const { error: deactivateErr } = await admin
         .from('maintenance_request_share_links')
-        .update({ active: false, revoked_at: nowIso })
+        .update({ active: false })
         .eq('organization_id', this.ctx.organizationId)
         .eq('maintenance_request_id', requestId)
         .eq('active', true);
@@ -151,11 +300,16 @@ export class MaintenanceShareLinksService {
           .eq('active', true)
           .maybeSingle();
         if (!wonErr && won) {
-          return {
-            token: won.token as string,
-            url: `${APP_URL}/m/${won.token}`,
-            expiresAt: won.expires_at as string,
-          };
+          const wonRow = won as { token: string; expires_at: string };
+          // Expiry-symmetric with the `existing` branch above (fix wave
+          // m2): the row that won the race was just inserted with a fresh
+          // 180-day TTL, so this is practically unreachable — but a raced
+          // re-fetch must never hand back a link this function itself
+          // considers already-dead just because it skipped the same check
+          // the non-raced path always runs.
+          if (!isExpired(wonRow.expires_at)) {
+            return toShareLink(wonRow.token, wonRow.expires_at);
+          }
         }
       }
       throw new ServiceError('internal_error', insErr.message);
@@ -170,7 +324,7 @@ export class MaintenanceShareLinksService {
       },
       this.ctx,
     );
-    return { token, url: `${APP_URL}/m/${token}`, expiresAt };
+    return toShareLink(token, expiresAt);
   }
 
   /** manage-only. Deactivates every currently-active link for the request.
@@ -202,85 +356,46 @@ export class MaintenanceShareLinksService {
 
 /**
  * Anonymous resolution — module-scoped function, no ServiceContext, because
- * the `/m/<token>` visitor has no StockPilot session at all. Deliberately
- * the ONLY function that ever turns a token into request data, so a future
- * hash-at-rest migration (recorded, not implemented here) only has to change
- * this one lookup. Every branch that isn't a full, valid, active,
- * unexpired-token match returns the SAME generic `null` — unknown, revoked,
- * and expired tokens are indistinguishable to the caller (no timing-obvious
- * branch, no distinct message).
+ * the `/m/<token>` visitor has no StockPilot session at all. Builds on the
+ * single resolver funnel (`resolveActiveShareRequest`) and returns an
+ * explicit ALLOW-LIST projection, not `select('*')` with keys deleted:
+ * requestNumber/subject/description/siteName/createdAt/photos and nothing
+ * else. No requester name/email/phone, no internal notes, no local owner,
+ * no other requests — and (fix wave C1) NO storage path and NO signed URL:
+ * `photos` carries only a `filename`, used solely for `alt` text and to
+ * size the grid. The actual bytes are served by
+ * `/m/[token]/photo/[n]/route.ts`, which streams them from Storage on the
+ * service-role client and never hands the browser anything storage-shaped
+ * either — see `resolveMaintenanceSharePhoto` below for that half.
  *
  * Uses the ADMIN client deliberately: there is no authenticated user to ride
  * RLS with. Every subsequent query is scoped by the RESOLVED link's OWN
  * `organization_id` + `maintenance_request_id` — never by anything else —
  * so a caller can never widen the query past the single request the token
  * actually names.
- *
- * The return shape is an explicit ALLOW-LIST projection, not `select('*')`
- * with keys deleted: requestNumber/subject/description/siteName/createdAt/
- * photos and nothing else. No requester name/email/phone, no internal notes,
- * no local owner, no other requests, no storage path — adding a column to
- * `maintenance_requests` can never leak through this function by accident.
  */
 export async function resolveMaintenanceShareToken(
   token: string,
 ): Promise<ResolvedMaintenanceShare | null> {
-  if (!TOKEN_SHAPE.test(token)) return null;
+  const resolved = await resolveActiveShareRequest(token);
+  if (!resolved) return null;
 
   const admin = createAdminClient();
-  const { data: link } = await admin
-    .from('maintenance_request_share_links')
-    .select('maintenance_request_id, organization_id, active, expires_at')
-    .eq('token', token)
-    .maybeSingle();
-  if (!link) return null;
-  const row = link as {
-    maintenance_request_id: string;
-    organization_id: string;
-    active: boolean;
-    expires_at: string;
-  };
-  if (!row.active) return null;
-  if (new Date(row.expires_at).getTime() < Date.now()) return null;
-
-  // Scoped by BOTH fields the link resolution itself just proved — never by
-  // anything a caller could otherwise supply (the only input to this whole
-  // function is the token).
   const { data: req } = await admin
     .from('maintenance_requests')
     .select('request_number, created_at, subject, description, charters!charter_id(name)')
-    .eq('id', row.maintenance_request_id)
-    .eq('organization_id', row.organization_id)
+    .eq('id', resolved.maintenanceRequestId)
+    .eq('organization_id', resolved.organizationId)
     .maybeSingle();
   if (!req) return null;
   const reqRow = req as Record<string, unknown>;
 
-  const { data: atts } = await admin
-    .from('maintenance_request_attachments')
-    .select('storage_path, thumbnail_path, safe_filename')
-    .eq('maintenance_request_id', row.maintenance_request_id)
-    .eq('organization_id', row.organization_id)
-    .order('sort_order', { ascending: true });
-
-  const photos: { url: string; thumbUrl: string | null; filename: string }[] = [];
-  for (const a of (atts ?? []) as Record<string, unknown>[]) {
-    const master = await admin.storage
-      .from(BUCKET)
-      .createSignedUrl(a.storage_path as string, PHOTO_SIGN_TTL_SEC);
-    // One broken photo never breaks the page — skip it and keep going.
-    if (master.error || !master.data) continue;
-    let thumbUrl: string | null = null;
-    const thumbnailPath = a.thumbnail_path as string | null;
-    if (thumbnailPath) {
-      const thumb = await admin.storage.from(BUCKET).createSignedUrl(thumbnailPath, PHOTO_SIGN_TTL_SEC);
-      if (!thumb.error && thumb.data) thumbUrl = thumb.data.signedUrl;
-    }
-    photos.push({
-      url: master.data.signedUrl,
-      thumbUrl,
-      filename: a.safe_filename as string,
-    });
-  }
+  const attachments = await fetchValidAttachments(
+    admin,
+    resolved.organizationId,
+    resolved.maintenanceRequestId,
+  );
+  if (attachments === null) return null;
 
   const charter = reqRow.charters as { name?: string } | null;
   return {
@@ -290,6 +405,49 @@ export async function resolveMaintenanceShareToken(
     description: reqRow.description as string,
     siteName: charter?.name ?? null,
     createdAt: reqRow.created_at as string,
-    photos,
+    photos: attachments.map((a) => ({ filename: a.safe_filename })),
+  };
+}
+
+/**
+ * The proxy route's ONLY data source (fix wave C1) — same resolver funnel
+ * and same defensively-filtered attachment list as
+ * `resolveMaintenanceShareToken` above, so `photos[index]` on the page and
+ * `GET /m/<token>/photo/<index>` always name the same photo. Returns the
+ * RAW storage path and the STORED (sniffed-at-upload, never client-supplied)
+ * mime type — this is the one place in the whole feature those are allowed
+ * to leave this module, and only into the proxy route's own server-side
+ * `admin.storage.download()` call, never into anything rendered or
+ * returned to the browser.
+ *
+ * `index` is bounds-checked here (an out-of-range or negative index is
+ * just another "unresolved" outcome, `null`) — the ROUTE never trusts a
+ * client-supplied `n` to index anything before this function has validated
+ * it against the request's OWN photo count.
+ */
+export async function resolveMaintenanceSharePhoto(
+  token: string,
+  index: number,
+): Promise<ResolvedMaintenanceSharePhoto | null> {
+  if (!Number.isInteger(index) || index < 0) return null;
+
+  const resolved = await resolveActiveShareRequest(token);
+  if (!resolved) return null;
+
+  const admin = createAdminClient();
+  const attachments = await fetchValidAttachments(
+    admin,
+    resolved.organizationId,
+    resolved.maintenanceRequestId,
+  );
+  if (attachments === null) return null;
+
+  const row = attachments[index];
+  if (!row) return null;
+
+  return {
+    storagePath: row.storage_path,
+    mimeType: row.mime_type as MaintenanceAttachmentMime,
+    filename: row.safe_filename,
   };
 }

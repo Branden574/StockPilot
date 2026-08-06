@@ -1,13 +1,23 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 import { env } from '@/lib/env.client';
+import { isSharePath } from '@/lib/share-paths';
 
 /**
  * PostHog bootstrap. Mounted at the app root so pageviews + autocapture
- * cover every route.
+ * cover every route — EXCEPT the public share surfaces under `/m/` and
+ * `/r/` (fix wave I6). Those URLs carry a raw, unauthenticated credential
+ * IN THE PATH ITSELF, and PostHog's pageview/autocapture ships
+ * `window.location.href` verbatim to a third-party vendor — that would
+ * leak the token (GC 27: never log a share token or signed URL).
+ * `NEXT_PUBLIC_POSTHOG_KEY` is unset in both env files as of this fix wave,
+ * so none of this fires today — but it is exactly one env var away from
+ * going live, with no code change that would catch it at that point, so
+ * the guard is on the PATH, not on the key staying empty forever.
  *
  * INERT BY DEFAULT: when `NEXT_PUBLIC_POSTHOG_KEY` is empty we never import or
  * init posthog-js, so there is no network traffic, no errors, and the ~200KB
@@ -19,9 +29,23 @@ import { env } from '@/lib/env.client';
  * SSR) and is guarded against the StrictMode double-invoke via `__loaded`.
  */
 export function PostHogProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const onSharePath = isSharePath(pathname);
+
   useEffect(() => {
     const key = env.NEXT_PUBLIC_POSTHOG_KEY;
     if (!key) return; // unconfigured → do nothing (no import, no init, no network)
+    if (onSharePath) {
+      // Never initialize FROM a share path. `capture_pageview`/`autocapture`
+      // are init-time-only options, so if the singleton is somehow already
+      // loaded (an in-app client-side transition landed here from a normal
+      // page — unlikely, but not impossible), opt it out rather than let it
+      // keep capturing while we're on a token-bearing URL.
+      void import('posthog-js').then(({ default: posthog }) => {
+        if (posthog.__loaded) posthog.opt_out_capturing();
+      });
+      return;
+    }
     let cancelled = false;
     void import('posthog-js').then(({ default: posthog }) => {
       if (cancelled || posthog.__loaded) return; // unmounted or already initialized
@@ -43,7 +67,7 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onSharePath]);
 
   return <>{children}</>;
 }
