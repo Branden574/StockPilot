@@ -175,6 +175,23 @@ describe('finalizePhoto', () => {
  * assertions pin the load-bearing rules a fresh edit could silently drop —
  * same idiom as item-create.test.ts's "app/item/new.tsx is wired to the
  * shared create path" block.
+ *
+ * HONEST LIMITS OF THIS TECHNIQUE (read before touching this file again):
+ * these are TEXT assertions over a source string — `readFileSync` + string/
+ * regex matching, nothing executes. That means they DO catch: the literal
+ * words/vocabulary this feature depends on going missing (a banned phrase
+ * creeping in, a note's wording drifting from the brief), and a symbol being
+ * deleted outright (an import, a call, a permission key disappearing from
+ * the file). It does NOT prove the code actually RUNS the way the pin
+ * implies at runtime — a value can satisfy every regex here while being
+ * completely disconnected from the variable that controls rendering or
+ * gating (dead code sitting next to a hardcoded replacement), and a `return`
+ * can vanish from inside a matched `if` block undetected UNLESS a pin
+ * specifically opens that block and looks. Every pin below that claims to
+ * verify a GATE (not just presence of a phrase) opens the actual assignment
+ * or block body and checks its contents, rather than checking that two
+ * unrelated substrings both merely occur somewhere in the file. A future
+ * pin added here must do the same, or it is decoration, not a test.
  */
 describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate language', () => {
   const src = readFileSync(
@@ -182,22 +199,44 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
     'utf8',
   );
 
-  it('reads the shared module registry, not a bespoke check', () => {
+  it('`enabled` is actually ASSIGNED FROM the shared module registry, not left dangling next to a hardcoded value', () => {
+    // Checking `useEnabledModules` and `.has('maintenance_requests')` are
+    // both present anywhere in the file is not enough: a mutation can leave
+    // `enabledModules.has('maintenance_requests');` sitting in the file as a
+    // dead, unassigned expression and hardcode `const enabled = true;` right
+    // next to it — every substring check above still passes. This pin
+    // requires the `.has(...)` call to be the right-hand side of the
+    // `enabled` assignment itself.
     expect(src).toContain('useEnabledModules');
-    expect(src).toMatch(/\.has\(['"]maintenance_requests['"]\)/);
+    expect(src).toMatch(
+      /const\s+enabled\s*=\s*enabledModules\.has\(\s*['"]maintenance_requests['"]\s*\)\s*;/,
+    );
   });
 
-  it('the module-off branch renders BEFORE the list ever loads (unreachable + invisible when off)', () => {
-    // The load() callback must early-return while the module is off, and
-    // that early-return must appear before the actual CALL (not just the
-    // import line, which is always near the top) in source order —
-    // otherwise "invisible when off" is cosmetic only and a disabled org
-    // still fires the request.
+  it('the module-off branch renders BEFORE the list ever loads, and the guard actually RETURNS (unreachable + invisible when off)', () => {
+    // Two separate ways this can look fixed while being broken:
+    //  1. the `if (!enabled)` text exists somewhere before the call site but
+    //     isn't really guarding it (checked via index comparison, as before);
+    //  2. the `if (!enabled) { ... }` block exists in the right place but its
+    //     `return;` has been stripped, leaving the guard clear the loading
+    //     spinner and fall through into the fetch anyway — a disabled org
+    //     would then silently fire the request, contradicting this file's
+    //     own "Invisible when off" comment. Pass #1 alone cannot catch this:
+    //     it only ever checked that the `if (...)` TEXT preceded the call,
+    //     never that a `return` sat inside it. This pin opens the block body
+    //     and requires an actual `return;` inside it, then checks THAT
+    //     return's own position — not the `if`'s — against the call site.
     const callSite = src.indexOf('await listMaintenanceRequests(');
-    const earlyReturnGuard = src.search(/if\s*\(\s*!enabled\s*\)/);
-    expect(earlyReturnGuard).toBeGreaterThan(-1);
     expect(callSite).toBeGreaterThan(-1);
-    expect(earlyReturnGuard).toBeLessThan(callSite);
+
+    const guardMatch = src.match(/if\s*\(\s*!enabled\s*\)\s*\{([\s\S]*?)\}/);
+    expect(guardMatch).not.toBeNull();
+    const guardBody = guardMatch![1];
+    expect(guardBody).toContain('return;');
+
+    const returnOffset = guardMatch!.index! + guardMatch![0].indexOf('return;');
+    expect(returnOffset).toBeGreaterThan(-1);
+    expect(returnOffset).toBeLessThan(callSite);
   });
 
   it('renders the brief section 22 note verbatim', () => {
@@ -220,13 +259,26 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
     }
   });
 
-  it('gates the all-org scope on read_all/manage, not submit alone', () => {
-    expect(src).toContain('maintenance_requests:read_all');
-    expect(src).toContain('maintenance_requests:manage');
+  it('`canReadAll` is actually ASSIGNED FROM showWriteCta(read_all/manage), not left dangling next to a hardcoded value', () => {
+    // Same class of gap as the `enabled` pin above: a mutation can leave both
+    // showWriteCta(...) calls sitting in the file as dead, unassigned
+    // expressions and hardcode `const canReadAll = true;` beside them — a
+    // pin that only checks the permission strings occur SOMEWHERE in the
+    // file cannot tell the difference. This requires `canReadAll` to be
+    // assigned directly from the `||` of both calls.
+    expect(src).toMatch(
+      /const\s+canReadAll\s*=\s*showWriteCta\(\s*perms\s*,\s*['"]maintenance_requests:read_all['"]\s*\)\s*\|\|\s*showWriteCta\(\s*perms\s*,\s*['"]maintenance_requests:manage['"]\s*\)\s*;/,
+    );
   });
 
-  it('gates the New-request affordance on submit', () => {
-    expect(src).toContain('maintenance_requests:submit');
+  it('`canSubmit` is actually ASSIGNED FROM showWriteCta(submit), not left dangling next to a hardcoded value', () => {
+    // The New-request affordance and the search box's scope='all' branch
+    // both key off canSubmit/canReadAll — the same dead-code-plus-hardcode
+    // gap applies here too, so it gets the same assignment-shape pin rather
+    // than a bare substring check.
+    expect(src).toMatch(
+      /const\s+canSubmit\s*=\s*showWriteCta\(\s*perms\s*,\s*['"]maintenance_requests:submit['"]\s*\)\s*;/,
+    );
   });
 
   it('derives status labels from MAINTENANCE_STATUS_LABELS, never a hand-copied literal', () => {

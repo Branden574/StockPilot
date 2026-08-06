@@ -24,6 +24,12 @@ import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { showWriteCta } from '@/lib/cta-gating';
+import {
+  createDebouncedScheduler,
+  createSequenceGuard,
+  type DebouncedScheduler,
+  type SequenceGuard,
+} from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   listMaintenanceRequests,
@@ -63,6 +69,12 @@ const STATUS_PILL: Record<MaintenanceStatus, 'default' | 'warn' | 'ok' | 'crit'>
 const SECTION_22_NOTE =
   'Ticket updates and replies are handled through the Outlook/Zendesk email conversation and are not synchronized into StockPilot.';
 
+// Same 250ms window inventory.tsx / books.tsx already debounce their own
+// search effects by — a scope toggle rides the same delay too (masked by the
+// loading skeleton), matching how those screens also debounce a filter tap,
+// not just typed characters.
+const SEARCH_DEBOUNCE_MS = 250;
+
 export default function MaintenanceListScreen() {
   const { c } = useTheme();
   const router = useRouter();
@@ -82,6 +94,18 @@ export default function MaintenanceListScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
 
+  // `q` changes on every keystroke; without the debounce below that fires a
+  // fresh GET per character. The sequence guard is a second, independent
+  // safeguard the debounce alone does not provide: even with debouncing, a
+  // slow response for an older call can still land after a fast response for
+  // a newer one, and only the guard — not timing — stops it from overwriting
+  // rows a newer call already owns. Same two idioms this app already uses
+  // inline elsewhere (see debounced-list-load.ts's own doc comment).
+  const schedulerRef = React.useRef<DebouncedScheduler | null>(null);
+  if (!schedulerRef.current) schedulerRef.current = createDebouncedScheduler(SEARCH_DEBOUNCE_MS);
+  const guardRef = React.useRef<SequenceGuard | null>(null);
+  if (!guardRef.current) guardRef.current = createSequenceGuard();
+
   const load = React.useCallback(async () => {
     // Invisible when off, not just unreachable: a disabled org never fires
     // the request at all, matching the drawer entry that never appears.
@@ -90,22 +114,29 @@ export default function MaintenanceListScreen() {
       setRefreshing(false);
       return;
     }
+    const seq = guardRef.current!.next();
     setLoadError(null);
     try {
       const res = await listMaintenanceRequests({ scope, q: q.trim() || undefined });
+      if (!guardRef.current!.isCurrent(seq)) return; // stale — a newer load owns the list now
       setRows(res);
     } catch (e) {
+      if (!guardRef.current!.isCurrent(seq)) return;
       setLoadError(
         e instanceof Error ? e.message : "Couldn't load maintenance requests. Try again.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (guardRef.current!.isCurrent(seq)) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [enabled, scope, q]);
 
   React.useEffect(() => {
-    void load();
+    const scheduler = schedulerRef.current!;
+    scheduler.schedule(() => void load());
+    return () => scheduler.cancel();
   }, [load]);
 
   function onRefresh() {
@@ -185,7 +216,7 @@ export default function MaintenanceListScreen() {
                 label="SEARCH"
                 value={q}
                 onChangeText={setQ}
-                placeholder="Request #, subject, description, requester…"
+                placeholder="Search request #, subject, description, requester…"
                 autoCapitalize="none"
                 autoCorrect={false}
                 returnKeyType="search"
