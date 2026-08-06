@@ -75,7 +75,15 @@ export interface MaintenanceEmailInput {
   building: string | null;
   roomOrArea: string | null;
   accessInstructions: string | null;
-  relatedItem: { name: string; sku: string | null; modelNumber: string | null; url: string | null } | null;
+  relatedItem: {
+    name: string;
+    sku: string | null;
+    barcode: string | null;
+    modelNumber: string | null;
+    warehouseName: string | null;
+    locationName: string | null;
+    url: string | null;
+  } | null;
   relatedOrder: { handle: string; requestedFor: string | null; url: string | null } | null;
   relatedRental: { itemNames: string[]; borrowerName: string | null; url: string | null } | null;
   photoCount: number;
@@ -266,7 +274,13 @@ export function buildMaintenanceEmailDraft(
         [
           line('Item', input.relatedItem.name),
           line('SKU', input.relatedItem.sku),
+          // Master brief §8's field list — deliberately NO Asset Tag line:
+          // no `inventory_items.asset_tag` column exists anywhere and the
+          // CSV importer validates-then-drops that header (audit Q6).
+          line('Barcode', input.relatedItem.barcode),
           line('Model Number', input.relatedItem.modelNumber),
+          line('Warehouse', input.relatedItem.warehouseName),
+          line('Location', input.relatedItem.locationName),
           line('StockPilot Item', input.relatedItem.url),
         ]
           .filter((l): l is string => Boolean(l))

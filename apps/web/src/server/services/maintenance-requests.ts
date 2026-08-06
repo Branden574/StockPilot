@@ -157,6 +157,29 @@ export class MaintenanceRequestsService {
     return can(this.ctx, 'maintenance_requests:read_all') || can(this.ctx, 'maintenance_requests:manage');
   }
 
+  /** Task 17 / binding constraint 2: re-derives a client-supplied related-
+   *  record id against THIS org before it is ever attached to a request.
+   *  Returns the id unchanged when a row exists in `table` with a matching
+   *  `organization_id` — otherwise null. Never throws on a
+   *  foreign/nonexistent id (that is the intended degrade-gracefully
+   *  outcome, not an error); a genuine read failure still surfaces as
+   *  internal_error, matching every other read in this file. Skips the
+   *  round trip entirely when no id was supplied. */
+  private async resolveRelatedId(
+    table: 'inventory_items' | 'order_requests' | 'rentals' | 'locations',
+    id: string | null | undefined,
+  ): Promise<string | null> {
+    if (!id) return null;
+    const { data, error } = await this.db
+      .from(table)
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return data ? id : null;
+  }
+
   async create(input: unknown): Promise<{ id: string; requestNumber: number; createdAt: string }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     assertPermission(this.ctx, 'maintenance_requests:submit');
@@ -187,11 +210,28 @@ export class MaintenanceRequestsService {
     // init: id/email/full_name/avatar_url/default_organization_id only), so
     // requester_phone_snapshot is the one snapshot field that legitimately
     // comes from client input (see the schema-strictness comment above).
-    const { data: profile } = await this.db
-      .from('user_profiles')
-      .select('full_name, email')
-      .eq('id', this.ctx.userId)
-      .maybeSingle();
+    //
+    // Task 17 / binding constraint 2: relatedItemId/relatedOrderRequestId/
+    // relatedRentalId/relatedLocationId are a DEEP-LINK HINT, never
+    // authority — a launch-point query string (Report a problem on an
+    // item/order/rental detail page) reaches here as plain form input,
+    // indistinguishable from an id the requester actually picked, and the
+    // column-level FK only proves the row exists SOMEWHERE, not that it
+    // belongs to THIS org. Every one of the four is re-derived against this
+    // org, in parallel with the profile lookup, before it is ever
+    // persisted: a foreign-org or nonexistent id degrades to null (the
+    // request still saves — only that one attachment is dropped), it never
+    // throws and it is never inserted verbatim. Same defense-in-depth shape
+    // as assignLocalOwner's organization_members re-check (I2) below.
+    const [profileRes, relatedItemId, relatedOrderRequestId, relatedRentalId, relatedLocationId] =
+      await Promise.all([
+        this.db.from('user_profiles').select('full_name, email').eq('id', this.ctx.userId).maybeSingle(),
+        this.resolveRelatedId('inventory_items', v.relatedItemId),
+        this.resolveRelatedId('order_requests', v.relatedOrderRequestId),
+        this.resolveRelatedId('rentals', v.relatedRentalId),
+        this.resolveRelatedId('locations', v.relatedLocationId),
+      ]);
+    const profile = profileRes.data;
     const fullName = (profile?.full_name as string | null | undefined)?.trim();
     const email = (profile?.email as string | null | undefined) ?? null;
 
@@ -213,10 +253,10 @@ export class MaintenanceRequestsService {
         room_or_area: v.roomOrArea ?? null,
         department: v.department ?? null,
         access_instructions: v.accessInstructions ?? null,
-        related_item_id: v.relatedItemId ?? null,
-        related_order_request_id: v.relatedOrderRequestId ?? null,
-        related_rental_id: v.relatedRentalId ?? null,
-        related_location_id: v.relatedLocationId ?? null,
+        related_item_id: relatedItemId,
+        related_order_request_id: relatedOrderRequestId,
+        related_rental_id: relatedRentalId,
+        related_location_id: relatedLocationId,
         status: 'saved',
       })
       .select('id, request_number, created_at')
@@ -232,7 +272,10 @@ export class MaintenanceRequestsService {
           request_number: row.request_number,
           priority: v.priority,
           category: v.category ?? null,
-          has_related_item: Boolean(v.relatedItemId),
+          // Reflects what was ACTUALLY attached post-org-scoping, not
+          // merely what the client requested — a dropped foreign-org id
+          // must never show up here as though it succeeded.
+          has_related_item: Boolean(relatedItemId),
           // NEVER the description, subject, phone, or a compose URL (GC 27).
         },
       },
@@ -712,17 +755,32 @@ export class MaintenanceRequestsService {
 
     let relatedItem: MaintenanceEmailInput['relatedItem'] = null;
     if (detail.relatedItemId) {
+      // Master brief §8's item field list — name/SKU/barcode/model number/
+      // warehouse/location/link, deliberately NO asset tag (audit Q6: no
+      // `asset_tag` column exists anywhere). Warehouse/location are two
+      // hops out: item -> primary_location_id -> locations row ->
+      // warehouse_id -> warehouses row. Same 2-hop embed shape the
+      // relatedRental block below already uses successfully
+      // (rentals -> rental_lines -> inventory_items) — cast through
+      // `unknown` first for the same reason (Database=any makes
+      // supabase-js infer a structurally different, incompatible shape for
+      // a nested embed than the real PostgREST response).
       const { data: item } = await this.db
         .from('inventory_items')
-        .select('id, name, sku, model_number')
+        .select('id, name, sku, barcode, model_number, locations!primary_location_id(name, warehouses!warehouse_id(name))')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', detail.relatedItemId)
         .maybeSingle();
       if (item) {
+        const loc =
+          (item.locations as unknown as { name: string; warehouses: { name: string } | null } | null) ?? null;
         relatedItem = {
           name: item.name as string,
           sku: (item.sku as string | null) ?? null,
+          barcode: (item.barcode as string | null) ?? null,
           modelNumber: (item.model_number as string | null) ?? null,
+          warehouseName: loc?.warehouses?.name ?? null,
+          locationName: loc?.name ?? null,
           url: `${APP_URL}/dashboard/inventory/${item.id}`,
         };
       }

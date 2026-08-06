@@ -250,6 +250,159 @@ describe('create', () => {
   });
 });
 
+/** Task 17 / binding constraint 2: the "Report a problem" launch points on
+ *  item/order/rental detail pages deep-link into the new-request form with
+ *  a query-string id — a HINT the form threads straight into create()'s
+ *  input as relatedItemId/relatedOrderRequestId/relatedRentalId. Those
+ *  columns' only DB constraint is a bare FK to the target table (0314:125-
+ *  128) — it proves the row exists SOMEWHERE, never that it belongs to
+ *  THIS org. A crafted deep-link (or a hand-edited form POST) carrying a
+ *  foreign-org or fabricated id must never attach that record; it must
+ *  degrade gracefully instead — no throw, no cross-org attach, request
+ *  still saves. relatedLocationId has no UI producer yet but shares the
+ *  exact same insert path, so it gets the same guard.
+ */
+describe('create — related-record ids are re-derived against THIS org, never trusted verbatim', () => {
+  const ITEM_UUID = '44444444-4444-4444-8444-444444444444';
+  const ORDER_UUID = '55555555-5555-4555-8555-555555555555';
+  const RENTAL_UUID = '66666666-6666-4666-8666-666666666666';
+  const LOCATION_UUID = '77777777-7777-4777-8777-777777777777';
+
+  it('attaches relatedItemId when the item exists in THIS org, and the org filter is genuinely applied (not just the returned row)', async () => {
+    const { stub, ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'inventory_items.select': { data: { id: ITEM_UUID }, error: null },
+      'maintenance_requests.insert': {
+        data: { id: 'r1', request_number: 1, created_at: '2026-08-05T16:15:00Z' },
+        error: null,
+      },
+    });
+    await new MaintenanceRequestsService(ctx).create({ ...VALID, relatedItemId: ITEM_UUID });
+    const insert = stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.related_item_id).toBe(ITEM_UUID);
+    // I4: without this recorded, the test above would still pass even if the
+    // org filter were dropped entirely from the existence check.
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['id', ITEM_UUID]);
+  });
+
+  it('MUTATION SELF-CHECK: a well-formed relatedItemId from another org (or a nonexistent one) is DROPPED — never attached, no throw, the request still saves', async () => {
+    const { stub, ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      // Not found under THIS org's filter — the mock ignores filters when
+      // deciding what to return, so this canned "not found" stands in for
+      // "exists, but in a different org" exactly as well as "never existed".
+      'inventory_items.select': { data: null, error: null },
+      'maintenance_requests.insert': {
+        data: { id: 'r1', request_number: 1, created_at: '2026-08-05T16:15:00Z' },
+        error: null,
+      },
+    });
+    const res = await new MaintenanceRequestsService(ctx).create({ ...VALID, relatedItemId: ITEM_UUID });
+    expect(res.id).toBe('r1');
+    const insert = stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.related_item_id).toBeNull();
+  });
+
+  it('the audit event reflects what was ACTUALLY attached, not what the client requested — has_related_item is false when the id was dropped', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'inventory_items.select': { data: null, error: null },
+      'maintenance_requests.insert': {
+        data: { id: 'r1', request_number: 1, created_at: '2026-08-05T16:15:00Z' },
+        error: null,
+      },
+    });
+    await new MaintenanceRequestsService(ctx).create({ ...VALID, relatedItemId: ITEM_UUID });
+    const payload = vi.mocked(audit).mock.calls[0]![0] as { extra: Record<string, unknown> };
+    expect(payload.extra.has_related_item).toBe(false);
+  });
+
+  it('attaches relatedOrderRequestId when it exists in THIS org, drops it when it does not', async () => {
+    const inOrg = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'order_requests.select': { data: { id: ORDER_UUID }, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(inOrg.ctx).create({ ...VALID, relatedOrderRequestId: ORDER_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_order_request_id,
+    ).toBe(ORDER_UUID);
+
+    const foreign = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'order_requests.select': { data: null, error: null },
+      'maintenance_requests.insert': { data: { id: 'r2', request_number: 2, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(foreign.ctx).create({ ...VALID, relatedOrderRequestId: ORDER_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_order_request_id,
+    ).toBeNull();
+  });
+
+  it('attaches relatedRentalId when it exists in THIS org, drops it when it does not', async () => {
+    const inOrg = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'rentals.select': { data: { id: RENTAL_UUID }, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(inOrg.ctx).create({ ...VALID, relatedRentalId: RENTAL_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_rental_id,
+    ).toBe(RENTAL_UUID);
+
+    const foreign = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'rentals.select': { data: null, error: null },
+      'maintenance_requests.insert': { data: { id: 'r2', request_number: 2, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(foreign.ctx).create({ ...VALID, relatedRentalId: RENTAL_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_rental_id,
+    ).toBeNull();
+  });
+
+  it('attaches relatedLocationId when it exists in THIS org, drops it when it does not (no UI producer yet, but the same insert path)', async () => {
+    const inOrg = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'locations.select': { data: { id: LOCATION_UUID }, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(inOrg.ctx).create({ ...VALID, relatedLocationId: LOCATION_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_location_id,
+    ).toBe(LOCATION_UUID);
+
+    const foreign = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'locations.select': { data: null, error: null },
+      'maintenance_requests.insert': { data: { id: 'r2', request_number: 2, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(foreign.ctx).create({ ...VALID, relatedLocationId: LOCATION_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.insert')![0]![0] as Record<string, unknown>)
+        .related_location_id,
+    ).toBeNull();
+  });
+
+  it('never queries a related-record table at all when no id was supplied — VALID alone stays a single-round-trip create', async () => {
+    const { stub, ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': { data: { id: 'r1', request_number: 1, created_at: 't' }, error: null },
+    });
+    await new MaintenanceRequestsService(ctx).create(VALID);
+    expect(stub.chainArgs.has('inventory_items.select')).toBe(false);
+    expect(stub.chainArgs.has('order_requests.select')).toBe(false);
+    expect(stub.chainArgs.has('rentals.select')).toBe(false);
+    expect(stub.chainArgs.has('locations.select')).toBe(false);
+  });
+});
+
 describe('list', () => {
   it("scope 'mine' pins a requester_user_id filter in the query chain", async () => {
     const { stub, ctx } = build({ 'maintenance_requests.select': { data: [], error: null } });
@@ -969,17 +1122,29 @@ describe('emailInput', () => {
         error: null,
       },
       'inventory_items.select': {
-        data: { id: 'i1', name: 'HVAC unit', sku: 'HVAC-1', model_number: 'ACX' },
+        data: {
+          id: 'i1',
+          name: 'HVAC unit',
+          sku: 'HVAC-1',
+          barcode: '012345678905',
+          model_number: 'ACX',
+          locations: { name: 'Room 204 Closet', warehouses: { name: 'Fresno Distribution Center' } },
+        },
         error: null,
       },
       'organizations.select': { data: { timezone: 'America/Los_Angeles' }, error: null },
     });
     const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.requestNumber).toBe('MR-2026-000042');
+    // Master brief §8's full item field list (audit Q6: NO asset tag — no
+    // such column/key exists anywhere in this object).
     expect(input.relatedItem).toEqual({
       name: 'HVAC unit',
       sku: 'HVAC-1',
+      barcode: '012345678905',
       modelNumber: 'ACX',
+      warehouseName: 'Fresno Distribution Center',
+      locationName: 'Room 204 Closet',
       url: expect.stringMatching(/^https:\/\/.+\/dashboard\/inventory\/i1$/),
     });
     expect(input.photoCount).toBe(2);
@@ -989,6 +1154,30 @@ describe('emailInput', () => {
     // inventory_items lookup entirely.
     expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['organization_id', ctx.organizationId]);
     expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['id', 'i1']);
+  });
+
+  it('MUTATION SELF-CHECK: an item with no primary location degrades to null warehouse/location — never throws, never [object Object]', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': {
+        data: { ...BASE_ROW, related_item_id: 'i1' },
+        error: null,
+      },
+      'inventory_items.select': {
+        data: { id: 'i1', name: 'Loose HVAC unit', sku: null, barcode: null, model_number: null, locations: null },
+        error: null,
+      },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(input.relatedItem).toEqual({
+      name: 'Loose HVAC unit',
+      sku: null,
+      barcode: null,
+      modelNumber: null,
+      warehouseName: null,
+      locationName: null,
+      url: expect.stringMatching(/^https:\/\/.+\/dashboard\/inventory\/i1$/),
+    });
   });
 
   it('snapshots the related order via requester_name (0044_order_requests.sql — real column, not "requested_for")', async () => {

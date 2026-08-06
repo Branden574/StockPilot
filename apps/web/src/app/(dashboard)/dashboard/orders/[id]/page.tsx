@@ -9,6 +9,7 @@ import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderLineActions } from '@/components/orders/order-line-actions';
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
+import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
@@ -214,6 +215,11 @@ export default async function OrderDetailPage({
   const returnsModuleGate =
     orderIsReturnable && (can(ctx, 'returns:manage') || isOwnRequest);
 
+  // "Report a problem" launch point (Task 17, master brief §8) — always
+  // available regardless of order status; the module RPC is only paid for a
+  // viewer who actually holds the submit permission.
+  const maintenanceGate = can(ctx, 'maintenance_requests:submit');
+
   // ---- Tier 2: every independent round trip the render might need, fired
   // together instead of one-at-a-time. Each slot is gated by a sync boolean
   // above and resolves to a cheap placeholder when its gate is false, so a
@@ -233,6 +239,7 @@ export default async function OrderDetailPage({
     pickerResult,
     shippingAccess,
     returnsAccess,
+    maintenanceAccess,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -416,6 +423,8 @@ export default async function OrderDetailPage({
     shippingModuleGate ? checkModuleAccess('shipping') : Promise.resolve(null),
 
     returnsModuleGate ? checkModuleAccess('returns') : Promise.resolve(null),
+
+    maintenanceGate ? checkModuleAccess('maintenance_requests') : Promise.resolve(null),
   ]);
 
   let viewerCanPick = true;
@@ -437,6 +446,7 @@ export default async function OrderDetailPage({
   const { pickers, assignedPickerName } = pickerResult;
   const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
   const returnsModuleEnabled = returnsModuleGate && (returnsAccess?.enabled ?? false);
+  const maintenanceModuleEnabled = maintenanceAccess?.enabled ?? false;
 
   // Tier 3 — the returnable-lines read genuinely depends on the Tier-2
   // module check above (returnsModuleEnabled), so it can't join that batch:
@@ -580,6 +590,11 @@ export default async function OrderDetailPage({
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
+            <ReportProblemButton
+              moduleEnabled={maintenanceModuleEnabled}
+              canSubmit={maintenanceGate}
+              prefill={{ orderRequestId: id }}
+            />
           </div>
         </div>
       </div>

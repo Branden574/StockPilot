@@ -46,7 +46,10 @@ const FULL_INPUT: MaintenanceEmailInput = {
   relatedItem: {
     name: 'Wall-mounted HVAC unit',
     sku: 'HVAC-WALL-204',
+    barcode: '012345678905',
     modelNumber: 'ACX-9000',
+    warehouseName: 'Fresno Distribution Center',
+    locationName: 'Room 204 Closet',
     url: 'https://stockpilotusa.com/dashboard/inventory/11111111-1111-1111-1111-111111111111',
   },
   relatedOrder: null,
@@ -133,12 +136,27 @@ describe('buildMaintenanceEmailDraft — body blocks', () => {
     expect(body).toContain('Building: Main Building');
     expect(body).toContain('Room or Area: Room 204');
   });
-  it('(9) related item block with SKU + model number + app link; NO asset-tag line ever (audit Q6)', () => {
+  it('(9) related item block with SKU + barcode + model number + warehouse + location + app link; NO asset-tag line ever (audit Q6)', () => {
     expect(body).toContain('Item: Wall-mounted HVAC unit');
     expect(body).toContain('SKU: HVAC-WALL-204');
+    expect(body).toContain('Barcode: 012345678905');
     expect(body).toContain('Model Number: ACX-9000');
+    expect(body).toContain('Warehouse: Fresno Distribution Center');
+    expect(body).toContain('Location: Room 204 Closet');
     expect(body).toContain('StockPilot Item: https://stockpilotusa.com/dashboard/inventory/');
     expect(body).not.toContain('Asset Tag');
+  });
+  it('MUTATION SELF-CHECK: dropping a §8 item field (e.g. barcode omitted from the input) omits only that line, never a bare label or "null"', () => {
+    const b = buildMaintenanceEmailDraft({
+      ...FULL_INPUT,
+      relatedItem: { ...FULL_INPUT.relatedItem!, barcode: null, warehouseName: null },
+    }).body;
+    expect(b).toContain('Item: Wall-mounted HVAC unit');
+    expect(b).toContain('Model Number: ACX-9000');
+    expect(b).toContain('Location: Room 204 Closet');
+    expect(b).not.toContain('Barcode');
+    expect(b).not.toContain('Warehouse:');
+    expect(b).not.toMatch(/\bnull\b/);
   });
   it('(10) related order block renders when provided', () => {
     const withOrder = buildMaintenanceEmailDraft({
@@ -482,7 +500,10 @@ describe('fix wave 1 (2e): related-record groups (item/order/rental) are blank-l
       relatedItem: {
         name: 'Wall-mounted HVAC unit',
         sku: 'HVAC-WALL-204',
+        barcode: '012345678905',
         modelNumber: 'ACX-9000',
+        warehouseName: 'Fresno Distribution Center',
+        locationName: 'Room 204 Closet',
         url: 'https://stockpilotusa.com/dashboard/inventory/11111111-1111-1111-1111-111111111111',
       },
       relatedOrder: {

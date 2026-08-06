@@ -77,7 +77,10 @@ const CONDENSED_BUT_FITS_INPUT: MaintenanceEmailInput = {
   relatedItem: {
     name: 'Wall-mounted HVAC unit',
     sku: 'HVAC-WALL-204',
+    barcode: '012345678905',
     modelNumber: 'ACX-9000',
+    warehouseName: 'Fresno Distribution Center',
+    locationName: 'Room 204 Closet',
     url: 'https://stockpilotusa.com/dashboard/inventory/11111111-1111-1111-1111-111111111111',
   },
   relatedOrder: null,

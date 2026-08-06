@@ -3,7 +3,9 @@ import { notFound, redirect } from 'next/navigation';
 
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
 import { RentalDetailHeader } from '@/components/rentals/rental-detail-header';
+import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { InventoryService } from '@/server/services/inventory';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -45,14 +47,30 @@ export default async function RentalDetailPage({
   const canManage = can(ctx, 'rentals:manage');
   const canCreate = can(ctx, 'rentals:create');
 
+  // "Report a problem" launch point (Task 17, master brief §8 / audit Q11 —
+  // rentals stand in for the brief's "assigned asset view"; no assets table
+  // exists). Sync gate first: the module RPC is only paid for a viewer who
+  // actually holds the submit permission.
+  const canReportProblem = can(ctx, 'maintenance_requests:submit');
+  const { enabled: maintenanceModuleEnabled } = canReportProblem
+    ? await checkModuleAccess('maintenance_requests')
+    : { enabled: false };
+
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       {/* Back link */}
-      <div className="mb-6">
-        <Link href="/dashboard/rentals" className="text-muted-foreground hover:text-foreground text-sm">
-          ← Back to rentals
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Rental detail</h1>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link href="/dashboard/rentals" className="text-muted-foreground hover:text-foreground text-sm">
+            ← Back to rentals
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Rental detail</h1>
+        </div>
+        <ReportProblemButton
+          moduleEnabled={maintenanceModuleEnabled}
+          canSubmit={canReportProblem}
+          prefill={{ rentalId: id }}
+        />
       </div>
 
       <div className="space-y-6">
