@@ -5,11 +5,13 @@ import { redirect } from 'next/navigation';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { MaintenanceSearch } from '@/components/maintenance/maintenance-search';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
+import { PageTour } from '@/components/onboarding/page-tour';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { MAINTENANCE_REQUESTS_TOUR } from '@/lib/onboarding/tours';
 import { formatRelative } from '@/lib/utils';
 import { withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
@@ -126,11 +128,14 @@ export default async function MaintenancePage({
             Ticket updates and replies are handled through the Outlook/Zendesk email conversation and are not synchronized into StockPilot.
           </p>
         </div>
-        {canSubmit && (
-          <Button asChild variant="gradient">
-            <Link href="/dashboard/maintenance/new">New maintenance request</Link>
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <PageTour tour={MAINTENANCE_REQUESTS_TOUR} />
+          {canSubmit && (
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/maintenance/new">New maintenance request</Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
