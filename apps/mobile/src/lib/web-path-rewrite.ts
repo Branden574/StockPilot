@@ -33,6 +33,17 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // /dashboard/admin/audit redirects there); the native twin stays at
   // /admin/audit. Query (filters) dropped → the full audit list.
   { re: /\/dashboard\/(admin\/)?audit(\?.*)?$/, to: () => '/admin/audit' },
+  // Maintenance requests (Task 18): all THREE notification doors this
+  // feature can link to (detail, the new-request form, and the list) need a
+  // native twin here or they dead-end on home through the catch-all below —
+  // detail before the bare-list rule so a request id is never mistaken for
+  // the list route, 'new' before it for the same reason (though 'new' can
+  // never satisfy the 36-char UUID pattern, so the order is for readability
+  // only, matching the staging/item-detail precedent above). Query (the
+  // ?scope= filter) is dropped → the full list.
+  { re: new RegExp(`/dashboard/maintenance/${UUID}`), to: (m) => `/maintenance/${m[1]}` },
+  { re: /\/dashboard\/maintenance\/new$/, to: () => '/maintenance/new' },
+  { re: /\/dashboard\/maintenance(\?.*)?$/, to: () => '/maintenance' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 
