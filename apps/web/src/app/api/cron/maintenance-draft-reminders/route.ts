@@ -7,6 +7,7 @@ import { formatMaintenanceRequestNumber } from '@stockpilot/core';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 import { createNotification } from '@/server/services/notifications';
 
 export const runtime = 'nodejs';
@@ -34,7 +35,8 @@ function secretsEqual(a: string, b: string): boolean {
  * shape ({ ok, remindersSent }).
  *
  * Eligibility: status = 'saved', created_at older than 24h,
- * draft_reminder_sent_at is null, not archived/cancelled. The `status`
+ * draft_reminder_sent_at is null, not archived/cancelled, AND the owning
+ * org still has the maintenance_requests module enabled. The `status`
  * enum and the `archived_at`/`cancelled_at` timestamps are always written
  * TOGETHER in the same update (archive()/cancel() in
  * server/services/maintenance-requests.ts), so `status = 'saved'` already
@@ -42,6 +44,22 @@ function secretsEqual(a: string, b: string): boolean {
  * belt-and-suspenders, matching the same double-guard 0314's own RLS
  * policies apply everywhere else on this table, not a distinct case the
  * status filter misses.
+ *
+ * Module gate (fast-follow, final-review finding): this is the one emit
+ * point in the feature with no `assertModuleEnabled`-equivalent check — the
+ * per-request service layer gates every write behind
+ * `assertModuleEnabled(ctx, 'maintenance_requests')`
+ * (server/services/maintenance-requests.ts), but a cron has no per-org
+ * ServiceContext to run that against; it queries every org's table rows
+ * directly. So the org allowlist is fetched FIRST (organization_modules,
+ * mirroring the auto-reorder cron's own module-enabled prefetch:
+ * api/cron/auto-reorder/route.ts) and applied as an `.in('organization_id',
+ * ...)` filter on the eligibility SELECT itself — a module-OFF org's rows
+ * never enter `data`, so they are never stamped and never notified. That
+ * also means re-enabling the module later revives the reminder for a saved
+ * draft that would otherwise have gone quiet, which is the intended
+ * behavior (a disabled module should pause the nag, not permanently silence
+ * a real unsent draft).
  *
  * Dedupe: stamp draft_reminder_sent_at FIRST (guarded on IS NULL), and
  * only notify when the stamp actually won the row — the 2026-07-11
@@ -80,6 +98,32 @@ export async function GET(req: Request) {
     created_at: string;
   };
 
+  // Module allowlist FIRST — the ONE emit point that had no module-enabled
+  // check (final-review finding). PAGINATED: a plain select silently caps at
+  // PostgREST's 1000-row `max_rows`, which would drop orgs once the platform
+  // has >1000 with this module enabled. Ordered by organization_id (stable,
+  // non-duplicating — module_id is fixed by the .eq filter so each row is
+  // already unique per org), same pagination shape as the auto-reorder cron.
+  let enabledOrgIds: string[];
+  try {
+    const enabledOrgRows = await fetchAllRows<{ organization_id: string }>((from, to) =>
+      admin
+        .from('organization_modules')
+        .select('organization_id')
+        .eq('module_id', 'maintenance_requests')
+        .eq('enabled', true)
+        .order('organization_id', { ascending: true })
+        .range(from, to),
+    );
+    enabledOrgIds = enabledOrgRows.map((r) => r.organization_id);
+  } catch (e) {
+    void reportError(e, { tag: 'cron.maintenance-draft-reminders' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+  if (enabledOrgIds.length === 0) {
+    return NextResponse.json({ ok: true, remindersSent: 0 });
+  }
+
   const { data, error } = await admin
     .from('maintenance_requests')
     .select('id, organization_id, requester_user_id, request_number, created_at')
@@ -88,6 +132,7 @@ export async function GET(req: Request) {
     .is('draft_reminder_sent_at', null)
     .is('archived_at', null)
     .is('cancelled_at', null)
+    .in('organization_id', enabledOrgIds)
     .limit(200);
   if (error) {
     void reportError(new Error(error.message), { tag: 'cron.maintenance-draft-reminders' });

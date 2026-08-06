@@ -83,13 +83,14 @@ export default async function PoImportsPage({
 
   const totalAcrossTabs = counts.active + counts.approved + counts.cancelled;
 
-  const pageHref = (p: number) => {
-    const sp = new URLSearchParams();
-    sp.set('status', tab);
-    if (q) sp.set('q', q);
-    if (p > 1) sp.set('page', String(p));
-    return `/dashboard/purchase-orders/imports?${sp.toString()}`;
-  };
+  // SERIALIZABLE props only: this is a server component rendering a 'use
+  // client' pager, and a function prop (hrefForPage) crashes any non-empty
+  // list at runtime — RSC refuses to serialize functions (digest
+  // 3969804129; see dashboard/maintenance/page.tsx's fix, Task 25 fast-follow
+  // BUG 1 sibling). baseParams mirrors this page's query contract
+  // (status/q) exactly, the same pair the tab links and search box write.
+  const importsBaseParams: Record<string, string> = { status: tab };
+  if (q) importsBaseParams.q = q;
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -244,7 +245,14 @@ export default async function PoImportsPage({
         {/* Server-side numbered pagination — hidden on single-page lists,
             same convention as the purchase-orders page. */}
         {!loadFailed && (total > PAGE_SIZE || page > 1) && (
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} hrefForPage={pageHref} className="mt-3" />
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            basePath="/dashboard/purchase-orders/imports"
+            baseParams={importsBaseParams}
+            className="mt-3"
+          />
         )}
       </div>
     </div>

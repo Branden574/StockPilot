@@ -192,13 +192,17 @@ export default async function MovementsPage({
 
   const activeFilters = { q: search, type: rawType, from: rawFrom, to: rawTo };
 
-  // Preserve the active filters across (server-mode) page links.
-  const hrefForPage = (n: number) => {
-    const sp = new URLSearchParams(buildMovementsQueryString(activeFilters));
-    if (n > 1) sp.set('page', String(n));
-    const qs = sp.toString();
-    return qs ? `/dashboard/movements?${qs}` : '/dashboard/movements';
-  };
+  // Preserve the active filters across (server-mode) page links. SERIALIZABLE
+  // props only: this is a server component rendering a 'use client' pager,
+  // and a function prop (hrefForPage) crashes any non-empty list at runtime —
+  // RSC refuses to serialize functions (digest 3969804129; see
+  // dashboard/maintenance/page.tsx's fix, Task 25 fast-follow BUG 1 sibling).
+  // baseParams reuses buildMovementsQueryString — the same query-string
+  // builder the Export CSV link uses — so the pager and the export can never
+  // drift on the filter shape.
+  const movementsBaseParams = Object.fromEntries(
+    new URLSearchParams(buildMovementsQueryString(activeFilters)),
+  );
 
   const exportQs = buildMovementsQueryString(activeFilters);
   const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
@@ -230,7 +234,8 @@ export default async function MovementsPage({
               total={total}
               totalPages={totalPages}
               hasNext={hasNext}
-              hrefForPage={hrefForPage}
+              basePath="/dashboard/movements"
+              baseParams={movementsBaseParams}
             />
           </div>
         </div>
@@ -379,7 +384,8 @@ export default async function MovementsPage({
             page={page}
             totalPages={totalPages}
             hasNext={hasNext}
-            hrefForPage={hrefForPage}
+            basePath="/dashboard/movements"
+            baseParams={movementsBaseParams}
           />
         </div>
       )}

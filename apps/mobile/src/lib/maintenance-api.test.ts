@@ -424,6 +424,16 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(src).toContain('{COPY_HELPER_TEXT}');
   });
 
+  it('the blocked-state retry line renders the shared BLOCKED_RETRY_MESSAGE constant, never a re-typed inline literal (fast-follow fix, 2026-08-06)', () => {
+    // Wired to the shared constant — not hand-copied inline, so screen and
+    // maintenance-email-actions.test.ts's literal pin cannot drift apart.
+    expect(src).toContain('{BLOCKED_RETRY_MESSAGE}');
+    // Source-pin regression guard: the ORIGINAL bug was a hardcoded literal
+    // here claiming Copy Email Details renders "below" this message, when
+    // the button actually renders above it. Never reintroduce that literal.
+    expect(src).not.toMatch(/Copy Email Details below/);
+  });
+
   it('renders the detail-page StockPilot-activity note (web page.tsx\'s own verbatim sentence) — no fake ticket-conversation timeline', () => {
     expect(src).toContain(
       'Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here.',

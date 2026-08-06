@@ -23,6 +23,7 @@ import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE,
+  BLOCKED_RETRY_MESSAGE,
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
@@ -387,7 +388,7 @@ export default function MaintenanceRequestDetailScreen() {
                 {BLOCKED_HEADLINE}
               </Body>
               <Body size={12.5} muted style={{ marginTop: 4 }}>
-                Your request is saved — try again, or use Copy Email Details below.
+                {BLOCKED_RETRY_MESSAGE}
               </Body>
             </Card>
           ) : null}
