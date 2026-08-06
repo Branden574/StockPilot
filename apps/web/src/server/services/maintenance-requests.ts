@@ -14,9 +14,43 @@ import {
 
 import { checkRateLimit } from '@/lib/rate-limit';
 import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+
+/**
+ * The ONLY audit_logs events the detail page's "StockPilot activity"
+ * timeline may ever surface (fix wave Important 1). `audit_logs` SELECT
+ * under RLS requires the `activity_logs:read` permission (migration 0279),
+ * which is DISTINCT from `maintenance_requests:manage` — a manager who was
+ * never separately granted `activity_logs:read` gets zero rows back from a
+ * plain `ctx.supabase` read, silently. `listTimelineEvents` below therefore
+ * reads on the ADMIN client (same posture as the WRITES in
+ * maintenance-share-links.ts), but only after re-deriving get()'s own view
+ * boundary first, and only for this one request's own rows.
+ *
+ * Belt-and-suspenders allow-listing: the query itself filters on `.in(...)`
+ * (so the admin client never even pulls a non-maintenance event off the
+ * wire), AND the mapped result is filtered again in JS against this same
+ * Set before it ever leaves the method. A future `maintenance_request.*`
+ * audit event (e.g. a status-change event added later) must be added to
+ * this list EXPLICITLY before it can ever reach the page — silence is the
+ * safe default, never an auto-appearing row.
+ */
+const TIMELINE_ALLOWED_EVENTS = [
+  'maintenance_request.attachment_added',
+  'maintenance_request.owner_assigned',
+] as const;
+const TIMELINE_ALLOWED_EVENT_SET = new Set<string>(TIMELINE_ALLOWED_EVENTS);
+
+export type MaintenanceTimelineEventType = (typeof TIMELINE_ALLOWED_EVENTS)[number];
+
+export interface MaintenanceTimelineEvent {
+  event: MaintenanceTimelineEventType;
+  createdAt: string;
+  extra: Record<string, unknown>;
+}
 
 // Same fallback the rest of the app uses when building an absolute app URL
 // server-side (order-requests.ts:2378/3220) — never window.location, since
@@ -780,5 +814,48 @@ export class MaintenanceRequestsService {
       photoCount: detail.photoCount,
       shareUrl: opts.shareUrl,
     };
+  }
+
+  /**
+   * Real, per-event rows for the detail page's "StockPilot activity"
+   * timeline (fix wave Important 1) — the same precedent
+   * components/orders/order-timeline.tsx already established for orders,
+   * adapted for maintenance's distinct audit-read permission boundary (see
+   * the TIMELINE_ALLOWED_EVENTS doc comment above this class).
+   *
+   * `this.get(id)` re-derives get()'s OWN view boundary (requester-own OR
+   * read_all OR manage) FIRST, on the RLS-scoped `ctx.supabase` client —
+   * exactly mirroring emailInput()'s own shape. If this caller cannot view
+   * the request at all, get() throws not_found and the admin client below
+   * is never even constructed, let alone queried: a viewer who cannot see
+   * the request never reaches the audit read.
+   *
+   * NOT module-gated (0314 Q3, by extension of get()): this only surfaces
+   * history off rows get() already exposes post-disable.
+   */
+  async listTimelineEvents(id: string): Promise<MaintenanceTimelineEvent[]> {
+    await this.get(id);
+
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('audit_logs')
+      .select('event, created_at, metadata')
+      .eq('organization_id', this.ctx.organizationId)
+      .filter('metadata->>entity_id', 'eq', id)
+      .in('event', TIMELINE_ALLOWED_EVENTS)
+      .order('created_at', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    return ((data ?? []) as Record<string, unknown>[])
+      .map((r) => ({
+        event: r.event as string,
+        createdAt: r.created_at as string,
+        extra: (r.metadata as Record<string, unknown> | null) ?? {},
+      }))
+      // JS-side re-filter (suspenders to the query's `.in()` belt): never
+      // trust a query-shape guard alone to be the ONLY thing standing
+      // between an unlisted event and the page — same defensive-redundancy
+      // posture maintenance-attachments.ts's validateFinalizePath uses.
+      .filter((r): r is MaintenanceTimelineEvent => TIMELINE_ALLOWED_EVENT_SET.has(r.event));
   }
 }

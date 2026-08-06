@@ -11,6 +11,13 @@ vi.mock('@/server/services/audit', () => ({
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, count: 1, resetAt: Date.now() + 60_000 })),
 }));
+// listTimelineEvents (fix wave Important 1) reads audit_logs on the ADMIN
+// client, separate from ctx.supabase — same mock seam maintenance-share-
+// links.test.ts uses for ITS admin-client writes.
+const { createAdminClientMock } = vi.hoisted(() => ({ createAdminClientMock: vi.fn() }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: createAdminClientMock,
+}));
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
@@ -43,6 +50,15 @@ function build(
   const stub = makeSupabaseStub(canned);
   const ctx = makeServiceContext(stub.client, { enabledModules: ENABLED_MODULES, ...overrides });
   return { stub, ctx };
+}
+
+/** Wires a FRESH admin-client stub (the service-role client — separate from
+ *  ctx.supabase) for listTimelineEvents' chainArgs assertions. Same helper
+ *  shape as maintenance-share-links.test.ts's own buildAdmin. */
+function buildAdmin(canned: Parameters<typeof makeSupabaseStub>[0] = {}) {
+  const adminStub = makeSupabaseStub(canned);
+  createAdminClientMock.mockReturnValue(adminStub.client);
+  return adminStub;
 }
 
 const VALID = {
@@ -1045,5 +1061,109 @@ describe('emailInput', () => {
     await expect(new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null })).resolves.toMatchObject({
       requestNumber: expect.any(String),
     });
+  });
+});
+
+describe('listTimelineEvents (fix wave Important 1 — audit-log-driven activity rows)', () => {
+  it('a viewer who cannot see the request never reaches the admin audit read — get() throws not_found FIRST, and the admin client is never even constructed', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).listTimelineEvents('r1')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('scopes the admin audit read by BOTH entity_id (via metadata->>entity_id) and organization_id (chainArgs-pinned) — MUTATION GUARD: dropping either filter is exactly the "unscoped admin read" this pins against', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: BASE_ROW, error: null } });
+    const adminStub = buildAdmin({ 'audit_logs.select': { data: [], error: null } });
+
+    await new MaintenanceRequestsService(ctx).listTimelineEvents('r1');
+
+    const args = adminStub.chainArgs.get('audit_logs.select')!;
+    expect(args).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(args).toContainEqual(['metadata->>entity_id', 'eq', 'r1']);
+  });
+
+  it('the query itself is narrowed to only the two allow-listed maintenance_request.* event kinds', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: BASE_ROW, error: null } });
+    const adminStub = buildAdmin({ 'audit_logs.select': { data: [], error: null } });
+
+    await new MaintenanceRequestsService(ctx).listTimelineEvents('r1');
+
+    const args = adminStub.chainArgs.get('audit_logs.select')!;
+    expect(args).toContainEqual(['event', ['maintenance_request.attachment_added', 'maintenance_request.owner_assigned']]);
+  });
+
+  it('MUTATION GUARD — an arbitrary, non-allow-listed event returned by the query (the mock stub does not itself apply .in()/.filter()) is dropped by the JS-side re-filter and never reaches the caller', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: BASE_ROW, error: null } });
+    buildAdmin({
+      'audit_logs.select': {
+        data: [
+          { event: 'maintenance_request.attachment_added', created_at: '2026-08-01T01:00:00.000Z', metadata: { attachment_id: 'att1' } },
+          // Not on the allow-list — must never survive to the returned array.
+          { event: 'maintenance_request.note_added', created_at: '2026-08-01T02:00:00.000Z', metadata: {} },
+        ],
+        error: null,
+      },
+    });
+
+    const events = await new MaintenanceRequestsService(ctx).listTimelineEvents('r1');
+    expect(events).toHaveLength(1);
+    expect(events.map((e) => e.event)).toEqual(['maintenance_request.attachment_added']);
+  });
+
+  it('maps event/created_at/metadata straight through for both allow-listed kinds, in the order the query returned them', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: BASE_ROW, error: null } });
+    buildAdmin({
+      'audit_logs.select': {
+        data: [
+          {
+            event: 'maintenance_request.attachment_added',
+            created_at: '2026-08-01T01:00:00.000Z',
+            metadata: { attachment_id: 'att1', byte_size: 1024 },
+          },
+          {
+            event: 'maintenance_request.owner_assigned',
+            created_at: '2026-08-02T00:00:00.000Z',
+            metadata: { local_owner_user_id: 'mgr-1' },
+          },
+        ],
+        error: null,
+      },
+    });
+
+    const events = await new MaintenanceRequestsService(ctx).listTimelineEvents('r1');
+    expect(events).toEqual([
+      {
+        event: 'maintenance_request.attachment_added',
+        createdAt: '2026-08-01T01:00:00.000Z',
+        extra: { attachment_id: 'att1', byte_size: 1024 },
+      },
+      {
+        event: 'maintenance_request.owner_assigned',
+        createdAt: '2026-08-02T00:00:00.000Z',
+        extra: { local_owner_user_id: 'mgr-1' },
+      },
+    ]);
+  });
+
+  it('a query error surfaces as internal_error', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: BASE_ROW, error: null } });
+    buildAdmin({ 'audit_logs.select': { data: null, error: { message: 'boom' } } });
+    await expect(new MaintenanceRequestsService(ctx).listTimelineEvents('r1')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
+  it('a read_all-only viewer of a request they do not own can still read its timeline (same boundary as get())', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:read_all']) },
+    );
+    buildAdmin({ 'audit_logs.select': { data: [], error: null } });
+    await expect(new MaintenanceRequestsService(ctx).listTimelineEvents('r1')).resolves.toEqual([]);
   });
 });

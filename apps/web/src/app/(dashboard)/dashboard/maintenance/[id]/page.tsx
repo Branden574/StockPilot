@@ -178,6 +178,23 @@ export default async function MaintenanceRequestDetailPage({
   }
   const authorNames: Record<string, string> = Object.fromEntries(members.map((m) => [m.userId, m.name]));
 
+  // Real audit-log-driven timeline rows (fix wave Important 1) — every
+  // viewer who reaches this branch already passed get()'s own view boundary
+  // (requester-own OR read_all OR manage), same as the rest of this page,
+  // so this is fetched unconditionally here (unlike notes/members, which
+  // stay manage-only). Never fetched for the ?review=1 branch above, which
+  // returns before this point and has no use for it.
+  const timelineEvents = await svc.listTimelineEvents(id);
+  const photoUploadedAt = timelineEvents
+    .filter((e) => e.event === 'maintenance_request.attachment_added')
+    .map((e) => e.createdAt);
+  // The current local_owner_user_id column is only ever written by
+  // assignLocalOwner(), which always audits owner_assigned in the same
+  // call — the MOST RECENT such event is the one that produced today's
+  // value, so its timestamp is what "Local owner assigned" reports.
+  const ownerAssignedAt =
+    timelineEvents.filter((e) => e.event === 'maintenance_request.owner_assigned').at(-1)?.createdAt ?? null;
+
   const requestNumber =
     formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
 
@@ -346,6 +363,12 @@ export default async function MaintenanceRequestDetailPage({
                   {formatRelative(detail.createdAt)}
                 </dd>
               </div>
+              {photoUploadedAt.map((createdAt, i) => (
+                <div key={`photo-${i}`} className="flex justify-between gap-3">
+                  <dt>Photo uploaded</dt>
+                  <dd className="text-muted-foreground text-right tabular-nums">{formatRelative(createdAt)}</dd>
+                </div>
+              ))}
               {detail.outlookDraftOpenedAt ? (
                 <div className="flex justify-between gap-3">
                   <dt>
@@ -360,7 +383,9 @@ export default async function MaintenanceRequestDetailPage({
               {detail.localOwnerUserId ? (
                 <div className="flex justify-between gap-3">
                   <dt>Local owner assigned</dt>
-                  <dd className="text-muted-foreground text-right">—</dd>
+                  <dd className="text-muted-foreground text-right tabular-nums">
+                    {ownerAssignedAt ? formatRelative(ownerAssignedAt) : '—'}
+                  </dd>
                 </div>
               ) : null}
               {detail.archivedAt ? (
@@ -382,7 +407,17 @@ export default async function MaintenanceRequestDetailPage({
             </dl>
           </section>
 
-          {canManage ? <ShareLinkPanel requestId={detail.id} link={shareLink} /> : null}
+          {/* Important 2 (fix wave): ensureActiveLink's own tier (maintenance-
+              share-links.ts) deliberately admits the owning requester
+              (submit + owns it), not just manage — the affordance here must
+              match. The owning requester gets a COPY-ONLY view (canRevoke
+              false): revoke() is genuinely manage-only server-side, so a
+              Revoke button for a non-manager owner would only ever 403. A
+              read_all-only non-owner is neither manage nor the owning
+              requester and sees no panel at all. */}
+          {canManage || isOwningRequester ? (
+            <ShareLinkPanel requestId={detail.id} link={shareLink} canRevoke={canManage} />
+          ) : null}
 
           {canManage ? (
             <MaintenanceNotesPanel

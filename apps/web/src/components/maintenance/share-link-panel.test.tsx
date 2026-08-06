@@ -46,16 +46,31 @@ afterEach(() => {
   if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
 });
 
+// Match page.test.tsx's own "StockPilot activity timeline honesty sweep"
+// word list exactly (fix wave Important 3 — Task 14's lesson carried
+// forward). Radix's Dialog unmounts its content entirely while `open` is
+// false, so a sweep run before ever opening the Revoke dialog can never see
+// this copy — the new tests below open it FIRST.
+const FORBIDDEN = [
+  'Ticket created',
+  'Request submitted to Zendesk',
+  'DC4 notified',
+  'Andrew notified',
+  'Ticket assigned',
+  'Email sent',
+  'Zendesk comment',
+];
+
 describe('ShareLinkPanel', () => {
   it('shows the empty state and no Copy/Revoke controls when there is no active link', () => {
-    render(<ShareLinkPanel requestId="r1" link={null} />);
+    render(<ShareLinkPanel requestId="r1" link={null} canRevoke={true} />);
     expect(screen.getByText(/No active share link/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
   });
 
   it('never renders the raw token as visible page text — only the Copy affordance can reach it', () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} />);
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
     // The token must not appear as literal text anywhere in the rendered
     // output (no href-as-text, no title, no data attribute, no plain <a>
     // whose visible label is the URL).
@@ -64,20 +79,20 @@ describe('ShareLinkPanel', () => {
   });
 
   it('discloses the ~180-day photo-access grant and that the link is revocable', () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} />);
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
     expect(screen.getByText(/180 days/)).toBeInTheDocument();
     expect(screen.getByText(/Revocable at any time/)).toBeInTheDocument();
   });
 
   it('Copy URL copies the exact link to the clipboard, never rendering it into the DOM', async () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} />);
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: /Copy URL/ }));
     expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(LINK.url);
     expect(await screen.findByText('Copied')).toBeInTheDocument();
   });
 
   it('Revoke opens a confirm dialog, then calls the revoke action and refreshes on success', async () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} />);
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     expect(screen.getByText('Revoke this share link?')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
@@ -87,10 +102,38 @@ describe('ShareLinkPanel', () => {
 
   it('surfaces a failed revoke via toast without refreshing', async () => {
     revoke.mockResolvedValueOnce({ error: { message: 'No active share link found for this request.' } });
-    render(<ShareLinkPanel requestId="r1" link={LINK} />);
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(toastError).toHaveBeenCalledWith('No active share link found for this request.');
     expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it('the OPEN Revoke confirm dialog never contains forbidden ticket/notification vocabulary (fix wave Important 3 — Task 14 lesson carried forward: a portalled dialog hides copy from a pre-open sweep)', async () => {
+    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect(screen.getByText('Revoke this share link?')).toBeInTheDocument();
+    for (const banned of FORBIDDEN) {
+      expect(document.body.textContent).not.toContain(banned);
+    }
+  });
+
+  describe('canRevoke={false} — the owning-requester COPY-ONLY tier (fix wave Important 2)', () => {
+    it('renders Copy but never a Revoke button, even with an active link', () => {
+      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
+      expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+    });
+
+    it('MUTATION GUARD — never mounts the revoke confirm dialog markup at all, so it cannot be coaxed open by any means', () => {
+      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
+      expect(screen.queryByText('Revoke this share link?')).not.toBeInTheDocument();
+    });
+
+    it('Copy URL still works normally in the copy-only tier', async () => {
+      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
+      await userEvent.click(screen.getByRole('button', { name: /Copy URL/ }));
+      expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(LINK.url);
+    });
   });
 });

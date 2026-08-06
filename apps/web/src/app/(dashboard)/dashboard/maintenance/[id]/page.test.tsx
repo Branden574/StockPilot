@@ -55,6 +55,7 @@ vi.mock('@/server/services/context', () => ({
 const get = vi.fn();
 const listNotes = vi.fn();
 const emailInput = vi.fn();
+const listTimelineEvents = vi.fn();
 vi.mock('@/server/services/maintenance-requests', () => ({ MaintenanceRequestsService: vi.fn() }));
 
 const signedViewUrls = vi.fn();
@@ -152,10 +153,12 @@ beforeEach(() => {
   emailInput.mockReset();
   signedViewUrls.mockReset();
   ensureActiveLink.mockReset();
+  listTimelineEvents.mockReset();
 
   get.mockResolvedValue(detailFixture());
   listNotes.mockResolvedValue([]);
   signedViewUrls.mockResolvedValue([]);
+  listTimelineEvents.mockResolvedValue([]);
   emailInput.mockImplementation(async (_id: string, opts: { shareUrl: string | null }) => ({
     requestNumber: 'MR-2026-000042',
     subject: 'AC not working in Room 204',
@@ -179,7 +182,10 @@ beforeEach(() => {
   }));
 
   vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ get, listNotes, emailInput }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
+    () =>
+      ({ get, listNotes, emailInput, listTimelineEvents }) as unknown as InstanceType<
+        typeof MaintenanceRequestsService
+      >,
   );
   vi.mocked(MaintenanceAttachmentsService).mockImplementation(
     () => ({ signedViewUrls }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
@@ -326,6 +332,63 @@ describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication
   });
 });
 
+describe('share-link affordance tier (fix wave Important 2 — ensureActiveLink admits the owning requester, so the panel must too)', () => {
+  it('Minor fold-in: the owning requester with photos gets a real minted share link end-to-end — sees Copy, never Revoke', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'u-1' }));
+    signedViewUrls.mockResolvedValueOnce([
+      { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
+    ]);
+    ensureActiveLink.mockResolvedValueOnce({
+      token: 'tok',
+      url: 'https://stockpilotusa.com/m/tok',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+    });
+    render(await MaintenanceRequestDetailPage(args()));
+
+    expect(ensureActiveLink).toHaveBeenCalledWith(VALID_ID);
+    expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: 'https://stockpilotusa.com/m/tok' });
+    expect(screen.getByText('Photo share link')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+    // MUTATION GUARD (3): a non-manage owning requester must never see
+    // Revoke — revoke() (maintenance-share-links.ts) is genuinely
+    // manage-only server-side, so a Revoke button here would only 403.
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+  });
+
+  it('a manage-holder still sees BOTH Copy and Revoke (unchanged tier)', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    signedViewUrls.mockResolvedValueOnce([
+      { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
+    ]);
+    ensureActiveLink.mockResolvedValueOnce({
+      token: 'tok',
+      url: 'https://stockpilotusa.com/m/tok',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+    });
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
+  });
+
+  it('a read_all-only non-owner sees no panel at all, even when a link happens to resolve for someone else\'s request', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'viewer-1', permissions: ['maintenance_requests:read_all'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    signedViewUrls.mockResolvedValueOnce([
+      { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByText('Photo share link')).not.toBeInTheDocument();
+  });
+});
+
 describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
   const FORBIDDEN = [
     'Ticket created',
@@ -389,6 +452,87 @@ describe('StockPilot activity timeline honesty sweep (brief §20/§23)', () => {
     expect(screen.queryByText('Local owner assigned')).not.toBeInTheDocument();
     expect(screen.queryByText('Request archived')).not.toBeInTheDocument();
     expect(screen.queryByText('Request cancelled')).not.toBeInTheDocument();
+  });
+});
+
+describe('activity timeline — audit-log driven rows (fix wave Important 1)', () => {
+  it('renders a "Photo uploaded" row per attachment_added event, with its real timestamp — never the previous "unobtainable" justification', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture());
+    listTimelineEvents.mockResolvedValueOnce([
+      { event: 'maintenance_request.attachment_added', createdAt: '2026-08-01T13:00:00.000Z', extra: {} },
+      { event: 'maintenance_request.attachment_added', createdAt: '2026-08-01T14:00:00.000Z', extra: {} },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(listTimelineEvents).toHaveBeenCalledWith(VALID_ID);
+    expect(screen.getAllByText('Photo uploaded')).toHaveLength(2);
+  });
+
+  it('renders a REAL timestamp on "Local owner assigned" from the owner_assigned event — never the previous em-dash placeholder', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ localOwnerUserId: 'mgr-1' }));
+    listTimelineEvents.mockResolvedValueOnce([
+      { event: 'maintenance_request.owner_assigned', createdAt: '2026-08-02T00:00:00.000Z', extra: {} },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    const row = screen.getByText('Local owner assigned').closest('div');
+    expect(row?.textContent).not.toContain('—');
+  });
+
+  it('takes the MOST RECENT owner_assigned event when the owner was reassigned more than once', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ localOwnerUserId: 'mgr-1' }));
+    listTimelineEvents.mockResolvedValueOnce([
+      { event: 'maintenance_request.owner_assigned', createdAt: '2026-01-01T00:00:00.000Z', extra: {} },
+      { event: 'maintenance_request.owner_assigned', createdAt: '2026-08-02T00:00:00.000Z', extra: {} },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    // formatRelative renders a relative string, not the raw ISO stamp — the
+    // MUTATION-relevant assertion is ONE row, not two duplicated ones, and
+    // it must not fall back to the em-dash placeholder.
+    const row = screen.getByText('Local owner assigned').closest('div');
+    expect(row?.textContent).not.toContain('—');
+  });
+
+  it('an event type NOT on the allow-list never renders — the page only ever recognizes attachment_added and owner_assigned', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture());
+    // The service itself allow-lists at the query AND the JS-filter layer
+    // (maintenance-requests.test.ts pins both), so this array is not
+    // achievable from a real call — this test instead proves the PAGE has
+    // its own independent, second allow-list: even handed a disallowed
+    // event directly (as if the service's own guard were ever bypassed),
+    // the page must not render anything for it.
+    listTimelineEvents.mockResolvedValueOnce([
+      { event: 'maintenance_request.note_added', createdAt: '2026-08-01T00:00:00.000Z', extra: {} },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByText('Photo uploaded')).not.toBeInTheDocument();
+    // Substring check on the whole body — a raw event-kind fallback (e.g.
+    // literally rendering `ev.event`) would produce a text node CONTAINING
+    // "note_added" even though it isn't an exact match for it, so an exact
+    // getByText('note_added') alone would miss that mutation.
+    expect(document.body.textContent).not.toContain('note_added');
+    // "Request saved" is the only row a fresh request (no draft/owner/close
+    // events) should show — an unlisted event must add NO extra row at all.
+    expect(screen.getByText('Request saved')).toBeInTheDocument();
+  });
+
+  it('never fetches the timeline in ?review=1 mode', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'u-1' }));
+    render(await MaintenanceRequestDetailPage(args({ review: '1' })));
+    expect(listTimelineEvents).not.toHaveBeenCalled();
   });
 });
 
