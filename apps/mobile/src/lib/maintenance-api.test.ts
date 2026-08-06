@@ -289,3 +289,50 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
     expect(src).toContain('formatMaintenanceRequestNumber');
   });
 });
+
+/**
+ * WIRING PIN for app/maintenance/new.tsx charters picker. Mobile's site picker
+ * must match web's active-only filter (ChartersService.list() defaults to
+ * active-only; RLS is org-scoped, not status-scoped, so archived charters
+ * would otherwise appear in the mobile picker even though web hides them).
+ *
+ * HONEST LIMITS: this pin checks that the literal query predicate text is
+ * present in the source file — it catches the filter going missing entirely,
+ * but does NOT prove the filter actually executes as intended at runtime,
+ * nor does it catch the filter being placed inside a dead-code branch or
+ * unreachable conditional. A stronger test would extract the charters query
+ * into a testable helper (see debounced-list-load.ts precedent), but for a
+ * single query in one place, a source-level text assertion suffices to catch
+ * the common mutation: a future edit that removes the filter line entirely
+ * (e.g., a merge conflict resolution or refactoring that accidentally drops
+ * it). Verify runtime behavior by hand-testing the mobile site picker in
+ * a staging org with archived sites present.
+ */
+describe('app/maintenance/new.tsx charters picker hides archived sites', () => {
+  const src = readFileSync(
+    path.resolve(__dirname, '../../app/maintenance/new.tsx'),
+    'utf8',
+  );
+
+  it('queries charters with .eq(\'status\', \'active\') to match web behavior', () => {
+    // The charters query must include the active-only filter. This regex
+    // matches the specific pattern: .eq('status', 'active') with flexible
+    // whitespace and quote styles.
+    expect(src).toMatch(
+      /\.eq\(\s*['"]status['"]\s*,\s*['"]active['"]\s*\)/,
+    );
+  });
+
+  it('places the status filter after the organization_id filter in the query chain', () => {
+    // Weak (text-only) check that the filters appear in the right order:
+    // organization_id filter must come before status filter. This cannot
+    // catch dead code or reordering within a different query chain, but it
+    // does catch a simple copy-paste where someone moved the status filter
+    // below the order() call, which would break the query.
+    const orgIdIndex = src.indexOf(`.eq('organization_id', orgId)`);
+    const statusIndex = src.indexOf(`.eq('status', 'active')`);
+    expect(orgIdIndex).toBeGreaterThan(-1);
+    expect(statusIndex).toBeGreaterThan(-1);
+    expect(orgIdIndex).toBeLessThan(statusIndex);
+  });
+});

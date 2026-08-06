@@ -160,6 +160,7 @@ export default function NewMaintenanceRequest() {
           .from('charters')
           .select('id, name')
           .eq('organization_id', orgId)
+          .eq('status', 'active')
           .order('name', { ascending: true }),
         supabase
           .from('organization_modules')
