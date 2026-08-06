@@ -34,6 +34,7 @@ export const TOUR_ROUTES: Record<string, string | undefined> = {
   reports: '/dashboard/reports',
   'ai-assistant': '/dashboard/ai',
   'item-detail': undefined,
+  'maintenance-requests': '/dashboard/maintenance',
 };
 
 export const WORKFLOW_GUIDES: WorkflowGuide[] = [

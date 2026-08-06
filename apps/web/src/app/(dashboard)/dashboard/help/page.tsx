@@ -9,6 +9,7 @@ import {
   DASHBOARD_TOUR,
   ITEM_DETAIL_TOUR,
   ITEMS_PAGE_TOUR,
+  MAINTENANCE_REQUESTS_TOUR,
   NAV_SETTINGS_TOUR,
   NEW_ITEM_TOUR,
   ORDER_CREATE_TOUR,
@@ -24,7 +25,11 @@ import { SUPPORT_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = { title: 'Help & Learning' };
 
-const ALL_TOURS = [
+/** Exported for registry tests only (Task 23) — pins that a tour defined in
+ *  lib/onboarding/tours.ts was actually wired into Help & Learning's replay
+ *  list, not just left orphaned there. Next.js ignores non-reserved named
+ *  exports from a page module, so this adds no route behavior. */
+export const ALL_TOURS = [
   DASHBOARD_TOUR,
   ITEMS_PAGE_TOUR,
   NEW_ITEM_TOUR,
@@ -38,6 +43,7 @@ const ALL_TOURS = [
   NAV_SETTINGS_TOUR,
   REPORTS_TOUR,
   AI_TOUR,
+  MAINTENANCE_REQUESTS_TOUR,
 ];
 
 /**
