@@ -52,22 +52,24 @@ function Field({ label, value }: { label: string; value: string | null | undefin
  * of it, so the preview can never drift from what Outlook will actually show.
  */
 export function MaintenanceReview({
-  requestId,
   detail,
   photos,
   emailInput,
   initialOpenCount,
 }: {
-  requestId: string;
   detail: MaintenanceRequestDetail;
   photos: PanelPhoto[];
   emailInput: MaintenanceEmailInput;
   initialOpenCount: number;
 }) {
+  // Minor 7 fix: `detail.id` IS the request id — there is no second value
+  // that could legitimately disagree with it, so a separate `requestId`
+  // prop was just a second source of truth a caller could pass out of sync
+  // with `detail`. Every consumer below reads `detail.id`.
+  const requestId = detail.id;
   const prepared = prepareMaintenanceEmail(emailInput);
   const requestNumber =
     formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
-  const photoDownloads = photos.map((p) => ({ url: p.url, filename: p.originalFilename }));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -231,11 +233,20 @@ export function MaintenanceReview({
       </Card>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Minor 6 fix: deliberately NOT passing `photoDownloads` here. The
+            Photos card above (when photos.length > 0) already renders its
+            own "Download Photos for Outlook" group right next to the §10
+            sentence and the thumbnails, so passing the same list into
+            MaintenanceEmailAction would render a SECOND identical group and
+            duplicate the "Download Photos for Outlook" heading text on the
+            page. MaintenanceEmailAction's own photoDownloads-driven group
+            stays in the component for contexts that render it WITHOUT an
+            adjacent Photos card (there are none yet, but the prop exists for
+            exactly that future reuse — see its own doc comment). */}
         <MaintenanceEmailAction
           requestId={requestId}
           emailInput={emailInput}
           initialOpenCount={initialOpenCount}
-          photoDownloads={photoDownloads.length > 0 ? photoDownloads : undefined}
         />
         {/* Editing happens on the detail page itself — this is a saved
             request, not a draft form, so "Edit Request" is a plain link back

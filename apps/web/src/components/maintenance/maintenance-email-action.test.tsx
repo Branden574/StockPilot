@@ -14,6 +14,16 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
   recordMaintenanceDraftOpenedAction: (...args: unknown[]) => recordAction(...args),
 }));
 
+// Minor 10: the .catch() added for IMPORTANT 1 reports a breadcrumb via
+// reportError rather than letting a lost draft-opened row go completely
+// unobserved. Mocked (not the real webhook/console implementation) so the
+// rejection tests below can assert the breadcrumb actually fires, not just
+// that the rejection was swallowed.
+const reportErrorMock = vi.fn(async (..._args: unknown[]) => undefined);
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
+
 import { MaintenanceEmailAction } from './maintenance-email-action';
 import type { MaintenanceEmailInput } from '@stockpilot/core';
 
@@ -139,6 +149,10 @@ describe('Open in Outlook (component tests 7, 14)', () => {
     renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
     await waitFor(() => expect(order).toEqual(['open', 'record']));
+    // Minor 4: pin the argument on the success-path call site too (not just
+    // the blocked-path one below) — a hardcoded foreign UUID here would
+    // still satisfy the ordering assertion above.
+    expect(recordAction).toHaveBeenCalledWith('r1');
   });
 
   it('shows the exact accurate-status success message in an aria-live region', async () => {
@@ -157,6 +171,64 @@ describe('Open in Outlook (component tests 7, 14)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
     expect(fetchSpy).not.toHaveBeenCalled(); // record goes through the mocked action, not fetch
     vi.unstubAllGlobals();
+  });
+});
+
+describe('IMPORTANT 1 fix: recordMaintenanceDraftOpenedAction rejection is absorbed, never an unhandled rejection', () => {
+  // Precedent: delivery-request-action.test.tsx's "still opens the draft
+  // when the audit call rejects" (delivery-request-action.tsx:141-148's
+  // `.catch()`). recordAction here is fire-and-forget (`void ...`, never
+  // awaited by the click handler), so a REJECTED promise — not a resolved
+  // `{ error }`, an actual network failure — has nowhere to land except a
+  // process-level 'unhandledRejection' unless production code attaches its
+  // own `.catch()`. This listener is the only thing in these tests that
+  // observes that.
+  it('success path (call site after window.open succeeds): success message still renders, no unhandled rejection', async () => {
+    recordAction.mockRejectedValueOnce(new Error('offline'));
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    const msg =
+      'Outlook opened with your maintenance request. Review the information, attach any downloaded photos you want included directly, and click Send.';
+    expect(await screen.findByText(msg)).toBeInTheDocument();
+
+    // Flush microtasks so a same-tick 'unhandledRejection' has a chance to
+    // fire before we assert on `unhandled`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    process.off('unhandledRejection', onUnhandledRejection);
+    expect(unhandled).toEqual([]);
+    // Minor 10: the rejection is still observable via the breadcrumb.
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'maintenance.draft-opened.record' }),
+    );
+  });
+
+  it('blocked path (mailto fallback call site): recovery panel still renders, no unhandled rejection', async () => {
+    openSpy.mockReturnValue(null as unknown as Window);
+    recordAction.mockRejectedValueOnce(new Error('offline'));
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    expect(await screen.findByText('Outlook could not be opened automatically.')).toBeInTheDocument();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    process.off('unhandledRejection', onUnhandledRejection);
+    expect(unhandled).toEqual([]);
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'maintenance.draft-opened.record' }),
+    );
   });
 });
 
@@ -207,6 +279,9 @@ describe('popup blocked (component test 8; brief section 19)', () => {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
     expect(recordAction).toHaveBeenCalledTimes(1);
+    // Minor 4: the count alone lets a hardcoded foreign UUID survive —
+    // pin the ARGUMENT too, so recording under the wrong request id fails.
+    expect(recordAction).toHaveBeenCalledWith('r1');
     // Second blocked click: no second mailto navigation, no second record.
     await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
     expect(assignSpy).toHaveBeenCalledTimes(1);
@@ -263,6 +338,21 @@ describe('copy fallback (component test 9; brief section 18)', () => {
     expect(area).toHaveAttribute('readonly');
     expect((area as HTMLTextAreaElement).value).toContain('TO: dc4@learn4life.org');
   });
+  it('Minor 5: copies the FULL body even when the open-link draft is condensed (mutation self-check: rebuilding clipboard from prepared.draft.body must fail this)', async () => {
+    // CONDENSED_BUT_FITS_INPUT drives prepared.draft.condensed === true, so
+    // prepared.draft.body has dropped access instructions, department,
+    // email/phone, category/priority/submitted, and the reply-thread
+    // sentence (email.ts's condense preserve-list). prepared.clipboardText
+    // is built from prepareMaintenanceEmail's separately-tracked FULL draft
+    // (email.ts:355-358) — it has no URL-length limit and must always carry
+    // everything, condensed or not. Access instructions is on the
+    // condense-drop list, so its presence here proves the clipboard did NOT
+    // come from the condensed draft.body.
+    renderAction({ emailInput: CONDENSED_BUT_FITS_INPUT });
+    await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
+    const written = vi.mocked(navigator.clipboard.writeText).mock.calls[0]![0] as string;
+    expect(written).toContain('Please contact the main office before entering the room.');
+  });
 });
 
 describe('condensed-state disclosure (Task 7 review finding — mutation self-check: suppress it and this fails)', () => {
@@ -282,34 +372,65 @@ describe('condensed-state disclosure (Task 7 review finding — mutation self-ch
 });
 
 describe('honesty sweep (component test 14; brief section 20)', () => {
-  it('the rendered component never contains a forbidden phrase in any state', async () => {
-    const { container } = renderAction();
-    for (const banned of [
-      'Ticket created',
-      'Request submitted to Zendesk',
-      'DC4 notified',
-      'Andrew notified',
-      'Ticket assigned',
-      'Email sent',
-    ]) {
-      expect(container.textContent).not.toContain(banned);
+  // IMPORTANT 2 fix: the original sweep only ever asserted against
+  // `container.textContent` — the render-target DOM node returned by RTL's
+  // `render()`. Radix Dialog PORTALS its content to a node appended directly
+  // under `document.body`, entirely outside `container`, so any copy that
+  // only appears inside the confirm dialog was structurally unsweepable:
+  // a literal "Email sent to DC4." planted in DialogDescription (or any
+  // dialog-only node) would pass every one of the assertions below with the
+  // old `container`-scoped check. Sweeping `document.body.textContent`
+  // instead covers the portal too, and still covers everything `container`
+  // did (container is itself inside body). Every state the component can be
+  // in is driven and swept: success, blocked, oversized (linkFits false),
+  // condensed-but-fits, and the duplicate-draft dialog open.
+  const BANNED_PHRASES = [
+    'Ticket created',
+    'Request submitted to Zendesk',
+    'DC4 notified',
+    'Andrew notified',
+    'Ticket assigned',
+    'Email sent',
+  ];
+
+  function assertHonestBody() {
+    for (const banned of BANNED_PHRASES) {
+      expect(document.body.textContent).not.toContain(banned);
     }
+  }
+
+  it('success state: no forbidden phrase after a successful open', async () => {
+    renderAction();
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    await screen.findByText(/Outlook opened with your maintenance request/);
+    assertHonestBody();
   });
 
-  it('never claims success anywhere across the blocked and oversized states either', async () => {
+  it('blocked state: no forbidden phrase in the recovery panel', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
-    const { container } = renderAction();
+    renderAction();
     await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
-    for (const banned of [
-      'Ticket created',
-      'Request submitted to Zendesk',
-      'DC4 notified',
-      'Andrew notified',
-      'Ticket assigned',
-      'Email sent',
-    ]) {
-      expect(container.textContent).not.toContain(banned);
-    }
+    await screen.findByText('Outlook could not be opened automatically.');
+    assertHonestBody();
+  });
+
+  it('oversized state (linkFits false): no forbidden phrase', async () => {
+    renderAction({ emailInput: { ...INPUT, requesterName: 'X'.repeat(3000) } });
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    await screen.findByText(/too long for an email link/i);
+    assertHonestBody();
+  });
+
+  it('condensed-but-fits state: no forbidden phrase', () => {
+    renderAction({ emailInput: CONDENSED_BUT_FITS_INPUT });
+    assertHonestBody();
+  });
+
+  it('dialog-open state: no forbidden phrase INSIDE the Radix portal (the state the old container-scoped sweep could not reach)', async () => {
+    renderAction({ initialOpenCount: 1 });
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Outlook' }));
+    await screen.findByRole('dialog');
+    assertHonestBody();
   });
 });
 

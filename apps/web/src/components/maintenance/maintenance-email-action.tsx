@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { reportError } from '@/lib/error-reporter';
 import { recordMaintenanceDraftOpenedAction } from '@/server/actions/maintenance-requests';
 
 /**
@@ -142,10 +143,24 @@ export function MaintenanceEmailAction({ requestId, emailInput, initialOpenCount
       // message only) — this UI already shows the real, local success state
       // from the open itself, so a failed record() only means the SERVER'S
       // open-count can drift from this component's local count, not that
-      // the employee's draft silently vanished.
-      void recordMaintenanceDraftOpenedAction(requestId).then((r) => {
-        if ('ok' in r) setOpenCount(r.openCount);
-      });
+      // the employee's draft silently vanished. A rejected PROMISE (network
+      // failure, not a resolved `{ error }`) is a different failure mode —
+      // without a `.catch()` it becomes an unhandled rejection, which in dev
+      // paints Next's error overlay directly over the honest success toast
+      // below. Mirrors delivery-request-action.tsx:141-148's identical
+      // precedent: bookkeeping is best-effort and must never surface to the
+      // employee who already has their draft.
+      void recordMaintenanceDraftOpenedAction(requestId)
+        .then((r) => {
+          if ('ok' in r) setOpenCount(r.openCount);
+        })
+        .catch((e: unknown) => {
+          // Best-effort breadcrumb only: a lost draft-opened row means the
+          // server's open-count silently undercounts (the duplicate-draft
+          // dialog in handlePrimaryClick may under-warn next time), which is
+          // otherwise unobservable.
+          void reportError(e, { tag: 'maintenance.draft-opened.record', level: 'warning' });
+        });
       toast.success(SUCCESS_MESSAGE);
       setAnnouncement(SUCCESS_MESSAGE);
       return;
@@ -161,7 +176,11 @@ export function MaintenanceEmailAction({ requestId, emailInput, initialOpenCount
     if (!mailtoAttemptedRef.current) {
       mailtoAttemptedRef.current = true;
       setOpenCount((n) => n + 1);
-      void recordMaintenanceDraftOpenedAction(requestId);
+      // Same best-effort .catch() as the success-path call above — a
+      // rejected promise here is otherwise an unhandled rejection.
+      void recordMaintenanceDraftOpenedAction(requestId).catch((e: unknown) => {
+        void reportError(e, { tag: 'maintenance.draft-opened.record', level: 'warning' });
+      });
       try {
         window.location.assign(prepared.mailtoUrl);
       } catch {
