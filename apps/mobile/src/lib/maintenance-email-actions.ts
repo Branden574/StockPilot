@@ -108,6 +108,19 @@ export const DUPLICATE_WARNING =
  *  blame link length for an actual failed/refused open. */
 export const BLOCKED_HEADLINE = 'Outlook could not be opened automatically.';
 
+/**
+ * Sub-line shown under BLOCKED_HEADLINE (fast-follow fix, 2026-08-06). This
+ * used to be an inline literal in app/maintenance/[id].tsx that said "...or
+ * use Copy Email Details below" — wrong on this screen, where the Copy
+ * Email Details button renders ABOVE the blocked-state card, not below it
+ * (unlike web's equivalent, maintenance-email-action.tsx, where the retry
+ * button genuinely IS below its own copy of this message — that's why the
+ * two platforms' wording differs on purpose, not by drift). Deliberately
+ * DIRECTION-FREE so a future layout reorder can't silently make this wrong
+ * again the way "below" did.
+ */
+export const BLOCKED_RETRY_MESSAGE = 'Your request is saved — try again, or use Copy Email Details instead.';
+
 /** Shown when `!prepared.linkFits` — even the condensed pair is too long.
  *  The selectable copy box always carries the complete, uncondensed body,
  *  so it is the one honest transport left; neither email button is offered

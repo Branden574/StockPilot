@@ -6,6 +6,7 @@ import { prepareMaintenanceEmail } from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
+  BLOCKED_RETRY_MESSAGE,
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
@@ -147,6 +148,20 @@ describe('exported copy is the literal, brief-pinned text', () => {
     expect(BLOCKED_HEADLINE).toBe('Outlook could not be opened automatically.');
   });
 
+  it('BLOCKED_RETRY_MESSAGE is the fixed, direction-free wording (fast-follow, 2026-08-06)', () => {
+    // Literal pin — this is the fix under test: the string used to read
+    // "...or use Copy Email Details below", which was wrong on this screen
+    // (the Copy Email Details button renders ABOVE the blocked-state card,
+    // not below it). Fixed to drop the directional claim entirely.
+    expect(BLOCKED_RETRY_MESSAGE).toBe(
+      'Your request is saved — try again, or use Copy Email Details instead.',
+    );
+    // Belt-and-suspenders: no layout-direction word can sneak back in,
+    // regardless of the exact phrasing chosen.
+    expect(BLOCKED_RETRY_MESSAGE.toLowerCase()).not.toContain('below');
+    expect(BLOCKED_RETRY_MESSAGE.toLowerCase()).not.toContain('above');
+  });
+
   it('DUPLICATE_WARNING matches brief section 21, verbatim', () => {
     expect(DUPLICATE_WARNING).toBe(
       'A maintenance email draft was already opened for this request. Sending multiple copies may create duplicate Zendesk tickets.',
@@ -180,6 +195,7 @@ describe('exported copy is the literal, brief-pinned text', () => {
     for (const text of [
       SUCCESS_MESSAGE,
       BLOCKED_HEADLINE,
+      BLOCKED_RETRY_MESSAGE,
       DUPLICATE_WARNING,
       OVERSIZED_MESSAGE,
       CONDENSED_NOTICE,
