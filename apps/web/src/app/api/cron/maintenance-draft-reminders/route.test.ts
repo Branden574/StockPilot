@@ -9,12 +9,23 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
  *     createNotification, and a 0-row match on the guarded update sends
  *     NOTHING (2026-07-11 duplicate-bug guard, cloned here),
  *   - the eligibility query shape (status='saved', created_at < 24h ago,
- *     draft_reminder_sent_at is null, not archived/cancelled, limit 200)
- *     is pinned via call-recording — this repo's supabase mock replays
- *     canned rows without PostgREST filtering,
+ *     draft_reminder_sent_at is null, not archived/cancelled, org module
+ *     enabled, limit 200) is pinned via call-recording — this repo's
+ *     supabase mock replays canned rows without PostgREST filtering,
  *   - recipient = requester_user_id only, pref-gated fail-open on
  *     push_maintenance_draft_reminder,
  *   - copy is verbatim per the brief.
+ *
+ * Fast-follow (final-review finding): the eligibility query had no
+ * module-enabled check — a stamped-but-disabled row could still fire. The
+ * fix prefetches the org allowlist (organization_modules) and filters the
+ * eligibility SELECT with `.in('organization_id', ...)` BEFORE anything is
+ * stamped, so a module-OFF org's row is skipped entirely (no stamp, no
+ * notify) — the reminder revives on its own if the module is re-enabled,
+ * rather than being permanently silenced. `stubFor` defaults the allowlist
+ * to every org the passed rows belong to (so the pre-existing tests below
+ * don't need to know this query exists); pass `{ enabledOrgIds: [...] }`
+ * explicitly to exercise the module-OFF path.
  */
 
 vi.mock('@/lib/env', () => ({
@@ -66,9 +77,30 @@ function draftRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function stubFor(rows: unknown[], overrides: Record<string, { data: unknown; error: null } | (() => { data: unknown; error: null })> = {}) {
+function stubFor(
+  rows: unknown[],
+  overrides: Record<string, { data: unknown; error: null } | (() => { data: unknown; error: null })> = {},
+  opts: { enabledOrgIds?: string[] } = {},
+) {
+  // Module allowlist default: every org the passed rows belong to is
+  // treated as module-enabled, so tests that predate the module-gate fix
+  // don't have to know this query exists. Pass opts.enabledOrgIds (e.g.
+  // []) explicitly to model a module-OFF org.
+  const enabledOrgIds =
+    opts.enabledOrgIds ??
+    Array.from(
+      new Set(
+        rows
+          .map((r) => (r as { organization_id?: string }).organization_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
   return makeSupabaseStub({
     'maintenance_requests.select': { data: rows, error: null },
+    'organization_modules.select': {
+      data: enabledOrgIds.map((organization_id) => ({ organization_id })),
+      error: null,
+    },
     // The stamp-guard update: returning a row means we won the write.
     'maintenance_requests.update': () => {
       callOrder.push('update');
@@ -109,7 +141,7 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // Eligibility predicate, pinned via call-recording (the mock replays
     // canned rows without applying real PostgREST filters).
     const selectChain = stub.chains.get('maintenance_requests.select');
-    expect(selectChain).toEqual(['select', 'eq', 'lt', 'is', 'is', 'is', 'limit']);
+    expect(selectChain).toEqual(['select', 'eq', 'lt', 'is', 'is', 'is', 'in', 'limit']);
     const selectArgs = stub.chainArgs.get('maintenance_requests.select') ?? [];
     expect(selectArgs[selectChain!.indexOf('eq')]).toEqual(['status', 'saved']);
     expect(selectArgs[selectChain!.indexOf('lt')]?.[0]).toBe('created_at');
@@ -119,7 +151,17 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     expect(selectArgs[3]).toEqual(['draft_reminder_sent_at', null]);
     expect(selectArgs[4]).toEqual(['archived_at', null]);
     expect(selectArgs[5]).toEqual(['cancelled_at', null]);
-    expect(selectArgs[6]).toEqual([200]);
+    // Module-gate fast-follow: the eligibility SELECT is filtered to the
+    // module-enabled org allowlist BEFORE the row limit.
+    expect(selectArgs[6]).toEqual(['organization_id', ['org-1']]);
+    expect(selectArgs[7]).toEqual([200]);
+
+    // The module allowlist query itself: enabled orgs for this module only.
+    const modChain = stub.chains.get('organization_modules.select');
+    expect(modChain).toEqual(['select', 'eq', 'eq', 'order', 'range']);
+    const modArgs = stub.chainArgs.get('organization_modules.select') ?? [];
+    expect(modArgs[modChain!.indexOf('eq')]).toEqual(['module_id', 'maintenance_requests']);
+    expect(modArgs[modChain!.lastIndexOf('eq')]).toEqual(['enabled', true]);
 
     // Stamp-FIRST dedupe: update runs, guarded on IS NULL, BEFORE select('id').
     const updateChain = stub.chains.get('maintenance_requests.update');
@@ -242,5 +284,32 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // Call order proves: stamp #1 (null-req row) → stamp #2 (valid row) → notify (valid only).
     expect(callOrder).toContain('update');
     expect(callOrder[callOrder.length - 1]).toBe('notify');
+  });
+
+  it('FIX 3 (fast-follow): an eligible row in a module-OFF org sends NOTHING and is NOT stamped', async () => {
+    // org-1 has an otherwise-eligible saved row, but the module allowlist is
+    // empty — org-1 does not have maintenance_requests enabled. The org
+    // allowlist is fetched and filtered BEFORE the eligibility SELECT runs,
+    // so a module-OFF org's row never even enters the query result: no
+    // stamp, no notification. This also means re-enabling the module later
+    // makes the row eligible again on the next run (chosen over stamping,
+    // so the reminder revives instead of being silenced permanently).
+    const stub = stubFor([draftRow()], {}, { enabledOrgIds: [] });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, remindersSent: 0 });
+    expect(createNotificationMock).not.toHaveBeenCalled();
+
+    // Not stamped: the eligibility query — and therefore the per-row update
+    // loop — never ran, because the org allowlist came back empty.
+    expect(stub.chains.get('maintenance_requests.select')).toBeUndefined();
+    expect(stub.chains.get('maintenance_requests.update')).toBeUndefined();
+    expect(callOrder).toEqual([]);
+
+    // The allowlist query itself still ran and was correctly scoped.
+    const modChain = stub.chains.get('organization_modules.select');
+    expect(modChain).toEqual(['select', 'eq', 'eq', 'order', 'range']);
   });
 });
