@@ -560,3 +560,117 @@ recipients, subject, body, and share link; zero real opens; zero sends; the
 only side effect was the designed draft-opened stamp. The C1 charter chain,
 module gating, RLS isolation, HEIC transcode, share-link mint/expiry/revoke,
 duplicate guard, and copy fallback are all proven against real data.
+
+## Task 25 fix wave (2026-08-06): BUG 1 fixed and re-verified end to end
+
+### The fix
+
+Root cause (as recorded above): the server component
+`apps/web/src/app/(dashboard)/dashboard/maintenance/page.tsx` passed an
+inline function prop (`hrefForPage={(n) => buildMaintenanceHref(...)}`) into
+the `'use client'` `Pagination`. RSC cannot serialize functions, so any
+non-empty list crashed to the error boundary (digest 3969804129); the pager
+block is gated on `visible.length > 0`, which is why every empty-list check,
+JSDOM test, typecheck, and `next build` passed while real data crashed.
+
+No existing server-component `Pagination` call site was a safe pattern to
+mirror — movements and PO-imports pass the same function prop (latent, see
+triage below), and the purchase-orders page hand-rolls plain `<Link>` hrefs
+instead of using the shared component. So `Pagination` gained a SERIALIZABLE
+link flavor (`components/ui/pagination.tsx`): `basePath` +
+`baseParams: Record<string, string>` + `pageParamName` (default `'page'`).
+The client component builds each page href itself — `baseParams` verbatim,
+page param appended for pages > 1, omitted on page 1 — reproducing
+`buildMaintenanceHref`'s exact URL shape. `hrefForPage` is untouched and
+still first-class for CLIENT call sites (inventory table, movements instant
+table, public-link editor — their tests still pass unmodified); the two
+flavors resolve to one internal `linkForPage`, function flavor winning.
+
+The maintenance page now passes `basePath="/dashboard/maintenance"` +
+`baseParams={maintenanceListParams({ scope, status, q })}` —
+`maintenanceListParams` is a new helper factored out of
+`buildMaintenanceHref` so the filter pills and the pager derive the
+`scope`/`status`/`q` query contract from the same definition and cannot
+drift.
+
+### Regression guard (+ its honest limits)
+
+Two new tests in the page's own suite
+(`.../maintenance/page.test.tsx`, "RSC serialization guard" block), in the
+repo's wiring-pin idiom: a `readFileSync` source-text pin asserting the page
+never spells the function-prop flavor (`hrefForPage=`) and does wire
+`basePath`/`baseParams` via `maintenanceListParams`. HONEST LIMITS stated in
+the test: a source-text assertion proves what the file says, not what React
+does — RSC serialization is only truly proven by an authed browser walk over
+a non-empty list (below).
+
+Mutation check: re-introducing
+`hrefForPage={(n) => buildMaintenanceHref({ scope, status, q, page: n })}`
+(after snapshotting to a uniquely named scratchpad file) failed both guards:
+`AssertionError: expected 'import { Wrench } from 'lucide-react…' not to
+match /hrefForPage=/` and the basePath pin's mirror failure; suite went
+2 failed | 27 passed. Restored from the snapshot; 29/29 green.
+
+### End-to-end re-verify (the four failed checks re-run, real browser)
+
+Local stack up (Task 25's seed intact: `MR-2026-000001`, walk users);
+dev server started with the same process-env key overrides the walk used
+(stale local `SUPABASE_SERVICE_ROLE_KEY` in stockpilot-env is STILL
+unrotated — owner action still open). Walk-account passwords were reset via
+the local GoTrue admin API (they were never recorded). Playwright-driven
+Chromium, real UI:
+
+- **Check 8 (list half) — PASS.** `/dashboard/maintenance` as
+  `walk.requester@test.local` renders the table WITH the row:
+  MR-2026-000001 / "Walk E2E: HVAC compressor rattling loudly" /
+  Email draft opened / normal / Desert Cove High - DC4 / 2 photos. No error
+  boundary. Console errors were solely the known local-dev CSP mismatch
+  (notifications poll + realtime WS to 127.0.0.1:54321) — zero React/RSC
+  errors, no digest.
+- **Check 17 (requester's My Requests) — PASS.** Same page, "My maintenance
+  requests" heading, row visible, row link resolves to the detail URL.
+- **Check 18 (manager's All Requests) — PASS.** As
+  `walk.manager@test.local`, `?scope=all` renders the row with the
+  Requester column ("Walk Requester") and the search box. Clicking the
+  "Email draft opened" status pill navigated to
+  `?scope=all&status=draft_opened` and the row stayed — filters survive on
+  a rows-bearing list.
+- **Check 21 (tour on a rows-bearing page) — PASS.** As the requester
+  (1 row — the exact persona that crashed in the walk):
+  `/dashboard/help` lists "Maintenance requests / 5 steps"; Start →
+  `/dashboard/maintenance?tour=maintenance-requests` mounted the spotlight
+  (`data-tour-open="true"`) with step 1 "Report a facility or equipment
+  issue", and Next advanced to step 2 "Start a new request" (Back/Next
+  shown).
+- **Pager states.** Only one row exists, so no page-2 link could be
+  clicked; instead: the pager renders INERT with one page (Prev and Next
+  both disabled, "Page 1") for both personas, and a `?page=2` deep link
+  renders the "Nothing on this page" empty state with "Back to page 1" —
+  no crash, URL contract intact.
+
+No email affordance was touched: Open in Outlook was never clicked (not
+needed for these checks; NO-SEND rules honored). Dev server stopped after
+the walk; local stack left up.
+
+### Latent-sibling triage (read once, NOT fixed on this branch)
+
+- `dashboard/movements/page.tsx` — CONFIRMED latent: this server component
+  passes a function `hrefForPage` into `Pagination` at both render sites
+  (~lines 227/378), gated on `!instant`, so the page will crash exactly when
+  an org's unfiltered movement count exceeds `MOVEMENTS_INSTANT_CAP` (or the
+  count query fails) and the server-mode pager renders.
+- `dashboard/purchase-orders/imports/page.tsx` — CONFIRMED latent: same
+  function prop (`hrefForPage={pageHref}`, ~line 247) from a server
+  component, rendered when `total > PAGE_SIZE || page > 1`, so it crashes
+  once an org holds more than 30 imports or anyone deep-links `?page=2`.
+  Both now have a ready-made fix (the serializable `basePath`/`baseParams`
+  flavor) for a follow-up task.
+
+### Gates (this fix wave)
+
+Spot-run web tests: 19 files / 370 tests passed (page suite 29 incl. the 2
+new guards; onboarding 10; all maintenance component/service/action suites;
+inventory-table pagination client-mode 7). Typecheck clean x3 (web, mobile,
+core). ESLint clean on the three touched files. Byte-hygiene grep -aPn
+clean. package.json/pnpm-lock.yaml untouched. `pnpm --filter web build`
+exit 0. Working tree clean after commit.

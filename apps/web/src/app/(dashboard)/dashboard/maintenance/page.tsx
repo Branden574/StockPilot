@@ -48,6 +48,21 @@ function clampPage(raw: string | undefined): number {
   return Math.min(Math.max(Math.floor(n), 1), 10_000);
 }
 
+/** The list page's query contract (`scope`/`status`/`q`) as a plain params
+ *  record — the ONE definition both the filter-pill hrefs and the pager's
+ *  serializable `baseParams` prop derive from, so they cannot drift. */
+function maintenanceListParams(params: {
+  scope: 'mine' | 'all';
+  status?: MaintenanceStatus | 'active';
+  q?: string;
+}): Record<string, string> {
+  const p: Record<string, string> = {};
+  if (params.scope === 'all') p.scope = 'all';
+  if (params.status) p.status = params.status;
+  if (params.q) p.q = params.q;
+  return p;
+}
+
 /** Builds a `/dashboard/maintenance` URL preserving the list page's query
  *  contract (`scope`/`status`/`q`, plus an additive `page`) — the same
  *  four params every filter pill, the search box, and the pager write. */
@@ -57,10 +72,7 @@ function buildMaintenanceHref(params: {
   q?: string;
   page?: number;
 }): string {
-  const usp = new URLSearchParams();
-  if (params.scope === 'all') usp.set('scope', 'all');
-  if (params.status) usp.set('status', params.status);
-  if (params.q) usp.set('q', params.q);
+  const usp = new URLSearchParams(maintenanceListParams(params));
   if (params.page && params.page > 1) usp.set('page', String(params.page));
   const qs = usp.toString();
   return qs ? `/dashboard/maintenance?${qs}` : '/dashboard/maintenance';
@@ -272,10 +284,17 @@ export default async function MaintenancePage({
 
         {visible.length > 0 && (
           <div className="mt-4 flex items-center justify-end">
+            {/* SERIALIZABLE props only: this is a server component rendering a
+                'use client' pager, and a function prop (hrefForPage) crashes
+                any non-empty list at runtime — RSC refuses to serialize
+                functions (digest 3969804129; 2026-08-05 walk, BUG 1). The
+                pager rebuilds buildMaintenanceHref's exact URL shape from
+                basePath + baseParams (page param appended, omitted on page 1). */}
             <Pagination
               page={page}
               hasNext={hasNext}
-              hrefForPage={(n) => buildMaintenanceHref({ scope, status, q, page: n })}
+              basePath="/dashboard/maintenance"
+              baseParams={maintenanceListParams({ scope, status, q })}
             />
           </div>
         )}

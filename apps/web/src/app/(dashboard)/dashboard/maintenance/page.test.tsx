@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -356,6 +359,38 @@ describe('New maintenance request CTA — gated on submit, matching the auditor-
     list.mockResolvedValueOnce([row()]);
     render(await MaintenancePage(args()));
     expect(screen.getByRole('link', { name: 'New maintenance request' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Task 25 fix wave — BUG 1 regression guard. The 2026-08-05 authed browser
+ * walk found that this SERVER component passed an inline function
+ * (`hrefForPage={(n) => buildMaintenanceHref(...)}`) into the 'use client'
+ * Pagination. RSC cannot serialize function props, so ANY non-empty list
+ * crashed to the error boundary (digest 3969804129) — while every JSDOM test
+ * in this file kept passing, because @testing-library renders the awaited
+ * element tree directly and never crosses a real server/client serialization
+ * boundary. So this guard is a source-text pin (the repo's wiring-pin idiom,
+ * see maintenance-onboarding.test.ts): it asserts the page never spells the
+ * function-prop flavor (`hrefForPage=`) and does wire the serializable
+ * basePath/baseParams flavor.
+ *
+ * HONEST LIMITS: a source-text assertion proves what the file SAYS, not what
+ * React does — RSC serialization of the props this page passes is only truly
+ * proven by an authed browser walk over a NON-EMPTY list (the pager block is
+ * gated on rows, which is exactly why empty-list tests, typecheck, and
+ * `next build` all missed the original bug).
+ */
+describe('RSC serialization guard — the pager gets serializable props only (Task 25 walk, BUG 1)', () => {
+  const src = readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8');
+
+  it('never passes the function-prop flavor (hrefForPage=) from this server component', () => {
+    expect(src).not.toMatch(/hrefForPage=/);
+  });
+
+  it('wires the pager via serializable basePath + baseParams derived from the shared query-contract helper', () => {
+    expect(src).toMatch(/basePath="\/dashboard\/maintenance"/);
+    expect(src).toMatch(/baseParams=\{maintenanceListParams\(\{ scope, status, q \}\)\}/);
   });
 });
 

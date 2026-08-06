@@ -12,10 +12,21 @@ import { cn } from '@/lib/utils';
 /**
  * Numbered pagination matching the Items pager: "Showing X–Y of Z", Prev, a
  * "Page N of M" popover to jump to any page, and Next. Works in two modes —
- * link mode (`hrefForPage`, server pages) or client mode (`onPageChange`, an
+ * link mode (server pages) or client mode (`onPageChange`, an
  * already-loaded set). Provide `total` + `pageSize` for the row-range text and
  * page count; otherwise pass `totalPages` (or just `hasNext` to degrade to
  * Prev/Next only).
+ *
+ * Link mode comes in two flavors:
+ * - `basePath` (+ optional `baseParams`/`pageParamName`) — SERIALIZABLE, the
+ *   only flavor a React Server Component may use. The pager builds each page
+ *   href itself: `baseParams` verbatim, then `pageParamName` appended for
+ *   pages > 1 (page 1 gets no page param — canonical URLs stay clean).
+ * - `hrefForPage` — a function, CLIENT COMPONENTS ONLY. Passing a function
+ *   across the RSC boundary throws `Functions cannot be passed directly to
+ *   Client Components` at runtime (digest 3969804129) and the error boundary
+ *   eats the whole page; nothing at build time catches it (the maintenance
+ *   list shipped that crash — 2026-08-05 walk, BUG 1).
  */
 export function Pagination({
   page,
@@ -24,6 +35,9 @@ export function Pagination({
   totalPages: totalPagesProp,
   hasNext,
   hrefForPage,
+  basePath,
+  baseParams,
+  pageParamName = 'page',
   onPageChange,
   className,
 }: {
@@ -33,10 +47,26 @@ export function Pagination({
   totalPages?: number;
   hasNext?: boolean;
   hrefForPage?: (n: number) => string;
+  basePath?: string;
+  baseParams?: Record<string, string>;
+  pageParamName?: string;
   onPageChange?: (n: number) => void;
   className?: string;
 }) {
   const router = useRouter();
+  // Resolve the link flavor once: an explicit function wins (client call
+  // sites), else build one from the serializable props (server call sites).
+  const linkForPage = React.useMemo<((n: number) => string) | undefined>(() => {
+    if (hrefForPage) return hrefForPage;
+    if (!basePath) return undefined;
+    return (n: number) => {
+      const usp = new URLSearchParams(baseParams);
+      usp.delete(pageParamName);
+      if (n > 1) usp.set(pageParamName, String(n));
+      const qs = usp.toString();
+      return qs ? `${basePath}?${qs}` : basePath;
+    };
+  }, [hrefForPage, basePath, baseParams, pageParamName]);
   const totalPages =
     total != null && pageSize ? Math.max(1, Math.ceil(total / pageSize)) : totalPagesProp;
   const numbered = typeof totalPages === 'number' && totalPages > 0;
@@ -47,9 +77,9 @@ export function Pagination({
   const go = React.useCallback(
     (n: number) => {
       if (onPageChange) onPageChange(n);
-      else if (hrefForPage) router.push(hrefForPage(n));
+      else if (linkForPage) router.push(linkForPage(n));
     },
-    [onPageChange, hrefForPage, router],
+    [onPageChange, linkForPage, router],
   );
 
   // Row-range text ("Showing 51–100 of 350") when we know the totals.
@@ -68,7 +98,7 @@ export function Pagination({
     >
       {range}
       <div className="flex items-center gap-1">
-        <PageBtn disabled={prevDisabled} href={hrefForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
+        <PageBtn disabled={prevDisabled} href={linkForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
           ← Prev
         </PageBtn>
 
@@ -87,7 +117,7 @@ export function Pagination({
               <JumpGrid
                 totalPages={totalPages as number}
                 current={safePage}
-                hrefForPage={hrefForPage}
+                hrefForPage={linkForPage}
                 go={go}
               />
             </PopoverContent>
@@ -96,7 +126,7 @@ export function Pagination({
           <span className="px-2 tabular-nums">Page {safePage}</span>
         )}
 
-        <PageBtn disabled={nextDisabled} href={hrefForPage?.(safePage + 1)} onClick={() => go(safePage + 1)}>
+        <PageBtn disabled={nextDisabled} href={linkForPage?.(safePage + 1)} onClick={() => go(safePage + 1)}>
           Next →
         </PageBtn>
       </div>
