@@ -13,6 +13,12 @@ const VALID = {
 
 const UUID_A = '11111111-1111-1111-1111-111111111111';
 
+// Built via String.fromCharCode rather than typed \uXXXX escapes, matching
+// the convention in maintenance/text.test.ts, so this source file's literal
+// bytes stay plain ASCII.
+const BEL = String.fromCharCode(7);
+const NUL = String.fromCharCode(0);
+
 describe('maintenanceRequestFormSchema — happy path', () => {
   it('accepts the minimal valid payload and defaults priority to normal', () => {
     const parsed = maintenanceRequestFormSchema.safeParse(VALID);
@@ -193,6 +199,91 @@ describe('maintenanceRequestFormSchema — description (Brief §7)', () => {
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.description).toBe(withBreaks);
+  });
+});
+
+/**
+ * Fix wave 1 (owner §7 gap): sanitization now happens HERE, at the shared
+ * schema, not just at email-build time — this is the whole point of the
+ * fix. Every case below documents the ORDERING decision recorded in the
+ * schema's doc comment (sanitize-then-check) and its consequences.
+ */
+describe('maintenanceRequestFormSchema — sanitization at intake (Fix wave 1, owner §7 gap)', () => {
+  it('subject: a stray control character is stripped, not merely accepted verbatim', () => {
+    // MUTATION TARGET: dropping `.transform(sanitizeSubjectLine)` from the
+    // subject pipeline leaves this passing on `.success` (BEL is not
+    // whitespace, so the meaningful-content refine still sees 3+
+    // consecutive letters either side) but the OUTPUT would still contain
+    // the raw BEL byte — the assertions on `parsed.data.subject` below are
+    // what actually catches that mutation.
+    const raw = `Air${BEL} conditioner is broken`;
+    const parsed = maintenanceRequestFormSchema.safeParse({ ...VALID, subject: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.subject).toBe('Air conditioner is broken');
+      expect(parsed.data.subject).not.toContain(BEL);
+    }
+  });
+
+  it('subject: control characters interspersed among 5 real letters still pass (ordering proof — see schema doc comment)', () => {
+    // Constructed so a naive check-BEFORE-sanitize implementation would
+    // reject this: the meaningful-content refine strips \s before testing
+    // for 3+ consecutive letter/digit characters, but BEL/NUL are not \s,
+    // so on the RAW value "A", "B", "C", "D", "E" are never consecutive.
+    // Sanitizing first turns each control byte into a space (which the
+    // refine's own \s-strip then removes), so the 5 real letters are
+    // correctly recognized as meaningful content.
+    const raw = `${NUL}A${BEL}B${NUL}C${BEL}D${NUL}E${BEL}`;
+    const parsed = maintenanceRequestFormSchema.safeParse({ ...VALID, subject: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.subject).toBe('A B C D E');
+  });
+
+  it('subject: an embedded line break is still REJECTED, exactly as before this fix (sanitizing does not turn this into a silent strip)', () => {
+    expect(
+      maintenanceRequestFormSchema.safeParse({ ...VALID, subject: 'AC broken\nin Room 204' })
+        .success,
+    ).toBe(false);
+    expect(
+      maintenanceRequestFormSchema.safeParse({ ...VALID, subject: 'AC broken\r\nin Room 204' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('description: CRLF is preserved as a single \\n (schema-level sanitization does not change the existing newline normalization)', () => {
+    const raw = 'Line one describing the issue.\r\nLine two with more detail.';
+    const parsed = maintenanceRequestFormSchema.safeParse({ ...VALID, description: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.description).toBe(
+        'Line one describing the issue.\nLine two with more detail.',
+      );
+    }
+  });
+
+  it('description: BEL/NUL are stripped while intentional newlines survive intact (MUTATION: swapping in sanitizeSubjectLine here must fail this test)', () => {
+    const raw = `Line one${BEL} describing the issue.\nLine two${NUL} with more detail.`;
+    const parsed = maintenanceRequestFormSchema.safeParse({ ...VALID, description: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.description).toBe(
+        'Line one describing the issue.\nLine two with more detail.',
+      );
+      expect(parsed.data.description).toContain('\n');
+      expect(parsed.data.description).not.toContain(BEL);
+      expect(parsed.data.description).not.toContain(NUL);
+    }
+  });
+
+  it('description: a 5,001-character raw value whose control byte sanitizes away lands at exactly the 5,000 cap and is accepted (sanitize-then-length-check — the documented ordering choice)', () => {
+    const raw = `${'x'.repeat(4999)}${NUL}x`; // 5,001 raw chars; the lone NUL is deleted by sanitizeDescriptionBlock
+    expect(raw.length).toBe(5001);
+    const parsed = maintenanceRequestFormSchema.safeParse({ ...VALID, description: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.description).toBe('x'.repeat(5000));
+      expect(parsed.data.description.length).toBe(5000);
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -135,6 +135,44 @@ describe('MaintenanceRequestForm', () => {
     await waitFor(() => expect(createAction).toHaveBeenCalled());
     const submitted = createAction.mock.calls[0]![0] as Record<string, unknown>;
     expect(submitted.description).toBe('Line one describing the issue.\nLine two with more detail.');
+  });
+
+  it('a rapid double submit (busy guard) creates only ONE request, not two', async () => {
+    // The mocked action stays pending until we resolve it manually, so the
+    // first submission is still in flight when the second one fires —
+    // exactly the window `if (busy) return` and `disabled={busy}` exist to
+    // guard.
+    let resolveCreate!: (value: {
+      ok: true;
+      id: string;
+      requestNumber: number;
+      createdAt: string;
+    }) => void;
+    createAction.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+
+    const { onSaved } = renderForm();
+    await userEvent.type(screen.getByLabelText('What is the issue?'), 'Air conditioner is not working in Room 204');
+    await userEvent.type(
+      screen.getByLabelText('Describe the maintenance issue'),
+      'Blowing warm air since yesterday afternoon.',
+    );
+
+    const button = screen.getByRole('button', { name: 'Save request' });
+    // Two submits fired back to back, before either has a chance to
+    // resolve — the second must be swallowed, not queued as a second call.
+    await userEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(createAction).toHaveBeenCalled());
+    resolveCreate({ ok: true, id: 'r1', requestNumber: 1, createdAt: '2026-08-05T16:15:00Z' });
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('r1'));
+
+    expect(createAction).toHaveBeenCalledTimes(1);
   });
 
   it('never renders forbidden status/Zendesk vocabulary (brief section 20)', () => {

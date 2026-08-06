@@ -61,3 +61,50 @@ describe('sanitizeDescriptionBlock (newline-PRESERVING — audit Q14)', () => {
     expect(sanitizeDescriptionBlock('plus\ttab')).toBe('plus tab');
   });
 });
+
+/**
+ * Fix wave 1 (owner §7 gap): the shared schema (packages/core/src/schemas/
+ * maintenance.ts) now sanitizes subject/description at INTAKE, but email.ts
+ * (below) still calls these same functions again at email-BUILD time —
+ * `buildMaintenanceEmailDraft` has no way of knowing whether its input came
+ * fresh off the (now-sanitizing) schema or from some other caller, so it
+ * keeps sanitizing defensively. These two tests confirm that double call is
+ * a no-op: once a value is sanitized, sanitizing it again produces the
+ * IDENTICAL string, so a DB row already sanitized at intake goes through
+ * email.ts unchanged.
+ */
+describe('idempotence (Fix wave 1) — sanitizing an already-sanitized value is a no-op', () => {
+  it('sanitizeSubjectLine(sanitizeSubjectLine(x)) === sanitizeSubjectLine(x)', () => {
+    const inputs = [
+      '  AC broken\r\nin Room\t204  ',
+      `a${BEL}${DEL}b`,
+      'Normal subject',
+      'Subject: real\r\nBcc: attacker@evil.test',
+      '   ',
+    ];
+    for (const input of inputs) {
+      const once = sanitizeSubjectLine(input);
+      const twice = sanitizeSubjectLine(once);
+      expect(twice).toBe(once);
+    }
+  });
+
+  it('sanitizeDescriptionBlock(sanitizeDescriptionBlock(x)) === sanitizeDescriptionBlock(x)', () => {
+    const inputs = [
+      'Line one\nLine two',
+      `a\r\nb${BEL}c${DEL}d`,
+      'a\n\n\n\n\nb',
+      '\n\n  hello\nworld  \n\n',
+      'a\rb',
+      'Paragraph one\n\nParagraph two',
+      'a   b',
+      'a\tb',
+      'plus\ttab',
+    ];
+    for (const input of inputs) {
+      const once = sanitizeDescriptionBlock(input);
+      const twice = sanitizeDescriptionBlock(once);
+      expect(twice).toBe(once);
+    }
+  });
+});
