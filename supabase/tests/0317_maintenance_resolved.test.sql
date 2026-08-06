@@ -1,5 +1,5 @@
 begin;
-select plan(17);
+select plan(18);
 
 -- ── Fixtures (0314-test conventions) ────────────────────────────────────────
 \set org_a '''a0000000-0000-0000-0000-00000000001a'''
@@ -52,20 +52,22 @@ set local role to 'authenticated';
 insert into public.maintenance_requests
   (organization_id, requester_user_id, requester_name_snapshot, subject, description)
 values (:org_a, :requester, 'Res Req', 'Leaking roof tile in Hall B', 'Water drips during rain.');
+-- Capture the request id for later tests, before role switch.
+select id from public.maintenance_requests where organization_id = :org_a \gset req_
 
 -- ── RLS: the kind clause, tested on the still-OPEN parent ───────────────────
 -- Deliberately BEFORE the resolve below: on an open request the kind clause
 -- is the ONLY thing refusing this insert, so mutation T1-M2 (deleting the
 -- clause) is genuinely killable here — after the resolve, the parent-open
--- clause would mask it.
+-- clause would mask it. ID captured via \gset before role switch (convention).
 select throws_ok(
-  $$ insert into public.maintenance_request_attachments
+  format($$ insert into public.maintenance_request_attachments
        (organization_id, maintenance_request_id, storage_path, original_filename,
         safe_filename, mime_type, byte_size, uploaded_by, kind)
-     select 'a0000000-0000-0000-0000-00000000001a', id,
-        'a0000000-0000-0000-0000-00000000001a/' || id || '/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jpg',
-        'p.jpg', 'p.jpg', 'image/jpeg', 100, '20000000-0000-0000-0000-000000000001', 'resolution'
-       from public.maintenance_requests limit 1 $$,
+     values ('a0000000-0000-0000-0000-00000000001a', %L,
+        'a0000000-0000-0000-0000-00000000001a/' || %L::text || '/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jpg',
+        'p.jpg', 'p.jpg', 'image/jpeg', 100, '20000000-0000-0000-0000-000000000001', 'resolution') $$,
+    :'req_id', :'req_id'),
   '42501', null, 'requester cannot insert kind=resolution on their own OPEN request');
 reset role;
 
@@ -108,6 +110,38 @@ select throws_ok(
        from public.maintenance_requests limit 1 $$,
   '42501', null, 'photos freeze on a resolved parent');
 reset role;
+
+-- ── RLS: DELETE-freeze on resolved parent (FIX 1) ───────────────────────────
+-- The DELETE policy EXISTS predicate includes `and r.resolved_at is null`.
+-- Mutation removing that clause must be caught: a same-org user who could
+-- normally delete an attachment must be silently filtered (RLS USING on DELETE
+-- filters rows, does not throw). Attachment created while OPEN, then parent
+-- resolved, then DELETE attempt. Assertion checks row still exists after.
+set local role to postgres;
+-- Insert attachment while in bypass mode (cleaner fixture than switching roles)
+insert into public.maintenance_request_attachments
+  (organization_id, maintenance_request_id, storage_path, original_filename,
+   safe_filename, mime_type, byte_size, uploaded_by, kind)
+values (:org_a, :'req_id', 'a0000000-0000-0000-0000-00000000001a/' || :'req_id'::text ||
+        '/cccccccc-cccc-4ccc-8ccc-cccccccccccc.jpg',
+        'c.jpg', 'c.jpg', 'image/jpeg', 100, :requester, 'requester');
+-- Capture attachment id for later assertion
+select id from public.maintenance_request_attachments
+  where organization_id = :org_a and maintenance_request_id = :'req_id' \gset att_
+
+-- Now switch to requester role and attempt DELETE (will be silently filtered)
+set local "request.jwt.claim.sub" to '20000000-0000-0000-0000-000000000001';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+delete from public.maintenance_request_attachments
+  where id = :'att_id' and organization_id = :org_a;
+
+-- Switch back to postgres and verify attachment still exists
+set local role to postgres;
+select is(
+  (select count(*)::int from public.maintenance_request_attachments
+    where id = :'att_id' and organization_id = :org_a),
+  1, 'DELETE on resolved parent is silently filtered; attachment still exists');
 
 -- ── Archive re-buckets resolved AND cancelled (D1) ──────────────────────────
 update public.maintenance_requests
