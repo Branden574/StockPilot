@@ -3,8 +3,10 @@ import 'server-only';
 import {
   can,
   formatMaintenanceRequestNumber,
+  MAINTENANCE_ATTACHMENT_KINDS,
   MAINTENANCE_MAX_PHOTOS,
   MAINTENANCE_MAX_PHOTO_BYTES,
+  type MaintenanceAttachmentKind,
 } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
@@ -101,6 +103,7 @@ export interface SignedMaintenancePhoto {
   thumbUrl: string | null;
   width: number | null;
   height: number | null;
+  kind: MaintenanceAttachmentKind;
 }
 
 export class MaintenanceAttachmentsService {
@@ -126,6 +129,13 @@ export class MaintenanceAttachmentsService {
    * ride the SAME select this method already makes) avoids a second round
    * trip just to re-fetch what this call already touched. createUploadUrl
    * doesn't need them and simply ignores the return value.
+   *
+   * Migration 0317: `resolved_at` closes the request the same way
+   * `archived_at`/`cancelled_at` already do — the SAME message, since the
+   * caller doesn't need to know WHICH closed state it hit, only that photos
+   * can no longer change. Mirrors the 0317 attachments INSERT/DELETE RLS
+   * predicate exactly (`r.archived_at is null and r.cancelled_at is null
+   * and r.resolved_at is null`) — defense in depth, both directions.
    */
   private async assertParentOwnedAndOpen(
     requestId: string,
@@ -134,7 +144,7 @@ export class MaintenanceAttachmentsService {
 
     const { data, error } = await this.ctx.supabase
       .from('maintenance_requests')
-      .select('id, requester_user_id, archived_at, cancelled_at, request_number, created_at, subject')
+      .select('id, requester_user_id, archived_at, cancelled_at, resolved_at, request_number, created_at, subject')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', requestId)
       .maybeSingle();
@@ -145,6 +155,7 @@ export class MaintenanceAttachmentsService {
       requester_user_id: string | null;
       archived_at: string | null;
       cancelled_at: string | null;
+      resolved_at: string | null;
       request_number: number | null;
       created_at: string | null;
       subject: string | null;
@@ -153,7 +164,7 @@ export class MaintenanceAttachmentsService {
     if (!isManager && row.requester_user_id !== this.ctx.userId) {
       throw new ServiceError('forbidden', 'Not your request.');
     }
-    if (row.archived_at || row.cancelled_at) {
+    if (row.archived_at || row.cancelled_at || row.resolved_at) {
       throw new ServiceError('conflict', 'This request is closed; photos can no longer change.');
     }
     return {
@@ -161,6 +172,33 @@ export class MaintenanceAttachmentsService {
       createdAt: row.created_at ?? null,
       subject: row.subject ?? null,
     };
+  }
+
+  /**
+   * Validates + authorizes `kind` (migration 0317/spec §2.2), shared by
+   * `createUploadUrl` and `finalize`. Defaults to `'requester'` when
+   * omitted — byte-for-byte the pre-kind behavior. `'resolution'` requires
+   * `maintenance_requests:manage`, mirroring the 0317 attachments INSERT
+   * RLS `with check` clause exactly (`kind = 'requester' or
+   * has_permission(..., 'maintenance_requests:manage')`) — defense in
+   * depth: a requester who somehow reached this far with kind='resolution'
+   * gets a clean `forbidden` from the SERVICE, never a storage write that
+   * only dies later at the RLS layer. Called immediately after
+   * `assertParentOwnedAndOpen`, before any rate-limit check or storage
+   * call, so an unauthorized kind never spends either budget.
+   */
+  private validateKind(kind: MaintenanceAttachmentKind | undefined): MaintenanceAttachmentKind {
+    const resolved = kind ?? 'requester';
+    if (!MAINTENANCE_ATTACHMENT_KINDS.includes(resolved)) {
+      throw new ServiceError(
+        'validation_error',
+        `Invalid photo kind. Must be one of: ${MAINTENANCE_ATTACHMENT_KINDS.join(', ')}.`,
+      );
+    }
+    if (resolved === 'resolution' && !can(this.ctx, 'maintenance_requests:manage')) {
+      throw new ServiceError('forbidden', 'Only a manage-holder may attach resolution proof photos.');
+    }
+    return resolved;
   }
 
   /** Task 21: fire-and-forget photo_rejected notification to the uploader.
@@ -195,7 +233,7 @@ export class MaintenanceAttachmentsService {
    *  both platforms transcode to JPEG client-side before ever calling this. */
   async createUploadUrl(
     requestId: string,
-    args: { fileExt: string; originalFilename: string },
+    args: { fileExt: string; originalFilename: string; kind?: MaintenanceAttachmentKind },
   ): Promise<{
     path: string;
     signedUrl: string;
@@ -206,6 +244,7 @@ export class MaintenanceAttachmentsService {
   }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     await this.assertParentOwnedAndOpen(requestId);
+    const kind = this.validateKind(args.kind);
 
     const ext = args.fileExt.replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!ALLOWED_EXTS.has(ext)) {
@@ -220,11 +259,15 @@ export class MaintenanceAttachmentsService {
       throw new ServiceError('conflict', 'Too many uploads in the last hour. Please try again later.');
     }
 
+    // Spec §2.2 — MAINTENANCE_MAX_PHOTOS applies PER KIND: requester photos
+    // and resolution proof each get their own 8-photo budget on the same
+    // request, so the count query is scoped by `kind` too.
     const { count, error: countErr } = await this.ctx.supabase
       .from('maintenance_request_attachments')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('maintenance_request_id', requestId);
+      .eq('maintenance_request_id', requestId)
+      .eq('kind', kind);
     if (countErr) throw new ServiceError('internal_error', countErr.message);
     if ((count ?? 0) >= MAINTENANCE_MAX_PHOTOS) {
       throw new ServiceError('conflict', `A request can carry at most ${MAINTENANCE_MAX_PHOTOS} photos.`);
@@ -257,10 +300,15 @@ export class MaintenanceAttachmentsService {
    */
   async finalize(
     requestId: string,
-    args: { path: string; originalFilename: string; declaredMime: string },
+    args: { path: string; originalFilename: string; declaredMime: string; kind?: MaintenanceAttachmentKind },
   ): Promise<{ id: string; width: number | null; height: number | null }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     const parent = await this.assertParentOwnedAndOpen(requestId);
+    // Manage-gated for kind='resolution' BEFORE any storage call (validateKind's
+    // own doc comment) — a requester who reaches finalize with kind='resolution'
+    // gets a clean forbidden here, never a download/sniff/insert attempt that
+    // would only die later at the RLS layer.
+    const kind = this.validateKind(args.kind);
 
     // CRITICAL 1 — strict shape validation BEFORE any storage call. See
     // validateFinalizePath's own doc for why a prefix check is not enough.
@@ -299,12 +347,15 @@ export class MaintenanceAttachmentsService {
     // request MAINTENANCE_MAX_PHOTOS signed-upload URLs concurrently (each
     // individually under the cap at mint time) and finalize all of them.
     // This is the last gate before the row that would push the request over
-    // the cap gets written — re-check LIVE, not the count mint saw.
+    // the cap gets written — re-check LIVE, not the count mint saw. Scoped
+    // by `kind` (spec §2.2 — the cap applies per kind, so 8 canned
+    // 'requester' rows must never block a 'resolution' mint or finalize).
     const { count, error: countErr } = await this.ctx.supabase
       .from('maintenance_request_attachments')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('maintenance_request_id', requestId);
+      .eq('maintenance_request_id', requestId)
+      .eq('kind', kind);
     if (countErr) throw new ServiceError('internal_error', countErr.message);
     if ((count ?? 0) >= MAINTENANCE_MAX_PHOTOS) {
       await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
@@ -326,6 +377,7 @@ export class MaintenanceAttachmentsService {
         height: sniffed.height,
         uploaded_by: this.ctx.userId,
         verified_at: new Date().toISOString(),
+        kind,
       })
       .select('id')
       .single();
@@ -437,7 +489,7 @@ export class MaintenanceAttachmentsService {
   async signedViewUrls(requestId: string): Promise<SignedMaintenancePhoto[]> {
     const { data: rows, error } = await this.ctx.supabase
       .from('maintenance_request_attachments')
-      .select('id, storage_path, thumbnail_path, original_filename, width, height')
+      .select('id, storage_path, thumbnail_path, original_filename, width, height, kind')
       .eq('organization_id', this.ctx.organizationId)
       .eq('maintenance_request_id', requestId)
       .order('sort_order', { ascending: true })
@@ -489,6 +541,7 @@ export class MaintenanceAttachmentsService {
         thumbUrl,
         width: (r.width as number | null) ?? null,
         height: (r.height as number | null) ?? null,
+        kind: r.kind as MaintenanceAttachmentKind,
       };
     });
   }

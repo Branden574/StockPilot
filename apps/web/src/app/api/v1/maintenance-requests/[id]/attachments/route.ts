@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { MAINTENANCE_ATTACHMENT_KINDS } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
@@ -21,6 +23,10 @@ export const dynamic = 'force-dynamic';
 const mintSchema = z.object({
   fileExt: z.string().trim().min(1).max(5),
   originalFilename: z.string().trim().min(1).max(300),
+  // Optional (migration 0317/spec §2.2) — omitted keeps today's behavior
+  // byte-for-byte (the service defaults to 'requester'). Forwarded verbatim;
+  // the service is the one place kind='resolution' gets manage-gated.
+  kind: z.enum(MAINTENANCE_ATTACHMENT_KINDS).optional(),
 });
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

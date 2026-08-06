@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { MAINTENANCE_ATTACHMENT_KINDS } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
@@ -28,6 +30,10 @@ const finalizeSchema = z.object({
   path: z.string().min(1).max(500),
   originalFilename: z.string().trim().min(1).max(300),
   declaredMime: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+  // Optional (migration 0317/spec §2.2) — omitted keeps today's behavior
+  // byte-for-byte (the service defaults to 'requester'). Forwarded verbatim;
+  // the service is the one place kind='resolution' gets manage-gated.
+  kind: z.enum(MAINTENANCE_ATTACHMENT_KINDS).optional(),
 });
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -58,6 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       path: parsed.data.path,
       originalFilename: parsed.data.originalFilename,
       declaredMime: parsed.data.declaredMime,
+      kind: parsed.data.kind,
     });
     return NextResponse.json(res);
   } catch (e) {

@@ -633,7 +633,7 @@ describe('resolveMaintenanceShareToken', () => {
     const res = await resolveMaintenanceShareToken(TOKEN);
     expect(res).not.toBeNull();
     expect(Object.keys(res!).sort()).toEqual(
-      ['createdAt', 'description', 'photos', 'requestNumber', 'siteName', 'subject'].sort(),
+      ['createdAt', 'description', 'photos', 'requestNumber', 'resolution', 'siteName', 'subject'].sort(),
     );
 
     const json = JSON.stringify(res);
@@ -672,6 +672,7 @@ describe('resolveMaintenanceShareToken', () => {
             storage_path: 'org-from-link/req-from-link/att-1/master.jpg',
             mime_type: 'image/jpeg',
             safe_filename: 'break-room.jpg',
+            kind: 'requester',
           },
         ],
         error: null,
@@ -682,7 +683,7 @@ describe('resolveMaintenanceShareToken', () => {
 
     const res = await resolveMaintenanceShareToken(TOKEN);
 
-    expect(res!.photos).toEqual([{ filename: 'break-room.jpg' }]);
+    expect(res!.photos).toEqual([{ filename: 'break-room.jpg', kind: 'requester' }]);
     expect(createSignedUrl).not.toHaveBeenCalled();
     expect(adminStub.client.storage.from).not.toHaveBeenCalled();
 
@@ -706,14 +707,19 @@ describe('resolveMaintenanceShareToken', () => {
       'maintenance_requests.select': { data: REQ_ROW, error: null },
       'maintenance_request_attachments.select': {
         data: [
-          { storage_path: '', mime_type: 'image/jpeg', safe_filename: 'broken.jpg' },
-          { storage_path: 'org-from-link/req-from-link/att-2/ok.jpg', mime_type: 'image/webp', safe_filename: 'ok.jpg' },
+          { storage_path: '', mime_type: 'image/jpeg', safe_filename: 'broken.jpg', kind: 'requester' },
+          {
+            storage_path: 'org-from-link/req-from-link/att-2/ok.jpg',
+            mime_type: 'image/webp',
+            safe_filename: 'ok.jpg',
+            kind: 'requester',
+          },
         ],
         error: null,
       },
     });
     const res = await resolveMaintenanceShareToken(TOKEN);
-    expect(res!.photos).toEqual([{ filename: 'ok.jpg' }]);
+    expect(res!.photos).toEqual([{ filename: 'ok.jpg', kind: 'requester' }]);
   });
 
   it('is NOT module-gated — a disabled module must not break a link that was already emailed (no assertModuleEnabled call is even possible here: there is no ServiceContext)', async () => {
@@ -788,6 +794,102 @@ describe('resolveMaintenanceShareToken', () => {
       const res = await resolveMaintenanceShareToken(TOKEN);
       expect(res!.siteName).toBeNull();
       expect(adminStub.chainArgs.has('charters.select')).toBe(false);
+    });
+  });
+
+  /**
+   * Task 3 brief test 8 / spec §4.2/§12.1. The shipped `fetchValidAttachments`
+   * ordered by `sort_order` ALONE — every row defaults `sort_order = 0`, so
+   * the tie order between same-sort_order rows rested on unguaranteed
+   * Postgres behavior. `created_at` is the new, explicit secondary key; both
+   * `.order()` calls are pinned here (chainArgs), in sequence, because this
+   * ONE function backs both `resolveMaintenanceShareToken` (the page) and
+   * `resolveMaintenanceSharePhoto` (the proxy route) — a wobbling tie order
+   * would desync their indices independently, not just within one call.
+   */
+  describe('fetchValidAttachments ordering tiebreaker (spec §4.2/§12.1)', () => {
+    it('orders by sort_order asc THEN created_at asc — chainArgs pins BOTH .order calls, in that sequence', async () => {
+      const adminStub = buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': { data: REQ_ROW, error: null },
+        'maintenance_request_attachments.select': { data: [], error: null },
+      });
+
+      await resolveMaintenanceShareToken(TOKEN);
+
+      const names = adminStub.chains.get('maintenance_request_attachments.select')!;
+      const args = adminStub.chainArgs.get('maintenance_request_attachments.select')!;
+      const orderIndices = names.reduce<number[]>((acc, n, i) => (n === 'order' ? [...acc, i] : acc), []);
+      expect(orderIndices).toHaveLength(2);
+      expect(args[orderIndices[0]!]).toEqual(['sort_order', { ascending: true }]);
+      expect(args[orderIndices[1]!]).toEqual(['created_at', { ascending: true }]);
+    });
+  });
+
+  /**
+   * Task 3 brief test 9/10 (D2/spec §4.2). `resolution` is gated purely on
+   * `resolved_at`; it is null for every request that has never been
+   * resolved, and carries the note VERBATIM (no truncation) plus a
+   * server-pre-formatted date once resolved — and deliberately NEVER a
+   * resolver name (that column isn't even in the select — see the leak
+   * guard test below).
+   */
+  describe('resolution block (D2/spec §4.2)', () => {
+    it('a resolved request row (resolved_at + resolution_note) projects { note, resolvedAtDisplay } — the note is a literal round-trip, never truncated or reformatted', async () => {
+      buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': {
+          data: {
+            ...REQ_ROW,
+            resolved_at: '2026-08-05T12:00:00Z',
+            resolution_note: 'The issue for the leaking roof tile has been resolved.',
+          },
+          error: null,
+        },
+        'maintenance_request_attachments.select': { data: [], error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.resolution).toEqual({
+        note: 'The issue for the leaking roof tile has been resolved.',
+        resolvedAtDisplay: 'August 5, 2026',
+      });
+    });
+
+    it('an unresolved request (resolved_at null) projects resolution: null', async () => {
+      buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': { data: { ...REQ_ROW, resolved_at: null, resolution_note: null }, error: null },
+        'maintenance_request_attachments.select': { data: [], error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.resolution).toBeNull();
+    });
+
+    it('MUTATION GUARD (T3-M4) — the resolver name NEVER reaches the projection: resolved_by_name_snapshot is not even selected, so simulating it directly on the row still cannot leak into `resolution` or anywhere else in the response', async () => {
+      buildAdmin({
+        'maintenance_request_share_links.select': { data: ACTIVE_LINK_ROW, error: null },
+        'maintenance_requests.select': {
+          data: {
+            ...REQ_ROW,
+            resolved_at: '2026-08-05T12:00:00Z',
+            resolution_note: 'Fixed the AC unit.',
+            // Simulated future/leaked column — a real row DOES carry this
+            // (migration 0317), but resolveMaintenanceShareToken's select
+            // never asks for it. If the select ever regressed to `select('*')`
+            // or the projection ever spread the raw row, this would surface.
+            resolved_by_name_snapshot: 'Jane Q. Manager',
+            resolved_by: 'user-jane-uuid',
+          },
+          error: null,
+        },
+        'maintenance_request_attachments.select': { data: [], error: null },
+      });
+      const res = await resolveMaintenanceShareToken(TOKEN);
+      expect(res!.resolution).toEqual({ note: 'Fixed the AC unit.', resolvedAtDisplay: 'August 5, 2026' });
+      expect(Object.keys(res!.resolution!).sort()).toEqual(['note', 'resolvedAtDisplay']);
+      const json = JSON.stringify(res);
+      expect(json).not.toContain('Jane Q. Manager');
+      expect(json).not.toContain('user-jane-uuid');
     });
   });
 });

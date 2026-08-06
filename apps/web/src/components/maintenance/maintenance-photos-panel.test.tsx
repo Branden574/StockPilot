@@ -97,6 +97,68 @@ describe('MaintenancePhotosPanel (component test 5)', () => {
     expect('thumbPath' in finalizeBody).toBe(false);
   });
 
+  // --- Migration 0317/spec §2.2 — the `kind` prop threaded into both bodies ---
+
+  function stubMintAndFinalize() {
+    return vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes('/attachments/finalize')) {
+        return { ok: true, json: async () => ({ id: 'new1', width: 10, height: 10 }) } as Response;
+      }
+      if (url.includes('/attachments') && !url.startsWith('https://storage.example.test')) {
+        return {
+          ok: true,
+          json: async () => ({
+            path: 'org/r1/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jpg',
+            signedUrl: 'https://storage.example.test/master',
+            token: 't',
+            thumbPath: 'org/r1/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-thumb.webp',
+            thumbSignedUrl: 'https://storage.example.test/thumb',
+            thumbToken: 'tt',
+          }),
+        } as Response;
+      }
+      return { ok: true } as Response;
+    });
+  }
+
+  it('default panel (no kind prop): sends kind: "requester" in BOTH the mint and finalize bodies', async () => {
+    const onChange = vi.fn();
+    const fetchSpy = stubMintAndFinalize();
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<MaintenancePhotosPanel requestId="r1" photos={[]} onChange={onChange} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, makeFile('new.jpg'));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    const mintCall = fetchSpy.mock.calls.find(
+      (c) => String(c[0]).includes('/attachments') && !String(c[0]).includes('/finalize'),
+    );
+    const finalizeCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/attachments/finalize'));
+    const mintBody = JSON.parse((mintCall![1] as RequestInit).body as string) as Record<string, unknown>;
+    const finalizeBody = JSON.parse((finalizeCall![1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(mintBody.kind).toBe('requester');
+    expect(finalizeBody.kind).toBe('requester');
+  });
+
+  it('kind="resolution": LITERAL PIN — sends kind: "resolution" in BOTH the mint and finalize bodies', async () => {
+    const onChange = vi.fn();
+    const fetchSpy = stubMintAndFinalize();
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<MaintenancePhotosPanel requestId="r1" photos={[]} onChange={onChange} kind="resolution" />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, makeFile('proof.jpg'));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    const mintCall = fetchSpy.mock.calls.find(
+      (c) => String(c[0]).includes('/attachments') && !String(c[0]).includes('/finalize'),
+    );
+    const finalizeCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/attachments/finalize'));
+    const mintBody = JSON.parse((mintCall![1] as RequestInit).body as string) as Record<string, unknown>;
+    const finalizeBody = JSON.parse((finalizeCall![1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(mintBody.kind).toBe('resolution');
+    expect(finalizeBody.kind).toBe('resolution');
+  });
+
   it('maps a 409 mint response to a human wait-and-retry message, not a generic failure, and offers Retry', async () => {
     const onChange = vi.fn();
     const fetchSpy = vi.fn(async (url: string) => {

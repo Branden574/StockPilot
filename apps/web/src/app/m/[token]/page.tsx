@@ -29,6 +29,50 @@ function formatSubmittedDate(iso: string): string {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+/** One labeled photo grid — used for both the requester "Photos" section
+ *  and the "Resolution proof" section. `items` carries the ORIGINAL index
+ *  from the combined `shared.photos` list (never a locally re-numbered
+ *  index), so every `<img>`/`<a>` src stays the single `/m/<token>/photo/<i>`
+ *  contract the proxy route enforces (spec §4.2) even though the two
+ *  sections render disjoint SUBSETS of that one list. */
+function PhotoGrid({
+  token,
+  heading,
+  items,
+}: {
+  token: string;
+  heading: string;
+  items: Array<{ photo: { filename: string }; index: number }>;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section>
+      <h2 className="text-sm font-medium">
+        {heading} ({items.length})
+      </h2>
+      <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {items.map(({ photo, index }) => {
+          // The ONLY photo URL this page ever renders: a same-origin proxy
+          // path indexed by position in the COMBINED list, never a signed
+          // storage URL (fix wave C1 — see the route's own doc comment).
+          const src = `/m/${token}/photo/${index}`;
+          return (
+            <li key={`${photo.filename}-${index}`}>
+              <a href={src} target="_blank" rel="noopener noreferrer">
+                {/* The proxy sets Cache-Control: private, no-store; plain
+                    img is correct here (no cross-origin optimizer to hand
+                    this off to). */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt={photo.filename} className="h-32 w-full rounded-lg border object-cover" />
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 /**
  * Public, unauthenticated maintenance-request share page — the "L4L/DC4 has
  * no StockPilot account but needs to see the photos" surface (maintenance
@@ -88,6 +132,15 @@ export default async function MaintenanceSharePage({
   const shared = await resolveMaintenanceShareToken(token);
   if (!shared) notFound();
 
+  // Split the ONE combined photo list into two labeled sections while
+  // preserving each entry's ORIGINAL index — the proxy URL contract is
+  // positional against the combined list (spec §4.2), so a section must
+  // never re-number its own subset (that would desync `/photo/<i>` from
+  // the photo it actually names — see T3-M3 in the task brief).
+  const indexedPhotos = shared.photos.map((photo, index) => ({ photo, index }));
+  const requesterPhotos = indexedPhotos.filter(({ photo }) => photo.kind === 'requester');
+  const resolutionPhotos = indexedPhotos.filter(({ photo }) => photo.kind === 'resolution');
+
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-6">
       <header>
@@ -101,34 +154,15 @@ export default async function MaintenanceSharePage({
         <h2 className="text-sm font-medium">Issue description</h2>
         <p className="mt-1 whitespace-pre-line text-sm">{shared.description}</p>
       </section>
-      {shared.photos.length > 0 ? (
+      {shared.resolution ? (
         <section>
-          <h2 className="text-sm font-medium">Photos ({shared.photos.length})</h2>
-          <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {shared.photos.map((p, i) => {
-              // The ONLY photo URL this page ever renders: a same-origin
-              // proxy path indexed by position, never a signed storage URL
-              // (fix wave C1 — see the route's own doc comment).
-              const src = `/m/${token}/photo/${i}`;
-              return (
-                <li key={`${p.filename}-${i}`}>
-                  <a href={src} target="_blank" rel="noopener noreferrer">
-                    {/* The proxy sets Cache-Control: private, no-store; plain
-                        img is correct here (no cross-origin optimizer to hand
-                        this off to). */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={src}
-                      alt={p.filename}
-                      className="h-32 w-full rounded-lg border object-cover"
-                    />
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
+          <h2 className="text-sm font-medium">Resolution</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Marked resolved · {shared.resolution.resolvedAtDisplay}</p>
+          <p className="mt-1 whitespace-pre-line text-sm">{shared.resolution.note}</p>
         </section>
       ) : null}
+      <PhotoGrid token={token} heading="Photos" items={requesterPhotos} />
+      <PhotoGrid token={token} heading="Resolution proof" items={resolutionPhotos} />
       <footer className="border-t pt-4 text-xs text-muted-foreground">
         This page shows one maintenance request shared from StockPilot. Internal notes are never shown here.
       </footer>
