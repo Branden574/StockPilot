@@ -654,6 +654,161 @@ describe('update', () => {
   });
 });
 
+/**
+ * Fix wave 1 (controller re-adjudication of Task 17's "not reachable through
+ * any shipped UI" call): the shipped PATCH route
+ * (api/v1/maintenance-requests/[id]/route.ts) forwards its body straight to
+ * update() with NO re-parse of its own — MaintenanceRequestsService.update()
+ * owns the schema AND the field allow-list per that route's own doc comment.
+ * So ANY Bearer-token holder who can PATCH their own (or, as a manager, any)
+ * request can reach these four fields directly — no crafted deep-link
+ * required, unlike create()'s query-string vector. Before this fix, update()
+ * wrote relatedItemId/relatedOrderRequestId/relatedRentalId/relatedLocationId
+ * straight through COLUMN_FOR_FIELD with no org check at all, so a
+ * well-formed foreign-org (or fabricated) uuid persisted verbatim. These
+ * tests assert on the RECORDED update payload (stub.chainArgs), never the
+ * return value — update() returns void, and a test that only checked
+ * "resolves" would pass whether or not the id was actually scrubbed
+ * (test-hygiene landmine #37, same rationale as the create() describe block
+ * above).
+ */
+describe('update — related-record ids are re-derived against THIS org, never trusted verbatim (fix wave 1)', () => {
+  const ITEM_UUID = '44444444-4444-4444-8444-444444444444';
+  const ORDER_UUID = '55555555-5555-4555-8555-555555555555';
+  const RENTAL_UUID = '66666666-6666-4666-8666-666666666666';
+  const LOCATION_UUID = '77777777-7777-4777-8777-777777777777';
+
+  it('a FOREIGN-org relatedItemId is dropped to null in the persisted patch — no throw, the rest of the patch still applies', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        // Not found under THIS org's filter — stands in for "exists, but in
+        // a different org" exactly as well as "never existed" (the mock
+        // ignores filters when deciding what to return), matching the
+        // identical create()-side test's own comment.
+        'inventory_items.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', {
+      subject: 'Still broken please fix',
+      relatedItemId: ITEM_UUID,
+    });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.related_item_id).toBeNull();
+    // The rest of the patch is unaffected by the dropped related id.
+    expect(patch.subject).toBe('Still broken please fix');
+  });
+
+  it('a VALID same-org relatedItemId persists unchanged, and the org filter is genuinely applied (not just the returned row)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'inventory_items.select': { data: { id: ITEM_UUID }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { relatedItemId: ITEM_UUID });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.related_item_id).toBe(ITEM_UUID);
+    // I4: without these recorded, this test would still pass even if the
+    // org filter were dropped entirely from resolveRelatedId's lookup.
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('inventory_items.select')).toContainEqual(['id', ITEM_UUID]);
+  });
+
+  it('a FOREIGN-org relatedOrderRequestId is dropped to null (same guard, order_requests table)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'order_requests.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { relatedOrderRequestId: ORDER_UUID });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.related_order_request_id).toBeNull();
+  });
+
+  it('a VALID same-org relatedRentalId persists unchanged (same guard, rentals table)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'rentals.select': { data: { id: RENTAL_UUID }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { relatedRentalId: RENTAL_UUID });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.related_rental_id).toBe(RENTAL_UUID);
+  });
+
+  it('relatedLocationId gets the identical guard (no UI producer yet, but the same update path)', async () => {
+    const foreign = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'locations.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(foreign.ctx).update('r1', { relatedLocationId: LOCATION_UUID });
+    expect(
+      (foreign.stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>)
+        .related_location_id,
+    ).toBeNull();
+
+    const inOrg = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'locations.select': { data: { id: LOCATION_UUID }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(inOrg.ctx).update('r1', { relatedLocationId: LOCATION_UUID });
+    expect(
+      (inOrg.stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>)
+        .related_location_id,
+    ).toBe(LOCATION_UUID);
+  });
+
+  it('an UNKNOWN (nonexistent) relatedItemId degrades to null without throwing', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'inventory_items.select': { data: null, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(
+      new MaintenanceRequestsService(ctx).update('r1', { relatedItemId: ITEM_UUID }),
+    ).resolves.toBeUndefined();
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.related_item_id).toBeNull();
+  });
+
+  it('never queries a related-record table when the patch carries none of the four related-id fields — a plain field edit stays scoped', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { subject: 'Broken chair leg — urgent' });
+    expect(stub.chainArgs.has('inventory_items.select')).toBe(false);
+    expect(stub.chainArgs.has('order_requests.select')).toBe(false);
+    expect(stub.chainArgs.has('rentals.select')).toBe(false);
+    expect(stub.chainArgs.has('locations.select')).toBe(false);
+  });
+});
+
 describe('archive', () => {
   it('requires manage — forbidden otherwise', async () => {
     const { ctx } = build({}, { permissions: new Set(['maintenance_requests:submit']) });

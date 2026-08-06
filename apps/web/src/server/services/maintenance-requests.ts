@@ -146,6 +146,22 @@ const COLUMN_FOR_FIELD: Record<string, string> = {
   relatedLocationId: 'related_location_id',
 };
 
+/** Fix wave 1: the same four related-id fields need the same
+ *  resolveRelatedId() re-derivation in update() that create() already does
+ *  (Task 17 / binding constraint 2) — the PATCH route
+ *  (api/v1/maintenance-requests/[id]/route.ts) forwards the body straight to
+ *  update() with no re-parse, so this is the only enforcement point standing
+ *  between a Bearer-token caller and a foreign-org related-record attach.
+ *  Maps each camelCase field to the table resolveRelatedId() checks it
+ *  against, so update()'s allow-list loop can special-case exactly these
+ *  four keys without forking a second implementation of the lookup. */
+const RELATED_ID_TABLE: Record<string, 'inventory_items' | 'order_requests' | 'rentals' | 'locations'> = {
+  relatedItemId: 'inventory_items',
+  relatedOrderRequestId: 'order_requests',
+  relatedRentalId: 'rentals',
+  relatedLocationId: 'locations',
+};
+
 export class MaintenanceRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -430,11 +446,40 @@ export class MaintenanceRequestsService {
       throw new ServiceError('validation_error', parsed.error.issues[0]?.message ?? 'Please check the form.');
     }
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    // Fix wave 1: related-id fields are collected separately rather than
+    // written straight into `updates` like every other field below — each
+    // one still needs the SAME org re-derivation create() already applies
+    // (Task 17 / binding constraint 2) before it can be trusted. A patched
+    // relatedItemId/relatedOrderRequestId/relatedRentalId/relatedLocationId
+    // is exactly as untrustworthy as one supplied at create time: the
+    // column's FK only proves the row exists SOMEWHERE, never that it
+    // belongs to THIS org, and the PATCH route forwards this body with no
+    // re-parse of its own.
+    const pendingRelatedIds: { key: string; table: (typeof RELATED_ID_TABLE)[string]; value: unknown }[] = [];
     for (const [key, value] of Object.entries(parsed.data as Record<string, unknown>)) {
       if (value === undefined) continue;
       if (!isManager && !REQUESTER_EDITABLE.has(key)) continue;
       const col = COLUMN_FOR_FIELD[key];
-      if (col) updates[col] = value ?? null;
+      if (!col) continue;
+      const relatedTable = RELATED_ID_TABLE[key];
+      if (relatedTable) {
+        pendingRelatedIds.push({ key, table: relatedTable, value });
+        continue;
+      }
+      updates[col] = value ?? null;
+    }
+    if (pendingRelatedIds.length > 0) {
+      // Reuses resolveRelatedId() verbatim — the same helper create() calls
+      // — rather than forking a second lookup implementation. A foreign-org
+      // or nonexistent id degrades to null (no throw, the rest of the patch
+      // still applies); only a genuine read failure surfaces as
+      // internal_error, matching resolveRelatedId's own contract.
+      const resolved = await Promise.all(
+        pendingRelatedIds.map(({ table, value }) => this.resolveRelatedId(table, value as string | null)),
+      );
+      pendingRelatedIds.forEach(({ key }, i) => {
+        updates[COLUMN_FOR_FIELD[key]!] = resolved[i];
+      });
     }
 
     const { data, error } = await this.db
