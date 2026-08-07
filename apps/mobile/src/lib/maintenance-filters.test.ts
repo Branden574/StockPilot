@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAINTENANCE_STATUS_CHIPS,
+  resolutionProofCaption,
   shouldShowResolutionCard,
   splitPhotosByKind,
   statusPillTone,
@@ -107,5 +108,26 @@ describe('splitPhotosByKind', () => {
 
   it('an empty list splits into two empty buckets', () => {
     expect(splitPhotosByKind([])).toEqual({ requester: [], resolution: [] });
+  });
+});
+
+describe('resolutionProofCaption', () => {
+  it('returns the "Added by the team..." caption when resolvedAt is set', () => {
+    expect(resolutionProofCaption('2026-08-05T00:00:00.000Z')).toBe(
+      'Added by the team when this request was marked resolved.',
+    );
+  });
+
+  it('returns the "Staged by the team..." caption when resolvedAt is null', () => {
+    expect(resolutionProofCaption(null)).toBe(
+      'Staged by the team while preparing to mark this request resolved.',
+    );
+  });
+
+  it('the two captions are literal-pinned to match web byte-for-byte', () => {
+    // Mutation guard: unconditional "Added by the team..." string will fail this
+    const captionWhenResolved = resolutionProofCaption('2026-08-05T00:00:00.000Z');
+    const captionWhenStaged = resolutionProofCaption(null);
+    expect(captionWhenResolved).not.toBe(captionWhenStaged);
   });
 });

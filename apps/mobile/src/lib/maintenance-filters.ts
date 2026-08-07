@@ -118,3 +118,17 @@ export function splitPhotosByKind<T extends { kind?: MaintenanceAttachmentKind |
     resolution: photos.filter((p) => p.kind === 'resolution'),
   };
 }
+
+/**
+ * Resolution-proof card caption (Task 9's fix wave — mirrors web's
+ * page.tsx:269-271 byte-for-byte). The caption's claim about resolution
+ * status is gated on `resolvedAt`, matching the resolution-card visibility
+ * itself: when resolvedAt is set, the proof photos document a completed
+ * resolution; when null (staged before the Resolve dialog), they document
+ * work-in-progress that may be abandoned.
+ */
+export function resolutionProofCaption(resolvedAt: string | null): string {
+  return resolvedAt
+    ? 'Added by the team when this request was marked resolved.'
+    : 'Staged by the team while preparing to mark this request resolved.';
+}

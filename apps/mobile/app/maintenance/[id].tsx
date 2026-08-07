@@ -40,7 +40,7 @@ import {
   type MobileMaintenancePhoto,
   type MobileMaintenanceRequestDetail,
 } from '@/lib/maintenance-api';
-import { shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
+import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -325,6 +325,9 @@ export default function MaintenanceRequestDetailScreen() {
                 />
               ))}
             </View>
+            <Body size={12.5} muted style={{ marginTop: 8 }}>
+              {resolutionProofCaption(detail.resolvedAt)}
+            </Body>
           </Card>
         ) : null}
 
