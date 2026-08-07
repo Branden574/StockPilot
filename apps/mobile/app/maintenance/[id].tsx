@@ -12,7 +12,6 @@ import {
   formatMaintenanceRequestNumber,
   prepareMaintenanceEmail,
   type MaintenanceEmailInput,
-  type MaintenanceStatus,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -21,6 +20,7 @@ import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { formatRelativeTime } from '@/lib/item-activity';
 import {
   BLOCKED_HEADLINE,
   BLOCKED_RETRY_MESSAGE,
@@ -40,6 +40,7 @@ import {
   type MobileMaintenancePhoto,
   type MobileMaintenanceRequestDetail,
 } from '@/lib/maintenance-api';
+import { shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -58,14 +59,6 @@ import { useTheme } from '@/lib/use-theme';
  * is orchestration + rendering only, same "source-pin honesty" posture
  * Task 18/19 established (this repo's vitest cannot render `app/`).
  */
-const STATUS_PILL: Record<MaintenanceStatus, 'default' | 'warn' | 'ok' | 'crit'> = {
-  saved: 'default',
-  draft_opened: 'warn',
-  resolved: 'ok',
-  archived: 'default',
-  cancelled: 'default',
-};
-
 /** Detail-page analog of the list screen's brief-section-22 note (web's own
  *  detail page shows this exact sentence under "StockPilot activity" —
  *  page.tsx). Never implies a fake ticket-conversation timeline (brief
@@ -220,8 +213,10 @@ export default function MaintenanceRequestDetailScreen() {
   }
 
   const handle = formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? `#${detail.requestNumber}`;
-  const pillStatus = STATUS_PILL[detail.status] ?? 'default';
+  const pillStatus = statusPillTone(detail.status);
   const showCondensedNotice = shouldShowCondensedNotice(prepared);
+  const showResolutionCard = shouldShowResolutionCard(detail);
+  const { requester: requesterPhotos, resolution: resolutionPhotos } = splitPhotosByKind(photos);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -256,6 +251,20 @@ export default function MaintenanceRequestDetailScreen() {
           </Body>
         </Card>
 
+        {showResolutionCard ? (
+          <Card padding={16} style={{ marginTop: 14 }}>
+            <Eyebrow>RESOLUTION</Eyebrow>
+            <Body size={14} color={c.ink} style={{ marginTop: 8 }}>
+              {detail.resolutionNote}
+            </Body>
+            <Body size={12.5} muted style={{ marginTop: 8 }}>
+              {`Marked resolved by ${detail.resolvedByName} · ${
+                detail.resolvedAt ? formatRelativeTime(detail.resolvedAt) : ''
+              }`}
+            </Body>
+          </Card>
+        ) : null}
+
         <Card padding={0} style={{ marginTop: 14 }}>
           <DetailRow label="REQUESTER" value={detail.requesterName} />
           <Hair inset={16} />
@@ -272,17 +281,42 @@ export default function MaintenanceRequestDetailScreen() {
           <DetailRow label="ACCESS INSTRUCTIONS" value={detail.accessInstructions} />
         </Card>
 
-        {photos.length > 0 ? (
+        {requesterPhotos.length > 0 ? (
           <Card padding={16} style={{ marginTop: 14 }}>
-            <Eyebrow>{`PHOTOS · ${photos.length}`}</Eyebrow>
+            <Eyebrow>{`PHOTOS · ${requesterPhotos.length}`}</Eyebrow>
             <View style={styles.photoGrid}>
-              {photos.map((p) => (
+              {requesterPhotos.map((p) => (
                 // Plain expo-image, no cacheKey/signing helper: these URLs
                 // arrive already-signed from the server every load (Task 8's
                 // MaintenanceAttachmentsService.signedViewUrls), and
                 // image-cache.ts's signItemImage/CachedImage are hardcoded to
                 // the UNRELATED item-images bucket — routing through them
                 // would sign against the wrong bucket entirely.
+                <Image
+                  key={p.id}
+                  source={{ uri: p.thumbUrl ?? p.url }}
+                  style={styles.photoThumb}
+                  contentFit="cover"
+                />
+              ))}
+            </View>
+          </Card>
+        ) : null}
+
+        {resolutionPhotos.length > 0 ? (
+          <Card padding={16} style={{ marginTop: 14 }}>
+            {/* Labeled distinctly from the requester PHOTOS card above
+                (Task 9's split — mirrors web's page.tsx "Resolution proof"
+                section). Visibility is gated on resolutionPhotos.length
+                alone, NOT on showResolutionCard/detail.resolvedAt — a
+                manager can stage proof photos before ever confirming the
+                Resolve dialog (Task 10), and hiding those rows here would
+                be worse than showing them; the claim of resolution itself
+                stays confined to the RESOLUTION card above, which IS gated
+                on resolvedAt. */}
+            <Eyebrow>{`RESOLUTION PROOF · ${resolutionPhotos.length}`}</Eyebrow>
+            <View style={styles.photoGrid}>
+              {resolutionPhotos.map((p) => (
                 <Image
                   key={p.id}
                   source={{ uri: p.thumbUrl ?? p.url }}

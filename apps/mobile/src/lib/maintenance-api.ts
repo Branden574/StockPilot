@@ -1,4 +1,5 @@
 import type {
+  MaintenanceAttachmentKind,
   MaintenanceEmailInput,
   MaintenancePriority,
   MaintenanceRequestFormValues,
@@ -63,6 +64,13 @@ export interface MobileMaintenanceRequestDetail extends MobileMaintenanceListRow
   outlookDraftOpenCount: number;
   archivedAt: string | null;
   cancelledAt: string | null;
+  /** Maintenance Resolved (spec §1.1): StockPilot-local close-out record.
+   *  resolvedByName is the RESOLVER's display-name snapshot (the same
+   *  requester_name_snapshot pattern, taken at write time from the
+   *  authenticated profile) — never a live join back to user_profiles. */
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  resolutionNote: string | null;
   updatedAt: string;
 }
 
@@ -74,6 +82,10 @@ export interface MobileMaintenancePhoto {
   thumbUrl: string | null;
   width: number | null;
   height: number | null;
+  /** Maintenance Resolved (migration 0317): 'requester' for photos attached
+   *  at request-creation time (the shipped default), 'resolution' for proof
+   *  photos a manage-holder attaches when closing out via resolve(). */
+  kind: MaintenanceAttachmentKind;
 }
 
 /** Mirror of `MaintenanceAttachmentsService.createUploadUrl`'s return shape. */
@@ -90,18 +102,30 @@ export interface MintPayload {
  * List the caller's own (`scope: 'mine'`) or the whole org's
  * (`scope: 'all'`, 403s server-side without read_all/manage) requests.
  *
- * No `limit`/`offset` — the route accepts none (Task 11's fixed contract),
- * so this always returns the newest 50 (the service's own default cap).
- * There is nothing this wrapper can do to page past that; screens must show
- * that honestly rather than implying a "load more" that does not exist.
+ * Task 9 correction: the route DOES accept an optional `status` filter —
+ * one of the five real statuses or the synthetic `'active'` shorthand
+ * (`saved` OR `draft_opened`, resolved JS-side by the service) — forwarded
+ * straight through to the route's own `STATUS_VALUES` allow-list
+ * (api/v1/maintenance-requests/route.ts); an unrecognized value there is
+ * silently dropped (treated as no filter), never rejected, so this wrapper
+ * does not validate it either. A prior version of this comment implied
+ * `scope`/`q` were the only params the route accepted — that was stale.
+ *
+ * No `limit`/`offset` — the route accepts neither (Task 11's fixed
+ * contract, unchanged by the above), so this always returns the newest 50
+ * (the service's own default cap). There is nothing this wrapper can do to
+ * page past that; screens must show that honestly rather than implying a
+ * "load more" that does not exist.
  */
 export async function listMaintenanceRequests(args: {
   scope: 'mine' | 'all';
   q?: string;
+  status?: MaintenanceStatus | 'active';
 }): Promise<MobileMaintenanceListRow[]> {
   const usp = new URLSearchParams({ scope: args.scope });
   const q = args.q?.trim();
   if (q) usp.set('q', q);
+  if (args.status) usp.set('status', args.status);
   const res = await api<{ requests: MobileMaintenanceListRow[] }>(
     `/api/v1/maintenance-requests?${usp.toString()}`,
   );

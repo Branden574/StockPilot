@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { MaintenanceEmailInput } from '@stockpilot/core';
+
 import {
   createMaintenanceRequest,
   finalizePhoto,
@@ -10,6 +12,8 @@ import {
   listMaintenanceRequests,
   mintPhotoUpload,
   recordDraftOpened,
+  type MobileMaintenancePhoto,
+  type MobileMaintenanceRequestDetail,
 } from './maintenance-api';
 
 // ./api reaches for expo-constants, AsyncStorage and the Supabase client at
@@ -69,6 +73,121 @@ describe('listMaintenanceRequests', () => {
     const calledPath = apiMock.api.mock.calls[0]?.[0] as string;
     expect(calledPath).not.toContain('limit');
     expect(calledPath).not.toContain('offset');
+  });
+
+  it('forwards a status filter — LITERAL URL pin (Task 9)', async () => {
+    apiMock.api.mockResolvedValueOnce({ requests: [] });
+    await listMaintenanceRequests({ scope: 'mine', status: 'resolved' });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/maintenance-requests?scope=mine&status=resolved',
+    );
+  });
+
+  it('forwards the synthetic "active" status value unchanged', async () => {
+    apiMock.api.mockResolvedValueOnce({ requests: [] });
+    await listMaintenanceRequests({ scope: 'all', status: 'active' });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/maintenance-requests?scope=all&status=active',
+    );
+  });
+
+  it('omits the status param entirely when absent — never sends status=undefined', async () => {
+    apiMock.api.mockResolvedValueOnce({ requests: [] });
+    await listMaintenanceRequests({ scope: 'mine' });
+    const calledPath = apiMock.api.mock.calls[0]?.[0] as string;
+    expect(calledPath).not.toContain('status');
+  });
+});
+
+/**
+ * Detail/photo field mirror (Task 9). `MobileMaintenanceRequestDetail` and
+ * `MobileMaintenancePhoto` are hand-declared mirrors of server-only
+ * interfaces (maintenance-requests.ts's `MaintenanceRequestDetail`,
+ * maintenance-attachments.ts's `SignedMaintenancePhoto`) that mobile cannot
+ * import directly. `getMaintenanceRequest`'s `api()` call casts its result
+ * `as T` with NO runtime validation, so a mirror interface that silently
+ * drops a field is invisible until a screen renders `undefined` where a
+ * real value belongs. This test builds a fully-typed canned response — a
+ * payload literal missing `resolvedAt`/`resolvedByName`/`resolutionNote` on
+ * `request` or `kind` on a photo is a COMPILE ERROR here, not a passing
+ * test with a silently-undefined field — then proves the wrapper still
+ * round-trips it verbatim (no transform of its own to get wrong).
+ */
+describe('getMaintenanceRequest — detail/photo field mirror (typecheck-forced, Task 9)', () => {
+  it('round-trips the resolution fields and photo kind exactly as the server sends them', async () => {
+    const request: MobileMaintenanceRequestDetail = {
+      id: 'req-1',
+      requestNumber: 42,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      subject: 'AC not working in Room 204',
+      status: 'resolved',
+      priority: 'high',
+      category: 'Heating or air conditioning',
+      siteName: 'DC4',
+      requesterName: 'Res Req',
+      requesterUserId: 'user-1',
+      photoCount: 2,
+      draftOpened: true,
+      localOwnerUserId: null,
+      description: 'The AC unit stopped blowing cold air this morning.',
+      requesterEmail: 'res-req@test.local',
+      requesterPhone: null,
+      charterId: 'charter-1',
+      warehouseId: null,
+      building: null,
+      roomOrArea: null,
+      department: null,
+      accessInstructions: null,
+      relatedItemId: null,
+      relatedOrderRequestId: null,
+      relatedRentalId: null,
+      relatedLocationId: null,
+      outlookDraftOpenedAt: '2026-08-01T01:00:00.000Z',
+      outlookDraftOpenCount: 1,
+      archivedAt: null,
+      cancelledAt: null,
+      resolvedAt: '2026-08-05T00:00:00.000Z',
+      resolvedByName: 'Dana Keeler',
+      resolutionNote: 'Replaced the leaking\nroof tile.',
+      updatedAt: '2026-08-05T00:00:00.000Z',
+    };
+    const photos: MobileMaintenancePhoto[] = [
+      {
+        id: 'p-1',
+        originalFilename: 'before.jpg',
+        url: 'https://signed/p1',
+        thumbUrl: 'https://signed/p1-thumb',
+        width: 800,
+        height: 600,
+        kind: 'requester',
+      },
+      {
+        id: 'p-2',
+        originalFilename: 'after.jpg',
+        url: 'https://signed/p2',
+        thumbUrl: null,
+        width: null,
+        height: null,
+        kind: 'resolution',
+      },
+    ];
+    const payload = {
+      request,
+      photos,
+      emailInput: {} as MaintenanceEmailInput,
+      canManage: true,
+    };
+    apiMock.api.mockResolvedValueOnce(payload);
+    const result = await getMaintenanceRequest('req-1');
+    expect(result).toEqual(payload);
+    // Field-for-field, not just deep-equal against the same object — a
+    // future edit that swaps resolvedByName/resolutionNote would still pass
+    // toEqual against a swapped fixture but fails these direct reads.
+    expect(result.request.resolvedAt).toBe('2026-08-05T00:00:00.000Z');
+    expect(result.request.resolvedByName).toBe('Dana Keeler');
+    expect(result.request.resolutionNote).toBe('Replaced the leaking\nroof tile.');
+    expect(result.photos[0]?.kind).toBe('requester');
+    expect(result.photos[1]?.kind).toBe('resolution');
   });
 });
 
@@ -288,6 +407,30 @@ describe('app/(drawer)/maintenance.tsx is wired to the module gate + accurate la
   it('formats the request handle through the shared formatter, never a raw number', () => {
     expect(src).toContain('formatMaintenanceRequestNumber');
   });
+
+  it('(Task 9) `status` is actually DERIVED FROM statusQueryParam(statusLabel), not left dangling next to a hardcoded value', () => {
+    expect(src).toContain('MAINTENANCE_STATUS_CHIPS');
+    expect(src).toMatch(/const\s+status\s*=\s*statusQueryParam\(\s*statusLabel\s*\)\s*;/);
+  });
+
+  it('(Task 9) the status chip row is rendered from MAINTENANCE_STATUS_CHIPS.map, and each chip actually calls setStatusLabel with ITS OWN label (not a hardcoded value)', () => {
+    const mapMatch = src.match(/\{MAINTENANCE_STATUS_CHIPS\.map\(\(chip\) => \(([\s\S]*?)\)\)\}/);
+    expect(mapMatch).not.toBeNull();
+    const body = mapMatch![1];
+    expect(body).toContain('setStatusLabel(chip.label)');
+    expect(body).toContain('{chip.label}');
+  });
+
+  it('(Task 9) `status` is threaded into the listMaintenanceRequests call, not just computed and discarded', () => {
+    const callMatch = src.match(/await listMaintenanceRequests\(\{([\s\S]*?)\}\)/);
+    expect(callMatch).not.toBeNull();
+    expect(callMatch![1]).toContain('status');
+  });
+
+  it('(Task 9) the row pill status is derived from the shared statusPillTone helper, never a hand-copied Record', () => {
+    expect(src).not.toContain('STATUS_PILL');
+    expect(src).toMatch(/const\s+pillStatus\s*=\s*statusPillTone\(\s*row\.status\s*\)\s*;/);
+  });
 });
 
 /**
@@ -456,6 +599,56 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
 
   it('derives status labels from MAINTENANCE_STATUS_LABELS, never a hand-copied literal', () => {
     expect(src).toContain('MAINTENANCE_STATUS_LABELS');
+  });
+
+  it('(Task 9) the header pill status is derived from the shared statusPillTone helper, never a hand-copied Record', () => {
+    expect(src).not.toContain('STATUS_PILL');
+    expect(src).toMatch(/const\s+pillStatus\s*=\s*statusPillTone\(\s*detail\.status\s*\)\s*;/);
+  });
+
+  it('(Task 9) `showResolutionCard` is actually ASSIGNED FROM shouldShowResolutionCard(detail), not left dangling next to a hardcoded value', () => {
+    expect(src).toMatch(
+      /const\s+showResolutionCard\s*=\s*shouldShowResolutionCard\(\s*detail\s*\)\s*;/,
+    );
+  });
+
+  it('(Task 9) the Resolution card is gated on `showResolutionCard` and renders the note + resolver-name line', () => {
+    const gateIdx = src.indexOf('{showResolutionCard ? (');
+    expect(gateIdx).toBeGreaterThan(-1);
+    const cardEndIdx = src.indexOf(') : null}', gateIdx);
+    expect(cardEndIdx).toBeGreaterThan(gateIdx);
+    const cardBody = src.slice(gateIdx, cardEndIdx);
+    expect(cardBody).toContain('RESOLUTION');
+    expect(cardBody).toContain('{detail.resolutionNote}');
+    expect(cardBody).toContain('Marked resolved by ${detail.resolvedByName}');
+  });
+
+  it('(Task 9) `requesterPhotos`/`resolutionPhotos` are actually DESTRUCTURED FROM splitPhotosByKind(photos), not left dangling next to the raw `photos` array', () => {
+    expect(src).toMatch(
+      /const\s*\{\s*requester:\s*requesterPhotos\s*,\s*resolution:\s*resolutionPhotos\s*\}\s*=\s*splitPhotosByKind\(\s*photos\s*\)\s*;/,
+    );
+  });
+
+  it('(Task 9) the PHOTOS card maps ONLY requesterPhotos — never the raw `photos` array or resolutionPhotos', () => {
+    const eyebrowIdx = src.indexOf('`PHOTOS · ${requesterPhotos.length}`');
+    expect(eyebrowIdx).toBeGreaterThan(-1);
+    const mapIdx = src.indexOf('requesterPhotos.map((p) =>', eyebrowIdx);
+    expect(mapIdx).toBeGreaterThan(eyebrowIdx);
+    // The mutation this catches: swapping requesterPhotos.map for
+    // photos.map or resolutionPhotos.map right after the PHOTOS eyebrow —
+    // the very next `.map((p) =>` call after this eyebrow must belong to
+    // requesterPhotos, not some other array.
+    const nextMapIdx = src.indexOf('.map((p) =>', eyebrowIdx);
+    expect(src.slice(nextMapIdx - 'requesterPhotos'.length, nextMapIdx)).toBe('requesterPhotos');
+  });
+
+  it('(Task 9) the RESOLUTION PROOF card is gated on resolutionPhotos.length and maps ONLY resolutionPhotos, distinctly labeled from the requester PHOTOS card', () => {
+    const eyebrowIdx = src.indexOf('`RESOLUTION PROOF · ${resolutionPhotos.length}`');
+    expect(eyebrowIdx).toBeGreaterThan(-1);
+    const gateIdx = src.lastIndexOf('{resolutionPhotos.length > 0 ? (', eyebrowIdx);
+    expect(gateIdx).toBeGreaterThan(-1);
+    const mapIdx = src.indexOf('.map((p) =>', eyebrowIdx);
+    expect(src.slice(mapIdx - 'resolutionPhotos'.length, mapIdx)).toBe('resolutionPhotos');
   });
 });
 
