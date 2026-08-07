@@ -22,7 +22,7 @@
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-import { MAINTENANCE_MAX_PHOTOS } from '@stockpilot/core';
+import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
 
 import { ApiError } from './api';
 import { resizeForUpload } from './image-resize';
@@ -81,7 +81,16 @@ export async function uploadMaintenancePhoto(
   requestId: string,
   asset: { uri: string; fileName?: string },
   onProgress: (fraction: number) => void,
+  options?: { kind?: MaintenanceAttachmentKind },
 ): Promise<{ id: string }> {
+  // Task 10 (migration 0317/spec §2.2): defaults to 'requester', matching
+  // web's `MaintenancePhotosPanel` (kind prop default 'requester') — and,
+  // like that panel, ALWAYS sent explicitly on both calls below rather than
+  // omitted for the default case. `optional` on this options bag (not a
+  // required 4th positional arg) keeps every existing 3-arg call site
+  // (app/maintenance/new.tsx's requester-photo flow) compiling unchanged.
+  const kind: MaintenanceAttachmentKind = options?.kind ?? 'requester';
+
   // 1) Resize + transcode. HEIC never reaches the server: resizeForUpload
   // either downsizes to JPEG (anything over 1600px on its long edge) or, for
   // an already-small source, transcodes any non-web-safe format (HEIC/HEIF)
@@ -93,8 +102,10 @@ export async function uploadMaintenancePhoto(
   const name = asset.fileName?.replace(/\.[a-z0-9]+$/i, '') || 'photo';
   const originalFilename = `${name}.${ext}`;
 
-  // 2) Server mint (rate-limited, entity-checked).
-  const mint = await mintPhotoUpload(requestId, { fileExt: ext, originalFilename }).catch((err) => {
+  // 2) Server mint (rate-limited, entity-checked). `kind` threaded through
+  // explicitly (Task 10) — createUploadUrl scopes its per-kind rate-limit
+  // count and manage-gate on this, not just the finalize step below.
+  const mint = await mintPhotoUpload(requestId, { fileExt: ext, originalFilename, kind }).catch((err) => {
     // Route contract (maintenance-attachments.ts `createUploadUrl`): 409,
     // NEVER 429, on rate-limit. The server's own message is already the
     // right copy ("Too many uploads in the last hour...") — forward it
@@ -156,12 +167,16 @@ export async function uploadMaintenancePhoto(
   // 5) Finalize: the server downloads + magic-byte-verifies before ever
   // recording a row, so a failure here means it REFUSED the file, not that
   // the network dropped — a different failure than step 3's, and the screen
-  // should say so rather than repeating "check your connection".
+  // should say so rather than repeating "check your connection". `kind`
+  // threaded through explicitly (Task 10) — this IS the step that actually
+  // records the kind on the row (finalize()'s own doc comment); a mint-only
+  // threading would still record every proof photo as 'requester'.
   return await finalizePhoto(requestId, {
     path: mint.path,
     thumbPath: mint.thumbPath,
     originalFilename,
     declaredMime,
+    kind,
   }).catch(() => {
     throw new UploadError('rejected', 'That photo was refused by the server.');
   });

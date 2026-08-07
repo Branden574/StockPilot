@@ -6,12 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MaintenanceEmailInput } from '@stockpilot/core';
 
 import {
+  addMaintenanceNote,
+  archiveMaintenanceRequest,
+  assignMaintenanceOwner,
   createMaintenanceRequest,
   finalizePhoto,
   getMaintenanceRequest,
+  listMaintenanceMembers,
+  listMaintenanceNotes,
   listMaintenanceRequests,
   mintPhotoUpload,
   recordDraftOpened,
+  resolveMaintenanceRequest,
   type MobileMaintenancePhoto,
   type MobileMaintenanceRequestDetail,
 } from './maintenance-api';
@@ -284,6 +290,94 @@ describe('finalizePhoto', () => {
     });
     const body = apiMock.api.mock.calls[0]?.[1] as { body: Record<string, unknown> };
     expect(body.body).not.toHaveProperty('thumbPath');
+  });
+});
+
+describe('resolveMaintenanceRequest', () => {
+  it('POSTs { note } to the resolve route — literal path + body pin', async () => {
+    apiMock.api.mockResolvedValueOnce({ ok: true });
+    await expect(resolveMaintenanceRequest('req-1', 'Replaced the leaking roof tile.')).resolves.toEqual({
+      ok: true,
+    });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/req-1/resolve', {
+      method: 'POST',
+      body: { note: 'Replaced the leaking roof tile.' },
+    });
+  });
+
+  it('surfaces a 409 AS-IS (a genuine conflict, not rate-limiting) — no special-casing to swallow or reword it', async () => {
+    class ApiError extends Error {
+      status: number;
+      constructor(message: string, status: number) {
+        super(message);
+        this.status = status;
+      }
+    }
+    apiMock.api.mockRejectedValueOnce(new ApiError('This request is already resolved.', 409));
+    const err = (await resolveMaintenanceRequest('req-1', 'Fixed it.').catch((e) => e)) as ApiError;
+    expect(err.status).toBe(409);
+    expect(err.message).toBe('This request is already resolved.');
+  });
+});
+
+describe('archiveMaintenanceRequest', () => {
+  it('POSTs the archive route with NO body — literal path pin', async () => {
+    apiMock.api.mockResolvedValueOnce({ ok: true });
+    await expect(archiveMaintenanceRequest('req-1')).resolves.toEqual({ ok: true });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/req-1/archive', {
+      method: 'POST',
+    });
+  });
+});
+
+describe('assignMaintenanceOwner', () => {
+  it('POSTs { userId } to the assign-owner route — literal path pin', async () => {
+    apiMock.api.mockResolvedValueOnce({ ok: true });
+    await expect(assignMaintenanceOwner('req-1', 'user-9')).resolves.toEqual({ ok: true });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/req-1/assign-owner', {
+      method: 'POST',
+      body: { userId: 'user-9' },
+    });
+  });
+
+  it('round-trips a null userId as an EXPLICIT null, not omitted — clearing the owner must reach the service as null', async () => {
+    apiMock.api.mockResolvedValueOnce({ ok: true });
+    await assignMaintenanceOwner('req-1', null);
+    const call = apiMock.api.mock.calls[0]?.[1] as { body: Record<string, unknown> };
+    expect(call.body).toHaveProperty('userId');
+    expect(call.body.userId).toBeNull();
+    expect(call.body).toEqual({ userId: null });
+  });
+});
+
+describe('listMaintenanceNotes', () => {
+  it('GETs the notes route and unwraps the { notes } envelope — literal path pin', async () => {
+    const notes = [
+      { id: 'note-1', authorUserId: 'user-1', body: 'Called the vendor.', createdAt: '2026-08-05T00:00:00.000Z' },
+    ];
+    apiMock.api.mockResolvedValueOnce({ notes });
+    await expect(listMaintenanceNotes('req-1')).resolves.toEqual(notes);
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/req-1/notes');
+  });
+});
+
+describe('addMaintenanceNote', () => {
+  it('POSTs { body } to the notes route — literal path + body pin', async () => {
+    apiMock.api.mockResolvedValueOnce({ id: 'note-1' });
+    await expect(addMaintenanceNote('req-1', 'Called the vendor.')).resolves.toEqual({ id: 'note-1' });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/req-1/notes', {
+      method: 'POST',
+      body: { body: 'Called the vendor.' },
+    });
+  });
+});
+
+describe('listMaintenanceMembers', () => {
+  it('GETs the (static) members route and unwraps the { members } envelope — literal path pin', async () => {
+    const members = [{ userId: 'user-1', name: 'Dana Keeler' }];
+    apiMock.api.mockResolvedValueOnce({ members });
+    await expect(listMaintenanceMembers()).resolves.toEqual(members);
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/maintenance-requests/members');
   });
 });
 
@@ -583,7 +677,7 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     );
   });
 
-  it('never renders forbidden vocabulary implying an outcome StockPilot cannot observe (brief section 20)', () => {
+  it('never renders forbidden vocabulary implying an outcome StockPilot cannot observe (brief section 20; §GC-4 extended for Task 10\'s CLOSE-OUT card)', () => {
     const FORBIDDEN = [
       'Ticket created',
       'Request submitted to Zendesk',
@@ -591,6 +685,14 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
       'Andrew notified',
       'Ticket assigned',
       'Email sent',
+      // §GC-4 additions (Maintenance Resolved plan) — this surface gains
+      // them because Task 10 modifies this file to add the CLOSE-OUT card.
+      'Ticket closed',
+      'Ticket resolved',
+      'Zendesk ticket closed',
+      'Zendesk ticket updated',
+      'Zendesk ticket resolved',
+      'Issue verified fixed',
     ];
     for (const banned of FORBIDDEN) {
       expect(src).not.toContain(banned);
@@ -649,6 +751,96 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(gateIdx).toBeGreaterThan(-1);
     const mapIdx = src.indexOf('.map((p) =>', eyebrowIdx);
     expect(src.slice(mapIdx - 'resolutionPhotos'.length, mapIdx)).toBe('resolutionPhotos');
+  });
+
+  /**
+   * (Task 10) CLOSE-OUT card wiring pins. Every DECISION the card makes —
+   * which actions are visible, whether the resolve confirm button is
+   * enabled, which literal `kind` a proof-photo upload carries — is
+   * delegated to a tested pure helper (maintenance-actions.test.ts,
+   * maintenance-upload.test.ts's kind-threading block) and proven
+   * BEHAVIORALLY there. What is left here is narrower: that the screen
+   * actually WIRES those tested helpers in, rather than reimplementing the
+   * decision inline or silently dropping the wiring. Same HONEST LIMITS as
+   * every other pin in this file (see the block comment above the
+   * app/(drawer)/maintenance.tsx describe above) — text assertions only,
+   * nothing executes; this cannot prove the resolve/archive/assign/notes
+   * network calls actually reach the server correctly at runtime, only
+   * that the source wires the right tested function to the right button.
+   * Verify runtime behavior by hand-testing the CLOSE-OUT card in a
+   * staging org (resolve with/without a proof photo, archive, assign and
+   * clear an owner, add an internal note).
+   */
+  it('(Task 10) `actions` is actually ASSIGNED FROM availableCloseoutActions(...), not left dangling next to a hardcoded value, and `showCloseout` is derived from it', () => {
+    expect(src).toMatch(
+      /const\s+actions\s*=\s*availableCloseoutActions\(\{[\s\S]{0,200}?\}\)\s*;/,
+    );
+    expect(src).toMatch(
+      /const\s+showCloseout\s*=\s*actions\.resolve\s*\|\|\s*actions\.archive\s*\|\|\s*actions\.assignOwner\s*\|\|\s*actions\.notes\s*;/,
+    );
+    // The CLOSE-OUT Card itself is gated on that derived value, not a
+    // hardcoded `true`/always-rendered Card.
+    expect(src).toContain('{showCloseout ? (');
+  });
+
+  it('(Task 10) the Resolve confirm button is disabled by the TESTED canConfirmResolve(...) gate, never a hand-rolled length check', () => {
+    expect(src).toMatch(
+      /disabled=\{!canConfirmResolve\(resolveNote\)\s*\|\|\s*resolvePending\}/,
+    );
+  });
+
+  it('(Task 10) the CLOSE-OUT card renders each action behind its OWN availableCloseoutActions flag — resolve/archive/assignOwner/notes are not conflated', () => {
+    expect(src).toContain('{actions.resolve ? (');
+    expect(src).toContain('{actions.archive ? (');
+    expect(src).toContain('{actions.assignOwner ? (');
+    expect(src).toContain('{actions.notes ? (');
+  });
+
+  it('(Task 10) proof photos upload with the LITERAL kind:\'resolution\' — never the requester default, never a variable that could drift', () => {
+    expect(src).toContain("{ kind: 'resolution' }");
+  });
+
+  it('(Task 10) MOBILE_RESOLVE_DISCLOSURE (not a re-typed inline literal) is rendered inside the Resolve section', () => {
+    expect(src).toContain('{MOBILE_RESOLVE_DISCLOSURE}');
+  });
+
+  it('(Task 10) a successful resolve/archive/assign bumps refreshKey via refreshDetail() — never a local hand-patched echo of server state', () => {
+    expect(src).toMatch(/function refreshDetail\(\)\s*\{\s*setRefreshKey\(\(k\) => k \+ 1\);\s*\}/);
+    // Every write action's success path calls it.
+    const doResolveBody = src.slice(
+      src.indexOf('async function doResolve()'),
+      src.indexOf('\n  }', src.indexOf('async function doResolve()')),
+    );
+    expect(doResolveBody).toContain('refreshDetail();');
+    const doArchiveBody = src.slice(
+      src.indexOf('async function doArchive()'),
+      src.indexOf('\n  }', src.indexOf('async function doArchive()')),
+    );
+    expect(doArchiveBody).toContain('refreshDetail();');
+    const doAssignBody = src.slice(
+      src.indexOf('async function doAssign('),
+      src.indexOf('\n  }', src.indexOf('async function doAssign(')),
+    );
+    expect(doAssignBody).toContain('refreshDetail();');
+  });
+
+  it('(Task 10) the resolve error path stays open and preserves input — resolveOpen/resolveNote are never cleared in the catch branch', () => {
+    const doResolveMatch = src.match(/async function doResolve\(\) \{([\s\S]*?)\n {2}\}/);
+    expect(doResolveMatch).not.toBeNull();
+    const body = doResolveMatch![1];
+    const tryIdx = body.indexOf('try {');
+    const catchIdx = body.indexOf('} catch (e) {');
+    expect(tryIdx).toBeGreaterThan(-1);
+    expect(catchIdx).toBeGreaterThan(tryIdx);
+    const tryBlock = body.slice(tryIdx, catchIdx);
+    const catchBlock = body.slice(catchIdx);
+    // Success path (inside try) is the ONLY place that closes the section
+    // and clears the note — never inside the catch block.
+    expect(tryBlock).toContain('setResolveOpen(false)');
+    expect(tryBlock).toContain("setResolveNote('')");
+    expect(catchBlock).not.toContain('setResolveOpen(false)');
+    expect(catchBlock).not.toContain("setResolveNote('')");
+    expect(catchBlock).toContain('setResolveError(mapActionError(e, RESOLVE_GENERIC_ERROR))');
   });
 });
 

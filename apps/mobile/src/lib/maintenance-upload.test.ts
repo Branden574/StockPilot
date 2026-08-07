@@ -123,9 +123,12 @@ describe('uploadMaintenancePhoto', () => {
 
     // 2) mint used the resized extension the mock returned ('jpg') — the
     // resize step is what forces JPEG; HEIC never reaches the server.
+    // kind: 'requester' is the Task 10 default, sent EXPLICITLY (never
+    // omitted) — matches web's MaintenancePhotosPanel.
     expect(maintenanceApiMock.mintPhotoUpload).toHaveBeenCalledWith('req-1', {
       fileExt: 'jpg',
       originalFilename: 'IMG_001.jpg',
+      kind: 'requester',
     });
 
     // 3) the upload task PUT the RESIZED file (not the original) as raw
@@ -141,12 +144,14 @@ describe('uploadMaintenancePhoto', () => {
       expect.any(Function),
     );
 
-    // 4) finalize used the mint's path/thumbPath and the correct MIME.
+    // 4) finalize used the mint's path/thumbPath, the correct MIME, and the
+    // SAME kind:'requester' default sent explicitly (Task 10).
     expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledWith('req-1', {
       path: MINT.path,
       thumbPath: MINT.thumbPath,
       originalFilename: 'IMG_001.jpg',
       declaredMime: 'image/jpeg',
+      kind: 'requester',
     });
   });
 
@@ -234,6 +239,7 @@ describe('uploadMaintenancePhoto', () => {
     expect(maintenanceApiMock.mintPhotoUpload).toHaveBeenCalledWith('req-1', {
       fileExt: 'png',
       originalFilename: 'Screenshot.png',
+      kind: 'requester',
     });
     expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledWith(
       'req-1',
@@ -259,6 +265,56 @@ describe('uploadMaintenancePhoto', () => {
     expect(maintenanceApiMock.mintPhotoUpload).toHaveBeenCalledWith(
       'req-1',
       expect.objectContaining({ originalFilename: 'photo.jpg' }),
+    );
+  });
+});
+
+/**
+ * Task 10 — `kind` threading. Proof photos on the maintenance detail
+ * screen's Resolve flow reuse this SAME orchestration with kind:
+ * 'resolution'; every other caller (app/maintenance/new.tsx's requester
+ * photos) keeps calling with no 4th argument at all and must keep getting
+ * the 'requester' default. T10-M2 (mutation self-check): dropping `kind`
+ * from the finalize call ONLY must fail the second test below — finalize()
+ * is the step that actually records the kind on the row
+ * (maintenance-attachments.ts), so a mint-only threading would silently
+ * record every proof photo as a requester photo server-side.
+ */
+describe('uploadMaintenancePhoto — kind threading (Task 10)', () => {
+  it('defaults to kind:"requester", sent EXPLICITLY in BOTH the mint and finalize bodies, when no options are given', async () => {
+    const onProgress = vi.fn();
+    await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, onProgress);
+    expect(maintenanceApiMock.mintPhotoUpload).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({ kind: 'requester' }),
+    );
+    expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({ kind: 'requester' }),
+    );
+  });
+
+  it('threads kind:"resolution" into BOTH the mint and finalize bodies when given', async () => {
+    const onProgress = vi.fn();
+    await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, onProgress, { kind: 'resolution' });
+    expect(maintenanceApiMock.mintPhotoUpload).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({ kind: 'resolution' }),
+    );
+    expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({ kind: 'resolution' }),
+    );
+  });
+
+  it('a 3-arg call (no options bag) still compiles and behaves exactly like an explicit default — the existing new.tsx call sites are untouched', async () => {
+    const onProgress = vi.fn();
+    // No 4th argument at all — proves the options bag is genuinely
+    // optional, not just typed optional while secretly required at runtime.
+    await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, onProgress);
+    expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({ kind: 'requester' }),
     );
   });
 });
