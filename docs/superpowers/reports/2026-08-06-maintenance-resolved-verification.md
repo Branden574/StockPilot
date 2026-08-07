@@ -491,3 +491,19 @@ No ledgered minor was found to be mis-triaged, and none was upgraded to a blocke
    "no share link exists any more", which is not what it means.
 4. The email body is intentionally absent from the dry-run log. Anyone debugging a future send
    should use the renderer directly (as this task did) rather than adding a body log line.
+
+## Ship log — 2026-08-06 (executed post-merge)
+
+All times UTC. Binding order followed; no real email sent at any point (the resolution sender is real code, so nothing was exercised against a live key).
+
+1. Pre-flight sweep for a fourth honesty-bug instance: enumerated every surface that renders resolution-kind photos. Web detail, mobile detail, and the public share page all carry the byte-identical staged/resolved captions. The email template carries none and needs none — `maybeSendMaintenanceResolvedEmail` returns `not_resolved` for any request whose status is not `resolved`, so the template can never render a staged state. Honesty enforced by guard rather than copy.
+2. `supabase db push --linked`: migration 0317 applied to prod (xizpqmhhslgzbuqtjubv). `migration list` confirms local/remote parity at 0317.
+3. PR #75 opened; full CI rollup green — Lint + Typecheck, Build, DB pgTAP tests, Semgrep SAST, Secret scan (TruffleHog), GitGuardian, Vercel. Merged as 21b87afb.
+4. Deploy verified reachable (the draft-reminder cron route answers 401 behind its auth guard; the dashboard route serves).
+5. Prod schema verified by query: all five resolution columns present, `maintenance_request_attachments.kind` present, `notification_preferences.push_maintenance_resolved` present, and the status CHECK now reads exactly `('saved','draft_opened','resolved','archived','cancelled')`.
+6. Mobile OTA published via `pnpm release:ota` (production channel) with Sentry source maps. Zero dependency changes across the whole branch, so the close-out actions ship to the installed 1.1.0 binary without an App Store build.
+7. L4L required no enable SQL — the module has been enabled for org 63c13e64-92a6-4ea4-9936-6a2c26a85b4a since the morning rollout.
+
+Pre-PR history note: two commits carried a `Co-Authored-By` trailer in violation of the repository's authorship rule. They were stripped with `git filter-branch` over `main..HEAD` before the branch was pushed; the resulting tree hash is byte-identical to the pre-strip tree (b6dfa73e) and all 18 commits were preserved. Every SHA recorded in task reports written before the strip therefore refers to content that still exists under a different hash.
+
+Owed after this ship: a real-device hand-test of the mobile close-out actions (the simulator remains blocked by the pre-existing expo-router boot crash); a fast-follow PR carrying the `cancel()` write-time guard and the mobile `refreshKey` coverage gap; and, as a local-environment hygiene item, blanking the populated `RESEND_API_KEY` in `apps/web/.env.local` so no future local walk can send real mail.
