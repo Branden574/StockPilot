@@ -211,6 +211,13 @@ export async function maybeSendMaintenanceResolvedEmail(
       let proofPhotoTotal: number;
       if (proof) {
         proofPhotoTotal = proof.entries.length;
+        // The embedded /m/{token}/photo/{n} URLs ride the share link's
+        // 120/hr fail-closed bucket. Email-client image proxies (Gmail,
+        // Outlook ATP) fetch at DELIVERY time, not when humans open the
+        // email. One email embeds up to PROOF_PHOTO_EMBED_MAX (~4) requests
+        // immediately; paired with the page's own ~17-request full view,
+        // this leaves ample headroom at one email per request (at-most-once).
+        // Batch-resend features must re-check this budget.
         proofPhotos = proof.entries.slice(0, PROOF_PHOTO_EMBED_MAX).map((e) => ({
           src: `${base}/m/${proof.token}/photo/${e.index}`,
           alt: e.filename,

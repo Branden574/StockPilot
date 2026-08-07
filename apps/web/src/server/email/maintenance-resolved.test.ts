@@ -157,6 +157,7 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
       expect(res).toEqual({ sent: false, reason: 'request_not_found' });
       expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('status is not resolved (e.g. "saved") -> not_resolved', async () => {
@@ -166,6 +167,7 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
       expect(res).toEqual({ sent: false, reason: 'not_resolved' });
       expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('null requester_email_snapshot -> no_requester_email', async () => {
@@ -178,6 +180,7 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
       expect(res).toEqual({ sent: false, reason: 'no_requester_email' });
       expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('resolved_by === requester_user_id (a manage-holder resolving their own request) -> self_resolve', async () => {
@@ -187,6 +190,7 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
       expect(res).toEqual({ sent: false, reason: 'self_resolve' });
       expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(stub.chainArgs.has('maintenance_requests.update')).toBe(false);
     });
 
     it('a null requester_user_id does NOT trigger self_resolve (nothing to compare resolved_by against) — proceeds normally', async () => {
@@ -278,6 +282,12 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       const args = sendEmailMock.mock.calls[0]![0] as { html: string };
       expect(args.html).not.toMatch(/photo\/\d+"/);
       expect(args.html).toContain('3 proof photos are on the request in StockPilot.');
+
+      // Pin countResolutionPhotos' three .eq() filters
+      const countArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
+      expect(countArgs).toContainEqual(['organization_id', ORG_ID]);
+      expect(countArgs).toContainEqual(['maintenance_request_id', REQUEST_ID]);
+      expect(countArgs).toContainEqual(['kind', 'resolution']);
     });
 
     it('org setting includeShareLinksInEmail=false -> proofPhotos empty and the share-link table is never even queried; sendEmail still called', async () => {
