@@ -862,13 +862,28 @@ export class MaintenanceRequestsService {
 
     // Channel (b): the at-most-once email. Fire-and-forget; the stamp column
     // (server/email/maintenance-resolved.ts) makes replays safe regardless
-    // of what happens to this promise.
-    void maybeSendMaintenanceResolvedEmail(createAdminClient(), id, { appUrl: APP_URL }).catch((err) => {
-      void reportError(err instanceof Error ? err : new Error(String(err)), {
-        tag: 'maintenance_resolved.email',
-        extra: { requestId: id },
-      });
-    });
+    // of what happens to this promise. M3 fix wave: createAdminClient() is
+    // constructed INSIDE this async boundary, not passed as a bare argument
+    // — the old shape evaluated it EAGERLY, before any .catch() was even
+    // attached, so a throw there (unset SUPABASE_SERVICE_ROLE_KEY — the
+    // documented 2026-07-21 outage class) would escape resolve() entirely:
+    // the resolution had already committed and audited above, but the
+    // caller saw an unhandled exception, the resolution_email_sent_at stamp
+    // was never claimed, and a retry then 409s (resolved_at is already set)
+    // with no path to resend. Wrapping construction in the SAME try/catch as
+    // the send makes that throw just another best-effort failure, exactly
+    // like a send_failed from inside maybeSendMaintenanceResolvedEmail
+    // itself.
+    void (async () => {
+      try {
+        await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, { appUrl: APP_URL });
+      } catch (err) {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'maintenance_resolved.email',
+          extra: { requestId: id },
+        });
+      }
+    })();
   }
 
   /** manage-only. "Local owner" is a StockPilot coordinator, never a

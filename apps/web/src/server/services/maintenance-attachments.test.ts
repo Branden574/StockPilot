@@ -823,6 +823,30 @@ describe('remove', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('M2 fix wave — when DELETE affects zero rows due to a RESOLVED request (resolved_at set, archived_at/cancelled_at both null), uses the SAME specific closed-request message rather than the generic catch-all', async () => {
+    const { ctx } = build({
+      'maintenance_request_attachments.select': {
+        data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+        error: null,
+      },
+      // Pre-read found the row, but delete affects zero rows.
+      'maintenance_request_attachments.delete': { data: null, error: null },
+      // Parent request is RESOLVED (not archived/cancelled) — the cause of
+      // the RLS refusal this test pins.
+      'maintenance_requests.select': {
+        data: { id: REQ_ID, archived_at: null, cancelled_at: null, resolved_at: '2026-08-05T00:00:00Z' },
+        error: null,
+      },
+    });
+
+    await expect(new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is closed; photos can no longer change.',
+    });
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('not_found when the attachment does not exist in this org/request', async () => {
     const { ctx } = build({
       'maintenance_request_attachments.select': { data: null, error: null },

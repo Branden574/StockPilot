@@ -34,15 +34,23 @@ function formatSubmittedDate(iso: string): string {
  *  from the combined `shared.photos` list (never a locally re-numbered
  *  index), so every `<img>`/`<a>` src stays the single `/m/<token>/photo/<i>`
  *  contract the proxy route enforces (spec §4.2) even though the two
- *  sections render disjoint SUBSETS of that one list. */
+ *  sections render disjoint SUBSETS of that one list.
+ *
+ *  `caption`, when supplied, renders as its own paragraph directly under the
+ *  grid — the "Resolution proof" call site below uses it to disclose whether
+ *  these photos were added after a REAL resolution or merely staged pre-flip
+ *  (fix wave I1). The "Photos" (requester) call site never passes one; that
+ *  section carries no such ambiguity. */
 function PhotoGrid({
   token,
   heading,
   items,
+  caption,
 }: {
   token: string;
   heading: string;
   items: Array<{ photo: { filename: string }; index: number }>;
+  caption?: string;
 }) {
   if (items.length === 0) return null;
   return (
@@ -69,6 +77,7 @@ function PhotoGrid({
           );
         })}
       </ul>
+      {caption ? <p className="text-muted-foreground mt-2 text-xs">{caption}</p> : null}
     </section>
   );
 }
@@ -162,7 +171,30 @@ export default async function MaintenanceSharePage({
         </section>
       ) : null}
       <PhotoGrid token={token} heading="Photos" items={requesterPhotos} />
-      <PhotoGrid token={token} heading="Resolution proof" items={resolutionPhotos} />
+      {/* Fix wave I1 — the third instance of this program's honesty bug: this
+          grid was gated ONLY on photo.kind === 'resolution', never on
+          `shared.resolution`, and carried no caption — so the heading
+          "Resolution proof (N)" WAS the whole claim. The Resolve dialog
+          stages proof photos pre-flip; abandoning it leaves kind='resolution'
+          rows on a request nobody resolved, and any detail view with photos
+          already minted a 180-day share link — so an external recipient
+          could open that old link and see "Resolution proof" on a request
+          that was never resolved. Mirrors the web detail (T7) / mobile (T9)
+          treatment byte-for-byte: the grid stays VISIBLE in both states
+          (hiding staged photos from the external viewer would be its own
+          dishonesty), but the caption's claim is gated on the ONE fact that
+          actually means "resolved" — `shared.resolution`, never
+          `resolutionPhotos.length > 0`. */}
+      <PhotoGrid
+        token={token}
+        heading="Resolution proof"
+        items={resolutionPhotos}
+        caption={
+          shared.resolution
+            ? 'Added by the team when this request was marked resolved.'
+            : 'Staged by the team while preparing to mark this request resolved.'
+        }
+      />
       <footer className="border-t pt-4 text-xs text-muted-foreground">
         This page shows one maintenance request shared from StockPilot. Internal notes are never shown here.
       </footer>

@@ -118,6 +118,17 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
     expect(args.from).toBe('StockPilot <maintenance@stockpilotusa.com>');
     expect(args.subject).toContain('marked resolved');
     expect(args.subject).toBe('Maintenance request MR-2026-000123 marked resolved');
+    // M6 fix wave — closes the last hop of the honesty-line -> template ->
+    // transport chain: families/maintenance.test.ts already pins the line
+    // into `renderMaintenanceResolvedEmail`'s OWN output, but nothing here
+    // proved this SENDER actually forwards that rendered html into the
+    // sendEmail() call args untouched. Literal string, copied verbatim —
+    // never the imported MAINTENANCE_RESOLVED_HONESTY_LINE constant, which
+    // would pass even if the sender silently dropped it and the constant
+    // just diffed against itself.
+    expect(args.html).toContain(
+      'This resolution was recorded by your team in StockPilot. It does not close or update the Zendesk ticket — replies and ticket status stay in the Outlook/Zendesk email conversation.',
+    );
 
     const updateChain = stub.chains.get('maintenance_requests.update');
     expect(updateChain).toContain('is');

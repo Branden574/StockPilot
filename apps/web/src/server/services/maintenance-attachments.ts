@@ -443,15 +443,22 @@ export class MaintenanceAttachmentsService {
       // not the requester/manager/manage, or the request closed between
       // the read and this write). Minor 12: distinguish the closed-request
       // cause from any other RLS refusal, same message assertParentOwned
-      // AndOpen uses, rather than one generic catch-all for both.
+      // AndOpen uses, rather than one generic catch-all for both. M2 fix
+      // wave: this read used to check only archived_at/cancelled_at, so a
+      // photo removal refused because the request had been RESOLVED (0317's
+      // RLS predicate also gates on resolved_at — see assertParentOwnedAnd
+      // Open's own doc comment) fell through to the generic message below
+      // instead of the accurate closed-request one.
       const { data: parent } = await this.ctx.supabase
         .from('maintenance_requests')
-        .select('archived_at, cancelled_at')
+        .select('archived_at, cancelled_at, resolved_at')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', requestId)
         .maybeSingle();
-      const parentRow = parent as { archived_at: string | null; cancelled_at: string | null } | null;
-      if (parentRow?.archived_at || parentRow?.cancelled_at) {
+      const parentRow = parent as
+        | { archived_at: string | null; cancelled_at: string | null; resolved_at: string | null }
+        | null;
+      if (parentRow?.archived_at || parentRow?.cancelled_at || parentRow?.resolved_at) {
         throw new ServiceError('conflict', 'This request is closed; photos can no longer change.');
       }
       throw new ServiceError('conflict', 'This photo could not be removed. Reload and try again.');

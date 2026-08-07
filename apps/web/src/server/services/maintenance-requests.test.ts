@@ -63,6 +63,7 @@ vi.mock('@/server/email/maintenance-resolved', () => ({
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -1565,6 +1566,41 @@ describe('resolve', () => {
     // Let the fire-and-forget .catch settle before the test ends — proves
     // resolve() itself never rejects even though the email hook did.
     await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('M3 fix wave: a throwing createAdminClient() (e.g. unset SUPABASE_SERVICE_ROLE_KEY, the 2026-07-21 outage class) never escapes resolve() or orphans the fire-and-forget dispatch — the resolution still commits, reportError is called, and maybeSendMaintenanceResolvedEmail is never even reached', async () => {
+    createAdminClientMock.mockImplementationOnce(() => {
+      throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
+    });
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).resolves.toBeUndefined();
+    // The resolution itself committed and audited before this throw — proven
+    // by the existing happy-path test's own update/audit assertions; here we
+    // only need the dispatch-boundary behavior.
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'maintenance_request.resolved' }),
+      ctx,
+    );
+    // The client construction threw BEFORE maybeSendMaintenanceResolvedEmail
+    // was ever called — the old eager-argument shape would have thrown at
+    // the exact same point, but OUTSIDE any try/catch, escaping resolve().
+    expect(maybeSendMaintenanceResolvedEmailMock).not.toHaveBeenCalled();
+
+    // Let the fire-and-forget async boundary settle before asserting on it.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'maintenance_resolved.email', extra: { requestId: 'r1' } }),
+    );
   });
 
   it('ensureActiveLink is called only when photoCount > 0 AND the org setting allows', async () => {

@@ -306,5 +306,40 @@ describe('GET /m/[token] (page render)', () => {
       const { getByText } = await renderPage(TOKEN);
       expect(getByText('Marked resolved · NOT-A-REAL-DATE-STRING')).toBeInTheDocument();
     });
+
+    it('fix wave I1 — resolution: null + a kind=\'resolution\' photo (the Resolve dialog was abandoned pre-flip) renders the STAGED caption, never the ADDED one, even though the grid itself stays visible', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: null,
+        photos: [{ filename: 'fixed.jpg', kind: 'resolution' as const }],
+      });
+      const { getByText, queryByText, getAllByRole } = await renderPage(TOKEN);
+
+      expect(getByText('Resolution proof (1)')).toBeInTheDocument();
+      expect(getAllByRole('img')).toHaveLength(1);
+      expect(
+        getByText('Staged by the team while preparing to mark this request resolved.'),
+      ).toBeInTheDocument();
+      expect(
+        queryByText('Added by the team when this request was marked resolved.'),
+      ).toBeNull();
+    });
+
+    it('fix wave I1 — a REAL resolution renders the ADDED caption on the same grid, never the STAGED one', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: { note: 'Fixed.', resolvedAtDisplay: 'August 5, 2026' },
+        photos: [{ filename: 'fixed.jpg', kind: 'resolution' as const }],
+      });
+      const { getByText, queryByText } = await renderPage(TOKEN);
+
+      expect(getByText('Resolution proof (1)')).toBeInTheDocument();
+      expect(
+        getByText('Added by the team when this request was marked resolved.'),
+      ).toBeInTheDocument();
+      expect(
+        queryByText('Staged by the team while preparing to mark this request resolved.'),
+      ).toBeNull();
+    });
   });
 });
