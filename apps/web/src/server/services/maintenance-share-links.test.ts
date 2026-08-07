@@ -25,6 +25,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import { audit } from './audit';
 import {
   hashShareToken,
+  listResolutionProofProxyPhotos,
   MaintenanceShareLinksService,
   resolveMaintenanceSharePhoto,
   resolveMaintenanceShareToken,
@@ -989,5 +990,131 @@ describe('resolveMaintenanceSharePhoto (the proxy route\'s only data source)', (
     const args = adminStub.chainArgs.get('maintenance_request_attachments.select')!;
     expect(args).toContainEqual(['organization_id', LINK_ORG]);
     expect(args).toContainEqual(['maintenance_request_id', LINK_REQ]);
+  });
+});
+
+/**
+ * Task 6's ONLY photo-URL data source. Unlike every other function in this
+ * file, this one is called directly with an admin client instance (the
+ * resolution email sender's own `admin` param — server/email/maintenance-
+ * resolved.ts) rather than through `createAdminClientMock`, so these tests
+ * build a plain `makeSupabaseStub()` and pass its `.client` straight in.
+ */
+describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s photo data source)', () => {
+  const ORG_ID = 'org-from-email';
+  const REQ_ID = 'req-from-email';
+  const TOKEN = 'a1'.repeat(32);
+  const futureIso = new Date(Date.now() + 30 * DAY_MS).toISOString();
+  const pastIso = new Date(Date.now() - DAY_MS).toISOString();
+
+  // 5 rows, 3 of kind='resolution', deliberately NOT contiguous — this is
+  // what distinguishes "combined-list index" (what /m/<token>/photo/<n>
+  // actually expects) from a locally re-filtered "resolution-only index"
+  // (T6-M4's mutation target).
+  const MIXED_ATTACHMENTS = [
+    { storage_path: 'org/req/0.jpg', mime_type: 'image/jpeg', safe_filename: 'requester-0.jpg', kind: 'requester' },
+    { storage_path: 'org/req/1.jpg', mime_type: 'image/jpeg', safe_filename: 'resolution-1.jpg', kind: 'resolution' },
+    { storage_path: 'org/req/2.jpg', mime_type: 'image/jpeg', safe_filename: 'requester-2.jpg', kind: 'requester' },
+    { storage_path: 'org/req/3.jpg', mime_type: 'image/jpeg', safe_filename: 'resolution-3.jpg', kind: 'resolution' },
+    { storage_path: 'org/req/4.jpg', mime_type: 'image/jpeg', safe_filename: 'resolution-4.jpg', kind: 'resolution' },
+  ];
+
+  it('no link row at all -> null, never touches the attachments table', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': { data: null, error: null },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    expect(res).toBeNull();
+    expect(stub.chainArgs.has('maintenance_request_attachments.select')).toBe(false);
+  });
+
+  it('an expired link -> null (never a live token handed back)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: pastIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    expect(res).toBeNull();
+  });
+
+  it('a whole-query attachments error -> null (never silently zero entries)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: futureIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': { data: null, error: { message: 'connection reset' } },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    expect(res).toBeNull();
+  });
+
+  it('an active unexpired link + mixed-kind rows -> the token and ONLY the resolution rows, at their COMBINED-list indices (not a re-filtered 0/1/2)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: futureIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    expect(res).toEqual({
+      token: TOKEN,
+      entries: [
+        { index: 1, filename: 'resolution-1.jpg' },
+        { index: 3, filename: 'resolution-3.jpg' },
+        { index: 4, filename: 'resolution-4.jpg' },
+      ],
+    });
+  });
+
+  it('no kind=\'resolution\' rows -> a real link but an empty entries array (not null — the link itself is still usable)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: futureIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': {
+        data: [{ storage_path: 'org/req/0.jpg', mime_type: 'image/jpeg', safe_filename: 'requester-0.jpg', kind: 'requester' }],
+        error: null,
+      },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    expect(res).toEqual({ token: TOKEN, entries: [] });
+  });
+
+  it('MUTATION GUARD — the link lookup is scoped by org + request + active (chainArgs-pinned)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: futureIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
+    });
+    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const args = stub.chainArgs.get('maintenance_request_share_links.select')!;
+    expect(args).toContainEqual(['organization_id', ORG_ID]);
+    expect(args).toContainEqual(['maintenance_request_id', REQ_ID]);
+    expect(args).toContainEqual(['active', true]);
+  });
+
+  it('reuses the SAME fetchValidAttachments ordering funnel — both .order calls are pinned, in sequence, same as resolveMaintenanceShareToken', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': {
+        data: { token: TOKEN, expires_at: futureIso },
+        error: null,
+      },
+      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
+    });
+    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const names = stub.chains.get('maintenance_request_attachments.select')!;
+    const args = stub.chainArgs.get('maintenance_request_attachments.select')!;
+    const orderIndices = names.reduce<number[]>((acc, n, i) => (n === 'order' ? [...acc, i] : acc), []);
+    expect(orderIndices).toHaveLength(2);
+    expect(args[orderIndices[0]!]).toEqual(['sort_order', { ascending: true }]);
+    expect(args[orderIndices[1]!]).toEqual(['created_at', { ascending: true }]);
   });
 });

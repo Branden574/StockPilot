@@ -2,6 +2,8 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import {
   can,
   formatMaintenanceRequestNumber,
@@ -568,4 +570,52 @@ export async function resolveMaintenanceSharePhoto(
     mimeType: row.mime_type as MaintenanceAttachmentMime,
     filename: row.safe_filename,
   };
+}
+
+/**
+ * The resolution email's (Task 6) ONLY photo-URL data source. Looks up the
+ * request's currently ACTIVE, unexpired share link by (organization_id,
+ * maintenance_request_id) — the sender knows the request, not a token, so
+ * this is a sibling lookup to `resolveActiveShareRequest` (which runs the
+ * reverse direction, token -> request) rather than a call through it. Reuses
+ * the SAME `fetchValidAttachments` ordering funnel every other public
+ * surface builds on, so the indices returned here are the request's
+ * COMBINED attachment-list positions (requester + resolution photos
+ * interleaved in `sort_order`/`created_at` order) — exactly what
+ * `/m/<token>/photo/<n>` expects, never a locally re-filtered "resolution-
+ * only" index that would point at the wrong photo.
+ *
+ * Deliberately does NOT mint a link — `MaintenanceRequestsService.resolve()`
+ * already decides whether to call `ensureActiveLink` (photos exist + the
+ * org's `includeShareLinksInEmail` setting) before the at-most-once email
+ * fires. This function only reads whatever already exists at send time, and
+ * returns `null` whenever there is nothing usable (no link ever minted,
+ * revoked, or expired) so the caller falls back to the renderer's own
+ * no-photos fallback line rather than embed a URL that would 404.
+ */
+export async function listResolutionProofProxyPhotos(
+  admin: SupabaseClient,
+  organizationId: string,
+  maintenanceRequestId: string,
+): Promise<{ token: string; entries: { index: number; filename: string }[] } | null> {
+  const { data: link } = await admin
+    .from('maintenance_request_share_links')
+    .select('token, expires_at')
+    .eq('organization_id', organizationId)
+    .eq('maintenance_request_id', maintenanceRequestId)
+    .eq('active', true)
+    .maybeSingle();
+  if (!link) return null;
+  const row = link as { token: string; expires_at: string };
+  if (isExpired(row.expires_at)) return null;
+
+  const attachments = await fetchValidAttachments(admin, organizationId, maintenanceRequestId);
+  if (attachments === null) return null;
+
+  const entries = attachments.reduce<{ index: number; filename: string }[]>((acc, a, index) => {
+    if (a.kind === 'resolution') acc.push({ index, filename: a.safe_filename });
+    return acc;
+  }, []);
+
+  return { token: row.token, entries };
 }
