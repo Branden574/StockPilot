@@ -5,6 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { MaintenancePhotosPanel, type PanelPhoto } from '@/components/maintenance/maintenance-photos-panel';
+import { ResolveRequestDialog } from '@/components/maintenance/resolve-request-dialog';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
@@ -33,24 +34,41 @@ export function MaintenancePhotosPanelClient({
 
 interface ActionsProps {
   requestId: string;
-  /** Task 8's archive() is manage-only. */
+  /** Task 4's archive() is manage-only, and (Maintenance Resolved D1) now
+   *  stays available on resolved/cancelled rows too — the page computes
+   *  this as `canManage && !detail.archivedAt`, no longer `!closed`. */
   showArchive: boolean;
-  /** Task 8's cancel() allows the owning requester (or manage, handled by
-   *  showArchive's own button for the manage persona) pre-close. */
+  /** Task 4's cancel() allows the owning requester (or manage, handled by
+   *  showArchive's own button for the manage persona) pre-close. Refuses a
+   *  resolved request the same as an archived one — `closed` on the page
+   *  now includes `resolvedAt`. */
   showCancel: boolean;
+  /** Maintenance Resolved (spec §8): manage-only, pre-close. */
+  showResolve: boolean;
+  /** Interpolated into the resolve dialog's disclosure copy. */
+  requesterName: string;
 }
 
 /**
- * Archive (manage) / Cancel (requester) — brief step 3's "Archive/Cancel
- * buttons (manage / requester respectively) wired to the Task 8 actions with
- * confirm dialogs." Both actions revalidate this page server-side already;
- * `router.refresh()` re-renders the CURRENT client tree against that fresh
- * data (the request is now closed, so the buttons disappear on next render).
+ * Resolve (manage) / Archive (manage) / Cancel (requester) — brief step 3's
+ * "Archive/Cancel buttons (manage / requester respectively) wired to the
+ * Task 4 actions with confirm dialogs," extended by Maintenance Resolved
+ * with a Resolve button ahead of Archive. Archive/Cancel revalidate this
+ * page server-side already; `router.refresh()` re-renders the CURRENT
+ * client tree against that fresh data. Resolve's own dialog does the same
+ * (`onResolved`) after its own successful action call.
  */
-export function MaintenanceRequestActions({ requestId, showArchive, showCancel }: ActionsProps) {
+export function MaintenanceRequestActions({
+  requestId,
+  showArchive,
+  showCancel,
+  showResolve,
+  requesterName,
+}: ActionsProps) {
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [resolveOpen, setResolveOpen] = React.useState(false);
   const [pending, setPending] = React.useState(false);
 
   async function doArchive() {
@@ -79,10 +97,15 @@ export function MaintenanceRequestActions({ requestId, showArchive, showCancel }
     router.refresh();
   }
 
-  if (!showArchive && !showCancel) return null;
+  if (!showArchive && !showCancel && !showResolve) return null;
 
   return (
     <div className="flex items-center gap-2">
+      {showResolve ? (
+        <Button type="button" variant="default" size="sm" onClick={() => setResolveOpen(true)}>
+          Resolve
+        </Button>
+      ) : null}
       {showCancel ? (
         <Button type="button" variant="ghost" size="sm" onClick={() => setCancelOpen(true)}>
           Cancel request
@@ -100,6 +123,14 @@ export function MaintenanceRequestActions({ requestId, showArchive, showCancel }
         </Button>
       ) : null}
 
+      <ResolveRequestDialog
+        requestId={requestId}
+        requesterName={requesterName}
+        open={resolveOpen}
+        onOpenChange={setResolveOpen}
+        onResolved={() => router.refresh()}
+      />
+
       <DestructiveConfirm
         open={cancelOpen}
         onOpenChange={setCancelOpen}
@@ -113,7 +144,7 @@ export function MaintenanceRequestActions({ requestId, showArchive, showCancel }
         open={archiveOpen}
         onOpenChange={setArchiveOpen}
         title="Archive this maintenance request?"
-        description="The request is marked archived and can no longer be edited. Use this for duplicates or requests that are already resolved."
+        description="The request is marked archived and can no longer be edited. Use this to tidy up old resolved or cancelled requests, or duplicates."
         confirmLabel="Archive"
         pending={pending}
         onConfirm={doArchive}

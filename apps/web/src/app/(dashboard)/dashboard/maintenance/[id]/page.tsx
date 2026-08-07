@@ -100,9 +100,22 @@ export default async function MaintenanceRequestDetailPage({
 
   const canManage = can(ctx, 'maintenance_requests:manage');
   const isOwningRequester = detail.requesterUserId === ctx.userId;
-  const closed = Boolean(detail.archivedAt || detail.cancelledAt);
+  // Maintenance Resolved (spec §1.3): a resolved request is closed the same
+  // way an archived/cancelled one is — widened here, the ONE place `closed`
+  // is computed, so every gate below (photos edit, Resolve/Archive/Cancel
+  // visibility) picks it up automatically.
+  const closed = Boolean(detail.archivedAt || detail.cancelledAt || detail.resolvedAt);
 
   const photos = await new MaintenanceAttachmentsService(ctx).signedViewUrls(id);
+  // Proof-photo kind split (spec §4.1). `kind` is a NOT NULL column
+  // defaulting to 'requester' at the DB (migration 0317), so the `??` here
+  // is defensive only — real rows always carry a kind. The requester card
+  // keeps its shipped identity/behavior (editable pre-close via
+  // MaintenancePhotosPanelClient); the resolution card is new and always
+  // read-only, since resolution photos only ever exist on a request that is
+  // resolved or about to be (spec §12.5's pre-flip staging).
+  const requesterPhotos = photos.filter((p) => (p.kind ?? 'requester') === 'requester');
+  const resolutionPhotos = photos.filter((p) => p.kind === 'resolution');
 
   // Share-link mint: mirrors the mobile REST route's GET handler exactly.
   // ensureActiveLink()'s bar (manage, OR the owning requester holding
@@ -196,7 +209,9 @@ export default async function MaintenanceRequestDetailPage({
           </div>
           <MaintenanceRequestActions
             requestId={detail.id}
-            showArchive={canManage && !closed}
+            requesterName={detail.requesterName}
+            showResolve={canManage && !closed}
+            showArchive={canManage && !detail.archivedAt}
             showCancel={isOwningRequester && !closed}
           />
         </div>
@@ -209,14 +224,24 @@ export default async function MaintenanceRequestDetailPage({
             <p className="mt-2 whitespace-pre-wrap text-sm">{detail.description}</p>
           </section>
 
+          {detail.resolvedAt ? (
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="text-sm font-medium">Resolution</h2>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{detail.resolutionNote}</p>
+              <p className="text-muted-foreground mt-2 text-xs">
+                Marked resolved by {detail.resolvedByName} · {formatRelative(detail.resolvedAt)}
+              </p>
+            </section>
+          ) : null}
+
           <section className="bg-card rounded-xl border p-4">
-            <h2 className="mb-3 text-sm font-medium">Photos ({photos.length})</h2>
+            <h2 className="mb-3 text-sm font-medium">Photos ({requesterPhotos.length})</h2>
             {closed ? (
-              photos.length === 0 ? (
+              requesterPhotos.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No photos were added to this request.</p>
               ) : (
                 <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                  {photos.map((p) => (
+                  {requesterPhotos.map((p) => (
                     <li key={p.id}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -229,7 +254,7 @@ export default async function MaintenanceRequestDetailPage({
                 </ul>
               )
             ) : (
-              <MaintenancePhotosPanelClient requestId={detail.id} photos={photos} />
+              <MaintenancePhotosPanelClient requestId={detail.id} photos={requesterPhotos} />
             )}
             {closed ? (
               <p className="text-muted-foreground mt-2 text-xs">
@@ -238,13 +263,34 @@ export default async function MaintenanceRequestDetailPage({
             ) : null}
           </section>
 
+          {resolutionPhotos.length > 0 ? (
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="mb-3 text-sm font-medium">Resolution proof ({resolutionPhotos.length})</h2>
+              <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                {resolutionPhotos.map((p) => (
+                  <li key={p.id}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={p.thumbUrl ?? p.url}
+                      alt={p.originalFilename}
+                      className="h-24 w-full rounded-lg border object-cover"
+                    />
+                  </li>
+                ))}
+              </ul>
+              <p className="text-muted-foreground mt-2 text-xs">
+                Added by the team when this request was marked resolved.
+              </p>
+            </section>
+          ) : null}
+
           <section className="bg-card rounded-xl border p-4">
             <h2 className="mb-3 text-sm font-medium">Email</h2>
             <MaintenanceEmailAction
               requestId={detail.id}
               emailInput={emailInput}
               initialOpenCount={detail.outlookDraftOpenCount}
-              photoDownloads={photos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
+              photoDownloads={requesterPhotos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
             />
           </section>
         </div>
@@ -362,6 +408,14 @@ export default async function MaintenanceRequestDetailPage({
                   <dt>Local owner assigned</dt>
                   <dd className="text-muted-foreground text-right tabular-nums">
                     {ownerAssignedAt ? formatRelative(ownerAssignedAt) : '—'}
+                  </dd>
+                </div>
+              ) : null}
+              {detail.resolvedAt ? (
+                <div className="flex justify-between gap-3">
+                  <dt>Marked resolved</dt>
+                  <dd className="text-muted-foreground text-right tabular-nums">
+                    {formatRelative(detail.resolvedAt)}
                   </dd>
                 </div>
               ) : null}

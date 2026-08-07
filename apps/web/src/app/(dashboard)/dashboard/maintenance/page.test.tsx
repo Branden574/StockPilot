@@ -276,6 +276,54 @@ describe('status filter', () => {
     expect(archivedPill).toHaveTextContent(MAINTENANCE_STATUS_LABELS.archived);
     expect(MAINTENANCE_STATUS_LABELS.archived).toBe('Archived');
   });
+
+  it('forwards status=resolved to the service, marks the Resolved pill current, and renders the Resolved badge variant for a resolved row', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([row({ id: 'r-resolved', status: 'resolved' })]);
+    render(await MaintenancePage(args({ scope: 'all', status: 'resolved' })));
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ status: 'resolved' }));
+    expect(screen.getByRole('link', { name: 'Resolved' })).toHaveAttribute('aria-current', 'page');
+
+    // Scoped to the table — 'Resolved' also appears as the status-filter
+    // pill above, a separate, deliberate occurrence (same pattern as the
+    // 'renders the status badge with the sanctioned label' test).
+    const table = screen.getByRole('table');
+    const badge = within(table).getByText('Resolved');
+    expect(badge).toBeInTheDocument();
+    expect(badge.className).toContain('emerald');
+  });
+});
+
+/**
+ * T2 review debt, explicitly owed to Task 7 (brief §4): the 'derives pill
+ * labels from MAINTENANCE_STATUS_LABELS' test above only ever compares the
+ * rendered pill against the SAME imported constant STATUS_FILTERS itself
+ * reads — a tautology that cannot catch a de-derivation (e.g. STATUS_FILTERS
+ * hand-rolling its own label array instead of mapping MAINTENANCE_STATUS_
+ * LABELS, or a plain typo baked into that map). This suite pins the five
+ * literal label strings independently, so a de-derivation regression fails
+ * HERE even though the tautological test above would stay green.
+ */
+describe('five-label pill pin — independent literal assertion (T2 review debt / Task 7)', () => {
+  it('renders exactly these five status-filter labels, in this literal order, never derived from MAINTENANCE_STATUS_LABELS in the assertion itself', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([]);
+    render(await MaintenancePage(args({ scope: 'all' })));
+
+    const expectedLabels = ['Saved', 'Email draft opened', 'Resolved', 'Archived', 'Cancelled'];
+    const nav = screen.getByRole('navigation', { name: 'Filter maintenance requests' });
+    for (const label of expectedLabels) {
+      expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
+    }
+
+    // Order pinned too — insertion order drives both the web pills and the
+    // REST route's STATUS_VALUES with zero changes there (spec §1.1).
+    const linkTexts = within(nav)
+      .getAllByRole('link')
+      .map((el) => el.textContent)
+      .filter((t): t is string => expectedLabels.includes(t ?? ''));
+    expect(linkTexts).toEqual(expectedLabels);
+  });
 });
 
 describe('pagination (list() has no count() sibling — hasNext via one extra fetched row)', () => {
