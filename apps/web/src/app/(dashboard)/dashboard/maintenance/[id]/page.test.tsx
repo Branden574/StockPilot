@@ -669,6 +669,47 @@ describe('Maintenance Resolved — button-visibility matrix (Task 7 Step 1 test 
     expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
   });
+
+  // Fix wave (Minor 3): the matrix above never covered a resolved/cancelled
+  // request viewed by its OWNING requester who holds no manage permission —
+  // `closed` hides Cancel, and `canManage` being false hides both Resolve
+  // and Archive regardless of `closed`, so all three must be absent.
+  it('resolved + owning-requester WITHOUT manage: Cancel, Resolve, and Archive are all hidden', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'u-1',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Fixed it.',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    // MUTATION GUARD (c): showing Cancel on a resolved row fails this.
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+  });
+
+  it('cancelled + owning-requester WITHOUT manage: Cancel, Resolve, and Archive are all hidden', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'u-1',
+        status: 'cancelled',
+        cancelledAt: '2026-08-05T00:00:00.000Z',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+  });
 });
 
 describe('Maintenance Resolved — resolution surfaces on the detail page (Task 7 Step 1 test 8)', () => {
@@ -762,6 +803,90 @@ describe('Maintenance Resolved — resolution surfaces on the detail page (Task 
     expect(screen.queryByText('Resolution')).not.toBeInTheDocument();
     expect(screen.queryByText(/Resolution proof/)).not.toBeInTheDocument();
     expect(screen.queryByText('Marked resolved')).not.toBeInTheDocument();
+  });
+});
+
+// Fix wave (Important 1): the "Resolution proof" card intentionally renders
+// STRAY kind='resolution' rows even on a still-open request (a manager
+// staged proof photos in the Resolve dialog, then cancelled out — spec
+// §12.5's pre-flip staging, designed/disclosed behavior). Hiding those rows
+// from the requester would be worse than showing them, but the caption must
+// never claim resolution happened when `detail.resolvedAt` says it hasn't.
+describe('Fix wave 1 — resolution-proof caption honesty (Important 1)', () => {
+  it('stray resolution photos on a still-open (never-resolved) request render the STAGED caption, never the resolved-claim one', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    // resolvedAt stays null (detailFixture's default) — this is the
+    // cancelled-Resolve-dialog scenario, not a resolved request.
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'proof-1',
+        originalFilename: 'staged.jpg',
+        url: 'https://signed/staged.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByText('Resolution proof (1)')).toBeInTheDocument();
+    expect(
+      screen.getByText('Staged by the team while preparing to mark this request resolved.'),
+    ).toBeInTheDocument();
+    // MUTATION GUARD (a): making the caption unconditional again (the
+    // resolved-state sentence rendering regardless of detail.resolvedAt)
+    // fails this — the false completion claim must never appear here.
+    expect(
+      screen.queryByText('Added by the team when this request was marked resolved.'),
+    ).not.toBeInTheDocument();
+
+    // Extends the §GC-4 forbidden-vocabulary sweep discipline (Task 7 Step 1
+    // test 10, below) to this new copy path: on an unresolved page, the
+    // resolved-state caption itself joins the banned-phrase list, alongside
+    // the Zendesk vocabulary that surface already sweeps for.
+    const FORBIDDEN_ON_UNRESOLVED = [
+      'Added by the team when this request was marked resolved.',
+      'Ticket resolved',
+      'Zendesk ticket resolved',
+      'Issue verified fixed',
+    ];
+    for (const banned of FORBIDDEN_ON_UNRESOLVED) {
+      expect(document.body.textContent).not.toContain(banned);
+    }
+  });
+
+  it('a resolved request with proof photos renders the RESOLVED caption, never the staged one', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Fixed it.',
+      }),
+    );
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'proof-1',
+        originalFilename: 'after.jpg',
+        url: 'https://signed/after.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByText('Added by the team when this request was marked resolved.')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Staged by the team while preparing to mark this request resolved.'),
+    ).not.toBeInTheDocument();
   });
 });
 

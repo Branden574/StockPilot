@@ -21,9 +21,11 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 
 import { MaintenanceRequestActions } from './detail-client';
 
-// ResolveRequestDialog does its own live GET fetch (loadResolutionPhotos) —
-// stubbed here so this suite never depends on a real network call; none of
-// these tests assert on its photo-preview content.
+// ResolveRequestDialog no longer does its own network fetch (fix wave
+// Important 2 — resolutionPhotos is prop-threaded from the page instead of
+// a client GET on open); this stub stays only as a tripwire so this suite
+// never silently starts depending on a real network call again. None of
+// these tests assert on it.
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false }) as Response));
 });
@@ -53,7 +55,7 @@ const FORBIDDEN = [
   'Issue verified fixed',
 ];
 
-const BASE_PROPS = { requestId: 'r1', requesterName: 'Jane Smith' };
+const BASE_PROPS = { requestId: 'r1', requesterName: 'Jane Smith', resolutionPhotos: [] };
 
 describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Important 3)', () => {
   it('the OPEN Cancel confirm dialog never contains forbidden ticket/notification vocabulary', async () => {
@@ -117,6 +119,36 @@ describe('MaintenanceRequestActions — Resolve affordance (Task 7 Step 1 test 6
       <MaintenanceRequestActions {...BASE_PROPS} showArchive={true} showCancel={true} showResolve={false} />,
     );
     expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MaintenanceRequestActions — resolutionPhotos prop-threaded into the Resolve dialog (fix wave Important 2)', () => {
+  it('a resolutionPhotos entry passed to MaintenanceRequestActions renders inside the OPEN Resolve dialog, through the real (unmocked) photos panel', async () => {
+    render(
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={false}
+        showResolve={true}
+        resolutionPhotos={[
+          { id: 'proof-1', originalFilename: 'after.jpg', url: 'https://signed/after.jpg', thumbUrl: null },
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Resolve' }));
+    expect(screen.getByText('Resolve this maintenance request?')).toBeInTheDocument();
+    // MUTATION GUARD (b): dropping the prop thread (or the dialog rendering
+    // an empty list regardless of what it was given) leaves this absent.
+    expect(screen.getByAltText('after.jpg')).toBeInTheDocument();
+  });
+
+  it('an empty resolutionPhotos array renders the dialog with no staged photos', async () => {
+    render(
+      <MaintenanceRequestActions {...BASE_PROPS} showArchive={false} showCancel={false} showResolve={true} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Resolve' }));
+    expect(screen.getByText('Resolve this maintenance request?')).toBeInTheDocument();
+    expect(screen.getByText('Photos (0/8)')).toBeInTheDocument();
   });
 });
 

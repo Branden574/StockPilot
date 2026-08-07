@@ -2,6 +2,19 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAINTENANCE_RESOLUTION_NOTE_MAX } from '@stockpilot/core';
+
+// The dialog now calls router.refresh() itself (fix wave Important 2 — it
+// threads the embedded photos panel's onChange straight to it, matching the
+// requester panel's own MaintenancePhotosPanelClient convention), so
+// useRouter must resolve to something real. A single vi.hoisted object
+// (not a fresh literal per render) keeps `refreshMock` a stable reference
+// tests can assert against.
+const routerMocks = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), back: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => routerMocks,
+}));
+
 const toastErrorMock = vi.fn();
 const toastSuccessMock = vi.fn();
 vi.mock('sonner', () => ({
@@ -31,6 +44,11 @@ vi.mock('@/components/maintenance/maintenance-photos-panel', () => ({
 
 import { ResolveRequestDialog } from './resolve-request-dialog';
 
+// Fix wave (Important 2): the dialog no longer does its own network fetch —
+// this global stub stays only as a tripwire. Any test that asserts
+// `fetch` was never called catches a regression back to the deleted
+// loadResolutionPhotos() path; nothing in this suite expects fetch to
+// succeed or even run.
 function noopFetch(): Promise<Response> {
   return Promise.resolve({ ok: false } as Response);
 }
@@ -56,6 +74,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof ResolveRequ
       open={true}
       onOpenChange={onOpenChange}
       onResolved={onResolved}
+      resolutionPhotos={[]}
       {...overrides}
     />,
   );
@@ -138,6 +157,7 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
         open={false}
         onOpenChange={vi.fn()}
         onResolved={vi.fn()}
+        resolutionPhotos={[]}
       />,
     );
     // Radix unmounts DialogContent while closed (Task 14's lesson) — a
@@ -152,6 +172,7 @@ describe('ResolveRequestDialog — copy pins + §GC-4 forbidden-vocabulary sweep
         open={true}
         onOpenChange={vi.fn()}
         onResolved={vi.fn()}
+        resolutionPhotos={[]}
       />,
     );
     expect(document.body.textContent).toContain('It does not close or update the Zendesk ticket.');
@@ -206,5 +227,50 @@ describe('ResolveRequestDialog — embedded photos panel (Step 1 test 5)', () =>
     expect(photosPanelProps).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: 'r1', kind: 'resolution' }),
     );
+  });
+});
+
+describe('ResolveRequestDialog — resolutionPhotos prop-threaded, no fetch (fix wave Important 2)', () => {
+  const PHOTOS = [
+    { id: 'proof-1', originalFilename: 'after.jpg', url: 'https://signed/after.jpg', thumbUrl: null },
+    { id: 'proof-2', originalFilename: 'before.jpg', url: 'https://signed/before.jpg', thumbUrl: 'https://signed/before-thumb.jpg' },
+  ];
+
+  it('renders the passed-in resolutionPhotos via MaintenancePhotosPanel — coverage the old fetch-on-open path never had', () => {
+    renderDialog({ resolutionPhotos: PHOTOS });
+    expect(screen.getByTestId('photos-panel-stub')).toBeInTheDocument();
+    // MUTATION GUARD (b): dropping the prop thread (or always rendering [])
+    // fails this — the mock records exactly what the dialog passed down.
+    expect(photosPanelProps).toHaveBeenCalledWith(expect.objectContaining({ photos: PHOTOS, kind: 'resolution' }));
+  });
+
+  it('never calls fetch — loadResolutionPhotos and its GET /api/v1/maintenance-requests/[id] are gone', async () => {
+    renderDialog({ resolutionPhotos: PHOTOS });
+    // Give any stray microtask/effect a chance to run before asserting a
+    // negative — same idiom as this file's other "never fired" checks.
+    await Promise.resolve();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("threads the embedded panel's onChange straight to router.refresh() — the SAME post-upload freshness mechanism the requester photos panel already relies on", () => {
+    renderDialog({ resolutionPhotos: PHOTOS });
+    const lastCallProps = photosPanelProps.mock.calls.at(-1)?.[0] as { onChange?: () => void } | undefined;
+    expect(typeof lastCallProps?.onChange).toBe('function');
+    lastCallProps?.onChange?.();
+    expect(routerMocks.refresh).toHaveBeenCalled();
+  });
+});
+
+describe('ResolveRequestDialog — resolution note maxLength cap (fix wave Minor 4)', () => {
+  it('the textarea maxLength attribute equals the shared MAINTENANCE_RESOLUTION_NOTE_MAX constant', () => {
+    renderDialog();
+    const textarea = screen.getByLabelText('Resolution note');
+    expect(textarea).toHaveAttribute('maxLength', String(MAINTENANCE_RESOLUTION_NOTE_MAX));
+  });
+
+  it('literal-pins the constant itself at 2000 (anti-tautology: catches a silent drift in the shared cap, not just a copy of it)', () => {
+    expect(MAINTENANCE_RESOLUTION_NOTE_MAX).toBe(2000);
+    renderDialog();
+    expect(screen.getByLabelText('Resolution note')).toHaveAttribute('maxLength', '2000');
   });
 });

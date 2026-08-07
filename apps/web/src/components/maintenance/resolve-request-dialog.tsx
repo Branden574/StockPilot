@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -33,21 +34,20 @@ interface Props {
    *  detail-client.tsx), kept separate from onOpenChange so a test can pin
    *  each independently (brief Step 1 test 2). */
   onResolved: () => void;
-}
-
-/** Shape this dialog cares about from GET /api/v1/maintenance-requests/[id]
- *  (Task 4's route, already returns `photos[]` with `kind` per spec §4.1) —
- *  declared locally, matching maintenance-photos-panel.tsx's own
- *  fetch-boundary convention rather than importing a server-only type into
- *  a client file. */
-interface DetailPhotosResponse {
-  photos?: Array<{
-    id: string;
-    originalFilename: string;
-    url: string;
-    thumbUrl: string | null;
-    kind?: string;
-  }>;
+  /** Server-computed kind='resolution' rows for this request (page.tsx ~line
+   *  118, the SAME signedViewUrls() call that seeds the Resolution proof
+   *  card), prop-threaded through MaintenanceRequestActions (detail-client.
+   *  tsx) instead of this dialog minting its own GET /api/v1/maintenance-
+   *  requests/[id] on every open and every photo change (fix wave Important
+   *  2 — the OLD loadResolutionPhotos() fetch pulled the FULL detail
+   *  assembly, incl. a possible share-link mint, purely to read photos[],
+   *  and was untested end to end since every test stubbed fetch to
+   *  {ok:false}). A plain serializable array — never a function, the RSC-
+   *  boundary crash class this file otherwise avoids. Kept fresh across
+   *  in-dialog uploads/removals by the SAME router.refresh() mechanism the
+   *  requester photos panel already relies on (detail-client.tsx's
+   *  MaintenancePhotosPanelClient onChange), not a local optimistic echo. */
+  resolutionPhotos: PanelPhoto[];
 }
 
 /**
@@ -61,39 +61,23 @@ interface DetailPhotosResponse {
  * (`maintenanceResolveSchema`, packages/core) — no parallel min/max rules
  * are hand-rolled here.
  */
-export function ResolveRequestDialog({ requestId, requesterName, open, onOpenChange, onResolved }: Props) {
+export function ResolveRequestDialog({
+  requestId,
+  requesterName,
+  open,
+  onOpenChange,
+  onResolved,
+  resolutionPhotos,
+}: Props) {
+  const router = useRouter();
   const [note, setNote] = React.useState('');
-  const [photos, setPhotos] = React.useState<PanelPhoto[]>([]);
   const [pending, setPending] = React.useState(false);
-
-  // Loads the CURRENT kind='resolution' rows for this request — populates
-  // the panel with anything already uploaded in this or a prior (cancelled)
-  // dialog session, and refreshes after every upload/remove so the panel's
-  // own remove affordance always operates on real, live rows (spec §8: "the
-  // panel's existing remove affordance handles that"). Best-effort: a
-  // failed load never blocks resolving — resolve()'s own live count is the
-  // authority on proof_photo_count, not this preview.
-  const loadResolutionPhotos = React.useCallback(async () => {
-    try {
-      const res = await fetch(`/api/v1/maintenance-requests/${requestId}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as DetailPhotosResponse;
-      setPhotos(
-        (data.photos ?? [])
-          .filter((p) => p.kind === 'resolution')
-          .map((p) => ({ id: p.id, originalFilename: p.originalFilename, url: p.url, thumbUrl: p.thumbUrl })),
-      );
-    } catch {
-      // Best-effort preview only (see doc comment above).
-    }
-  }, [requestId]);
 
   React.useEffect(() => {
     if (!open) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open, matches destructive-confirm.tsx's own idiom
     setNote('');
-    void loadResolutionPhotos();
-  }, [open, loadResolutionPhotos]);
+  }, [open]);
 
   // Client hint only — the server re-parses with this SAME schema and is
   // the authority (doc comment on resolveMaintenanceRequestAction).
@@ -156,8 +140,8 @@ export function ResolveRequestDialog({ requestId, requesterName, open, onOpenCha
             </p>
             <MaintenancePhotosPanel
               requestId={requestId}
-              photos={photos}
-              onChange={() => void loadResolutionPhotos()}
+              photos={resolutionPhotos}
+              onChange={() => router.refresh()}
               kind="resolution"
             />
           </div>

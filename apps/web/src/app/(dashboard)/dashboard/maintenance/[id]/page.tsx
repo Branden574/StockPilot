@@ -213,6 +213,7 @@ export default async function MaintenanceRequestDetailPage({
             showResolve={canManage && !closed}
             showArchive={canManage && !detail.archivedAt}
             showCancel={isOwningRequester && !closed}
+            resolutionPhotos={resolutionPhotos}
           />
         </div>
       </div>
@@ -279,7 +280,21 @@ export default async function MaintenanceRequestDetailPage({
                 ))}
               </ul>
               <p className="text-muted-foreground mt-2 text-xs">
-                Added by the team when this request was marked resolved.
+                {/* Fix wave (Important 1): this card intentionally renders
+                    STRAY kind='resolution' rows even on a still-open request
+                    (a manager staged proof photos then cancelled the Resolve
+                    dialog — spec §12.5's pre-flip staging is designed,
+                    disclosed behavior, not a bug). Hiding those rows from
+                    the requester would be worse than showing them, but the
+                    caption must never claim resolution happened when it
+                    hasn't — so the claim itself is gated on the ONE fact
+                    that actually means "resolved", `detail.resolvedAt`,
+                    never on `resolutionPhotos.length > 0` (spec §11
+                    Vocabulary: "marked resolved" is only true of a real
+                    StockPilot record). */}
+                {detail.resolvedAt
+                  ? 'Added by the team when this request was marked resolved.'
+                  : 'Staged by the team while preparing to mark this request resolved.'}
               </p>
             </section>
           ) : null}

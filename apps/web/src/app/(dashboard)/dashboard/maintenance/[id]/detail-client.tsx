@@ -47,6 +47,12 @@ interface ActionsProps {
   showResolve: boolean;
   /** Interpolated into the resolve dialog's disclosure copy. */
   requesterName: string;
+  /** Fix wave (Important 2): the page's own server-computed kind='resolution'
+   *  rows (page.tsx ~line 118, the SAME signedViewUrls() call that seeds the
+   *  Resolution proof card), prop-threaded straight into ResolveRequestDialog
+   *  instead of that dialog minting its own client GET on every open/change.
+   *  A plain serializable array, never a function. */
+  resolutionPhotos: PanelPhoto[];
 }
 
 /**
@@ -64,6 +70,7 @@ export function MaintenanceRequestActions({
   showCancel,
   showResolve,
   requesterName,
+  resolutionPhotos,
 }: ActionsProps) {
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = React.useState(false);
@@ -129,6 +136,7 @@ export function MaintenanceRequestActions({
         open={resolveOpen}
         onOpenChange={setResolveOpen}
         onResolved={() => router.refresh()}
+        resolutionPhotos={resolutionPhotos}
       />
 
       <DestructiveConfirm
