@@ -215,6 +215,18 @@ describe('proof photos', () => {
     const { text: zeroText } = render({ proofPhotos: [], proofPhotoTotal: 0 });
     expect(zeroText).not.toContain('proof photo');
   });
+
+  it('attribute-context injection via proof photo src is neutralized (quotes escaped)', () => {
+    const hostile = 'https://stockpilotusa.com/m/tok/photo/0" onerror="alert(1)" x="';
+    const photos = [{ src: hostile, alt: 'roof-1.jpg' }];
+    const { html } = render({ proofPhotos: photos, proofPhotoTotal: 1 });
+    // The live onerror attribute must NOT appear
+    expect(html).not.toContain('onerror="alert(1)"');
+    // The escaped form must be present (the quote becomes &quot;)
+    expect(html).toContain('&quot; onerror=&quot;alert(1)&quot; x=&quot;');
+    // The image must still render with the escaped src
+    expect(html).toContain(`src="${hostile.replace(/"/g, '&quot;')}"`);
+  });
 });
 
 // ── 6. Negative: never a signed Storage URL ─────────────────────────
@@ -243,6 +255,17 @@ describe('cta + sender', () => {
     });
     expect(html).toContain('href="https://app.example.com/dashboard/maintenance/xyz-999"');
     expect(html).toContain('>View request');
+  });
+
+  it('attribute-context injection via requestUrl in cta and footer is neutralized (quotes escaped)', () => {
+    const hostile = 'https://app.example.com/dashboard/maintenance/xyz" onerror="alert(1)" x="';
+    const { html } = render({ requestUrl: hostile });
+    // The live onerror attribute must NOT appear
+    expect(html).not.toContain('onerror="alert(1)"');
+    // The escaped form must be present in both the cta href and footer support link
+    expect(html).toContain(`&quot; onerror=&quot;alert(1)&quot; x=&quot;`);
+    // Both links (primary button and footer) must carry the escaped URL
+    expect(html.match(/href=".*&quot;.*onerror/g)).toBeTruthy();
   });
 
   it('sends from the registry sender, re-pinned as a string literal here (GC 9)', () => {

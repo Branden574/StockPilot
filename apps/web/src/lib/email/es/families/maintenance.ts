@@ -129,7 +129,7 @@ function proofPhotoGridHtml(photos: MaintenanceResolvedProofPhoto[]): string {
     const cells = pair
       .map(
         (p) =>
-          `<td style="padding:0 8px 8px 0"><img src="${p.src}" width="${PROOF_IMG_WIDTH}" alt="${escapeHtml(p.alt)}" style="display:block;width:${PROOF_IMG_WIDTH}px;max-width:${PROOF_IMG_WIDTH}px;height:auto;border:0;border-radius:8px"></td>`,
+          `<td style="padding:0 8px 8px 0"><img src="${escapeHtml(p.src)}" width="${PROOF_IMG_WIDTH}" alt="${escapeHtml(p.alt)}" style="display:block;width:${PROOF_IMG_WIDTH}px;max-width:${PROOF_IMG_WIDTH}px;height:auto;border:0;border-radius:8px"></td>`,
       )
       .join('');
     rowsHtml.push(`<tr>${cells}</tr>`);
@@ -216,12 +216,12 @@ export function renderMaintenanceResolvedEmail(
     ),
     section(
       '0 36px 30px',
-      ctaRow({ primary: { label: DEF.cta, href: params.requestUrl } }),
+      ctaRow({ primary: { label: DEF.cta, href: escapeHtml(params.requestUrl) } }),
     ),
     footer({
       kind: 'ess',
       reasonHtml: `${honestyLineFirstSentence()} Sent once when a request you submitted is marked resolved.`,
-      urls: { support: params.requestUrl },
+      urls: { support: escapeHtml(params.requestUrl) },
     }),
   ]
     .filter(Boolean)
