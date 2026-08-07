@@ -2,7 +2,14 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
-import { can, formatMaintenanceRequestNumber, MAINTENANCE_SHARE_LINK_TTL_DAYS } from '@stockpilot/core';
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+import {
+  can,
+  formatMaintenanceRequestNumber,
+  MAINTENANCE_SHARE_LINK_TTL_DAYS,
+  type MaintenanceAttachmentKind,
+} from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -71,6 +78,16 @@ function isExpired(expiresAt: string): boolean {
   return new Date(expiresAt).getTime() <= Date.now();
 }
 
+/** Same recipe as `/m/[token]/page.tsx`'s own `formatSubmittedDate` —
+ *  duplicated here deliberately (this is the resolver's projection, not
+ *  the page's rendering concern) so `resolution.resolvedAtDisplay` arrives
+ *  already formatted and matches the page's "Submitted:" line exactly. */
+function formatResolvedAtDisplay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 function toShareLink(token: string, expiresAt: string): MaintenanceShareLink {
   return { token, url: `${APP_URL}/m/${token}`, expiresAt };
 }
@@ -87,7 +104,16 @@ export interface ResolvedMaintenanceShare {
   description: string;
   siteName: string | null;
   createdAt: string;
-  photos: { filename: string }[];
+  photos: { filename: string; kind: MaintenanceAttachmentKind }[];
+  /** D2/spec §4.2 — present only once the request is resolved. Deliberately
+   *  NO resolver name on this anonymous surface (the allow-list posture:
+   *  DC4/Andrew need the evidence and the outcome, not a staff directory —
+   *  the requester's own email is where the resolver's name belongs).
+   *  `resolvedAtDisplay` is pre-formatted server-side (same recipe as this
+   *  page's own `formatSubmittedDate` helper — duplicated intentionally,
+   *  not shared, since this is the resolver's projection, not the page's
+   *  rendering concern) so the page never has to parse/reformat a date. */
+  resolution: { note: string; resolvedAtDisplay: string } | null;
 }
 
 /** What the photo PROXY route needs for exactly one photo — the raw storage
@@ -108,6 +134,7 @@ interface AttachmentRow {
   storage_path: string;
   mime_type: string;
   safe_filename: string;
+  kind: MaintenanceAttachmentKind;
 }
 
 const ALLOWED_MIME = new Set<string>(['image/png', 'image/jpeg', 'image/webp']);
@@ -171,11 +198,18 @@ async function resolveActiveShareRequest(
 }
 
 /** Every attachment row for a resolved (org, request) pair, ordered exactly
- *  like the authenticated detail page (`sort_order`), and defensively
- *  filtered (see `isValidAttachmentRow`). Shared by both public functions
- *  below so their photo lists/indices can never drift apart. Returns `null`
- *  on a query error (fix wave m4 — a whole-query failure must surface as
- *  "this link doesn't resolve", never silently render as zero photos). */
+ *  like the authenticated detail page (`sort_order`, then `created_at` as an
+ *  explicit tiebreaker — spec §4.2/§12.1: every row defaults `sort_order =
+ *  0` today, so without a secondary key the tie order between same-
+ *  sort_order rows is unguaranteed Postgres behavior, not a deterministic
+ *  contract. This is the ONE fetch both the share page and the photo proxy
+ *  route build on, so a wobbling tie order would desync `photos[i]` from
+ *  `/m/<token>/photo/<i>` for the two callers independently re-running this
+ *  same query), and defensively filtered (see `isValidAttachmentRow`).
+ *  Shared by both public functions below so their photo lists/indices can
+ *  never drift apart. Returns `null` on a query error (fix wave m4 — a
+ *  whole-query failure must surface as "this link doesn't resolve", never
+ *  silently render as zero photos). */
 async function fetchValidAttachments(
   admin: ReturnType<typeof createAdminClient>,
   organizationId: string,
@@ -183,12 +217,44 @@ async function fetchValidAttachments(
 ): Promise<AttachmentRow[] | null> {
   const { data, error } = await admin
     .from('maintenance_request_attachments')
-    .select('storage_path, mime_type, safe_filename')
+    .select('storage_path, mime_type, safe_filename, kind')
     .eq('maintenance_request_id', maintenanceRequestId)
     .eq('organization_id', organizationId)
-    .order('sort_order', { ascending: true });
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true });
   if (error) return null;
   return ((data ?? []) as AttachmentRow[]).filter(isValidAttachmentRow);
+}
+
+/**
+ * Whether this org wants a share link folded into the compose email / the
+ * resolution email — the ONE reader of `organization_modules.settings.
+ * includeShareLinksInEmail` (previously three independent private copies:
+ * the web detail page, the mobile REST parity route, and now resolve()'s
+ * own need to decide whether to mint a link before the at-most-once email
+ * fires). `organization_modules.settings` is an unconstrained jsonb blob
+ * (0144), so an absent key or a missing row both mean "never configured"
+ * and default ON, matching every other module settings reader in this
+ * codebase (packages/core/src/b2b/pricing-mode.ts's own precedent). A plain
+ * read, not a permission check — the real authorization for MINTING a link
+ * still lives entirely in `ensureActiveLink` (requester+submit, or manage);
+ * this only decides whether a caller even asks. Reads via `ctx.supabase`
+ * (RLS-scoped, user-authed) — same client every existing call site already
+ * used, never the admin client, since any org member can read their own
+ * org's module settings.
+ */
+export async function maintenanceShareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
+  const { data } = await ctx.supabase
+    .from('organization_modules')
+    .select('settings')
+    .eq('organization_id', ctx.organizationId)
+    .eq('module_id', 'maintenance_requests')
+    .maybeSingle();
+  const settings = (data as { settings?: unknown } | null)?.settings as
+    | { includeShareLinksInEmail?: boolean }
+    | null
+    | undefined;
+  return settings?.includeShareLinksInEmail !== false;
 }
 
 export class MaintenanceShareLinksService {
@@ -392,14 +458,18 @@ async function resolveOrgScopedCharterName(
  * the `/m/<token>` visitor has no StockPilot session at all. Builds on the
  * single resolver funnel (`resolveActiveShareRequest`) and returns an
  * explicit ALLOW-LIST projection, not `select('*')` with keys deleted:
- * requestNumber/subject/description/siteName/createdAt/photos and nothing
- * else. No requester name/email/phone, no internal notes, no local owner,
- * no other requests — and (fix wave C1) NO storage path and NO signed URL:
- * `photos` carries only a `filename`, used solely for `alt` text and to
- * size the grid. The actual bytes are served by
- * `/m/[token]/photo/[n]/route.ts`, which streams them from Storage on the
- * service-role client and never hands the browser anything storage-shaped
- * either — see `resolveMaintenanceSharePhoto` below for that half.
+ * requestNumber/subject/description/siteName/createdAt/photos/resolution and
+ * nothing else. No requester name/email/phone, no internal notes, no local
+ * owner, no other requests, and (D2/spec §4.2) NO resolver name either — a
+ * resolved request's `resolution` carries only the note and a pre-formatted
+ * date, never `resolved_by`/`resolved_by_name_snapshot` (that column is not
+ * even in the select below) — and (fix wave C1) NO storage path and NO
+ * signed URL: `photos` carries only a `filename` + `kind`, used solely for
+ * `alt` text, grid sizing, and the requester-vs-resolution section split.
+ * The actual bytes are served by `/m/[token]/photo/[n]/route.ts`, which
+ * streams them from Storage on the service-role client and never hands the
+ * browser anything storage-shaped either — see `resolveMaintenanceSharePhoto`
+ * below for that half.
  *
  * Uses the ADMIN client deliberately: there is no authenticated user to ride
  * RLS with. Every subsequent query is scoped by the RESOLVED link's OWN
@@ -419,7 +489,7 @@ export async function resolveMaintenanceShareToken(
   const admin = createAdminClient();
   const { data: req } = await admin
     .from('maintenance_requests')
-    .select('request_number, created_at, subject, description, charter_id')
+    .select('request_number, created_at, subject, description, charter_id, resolved_at, resolution_note')
     .eq('id', resolved.maintenanceRequestId)
     .eq('organization_id', resolved.organizationId)
     .maybeSingle();
@@ -432,6 +502,21 @@ export async function resolveMaintenanceShareToken(
   ]);
   if (attachments === null) return null;
 
+  // D2/spec §4.2 — gated purely on `resolved_at`: resolve() always requires
+  // a note (packages/core's maintenanceResolveSchema), so in practice the
+  // two are never set independently, but this projection never trusts
+  // resolution_note alone to decide "is this request resolved" (a
+  // hypothetical null note on an already-resolved row still renders the
+  // resolved block, just with an empty note, rather than silently hiding
+  // that the request WAS resolved).
+  const resolvedAt = reqRow.resolved_at as string | null;
+  const resolution = resolvedAt
+    ? {
+        note: (reqRow.resolution_note as string | null) ?? '',
+        resolvedAtDisplay: formatResolvedAtDisplay(resolvedAt),
+      }
+    : null;
+
   return {
     requestNumber:
       formatMaintenanceRequestNumber(reqRow.request_number as number, reqRow.created_at as string) ?? 'MR',
@@ -439,7 +524,8 @@ export async function resolveMaintenanceShareToken(
     description: reqRow.description as string,
     siteName,
     createdAt: reqRow.created_at as string,
-    photos: attachments.map((a) => ({ filename: a.safe_filename })),
+    photos: attachments.map((a) => ({ filename: a.safe_filename, kind: a.kind })),
+    resolution,
   };
 }
 
@@ -484,4 +570,52 @@ export async function resolveMaintenanceSharePhoto(
     mimeType: row.mime_type as MaintenanceAttachmentMime,
     filename: row.safe_filename,
   };
+}
+
+/**
+ * The resolution email's (Task 6) ONLY photo-URL data source. Looks up the
+ * request's currently ACTIVE, unexpired share link by (organization_id,
+ * maintenance_request_id) — the sender knows the request, not a token, so
+ * this is a sibling lookup to `resolveActiveShareRequest` (which runs the
+ * reverse direction, token -> request) rather than a call through it. Reuses
+ * the SAME `fetchValidAttachments` ordering funnel every other public
+ * surface builds on, so the indices returned here are the request's
+ * COMBINED attachment-list positions (requester + resolution photos
+ * interleaved in `sort_order`/`created_at` order) — exactly what
+ * `/m/<token>/photo/<n>` expects, never a locally re-filtered "resolution-
+ * only" index that would point at the wrong photo.
+ *
+ * Deliberately does NOT mint a link — `MaintenanceRequestsService.resolve()`
+ * already decides whether to call `ensureActiveLink` (photos exist + the
+ * org's `includeShareLinksInEmail` setting) before the at-most-once email
+ * fires. This function only reads whatever already exists at send time, and
+ * returns `null` whenever there is nothing usable (no link ever minted,
+ * revoked, or expired) so the caller falls back to the renderer's own
+ * no-photos fallback line rather than embed a URL that would 404.
+ */
+export async function listResolutionProofProxyPhotos(
+  admin: SupabaseClient,
+  organizationId: string,
+  maintenanceRequestId: string,
+): Promise<{ token: string; entries: { index: number; filename: string }[] } | null> {
+  const { data: link } = await admin
+    .from('maintenance_request_share_links')
+    .select('token, expires_at')
+    .eq('organization_id', organizationId)
+    .eq('maintenance_request_id', maintenanceRequestId)
+    .eq('active', true)
+    .maybeSingle();
+  if (!link) return null;
+  const row = link as { token: string; expires_at: string };
+  if (isExpired(row.expires_at)) return null;
+
+  const attachments = await fetchValidAttachments(admin, organizationId, maintenanceRequestId);
+  if (attachments === null) return null;
+
+  const entries = attachments.reduce<{ index: number; filename: string }[]>((acc, a, index) => {
+    if (a.kind === 'resolution') acc.push({ index, filename: a.safe_filename });
+    return acc;
+  }, []);
+
+  return { token: row.token, entries };
 }

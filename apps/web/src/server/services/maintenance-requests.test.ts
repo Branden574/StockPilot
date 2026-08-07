@@ -29,13 +29,46 @@ const { notifyMaintenanceEventMock } = vi.hoisted(() => ({
 vi.mock('@/server/services/maintenance-notify', () => ({
   notifyMaintenanceEvent: notifyMaintenanceEventMock,
 }));
+// resolve()'s share-link step (Task 4): mock both exports of the module —
+// the class (ensureActiveLink spy) and the shared enabled-check function —
+// so tests can control whether a link is minted without touching real
+// storage/DB. Defaults mirror "eligible": enabled=true, ensureActiveLink
+// resolves a link.
+const { ensureActiveLinkMock, maintenanceShareLinksEnabledMock } = vi.hoisted(() => ({
+  ensureActiveLinkMock: vi.fn(async () => ({
+    token: 'tok',
+    url: 'https://stockpilotusa.com/m/tok',
+    expiresAt: '2027-01-01T00:00:00Z',
+  })),
+  maintenanceShareLinksEnabledMock: vi.fn(async () => true),
+}));
+vi.mock('@/server/services/maintenance-share-links', () => ({
+  MaintenanceShareLinksService: class {
+    ensureActiveLink = ensureActiveLinkMock;
+  },
+  maintenanceShareLinksEnabled: maintenanceShareLinksEnabledMock,
+}));
+// resolve()'s at-most-once email hook (T6 stub seam, Task 4): mocked so its
+// call args/order/rejection-swallowing can be asserted without depending on
+// the real (currently inert) stub body.
+const { maybeSendMaintenanceResolvedEmailMock } = vi.hoisted(() => ({
+  maybeSendMaintenanceResolvedEmailMock: vi.fn(
+    async (_admin: unknown, _requestId: string, _opts: { appUrl: string }) =>
+      ({ sent: false as const, reason: 'error' as const }),
+  ),
+}));
+vi.mock('@/server/email/maintenance-resolved', () => ({
+  maybeSendMaintenanceResolvedEmail: maybeSendMaintenanceResolvedEmailMock,
+}));
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { audit } from './audit';
+import { ServiceError } from './context';
 import { MaintenanceRequestsService } from './maintenance-requests';
 
 // `maintenance_requests` is `defaultOnFor: []` in the module registry (L4L-
@@ -657,6 +690,31 @@ describe('get', () => {
     expect(detail.outlookDraftOpenCount).toBe(2);
     expect(detail.archivedAt).toBeNull();
     expect(detail.cancelledAt).toBeNull();
+    // Maintenance Resolved: get() maps resolvedAt/resolvedByName/
+    // resolutionNote off the row too, when none of them are set.
+    expect(detail.resolvedAt).toBeNull();
+    expect(detail.resolvedByName).toBeNull();
+    expect(detail.resolutionNote).toBeNull();
+  });
+
+  it('Maintenance Resolved: get() maps resolvedAt/resolvedByName/resolutionNote off the row when a resolution has been recorded', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': {
+        data: {
+          ...BASE_ROW,
+          status: 'resolved',
+          resolved_at: '2026-08-05T18:00:00Z',
+          resolved_by: 'mgr-1',
+          resolved_by_name_snapshot: 'Jane Manager',
+          resolution_note: 'Replaced the AC unit compressor.',
+        },
+        error: null,
+      },
+    });
+    const detail = await new MaintenanceRequestsService(ctx).get('r1');
+    expect(detail.resolvedAt).toBe('2026-08-05T18:00:00Z');
+    expect(detail.resolvedByName).toBe('Jane Manager');
+    expect(detail.resolutionNote).toBe('Replaced the AC unit compressor.');
   });
 
   it('READ-GATE PIN (0314 Q3): succeeds with the module DISABLED — request history stays visible after a disable', async () => {
@@ -734,6 +792,37 @@ describe('update', () => {
       {
         'maintenance_requests.select': {
           data: { ...BASE_ROW, requester_user_id: 'other-user', archived_at: '2026-01-01T00:00:00Z', status: 'archived' },
+          error: null,
+        },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).update('r1', { category: 'Electrical' });
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.category).toBe('Electrical');
+  });
+
+  it('Maintenance Resolved: blocks a requester (non-manager) from editing their OWN resolved request — the closed-state guard widened to resolvedAt', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, resolved_at: '2026-08-05T00:00:00Z', status: 'resolved' },
+          error: null,
+        },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(
+      new MaintenanceRequestsService(ctx).update('r1', { subject: 'Still broken please fix' }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('a manage-holder MAY still edit another user\'s resolved request (manage bypasses the closed-state guard entirely, same as archived)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, requester_user_id: 'other-user', resolved_at: '2026-08-05T00:00:00Z', status: 'resolved' },
           error: null,
         },
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
@@ -1016,7 +1105,7 @@ describe('archive', () => {
   it('MUTATION GUARD (status lockstep, plan C1): sets status="archived" AND archived_at TOGETHER in one write, pinning the org + id filters', async () => {
     const { stub, ctx } = build(
       {
-        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.select': { data: { archived_at: null }, error: null },
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
@@ -1031,12 +1120,21 @@ describe('archive', () => {
     // I3: the org + id filters that scope this write.
     expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['organization_id', ctx.organizationId]);
     expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
+    // GC 12 (D4, history is sacred) / T4-M4 mutation target: this write must
+    // NEVER carry any resolution/cancellation stamp key — archiving only
+    // adds archived_at on top of whatever closed state already exists, it
+    // never overwrites or clears one.
+    expect(patch).not.toHaveProperty('resolved_at');
+    expect(patch).not.toHaveProperty('resolved_by');
+    expect(patch).not.toHaveProperty('resolved_by_name_snapshot');
+    expect(patch).not.toHaveProperty('resolution_note');
+    expect(patch).not.toHaveProperty('cancelled_at');
   });
 
   it('audits maintenance_request.archived', async () => {
     const { ctx } = build(
       {
-        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.select': { data: { archived_at: null }, error: null },
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
@@ -1048,14 +1146,48 @@ describe('archive', () => {
     );
   });
 
-  it('M1: refuses to archive an already-CANCELLED request instead of stamping both closed states on one row', async () => {
+  it('D1 (owner-decided M1 REVERSAL): archive() now ACCEPTS an already-CANCELLED row — a cancelled request is nameable history, not a second closed state archive must refuse', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: { archived_at: null, cancelled_at: '2026-08-01T00:00:00Z' }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).archive('r1')).resolves.toBeUndefined();
+    // Pin the select to refuse regressions that widen the pre-read or re-add cancellation checks.
+    expect(stub.chainArgs.get('maintenance_requests.select')?.[0]?.[0]).toBe('archived_at');
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.status).toBe('archived');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'maintenance_request.archived' }),
+      ctx,
+    );
+  });
+
+  it('D1: archive() also ACCEPTS an already-RESOLVED row (the same re-bucket reasoning as the cancelled case)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: { archived_at: null, resolved_at: '2026-08-01T00:00:00Z' }, error: null },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).archive('r1')).resolves.toBeUndefined();
+    // Pin the select to refuse regressions that widen the pre-read or re-add resolution checks.
+    expect(stub.chainArgs.get('maintenance_requests.select')?.[0]?.[0]).toBe('archived_at');
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.status).toBe('archived');
+  });
+
+  it('archive on an ALREADY-ARCHIVED row → conflict (the one refusal archive() keeps — re-archiving nothing makes no sense)', async () => {
     const { ctx } = build(
       {
-        'maintenance_requests.select': { data: { cancelled_at: '2026-01-01T00:00:00Z' }, error: null },
+        'maintenance_requests.select': { data: { archived_at: '2026-01-01T00:00:00Z' }, error: null },
         // A SUCCEEDING update fixture, deliberately: without it the mock's
         // zero-row default lets the generic C2 guard throw the same
         // 'conflict' this test expects, masking deletion of the specific
-        // already-cancelled guard (re-review mutation T survived on that).
+        // already-archived guard.
         'maintenance_requests.update': { data: { id: 'r1' }, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
@@ -1075,7 +1207,7 @@ describe('archive', () => {
   it('C2 PHANTOM-SUCCESS GUARD: a zero-row update (stale/foreign id at write time) throws instead of reporting a false success', async () => {
     const { ctx } = build(
       {
-        'maintenance_requests.select': { data: { cancelled_at: null }, error: null },
+        'maintenance_requests.select': { data: { archived_at: null }, error: null },
         'maintenance_requests.update': { data: null, error: null },
       },
       { permissions: new Set(['maintenance_requests:manage']) },
@@ -1154,6 +1286,34 @@ describe('cancel', () => {
     await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('cannot cancel an already-RESOLVED request — literal-pinned message, and applies to a manage-holder too (no reversal here, unlike archive()\'s D1)', async () => {
+    const resolved = {
+      ...BASE_ROW,
+      resolved_at: '2026-08-05T00:00:00Z',
+      resolved_by: 'mgr-1',
+      resolved_by_name_snapshot: 'Jane Manager',
+      resolution_note: 'Replaced the AC unit.',
+      status: 'resolved',
+    };
+    const requesterCtx = build(
+      { 'maintenance_requests.select': { data: resolved, error: null } },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(new MaintenanceRequestsService(requesterCtx.ctx).cancel('r1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is resolved and can no longer be cancelled.',
+    });
+
+    const managerCtx = build(
+      { 'maintenance_requests.select': { data: { ...resolved, requester_user_id: 'other-user' }, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(managerCtx.ctx).cancel('r1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is resolved and can no longer be cancelled.',
+    });
+  });
+
   it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of reporting a false success', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: BASE_ROW, error: null },
@@ -1168,6 +1328,337 @@ describe('cancel', () => {
     await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({
       code: 'module_disabled',
     });
+  });
+});
+
+describe('resolve', () => {
+  const RESOLVE_HEADER = {
+    archived_at: null,
+    cancelled_at: null,
+    resolved_at: null,
+    requester_user_id: 'other-user',
+    request_number: 42,
+    created_at: '2026-08-01T12:00:00Z',
+    subject: 'AC not working',
+  };
+  const NOTE_INPUT = { note: 'Replaced the AC unit compressor and tested airflow.' };
+
+  it('happy path: manage ctx, parse ok, ONE update carrying EXACTLY the resolution keys with the 3 .is() guards pinned; audits maintenance_request.resolved with { has_note, proof_photo_count } and NEVER the note text', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 3 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(Object.keys(patch).sort()).toEqual(
+      ['resolution_note', 'resolved_at', 'resolved_by', 'resolved_by_name_snapshot', 'status', 'updated_at'].sort(),
+    );
+    expect(patch.status).toBe('resolved');
+    expect(patch.resolved_by).toBe(ctx.userId);
+    expect(patch.resolved_by_name_snapshot).toBe('Jane Smith');
+    expect(patch.resolution_note).toBe(NOTE_INPUT.note);
+    expect(patch.resolved_at).toBeTruthy();
+    expect(patch.updated_at).toBeTruthy();
+
+    const updateArgs = stub.chainArgs.get('maintenance_requests.update')!;
+    expect(updateArgs).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(updateArgs).toContainEqual(['id', 'r1']);
+    expect(updateArgs).toContainEqual(['resolved_at', null]);
+    expect(updateArgs).toContainEqual(['archived_at', null]);
+    expect(updateArgs).toContainEqual(['cancelled_at', null]);
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'maintenance_request.resolved',
+        entityType: 'maintenance_request',
+        entityId: 'r1',
+        extra: { has_note: true, proof_photo_count: 3 },
+      }),
+      ctx,
+    );
+    const auditPayload = vi
+      .mocked(audit)
+      .mock.calls.find((c) => (c[0] as { event: string }).event === 'maintenance_request.resolved')![0];
+    expect(JSON.stringify(auditPayload)).not.toContain(NOTE_INPUT.note);
+  });
+
+  it('rejects invalid input (resolution note fails maintenanceResolveSchema\'s 5-char minimum)', async () => {
+    const { ctx } = build({}, { permissions: new Set(['maintenance_requests:manage']) });
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', { note: 'no' })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+  });
+
+  it('resolve without manage → forbidden', async () => {
+    const { ctx } = build({}, { permissions: new Set(['maintenance_requests:submit']) });
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('module off → module_disabled', async () => {
+    const { ctx } = build(
+      {},
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS), permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+  });
+
+  it('resolve on a stale/foreign id throws not_found', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: null, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('missing', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
+  it('resolve on an ARCHIVED request → conflict, literal message', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...RESOLVE_HEADER, archived_at: '2026-01-01T00:00:00Z' }, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is archived and can no longer be resolved.',
+    });
+  });
+
+  it('resolve on a CANCELLED request → conflict, literal message', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...RESOLVE_HEADER, cancelled_at: '2026-01-01T00:00:00Z' }, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is cancelled and can no longer be resolved.',
+    });
+  });
+
+  it('resolve on an ALREADY-RESOLVED request → conflict, literal message', async () => {
+    const { ctx } = build(
+      { 'maintenance_requests.select': { data: { ...RESOLVE_HEADER, resolved_at: '2026-01-01T00:00:00Z' }, error: null } },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is already resolved.',
+    });
+  });
+
+  it('C2 PHANTOM-SUCCESS GUARD: a zero-row guarded update throws conflict instead of a phantom success — audit NOT written', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: null, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request changed state and can no longer be resolved this way. Reload and try again.',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('resolverName falls back to "Unknown" when no profile row exists (mirrors create()\'s identity-snapshot fallback chain)', async () => {
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: null, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
+    expect(patch.resolved_by_name_snapshot).toBe('Unknown');
+  });
+
+  it('notify emit: event "resolved" targeting the requester, fired AFTER the audit write', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(1);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'resolved',
+        requestId: 'r1',
+        targetUserId: 'other-user',
+      }),
+    );
+    // Fire-and-forget AFTER the audit write (T21 structural precedent).
+    expect(vi.mocked(audit).mock.invocationCallOrder[0]!).toBeLessThan(
+      notifyMaintenanceEventMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('SELF-RESOLVE SUPPRESSION: requester === resolver → NO notification', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: { ...RESOLVE_HEADER, requester_user_id: 'user-test' }, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) }, // default ctx.userId is 'user-test'
+    );
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('SUPPRESSION: requester_user_id is null → NO notification (nobody to notify)', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: { ...RESOLVE_HEADER, requester_user_id: null }, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    vi.mocked(notifyMaintenanceEventMock).mockClear();
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(notifyMaintenanceEventMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('email hook: maybeSendMaintenanceResolvedEmail called ONCE with the request id, AFTER the update+audit; its rejection does not reject resolve() (fire-and-forget .catch)', async () => {
+    maybeSendMaintenanceResolvedEmailMock.mockRejectedValueOnce(new Error('resend down'));
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).resolves.toBeUndefined();
+
+    expect(maybeSendMaintenanceResolvedEmailMock).toHaveBeenCalledTimes(1);
+    const call = maybeSendMaintenanceResolvedEmailMock.mock.calls[0]!;
+    expect(call[1]).toBe('r1');
+    expect(vi.mocked(audit).mock.invocationCallOrder[0]!).toBeLessThan(
+      maybeSendMaintenanceResolvedEmailMock.mock.invocationCallOrder[0]!,
+    );
+
+    // Let the fire-and-forget .catch settle before the test ends — proves
+    // resolve() itself never rejects even though the email hook did.
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('M3 fix wave: a throwing createAdminClient() (e.g. unset SUPABASE_SERVICE_ROLE_KEY, the 2026-07-21 outage class) never escapes resolve() or orphans the fire-and-forget dispatch — the resolution still commits, reportError is called, and maybeSendMaintenanceResolvedEmail is never even reached', async () => {
+    createAdminClientMock.mockImplementationOnce(() => {
+      throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
+    });
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).resolves.toBeUndefined();
+    // The resolution itself committed and audited before this throw — proven
+    // by the existing happy-path test's own update/audit assertions; here we
+    // only need the dispatch-boundary behavior.
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'maintenance_request.resolved' }),
+      ctx,
+    );
+    // The client construction threw BEFORE maybeSendMaintenanceResolvedEmail
+    // was ever called — the old eager-argument shape would have thrown at
+    // the exact same point, but OUTSIDE any try/catch, escaping resolve().
+    expect(maybeSendMaintenanceResolvedEmailMock).not.toHaveBeenCalled();
+
+    // Let the fire-and-forget async boundary settle before asserting on it.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'maintenance_resolved.email', extra: { requestId: 'r1' } }),
+    );
+  });
+
+  it('ensureActiveLink is called only when photoCount > 0 AND the org setting allows', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 2 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(ensureActiveLinkMock).toHaveBeenCalledTimes(1);
+    expect(ensureActiveLinkMock).toHaveBeenCalledWith('r1');
+  });
+
+  it('ensureActiveLink is NOT called when photoCount is 0', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(ensureActiveLinkMock).not.toHaveBeenCalled();
+  });
+
+  it('ensureActiveLink is NOT called when the org setting disallows share links, even with photos', async () => {
+    maintenanceShareLinksEnabledMock.mockResolvedValueOnce(false);
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 2 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(ensureActiveLinkMock).not.toHaveBeenCalled();
+  });
+
+  it('a ServiceError from ensureActiveLink degrades silently — resolve() still succeeds', async () => {
+    ensureActiveLinkMock.mockRejectedValueOnce(new ServiceError('forbidden', 'no'));
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 2 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT)).resolves.toBeUndefined();
   });
 });
 
@@ -1483,6 +1974,22 @@ describe('recordDraftOpened', () => {
     expect(res.openCount).toBe(1);
     const patch = stub.chainArgs.get('maintenance_requests.update')![0]![0] as Record<string, unknown>;
     expect(patch.status).toBe('archived');
+  });
+
+  it('Maintenance Resolved: the requester cannot record a draft-open on their OWN resolved request (closed-state guard widened to resolvedAt)', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, resolved_at: '2026-08-05T00:00:00Z', status: 'resolved' },
+          error: null,
+        },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).recordDraftOpened('r1')).rejects.toMatchObject({
+      code: 'conflict',
+    });
   });
 
   it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of returning an openCount that was never persisted', async () => {

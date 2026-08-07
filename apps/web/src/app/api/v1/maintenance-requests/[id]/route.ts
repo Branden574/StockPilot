@@ -5,38 +5,13 @@ import { can } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
-import { serviceErrorStatus, ServiceError, type ServiceContext } from '@/server/services/context';
+import { serviceErrorStatus, ServiceError } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
-import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
+import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-/**
- * Whether this org wants a share link folded into the compose email. New
- * setting (Task 11) — `organization_modules.settings` is an unconstrained
- * jsonb blob (0144), so an absent key or a missing row both mean "never
- * configured" and default ON, matching every other module settings reader
- * in this codebase (packages/core/src/b2b/pricing-mode.ts's own precedent).
- * A plain read, not a permission check — the real authorization for MINTING
- * a link still lives entirely in MaintenanceShareLinksService.ensureActiveLink
- * (requester+submit, or manage); this only decides whether the route even
- * asks.
- */
-async function shareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
-  const { data } = await ctx.supabase
-    .from('organization_modules')
-    .select('settings')
-    .eq('organization_id', ctx.organizationId)
-    .eq('module_id', 'maintenance_requests')
-    .maybeSingle();
-  const settings = (data as { settings?: unknown } | null)?.settings as
-    | { includeShareLinksInEmail?: boolean }
-    | null
-    | undefined;
-  return settings?.includeShareLinksInEmail !== false;
-}
 
 /**
  * Request detail for the mobile app and any REST consumer — the Bearer
@@ -75,7 +50,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const photos = await new MaintenanceAttachmentsService(ctx).signedViewUrls(id);
 
     let shareUrl: string | null = null;
-    if (request.photoCount > 0 && (await shareLinksEnabled(ctx))) {
+    if (request.photoCount > 0 && (await maintenanceShareLinksEnabled(ctx))) {
       try {
         shareUrl = (await new MaintenanceShareLinksService(ctx).ensureActiveLink(id)).url;
       } catch (shareErr) {

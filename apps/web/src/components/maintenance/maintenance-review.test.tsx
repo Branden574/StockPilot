@@ -50,6 +50,9 @@ const DETAIL: MaintenanceRequestDetail = {
   outlookDraftOpenCount: 0,
   archivedAt: null,
   cancelledAt: null,
+  resolvedAt: null,
+  resolvedByName: null,
+  resolutionNote: null,
   updatedAt: '2026-08-05T16:15:00Z',
 };
 

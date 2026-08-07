@@ -5,6 +5,7 @@ import {
   formatMaintenanceRequestNumber,
   formatOrderNumber,
   maintenanceRequestFormSchema,
+  maintenanceResolveSchema,
   parseMaintenanceRequestNumber,
   uuidSchema,
   type MaintenanceEmailInput,
@@ -12,6 +13,7 @@ import {
   type MaintenanceStatus,
 } from '@stockpilot/core';
 
+import { maybeSendMaintenanceResolvedEmail } from '@/server/email/maintenance-resolved';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
@@ -19,6 +21,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import { maintenanceShareLinksEnabled, MaintenanceShareLinksService } from './maintenance-share-links';
 import { notifyMaintenanceEvent } from './maintenance-notify';
 
 /**
@@ -107,6 +110,13 @@ export interface MaintenanceRequestDetail extends MaintenanceRequestListRow {
   outlookDraftOpenCount: number;
   archivedAt: string | null;
   cancelledAt: string | null;
+  /** Maintenance Resolved (spec §1.1): StockPilot-local close-out record.
+   *  resolvedByName is the RESOLVER's display-name snapshot (the same
+   *  requester_name_snapshot pattern, taken at write time from the
+   *  authenticated profile) — never a live join back to user_profiles. */
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  resolutionNote: string | null;
   updatedAt: string;
 }
 
@@ -519,6 +529,9 @@ export class MaintenanceRequestsService {
       outlookDraftOpenCount: (row.outlook_draft_open_count as number) ?? 0,
       archivedAt: (row.archived_at as string | null) ?? null,
       cancelledAt: (row.cancelled_at as string | null) ?? null,
+      resolvedAt: (row.resolved_at as string | null) ?? null,
+      resolvedByName: (row.resolved_by_name_snapshot as string | null) ?? null,
+      resolutionNote: (row.resolution_note as string | null) ?? null,
       updatedAt: row.updated_at as string,
     };
   }
@@ -529,7 +542,11 @@ export class MaintenanceRequestsService {
     const isManager = can(this.ctx, 'maintenance_requests:manage');
     const isRequester = detail.requesterUserId === this.ctx.userId;
     if (!isManager && !isRequester) throw new ServiceError('forbidden', 'Not your request.');
-    if (!isManager && (detail.archivedAt || detail.cancelledAt)) {
+    // Maintenance Resolved: resolved joins archived/cancelled as a CLOSED
+    // state for the requester's own-row edit path — manage still bypasses
+    // this entirely (a manage-holder may still edit a resolved request's
+    // metadata, same as an archived one today).
+    if (!isManager && (detail.archivedAt || detail.cancelledAt || detail.resolvedAt)) {
       throw new ServiceError('conflict', 'This request is closed and can no longer be edited.');
     }
 
@@ -611,28 +628,39 @@ export class MaintenanceRequestsService {
 
   /** manage-only. Sets status + archived_at TOGETHER, in one write — the DB
    *  has no lockstep trigger by design (plan C1), so this service owns
-   *  keeping the two consistent on every transition. */
+   *  keeping the two consistent on every transition.
+   *
+   *  Maintenance Resolved (owner decision D1 — a deliberate REVERSAL of the
+   *  prior M1 fix): archive() now ACCEPTS both a cancelled row and a
+   *  resolved row. Archive is a re-bucket ("get this off my active list"),
+   *  not a second closed-state — a cancelled or resolved request is still
+   *  perfectly nameable history, and hiding it from the active view is a
+   *  legitimate housekeeping action a manage-holder should be able to take
+   *  without StockPilot refusing. GC 12 (history is sacred, D4): this write
+   *  NEVER includes resolved_at/resolved_by/resolved_by_name_snapshot/
+   *  resolution_note/cancelled_at in its update object — archiving must
+   *  never overwrite or clear any of those columns, only add archived_at on
+   *  top of whatever closed state (if any) already exists. */
   async archive(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
     assertPermission(this.ctx, 'maintenance_requests:manage');
 
-    // M1: refuse archiving an already-CANCELLED request rather than
-    // silently ending up with BOTH archived_at and cancelled_at set on the
-    // same row — two closed-state timestamps on one request is a history
-    // nothing downstream can make sense of. Narrow pre-read (status column
-    // only), same shape as cycle-counts.ts's assign() header check —
-    // archive() had NO existence check at all before this fix, so a
-    // missing row here is genuinely not_found, not a race.
+    // Refuse only an ALREADY-archived request — re-archiving is the one
+    // state transition that makes no sense (there is nothing left to
+    // re-bucket). Narrow pre-read (status column only), same shape as
+    // cycle-counts.ts's assign() header check — archive() had NO existence
+    // check at all before the original fix, so a missing row here is
+    // genuinely not_found, not a race.
     const { data: header, error: hErr } = await this.db
       .from('maintenance_requests')
-      .select('cancelled_at')
+      .select('archived_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Maintenance request not found.');
-    if ((header as { cancelled_at: string | null }).cancelled_at) {
-      throw new ServiceError('conflict', 'This request is cancelled and cannot be archived.');
+    if ((header as { archived_at: string | null }).archived_at) {
+      throw new ServiceError('conflict', 'This request is already archived.');
     }
 
     const now = new Date().toISOString();
@@ -667,6 +695,14 @@ export class MaintenanceRequestsService {
       throw new ServiceError('forbidden', 'Not your request.');
     }
     if (detail.archivedAt) throw new ServiceError('conflict', 'This request is archived.');
+    // Maintenance Resolved: a resolved request is closed the SAME way an
+    // archived one is — cancel() means "never mind, this is no longer
+    // relevant," which does not apply to a request the team has already
+    // recorded as fixed. Unlike archive() (D1), there is no reversal here:
+    // cancel refuses resolved for BOTH the requester and manage paths.
+    if (detail.resolvedAt) {
+      throw new ServiceError('conflict', 'This request is resolved and can no longer be cancelled.');
+    }
     const now = new Date().toISOString();
     const { data, error } = await this.db
       .from('maintenance_requests')
@@ -687,6 +723,167 @@ export class MaintenanceRequestsService {
       );
     }
     await audit({ event: 'maintenance_request.cancelled', entityType: 'maintenance_request', entityId: id }, this.ctx);
+  }
+
+  /** manage-only close-out (owner decision D1/D2). Records a StockPilot-local
+   *  resolution: status + resolved_at + resolved_by + name snapshot + the
+   *  note, in ONE guarded write. Proof photos are uploaded by the dialog
+   *  BEFORE this call (kind='resolution', request still open) — this method
+   *  never touches Storage. Requester notification (both channels) fires
+   *  fire-and-forget AFTER the audit write; the email is at-most-once via
+   *  resolution_email_sent_at (server/email/maintenance-resolved.ts). */
+  async resolve(id: string, input: unknown): Promise<void> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+    assertPermission(this.ctx, 'maintenance_requests:manage');
+
+    const parsed = maintenanceResolveSchema.safeParse(input);
+    if (!parsed.success) {
+      throw new ServiceError('validation_error', parsed.error.issues[0]?.message ?? 'Please check the resolution note.');
+    }
+    const note = parsed.data.note;
+
+    const { data: header, error: hErr } = await this.db
+      .from('maintenance_requests')
+      .select('archived_at, cancelled_at, resolved_at, requester_user_id, request_number, created_at, subject')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Maintenance request not found.');
+    const h = header as {
+      archived_at: string | null;
+      cancelled_at: string | null;
+      resolved_at: string | null;
+      requester_user_id: string | null;
+      request_number: number | null;
+      created_at: string | null;
+      subject: string | null;
+    };
+    if (h.archived_at) throw new ServiceError('conflict', 'This request is archived and can no longer be resolved.');
+    if (h.cancelled_at) throw new ServiceError('conflict', 'This request is cancelled and can no longer be resolved.');
+    if (h.resolved_at) throw new ServiceError('conflict', 'This request is already resolved.');
+
+    // Resolver display-name snapshot — the create() identity-snapshot pattern:
+    // the authenticated profile, never client input.
+    const { data: profile } = await this.db
+      .from('user_profiles')
+      .select('full_name, email')
+      .eq('id', this.ctx.userId)
+      .maybeSingle();
+    const resolverName = (
+      (profile?.full_name as string | null | undefined)?.trim() ||
+      (profile?.email as string | null | undefined) ||
+      'Unknown'
+    ).slice(0, 200);
+
+    const { count: proofCount } = await this.db
+      .from('maintenance_request_attachments')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('maintenance_request_id', id)
+      .eq('kind', 'resolution');
+
+    const now = new Date().toISOString();
+    const { data, error } = await this.db
+      .from('maintenance_requests')
+      .update({
+        status: 'resolved',
+        resolved_at: now,
+        resolved_by: this.ctx.userId,
+        resolved_by_name_snapshot: resolverName,
+        resolution_note: note,
+        updated_at: now,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .is('resolved_at', null)
+      .is('archived_at', null)
+      .is('cancelled_at', null)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // C2: the pre-read above already confirmed the row exists and was open —
+    // a zero-row result here means it changed state between that read and
+    // this write. Conflict, not not_found: fail CLOSED, no phantom audit.
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This request changed state and can no longer be resolved this way. Reload and try again.',
+      );
+    }
+
+    await audit(
+      {
+        event: 'maintenance_request.resolved',
+        entityType: 'maintenance_request',
+        entityId: id,
+        // NEVER the note text (GC 16/27 posture) — only whether one exists
+        // and how many resolution-kind photos back it up.
+        extra: { has_note: true, proof_photo_count: proofCount ?? 0 },
+      },
+      this.ctx,
+    );
+
+    const handle =
+      formatMaintenanceRequestNumber(h.request_number, h.created_at) ?? `MR-${id.slice(0, 8)}`;
+
+    // Channel (a): in-app/push — suppressed for self-resolve (a manage-
+    // holder resolving their OWN submitted request), pref-gated fail-open
+    // inside notifyMaintenanceEvent.
+    if (h.requester_user_id && h.requester_user_id !== this.ctx.userId) {
+      this.emitNotify({
+        organizationId: this.ctx.organizationId,
+        event: 'resolved',
+        requestId: id,
+        requestHandle: handle,
+        subject: h.subject ?? '',
+        actorUserId: this.ctx.userId,
+        targetUserId: h.requester_user_id,
+      });
+    }
+
+    // Share link for the email's proof-photo proxy URLs — same conditions as
+    // the detail page (photos of ANY kind + org setting), manage always
+    // eligible; a ServiceError from it degrades to "no link" rather than
+    // failing this already-committed resolution (the email falls back to
+    // its in-app line).
+    try {
+      const { count: anyPhotos } = await this.db
+        .from('maintenance_request_attachments')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('maintenance_request_id', id);
+      if ((anyPhotos ?? 0) > 0 && (await maintenanceShareLinksEnabled(this.ctx))) {
+        await new MaintenanceShareLinksService(this.ctx).ensureActiveLink(id);
+      }
+    } catch (e) {
+      if (!(e instanceof ServiceError)) throw e;
+    }
+
+    // Channel (b): the at-most-once email. Fire-and-forget; the stamp column
+    // (server/email/maintenance-resolved.ts) makes replays safe regardless
+    // of what happens to this promise. M3 fix wave: createAdminClient() is
+    // constructed INSIDE this async boundary, not passed as a bare argument
+    // — the old shape evaluated it EAGERLY, before any .catch() was even
+    // attached, so a throw there (unset SUPABASE_SERVICE_ROLE_KEY — the
+    // documented 2026-07-21 outage class) would escape resolve() entirely:
+    // the resolution had already committed and audited above, but the
+    // caller saw an unhandled exception, the resolution_email_sent_at stamp
+    // was never claimed, and a retry then 409s (resolved_at is already set)
+    // with no path to resend. Wrapping construction in the SAME try/catch as
+    // the send makes that throw just another best-effort failure, exactly
+    // like a send_failed from inside maybeSendMaintenanceResolvedEmail
+    // itself.
+    void (async () => {
+      try {
+        await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, { appUrl: APP_URL });
+      } catch (err) {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'maintenance_resolved.email',
+          extra: { requestId: id },
+        });
+      }
+    })();
   }
 
   /** manage-only. "Local owner" is a StockPilot coordinator, never a
@@ -857,9 +1054,10 @@ export class MaintenanceRequestsService {
     }
     // C1: closed-state guard mirroring RLS's `using` clause — the
     // requester's own write path there requires archived_at IS NULL AND
-    // cancelled_at IS NULL; manage/manager bypasses it entirely, same as
-    // update()'s identical guard.
-    if (!isManager && (detail.archivedAt || detail.cancelledAt)) {
+    // cancelled_at IS NULL AND (Maintenance Resolved) resolved_at IS NULL;
+    // manage/manager bypasses it entirely, same as update()'s identical
+    // guard.
+    if (!isManager && (detail.archivedAt || detail.cancelledAt || detail.resolvedAt)) {
       throw new ServiceError('conflict', 'This request is closed and can no longer be edited.');
     }
 

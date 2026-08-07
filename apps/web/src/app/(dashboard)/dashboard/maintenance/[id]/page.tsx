@@ -13,64 +13,15 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { Badge } from '@/components/ui/badge';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatRelative } from '@/lib/utils';
-import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
+import { fetchAcceptedMembers } from '@/server/lib/maintenance-members';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
-import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
+import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
 
 import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detail-client';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Whether this org wants a share link folded into the compose email — the
- * exact same org-setting read as the mobile REST parity route
- * (api/v1/maintenance-requests/[id]/route.ts's own `shareLinksEnabled`).
- * Kept as a second, page-local copy rather than a shared export: both call
- * sites are small, self-contained reads with no other coupling, and each
- * page/route owns its own request shape already. See that route's doc
- * comment for the full default-ON rationale.
- */
-async function shareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
-  const { data } = await ctx.supabase
-    .from('organization_modules')
-    .select('settings')
-    .eq('organization_id', ctx.organizationId)
-    .eq('module_id', 'maintenance_requests')
-    .maybeSingle();
-  const settings = (data as { settings?: unknown } | null)?.settings as
-    | { includeShareLinksInEmail?: boolean }
-    | null
-    | undefined;
-  return settings?.includeShareLinksInEmail !== false;
-}
-
-/** organization_members embedding user_profiles!user_id, filtered to
- *  accepted members — same query cycle-counts/new/page.tsx:36-57 uses for
- *  its own assignee picker. Backs BOTH the owner picker and note-author
- *  name resolution, since only a manage-holder ever sees either. */
-async function fetchAcceptedMembers(ctx: ServiceContext): Promise<MaintenanceOwnerOption[]> {
-  const { data: rawMembers } = await ctx.supabase
-    .from('organization_members')
-    .select('user_id, user:user_profiles!user_id (id, full_name, email)')
-    .eq('organization_id', ctx.organizationId)
-    .not('accepted_at', 'is', null);
-  type MemberRow = {
-    user_id: string;
-    user:
-      | { id: string; full_name: string | null; email: string }
-      | { id: string; full_name: string | null; email: string }[]
-      | null;
-  };
-  return ((rawMembers ?? []) as MemberRow[])
-    .map((row) => {
-      const u = Array.isArray(row.user) ? row.user[0] : row.user;
-      if (!u) return null;
-      return { userId: u.id, name: u.full_name ?? u.email };
-    })
-    .filter((m): m is MaintenanceOwnerOption => Boolean(m))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
 
 function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
   const v = typeof value === 'string' ? value.trim() : '';
@@ -123,9 +74,22 @@ export default async function MaintenanceRequestDetailPage({
 
   const canManage = can(ctx, 'maintenance_requests:manage');
   const isOwningRequester = detail.requesterUserId === ctx.userId;
-  const closed = Boolean(detail.archivedAt || detail.cancelledAt);
+  // Maintenance Resolved (spec §1.3): a resolved request is closed the same
+  // way an archived/cancelled one is — widened here, the ONE place `closed`
+  // is computed, so every gate below (photos edit, Resolve/Archive/Cancel
+  // visibility) picks it up automatically.
+  const closed = Boolean(detail.archivedAt || detail.cancelledAt || detail.resolvedAt);
 
   const photos = await new MaintenanceAttachmentsService(ctx).signedViewUrls(id);
+  // Proof-photo kind split (spec §4.1). `kind` is a NOT NULL column
+  // defaulting to 'requester' at the DB (migration 0317), so the `??` here
+  // is defensive only — real rows always carry a kind. The requester card
+  // keeps its shipped identity/behavior (editable pre-close via
+  // MaintenancePhotosPanelClient); the resolution card is new and always
+  // read-only, since resolution photos only ever exist on a request that is
+  // resolved or about to be (spec §12.5's pre-flip staging).
+  const requesterPhotos = photos.filter((p) => (p.kind ?? 'requester') === 'requester');
+  const resolutionPhotos = photos.filter((p) => p.kind === 'resolution');
 
   // Share-link mint: mirrors the mobile REST route's GET handler exactly.
   // ensureActiveLink()'s bar (manage, OR the owning requester holding
@@ -135,7 +99,7 @@ export default async function MaintenanceRequestDetailPage({
   // attempt degrades to shareLink: null; a non-ServiceError (a real bug)
   // still propagates to the error boundary, same as the route.
   let shareLink: MaintenanceShareLinkInfo | null = null;
-  if (photos.length > 0 && (await shareLinksEnabled(ctx))) {
+  if (photos.length > 0 && (await maintenanceShareLinksEnabled(ctx))) {
     try {
       shareLink = await new MaintenanceShareLinksService(ctx).ensureActiveLink(id);
     } catch (shareErr) {
@@ -219,8 +183,11 @@ export default async function MaintenanceRequestDetailPage({
           </div>
           <MaintenanceRequestActions
             requestId={detail.id}
-            showArchive={canManage && !closed}
+            requesterName={detail.requesterName}
+            showResolve={canManage && !closed}
+            showArchive={canManage && !detail.archivedAt}
             showCancel={isOwningRequester && !closed}
+            resolutionPhotos={resolutionPhotos}
           />
         </div>
       </div>
@@ -232,14 +199,24 @@ export default async function MaintenanceRequestDetailPage({
             <p className="mt-2 whitespace-pre-wrap text-sm">{detail.description}</p>
           </section>
 
+          {detail.resolvedAt ? (
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="text-sm font-medium">Resolution</h2>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{detail.resolutionNote}</p>
+              <p className="text-muted-foreground mt-2 text-xs">
+                Marked resolved by {detail.resolvedByName} · {formatRelative(detail.resolvedAt)}
+              </p>
+            </section>
+          ) : null}
+
           <section className="bg-card rounded-xl border p-4">
-            <h2 className="mb-3 text-sm font-medium">Photos ({photos.length})</h2>
+            <h2 className="mb-3 text-sm font-medium">Photos ({requesterPhotos.length})</h2>
             {closed ? (
-              photos.length === 0 ? (
+              requesterPhotos.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No photos were added to this request.</p>
               ) : (
                 <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                  {photos.map((p) => (
+                  {requesterPhotos.map((p) => (
                     <li key={p.id}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -252,7 +229,7 @@ export default async function MaintenanceRequestDetailPage({
                 </ul>
               )
             ) : (
-              <MaintenancePhotosPanelClient requestId={detail.id} photos={photos} />
+              <MaintenancePhotosPanelClient requestId={detail.id} photos={requesterPhotos} />
             )}
             {closed ? (
               <p className="text-muted-foreground mt-2 text-xs">
@@ -261,13 +238,48 @@ export default async function MaintenanceRequestDetailPage({
             ) : null}
           </section>
 
+          {resolutionPhotos.length > 0 ? (
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="mb-3 text-sm font-medium">Resolution proof ({resolutionPhotos.length})</h2>
+              <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                {resolutionPhotos.map((p) => (
+                  <li key={p.id}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={p.thumbUrl ?? p.url}
+                      alt={p.originalFilename}
+                      className="h-24 w-full rounded-lg border object-cover"
+                    />
+                  </li>
+                ))}
+              </ul>
+              <p className="text-muted-foreground mt-2 text-xs">
+                {/* Fix wave (Important 1): this card intentionally renders
+                    STRAY kind='resolution' rows even on a still-open request
+                    (a manager staged proof photos then cancelled the Resolve
+                    dialog — spec §12.5's pre-flip staging is designed,
+                    disclosed behavior, not a bug). Hiding those rows from
+                    the requester would be worse than showing them, but the
+                    caption must never claim resolution happened when it
+                    hasn't — so the claim itself is gated on the ONE fact
+                    that actually means "resolved", `detail.resolvedAt`,
+                    never on `resolutionPhotos.length > 0` (spec §11
+                    Vocabulary: "marked resolved" is only true of a real
+                    StockPilot record). */}
+                {detail.resolvedAt
+                  ? 'Added by the team when this request was marked resolved.'
+                  : 'Staged by the team while preparing to mark this request resolved.'}
+              </p>
+            </section>
+          ) : null}
+
           <section className="bg-card rounded-xl border p-4">
             <h2 className="mb-3 text-sm font-medium">Email</h2>
             <MaintenanceEmailAction
               requestId={detail.id}
               emailInput={emailInput}
               initialOpenCount={detail.outlookDraftOpenCount}
-              photoDownloads={photos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
+              photoDownloads={requesterPhotos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
             />
           </section>
         </div>
@@ -385,6 +397,14 @@ export default async function MaintenanceRequestDetailPage({
                   <dt>Local owner assigned</dt>
                   <dd className="text-muted-foreground text-right tabular-nums">
                     {ownerAssignedAt ? formatRelative(ownerAssignedAt) : '—'}
+                  </dd>
+                </div>
+              ) : null}
+              {detail.resolvedAt ? (
+                <div className="flex justify-between gap-3">
+                  <dt>Marked resolved</dt>
+                  <dd className="text-muted-foreground text-right tabular-nums">
+                    {formatRelative(detail.resolvedAt)}
                   </dd>
                 </div>
               ) : null}

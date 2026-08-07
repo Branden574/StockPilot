@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -62,7 +62,15 @@ const signedViewUrls = vi.fn();
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
 
 const ensureActiveLink = vi.fn();
-vi.mock('@/server/services/maintenance-share-links', () => ({ MaintenanceShareLinksService: vi.fn() }));
+// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+// maintenanceShareLinksEnabled stays the REAL implementation, which reads
+// `ctx.supabase`'s own 'organization_modules.select' canning, the exact
+// org-setting read this page used to duplicate locally before Task 4 lifted
+// it into this shared module.
+vi.mock('@/server/services/maintenance-share-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/services/maintenance-share-links')>();
+  return { ...actual, MaintenanceShareLinksService: vi.fn() };
+});
 
 // Every server action any nested client component might call — none of
 // these fire on a plain render, but importing the REAL module would pull in
@@ -125,6 +133,12 @@ function detailFixture(overrides: Record<string, unknown> = {}) {
     outlookDraftOpenCount: 0,
     archivedAt: null,
     cancelledAt: null,
+    // Maintenance Resolved (spec §1.1) detail fields — real, non-optional
+    // members of MaintenanceRequestDetail (server/services/maintenance-
+    // requests.ts) as of Task 4.
+    resolvedAt: null,
+    resolvedByName: null,
+    resolutionNote: null,
     updatedAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   };
@@ -577,5 +591,349 @@ describe('archive/cancel affordance gating', () => {
     render(await MaintenanceRequestDetailPage(args()));
     expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+  });
+});
+
+// Maintenance Resolved (Task 7 Step 1 test 9) — the full gating matrix from
+// the brief. `closed` on the page now widens to include `resolvedAt`;
+// `showArchive` narrows to `!detail.archivedAt` only (D1 re-bucket — Archive
+// stays available on resolved AND cancelled rows).
+describe('Maintenance Resolved — button-visibility matrix (Task 7 Step 1 test 9)', () => {
+  it('resolved + manage: Archive visible, Resolve absent, Cancel absent (D1 re-bucket)', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Fixed it.',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+  });
+
+  it('open + manage (not the owning requester): Resolve + Archive show, no Cancel', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+  });
+
+  it('open + manage-holder who is ALSO the owning requester: Resolve + Archive + Cancel all show (the matrix\'s "unless owner")', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({
+        userId: 'u-1',
+        permissions: ['maintenance_requests:manage', 'maintenance_requests:submit'],
+      }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'u-1' }));
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel request' })).toBeInTheDocument();
+  });
+
+  it('open + owning-requester with no manage: Cancel only', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'u-1' }));
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: 'Cancel request' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+  });
+
+  it('cancelled + manage: Archive visible (D1 re-bucket), Resolve absent', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'cancelled',
+        cancelledAt: '2026-08-05T00:00:00.000Z',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+  });
+
+  // Fix wave (Minor 3): the matrix above never covered a resolved/cancelled
+  // request viewed by its OWNING requester who holds no manage permission —
+  // `closed` hides Cancel, and `canManage` being false hides both Resolve
+  // and Archive regardless of `closed`, so all three must be absent.
+  it('resolved + owning-requester WITHOUT manage: Cancel, Resolve, and Archive are all hidden', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'u-1',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Fixed it.',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    // MUTATION GUARD (c): showing Cancel on a resolved row fails this.
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+  });
+
+  it('cancelled + owning-requester WITHOUT manage: Cancel, Resolve, and Archive are all hidden', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'u-1',
+        status: 'cancelled',
+        cancelledAt: '2026-08-05T00:00:00.000Z',
+      }),
+    );
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByRole('button', { name: 'Cancel request' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Maintenance Resolved — resolution surfaces on the detail page (Task 7 Step 1 test 8)', () => {
+  it('renders the Resolution card verbatim (multi-line preserved), the resolver-name line, the "Marked resolved" timeline row, and splits photos by kind (counts pinned)', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Replaced the leaking\nroof tile.',
+      }),
+    );
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'req-1',
+        originalFilename: 'before.jpg',
+        url: 'https://signed/before.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'requester',
+      },
+      {
+        id: 'req-2',
+        originalFilename: 'before2.jpg',
+        url: 'https://signed/before2.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'requester',
+      },
+      {
+        id: 'proof-1',
+        originalFilename: 'after.jpg',
+        url: 'https://signed/after.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+
+    // Note VERBATIM — a raw textContent comparison (not RTL's normalized
+    // string matcher, which collapses whitespace and would mask a mutation
+    // that strips the embedded newline) proves the newline itself survives,
+    // and the `whitespace-pre-wrap` class proves it is rendered, not hidden.
+    const noteEl = screen.getByText((_content, el) => el?.textContent === 'Replaced the leaking\nroof tile.');
+    expect(noteEl).toBeInTheDocument();
+    expect(noteEl).toHaveClass('whitespace-pre-wrap');
+    expect(screen.getByText(/Marked resolved by Dana Keeler/)).toBeInTheDocument();
+
+    // Timeline row.
+    expect(screen.getByText('Marked resolved')).toBeInTheDocument();
+
+    // Counts pinned: the requester card excludes the resolution-kind photo,
+    // and the resolution proof card lists it exclusively.
+    expect(screen.getByText('Photos (2)')).toBeInTheDocument();
+    expect(screen.getByText('Resolution proof (1)')).toBeInTheDocument();
+    expect(screen.getByText('Added by the team when this request was marked resolved.')).toBeInTheDocument();
+    expect(screen.getByAltText('after.jpg')).toBeInTheDocument();
+
+    const photosSection = screen.getByText('Photos (2)').closest('section');
+    expect(photosSection).not.toBeNull();
+    expect(within(photosSection as HTMLElement).queryByAltText('after.jpg')).not.toBeInTheDocument();
+    expect(within(photosSection as HTMLElement).getByAltText('before.jpg')).toBeInTheDocument();
+    expect(within(photosSection as HTMLElement).getByAltText('before2.jpg')).toBeInTheDocument();
+  });
+
+  it('an open (never-resolved) request renders neither the Resolution card nor the Resolution proof section', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'req-1',
+        originalFilename: 'before.jpg',
+        url: 'https://signed/before.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'requester',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByText('Resolution')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Resolution proof/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Marked resolved')).not.toBeInTheDocument();
+  });
+});
+
+// Fix wave (Important 1): the "Resolution proof" card intentionally renders
+// STRAY kind='resolution' rows even on a still-open request (a manager
+// staged proof photos in the Resolve dialog, then cancelled out — spec
+// §12.5's pre-flip staging, designed/disclosed behavior). Hiding those rows
+// from the requester would be worse than showing them, but the caption must
+// never claim resolution happened when `detail.resolvedAt` says it hasn't.
+describe('Fix wave 1 — resolution-proof caption honesty (Important 1)', () => {
+  it('stray resolution photos on a still-open (never-resolved) request render the STAGED caption, never the resolved-claim one', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    // resolvedAt stays null (detailFixture's default) — this is the
+    // cancelled-Resolve-dialog scenario, not a resolved request.
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId: 'someone-else' }));
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'proof-1',
+        originalFilename: 'staged.jpg',
+        url: 'https://signed/staged.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByText('Resolution proof (1)')).toBeInTheDocument();
+    expect(
+      screen.getByText('Staged by the team while preparing to mark this request resolved.'),
+    ).toBeInTheDocument();
+    // MUTATION GUARD (a): making the caption unconditional again (the
+    // resolved-state sentence rendering regardless of detail.resolvedAt)
+    // fails this — the false completion claim must never appear here.
+    expect(
+      screen.queryByText('Added by the team when this request was marked resolved.'),
+    ).not.toBeInTheDocument();
+
+    // Extends the §GC-4 forbidden-vocabulary sweep discipline (Task 7 Step 1
+    // test 10, below) to this new copy path: on an unresolved page, the
+    // resolved-state caption itself joins the banned-phrase list, alongside
+    // the Zendesk vocabulary that surface already sweeps for.
+    const FORBIDDEN_ON_UNRESOLVED = [
+      'Added by the team when this request was marked resolved.',
+      'Ticket resolved',
+      'Zendesk ticket resolved',
+      'Issue verified fixed',
+    ];
+    for (const banned of FORBIDDEN_ON_UNRESOLVED) {
+      expect(document.body.textContent).not.toContain(banned);
+    }
+  });
+
+  it('a resolved request with proof photos renders the RESOLVED caption, never the staged one', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Fixed it.',
+      }),
+    );
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'proof-1',
+        originalFilename: 'after.jpg',
+        url: 'https://signed/after.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.getByText('Added by the team when this request was marked resolved.')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Staged by the team while preparing to mark this request resolved.'),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolved-state page (Task 7 Step 1 test 10)', () => {
+  const FORBIDDEN = [
+    'Ticket created',
+    'Request submitted to Zendesk',
+    'DC4 notified',
+    'Andrew notified',
+    'Ticket assigned',
+    'Email sent',
+    'Zendesk comment',
+    'Ticket closed',
+    'Ticket resolved',
+    'Zendesk ticket closed',
+    'Zendesk ticket updated',
+    'Zendesk ticket resolved',
+    'Issue verified fixed',
+  ];
+
+  it('a fully resolved request with proof photos never renders forbidden vocabulary anywhere on the page', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    get.mockResolvedValueOnce(
+      detailFixture({
+        requesterUserId: 'someone-else',
+        status: 'resolved',
+        resolvedAt: '2026-08-05T00:00:00.000Z',
+        resolvedByName: 'Dana Keeler',
+        resolutionNote: 'Replaced the leaking roof tile.',
+      }),
+    );
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'proof-1',
+        originalFilename: 'after.jpg',
+        url: 'https://signed/after.jpg',
+        thumbUrl: null,
+        width: 800,
+        height: 600,
+        kind: 'resolution',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    for (const banned of FORBIDDEN) {
+      expect(document.body.textContent).not.toContain(banned);
+    }
   });
 });

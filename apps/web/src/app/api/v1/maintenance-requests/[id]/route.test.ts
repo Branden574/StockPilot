@@ -15,7 +15,16 @@ import { GET, PATCH } from './route';
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/server/services/maintenance-requests', () => ({ MaintenanceRequestsService: vi.fn() }));
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
-vi.mock('@/server/services/maintenance-share-links', () => ({ MaintenanceShareLinksService: vi.fn() }));
+// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+// maintenanceShareLinksEnabled stays the REAL implementation, which reads
+// `ctx.supabase`'s own 'organization_modules.select' canning (already
+// configured per-test via buildCtx({ settings })), the exact org-setting
+// read this route used to duplicate locally before Task 4 lifted it into
+// this shared module.
+vi.mock('@/server/services/maintenance-share-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/services/maintenance-share-links')>();
+  return { ...actual, MaintenanceShareLinksService: vi.fn() };
+});
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
@@ -58,6 +67,13 @@ const DETAIL = {
   outlookDraftOpenCount: 0,
   archivedAt: null,
   cancelledAt: null,
+  // Maintenance Resolved (spec §1.1) detail fields — real, non-optional
+  // members of MaintenanceRequestDetail (server/services/maintenance-
+  // requests.ts) as of Task 4. A rename/removal here breaks this fixture,
+  // not just an inference — the live mobile client (T18-T20) reads these.
+  resolvedAt: null,
+  resolvedByName: null,
+  resolutionNote: null,
   updatedAt: '2026-08-01T00:00:00.000Z',
 };
 
@@ -126,7 +142,15 @@ beforeEach(() => {
     shareUrl: opts.shareUrl,
   }));
   signedViewUrls.mockResolvedValue([
-    { id: 'a-1', originalFilename: 'leak.jpg', url: 'https://signed/leak.jpg', thumbUrl: 'https://signed/leak-thumb.jpg', width: 800, height: 600 },
+    {
+      id: 'a-1',
+      originalFilename: 'leak.jpg',
+      url: 'https://signed/leak.jpg',
+      thumbUrl: 'https://signed/leak-thumb.jpg',
+      width: 800,
+      height: 600,
+      kind: 'requester',
+    },
   ]);
   ensureActiveLink.mockResolvedValue({ token: 'tok', url: 'https://stockpilotusa.com/m/tok', expiresAt: '2027-01-01T00:00:00.000Z' });
   vi.mocked(MaintenanceRequestsService).mockImplementation(
@@ -169,9 +193,47 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
       thumbUrl: 'https://signed/leak-thumb.jpg',
       width: 800,
       height: 600,
+      kind: 'requester',
     });
     expect(body.emailInput.shareUrl).toBe('https://stockpilotusa.com/m/tok');
     expect(ensureActiveLink).toHaveBeenCalledWith(REQUEST_ID);
+  });
+
+  it('surfaces resolvedAt/resolvedByName/resolutionNote and each photo\'s kind (Maintenance Resolved detail fields, Task 8)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: {} }) as never);
+    get.mockResolvedValueOnce({
+      ...DETAIL,
+      status: 'resolved',
+      resolvedAt: '2026-08-05T18:00:00.000Z',
+      resolvedByName: 'Andrew Rosas',
+      resolutionNote: 'Replaced the shutoff valve and confirmed no further leaking.',
+    });
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'a-2',
+        originalFilename: 'fixed.jpg',
+        url: 'https://signed/fixed.jpg',
+        thumbUrl: null,
+        width: 640,
+        height: 480,
+        kind: 'resolution',
+      },
+    ]);
+    const res = await GET(getReq(), { params: params(REQUEST_ID) });
+    const body = await res.json();
+    expect(body.request.resolvedAt).toBe('2026-08-05T18:00:00.000Z');
+    expect(body.request.resolvedByName).toBe('Andrew Rosas');
+    expect(body.request.resolutionNote).toBe('Replaced the shutoff valve and confirmed no further leaking.');
+    expect(body.photos[0].kind).toBe('resolution');
+  });
+
+  it('defaults resolvedAt/resolvedByName/resolutionNote to null for a non-resolved request', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: {} }) as never);
+    const res = await GET(getReq(), { params: params(REQUEST_ID) });
+    const body = await res.json();
+    expect(body.request.resolvedAt).toBeNull();
+    expect(body.request.resolvedByName).toBeNull();
+    expect(body.request.resolutionNote).toBeNull();
   });
 
   it('omits the share link (shareUrl: null) when the org setting disables it, and never mints one', async () => {

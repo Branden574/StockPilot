@@ -51,6 +51,24 @@ import { notFound } from 'next/navigation';
 
 import MaintenanceSharePage from './page';
 
+// Brief section 20/GC4's forbidden vocabulary, extended with the resolved-
+// specific phrases (spec §11) — this suite now renders resolution copy, so
+// it carries the full sweep, not just the pre-resolved subset.
+const FORBIDDEN = [
+  'Email sent',
+  'Ticket created',
+  'Request submitted to Zendesk',
+  'DC4 notified',
+  'Andrew notified',
+  'Ticket assigned',
+  'Ticket closed',
+  'Ticket resolved',
+  'Zendesk ticket closed',
+  'Zendesk ticket updated',
+  'Zendesk ticket resolved',
+  'Issue verified fixed',
+];
+
 const TOKEN = 'e'.repeat(64);
 const RESOLVED = {
   requestNumber: 'MR-2026-000042',
@@ -58,7 +76,8 @@ const RESOLVED = {
   description: 'Blowing warm air since yesterday afternoon.\nStarted Monday.',
   siteName: 'Fresno DC4',
   createdAt: '2026-08-01T12:00:00Z',
-  photos: [{ filename: 'break-room.jpg' }],
+  photos: [{ filename: 'break-room.jpg', kind: 'requester' as const }],
+  resolution: null as { note: string; resolvedAtDisplay: string } | null,
 };
 
 async function renderPage(token: string) {
@@ -103,7 +122,10 @@ describe('GET /m/[token] (page render)', () => {
     // itself, as a proxy path.
     resolveMaintenanceShareTokenMock.mockResolvedValue({
       ...RESOLVED,
-      photos: [{ filename: 'break-room.jpg' }, { filename: 'hallway.jpg' }],
+      photos: [
+        { filename: 'break-room.jpg', kind: 'requester' as const },
+        { filename: 'hallway.jpg', kind: 'requester' as const },
+      ],
     });
     const { container, getAllByRole } = await renderPage(TOKEN);
 
@@ -211,5 +233,113 @@ describe('GET /m/[token] (page render)', () => {
     resolveMaintenanceShareTokenMock.mockResolvedValue({ ...RESOLVED, siteName: null });
     const { queryByText } = await renderPage(TOKEN);
     expect(queryByText(/^Site:/)).toBeNull();
+  });
+
+  describe('resolution proof section (Maintenance Resolved, task brief test 11/12)', () => {
+    it('renders two labeled sections — Photos (requester) and Resolution proof (resolution) — with each <img> src STILL indexed against the ONE combined list (requester at 0, resolution at 1), never a locally re-numbered index', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        photos: [
+          { filename: 'leak.jpg', kind: 'requester' as const },
+          { filename: 'fixed.jpg', kind: 'resolution' as const },
+        ],
+      });
+      const { getByText, getAllByRole } = await renderPage(TOKEN);
+
+      expect(getByText('Photos (1)')).toBeInTheDocument();
+      expect(getByText('Resolution proof (1)')).toBeInTheDocument();
+
+      const images = getAllByRole('img');
+      expect(images).toHaveLength(2);
+      expect(images[0]!.getAttribute('alt')).toBe('leak.jpg');
+      expect(images[0]!.getAttribute('src')).toBe(`/m/${TOKEN}/photo/0`);
+      // MUTATION GUARD (T3-M3) — the resolution section's own item is at
+      // combined-list index 1; a filtered-array-local index would instead
+      // read `/photo/0` here (both sections would start counting from 0
+      // independently), which this literal pin catches.
+      expect(images[1]!.getAttribute('alt')).toBe('fixed.jpg');
+      expect(images[1]!.getAttribute('src')).toBe(`/m/${TOKEN}/photo/1`);
+    });
+
+    it('omits the Resolution proof section when there are no resolution-kind photos, even though requester photos exist', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        photos: [{ filename: 'leak.jpg', kind: 'requester' as const }],
+      });
+      const { queryByText, getAllByRole } = await renderPage(TOKEN);
+      expect(queryByText(/Resolution proof/)).toBeNull();
+      expect(getAllByRole('img')).toHaveLength(1);
+    });
+
+    it('an unresolved request renders no Resolution block at all', async () => {
+      const { queryByText } = await renderPage(TOKEN);
+      expect(queryByText('Resolution')).toBeNull();
+      expect(queryByText(/Marked resolved/)).toBeNull();
+    });
+
+    it('a resolved request renders "Marked resolved · {date}" and the note VERBATIM (whitespace-pre-line, no truncation), and the §11 forbidden-phrase sweep stays clean over the whole rendered page', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: {
+          note: 'The issue for the leaking roof tile has been resolved.\nReplaced the cracked tile.',
+          resolvedAtDisplay: 'August 5, 2026',
+        },
+      });
+      const { getByText } = await renderPage(TOKEN);
+
+      expect(getByText('Resolution')).toBeInTheDocument();
+      expect(getByText('Marked resolved · August 5, 2026')).toBeInTheDocument();
+      const note = getByText((_, node) => node?.textContent === 'The issue for the leaking roof tile has been resolved.\nReplaced the cracked tile.');
+      expect(note).toBeInTheDocument();
+      expect(note.className).toContain('whitespace-pre-line');
+
+      for (const banned of FORBIDDEN) {
+        expect(document.body.textContent).not.toContain(banned);
+      }
+    });
+
+    it('resolvedAtDisplay is rendered VERBATIM as handed back by the resolver — the page never reformats it itself', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: { note: 'Fixed.', resolvedAtDisplay: 'NOT-A-REAL-DATE-STRING' },
+      });
+      const { getByText } = await renderPage(TOKEN);
+      expect(getByText('Marked resolved · NOT-A-REAL-DATE-STRING')).toBeInTheDocument();
+    });
+
+    it('fix wave I1 — resolution: null + a kind=\'resolution\' photo (the Resolve dialog was abandoned pre-flip) renders the STAGED caption, never the ADDED one, even though the grid itself stays visible', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: null,
+        photos: [{ filename: 'fixed.jpg', kind: 'resolution' as const }],
+      });
+      const { getByText, queryByText, getAllByRole } = await renderPage(TOKEN);
+
+      expect(getByText('Resolution proof (1)')).toBeInTheDocument();
+      expect(getAllByRole('img')).toHaveLength(1);
+      expect(
+        getByText('Staged by the team while preparing to mark this request resolved.'),
+      ).toBeInTheDocument();
+      expect(
+        queryByText('Added by the team when this request was marked resolved.'),
+      ).toBeNull();
+    });
+
+    it('fix wave I1 — a REAL resolution renders the ADDED caption on the same grid, never the STAGED one', async () => {
+      resolveMaintenanceShareTokenMock.mockResolvedValue({
+        ...RESOLVED,
+        resolution: { note: 'Fixed.', resolvedAtDisplay: 'August 5, 2026' },
+        photos: [{ filename: 'fixed.jpg', kind: 'resolution' as const }],
+      });
+      const { getByText, queryByText } = await renderPage(TOKEN);
+
+      expect(getByText('Resolution proof (1)')).toBeInTheDocument();
+      expect(
+        getByText('Added by the team when this request was marked resolved.'),
+      ).toBeInTheDocument();
+      expect(
+        queryByText('Staged by the team while preparing to mark this request resolved.'),
+      ).toBeNull();
+    });
   });
 });

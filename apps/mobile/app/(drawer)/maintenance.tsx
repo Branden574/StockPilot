@@ -11,11 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import {
-  formatMaintenanceRequestNumber,
-  MAINTENANCE_STATUS_LABELS,
-  type MaintenanceStatus,
-} from '@stockpilot/core';
+import { formatMaintenanceRequestNumber, MAINTENANCE_STATUS_LABELS } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -35,6 +31,7 @@ import {
   listMaintenanceRequests,
   type MobileMaintenanceListRow,
 } from '@/lib/maintenance-api';
+import { MAINTENANCE_STATUS_CHIPS, statusPillTone, statusQueryParam } from '@/lib/maintenance-filters';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
@@ -59,13 +56,6 @@ import { useTheme } from '@/lib/use-theme';
  * so this always shows the newest 50 rows — there is no "load more" to
  * build, and this screen does not pretend otherwise.
  */
-const STATUS_PILL: Record<MaintenanceStatus, 'default' | 'warn' | 'ok' | 'crit'> = {
-  saved: 'default',
-  draft_opened: 'warn',
-  archived: 'default',
-  cancelled: 'default',
-};
-
 const SECTION_22_NOTE =
   'Ticket updates and replies are handled through the Outlook/Zendesk email conversation and are not synchronized into StockPilot.';
 
@@ -89,6 +79,8 @@ export default function MaintenanceListScreen() {
 
   const [scope, setScope] = React.useState<'mine' | 'all'>('mine');
   const [q, setQ] = React.useState('');
+  const [statusLabel, setStatusLabel] = React.useState('All');
+  const status = statusQueryParam(statusLabel);
   const [rows, setRows] = React.useState<MobileMaintenanceListRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
@@ -117,7 +109,7 @@ export default function MaintenanceListScreen() {
     const seq = guardRef.current!.next();
     setLoadError(null);
     try {
-      const res = await listMaintenanceRequests({ scope, q: q.trim() || undefined });
+      const res = await listMaintenanceRequests({ scope, q: q.trim() || undefined, status });
       if (!guardRef.current!.isCurrent(seq)) return; // stale — a newer load owns the list now
       setRows(res);
     } catch (e) {
@@ -131,7 +123,11 @@ export default function MaintenanceListScreen() {
         setRefreshing(false);
       }
     }
-  }, [enabled, scope, q]);
+    // `status` is included so a chip tap re-runs this same debounce +
+    // sequence-guard machinery `q`/`scope` already ride — a chip tap while a
+    // slower earlier request is still in flight must not let that stale
+    // response overwrite the rows the new filter now owns (Task 18 guard).
+  }, [enabled, scope, q, status]);
 
   React.useEffect(() => {
     const scheduler = schedulerRef.current!;
@@ -211,6 +207,15 @@ export default function MaintenanceListScreen() {
                 </Pressable>
               ) : null}
             </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+              {MAINTENANCE_STATUS_CHIPS.map((chip) => (
+                <Pressable key={chip.label} onPress={() => setStatusLabel(chip.label)}>
+                  <Pill status={statusLabel === chip.label ? 'ok' : 'default'} dot={false}>
+                    {chip.label}
+                  </Pill>
+                </Pressable>
+              ))}
+            </View>
             {scope === 'all' ? (
               <Field
                 label="SEARCH"
@@ -288,7 +293,7 @@ function MaintenanceRow({
 }) {
   const { c } = useTheme();
   const handle = formatMaintenanceRequestNumber(row.requestNumber, row.createdAt) ?? `#${row.requestNumber}`;
-  const pillStatus = STATUS_PILL[row.status] ?? 'default';
+  const pillStatus = statusPillTone(row.status);
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>

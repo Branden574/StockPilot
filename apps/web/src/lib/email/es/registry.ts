@@ -15,6 +15,12 @@
  * sums to 29. The operative instruction is "implement every row of
  * ES.EMAILS", so all 29 rows are here; the 28-vs-29 miscount is surfaced
  * for the owner rather than silently resolved.
+ *
+ * COUNT (2026-08-06, Maintenance Resolved program): a 30th row,
+ * `maintenance-resolved`, is added outside the original 29-row design
+ * package — the resolution email for the maintenance-requests module
+ * (docs/superpowers/plans/2026-08-06-maintenance-resolved.md, spec §6.1).
+ * 29 -> 30 total; 25 -> 26 live; the `maintenance` family is new.
  */
 
 import type { EsStatusVariant } from './tokens';
@@ -27,7 +33,8 @@ export type EsEmailFamily =
   | 'rentals'
   | 'schedule'
   | 'digest'
-  | 'support';
+  | 'support'
+  | 'maintenance';
 
 export type EsEmailStatus = 'live' | 'latent' | 'concept';
 
@@ -786,6 +793,29 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     cta: 'View resolution',
     motionNote: 'None',
     motionAsset: null,
+    footer: 'ess',
+  }),
+
+  // ── Maintenance (2026-08-06, Maintenance Resolved program) ─────────
+  d({
+    id: 'maintenance-resolved',
+    family: 'maintenance',
+    name: 'Maintenance Request Resolved',
+    status: 'live',
+    category: 'ess',
+    tag: 'Maintenance',
+    trigger: 'A manage-holder marks a maintenance request resolved',
+    to: 'Requester',
+    from: 'StockPilot <maintenance@stockpilotusa.com>',
+    replyTo: 'Not monitored',
+    subject: (p: { handle: string }) =>
+      `Maintenance request ${p.handle} marked resolved`,
+    preheader: (p: { resolverName: string }) =>
+      `Recorded by ${p.resolverName} in StockPilot. The resolution note and any proof photos are inside.`,
+    badge: { variant: 'ok', label: () => 'Marked resolved' },
+    cta: 'View request',
+    motionNote: 'L3 · Check draw',
+    motionAsset: 'check',
     footer: 'ess',
   }),
 ];

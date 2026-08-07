@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { MAINTENANCE_MAX_PHOTOS } from '@stockpilot/core';
+import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
 import { compressImageVariants } from '@/lib/image-variants';
 import { Button } from '@/components/ui/button';
 
@@ -18,6 +18,15 @@ interface Props {
   requestId: string;
   photos: PanelPhoto[];
   onChange: () => void; // parent refetches
+  /** Migration 0317/spec §2.2 — which attachment kind THIS panel instance
+   *  uploads. Defaults to `'requester'` (today's only behavior, unchanged).
+   *  The resolve dialog (a later task) reuses this same panel with
+   *  `kind="resolution"` for proof photos; the server is the one place
+   *  'resolution' gets manage-gated (see maintenance-attachments.ts's
+   *  validateKind) — this prop only decides what gets threaded into the
+   *  mint/finalize request bodies below, never an authorization decision
+   *  made client-side. */
+  kind?: MaintenanceAttachmentKind;
 }
 
 /** Mint-response shape from POST .../attachments (maintenance-attachments.ts
@@ -62,7 +71,7 @@ async function humanizeUploadError(res: Response, fallback: string): Promise<str
   return fallback;
 }
 
-async function uploadOne(requestId: string, file: File): Promise<void> {
+async function uploadOne(requestId: string, file: File, kind: MaintenanceAttachmentKind): Promise<void> {
   // 1) Client-side resize + HEIC->JPEG transcode + thumb generation. The
   // real return shape is { master: File, thumbBlob: Blob | null, lqip }
   // (image-variants.ts:36-40) — thumbBlob can be null when transcoding
@@ -70,11 +79,14 @@ async function uploadOne(requestId: string, file: File): Promise<void> {
   const variants = await compressImageVariants(file);
   const ext = extFromMime(variants.master.type);
 
-  // 2) Server mint (rate-limited, entity-checked).
+  // 2) Server mint (rate-limited, entity-checked). `kind` is always sent
+  // explicitly — never omitted just because it happens to equal the
+  // server's own default — so the mint and finalize bodies agree with each
+  // other and with what actually gets threaded through to the insert row.
   const mintRes = await fetch(`/api/v1/maintenance-requests/${requestId}/attachments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileExt: ext, originalFilename: file.name }),
+    body: JSON.stringify({ fileExt: ext, originalFilename: file.name, kind }),
   });
   if (!mintRes.ok) {
     throw new Error(await humanizeUploadError(mintRes, 'Upload not allowed right now.'));
@@ -103,14 +115,14 @@ async function uploadOne(requestId: string, file: File): Promise<void> {
   const finRes = await fetch(`/api/v1/maintenance-requests/${requestId}/attachments/finalize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: mint.path, originalFilename: file.name, declaredMime: variants.master.type }),
+    body: JSON.stringify({ path: mint.path, originalFilename: file.name, declaredMime: variants.master.type, kind }),
   });
   if (!finRes.ok) {
     throw new Error(await humanizeUploadError(finRes, 'That file is not a supported photo.'));
   }
 }
 
-export function MaintenancePhotosPanel({ requestId, photos, onChange }: Props) {
+export function MaintenancePhotosPanel({ requestId, photos, onChange, kind = 'requester' }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploads, setUploads] = useState<QueuedUpload[]>([]);
   const busy = uploads.some((u) => u.status === 'uploading');
@@ -122,7 +134,7 @@ export function MaintenancePhotosPanel({ requestId, photos, onChange }: Props) {
   async function runUpload(item: QueuedUpload) {
     setUploads((prev) => prev.map((u) => (u.key === item.key ? { ...u, status: 'uploading', message: undefined } : u)));
     try {
-      await uploadOne(requestId, item.file);
+      await uploadOne(requestId, item.file, kind);
       setUploads((prev) => prev.filter((u) => u.key !== item.key));
       onChange();
     } catch (e) {

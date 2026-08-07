@@ -109,3 +109,42 @@ export const maintenanceRequestFormSchema = z
   .strict();
 
 export type MaintenanceRequestFormValues = z.infer<typeof maintenanceRequestFormSchema>;
+
+/**
+ * The resolve() close-out contract (Maintenance Resolved spec §3.1). Shared
+ * by the web dialog, the mobile action, and the server `resolve()` method's
+ * `safeParse` re-validation — same authority posture as the create-side
+ * schema above.
+ *
+ * `.strict()` for the same reason as `maintenanceRequestFormSchema`: a body
+ * smuggling `resolvedByName`, `sentAt`, or any recipient-shaped key is a hard
+ * rejection. `resolvedByName` in particular must never come from the client
+ * — the service reads it from the caller's own profile server-side.
+ *
+ * The note uses `sanitizeDescriptionBlock`, the newline-PRESERVING variant —
+ * never `sanitizeSubjectLine`, which would collapse a resolution note's
+ * intentional line breaks into spaces. The note is multi-line content,
+ * exactly like the create-side description field.
+ *
+ * ORDERING DECISION — sanitize-then-check, matching the form schema above
+ * (schemas/maintenance.ts:33-55): `.transform()` runs BEFORE the
+ * min/max checks via `.pipe()`, so a raw 2,001-character note whose control
+ * bytes sanitize away to exactly 2,000 characters is accepted — the cap
+ * describes the value that gets persisted, not whatever the client pasted.
+ */
+export const maintenanceResolveSchema = z
+  .object({
+    note: z
+      .string()
+      .trim()
+      .transform(sanitizeDescriptionBlock)
+      .pipe(
+        z
+          .string()
+          .min(5, 'Describe how this was resolved (at least 5 characters).')
+          .max(2000, 'Keep the resolution note under 2,000 characters.'),
+      ),
+  })
+  .strict();
+
+export type MaintenanceResolveValues = z.infer<typeof maintenanceResolveSchema>;

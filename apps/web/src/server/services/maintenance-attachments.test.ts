@@ -229,6 +229,113 @@ describe('createUploadUrl (mint)', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('migration 0317 — rejects once the request is resolved, with the SAME literal message archived_at/cancelled_at produce (assertParentOwnedAndOpen mirrors the 0317 attachments INSERT/DELETE RLS predicate, which also gates on resolved_at)', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { id: REQ_ID, requester_user_id: 'user-test', archived_at: null, cancelled_at: null, resolved_at: '2026-08-05T00:00:00Z' },
+          error: null,
+        },
+      },
+      { role: 'admin' },
+    );
+    await expect(
+      new MaintenanceAttachmentsService(ctx).createUploadUrl(REQ_ID, { fileExt: 'jpg', originalFilename: 'x.jpg' }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is closed; photos can no longer change.',
+    });
+  });
+
+  describe('kind (migration 0317/spec §2.2)', () => {
+    it('default (no kind supplied): the cap count query is scoped by .eq(\'kind\', \'requester\') — chainArgs-pinned — and the mint path is otherwise unchanged', async () => {
+      const { stub, ctx } = build({
+        'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+        'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
+      });
+      stubCtxUploadStorage(stub);
+
+      const res = await new MaintenanceAttachmentsService(ctx).createUploadUrl(REQ_ID, {
+        fileExt: 'jpg',
+        originalFilename: 'x.jpg',
+      });
+
+      expect(res.path).toEqual(expect.any(String));
+      const countArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
+      expect(countArgs).toContainEqual(['kind', 'requester']);
+    });
+
+    it('kind=\'resolution\' without manage is forbidden; a manage-holder succeeds, and the cap count query is scoped by .eq(\'kind\', \'resolution\')', async () => {
+      const { ctx: staffCtx } = build(
+        { 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } },
+        { role: 'staff' }, // staff holds submit but not manage (0314)
+      );
+      await expect(
+        new MaintenanceAttachmentsService(staffCtx).createUploadUrl(REQ_ID, {
+          fileExt: 'jpg',
+          originalFilename: 'x.jpg',
+          kind: 'resolution',
+        }),
+      ).rejects.toMatchObject({ code: 'forbidden' });
+
+      const { stub, ctx: managerCtx } = build(
+        {
+          'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+          'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
+        },
+        { role: 'admin' }, // admin holds maintenance_requests:manage by default (0314)
+      );
+      stubCtxUploadStorage(stub);
+      await expect(
+        new MaintenanceAttachmentsService(managerCtx).createUploadUrl(REQ_ID, {
+          fileExt: 'jpg',
+          originalFilename: 'x.jpg',
+          kind: 'resolution',
+        }),
+      ).resolves.toMatchObject({ path: expect.any(String) });
+      const countArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
+      expect(countArgs).toContainEqual(['kind', 'resolution']);
+    });
+
+    it('per-kind caps: 8 canned \'requester\' rows do NOT block a \'resolution\' mint — stated honestly, the count itself is canned (the mock replays whatever count the test hands it regardless of filters), so what this actually pins is the .eq(\'kind\', \'resolution\') call on the count query PLUS the JS branch that reads that count against the cap, not a real per-kind DB count', async () => {
+      const { stub, ctx } = build(
+        {
+          'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+          // Canned as if 8 'requester' rows already exist — a real per-kind
+          // COUNT for 'resolution' would be 0, which is what the mint call
+          // below is really exercising via the .eq('kind','resolution') pin.
+          'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
+        },
+        { role: 'admin' },
+      );
+      stubCtxUploadStorage(stub);
+      await expect(
+        new MaintenanceAttachmentsService(ctx).createUploadUrl(REQ_ID, {
+          fileExt: 'jpg',
+          originalFilename: 'x.jpg',
+          kind: 'resolution',
+        }),
+      ).resolves.toMatchObject({ path: expect.any(String) });
+      const countArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
+      expect(countArgs).toContainEqual(['kind', 'resolution']);
+      expect(countArgs).not.toContainEqual(['kind', 'requester']);
+    });
+
+    it('an invalid kind literal (\'proof\') is rejected with validation_error, LITERAL-pinned against the requester/resolution allow-list', async () => {
+      const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+      await expect(
+        new MaintenanceAttachmentsService(ctx).createUploadUrl(REQ_ID, {
+          fileExt: 'jpg',
+          originalFilename: 'x.jpg',
+          kind: 'proof' as unknown as 'requester' | 'resolution',
+        }),
+      ).rejects.toMatchObject({
+        code: 'validation_error',
+        message: 'Invalid photo kind. Must be one of: requester, resolution.',
+      });
+    });
+  });
+
   it('not_found when the parent request does not exist in this org — and never mints an upload URL', async () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: null, error: null },
@@ -571,6 +678,89 @@ describe('finalize', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
     expect(downloadMock).not.toHaveBeenCalled();
   });
+
+  describe('kind (migration 0317/spec §2.2)', () => {
+    it('records kind on the INSERT payload — chainArgs pin on the insert object — defaulting to \'requester\' when omitted', async () => {
+      const bytes = pngBytes(2, 3);
+      downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+      const { stub, ctx } = build({
+        'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+        'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+      });
+      const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+      await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'break-room.png',
+        declaredMime: 'image/png',
+      });
+
+      const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+      expect(insert.kind).toBe('requester');
+    });
+
+    it('kind=\'resolution\' lands on the INSERT payload verbatim for a manage-holder, and the live cap re-check is scoped by .eq(\'kind\', \'resolution\')', async () => {
+      const bytes = pngBytes(2, 3);
+      downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+      const { stub, ctx } = build(
+        {
+          'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+          'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
+          'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+        },
+        { role: 'admin' }, // admin holds maintenance_requests:manage by default (0314)
+      );
+      const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+      await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'proof.png',
+        declaredMime: 'image/png',
+        kind: 'resolution',
+      });
+
+      const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+      expect(insert.kind).toBe('resolution');
+      const capArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
+      expect(capArgs).toContainEqual(['kind', 'resolution']);
+    });
+
+    it('MUTATION GUARD (T3-M1) — finalize kind=\'resolution\' without manage is forbidden BEFORE any storage download: no storage call ever happens (chains prove it), never mind a written row', async () => {
+      const { ctx } = build(
+        { 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } },
+        { role: 'staff' }, // staff holds submit but not manage (0314)
+      );
+      const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+      await expect(
+        new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+          path,
+          originalFilename: 'proof.png',
+          declaredMime: 'image/png',
+          kind: 'resolution',
+        }),
+      ).rejects.toMatchObject({ code: 'forbidden' });
+      expect(downloadMock).not.toHaveBeenCalled();
+    });
+
+    it('an invalid kind literal (\'proof\') is rejected with validation_error BEFORE any storage download, LITERAL-pinned against the requester/resolution allow-list', async () => {
+      const { ctx } = build({ 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } });
+      const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+      await expect(
+        new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+          path,
+          originalFilename: 'x.png',
+          declaredMime: 'image/png',
+          kind: 'proof' as unknown as 'requester' | 'resolution',
+        }),
+      ).rejects.toMatchObject({
+        code: 'validation_error',
+        message: 'Invalid photo kind. Must be one of: requester, resolution.',
+      });
+      expect(downloadMock).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('remove', () => {
@@ -633,6 +823,30 @@ describe('remove', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('M2 fix wave — when DELETE affects zero rows due to a RESOLVED request (resolved_at set, archived_at/cancelled_at both null), uses the SAME specific closed-request message rather than the generic catch-all', async () => {
+    const { ctx } = build({
+      'maintenance_request_attachments.select': {
+        data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+        error: null,
+      },
+      // Pre-read found the row, but delete affects zero rows.
+      'maintenance_request_attachments.delete': { data: null, error: null },
+      // Parent request is RESOLVED (not archived/cancelled) — the cause of
+      // the RLS refusal this test pins.
+      'maintenance_requests.select': {
+        data: { id: REQ_ID, archived_at: null, cancelled_at: null, resolved_at: '2026-08-05T00:00:00Z' },
+        error: null,
+      },
+    });
+
+    await expect(new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is closed; photos can no longer change.',
+    });
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('not_found when the attachment does not exist in this org/request', async () => {
     const { ctx } = build({
       'maintenance_request_attachments.select': { data: null, error: null },
@@ -676,6 +890,7 @@ describe('signedViewUrls', () => {
               original_filename: 'photo.jpg',
               width: 10,
               height: 20,
+              kind: 'requester',
             },
           ],
           error: null,
@@ -695,6 +910,7 @@ describe('signedViewUrls', () => {
         thumbUrl: 'https://mock/view-signed',
         width: 10,
         height: 20,
+        kind: 'requester',
       },
     ]);
     // ADMIN client used (never ctx.supabase — RLS-scoped visibility already
@@ -710,18 +926,19 @@ describe('signedViewUrls', () => {
     void stub;
   });
 
-  it('batches every master + thumb path across MULTIPLE rows into a single createSignedUrls call', async () => {
+  it('batches every master + thumb path across MULTIPLE rows into a single createSignedUrls call, and maps EACH row\'s own kind through — a mixed requester/resolution result never collapses to one value', async () => {
     const { ctx } = build({
       'maintenance_request_attachments.select': {
         data: [
-          { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: 'org-test/req/a-thumb.webp', original_filename: 'a.jpg', width: 1, height: 1 },
-          { id: 'att-2', storage_path: 'org-test/req/b.jpg', thumbnail_path: null, original_filename: 'b.jpg', width: null, height: null },
+          { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: 'org-test/req/a-thumb.webp', original_filename: 'a.jpg', width: 1, height: 1, kind: 'requester' },
+          { id: 'att-2', storage_path: 'org-test/req/b.jpg', thumbnail_path: null, original_filename: 'b.jpg', width: null, height: null, kind: 'resolution' },
         ],
         error: null,
       },
     });
     const res = await new MaintenanceAttachmentsService(ctx).signedViewUrls(REQ_ID);
     expect(res).toHaveLength(2);
+    expect(res.map((p) => p.kind)).toEqual(['requester', 'resolution']);
     expect(adminCreateSignedUrlsMock).toHaveBeenCalledTimes(1);
     expect(adminCreateSignedUrlsMock).toHaveBeenCalledWith(
       ['org-test/req/a.jpg', 'org-test/req/a-thumb.webp', 'org-test/req/b.jpg'],

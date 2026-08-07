@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { maintenanceRequestFormSchema } from './maintenance';
+import { maintenanceRequestFormSchema, maintenanceResolveSchema } from './maintenance';
 
 /**
  * Minimal valid payload — every optional field omitted. `priority` is
@@ -346,5 +346,105 @@ describe('maintenanceRequestFormSchema — related-record and site UUID fields',
     expect(maintenanceRequestFormSchema.safeParse({ ...VALID, [field]: UUID_A }).success).toBe(
       true,
     );
+  });
+});
+
+/**
+ * maintenanceResolveSchema (Maintenance Resolved spec §3.1) — the resolve()
+ * close-out contract. Same .strict()/sanitize-then-check conventions as
+ * maintenanceRequestFormSchema above; the note uses the newline-PRESERVING
+ * sanitizer (sanitizeDescriptionBlock), never the collapsing one
+ * (sanitizeSubjectLine), because a resolution note is multi-line content.
+ */
+describe('maintenanceResolveSchema — happy path', () => {
+  it('accepts the owner example verbatim and round-trips the note unchanged', () => {
+    const note = 'The issue for the leaking roof tile has been resolved.';
+    const parsed = maintenanceResolveSchema.safeParse({ note });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.note).toBe(note);
+    }
+  });
+});
+
+describe('maintenanceResolveSchema — NO recipient/identity override surface (.strict())', () => {
+  it('rejects a payload carrying an extra key alongside a valid note (MUTATION: dropping .strict() lets this pass)', () => {
+    const parsed = maintenanceResolveSchema.safeParse({
+      note: 'x'.repeat(10),
+      resolverName: 'spoof',
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('the schema shape has no resolverName/sentAt/recipient-shaped key at all', () => {
+    const shape = maintenanceResolveSchema.shape as Record<string, unknown>;
+    for (const forbidden of ['resolverName', 'sentAt', 'to', 'cc', 'bcc', 'recipient']) {
+      expect(Object.prototype.hasOwnProperty.call(shape, forbidden)).toBe(false);
+    }
+  });
+});
+
+describe('maintenanceResolveSchema — note bounds (spec §3.1)', () => {
+  it('rejects a note with fewer than 5 characters and pins the literal message', () => {
+    const parsed = maintenanceResolveSchema.safeParse({ note: 'Fixt' }); // 4 chars
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toBe(
+        'Describe how this was resolved (at least 5 characters).',
+      );
+    }
+  });
+
+  it('accepts a note at exactly 5 characters', () => {
+    const parsed = maintenanceResolveSchema.safeParse({ note: 'Fixed' }); // 5 chars
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a note at exactly the 2,000-character cap and rejects a clean 2,001-character note, pinning the literal cap message', () => {
+    const atCap = 'x'.repeat(2000);
+    const overCap = 'x'.repeat(2001);
+    const atCapParsed = maintenanceResolveSchema.safeParse({ note: atCap });
+    expect(atCapParsed.success).toBe(true);
+    const overCapParsed = maintenanceResolveSchema.safeParse({ note: overCap });
+    expect(overCapParsed.success).toBe(false);
+    if (!overCapParsed.success) {
+      expect(overCapParsed.error.issues[0]?.message).toBe(
+        'Keep the resolution note under 2,000 characters.',
+      );
+    }
+  });
+
+  it('sanitize-then-check: a 2,001-raw-character note whose control byte sanitizes away lands at exactly the 2,000 cap and is ACCEPTED (the documented ordering choice — spec §3.1 mirrors the form schema)', () => {
+    const raw = `${'x'.repeat(1999)}${NUL}x`; // 2,001 raw chars; the lone NUL is deleted by sanitizeDescriptionBlock
+    expect(raw.length).toBe(2001);
+    const parsed = maintenanceResolveSchema.safeParse({ note: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.note).toBe('x'.repeat(2000));
+      expect(parsed.data.note.length).toBe(2000);
+    }
+  });
+});
+
+describe('maintenanceResolveSchema — newlines PRESERVED (MUTATION: swapping in sanitizeSubjectLine here must fail this test)', () => {
+  it('round-trips intentional line breaks in the note', () => {
+    const withBreaks = 'line one\n\nline two';
+    const parsed = maintenanceResolveSchema.safeParse({ note: withBreaks });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.note).toBe(withBreaks);
+      expect(parsed.data.note).toContain('\n');
+    }
+  });
+
+  it('strips control bytes while newlines survive intact', () => {
+    const raw = `Line one${BEL} of the fix.\nLine two${NUL} of the fix.`;
+    const parsed = maintenanceResolveSchema.safeParse({ note: raw });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.note).toBe('Line one of the fix.\nLine two of the fix.');
+      expect(parsed.data.note).not.toContain(BEL);
+      expect(parsed.data.note).not.toContain(NUL);
+    }
   });
 });
