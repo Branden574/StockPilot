@@ -13,41 +13,15 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { Badge } from '@/components/ui/badge';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatRelative } from '@/lib/utils';
-import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
+import { fetchAcceptedMembers } from '@/server/lib/maintenance-members';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
 
 import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detail-client';
 
 export const dynamic = 'force-dynamic';
-
-/** organization_members embedding user_profiles!user_id, filtered to
- *  accepted members — same query cycle-counts/new/page.tsx:36-57 uses for
- *  its own assignee picker. Backs BOTH the owner picker and note-author
- *  name resolution, since only a manage-holder ever sees either. */
-async function fetchAcceptedMembers(ctx: ServiceContext): Promise<MaintenanceOwnerOption[]> {
-  const { data: rawMembers } = await ctx.supabase
-    .from('organization_members')
-    .select('user_id, user:user_profiles!user_id (id, full_name, email)')
-    .eq('organization_id', ctx.organizationId)
-    .not('accepted_at', 'is', null);
-  type MemberRow = {
-    user_id: string;
-    user:
-      | { id: string; full_name: string | null; email: string }
-      | { id: string; full_name: string | null; email: string }[]
-      | null;
-  };
-  return ((rawMembers ?? []) as MemberRow[])
-    .map((row) => {
-      const u = Array.isArray(row.user) ? row.user[0] : row.user;
-      if (!u) return null;
-      return { userId: u.id, name: u.full_name ?? u.email };
-    })
-    .filter((m): m is MaintenanceOwnerOption => Boolean(m))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
 
 function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
   const v = typeof value === 'string' ? value.trim() : '';
