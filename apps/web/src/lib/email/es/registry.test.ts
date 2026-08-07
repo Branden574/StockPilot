@@ -13,6 +13,12 @@ import { ES_EMAILS, esEmailById } from './registry';
  * to 29. The registry array is the operative source of truth
  * ("implement every row of ES.EMAILS"), so 29 it is — the 28-vs-29
  * miscount is flagged to the owner in registry.ts.
+ *
+ * COUNT UPDATE (2026-08-06, Maintenance Resolved program): a 30th row,
+ * `maintenance-resolved`, ships outside the original 29-row design
+ * package (docs/superpowers/plans/2026-08-06-maintenance-resolved.md,
+ * spec §6.1) — the counts below move 29 -> 30 and 25 -> 26 live; the
+ * `maintenance` family is new (1 row).
  */
 
 interface Expected {
@@ -299,18 +305,27 @@ const EXPECTED: Expected[] = [
     preheaderParams: { ticketId: 'SUP-1187', closedOn: 'Jun 13', window: '7 days' },
     badge: 'Resolved',
   },
+  {
+    id: 'maintenance-resolved',
+    subject: 'Maintenance request MR-2026-000123 marked resolved',
+    subjectParams: { handle: 'MR-2026-000123' },
+    preheader:
+      'Recorded by Dana Keeler in StockPilot. The resolution note and any proof photos are inside.',
+    preheaderParams: { resolverName: 'Dana Keeler' },
+    badge: 'Marked resolved',
+  },
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (29 — see the 28-vs-29 flag)', () => {
-    expect(ES_EMAILS).toHaveLength(29);
-    expect(EXPECTED).toHaveLength(29);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(29);
+  it('carries every row of ES.EMAILS (30 — 29 design-package rows + the 2026-08-06 Maintenance Resolved row, see the 28-vs-29 flag)', () => {
+    expect(ES_EMAILS).toHaveLength(30);
+    expect(EXPECTED).toHaveLength(30);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(30);
   });
 
-  it('splits into 25 live + 2 latent + 2 concept', () => {
+  it('splits into 26 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(25);
+    expect(by('live')).toBe(26);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
@@ -325,6 +340,9 @@ describe('es registry — shape', () => {
     expect(by('schedule')).toBe(2);
     expect(by('digest')).toBe(2);
     expect(by('support')).toBe(3);
+    // 2026-08-06 Maintenance Resolved program — outside the original
+    // 29-row design package (see the COUNT UPDATE flag above).
+    expect(by('maintenance')).toBe(1);
   });
 
   it('maps footer type to category exactly (registry foot === cat on every row)', () => {
@@ -354,6 +372,9 @@ describe('es registry — shape', () => {
       'StockPilot Support <tickets@stockpilotusa.com>',
     );
     expect(esEmailById('support-ticket').replyTo).toBe('Reply-to set to the customer');
+    expect(esEmailById('maintenance-resolved').from).toBe(
+      'StockPilot <maintenance@stockpilotusa.com>',
+    );
   });
 
   it('assigns motion assets only where the MOTION registry has one', () => {
@@ -374,6 +395,7 @@ describe('es registry — shape', () => {
     expect(asset('sched-hour')).toBe('clock');
     expect(asset('sched-tmrw')).toBe('calendar');
     expect(asset('digest')).toBe('bars');
+    expect(asset('maintenance-resolved')).toBe('check');
     // received "Timeline tick": produced in-house (11px inline dot).
     expect(asset('received')).toBe('tick');
     // No motion on denied / cancelled / receipts / support ticket
