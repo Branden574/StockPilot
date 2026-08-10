@@ -207,6 +207,22 @@ export function MovementsInstantTable({
           </Table>
         </div>
       )}
+
+      {/* Bottom pager. The server-mode page (dashboard/movements/page.tsx)
+          renders one above AND below the table; instant mode only had the top
+          one, so on any ledger under MOVEMENTS_INSTANT_CAP — i.e. most of the
+          time — you scrolled to the end of a full page and had to go back up to
+          advance. Same props as the top instance so both stay in lockstep. */}
+      {visible.length > 0 && (
+        <div className="mt-4 flex items-center justify-end">
+          <Pagination
+            page={safePage}
+            pageSize={PAGE_SIZE}
+            total={filtered.length}
+            onPageChange={setPage}
+          />
+        </div>
+      )}
     </div>
   );
 }
