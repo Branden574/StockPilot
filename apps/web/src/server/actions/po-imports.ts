@@ -4,20 +4,14 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError, withContext } from '@/server/services/context';
-import { InventoryService } from '@/server/services/inventory';
+import { ServiceError } from '@/server/services/context';
 import { PoImportsService } from '@/server/services/po-imports';
 import {
-  createItemsFromPoLines,
   createItemsFromPoLinesSchema,
-  findDuplicatesForPoLines,
   findDuplicatesForPoLinesSchema,
   type DuplicateCandidate,
 } from '@/server/services/po-imports-lines';
 import type { LineResolution } from '@/server/services/po-imports-variants';
-import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
-import { requireOrgContext } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
 
 import {
   approvePoImportSchema,
@@ -53,17 +47,13 @@ export async function presignPoUploadAction(input: {
     return err('validation_error', 'Only PDF or CSV files are allowed');
   }
   try {
-    const ctx = await requireOrgContext();
-    const supabase = await createClient();
-    const ext = parsed.data.fileName.split('.').pop()?.toLowerCase() ?? 'bin';
-    const storagePath = `${ctx.organizationId}/po-imports/${crypto.randomUUID()}.${ext}`;
-
-    const { data, error } = await supabase.storage
-      .from('po-imports')
-      .createSignedUploadUrl(storagePath);
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    return ok({ uploadUrl: data.signedUrl, storagePath });
+    // Route through the gated service twin — presigning an upload url into the
+    // po-imports bucket is import-privileged (po_imports module +
+    // purchase_orders:manage), not something any org member may do. The old
+    // inline requireOrgContext + createClient path carried NO such gate.
+    const svc = await PoImportsService.forCurrentUser();
+    const result = await svc.presignUpload({ fileName: parsed.data.fileName });
+    return ok(result);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -184,30 +174,14 @@ export async function createItemsFromPoLinesAction(input: {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
-    const ctx = await requireOrgContext();
-    const supabase = await createClient();
-    const inventorySvc = await InventoryService.forCurrentUser();
-    const mappingsSvc = await VendorItemMappingsService.forCurrentUser();
-    // Request-cached, so this is the same context the two services above
-    // already built. Needed for the category tracking profile, the org's
-    // product groups and the `sports` module flag.
-    const serviceCtx = await withContext();
-
-    // Implementation lives in po-imports-lines.ts, SHARED with the
-    // /api/v1/po-imports/[id]/create-items Bearer route (via
-    // PoImportsService.createItemsFromLines) so web and mobile can never
-    // drift. This action keeps its historical auth posture: cookie org
-    // context + RLS + InventoryService.create's internal permission gate.
-    const result = await createItemsFromPoLines(
-      {
-        supabase,
-        organizationId: ctx.organizationId,
-        inventorySvc,
-        mappingsSvc,
-        ctx: serviceCtx,
-      },
-      parsed.data,
-    );
+    // Route through the gated service twin (PoImportsService.createItemsFromLines)
+    // — the SAME shared implementation the /api/v1 Bearer route uses. It adds the
+    // po_imports module + purchase_orders:manage asserts on top of
+    // InventoryService.create's own item-create gate. The old inline path called
+    // the shared function directly with only the item-create gate, so a caller
+    // with items:create but a REVOKED purchase_orders:manage slipped through.
+    const svc = await PoImportsService.forCurrentUser();
+    const result = await svc.createItemsFromLines(parsed.data);
 
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     revalidatePath('/dashboard/inventory');
@@ -236,12 +210,12 @@ export async function findDuplicatesForPoLinesAction(input: {
   const parsed = findDuplicatesForPoLinesSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
-    const ctx = await requireOrgContext();
-    const supabase = await createClient();
-    const { matches } = await findDuplicatesForPoLines(
-      { supabase, organizationId: ctx.organizationId },
-      parsed.data,
-    );
+    // Route through the gated service twin (PoImportsService.findDuplicatesForLines)
+    // — reading duplicate candidates exposes catalog rows, so it must carry the
+    // po_imports module + purchase_orders:manage gate. The old inline path read
+    // the DB directly with no such gate, so any org member could enumerate it.
+    const svc = await PoImportsService.forCurrentUser();
+    const { matches } = await svc.findDuplicatesForLines(parsed.data);
     return ok({ matches });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { audit } from './audit';
 import { InventoryService } from './inventory';
@@ -33,6 +33,7 @@ import {
   type ResolveLineVariantDeps,
 } from './po-imports-variants';
 import { ProductGroupsService } from './product-groups';
+import { assertPoApprovalThreshold } from './purchase-orders';
 import {
   resolveTrackingProfile,
   type ResolvedTrackingProfile,
@@ -468,6 +469,29 @@ export class PoImportsService {
         .filter((r) => r.id !== predId && r.reimported_from_id === header.id)
         .map(toRef),
     };
+  }
+
+  /**
+   * Presigns a direct-to-Storage PUT url for a PO import file (the client
+   * uploads the file itself — server actions have a 1MB body cap). The gate
+   * lives HERE (po_imports module + purchase_orders:manage) so the web action
+   * and any future Bearer surface share one authz posture: minting a signed
+   * upload url into the po-imports bucket is the first step of an import and
+   * must not be reachable by a member without import rights. File-type/size
+   * validation stays at the caller's boundary; the storage path is per-org.
+   */
+  async presignUpload(input: {
+    fileName: string;
+  }): Promise<{ uploadUrl: string; storagePath: string }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+    const ext = input.fileName.split('.').pop()?.toLowerCase() ?? 'bin';
+    const storagePath = `${this.ctx.organizationId}/po-imports/${randomUUID()}.${ext}`;
+    const { data, error } = await this.ctx.supabase.storage
+      .from('po-imports')
+      .createSignedUploadUrl(storagePath);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return { uploadUrl: data.signedUrl, storagePath };
   }
 
   /**
@@ -1455,6 +1479,16 @@ export class PoImportsService {
     // movement). Everything in finalLines that is not inventory is a charge, so
     // nothing priced is dropped.
     const { chargeRows, chargeTotal } = buildPoCharges(finalLines, this.ctx.organizationId);
+
+    // Spend governance parity with PurchaseOrdersService.updateStatus: approving
+    // an import INSERTS a receivable purchase_orders row (status
+    // 'expected_inbound'), which is a spend-committing act. Without this gate a
+    // manager could place a PO of ANY size through the import flow while the
+    // manual "Mark as ordered" path enforced the org's approval threshold — the
+    // exact bypass the threshold exists to prevent. Same shared, fail-closed
+    // gate; owner/admin are exempt inside it. Checked against the TRUE invoice
+    // value (goods + charges) — the value that lands on purchase_orders.total.
+    await assertPoApprovalThreshold(this.ctx, subtotal + chargeTotal);
 
     // Receiving posts against a destination location. The user MUST have
     // chosen one at import review — there is deliberately no fallback (the

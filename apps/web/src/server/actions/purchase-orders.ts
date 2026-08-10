@@ -3,14 +3,19 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { requireOrgContext } from '@/lib/auth/session';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
-import { createClient } from '@/lib/supabase/server';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+  withContext,
+} from '@/server/services/context';
+import { LocationsService } from '@/server/services/locations';
 import {
   createPoSchema,
   PurchaseOrdersService,
+  updatePoStatusSchema,
   type CreatePoInput,
 } from '@/server/services/purchase-orders';
 
@@ -80,8 +85,13 @@ export async function setPoDestinationWarehouseAction(input: {
   const parsed = setDestinationSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
-    const ctx = await requireOrgContext();
-    const supabase = await createClient();
+    // Full service context (effective permissions + enabled modules + MFA gate +
+    // RLS-bound client), not just requireOrgContext. This action was previously
+    // UNGATED — a member with purchase_orders:manage revoked could still re-point
+    // a PO's receiving destination. Gate it like every other PO mutation.
+    const ctx = await withContext();
+    assertModuleEnabled(ctx, 'purchase_orders');
+    assertPermission(ctx, 'purchase_orders:manage');
 
     // Receiving posts stock INTO this warehouse, so the caller must have write
     // access to it — mirror the guard in the create()/update() service paths so
@@ -92,21 +102,19 @@ export async function setPoDestinationWarehouseAction(input: {
       throw new ServiceError('forbidden', 'You do not have access to receive into that warehouse.');
     });
 
-    // Reuse an existing location for the warehouse, or auto-create one.
-    let locationId: string | null = null;
-    const { data: existing, error: findErr } = await supabase
-      .from('locations')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('warehouse_id', parsed.data.warehouseId)
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
-    if (findErr) throw new ServiceError('internal_error', findErr.message);
-    if (existing?.id) {
-      locationId = existing.id as string;
+    // Resolve the destination through LocationsService (org-scoped) rather than
+    // trusting a raw id: reuse this warehouse's existing SITE location, or create
+    // one. `sitesOnly` excludes the staging/unplaced system buckets — those must
+    // never be a PO's receiving destination.
+    const locationsSvc = new LocationsService(ctx);
+    const existing = (await locationsSvc.list({ sitesOnly: true })).find(
+      (l) => (l as { warehouse_id: string | null }).warehouse_id === parsed.data.warehouseId,
+    );
+    let locationId: string;
+    if (existing) {
+      locationId = (existing as { id: string }).id;
     } else {
-      const { data: warehouse } = await supabase
+      const { data: warehouse } = await ctx.supabase
         .from('warehouses')
         .select('name')
         .eq('organization_id', ctx.organizationId)
@@ -115,26 +123,26 @@ export async function setPoDestinationWarehouseAction(input: {
       if (!warehouse) {
         return err('not_found', 'Warehouse not found');
       }
-      const { data: created, error: insErr } = await supabase
-        .from('locations')
-        .insert({
-          organization_id: ctx.organizationId,
-          warehouse_id: parsed.data.warehouseId,
-          name: warehouse.name as string,
-          type: 'warehouse',
-        })
-        .select('id')
-        .single();
-      if (insErr) throw new ServiceError('internal_error', insErr.message);
-      locationId = created.id as string;
+      const created = await locationsSvc.create({
+        name: (warehouse as { name: string }).name,
+        type: 'warehouse',
+        warehouseId: parsed.data.warehouseId,
+      });
+      locationId = (created as { id: string }).id;
     }
 
-    const { error: updErr } = await supabase
+    // Fail CLOSED: confirm the PO row was actually re-pointed (.select the row)
+    // so a 0-row update — a foreign/deleted PO id, or an RLS refusal — cannot be
+    // reported as success (the .update().eq() fail-open lesson).
+    const { data: updated, error: updErr } = await ctx.supabase
       .from('purchase_orders')
       .update({ destination_location_id: locationId })
       .eq('organization_id', ctx.organizationId)
-      .eq('id', parsed.data.poId);
+      .eq('id', parsed.data.poId)
+      .select('id')
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!updated) throw new ServiceError('not_found', 'Purchase order not found.');
 
     revalidatePath(`/dashboard/purchase-orders/${parsed.data.poId}`);
     revalidatePath('/dashboard/purchase-orders');
@@ -183,10 +191,27 @@ export async function updatePoNotesAction(
   }
 }
 
+// The status a client may set DIRECTLY. The UI (po-actions.tsx) only ever
+// sends 'ordered' or 'cancelled' (and 'draft' as a de-commit), so those three
+// are the whole legitimate set. Receivable states — 'expected_inbound',
+// 'partially_received', 'received' — are NEVER user-set here (they are reached
+// by the import-approval and receiving flows), and 'received' would fabricate a
+// fully-received PO with no receipts. The TS union is compile-time only, so a
+// forged call could still pass one; zod rejects it at the boundary. The service
+// (updateStatus) additionally gates every receivable transition on the approval
+// threshold as defense-in-depth.
+const updatePoStatusActionSchema = updatePoStatusSchema.extend({
+  id: z.string().uuid(),
+});
+
 export async function updatePoStatusAction(id: string, status: 'draft' | 'ordered' | 'cancelled'): Promise<ActionResult<void>> {
+  const parsed = updatePoStatusActionSchema.safeParse({ id, status });
+  if (!parsed.success) {
+    return err('validation_error', 'Invalid purchase order status update.');
+  }
   try {
     const svc = await PurchaseOrdersService.forCurrentUser();
-    await svc.updateStatus(id, status);
+    await svc.updateStatus(parsed.data.id, parsed.data.status);
     revalidatePath('/dashboard/purchase-orders');
     revalidatePath(`/dashboard/purchase-orders/${id}`);
     // Cancelling auto-archives PO-created custom items (visible status flip).
