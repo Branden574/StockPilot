@@ -6,7 +6,11 @@ import {
   isSniffedKindAllowedInBucket,
   sniffImage,
 } from '@/lib/image-signature';
-import { isValidStoragePath, itemImagePathShape } from '@/lib/storage-path';
+import {
+  isValidStoragePath,
+  itemImageAnyPathShape,
+  itemImagePathShape,
+} from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -102,16 +106,41 @@ function memoSet(path: string, url: string): void {
   signedUrlMemo.set(path, { url, expiresAtMs: Date.now() + MEMO_TTL_MS });
 }
 
+/**
+ * HI-8 read-side gate. Every function below signs a DB-sourced path with the
+ * SERVICE-ROLE client, which bypasses RLS by construction — so a path that
+ * reached the column before the write-side shapes existed (or through the
+ * mobile PostgREST insert path, which never passes through a service) must
+ * not be handed to storage unchecked. `itemImageAnyPathShape` is structural
+ * rather than id-pinned because these callers legitimately do not know the
+ * owning org: `public-items.ts` renders an UNAUTHENTICATED public page.
+ *
+ * Verified safe against production before enabling: all 465 `storage_path`
+ * and all 461 `thumb_path` rows match this shape exactly, so no existing
+ * image blanks. Fail-closed is deliberate — an unrecognised path yields no
+ * URL rather than a service-role-signed one, and callers already treat a
+ * missing URL as "no image" (never negatively cached, see the note on
+ * `signItemImageMaster`).
+ */
+function isSignableItemImagePath(storagePath: string): boolean {
+  return isValidStoragePath(storagePath, itemImageAnyPathShape());
+}
+
 /** ONE createSignedUrls covering `paths`. Never throws — per-path
  *  failures (and a whole-call failure) just leave paths out of the map,
  *  and the per-path signer falls back to its single-sign path. */
 async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+  // Drop malformed paths before the batch rather than after: createSignedUrls
+  // is one call for the whole array, so a single traversal path would
+  // otherwise be signed alongside the legitimate ones.
+  const safePaths = paths.filter(isSignableItemImagePath);
+  if (safePaths.length === 0) return out;
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.storage
       .from('item-images')
-      .createSignedUrls(paths, SIGNED_URL_TTL_SEC);
+      .createSignedUrls(safePaths, SIGNED_URL_TTL_SEC);
     if (error || !data) return out;
     for (const entry of data) {
       if (entry.signedUrl && !entry.error && entry.path) {
@@ -157,6 +186,9 @@ const signItemImageMaster = unstable_cache(
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
+  // Checked BEFORE the cached signer so a rejected path never creates an
+  // `unstable_cache` entry at all.
+  if (!isSignableItemImagePath(storagePath)) return null;
   try {
     return await signItemImageMaster(storagePath);
   } catch (err) {
@@ -203,6 +235,9 @@ async function getCachedItemImageTransformedSignedUrl(
   storagePath: string,
   width: number,
 ): Promise<string | null> {
+  // Same gate as the plain signer — this path also reaches storage with the
+  // service-role client, just with transform params folded into the signature.
+  if (!isSignableItemImagePath(storagePath)) return null;
   try {
     return await signItemImageTransformed(storagePath, width);
   } catch (err) {

@@ -523,3 +523,120 @@ describe('PoImportsService.createFromScan — MED-22', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. ItemImagesService.signedUrls — the READ side
+// ---------------------------------------------------------------------------
+/**
+ * The five sites above are WRITE gates: they stop a hostile path being stored.
+ * They cannot help a path that is ALREADY in the column — one written before
+ * those gates existed, or written through mobile's direct PostgREST insert,
+ * which never passes through a service at all.
+ *
+ * `signedUrls` hands DB-sourced paths to the SERVICE-ROLE client, which
+ * bypasses RLS by construction, so it needs its own structural gate. Asserted
+ * property: a malformed stored path NEVER reaches the storage client — neither
+ * through the batch signer nor the per-path signer. Both are checked because
+ * they are separate code paths to the same privileged call, and `signedUrls`
+ * starts the batch and the per-path resolve concurrently.
+ */
+describe('ItemImagesService.signedUrls — HI-8 on the service-role READ path', () => {
+  async function signWith(paths: string[]) {
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    const createSignedUrl = vi.fn(async () => ({
+      data: { signedUrl: 'https://signed.example/one' },
+      error: null,
+    }));
+    const createSignedUrls = vi.fn(async (given: string[]) => ({
+      data: given.map((p) => ({ path: p, signedUrl: `https://signed.example/${p}`, error: null })),
+      error: null,
+    }));
+    (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      storage: { from: vi.fn(() => ({ createSignedUrl, createSignedUrls })) },
+    });
+    const stub = makeSupabaseStub({});
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { role: 'admin', organizationId: ORG }) as never,
+    );
+    const map = await svc.signedUrls(paths);
+    return { map, createSignedUrl, createSignedUrls };
+  }
+
+  it('signs a real stored path — proves the gate is not simply refusing everything', async () => {
+    const good = `${ORG}/items/${ENTITY}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.webp`;
+    const { map, createSignedUrls } = await signWith([good]);
+
+    expect(createSignedUrls).toHaveBeenCalledWith([good], expect.any(Number));
+    expect(map.get(good)).toBeTruthy();
+  });
+
+  it('accepts the books-import cover convention, which omits the items/ segment', async () => {
+    // `{org}/{item}/cover.jpg` is a legitimate in-production shape (the cover
+    // rehost inserts its row directly). A gate that only knew the presigned
+    // convention would blank every imported book cover.
+    const cover = `${ORG}/${ENTITY}/cover.jpg`;
+    const { map } = await signWith([cover]);
+
+    expect(map.get(cover)).toBeTruthy();
+  });
+
+  /**
+   * The escape payloads only — every case that CLAIMS to be inside our org and
+   * then breaks out of it (traversal, encoded traversal, absolute, empty
+   * segment, backslash). Derived by "mentions our org" rather than by index so
+   * a payload added to TRAVERSALS is picked up here automatically.
+   *
+   * The one case deliberately EXCLUDED is TRAVERSALS' different-org path. That
+   * is a write-gate property, not a read-gate one: see the test below.
+   */
+  const ESCAPES = TRAVERSALS(ORG, ENTITY).filter((p) => p.includes(ORG));
+
+  it('never hands an escaping path to the storage client, by either signer', async () => {
+    expect(ESCAPES.length).toBeGreaterThan(5); // guard against the filter silently emptying
+    for (const bad of ESCAPES) {
+      const { map, createSignedUrl, createSignedUrls } = await signWith([bad]);
+
+      expect(map.has(bad), bad).toBe(false);
+      // The batch call must not carry it...
+      for (const call of createSignedUrls.mock.calls) {
+        expect(call[0], bad).not.toContain(bad);
+      }
+      // ...and the per-path signer must not have been reached either.
+      expect(createSignedUrl, bad).not.toHaveBeenCalled();
+    }
+  });
+
+  it('DOES sign a structurally-valid path belonging to another org — by design', async () => {
+    // Documents a real and deliberate boundary rather than asserting a hole.
+    // The read gate is STRUCTURAL: `itemImageAnyPathShape` cannot pin the org,
+    // because the org id is exactly what is unknown at these call sites —
+    // `public-items.ts` signs item images on an UNAUTHENTICATED public page.
+    //
+    // Org authorization for this path happens UPSTREAM, at the query: the
+    // row-reading methods filter `.eq('organization_id', ctx.organizationId)`,
+    // and the public page resolves items through the public-eligibility
+    // predicate. So a foreign-org path can only arrive here if a caller
+    // hand-fed it, and the write gates above are what stop such a path being
+    // stored in the first place.
+    //
+    // If this ever needs to become org-pinned, the fix is a pinned shape at
+    // the callers that DO know the org — not tightening this shared gate,
+    // which would blank every image on the public catalog.
+    const foreign = `99999999-9999-4999-8999-999999999999/${ENTITY}/x.jpg`;
+    const { map } = await signWith([foreign]);
+
+    expect(map.get(foreign)).toBeTruthy();
+  });
+
+  it('drops only the malformed path from a mixed batch, still signing the good one', async () => {
+    // A single poisoned row must not blank an entire list page: createSignedUrls
+    // is one call for the whole array, so the filter has to be per-path.
+    const good = `${ORG}/items/${ENTITY}/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.webp`;
+    const bad = `${ORG}/items/${ENTITY}/../../../item-images/victim/x.jpg`;
+    const { map, createSignedUrls } = await signWith([bad, good]);
+
+    expect(map.get(good)).toBeTruthy();
+    expect(map.has(bad)).toBe(false);
+    expect(createSignedUrls).toHaveBeenCalledWith([good], expect.any(Number));
+  });
+});
