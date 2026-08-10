@@ -322,7 +322,16 @@ export type AuditEvent =
   | 'maintenance_request.attachment_removed'
   | 'maintenance_request.share_link_created'
   | 'maintenance_request.share_link_revoked'
-  | 'maintenance_request.settings_updated';
+  | 'maintenance_request.settings_updated'
+  /**
+   * Every AI-chat invocation of a WRITE tool, emitted at the tool-call
+   * boundary in lib/ai/chat.ts (both provider loops). `extra` is
+   * { tool, args, ok } — the argument object is recorded deliberately: without
+   * it the row proves only that "the assistant wrote something", which is not a
+   * paper trail. ok=false rows are the interesting ones (a refused or failed
+   * write attempt). No migration: audit_logs.event is un-CHECKed text.
+   */
+  | 'ai.write_tool_invoked';
 
 interface AuditPayload {
   event: AuditEvent;

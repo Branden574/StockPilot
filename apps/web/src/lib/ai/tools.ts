@@ -5,6 +5,7 @@ import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@googl
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { claudeGenerateJsonString } from './claude';
 import { resolveAiProvider } from './provider';
+import { dataTag, untrustedDeep, untrustedTag } from './untrusted';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
@@ -29,6 +30,8 @@ import {
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 
+import type { MovementType } from '@stockpilot/core';
+
 /**
  * Tool catalog the chatbot can call. Each entry pairs a Gemini-shaped
  * function declaration (sent to the model so it knows what's available)
@@ -42,28 +45,34 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 export interface ToolExecutor {
   declaration: FunctionDeclaration;
+  /**
+   * True for any tool that MUTATES data. Declared here, next to the executor,
+   * rather than in a separate name list the next tool author would forget to
+   * update — the chat loops derive the write-tool guard (taint refusal + audit
+   * row) from this flag, so a new write tool is protected the moment it sets
+   * it. `tools.write-guard.test.ts` asserts every tool whose declaration says
+   * "WRITE" carries the flag, so omitting it fails CI.
+   */
+  write?: boolean;
   execute: (args: Record<string, unknown>, ctx: ServiceContext) => Promise<unknown>;
 }
 
 /**
- * Wrap a user-controlled free-text value in <data>…</data> tags so the
- * model treats it as DATA, never as instructions. The system prompt
- * has a matching directive that text inside <data> is never an
- * instruction — combined this is our defense-in-depth against
- * prompt injection routed through item names, notes, requester
- * names, book titles from public lookup APIs, etc.
+ * `dataTag` / `untrustedTag` are the ONE data-envelope implementation, shared
+ * with both chat loops — see lib/ai/untrusted.ts for the full rationale.
  *
- * Null/empty values are passed through unchanged so the model doesn't
- * see "<data></data>" everywhere.
+ *   dataTag(v)      — fence text authored INSIDE the caller's org (item names,
+ *                     warehouse labels, movement notes).
+ *   untrustedTag(v) — fence AND taint text a STRANGER controls (public
+ *                     order-link submissions, third-party book metadata, OCR
+ *                     output). Tainted text cannot be quoted into a write
+ *                     tool's arguments; the write is refused instead.
+ *
+ * Tools do not have to be exhaustive any more: the chat loops fence every
+ * remaining prose string in the result at the loop boundary. Keep tagging by
+ * hand anyway — it documents provenance, and `untrustedTag` is the only way to
+ * record taint.
  */
-function dataTag(value: unknown): unknown {
-  if (typeof value !== 'string' || value.length === 0) return value;
-  // Strip any embedded </data> the user already supplied — prevents
-  // them closing our wrapper mid-string. Belt-and-suspenders next to
-  // the system-prompt directive.
-  const safe = value.replace(/<\/?data>/gi, '');
-  return `<data>${safe}</data>`;
-}
 
 /**
  * Format any service result as a compact JSON-shaped object Gemini can
@@ -716,10 +725,18 @@ const listSuppliersTool: ToolExecutor = {
     // Server-side filter via PostgREST `ilike` — avoids pulling every
     // supplier into Node just to filter client-side. Caps at 30 rows
     // so the AI context stays bounded even on big workspaces.
-    // RLS scopes by organization automatically.
+    //
+    // HI-4: the explicit organization_id filter is REQUIRED, not decoration.
+    // The old comment here claimed "RLS scopes by organization automatically"
+    // — RLS scopes to every org the caller BELONGS TO, which is not the same
+    // as the org whose chat this is. A user who is a member of two orgs got
+    // both orgs' vendor rows (name + email + phone: PII) pulled into the
+    // current org's model context. Every other read tool in this file scopes
+    // explicitly to ctx.organizationId; this one silently did not.
     let query = ctx.supabase
       .from('suppliers')
       .select('id, name, email, phone')
+      .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
       .order('name', { ascending: true })
       .limit(30);
@@ -749,7 +766,33 @@ const listSuppliersTool: ToolExecutor = {
   },
 };
 
+/**
+ * The movement classifications an AI-driven stock adjustment may write.
+ *
+ * A STRICT SUBSET of movementTypeSchema, on purpose. 'transfer',
+ * 'receive_po', 'return' and 'initial' are owned by their own flows (the
+ * transfer RPC, post_receipt_v2, the RMA path, item creation) and each carries
+ * side effects an `adjust_stock` call does not perform — letting the model
+ * stamp one of those onto a bare quantity change would forge a provenance the
+ * rest of the app trusts.
+ */
+const AI_ADJUST_MOVEMENT_TYPES = ['adjust', 'damage', 'loss', 'correction'] as const;
+
+function resolveAdjustMovementType(raw: unknown): MovementType {
+  if (raw === undefined || raw === null || raw === '') return 'adjust';
+  if (
+    typeof raw === 'string' &&
+    (AI_ADJUST_MOVEMENT_TYPES as ReadonlyArray<string>).includes(raw)
+  ) {
+    return raw as MovementType;
+  }
+  throw new Error(
+    `movementType must be one of ${AI_ADJUST_MOVEMENT_TYPES.join(', ')} (got ${JSON.stringify(raw)})`,
+  );
+}
+
 const adjustStockTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'adjustStock',
     description:
@@ -775,7 +818,7 @@ const adjustStockTool: ToolExecutor = {
         movementType: {
           type: SchemaType.STRING,
           description:
-            "Optional movement classification. One of 'adjust' (default), 'shrinkage', 'damage', 'count'.",
+            "Optional movement classification. One of 'adjust' (default), 'damage', 'loss', 'correction'. Any other value is rejected — use 'loss' for shrinkage/theft and 'correction' for cycle-count fixes.",
         },
       },
       required: ['itemId', 'delta', 'reason'],
@@ -785,10 +828,21 @@ const adjustStockTool: ToolExecutor = {
     const itemId = String(args.itemId ?? '');
     const delta = Number(args.delta);
     const reason = String(args.reason ?? '').trim();
-    const movementType =
-      typeof args.movementType === 'string' && args.movementType.length > 0
-        ? args.movementType
-        : 'adjust';
+    // MED-19: allowlist the movement classification.
+    //
+    // This used to take the model's string verbatim and force it past the
+    // compiler with `as never`. Two problems, both real: the cast disabled the
+    // ONE check that would have caught it, and the declaration advertised
+    // 'shrinkage' and 'count' — neither of which exists in movementTypeSchema.
+    // So the documented values were writing a movement_type the enum does not
+    // contain, and the model could put ANY string on the row (including one
+    // that misreports a removal as a receipt in the activity feed and every
+    // movement-type-filtered report downstream).
+    //
+    // Reject rather than silently coerce: the declaration names the exact four
+    // values, so an unknown one means the model guessed, and a guessed audit
+    // classification is worse than a retry.
+    const movementType = resolveAdjustMovementType(args.movementType);
     if (!itemId) throw new Error('itemId is required');
     if (!Number.isFinite(delta) || delta === 0) {
       throw new Error('delta must be a non-zero number');
@@ -807,7 +861,9 @@ const adjustStockTool: ToolExecutor = {
     await svc.adjustStock({
       itemId,
       quantityChange: delta,
-      movementType: movementType as never,
+      // No cast: `movementType` is a MovementType, so the compiler now checks
+      // this call the way it checks every other adjustStock caller.
+      movementType,
       reason,
     });
     revalidateInventoryList(ctx.organizationId);
@@ -875,11 +931,14 @@ const lookupIsbnTool: ToolExecutor = {
       found: true,
       isbn: meta.isbn,
       // title/authors/publisher come from Google Books / Open Library /
-      // LoC — third-party data that could contain anything. Treat as
-      // data, not instructions.
-      title: dataTag(meta.title),
-      authors: Array.isArray(meta.authors) ? meta.authors.map((a) => dataTag(a)) : meta.authors,
-      publisher: dataTag(meta.publisher),
+      // LoC — third-party data that could contain anything. Fenced as data
+      // AND tainted: nobody in this org wrote it, so it must never turn up in
+      // a write tool's arguments.
+      title: untrustedTag(meta.title),
+      authors: Array.isArray(meta.authors)
+        ? meta.authors.map((a) => untrustedTag(a))
+        : meta.authors,
+      publisher: untrustedTag(meta.publisher),
       publishedDate: meta.publishedDate,
       grade: meta.grade,
       sources: meta.sources,
@@ -914,6 +973,7 @@ const previewBulkBookImportTool: ToolExecutor = {
 };
 
 const executeBulkBookImportTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'executeBulkBookImport',
     description:
@@ -1074,6 +1134,7 @@ const exportInventoryTool: ToolExecutor = {
 };
 
 const draftPosTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'draftPos',
     description:
@@ -1250,6 +1311,7 @@ const suggestReorderPointTool: ToolExecutor = {
 };
 
 const applyReorderPointTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'applyReorderPoint',
     description:
@@ -1281,6 +1343,12 @@ const applyReorderPointTool: ToolExecutor = {
     if (!Number.isFinite(reorderPoint) || reorderPoint < 0) {
       throw new Error('reorderPoint must be a number ≥ 0');
     }
+    // Explicit gate at the tool boundary. InventoryService.update() asserts
+    // items:update too, but this tool reads the item FIRST (to report old →
+    // new), so without this a caller who cannot write still gets a read out of
+    // a tool declared WRITE. Every other write tool in this file asserts up
+    // front; this one only inherited the service's check.
+    assertPermission(ctx, 'items:update');
     // UpdateItemInput is camelCase — snake_case keys would be silently ignored
     // by InventoryService.update (caught by adversarial review; the compiler
     // checks this now that there's no cast).
@@ -1354,6 +1422,7 @@ const suggestReorderPointsTool: ToolExecutor = {
 };
 
 const draftPosFromForecastTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'draftPosFromForecast',
     description:
@@ -1365,6 +1434,11 @@ const draftPosFromForecastTool: ToolExecutor = {
     },
   },
   async execute(_args, ctx) {
+    // Explicit gate at the tool boundary, matching draftPos above.
+    // PlanningService.autoGenerateDraftPOs asserts the same permission, but a
+    // write tool that reaches the service before any check of its own is the
+    // one shape this file does not use anywhere else.
+    assertPermission(ctx, 'purchase_orders:manage');
     const { PlanningService } = await import('@/server/services/planning');
     const svc = new PlanningService(ctx);
     return svc.autoGenerateDraftPOs();
@@ -1374,6 +1448,42 @@ const draftPosFromForecastTool: ToolExecutor = {
 const VISION_MODEL = env.GEMINI_MODEL;
 const VISION_FETCH_TIMEOUT_MS = 12_000;
 const VISION_MAX_BYTES = 6 * 1024 * 1024; // ~6 MB
+
+/**
+ * MED-18: hosts identifyFromPhoto may fetch from.
+ *
+ * The URL for this tool is chosen by the MODEL, from text that may itself have
+ * arrived through a tool result — so it is attacker-influenceable, and the
+ * fetch is server-side egress. safeFetch already blocked private/link-local/
+ * metadata addresses, which stops the classic SSRF pivot; it did not stop the
+ * remaining abuses of an authenticated any-URL fetcher: using our egress IP as
+ * an open proxy, probing which public hosts respond, or exfiltrating to an
+ * attacker-controlled collector by embedding a URL in injected text.
+ *
+ * Both real callers fetch our OWN storage: the web composer uploads the photo
+ * to Supabase Storage and passes the signed URL, and the mobile app posts bytes
+ * to /api/v1/ai/identify-from-photo instead of using this tool at all. So the
+ * allowlist is the Supabase project host plus the app host — a deliberate
+ * narrowing from the previous "arbitrary external URLs work too", which was
+ * never a flow the product needed.
+ *
+ * Reuses SsrfGuardOptions.hostAllowlist — the mechanism already used for book
+ * cover rehosting (server/services/books-import.ts). No second guard.
+ */
+const VISION_HOST_ALLOWLIST: ReadonlyArray<string> = (() => {
+  const hosts = new Set<string>();
+  for (const raw of [env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_APP_URL]) {
+    if (!raw) continue;
+    try {
+      hosts.add(new URL(raw).hostname.toLowerCase());
+    } catch {
+      // Malformed env value — skip it rather than crash the module. An empty
+      // allowlist fails CLOSED (safeFetch rejects every host), which is the
+      // right direction for a security control.
+    }
+  }
+  return Array.from(hosts);
+})();
 
 const identifyFromPhotoTool: ToolExecutor = {
   declaration: {
@@ -1386,7 +1496,7 @@ const identifyFromPhotoTool: ToolExecutor = {
         imageUrl: {
           type: SchemaType.STRING,
           description:
-            'Public HTTP(S) URL of the image to identify. Signed Supabase Storage URLs work; arbitrary external URLs work too as long as the server can fetch them.',
+            "HTTP(S) URL of the image to identify. Must be a signed Supabase Storage URL or an URL on this app's own host — arbitrary external URLs are rejected. If the user has a photo, have them attach it in the chat composer so it gets uploaded first.",
         },
         hint: {
           type: SchemaType.STRING,
@@ -1397,10 +1507,20 @@ const identifyFromPhotoTool: ToolExecutor = {
       required: ['imageUrl'],
     },
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const usingClaude = resolveAiProvider() === 'claude';
     if (usingClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) {
       throw new Error(usingClaude ? 'ANTHROPIC_API_KEY not configured' : 'GEMINI_API_KEY not configured');
+    }
+    // MED-18: per-user rate limit. This tool does an outbound fetch AND a
+    // multimodal model call, both of which the MODEL can trigger in a loop —
+    // lookupIsbn (a strictly cheaper tool) has been capped since it shipped
+    // while this one, the expensive one, was uncapped. Fail CLOSED, matching
+    // the vision route at /api/v1/ai/identify-from-photo: if the limiter is
+    // unavailable we would rather refuse than leave the egress path open.
+    const rl = await checkRateLimit(`ai-identify-photo:${ctx.userId}`, 20, 60_000, 'closed');
+    if (!rl.allowed) {
+      throw new Error('Rate limit reached for photo identification. Try again in a moment.');
     }
     const url = String(args.imageUrl ?? '');
     if (!/^https?:\/\//i.test(url)) {
@@ -1422,7 +1542,11 @@ const identifyFromPhotoTool: ToolExecutor = {
       const headAc = new AbortController();
       const headTimer = setTimeout(() => headAc.abort(), VISION_FETCH_TIMEOUT_MS);
       try {
-        const headRes = await safeFetch(url, { method: 'HEAD', signal: headAc.signal });
+        const headRes = await safeFetch(url, {
+          method: 'HEAD',
+          signal: headAc.signal,
+          hostAllowlist: VISION_HOST_ALLOWLIST,
+        });
         // Tightened from "fall through on non-2xx": if the HEAD explicitly
         // says 401/403/404/410, the GET is going to fail too — abort early
         // so we don't burn a slower GET for nothing. We still tolerate
@@ -1477,7 +1601,10 @@ const identifyFromPhotoTool: ToolExecutor = {
     let bytes: ArrayBuffer;
     let mimeType: string;
     try {
-      const res = await safeFetch(url, { signal: ac.signal });
+      const res = await safeFetch(url, {
+        signal: ac.signal,
+        hostAllowlist: VISION_HOST_ALLOWLIST,
+      });
       if (!res.ok) {
         throw new Error(`fetch failed: ${res.status} ${res.statusText}`);
       }
@@ -1575,7 +1702,12 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
     // hand it back in the structured response. We scan every string
     // field for injection-shaped phrases and redact them before the
     // chat loop ever sees the result.
-    return scrubVisionInjection(parsed);
+    //
+    // The regex scan catches the KNOWN phrasings. `untrustedDeep` covers the
+    // ones it does not: whatever text survives is fenced as data AND recorded
+    // as external-origin taint, so even a novel injection that reads cleanly
+    // to the regex cannot be quoted into a write tool's arguments.
+    return untrustedDeep(scrubVisionInjection(parsed));
   },
 };
 
@@ -1753,21 +1885,25 @@ const listOrderRequestsTool: ToolExecutor = {
     return {
       total: rows.length,
       requests: rows.map((r) => {
-        let requesterDisplay: string;
+        // Provenance split, and the reason this branch matters for security:
+        // an INTERNAL requester's display name was typed by a member of this
+        // org (fenced, but not taint — quoting a colleague's name in a denial
+        // reason is legitimate). An EXTERNAL one came from a PUBLIC order link
+        // and was typed by an UNAUTHENTICATED stranger — that is the exact
+        // field HI-5 is about, so it is fenced AND tainted.
+        let requesterDisplay: unknown;
         if (r.requesterUserId) {
           const u = userMap.get(r.requesterUserId);
-          requesterDisplay = u?.fullName || u?.email || '(team member)';
+          requesterDisplay = dataTag(u?.fullName || u?.email || '(team member)');
         } else {
-          requesterDisplay = `${r.requesterName ?? 'External requester'}${r.requesterOrgLabel ? ' · ' + r.requesterOrgLabel : ''}`;
+          requesterDisplay = untrustedTag(
+            `${r.requesterName ?? 'External requester'}${r.requesterOrgLabel ? ' · ' + r.requesterOrgLabel : ''}`,
+          );
         }
         return {
           id: r.id,
           status: r.status,
-          // requesterDisplay and warehouseName are user-supplied strings
-          // (one comes from the public form submission, the other from
-          // an org user's warehouse rename). Wrap so the model treats
-          // them as data, never instructions.
-          requesterDisplay: dataTag(requesterDisplay),
+          requesterDisplay,
           warehouseName: dataTag(r.warehouseName),
           lineCount: r.lineCount,
           totalQuantity: r.totalQuantity,
@@ -1863,6 +1999,7 @@ const getOrderRequestSummaryTool: ToolExecutor = {
 // ──────────────────────────────────────────────────────────────────
 
 const approveOrderTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'approveOrder',
     description:
@@ -1904,6 +2041,7 @@ const approveOrderTool: ToolExecutor = {
 };
 
 const denyOrderTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'denyOrder',
     description:
@@ -1943,6 +2081,7 @@ const denyOrderTool: ToolExecutor = {
 };
 
 const cancelOrderTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'cancelOrder',
     description:
@@ -2196,7 +2335,9 @@ const getRecentOrdersTool: ToolExecutor = {
     return list.map((o) => ({
       id: o.id,
       status: o.status,
-      requester: dataTag(o.requesterName ?? o.requesterEmail ?? null),
+      // requesterName / requesterEmail on a public-link order are written by
+      // an unauthenticated stranger — fence AND taint (see listOrderRequests).
+      requester: untrustedTag(o.requesterName ?? o.requesterEmail ?? null),
       warehouseName: dataTag(o.warehouseName),
       lineCount: o.lineCount,
       totalQty: o.totalQuantity,
@@ -2425,9 +2566,14 @@ const searchInventorySemanticTool: ToolExecutor = {
       };
     }
 
+    // HI-3, layer 2 (database). Migration 0320 adds `p_org_id` and filters
+    // inside the function, and DROPS the old org-blind 3-argument signature so
+    // no caller can reintroduce the leak. The org id comes from ctx — never
+    // from the model, same rule as every other tool in this file.
     const { data, error } = await ctx.supabase.rpc(
       'match_inventory_items_by_embedding',
       {
+        p_org_id: ctx.organizationId,
         p_query: vectorLiteral(vec),
         p_limit: limit,
         p_min_score: minScore,
@@ -2438,7 +2584,7 @@ const searchInventorySemanticTool: ToolExecutor = {
         error: 'search_failed',
         message: error.message,
         hint:
-          'If the message mentions the function not existing, migration 0094 needs to be applied. If no rows have embeddings yet, run the backfill from /dashboard/settings (or via the embedItems action).',
+          'If the message mentions the function not existing or no function matching the arguments, migration 0320 needs to be applied (it replaces 0094 s signature with an org-scoped one). If no rows have embeddings yet, run the backfill from /dashboard/settings (or via the embedItems action).',
       };
     }
     const rows = (data ?? []) as Array<{
@@ -2449,18 +2595,51 @@ const searchInventorySemanticTool: ToolExecutor = {
       quantity_on_hand: number;
       similarity: number;
     }>;
-    return rows.map((r) => ({
-      id: r.id,
-      name: dataTag(r.name),
-      sku: r.sku,
-      warehouseId: r.warehouse_id,
-      qty: r.quantity_on_hand,
-      similarity: Math.round(r.similarity * 1000) / 1000,
-    }));
+
+    // HI-3, layer 1 (application). Independent of the migration, and kept even
+    // after it lands.
+    //
+    // WHY THIS IS NEEDED AT ALL: the RPC is SECURITY INVOKER, so RLS applies —
+    // but RLS on inventory_items admits every org the caller is a MEMBER of,
+    // which is not the same set as "the org this chat belongs to". For a
+    // multi-org user (and for any future act-as path) the vector search
+    // therefore returned another organization's item names and quantities
+    // straight into this org's model context. Vector similarity ignores tenancy
+    // entirely: nothing in the ranking prefers the current org's rows.
+    //
+    // Post-filter by asking the DB which of the returned ids are actually in
+    // ctx.organizationId. One extra round-trip on ≤25 ids, and it fails CLOSED:
+    // if the confirmation query errors we return the error rather than the
+    // unverified rows.
+    if (rows.length === 0) return [];
+    const { data: owned, error: ownedError } = await ctx.supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', ctx.organizationId)
+      .in(
+        'id',
+        rows.map((r) => r.id),
+      );
+    if (ownedError) {
+      return { error: 'search_failed', message: ownedError.message };
+    }
+    const inOrg = new Set((owned ?? []).map((r) => (r as { id: string }).id));
+
+    return rows
+      .filter((r) => inOrg.has(r.id))
+      .map((r) => ({
+        id: r.id,
+        name: dataTag(r.name),
+        sku: r.sku,
+        warehouseId: r.warehouse_id,
+        qty: r.quantity_on_hand,
+        similarity: Math.round(r.similarity * 1000) / 1000,
+      }));
   },
 };
 
 const backfillEmbeddingsTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'backfillEmbeddings',
     description:
@@ -2520,13 +2699,16 @@ const listScheduleEventsTool: ToolExecutor = {
         status: e.status,
         location: dataTag(e.locationText),
         warehouseName: e.warehouseName,
-        requesterName: dataTag(e.requesterName),
+        // Auto-created delivery events carry the ORDER's requester name, which
+        // on a public-link order came from an unauthenticated form.
+        requesterName: untrustedTag(e.requesterName),
       })),
     };
   },
 };
 
 const createScheduleEventTool: ToolExecutor = {
+  write: true,
   declaration: {
     name: 'createScheduleEvent',
     description:
@@ -2547,6 +2729,9 @@ const createScheduleEventTool: ToolExecutor = {
     },
   },
   async execute(args, ctx) {
+    // Explicit gate at the tool boundary (ScheduleService.create asserts it
+    // too) so a viewer's attempt is refused before any parsing or import work.
+    assertPermission(ctx, 'schedule:manage');
     const { ScheduleService } = await import('@/server/services/schedule');
     const { createScheduleEventSchema } = await import('@stockpilot/core');
     const parsed = createScheduleEventSchema.safeParse({

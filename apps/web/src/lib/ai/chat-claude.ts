@@ -8,9 +8,12 @@ import { reportError } from '@/lib/error-reporter';
 import { TOOL_CATALOG, toolDeclarations } from './tools';
 import {
   classifyToolErrorMessage,
+  executeToolCall,
   MAX_HISTORY_TURNS,
   MAX_TOOL_CALLS_PER_ROUND,
   MAX_TOOL_HOPS,
+  newTurnOriginRegistry,
+  runWithUntrustedOrigins,
   scrubDataTags,
   SYSTEM_PROMPT,
   type ChatStreamEvent,
@@ -102,6 +105,8 @@ export async function* streamChatClaude(
 
   const toolCallsUsed: ToolCallRecord[] = [];
   let assembledReply = '';
+  // ONE registry for the whole turn — same rails as the Gemini loop.
+  const origins = newTurnOriginRegistry();
 
   for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
     if (signal?.aborted) throw new Error('aborted');
@@ -224,7 +229,11 @@ export async function* streamChatClaude(
           };
         }
         try {
-          const out = await tool.execute(call.args ?? {}, ctx);
+          // Shared boundary with the Gemini loop: arg de-fencing, write
+          // refusal on untrusted-quoted args, result fencing, write audit.
+          const out = await runWithUntrustedOrigins(origins, () =>
+            executeToolCall(tool, call.name, call.args ?? {}, ctx),
+          );
           return { type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(out ?? null) };
         } catch (err) {
           void reportError(err, {
