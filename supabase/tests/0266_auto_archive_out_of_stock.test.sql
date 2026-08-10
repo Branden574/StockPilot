@@ -66,8 +66,18 @@ select isnt((select zero_since from public.inventory_items where id='00000000-00
   'zero_since is set when qty crosses to 0');
 
 -- 2. Staying at/below zero keeps the original zero_since (does not reset).
+-- The second UPDATE below re-writes quantity_on_hand as 0 rather than -1. It
+-- used to write -1, which migration 0322's
+-- inventory_items_quantity_on_hand_nonneg CHECK now refuses (MED-11: a negative
+-- on-hand was reachable only by a direct PostgREST PATCH or a cycle count
+-- carrying a negative counted_quantity — never by any RPC, all of which raise
+-- insufficient_stock first). The assertion is unchanged and still exercises the
+-- SAME branch of _track_zero_since: `before update of quantity_on_hand` fires
+-- on any UPDATE naming the column, and with old = 0 and new = 0 neither of the
+-- function's two if-branches is taken, so zero_since must survive untouched.
+-- 0322's own test file asserts the negative write is refused.
 update public.inventory_items set zero_since = now() - interval '10 days' where id='00000000-0000-0000-0000-0000000000b1';
-update public.inventory_items set quantity_on_hand = -1 where id='00000000-0000-0000-0000-0000000000b1';
+update public.inventory_items set quantity_on_hand = 0 where id='00000000-0000-0000-0000-0000000000b1';
 select cmp_ok((select zero_since from public.inventory_items where id='00000000-0000-0000-0000-0000000000b1'), '<',
   now() - interval '1 day', 'zero_since is preserved while still <= 0');
 

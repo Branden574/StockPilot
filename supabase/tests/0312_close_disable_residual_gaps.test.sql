@@ -10,8 +10,12 @@
 --      the new one. Asserted as text on pg_policies, the repo's idiom for
 --      storage.objects (see 0026_avatar_logo_buckets.test.sql) since these
 --      policies cannot be exercised end-to-end without the storage extension.
---      The read policy ("user-avatars authenticated read") is asserted
---      UNCHANGED — this migration must not touch it.
+--      The read policy ("user-avatars authenticated read") was originally
+--      asserted UNCHANGED here. Wave C2 (MED-13) found that 0105 shape to BE a
+--      vulnerability — its whole predicate was `bucket_id = 'user-avatars'`, so
+--      one .list() enumerated every avatar path platform-wide — and migration
+--      0322 scopes it by folder ownership. The two assertions near the end of
+--      this file were updated accordingly rather than left asserting the hole.
 --
 --   2. user_can_access_inventory(uuid,uuid,uuid,text) and
 --      user_can_access_warehouse(uuid,uuid,text) no longer hold EXECUTE for
@@ -28,7 +32,7 @@
 
 begin;
 
-select plan(28);
+select plan(29);
 
 -- ============================================================================
 -- 1. storage.objects — user-avatars write policies preserve the original
@@ -153,13 +157,34 @@ select is(
   'all three user-avatars write policies remain scoped to {authenticated}'
 );
 
--- The read policy is untouched by this migration: no disabled_at reference,
--- still authenticated-only (0105's shape), still just bucket_id.
+-- The read policy carries no disabled_at reference. 0312 did not add one, and
+-- 0322 (which DID rewrite this policy, to scope it by folder ownership) did not
+-- either — deliberately, because a disabled account holds no session (0310)
+-- and object downloads bypass this policy entirely while the bucket is public.
 select ok(
   (select qual from pg_policies
     where schemaname = 'storage' and tablename = 'objects'
       and policyname = 'user-avatars authenticated read') !~ 'disabled_at',
-  'user-avatars authenticated read (SELECT) was NOT touched by this migration'
+  'user-avatars authenticated read (SELECT) still carries no disabled_at guard'
+);
+
+-- INVERTED BY WAVE C2 (MED-13). This assertion previously read
+--   '... (SELECT) was NOT touched by this migration'
+-- and, together with the one above, pinned 0105's shape — a policy whose ENTIRE
+-- predicate was `bucket_id = 'user-avatars'`. That shape was the vulnerability:
+-- any authenticated user could POST /storage/v1/object/list/user-avatars and
+-- enumerate every avatar path on the platform, across every tenant. A test
+-- asserting "unchanged" is a test defending the hole once the hole is known, so
+-- it is replaced here by an assertion of the SCOPED shape 0322 installs. Full
+-- both-directions coverage lives in supabase/tests/0322_*.test.sql; this one
+-- exists so that reverting 0322's policy fails 0312's file too, where the
+-- original claim was made.
+select matches(
+  (select qual from pg_policies
+    where schemaname = 'storage' and tablename = 'objects'
+      and policyname = 'user-avatars authenticated read'),
+  'foldername',
+  'user-avatars authenticated read (SELECT) is folder-ownership scoped (0322), not bucket-wide'
 );
 
 -- ============================================================================

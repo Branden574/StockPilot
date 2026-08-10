@@ -59,20 +59,41 @@ async function requireConfigurer() {
 }
 
 /**
- * Anti-escalation guard: you can only GRANT a permission you hold yourself.
- * This stops an admin from granting (to a role, a user, or their own account) a
- * permission they lack — most importantly billing:manage, which is owner-only.
- * Revokes (false) and clears (null) are always allowed; they can't escalate.
+ * Anti-escalation guard: you can only GRANT — or CLEAR — a permission you hold
+ * yourself. This stops an admin from handing (to a role, a user, or their own
+ * account) a permission they lack — most importantly billing:manage, which is
+ * owner-only.
+ *
+ * MED-14: `null` (clear) is gated by the SAME rule as `true`, not exempt from
+ * it. Clearing is a DELETE of the override row, and deleting a `granted=false`
+ * row removes a RESTRICTION — the subject reverts to their role default, which
+ * is an escalation. Treating clears as harmless let an admin delete an
+ * owner-applied restriction off their own account. Only `false` (writing a
+ * restriction) is unconditionally safe, because it can only ever take
+ * permissions away.
+ *
+ * The owner-lockout escape hatch is preserved, but note WHERE it lives: NOT in
+ * `can()`, which simply reads ctx.permissions when present. It is
+ * effectivePermissions() / loadEffectivePermissions() that short-circuit role
+ * 'owner' to the FULL permission set (with no DB round-trip), so an owner's
+ * effective set always contains every permission and this guard always passes
+ * for them. Anything that ever lets an owner context carry a narrowed
+ * permission set would silently close the escape hatch here.
+ *
+ * The database enforces the same invariant independently — see the
+ * *_overrides_delete policies in migration 0322, which allow deleting a
+ * `granted=true` row freely but require has_permission() to delete a
+ * `granted=false` one.
  */
 function assertCanGrant(
   ctx: Awaited<ReturnType<typeof requireConfigurer>>,
   permission: Permission,
   granted: boolean | null,
 ): void {
-  if (granted === true && !can(ctx, permission)) {
+  if (granted !== false && !can(ctx, permission)) {
     throw new ServiceError(
       'forbidden',
-      'You can only grant permissions you have yourself.',
+      'You can only grant or clear permissions you have yourself.',
     );
   }
 }

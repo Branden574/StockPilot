@@ -36,7 +36,12 @@ const csvRowSchema = z.object({
   description: z.string().max(5000).optional(),
   unit_cost: z.coerce.number().nonnegative().default(0),
   retail_price: z.coerce.number().nonnegative().default(0),
-  quantity_on_hand: z.coerce.number().default(0),
+  // MED-11: `.nonnegative()` brings this in line with every sibling numeric
+  // column here and with migration 0322's inventory_items_quantity_on_hand_nonneg
+  // CHECK. It was the only one missing the floor, so a CSV carrying a negative
+  // quantity used to import silently; it would now fail with a raw
+  // check_violation instead of a per-row validation error.
+  quantity_on_hand: z.coerce.number().nonnegative().default(0),
   reorder_point: z.coerce.number().nonnegative().default(0),
   reorder_quantity: z.coerce.number().nonnegative().default(0),
   unit_of_measure: z.string().max(32).optional(),
