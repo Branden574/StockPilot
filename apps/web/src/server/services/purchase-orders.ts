@@ -105,6 +105,66 @@ interface PoPageRpcRow {
 /** One PO index table row — the RPC row minus the window count. */
 export type PoPageRow = Omit<PoPageRpcRow, 'filtered_count'>;
 
+/**
+ * Every status that COMMITS spend / creates a receivable PO — i.e. a
+ * transition OUT of 'draft' that a spend control must clear. The canonical
+ * placement is 'ordered', but 'expected_inbound' and 'partially_received' are
+ * equally receivable, and 'received' additionally fabricates a fully-received
+ * PO (no receipts, no stock movements). The action's TS union is compile-time
+ * only, so a forged call can carry any of these; each must clear the approval
+ * threshold. 'draft' (de-commit) and 'cancelled' (terminal) are NOT here — they
+ * stay open to any purchase_orders:manage holder.
+ */
+export const SPEND_COMMITTING_PO_STATUSES: ReadonlySet<string> = new Set([
+  'ordered',
+  'expected_inbound',
+  'partially_received',
+  'received',
+]);
+
+/**
+ * PO approval threshold (Intacct-grade spend governance, no migration — lives
+ * in the purchase_orders module's organization_modules.settings as
+ * `approvalThresholdAmount`). When configured (> 0), a PO whose total is AT OR
+ * ABOVE the threshold can only be committed by an owner or admin; managers keep
+ * full draft/cancel rights at any size. Absent/0 = feature off (the default —
+ * existing orgs are unaffected).
+ *
+ * Shared by the PO status transition (PurchaseOrdersService.updateStatus) AND
+ * the PO-import approval (PoImportsService.approve) so the two spend-committing
+ * paths can never drift — a threshold enforced on one but not the other is not
+ * a threshold.
+ *
+ * FAIL CLOSED: a settings read error blocks the transition rather than silently
+ * waiving governance (an approval gate that disappears on a transient DB error
+ * is not a gate).
+ */
+export async function assertPoApprovalThreshold(
+  ctx: ServiceContext,
+  total: number,
+): Promise<void> {
+  if (ctx.role === 'owner' || ctx.role === 'admin') return;
+  const { data, error } = await ctx.supabase
+    .from('organization_modules')
+    .select('settings')
+    .eq('organization_id', ctx.organizationId)
+    .eq('module_id', 'purchase_orders')
+    .maybeSingle();
+  if (error) throw new ServiceError('internal_error', error.message);
+  const settings = ((data as { settings?: unknown } | null)?.settings ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const raw = Number(settings.approvalThresholdAmount);
+  const threshold = Number.isFinite(raw) && raw > 0 ? raw : null;
+  if (threshold !== null && total >= threshold) {
+    throw new ServiceError(
+      'forbidden',
+      `This purchase order ($${total.toLocaleString()}) meets the $${threshold.toLocaleString()} approval threshold — ask an owner or admin to place it.`,
+    );
+  }
+}
+
 export class PurchaseOrdersService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1061,9 +1121,16 @@ export class PurchaseOrdersService {
         'This purchase order was cancelled and cannot be reopened. Create a new one instead.',
       );
     }
-    if (status === 'ordered') {
+    if (SPEND_COMMITTING_PO_STATUSES.has(status)) {
       // Spend governance: committing the order is the gated act — drafting
       // and cancelling stay open to everyone with purchase_orders:manage.
+      // Gate EVERY receivable transition, not just 'ordered': a forged action
+      // payload can carry 'expected_inbound' / 'partially_received' / 'received'
+      // (the TS union is compile-time only), each of which writes a receivable
+      // PO — 'received' fabricates a fully-received one — and must clear the
+      // same threshold. The action boundary (updatePoStatusAction) additionally
+      // zod-rejects those states so the UI's real set (draft/ordered/cancelled)
+      // is the only thing a client can send; this is the defense-in-depth twin.
       await this.assertApprovalThreshold(Number((po as { total?: unknown }).total ?? 0));
     }
     const { data: row, error } = await this.ctx.supabase
@@ -1225,38 +1292,13 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * PO approval threshold (Intacct-grade spend governance, no migration —
-   * lives in the purchase_orders module's organization_modules.settings as
-   * `approvalThresholdAmount`). When configured (> 0), a PO whose total is AT
-   * OR ABOVE the threshold can only be PLACED (status → ordered) by an owner
-   * or admin; managers keep full draft/cancel rights at any size. Absent/0 =
-   * feature off (the default — existing orgs are unaffected).
-   *
-   * FAIL CLOSED: a settings read error blocks the transition rather than
-   * silently waiving governance (an approval gate that disappears on a
-   * transient DB error is not a gate).
+   * Spend-governance gate for a status transition. Delegates to the shared
+   * `assertPoApprovalThreshold` (module scope) so the PO-import approval path
+   * enforces the identical threshold — see that function for the full rationale
+   * and the fail-closed posture.
    */
   private async assertApprovalThreshold(total: number): Promise<void> {
-    if (this.ctx.role === 'owner' || this.ctx.role === 'admin') return;
-    const { data, error } = await this.ctx.supabase
-      .from('organization_modules')
-      .select('settings')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('module_id', 'purchase_orders')
-      .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
-    const settings = ((data as { settings?: unknown } | null)?.settings ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const raw = Number(settings.approvalThresholdAmount);
-    const threshold = Number.isFinite(raw) && raw > 0 ? raw : null;
-    if (threshold !== null && total >= threshold) {
-      throw new ServiceError(
-        'forbidden',
-        `This purchase order ($${total.toLocaleString()}) meets the $${threshold.toLocaleString()} approval threshold — ask an owner or admin to place it.`,
-      );
-    }
+    await assertPoApprovalThreshold(this.ctx, total);
   }
 
   /**

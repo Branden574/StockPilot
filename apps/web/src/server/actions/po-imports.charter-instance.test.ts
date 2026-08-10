@@ -16,24 +16,43 @@ const { mockCreate, mockUpsert } = vi.hoisted(() => ({
   mockUpsert: vi.fn(async () => {}),
 }));
 
+// createItemsFromPoLinesAction now routes through PoImportsService.createItemsFromLines
+// (the gated twin), which constructs these services with `new` and passes the
+// withContext ctx. Behavior under test is unchanged (same shared implementation);
+// only the mock seam moved from the static forCurrentUser to constructor + withContext.
 vi.mock('@/server/services/inventory', () => ({
-  InventoryService: { forCurrentUser: vi.fn(async () => ({ create: mockCreate })) },
+  InventoryService: class {
+    create = mockCreate;
+  },
 }));
 vi.mock('@/server/services/vendor-item-mappings', () => ({
-  VendorItemMappingsService: { forCurrentUser: vi.fn(async () => ({ upsert: mockUpsert })) },
-}));
-vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({
-    organizationId: 'org-test',
-    userId: 'user-test',
-    role: 'admin',
-  })),
+  VendorItemMappingsService: class {
+    upsert = mockUpsert;
+  },
 }));
 
 const { mockSupabaseRef } = vi.hoisted(() => ({ mockSupabaseRef: { client: null as unknown } }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => mockSupabaseRef.client),
 }));
+vi.mock('@/server/services/context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/services/context')>();
+  return {
+    ...actual,
+    // Admin so the twin's purchase_orders:manage gate passes via the static role
+    // fallback; enabledModules carries only po_imports (sports stays OFF, matching
+    // the previous empty-module behavior). supabase is the per-test stub.
+    withContext: vi.fn(async () => ({
+      organizationId: 'org-test',
+      userId: 'user-test',
+      role: 'admin',
+      supabase: mockSupabaseRef.client,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set(['po_imports']),
+    })),
+  };
+});
 
 import { createItemsFromPoLinesAction } from './po-imports';
 

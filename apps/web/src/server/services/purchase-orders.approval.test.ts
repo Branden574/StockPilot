@@ -129,6 +129,27 @@ describe('PurchaseOrdersService.updateStatus — approval threshold', () => {
     await svc.updateStatus('po-1', 'cancelled');
     expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
   });
+
+  // HI-1 (path 1, part b): the spend control must gate EVERY receivable
+  // transition, not just the canonical 'ordered'. The action's TS union is
+  // compile-time only, so a forged payload can carry 'expected_inbound' /
+  // 'partially_received' / 'received' — each writes a receivable PO ('received'
+  // fabricates a fully-received one with no receipts). Casting past the TS union
+  // reproduces exactly that forged wire shape.
+  for (const forged of ['expected_inbound', 'partially_received', 'received'] as const) {
+    it(`blocks a manager committing an above-threshold PO via a forged '${forged}' transition`, async () => {
+      const stub = stubFor({ total: 750, settings: { approvalThresholdAmount: 500 } });
+      const svc = new PurchaseOrdersService(
+        makeServiceContext(stub.client, { role: 'manager' }) as never,
+      );
+      const err = await svc.updateStatus('po-1', forged as never).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('forbidden');
+      expect((err as ServiceError).message).toMatch(/approval threshold/i);
+      // The receivable PO write must never have landed.
+      expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    });
+  }
 });
 
 describe('PurchaseOrdersService.updateStatus — cancelled is terminal', () => {
