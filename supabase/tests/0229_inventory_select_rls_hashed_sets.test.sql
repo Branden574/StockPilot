@@ -481,18 +481,39 @@ select is(
   'OLD: the pre-0229 predicate LEAKED all 5 items to the expired impersonator (the gap 0229 closes)');
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- stock_movements: org-membership scope preserved (NOT warehouse-scoped).
+-- stock_movements: org membership is necessary but, since 0321, NOT sufficient.
 -- ═════════════════════════════════════════════════════════════════════════════
 
--- staffNone sees zero ITEMS (above) but ALL org A movements — proving the
--- movements policy is org-membership-only, exactly like old is_org_member.
+-- AMENDED BY MIGRATION 0321 (security Wave C1, finding HI-7). This assertion
+-- used to expect 2 and was captioned "an org A member with NO warehouse
+-- assignment still sees both org A movements (org-membership scope preserved)".
+-- That expectation was correct for 0229 — a performance migration whose whole
+-- claim was row-set equivalence with the 0140 policy — but the semantics it
+-- pinned WERE the vulnerability: staffNone sees zero ITEMS (asserted above) and
+-- yet could read every movement in the organization, including other
+-- warehouses' quantities and the acting colleague's embedded email.
+--
+-- 0321 rewrote stock_movements_select as `org membership AND (activity_logs:read
+-- OR the movement's item is in one of my warehouses)`. staffNone is a staff
+-- member (no activity_logs:read in any default set) with no assignment, so both
+-- disjuncts are false and the correct answer is now ZERO. This also matches what
+-- the app has always rendered for this user: MovementsService.list returns []
+-- when access.readableIds is empty.
+--
+-- The org-membership conjunct this section was written to protect is unchanged
+-- and is still proved by the four assertions below (cross-org isolation,
+-- non-member, expired impersonation, active impersonation) — those callers are
+-- owners, who hold activity_logs:read by short-circuit, so they exercise the
+-- membership boundary without the warehouse branch interfering.
+-- Both directions of the new rule are proved in
+-- supabase/tests/0321_movement_read_scope_and_attribution.test.sql.
 set local "request.jwt.claim.sub" to 'ac022900-0000-0000-0000-000000000104';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select is(
   (select count(*) from public.stock_movements where organization_id::text like 'ac022900%'),
-  2::bigint,
-  'movements: an org A member with NO warehouse assignment still sees both org A movements (org-membership scope preserved)');
+  0::bigint,
+  'movements (0321): an org A member with NO warehouse assignment and no activity_logs:read now sees ZERO movements — org membership alone is no longer sufficient');
 reset role;
 
 set local "request.jwt.claim.sub" to 'ac022900-0000-0000-0000-000000000108';
