@@ -9,6 +9,11 @@ import { detectFileKind } from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
 import { checkRateLimit } from '@/lib/rate-limit';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+} from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +32,33 @@ const MAX_BYTES = 10 * 1024 * 1024;
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // MED-20: module gate + permission gate.
+  //
+  // This endpoint burns the org's model quota and serverless time on a
+  // multimodal call, and it was reachable by ANY authenticated member of ANY
+  // org — including an org that does not have the AI module, and including a
+  // viewer. Every other AI endpoint gates both (see
+  // /api/v1/ai/identify-from-photo and /api/ai/chat); this one only had a rate
+  // limit, which caps the blast radius per minute without deciding who is
+  // allowed to fire at all.
+  //
+  // items:create is the right permission: the ONLY consumer of the extracted
+  // ISBNs is the bulk book import, which asserts items:create itself
+  // (BooksImportService.execute). A user who cannot create items has no reason
+  // to extract an ISBN list.
+  try {
+    assertModuleEnabled(ctx, 'ai');
+    assertPermission(ctx, 'items:create');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'module_disabled') {
+      return NextResponse.json({ error: 'module_disabled', message: e.message }, { status: 403 });
+    }
+    if (e instanceof ServiceError && e.code === 'forbidden') {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
+    throw e;
+  }
 
   // Rate-limit the Gemini-backed extraction per user. Every other AI endpoint
   // (ai-chat, po-imports/scan, cycle-count ai-scan) caps this; without it a

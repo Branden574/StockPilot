@@ -7,6 +7,11 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { lookupUpc, buildAiDescriptionPrompt } from '@/lib/upc-lookup';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+} from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,6 +38,42 @@ export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+
+  // MED-20, part 1: permission gate. This endpoint exists to PRE-FILL a new
+  // item from a scanned barcode, so items:create is the capability it serves —
+  // and it spends money (UPCitemdb + a model call) on every request, which is
+  // not something a viewer should be able to do. It previously had only a rate
+  // limit, which bounds the spend per minute without deciding who may spend.
+  try {
+    assertPermission(ctx, 'items:create');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'forbidden') {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
+    throw e;
+  }
+
+  // MED-20, part 2: the 'ai' module gates the AI DESCRIPTION FALLBACK ONLY,
+  // not the whole endpoint.
+  //
+  // Deliberate deviation from a blanket assertModuleEnabled: the primary path
+  // here (local DB short-circuit, then UPCitemdb) contains no AI at all, so
+  // failing the whole request would break plain barcode enrichment for every
+  // org that has not bought the AI module — a functional regression, not a
+  // security fix. Gating the model call is what actually stops an org without
+  // the AI entitlement from reaching a model. assertModuleEnabled stays the
+  // single source of truth for the decision (it also honours core-tier
+  // modules); only the response to a failure differs.
+  let aiModuleEnabled = true;
+  try {
+    assertModuleEnabled(ctx, 'ai');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'module_disabled') {
+      aiModuleEnabled = false;
+    } else {
+      throw e;
+    }
   }
 
   // Per-user throttle: this calls paid external APIs (UPCitemdb + Gemini).
@@ -81,7 +122,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const enableAi = Boolean(env.GEMINI_API_KEY);
+    // Needs BOTH a key and the org's AI entitlement (MED-20, part 2).
+    const enableAi = Boolean(env.GEMINI_API_KEY) && aiModuleEnabled;
     const result = await lookupUpc(upc, {
       enableAiFallback: enableAi,
       describeWithAi: enableAi ? describeWithGemini : undefined,
