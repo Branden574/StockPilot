@@ -219,13 +219,17 @@ select ok(
 -- ── Exact seed shape ────────────────────────────────────────────────────────
 -- The counts above are open-ended (>=, >0) and would survive a generate_series
 -- that produced the wrong span. These pin the real numbers: US Men's / Women's
--- run 4.0-18.0 in half steps = 29 values each; US Youth runs 1.0-7.0 = 13.
+-- run 4.0-18.0 in half steps = 29 values; US Youth runs 1.0-7.0 = 13.
+-- Men's is 31 rather than 29 since migration 0319 added 3 and 3.5 at the owner's
+-- request (L4L stocks small adult sizes; the Shoes category maps to this scale).
+-- Women's still runs 4.0-18.0 = 29 — no category uses it today, so it was left
+-- alone rather than widened on speculation.
 select is(
   (select count(*)::int from public.size_scale_values v
      join public.size_scales s on s.id = v.size_scale_id
     where s.organization_id is null and s.key = 'us_mens_shoe'),
-  29,
-  'US Men''s shoe seeds exactly 29 values (4.0-18.0 in half steps)');
+  31,
+  'US Men''s shoe seeds exactly 31 values (3.0-18.0 in half steps, incl. 0319''s 3/3.5)');
 
 select is(
   (select count(*)::int from public.size_scale_values v
