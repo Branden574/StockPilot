@@ -40,8 +40,15 @@ import {
   type TrackingProfileCache,
 } from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
+import {
+  isAllowedPoImportUploadMime,
+  PO_IMPORT_SCAN_MIME_TYPES,
+  PO_IMPORT_UPLOAD_MIME_ERROR,
+  poImportUploadExtensionFor,
+} from '@/lib/po-imports/mime';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
+import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import {
@@ -477,15 +484,39 @@ export class PoImportsService {
    * lives HERE (po_imports module + purchase_orders:manage) so the web action
    * and any future Bearer surface share one authz posture: minting a signed
    * upload url into the po-imports bucket is the first step of an import and
-   * must not be reachable by a member without import rights. File-type/size
-   * validation stays at the caller's boundary; the storage path is per-org.
+   * must not be reachable by a member without import rights.
+   *
+   * MED-22 — the declared content type is now an EXPLICIT ALLOWLIST checked
+   * here, not only at the web action's boundary. Two things were wrong before:
+   *
+   *  1. The allowlist lived in `server/actions/po-imports.ts` alone, so any
+   *     other caller of this service (the Bearer surface this method's own doc
+   *     comment anticipates) got a signed upload url for an arbitrary content
+   *     type. The po-imports bucket has NO `allowed_mime_types` pin (0021
+   *     created it without one; 0047 set only `file_size_limit`), so nothing
+   *     downstream refused the PUT either — an HTML or SVG document could be
+   *     parked in the bucket and later handed out under a signed URL.
+   *  2. The stored extension came from `fileName.split('.').pop()`, entirely
+   *     caller-controlled and UNSANITIZED — unlike its sibling
+   *     `ItemImagesService.createUploadUrl`, which strips non-alphanumerics.
+   *     A `fileName` of `po.csv/../../item-images/x` yields an `ext` of
+   *     `csv/../../item-images/x`, i.e. a MINTED path containing a traversal:
+   *     the org prefix is intact, but storage-js resolves the `..` segments
+   *     into the fetch() URL, so the signed upload url could point outside the
+   *     org folder and outside the bucket. The extension is now chosen by the
+   *     SERVER from the allowlisted MIME, so `fileName` no longer reaches the
+   *     path at all.
    */
   async presignUpload(input: {
     fileName: string;
+    fileMimeType: string;
   }): Promise<{ uploadUrl: string; storagePath: string }> {
     assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
-    const ext = input.fileName.split('.').pop()?.toLowerCase() ?? 'bin';
+    const ext = poImportUploadExtensionFor(input.fileMimeType);
+    if (!ext) {
+      throw new ServiceError('validation_error', PO_IMPORT_UPLOAD_MIME_ERROR);
+    }
     const storagePath = `${this.ctx.organizationId}/po-imports/${randomUUID()}.${ext}`;
     const { data, error } = await this.ctx.supabase.storage
       .from('po-imports')
@@ -521,17 +552,32 @@ export class PoImportsService {
     assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
-    // Defense-in-depth: the action schema validates storagePath as a
-    // bare string. The presign step builds a per-org path, but the
-    // client could call recordPoUploadAction with someone else's path.
-    // Storage RLS still refuses cross-org downloads, but a pointer row
-    // pointing at another org's file has no business existing.
-    const requiredPrefix = `${this.ctx.organizationId}/`;
-    if (!input.storagePath.startsWith(requiredPrefix)) {
+    // HI-8: the action schema validates storagePath as a bare string. The
+    // presign step builds a per-org path, but the client can call
+    // recordPoUploadAction with any path it likes, and the old check was
+    // `startsWith(`${orgId}/`)` — satisfied by
+    // `${orgId}/../../order-attachments/<victim-org>/<order>/proof.jpg`,
+    // because @supabase/storage-js interpolates the path into a fetch() URL
+    // and the WHATWG parser resolves `..` before the request leaves Node. The
+    // row would then be parsed by `parseImport`, which DOWNLOADS whatever
+    // `storage_path` names — turning this into an arbitrary-object read whose
+    // extracted text lands in this org's import for anyone to read.
+    //
+    // `poImportPathShape` pins the whole string to `{org}/po-imports/{file}`,
+    // which is what both mints produce (presignUpload's uuid filename and
+    // createFromScan's sha256 one).
+    if (!isValidStoragePath(input.storagePath, poImportPathShape(this.ctx.organizationId))) {
       throw new ServiceError(
         'validation_error',
         'Invalid storage path — wrong org prefix.',
       );
+    }
+    // MED-22 — the SAME allowlist the presign is bound to. Without this, a
+    // caller could presign a legitimate `text/csv` upload and then record the
+    // row with an arbitrary `file_mime_type`, which is the value the detail UI
+    // and every export read back as the document's type.
+    if (!isAllowedPoImportUploadMime(input.fileMimeType)) {
+      throw new ServiceError('validation_error', PO_IMPORT_UPLOAD_MIME_ERROR);
     }
 
     // Duplicate decision — see resolveDuplicateBySha256 for the full rule.
@@ -791,6 +837,21 @@ export class PoImportsService {
         'validation_error',
         'Limit is 5 frames per scan — split larger POs into separate scans.',
       );
+    }
+    // MED-22 — every frame's declared type must be one the scan path accepts.
+    // The `/api/po-imports/scan` route checks the same set at its boundary, but
+    // this method is the shared service twin: `mimeType` is written straight
+    // into the storage object's Content-Type below (via the SERVICE-ROLE
+    // client, which the bucket's RLS cannot second-guess) and is also what
+    // Gemini is handed. A caller reaching the service directly could otherwise
+    // park an arbitrary content type in the po-imports bucket.
+    for (const f of input.files) {
+      if (!PO_IMPORT_SCAN_MIME_TYPES.has(f.mimeType)) {
+        throw new ServiceError(
+          'validation_error',
+          `Unsupported file type: ${f.mimeType}. Use JPEG/PNG/WEBP/HEIC or PDF.`,
+        );
+      }
     }
 
     // Hash the concatenated bytes for dedup.
@@ -1059,6 +1120,24 @@ export class PoImportsService {
       const buffer = Buffer.from(ab);
       const sourceType: ParseSourceType =
         (header.source_type as string) === 'pdf' ? 'pdf' : 'csv';
+      // MED-22, byte leg. `createSignedUploadUrl` cannot carry a content type
+      // (storage-js accepts only `{ upsert }`), so the PUT's Content-Type
+      // header stays client-chosen even though the presign is now bound to an
+      // allowlisted MIME. This is where the bytes get the last word: a source
+      // recorded as `pdf` must actually BE a PDF before it reaches the PDF
+      // parser, so arbitrary bytes cannot be fed to it by presigning a
+      // legitimate type and uploading something else.
+      //
+      // `%PDF-` is searched for in the first 1024 bytes rather than pinned to
+      // offset 0 on purpose: the spec puts the header first, but real-world
+      // PDFs carry leading junk and every reader tolerates it inside that
+      // window — pinning offset 0 would reject files that parse fine today.
+      // CSV gets no equivalent check: it has no magic bytes, and "is this
+      // text" is exactly what the CSV parser already decides (it yields zero
+      // lines, which is already surfaced as a failed parse).
+      if (sourceType === 'pdf' && !buffer.subarray(0, 1024).includes('%PDF-')) {
+        throw new Error('not a PDF document');
+      }
       const parsed = await parsePoFile(buffer, sourceType);
       canonical = parsed;
       // Persist the raw extracted text so the UI can surface it for

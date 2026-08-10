@@ -2,6 +2,15 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import {
+  isSniffedKindAllowedInBucket,
+  sniffImage,
+} from '@/lib/image-signature';
+import {
+  isValidStoragePath,
+  itemImageAnyPathShape,
+  itemImagePathShape,
+} from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -97,16 +106,41 @@ function memoSet(path: string, url: string): void {
   signedUrlMemo.set(path, { url, expiresAtMs: Date.now() + MEMO_TTL_MS });
 }
 
+/**
+ * HI-8 read-side gate. Every function below signs a DB-sourced path with the
+ * SERVICE-ROLE client, which bypasses RLS by construction — so a path that
+ * reached the column before the write-side shapes existed (or through the
+ * mobile PostgREST insert path, which never passes through a service) must
+ * not be handed to storage unchecked. `itemImageAnyPathShape` is structural
+ * rather than id-pinned because these callers legitimately do not know the
+ * owning org: `public-items.ts` renders an UNAUTHENTICATED public page.
+ *
+ * Verified safe against production before enabling: all 465 `storage_path`
+ * and all 461 `thumb_path` rows match this shape exactly, so no existing
+ * image blanks. Fail-closed is deliberate — an unrecognised path yields no
+ * URL rather than a service-role-signed one, and callers already treat a
+ * missing URL as "no image" (never negatively cached, see the note on
+ * `signItemImageMaster`).
+ */
+function isSignableItemImagePath(storagePath: string): boolean {
+  return isValidStoragePath(storagePath, itemImageAnyPathShape());
+}
+
 /** ONE createSignedUrls covering `paths`. Never throws — per-path
  *  failures (and a whole-call failure) just leave paths out of the map,
  *  and the per-path signer falls back to its single-sign path. */
 async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+  // Drop malformed paths before the batch rather than after: createSignedUrls
+  // is one call for the whole array, so a single traversal path would
+  // otherwise be signed alongside the legitimate ones.
+  const safePaths = paths.filter(isSignableItemImagePath);
+  if (safePaths.length === 0) return out;
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.storage
       .from('item-images')
-      .createSignedUrls(paths, SIGNED_URL_TTL_SEC);
+      .createSignedUrls(safePaths, SIGNED_URL_TTL_SEC);
     if (error || !data) return out;
     for (const entry of data) {
       if (entry.signedUrl && !entry.error && entry.path) {
@@ -152,6 +186,9 @@ const signItemImageMaster = unstable_cache(
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
+  // Checked BEFORE the cached signer so a rejected path never creates an
+  // `unstable_cache` entry at all.
+  if (!isSignableItemImagePath(storagePath)) return null;
   try {
     return await signItemImageMaster(storagePath);
   } catch (err) {
@@ -198,6 +235,9 @@ async function getCachedItemImageTransformedSignedUrl(
   storagePath: string,
   width: number,
 ): Promise<string | null> {
+  // Same gate as the plain signer — this path also reaches storage with the
+  // service-role client, just with transform params folded into the signature.
+  if (!isSignableItemImagePath(storagePath)) return null;
   try {
     return await signItemImageTransformed(storagePath, width);
   } catch (err) {
@@ -655,24 +695,28 @@ export class ItemImagesService {
     opts: { thumbPath?: string | null; lqip?: string | null } = {},
   ) {
     assertPermission(this.ctx, 'items:update');
-    // Defense-in-depth: the action schema validates `storagePath` as a
-    // bare string, so a hostile client could send another org's path
-    // here. Storage RLS would still refuse to mint a signed URL for
-    // the wrong org's bucket folder (the rendered image stays
-    // private), but we'd be inserting a pointer row tagged with OUR
-    // organization_id pointing at THEIR file — a row that has no
-    // business existing. Reject it before it ever hits the DB.
-    const requiredPrefix = `${this.ctx.organizationId}/`;
-    if (!storagePath.startsWith(requiredPrefix)) {
+    // HI-8: the action schema validates `storagePath` as a bare string, so a
+    // hostile client could send another org's path here — or, worse, a path
+    // that only STARTS with our org's prefix and then climbs out of it. The
+    // old check was `startsWith(`${orgId}/`)`, which
+    // `${orgId}/../../item-images/<victim-org>/<victim-item>/cover.jpg`
+    // satisfies: @supabase/storage-js interpolates the path into a fetch()
+    // URL and the WHATWG parser resolves `..` before the request leaves Node,
+    // so the prefix check passes while the path escapes both the org folder
+    // and the bucket. `itemImagePathShape` pins the path to EXACTLY what
+    // createUploadUrl mints, from the server's own org id and this call's
+    // item id, so no traversal encoding can be expressed inside it. See
+    // lib/storage-path.ts for why a positive shape beats a denylist here.
+    const pathShape = itemImagePathShape(this.ctx.organizationId, itemId);
+    if (!isValidStoragePath(storagePath, pathShape)) {
       throw new ServiceError(
         'validation_error',
         'Invalid storage path — wrong org prefix.',
       );
     }
-    // Same prefix gate on the thumb path — a thumb path pointing at a
-    // different org's folder would never resolve to a real upload, but
-    // an inserted pointer is still a row we don't want.
-    if (opts.thumbPath && !opts.thumbPath.startsWith(requiredPrefix)) {
+    // Same gate on the thumb path — createUploadUrl mints it next to the
+    // master, so it takes the same shape.
+    if (opts.thumbPath && !isValidStoragePath(opts.thumbPath, pathShape)) {
       throw new ServiceError(
         'validation_error',
         'Invalid thumb path — wrong org prefix.',
@@ -698,6 +742,40 @@ export class ItemImagesService {
       .maybeSingle();
     if (itemErr) throw new ServiceError('internal_error', itemErr.message);
     if (!itemRow) throw new ServiceError('not_found', 'Item not found');
+
+    // MED-23 — verify the BYTES, not the client's word for them. The bucket's
+    // allowed_mime_types (0046) only checks the Content-Type header the client
+    // sent with its PUT, and that header is client-controlled: a renamed
+    // binary, an HTML document or an SVG carrying script all reach storage by
+    // declaring `image/png`. item-images objects are later signed and rendered
+    // (including on the UNAUTHENTICATED public item page), so a non-image
+    // sitting behind a signed URL on our own origin is a real payload host.
+    //
+    // Same verify-or-delete shape as the maintenance-attachments reference:
+    // download, sniff, and on any disagreement REMOVE the object and write no
+    // row — never leave an unverified object with a row pointing at it. The
+    // download doubles as the finalize-time existence check: a `record()` that
+    // was never preceded by a real PUT no longer creates a phantom row whose
+    // signed URL 404s in every list.
+    //
+    // Gated on the BUCKET's allowlist rather than merely "is some image", so
+    // this surface can never accept a format 0046 pins item-images against.
+    // Uses the caller's own RLS-scoped client, not service-role — the
+    // "item-images authenticated read/staff delete" policies (0003/0140)
+    // already grant exactly this, so there is no reason to reach for
+    // createAdminClient here.
+    const bucket = this.ctx.supabase.storage.from('item-images');
+    const { data: blob, error: dlErr } = await bucket.download(storagePath);
+    if (dlErr || !blob) {
+      throw new ServiceError('validation_error', 'invalid_image');
+    }
+    const sniffed = sniffImage(new Uint8Array(await blob.arrayBuffer()));
+    if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'item-images')) {
+      const orphans = opts.thumbPath ? [storagePath, opts.thumbPath] : [storagePath];
+      await bucket.remove(orphans);
+      throw new ServiceError('validation_error', 'invalid_image');
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('item_images')
       .insert({

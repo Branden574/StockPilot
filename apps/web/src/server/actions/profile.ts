@@ -5,6 +5,8 @@ import { z } from 'zod';
 
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
+import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
+import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
@@ -230,8 +232,17 @@ export async function setAvatarUrlAction(input: {
  * here is an SSRF sink (the render worker would fetch it).
  */
 function expectedLogoPrefix(orgId: string): string {
+  return `${orgLogoBucketUrlPrefix()}${orgId}/`;
+}
+
+/** Everything in a logo's public URL up to (and including) the bucket name —
+ *  i.e. the point where the BUCKET-RELATIVE object path begins. Slicing here
+ *  rather than at `expectedLogoPrefix` keeps the org id inside the derived
+ *  path, so the storage-path shape check validates that segment too instead of
+ *  taking the string prefix check's word for it. */
+function orgLogoBucketUrlPrefix(): string {
   const base = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
-  return `${base}/storage/v1/object/public/org-logos/${orgId}/`;
+  return `${base}/storage/v1/object/public/org-logos/`;
 }
 
 /**
@@ -271,6 +282,46 @@ export async function setOrgLogoUrlAction(input: {
       }
       // Drop any ?t= cache-buster before persisting (matches the avatar path).
       persistUrl = candidate;
+
+      // MED-23 — verify the BYTES of the object this URL names before the URL
+      // becomes the org's logo. org-logos is a PUBLIC bucket whose
+      // `allowed_mime_types` pin (0046) only inspects the Content-Type header
+      // the browser attached to its PUT, and that header is client-controlled:
+      // an HTML document or an SVG carrying script uploads cleanly by
+      // declaring `image/png`, and then lives at a permanent, unauthenticated
+      // URL on the Supabase origin — which this action is about to publish
+      // into every page header, every emailed PDF and every export. The logo
+      // is additionally fetched server-side by five PDF renderers, which is
+      // why the prefix check above already exists; bytes are the other half.
+      //
+      // Verify-or-delete, same shape as the maintenance-attachments
+      // reference: download, sniff, and on any disagreement REMOVE the object
+      // and refuse — never leave an unverified object reachable at a URL a
+      // client already knows.
+      const objectPath = candidate.slice(orgLogoBucketUrlPrefix().length);
+      // The prefix check is a PREFIX check (HI-8): `{org}/../../item-images/...`
+      // starts with the expected prefix and still escapes the bucket once
+      // storage-js interpolates it into a fetch() URL, so the derived path is
+      // shape-validated before any storage call is made with it.
+      if (!isValidStoragePath(objectPath, orgLogoPathShape(ctx.organizationId))) {
+        return err(
+          'validation_error',
+          'Logo URL must point at your organization’s logo in the StockPilot storage bucket.',
+        );
+      }
+      const logos = createAdminClient().storage.from('org-logos');
+      const { data: blob, error: dlErr } = await logos.download(objectPath);
+      if (dlErr || !blob) {
+        return err('validation_error', 'That logo upload could not be read. Try uploading again.');
+      }
+      const sniffed = sniffImage(new Uint8Array(await blob.arrayBuffer()));
+      if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'org-logos')) {
+        await logos.remove([objectPath]);
+        return err(
+          'validation_error',
+          'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
+        );
+      }
     }
     const supabase = await createClient();
     const { data: prev } = await supabase

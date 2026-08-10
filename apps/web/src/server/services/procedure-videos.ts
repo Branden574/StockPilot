@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache';
 
 import type { RecordProcedureVideoInput } from '@stockpilot/core';
 
+import { isValidStoragePath, procedureVideoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -158,15 +159,25 @@ export class ProcedureVideosService {
     assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
 
-    // Defense-in-depth: the action schema accepts `storagePath` as a
-    // bare string, so a hostile caller could pass another org's path
-    // (or *any* path) here. Storage RLS still refuses signed URLs for
-    // cross-org paths, but we'd be inserting a pointer row tagged with
-    // OUR org pointing at THEIR file. Two checks:
-    //   1) the org prefix must match the caller's org
-    //   2) the SECOND segment must match the target procedure id —
-    //      otherwise a manager could record a video on procedure A that
-    //      actually points at procedure B's storage folder
+    // HI-8: the action schema accepts `storagePath` as a bare string, so a
+    // hostile caller could pass another org's path — or *any* path. This used
+    // to be two `startsWith` prefix checks (org, then org+procedure), and a
+    // prefix check says nothing about the rest of the string:
+    // `${org}/${proc}/../../../item-images/<victim-org>/<victim-item>/cover.jpg`
+    // satisfies BOTH, because @supabase/storage-js interpolates the path into
+    // a fetch() URL whose `..` segments the WHATWG parser resolves before the
+    // request leaves Node — so the row pointed outside the procedure folder,
+    // outside the org, and outside the bucket, and `signedUrls()` below signs
+    // it with the SERVICE-ROLE client, which RLS cannot stop.
+    //
+    // `procedureVideoPathShape` pins the whole string to `{org}/{proc}/{file}`
+    // from the server's own org id and this call's procedure id, so it carries
+    // both of the old checks' intent and admits no traversal encoding.
+    //
+    // The org-prefix check is kept as a SEPARATE first step purely to preserve
+    // its distinct error copy: a caller who sent another org's path gets the
+    // "wrong org prefix" message it has always gotten, rather than the
+    // procedure-mismatch one.
     const orgPrefix = `${this.ctx.organizationId}/`;
     if (!input.storagePath.startsWith(orgPrefix)) {
       throw new ServiceError(
@@ -174,16 +185,16 @@ export class ProcedureVideosService {
         'Invalid storage path — wrong org prefix.',
       );
     }
-    const procPrefix = `${this.ctx.organizationId}/${input.procedureId}/`;
-    if (!input.storagePath.startsWith(procPrefix)) {
+    const pathShape = procedureVideoPathShape(this.ctx.organizationId, input.procedureId);
+    if (!isValidStoragePath(input.storagePath, pathShape)) {
       throw new ServiceError(
         'validation_error',
         'Invalid storage path — does not match this procedure.',
       );
     }
-    // The poster (if captured) must live under the same org/procedure prefix
-    // as the video — same defense-in-depth as storagePath above.
-    if (input.thumbnailPath && !input.thumbnailPath.startsWith(procPrefix)) {
+    // The poster (if captured) is minted next to the video as
+    // `{uuid}.poster.jpg`, so it takes the SAME shape — same gate.
+    if (input.thumbnailPath && !isValidStoragePath(input.thumbnailPath, pathShape)) {
       throw new ServiceError(
         'validation_error',
         'Invalid thumbnail path — does not match this procedure.',

@@ -35,6 +35,28 @@ import type { ServiceContext } from './context';
 
 import { ItemImagesService } from './item-images';
 
+/**
+ * Realistic path fixtures. These were short synthetic keys ('b1/master.jpg',
+ * 'org-1/items/item-pdf-ok/...') until security wave D added a structural gate
+ * on the service-role signers: a stored path is now shape-checked before it is
+ * handed to Storage, and real orgs and items are always UUIDs. The ids below
+ * are therefore UUID-shaped and each fixture keeps a DISTINCT item id, because
+ * the batch and memo assertions below depend on paths being distinct.
+ * Nothing about what these tests assert changed — only the fixture realism.
+ */
+const ORG = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f';
+const B1 = 'b1b1b1b1-0000-4000-8000-000000000001';
+const B2 = 'b2b2b2b2-0000-4000-8000-000000000002';
+const B3 = 'b3b3b3b3-0000-4000-8000-000000000003';
+const B4 = 'b4b4b4b4-0000-4000-8000-000000000004';
+const B5 = 'b5b5b5b5-0000-4000-8000-000000000005';
+const BROWSER_NOTHUMB = 'aaaa2222-0000-4000-8000-000000000012';
+const BROWSER_OK = 'aaaa3333-0000-4000-8000-000000000013';
+const PDF_FB1 = 'aaaa4444-0000-4000-8000-000000000014';
+const PDF_FB2 = 'aaaa5555-0000-4000-8000-000000000015';
+const PDF_OK = 'aaaa6666-0000-4000-8000-000000000016';
+
+
 function svc(): ItemImagesService {
   return new ItemImagesService({} as ServiceContext);
 }
@@ -62,29 +84,29 @@ describe('ItemImagesService.signedUrls (batched signing)', () => {
   it('cold paths are signed with ONE batch call — the per-path signer consumes the primed batch and never issues individual storage calls', async () => {
     createSignedUrlsMock.mockResolvedValue({
       data: [
-        { path: 'b1/master.jpg', signedUrl: 'https://signed/b1-master', error: null },
-        { path: 'b1/thumb.webp', signedUrl: 'https://signed/b1-thumb', error: null },
+        { path: `${ORG}/${B1}/master.jpg`, signedUrl: 'https://signed/b1-master', error: null },
+        { path: `${ORG}/${B1}/thumb.webp`, signedUrl: 'https://signed/b1-thumb', error: null },
       ],
       error: null,
     });
 
-    const map = await svc().signedUrls(['b1/master.jpg', 'b1/thumb.webp']);
+    const map = await svc().signedUrls([`${ORG}/${B1}/master.jpg`, `${ORG}/${B1}/thumb.webp`]);
 
     expect(createSignedUrlsMock).toHaveBeenCalledTimes(1);
     expect(createSignedUrlsMock).toHaveBeenCalledWith(
-      ['b1/master.jpg', 'b1/thumb.webp'],
+      [`${ORG}/${B1}/master.jpg`, `${ORG}/${B1}/thumb.webp`],
       expect.any(Number),
     );
     expect(createSignedUrlMock).not.toHaveBeenCalled();
-    expect(map.get('b1/master.jpg')).toBe('https://signed/b1-master');
-    expect(map.get('b1/thumb.webp')).toBe('https://signed/b1-thumb');
+    expect(map.get(`${ORG}/${B1}/master.jpg`)).toBe('https://signed/b1-master');
+    expect(map.get(`${ORG}/${B1}/thumb.webp`)).toBe('https://signed/b1-thumb');
   });
 
   it('a path the batch failed to cover falls back to the original single createSignedUrl (per-path resilience preserved)', async () => {
     createSignedUrlsMock.mockResolvedValue({
       data: [
-        { path: 'b2/ok.jpg', signedUrl: 'https://signed/b2-ok', error: null },
-        { path: 'b2/broken.jpg', signedUrl: null, error: 'Object not found' },
+        { path: `${ORG}/${B2}/ok.jpg`, signedUrl: 'https://signed/b2-ok', error: null },
+        { path: `${ORG}/${B2}/broken.jpg`, signedUrl: null, error: 'Object not found' },
       ],
       error: null,
     });
@@ -93,13 +115,13 @@ describe('ItemImagesService.signedUrls (batched signing)', () => {
       error: null,
     });
 
-    const map = await svc().signedUrls(['b2/ok.jpg', 'b2/broken.jpg']);
+    const map = await svc().signedUrls([`${ORG}/${B2}/ok.jpg`, `${ORG}/${B2}/broken.jpg`]);
 
     expect(createSignedUrlsMock).toHaveBeenCalledTimes(1);
     expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
-    expect(createSignedUrlMock).toHaveBeenCalledWith('b2/broken.jpg', expect.any(Number));
-    expect(map.get('b2/ok.jpg')).toBe('https://signed/b2-ok');
-    expect(map.get('b2/broken.jpg')).toBe('https://signed/b2-single');
+    expect(createSignedUrlMock).toHaveBeenCalledWith(`${ORG}/${B2}/broken.jpg`, expect.any(Number));
+    expect(map.get(`${ORG}/${B2}/ok.jpg`)).toBe('https://signed/b2-ok');
+    expect(map.get(`${ORG}/${B2}/broken.jpg`)).toBe('https://signed/b2-single');
   });
 
   it('a whole-batch failure degrades to single signs for every path — same result, never a throw', async () => {
@@ -109,43 +131,43 @@ describe('ItemImagesService.signedUrls (batched signing)', () => {
       error: null,
     });
 
-    const map = await svc().signedUrls(['b3/a.jpg']);
+    const map = await svc().signedUrls([`${ORG}/${B3}/a.jpg`]);
 
     expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
-    expect(map.get('b3/a.jpg')).toBe('https://signed/b3-single');
+    expect(map.get(`${ORG}/${B3}/a.jpg`)).toBe('https://signed/b3-single');
   });
 
   it('a path that fails to sign everywhere is simply absent from the result (public contract unchanged) and is NOT memoized — the next call retries', async () => {
     createSignedUrlsMock.mockResolvedValue({ data: [], error: null });
     createSignedUrlMock.mockResolvedValue({ data: null, error: { message: 'nope' } });
 
-    const first = await svc().signedUrls(['b4/x.jpg']);
-    expect(first.has('b4/x.jpg')).toBe(false);
+    const first = await svc().signedUrls([`${ORG}/${B4}/x.jpg`]);
+    expect(first.has(`${ORG}/${B4}/x.jpg`)).toBe(false);
 
     // Retry succeeds — nothing negative stuck in the in-process memo
     // (recurring bug pattern #6: never cache a null).
     createSignedUrlsMock.mockResolvedValue({
-      data: [{ path: 'b4/x.jpg', signedUrl: 'https://signed/b4-x', error: null }],
+      data: [{ path: `${ORG}/${B4}/x.jpg`, signedUrl: 'https://signed/b4-x', error: null }],
       error: null,
     });
-    const second = await svc().signedUrls(['b4/x.jpg']);
-    expect(second.get('b4/x.jpg')).toBe('https://signed/b4-x');
+    const second = await svc().signedUrls([`${ORG}/${B4}/x.jpg`]);
+    expect(second.get(`${ORG}/${B4}/x.jpg`)).toBe('https://signed/b4-x');
   });
 
   it('in-process memo: a second resolve of already-signed paths issues ZERO storage calls and returns the SAME URLs (same-path → same-URL stability)', async () => {
     createSignedUrlsMock.mockResolvedValue({
-      data: [{ path: 'b5/stable.jpg', signedUrl: 'https://signed/b5-stable', error: null }],
+      data: [{ path: `${ORG}/${B5}/stable.jpg`, signedUrl: 'https://signed/b5-stable', error: null }],
       error: null,
     });
 
-    const first = await svc().signedUrls(['b5/stable.jpg']);
-    expect(first.get('b5/stable.jpg')).toBe('https://signed/b5-stable');
+    const first = await svc().signedUrls([`${ORG}/${B5}/stable.jpg`]);
+    expect(first.get(`${ORG}/${B5}/stable.jpg`)).toBe('https://signed/b5-stable');
 
     vi.clearAllMocks();
-    const second = await svc().signedUrls(['b5/stable.jpg']);
+    const second = await svc().signedUrls([`${ORG}/${B5}/stable.jpg`]);
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
     expect(createSignedUrlMock).not.toHaveBeenCalled();
-    expect(second.get('b5/stable.jpg')).toBe('https://signed/b5-stable');
+    expect(second.get(`${ORG}/${B5}/stable.jpg`)).toBe('https://signed/b5-stable');
   });
 
   it('returns an empty map for an empty path list without touching storage', async () => {
@@ -187,8 +209,8 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
           data: [
             {
               item_id: 'item-pdf-ok',
-              storage_path: 'org-1/items/item-pdf-ok/master.jpg',
-              thumb_path: 'org-1/items/item-pdf-ok/thumb.webp',
+              storage_path: `${ORG}/items/${PDF_OK}/master.jpg`,
+              thumb_path: `${ORG}/items/${PDF_OK}/thumb.webp`,
               is_primary: true,
               sort_order: 0,
             },
@@ -208,7 +230,7 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
 
       expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
       const [path, , options] = createSignedUrlMock.mock.calls[0]!;
-      expect(path).toBe('org-1/items/item-pdf-ok/thumb.webp');
+      expect(path).toBe(`${ORG}/items/${PDF_OK}/thumb.webp`);
       expect(options).toEqual(
         expect.objectContaining({ transform: expect.objectContaining({ width: 200 }) }),
       );
@@ -221,8 +243,8 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
           data: [
             {
               item_id: 'item-pdf-fallback1',
-              storage_path: 'org-1/items/item-pdf-fallback1/master.jpg',
-              thumb_path: 'org-1/items/item-pdf-fallback1/thumb.webp',
+              storage_path: `${ORG}/items/${PDF_FB1}/master.jpg`,
+              thumb_path: `${ORG}/items/${PDF_FB1}/thumb.webp`,
               is_primary: true,
               sort_order: 0,
             },
@@ -245,9 +267,9 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
       expect(createSignedUrlMock).toHaveBeenCalledTimes(2);
       const [firstPath, , firstOptions] = createSignedUrlMock.mock.calls[0]!;
       const [secondPath, , secondOptions] = createSignedUrlMock.mock.calls[1]!;
-      expect(firstPath).toBe('org-1/items/item-pdf-fallback1/thumb.webp');
+      expect(firstPath).toBe(`${ORG}/items/${PDF_FB1}/thumb.webp`);
       expect(firstOptions).toEqual(expect.objectContaining({ transform: expect.anything() }));
-      expect(secondPath).toBe('org-1/items/item-pdf-fallback1/master.jpg');
+      expect(secondPath).toBe(`${ORG}/items/${PDF_FB1}/master.jpg`);
       expect(secondOptions).toEqual(expect.objectContaining({ transform: expect.anything() }));
       expect(map.get('item-pdf-fallback1')).toBe(
         'https://signed/pdf-fallback1-master-transform',
@@ -260,8 +282,8 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
           data: [
             {
               item_id: 'item-pdf-fallback2',
-              storage_path: 'org-1/items/item-pdf-fallback2/master.jpg',
-              thumb_path: 'org-1/items/item-pdf-fallback2/thumb.webp',
+              storage_path: `${ORG}/items/${PDF_FB2}/master.jpg`,
+              thumb_path: `${ORG}/items/${PDF_FB2}/thumb.webp`,
               is_primary: true,
               sort_order: 0,
             },
@@ -284,7 +306,7 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
 
       expect(createSignedUrlMock).toHaveBeenCalledTimes(3);
       const thirdCall = createSignedUrlMock.mock.calls[2]!;
-      expect(thirdCall[0]).toBe('org-1/items/item-pdf-fallback2/thumb.webp');
+      expect(thirdCall[0]).toBe(`${ORG}/items/${PDF_FB2}/thumb.webp`);
       // The plain signer calls createSignedUrl(path, ttl) — NO third
       // options argument — which is exactly what distinguishes "plain" from
       // "transform" in this mock, since both routes share one signing fn.
@@ -302,8 +324,8 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
           data: [
             {
               item_id: 'item-browser-ok',
-              storage_path: 'org-1/items/item-browser-ok/master.jpg',
-              thumb_path: 'org-1/items/item-browser-ok/thumb.webp',
+              storage_path: `${ORG}/items/${BROWSER_OK}/master.jpg`,
+              thumb_path: `${ORG}/items/${BROWSER_OK}/thumb.webp`,
               is_primary: true,
               sort_order: 0,
             },
@@ -323,7 +345,7 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
 
       expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
       const call = createSignedUrlMock.mock.calls[0]!;
-      expect(call[0]).toBe('org-1/items/item-browser-ok/thumb.webp');
+      expect(call[0]).toBe(`${ORG}/items/${BROWSER_OK}/thumb.webp`);
       expect(call.length).toBe(2); // plain signer — no transform options arg
       expect(map.get('item-browser-ok')).toBe('https://signed/browser-ok-plain-thumb');
     });
@@ -334,7 +356,7 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
           data: [
             {
               item_id: 'item-browser-nothumb',
-              storage_path: 'org-1/items/item-browser-nothumb/master.jpg',
+              storage_path: `${ORG}/items/${BROWSER_NOTHUMB}/master.jpg`,
               thumb_path: null,
               is_primary: true,
               sort_order: 0,
@@ -355,7 +377,7 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
 
       expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
       const [path, , options] = createSignedUrlMock.mock.calls[0]!;
-      expect(path).toBe('org-1/items/item-browser-nothumb/master.jpg');
+      expect(path).toBe(`${ORG}/items/${BROWSER_NOTHUMB}/master.jpg`);
       expect(options).toEqual(
         expect.objectContaining({ transform: expect.objectContaining({ width: 200 }) }),
       );

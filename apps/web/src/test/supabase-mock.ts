@@ -59,6 +59,19 @@ export interface SupabaseStub {
 
 type ResultMap = Record<string, QueryResult | (() => QueryResult)>;
 
+/** A minimal but GENUINE 26-byte PNG — the 8-byte signature, the IHDR
+ *  length + tag, then 2x3 dimensions. Every byte is a literal from the PNG
+ *  spec, so `sniffImage` classifies it as a real png. Used as the default
+ *  `storage.download()` body (see the storage stub below). */
+function MOCK_PNG_BYTES(): Uint8Array {
+  const b = new Uint8Array(26);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  b.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+  new DataView(b.buffer).setUint32(16, 2);
+  new DataView(b.buffer).setUint32(20, 3);
+  return b;
+}
+
 function pickResult(
   resultMap: ResultMap,
   key: string,
@@ -216,6 +229,20 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
           error: null,
         })),
         createSignedUrls: vi.fn(async () => ({ data: [], error: null })),
+        createSignedUploadUrl: vi.fn(async () => ({
+          data: { signedUrl: 'https://mock/upload', token: 'mock-token' },
+          error: null,
+        })),
+        // Defaults to a REAL, minimal PNG rather than an empty blob. The
+        // finalize-time magic-byte guard (MED-23) rejects a body whose bytes
+        // are not an image and DELETES the object, so a stub serving garbage
+        // would make every ordinary "an image was uploaded" test fail for a
+        // reason that has nothing to do with what it is testing. Tests that
+        // want the rejection path override `download` with their own spy.
+        download: vi.fn(async () => ({
+          data: { arrayBuffer: async () => MOCK_PNG_BYTES().buffer },
+          error: null,
+        })),
         remove: vi.fn(async () => ({ data: null, error: null })),
       })),
     },

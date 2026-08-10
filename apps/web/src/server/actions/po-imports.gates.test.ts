@@ -66,7 +66,14 @@ describe('presignPoUploadAction — routes through the gated service twin', () =
     const res = await presignPoUploadAction(VALID);
     expect(res.ok).toBe(true);
     expect(mockPresignUpload).toHaveBeenCalledTimes(1);
-    expect(mockPresignUpload).toHaveBeenCalledWith({ fileName: 'po.csv' });
+    // MED-22: fileMimeType is passed THROUGH now — the service uses it to choose
+    // the stored extension itself rather than parsing it out of fileName (which
+    // was a path-injection sink). If a refactor stopped forwarding it, the
+    // service would fall back to refusing every upload, so this is pinned.
+    expect(mockPresignUpload).toHaveBeenCalledWith({
+      fileName: 'po.csv',
+      fileMimeType: 'text/csv',
+    });
   });
 
   it('surfaces the service gate as a forbidden result', async () => {

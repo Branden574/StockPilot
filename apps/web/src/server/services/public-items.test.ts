@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { toPublicItem, PUBLIC_ITEM_FIELDS } from './public-items';
+// getPublicItem is wrapped in unstable_cache at module scope, which is not
+// callable outside a request. Pass the fn straight through so the HI-8 guard
+// below can be exercised directly.
+vi.mock('next/cache', () => ({ unstable_cache: vi.fn((fn: unknown) => fn) }));
+const { mockCreateAdminClient } = vi.hoisted(() => ({ mockCreateAdminClient: vi.fn() }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mockCreateAdminClient }));
+
+import { getPublicItem, toPublicItem, PUBLIC_ITEM_FIELDS } from './public-items';
 
 /**
  * Critical security boundary: the public item page hits Supabase via
@@ -175,5 +182,114 @@ describe('toPublicItem', () => {
       'category_name',
       'custom_fields',
     ]);
+  });
+});
+
+/**
+ * HI-8 on the READ side. `resolvePublicImageUrl` runs the SERVICE-ROLE client
+ * on an UNAUTHENTICATED page and does not know (or check) which org owns the
+ * item — that is the point of a public item view. So the `storage_path` it
+ * signs comes out of the database with no org context at all, and a poisoned
+ * value would be resolved by the WHATWG URL parser inside
+ * @supabase/storage-js: `<org>/../../<other-bucket>/<victim>/x.jpg` would mint
+ * a service-role-signed URL for an object in a DIFFERENT bucket and hand it to
+ * an anonymous visitor.
+ *
+ * The property: a stored path that is not structurally a legitimate item-image
+ * path is never passed to the storage client at all, and the page falls back to
+ * the external cover / placeholder — the same outcome as a failed signing call.
+ */
+describe('getPublicItem — HI-8 on the service-role image read', () => {
+  const ITEM = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ORG = '11111111-1111-4111-8111-111111111111';
+
+  function stubAdmin(storagePath: string, customFields: unknown = null) {
+    const createSignedUrl = vi.fn(async () => ({
+      data: { signedUrl: 'https://signed.example/cover.jpg' },
+      error: null,
+    }));
+    // Chainable builder: from(...).select(...).eq(...)... resolving to rows.
+    function builder(rows: unknown) {
+      const chain: Record<string, unknown> = {};
+      const proxy: unknown = new Proxy(chain, {
+        get(_t, prop: string) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) => resolve({ data: rows, error: null });
+          }
+          if (prop === 'maybeSingle') {
+            return async () => ({
+              data: Array.isArray(rows) ? (rows[0] ?? null) : rows,
+              error: null,
+            });
+          }
+          return () => proxy;
+        },
+      });
+      return proxy;
+    }
+    const admin = {
+      from: vi.fn((table: string) =>
+        table === 'item_images'
+          ? builder([{ storage_path: storagePath, is_primary: true, sort_order: 0 }])
+          : builder([
+              {
+                id: ITEM,
+                name: 'Public Item',
+                item_type: 'product',
+                quantity_on_hand: 3,
+                custom_fields: customFields,
+                status: 'active',
+                deleted_at: null,
+                category: { name: 'Fiction' },
+              },
+            ]),
+      ),
+      storage: { from: vi.fn(() => ({ createSignedUrl })) },
+    };
+    mockCreateAdminClient.mockReturnValue(admin);
+    return { createSignedUrl };
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('PAIRED POSITIVE — a legitimate stored path IS signed, so the refusals below are not vacuous', async () => {
+    const { createSignedUrl } = stubAdmin(
+      `${ORG}/items/${ITEM}/33333333-3333-4333-8333-333333333333.webp`,
+    );
+    const out = await getPublicItem(ITEM);
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(out?.imageUrl).toBe('https://signed.example/cover.jpg');
+  });
+
+  it('PAIRED POSITIVE — the books-import {org}/{item}/cover.jpg convention is also signed', async () => {
+    const { createSignedUrl } = stubAdmin(`${ORG}/${ITEM}/cover.jpg`);
+    const out = await getPublicItem(ITEM);
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(out?.imageUrl).toBe('https://signed.example/cover.jpg');
+  });
+
+  it.each([
+    `${ORG}/items/${ITEM}/../../../org-logos/victim-org/logo.png`,
+    `${ORG}/%2e%2e/%2e%2e/maintenance-photos/victim/photo.jpg`,
+    `${ORG}/%252e%252e/item-images/victim/x.jpg`,
+    `/${ORG}/items/${ITEM}/x.jpg`,
+    `${ORG}//items/${ITEM}/x.jpg`,
+    `${ORG}\\..\\..\\po-imports\\victim\\invoice.pdf`,
+  ])('REFUSES to service-role-sign the poisoned stored path %s', async (bad) => {
+    const { createSignedUrl } = stubAdmin(bad);
+    const out = await getPublicItem(ITEM);
+    // The storage client must never see it.
+    expect(createSignedUrl).not.toHaveBeenCalled();
+    // And the page degrades to the placeholder rather than erroring.
+    expect(out?.imageUrl).toBeNull();
+  });
+
+  it('a refused path still falls back to the external ISBN cover, so a poisoned row does not blank a book that has one', async () => {
+    const { createSignedUrl } = stubAdmin(`${ORG}/items/${ITEM}/../../x/y.jpg`, {
+      thumbnail_url: 'https://books.example/cover.jpg',
+    });
+    const out = await getPublicItem(ITEM);
+    expect(createSignedUrl).not.toHaveBeenCalled();
+    expect(out?.imageUrl).toBe('https://books.example/cover.jpg');
   });
 });

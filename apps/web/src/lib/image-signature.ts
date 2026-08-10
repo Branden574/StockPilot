@@ -13,13 +13,133 @@
  * reach. "Bytes win" is a property of the signature, not a behavior this
  * function has to implement.
  */
-export type SniffedImage = { kind: 'png' | 'jpeg' | 'webp'; width: number | null; height: number | null };
+export type SniffedImage = {
+  kind: 'png' | 'jpeg' | 'webp' | 'avif' | 'heic';
+  width: number | null;
+  height: number | null;
+};
 
-export const MIME_FOR_KIND: Record<SniffedImage['kind'], 'image/png' | 'image/jpeg' | 'image/webp'> = {
+export const MIME_FOR_KIND: Record<
+  SniffedImage['kind'],
+  'image/png' | 'image/jpeg' | 'image/webp' | 'image/avif' | 'image/heic'
+> = {
   png: 'image/png',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
+  // avif/heic added by security wave D (MED-23), WITH detection branches in
+  // sniffImage below — a widened union without them is worse than no widening
+  // at all, because the members are unreachable and the guard that depends on
+  // them silently deletes.
+  //
+  // Both are pinned in `allowed_mime_types` on buckets this sniffer now
+  // guards: org-logos and user-avatars allow avif (migration 0046), and
+  // item-images allows avif AND heic (0046). So a sniffer that returned null
+  // for them would have DELETED legitimate uploads the buckets deliberately
+  // accept — the exact trap a verify-or-delete guard walks into when its
+  // sniffer is narrower than the allowlist it defends.
+  //
+  // This is not a hypothetical reachability argument. `image-uploader.tsx`
+  // ACCEPTs image/avif and image/heic, and `compressImageVariants`
+  // (lib/image-variants.ts) uploads the ORIGINAL, untranscoded file as the
+  // master whenever its WebP encode does not come out smaller, whenever
+  // `createImageBitmap` cannot decode the source, or whenever the heic2any
+  // transcode fails — all three of which it does deliberately, to preserve
+  // the upload rather than drop it. So an item-image master genuinely can be
+  // AVIF or HEIC bytes in production.
+  avif: 'image/avif',
+  heic: 'image/heic',
 };
+
+/**
+ * The `allowed_mime_types` of every bucket whose uploads this sniffer gates,
+ * transcribed from the migrations that pin them.
+ *
+ * THE INVARIANT THIS TABLE EXISTS TO MAKE CHECKABLE: a verify-or-delete guard
+ * is only safe when the sniffer is AT LEAST AS WIDE as the allowlist of the
+ * bucket it defends. If a bucket accepts a format `sniffImage` cannot
+ * recognize, every legitimate upload of that format sniffs as `null` and the
+ * guard DELETES it. That is not a theoretical failure — it is exactly what a
+ * half-finished widening of `SniffedImage['kind']` (union members added, no
+ * detection branches) would have shipped for AVIF and HEIC. The unit suite
+ * asserts both directions of this table against real byte fixtures, so adding
+ * a MIME here without teaching `sniffImage` to detect it fails the build.
+ *
+ * The other direction matters too, and is why callers pass their bucket in
+ * rather than just checking `sniffed !== null`: the sniffer is deliberately
+ * WIDER than some of these buckets, and a surface must not accept a format
+ * its own bucket refuses. maintenance-photos is the live case — 0315 leaves
+ * HEIC out on purpose (both platforms transcode to JPEG client-side; the
+ * order-attachments bucket does accept raw HEIC and produced unrenderable
+ * originals, which is the mistake 0315 declines to repeat).
+ */
+export const SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS = {
+  // migration 0046:196-205
+  'item-images': ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/heic'],
+  'org-logos': ['image/png', 'image/jpeg', 'image/webp', 'image/avif'],
+  // migration 0315:29-35 — HEIC deliberately excluded.
+  'maintenance-photos': ['image/png', 'image/jpeg', 'image/webp'],
+} as const;
+
+export type SnifferGatedBucket = keyof typeof SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS;
+
+/**
+ * Whether a sniffed kind is a format the given bucket actually accepts.
+ *
+ * Callers should gate on THIS rather than on `sniffed !== null`: "the bytes
+ * are some image" is a weaker property than "the bytes are an image this
+ * bucket is pinned to hold", and the two differ for every bucket whose
+ * allowlist is narrower than the sniffer.
+ */
+export function isSniffedKindAllowedInBucket(
+  kind: SniffedImage['kind'],
+  bucket: SnifferGatedBucket,
+): boolean {
+  const allowed: readonly string[] = SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS[bucket];
+  return allowed.includes(MIME_FOR_KIND[kind]);
+}
+
+/**
+ * ISO base media file format (ISO/IEC 14496-12) brand sets.
+ *
+ * AVIF and HEIC are both ISO-BMFF containers, so they share a byte prefix
+ * with MP4, QuickTime and every other member of the family: `ftyp` at bytes
+ * 4..8. Matching `ftyp` alone would sniff an MP4 as an image. The BRAND —
+ * the four bytes at 8..12, plus the optional compatible-brand list that
+ * follows the minor version at 16 — is what actually names the format.
+ *
+ * The compatible-brand list is read as well as the major brand because real
+ * encoders disagree about which goes where: an AVIF written by libavif
+ * carries major brand `avif`, but files from some pipelines carry the generic
+ * `mif1` as major and list `avif` only as compatible. AVIF brands are
+ * therefore tested across the whole list BEFORE HEIC's, since `mif1`/`msf1`
+ * are generic HEIF brands an AVIF may legitimately advertise.
+ */
+const ISO_BMFF_AVIF_BRANDS: ReadonlySet<string> = new Set(['avif', 'avis']);
+const ISO_BMFF_HEIC_BRANDS: ReadonlySet<string> = new Set([
+  'heic',
+  'heix',
+  'hevc',
+  'heim',
+  'heis',
+  'hevm',
+  'hevs',
+  'mif1',
+  'msf1',
+]);
+
+/** Four bytes as ASCII, or null if any of them is outside printable ASCII —
+ *  a brand is always four printable characters, so anything else is not a
+ *  brand and must not be coerced into one. */
+function readBrand(data: Uint8Array, offset: number): string | null {
+  if (offset + 4 > data.length) return null;
+  let out = '';
+  for (let i = offset; i < offset + 4; i += 1) {
+    const byte = data[i]!;
+    if (byte < 0x20 || byte > 0x7e) return null;
+    out += String.fromCharCode(byte);
+  }
+  return out;
+}
 
 /** Postgres `integer` (int4) range — `width`/`height` land in an `integer`
  *  column (migration 0314). A crafted/corrupted header can report a
@@ -128,6 +248,54 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
     data[11] === 0x50
   ) {
     return { kind: 'webp', width: null, height: null };
+  }
+  // AVIF / HEIC — ISO-BMFF. Layout of the mandatory leading `ftyp` box:
+  //   0..4    box size (BE32, includes these 4 bytes)
+  //   4..8    'ftyp'
+  //   8..12   major brand
+  //   12..16  minor version
+  //   16..    zero or more compatible brands, to the end of the box
+  // The brand is read, never just `ftyp` (see the brand-set comments above):
+  // an MP4 ('isom'/'mp42') and a QuickTime movie ('qt  ') reach this branch
+  // with a valid ftyp box and must fall through to null, so a video renamed
+  // to .heic is refused rather than recorded as a photo.
+  //
+  // width/height are DELIBERATELY null. Real ISO-BMFF dimensions live in an
+  // `ispe` property box nested inside meta/iprp/ipco, which means walking a
+  // box tree over attacker-supplied bytes — a much larger parser, and a much
+  // larger attack surface, for a value both callers treat as optional. WEBP
+  // above already returns null dimensions for the same reason, and the
+  // `width`/`height` columns are nullable.
+  if (
+    data.length >= 12 &&
+    data[4] === 0x66 && // 'f'
+    data[5] === 0x74 && // 't'
+    data[6] === 0x79 && // 'y'
+    data[7] === 0x70 // 'p'
+  ) {
+    const boxSize = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0);
+    // A conforming ftyp box is at least 16 bytes (header + major brand +
+    // minor version). A smaller or absent declared size means the header is
+    // malformed, not that it needs guessing at.
+    if (boxSize < 16) return null;
+    const brands: string[] = [];
+    const major = readBrand(data, 8);
+    if (major) brands.push(major);
+    // Compatible brands run from 16 to the end of the ftyp box. Clamp to the
+    // bytes actually held: a crafted boxSize of 0xFFFFFFFF must not turn into
+    // an out-of-range read, and a truncated download must not be walked past.
+    const end = Math.min(boxSize, data.length);
+    for (let offset = 16; offset + 4 <= end; offset += 4) {
+      const brand = readBrand(data, offset);
+      if (brand) brands.push(brand);
+    }
+    if (brands.some((b) => ISO_BMFF_AVIF_BRANDS.has(b))) {
+      return { kind: 'avif', width: null, height: null };
+    }
+    if (brands.some((b) => ISO_BMFF_HEIC_BRANDS.has(b))) {
+      return { kind: 'heic', width: null, height: null };
+    }
+    return null;
   }
   return null;
 }

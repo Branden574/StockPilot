@@ -2,6 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { isValidStoragePath, itemImageAnyPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
@@ -140,7 +141,20 @@ async function resolvePublicImageUrl(
     .order('sort_order', { ascending: true })
     .limit(1);
   const imgRow = (imgRows ?? [])[0] as { storage_path?: string } | undefined;
-  if (imgRow?.storage_path) {
+  // HI-8: this is a SERVICE-ROLE read on an UNAUTHENTICATED page, and it does
+  // not know (or check) which org owns the item — the whole point of the
+  // public item view. So the path it signs is structurally validated before
+  // it reaches the storage client: `..`/`%2e%2e` segments in a stored path
+  // would be resolved by the WHATWG URL parser inside @supabase/storage-js
+  // and could mint a service-role-signed URL for an object in a DIFFERENT
+  // bucket entirely, served to an anonymous visitor.
+  //
+  // `itemImageAnyPathShape` is structural rather than id-pinned because the
+  // owning org id is exactly what is unknown here; item-level pinning is
+  // enforced on the WRITE side by `ItemImagesService.record()`. A row that
+  // fails the shape falls through to the custom_fields cover / placeholder
+  // below, which is the same outcome as a failed signing call.
+  if (imgRow?.storage_path && isValidStoragePath(imgRow.storage_path, itemImageAnyPathShape())) {
     // M5: 1h TTL. The /p/items/[id] page is server-rendered per
     // request, so the signed URL is freshly minted on each load —
     // there's no SSG cache that depends on a long TTL. A 7-day window

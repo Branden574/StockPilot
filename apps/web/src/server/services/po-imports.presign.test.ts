@@ -26,7 +26,7 @@ describe('PoImportsService.presignUpload — authorization gate', () => {
         permissions: new Set<Permission>([]),
       }) as never,
     );
-    const err = await svc.presignUpload({ fileName: 'po.csv' }).catch((e: unknown) => e);
+    const err = await svc.presignUpload({ fileName: 'po.csv', fileMimeType: 'text/csv' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('forbidden');
   });
@@ -39,7 +39,7 @@ describe('PoImportsService.presignUpload — authorization gate', () => {
         enabledModules: new Set<ModuleId>(['inventory']),
       }) as never,
     );
-    const err = await svc.presignUpload({ fileName: 'po.csv' }).catch((e: unknown) => e);
+    const err = await svc.presignUpload({ fileName: 'po.csv', fileMimeType: 'text/csv' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('module_disabled');
   });
@@ -55,9 +55,10 @@ describe('PoImportsService.presignUpload — authorization gate', () => {
     const svc = new PoImportsService(
       makeServiceContext(client, { role: 'admin', organizationId: 'org-9' }) as never,
     );
-    const out = await svc.presignUpload({ fileName: 'invoice.PDF' });
+    const out = await svc.presignUpload({ fileName: 'invoice.PDF', fileMimeType: 'application/pdf' });
     expect(out.uploadUrl).toBe('https://signed.example/put');
-    // Path is org-scoped and keeps the (lowercased) extension.
+    // MED-22: the path is org-scoped and its extension comes from the
+    // ALLOWLISTED MIME, not from the caller's fileName.
     expect(out.storagePath).toMatch(/^org-9\/po-imports\/[0-9a-f-]+\.pdf$/);
     expect(createSignedUploadUrl).toHaveBeenCalledTimes(1);
   });

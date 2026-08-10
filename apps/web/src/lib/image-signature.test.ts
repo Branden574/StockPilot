@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { MIME_FOR_KIND, sniffImage } from './image-signature';
+import {
+  isSniffedKindAllowedInBucket,
+  MIME_FOR_KIND,
+  SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS,
+  sniffImage,
+  type SniffedImage,
+} from './image-signature';
 
 /** Minimal real headers, from the format specs — no binary fixture files;
  *  every byte here is a literal from the PNG/JPEG/RIFF specs (task hygiene:
@@ -24,6 +30,24 @@ function webpBytes(): Uint8Array {
   const b = new Uint8Array(16);
   b.set([0x52, 0x49, 0x46, 0x46]); // 'RIFF'
   b.set([0x57, 0x45, 0x42, 0x50], 8); // 'WEBP'
+  return b;
+}
+
+/**
+ * An ISO-BMFF `ftyp` box, from ISO/IEC 14496-12: 4-byte box size, 'ftyp',
+ * 4-byte major brand, 4-byte minor version, then zero or more compatible
+ * brands. This is the container AVIF and HEIC both use — and so do MP4 and
+ * QuickTime, which is the whole reason the brand has to be read.
+ */
+function isoBmffBytes(major: string, compatible: string[] = []): Uint8Array {
+  const boxSize = 16 + compatible.length * 4;
+  const b = new Uint8Array(boxSize);
+  new DataView(b.buffer).setUint32(0, boxSize);
+  const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
+  b.set(ascii('ftyp'), 4);
+  b.set(ascii(major), 8);
+  b.set([0x00, 0x00, 0x00, 0x00], 12); // minor version
+  compatible.forEach((brand, i) => b.set(ascii(brand), 16 + i * 4));
   return b;
 }
 
@@ -58,12 +82,20 @@ describe('sniffImage', () => {
   });
 
   it('maps kinds to the exact bucket MIME pins', () => {
-    expect(MIME_FOR_KIND).toEqual({ png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' });
+    expect(MIME_FOR_KIND).toEqual({
+      png: 'image/png',
+      jpeg: 'image/jpeg',
+      webp: 'image/webp',
+      avif: 'image/avif',
+      heic: 'image/heic',
+    });
     // Literal-pin each value individually too (test-tautology rule — never
     // rely solely on a structural comparison against the same object shape).
     expect(MIME_FOR_KIND.png).toBe('image/png');
     expect(MIME_FOR_KIND.jpeg).toBe('image/jpeg');
     expect(MIME_FOR_KIND.webp).toBe('image/webp');
+    expect(MIME_FOR_KIND.avif).toBe('image/avif');
+    expect(MIME_FOR_KIND.heic).toBe('image/heic');
   });
 
   it('a truncated PNG (too short to contain IHDR dimensions) is rejected, not crashed on', () => {
@@ -142,6 +174,62 @@ describe('sniffImage', () => {
     expect(sniffImage(zeroDim)).toBeNull();
   });
 
+  it('identifies AVIF by its ISO-BMFF major brand (dimensions null — ispe lives in a nested box tree this deliberately does not walk)', () => {
+    expect(sniffImage(isoBmffBytes('avif'))).toEqual({ kind: 'avif', width: null, height: null });
+    // 'avis' is the image-sequence brand and is equally an AVIF.
+    expect(sniffImage(isoBmffBytes('avis'))).toEqual({ kind: 'avif', width: null, height: null });
+  });
+
+  it('identifies AVIF from the COMPATIBLE-brand list when the major brand is the generic HEIF `mif1` — and classifies it as avif, not heic, because AVIF wins the ordering', () => {
+    // Real files from some pipelines carry major brand 'mif1' with 'avif' only
+    // in the compatible list. Sniffing that as HEIC would hand the caller
+    // 'image/heic', which then mismatches a truthful `image/avif` declaration
+    // and gets a legitimate upload DELETED by a verify-or-delete guard.
+    const bytes = isoBmffBytes('mif1', ['avif', 'mif1', 'miaf']);
+    expect(sniffImage(bytes)).toEqual({ kind: 'avif', width: null, height: null });
+  });
+
+  it('identifies HEIC across every brand iOS and HEIF encoders emit', () => {
+    for (const brand of ['heic', 'heix', 'hevc', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1']) {
+      expect(sniffImage(isoBmffBytes(brand))).toEqual({
+        kind: 'heic',
+        width: null,
+        height: null,
+      });
+    }
+  });
+
+  it('SECURITY: an ISO-BMFF file that is NOT an image — an MP4 or a QuickTime movie — is REJECTED, not sniffed as heic just because it has an `ftyp` box', () => {
+    // These share AVIF/HEIC's container and their first 8 bytes exactly. A
+    // sniffer that matched on 'ftyp' alone (rather than reading the brand)
+    // would classify all of them as an image and let a video be recorded as,
+    // and served as, a photo.
+    for (const brand of ['isom', 'mp41', 'mp42', 'M4V ', 'qt  ', 'crx ']) {
+      expect(sniffImage(isoBmffBytes(brand))).toBeNull();
+    }
+  });
+
+  it('an ISO-BMFF header whose declared ftyp box size is nonsense is rejected rather than walked out of bounds', () => {
+    // boxSize = 0xFFFFFFFF, far past the buffer: the compatible-brand walk
+    // must clamp to the bytes actually held. The brand is a real HEIC brand,
+    // so the ONLY thing that can reject this is the bounds handling — and if
+    // the walk read past the end it would throw instead of returning.
+    const huge = isoBmffBytes('heic', ['heic']);
+    new DataView(huge.buffer).setUint32(0, 0xffffffff);
+    expect(sniffImage(huge)).toEqual({ kind: 'heic', width: null, height: null });
+
+    // A declared size below the mandatory 16-byte minimum is malformed.
+    const tiny = isoBmffBytes('heic');
+    new DataView(tiny.buffer).setUint32(0, 8);
+    expect(sniffImage(tiny)).toBeNull();
+  });
+
+  it('an ISO-BMFF header with non-printable bytes where the brand should be is rejected, not coerced into a brand string', () => {
+    const garbageBrand = isoBmffBytes('heic');
+    garbageBrand.set([0x00, 0x01, 0xff, 0xfe], 8);
+    expect(sniffImage(garbageBrand)).toBeNull();
+  });
+
   it('Minor 8 — a legitimate JPEG padded with 0xFF fill bytes before its SOF marker is still correctly sniffed (ITU T.81 §B.1.1.2: fill bytes before a marker are legal, real encoders emit them)', () => {
     // SOI, then THREE extra 0xFF fill bytes, then the real marker byte
     // (0xC0 = SOF0), then the same segment body jpegBytes() uses.
@@ -149,5 +237,106 @@ describe('sniffImage', () => {
       0xff, 0xd8, 0xff, 0xff, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00,
     ]);
     expect(sniffImage(withFill)).toEqual({ kind: 'jpeg', width: 4, height: 5 });
+  });
+});
+
+/**
+ * THE WAVE-D INVARIANT.
+ *
+ * A verify-or-delete guard is a DESTRUCTIVE control: on a sniff it does not
+ * like, it removes the uploaded object. That makes the sniffer's coverage a
+ * correctness requirement, not a nicety — if a bucket accepts a format
+ * `sniffImage` cannot recognize, every legitimate upload of that format sniffs
+ * as null and gets deleted.
+ *
+ * This is not hypothetical. The half-finished version of this wave widened
+ * `SniffedImage['kind']` to include 'avif' and 'heic' and extended
+ * MIME_FOR_KIND to match, but never added detection branches — so both union
+ * members were unreachable and the guard would have deleted every AVIF and
+ * HEIC upload the item-images and org-logos buckets explicitly accept.
+ *
+ * The invariant, in both directions:
+ *   NEVER NARROWER than a gated bucket's allowlist — else legitimate uploads
+ *     are destroyed. Asserted with REAL BYTES per MIME, so declaring a MIME
+ *     supported without teaching sniffImage to detect it fails here.
+ *   NEVER SILENTLY WIDER at a call site — a surface must not accept a format
+ *     its own bucket refuses, which is what `isSniffedKindAllowedInBucket`
+ *     exists to let each caller state.
+ */
+describe('sniffer coverage vs the bucket allowlists it gates', () => {
+  /** A real byte fixture per MIME this sniffer must recognize. Deliberately
+   *  built here rather than derived from MIME_FOR_KIND: the point is to prove
+   *  the sniffer against independent evidence, not to restate its own table. */
+  const BYTES_FOR_MIME: Record<string, () => Uint8Array> = {
+    'image/png': () => pngBytes(2, 3),
+    'image/jpeg': () => jpegBytes(4, 5),
+    'image/webp': () => webpBytes(),
+    'image/avif': () => isoBmffBytes('avif'),
+    'image/heic': () => isoBmffBytes('heic'),
+  };
+
+  it('is never NARROWER than any gated bucket: every MIME in every allowlist is produced by real bytes the sniffer recognizes', () => {
+    for (const [bucket, allowlist] of Object.entries(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS)) {
+      for (const mime of allowlist) {
+        const fixture = BYTES_FOR_MIME[mime];
+        expect(
+          fixture,
+          `${bucket} accepts ${mime} but this suite has no byte fixture for it — add one, and make sure sniffImage detects it, before adding the MIME to the allowlist`,
+        ).toBeDefined();
+        const sniffed = sniffImage(fixture!());
+        expect(sniffed, `sniffImage returned null for ${mime}, which ${bucket} accepts`).not.toBeNull();
+        expect(MIME_FOR_KIND[sniffed!.kind]).toBe(mime);
+        expect(isSniffedKindAllowedInBucket(sniffed!.kind, bucket as keyof typeof SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS)).toBe(true);
+      }
+    }
+  });
+
+  it('every kind the sniffer can return has a MIME_FOR_KIND entry, so no sniff result is ever undefined at a comparison site', () => {
+    const kinds: SniffedImage['kind'][] = ['png', 'jpeg', 'webp', 'avif', 'heic'];
+    for (const kind of kinds) {
+      expect(MIME_FOR_KIND[kind], `MIME_FOR_KIND is missing ${kind}`).toMatch(/^image\//);
+    }
+    // And the table has no entries beyond those kinds — a stale MIME left in
+    // MIME_FOR_KIND after a kind was removed would silently satisfy the
+    // allowlist test above without any detection behind it.
+    expect(Object.keys(MIME_FOR_KIND).sort()).toEqual([...kinds].sort());
+  });
+
+  it('is never silently WIDER at a call site: maintenance-photos refuses HEIC (0315 leaves it out on purpose) while item-images accepts it', () => {
+    // The concrete divergence in the product. A HEIC body sniffs successfully
+    // — so a guard checking only `sniffed !== null` would accept it into
+    // maintenance-photos, a bucket pinned against it. The per-bucket check is
+    // what refuses it.
+    const heic = sniffImage(isoBmffBytes('heic'));
+    expect(heic?.kind).toBe('heic');
+    expect(isSniffedKindAllowedInBucket('heic', 'maintenance-photos')).toBe(false);
+    expect(isSniffedKindAllowedInBucket('heic', 'item-images')).toBe(true);
+    // org-logos allows AVIF but not HEIC (migration 0046).
+    expect(isSniffedKindAllowedInBucket('avif', 'org-logos')).toBe(true);
+    expect(isSniffedKindAllowedInBucket('heic', 'org-logos')).toBe(false);
+  });
+
+  it('pins each gated bucket allowlist to the exact set its migration writes', () => {
+    // Literal pins, not a structural comparison: these are transcriptions of
+    // migrations 0046 and 0315, and a drift between the two is the bug this
+    // whole file guards against.
+    expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['item-images']).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/avif',
+      'image/heic',
+    ]);
+    expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['org-logos']).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/avif',
+    ]);
+    expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['maintenance-photos']).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+    ]);
   });
 });
