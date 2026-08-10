@@ -154,14 +154,35 @@ select is(
   'the ACTIVE recipient still gets their in-app row — the guard is not over-broad'
 );
 
--- ── 3. create-or-replace preserved the 0025 grant ───────────────────────────
+-- ── 3. create-or-replace preserved the pre-existing grants ──────────────────
 -- Postgres does not change ownership/permissions on CREATE OR REPLACE
 -- FUNCTION with an unchanged signature. Pin that empirically rather than by
--- citing the docs: 0025's trailing `grant execute ... to authenticated`
--- must still hold after 0313 replaced the body.
+-- citing the docs.
+--
+-- AMENDED BY 0318 (P0 anon-EXECUTE remediation). This assertion originally
+-- used `authenticated` on _notify_recipients(uuid) as its vehicle — 0025's
+-- trailing `grant execute ... to authenticated`. Migration 0318 deliberately
+-- revokes that grant: _notify_recipients returns the owner/admin/manager
+-- roster for ANY organization UUID, which made it a cross-tenant roster
+-- oracle, and it needs no caller grant because all five of its callers
+-- (_notify_low_stock, _notify_po_status, _notify_receipt_posted,
+-- _notify_bundle_shortage, _notify_order_request_changes) are SECURITY
+-- DEFINER and therefore reach it as their own owner. 0313's own sections 1
+-- and 2 above still exercise that path end to end, so nothing this file
+-- actually tests depends on the revoked grant.
+--
+-- The Postgres semantic being pinned is unchanged; only the vehicle moved, to
+-- the OTHER function 0313 create-or-replaced (line 88),
+-- _dispatch_push_for_notification(). It returns `trigger`, so Postgres refuses
+-- to invoke it as an RPC at all ("trigger functions can only be called as
+-- triggers") — its inherited EXECUTE grants are not reachable privilege and
+-- 0318 correctly leaves them alone. That makes it a stable vehicle for the
+-- ACL-survives-replace claim. The complementary assertion, that
+-- _notify_recipients now retains ONLY postgres and service_role, lives in
+-- supabase/tests/0318_secdef_grants.test.sql.
 select ok(
-  has_function_privilege('authenticated', 'public._notify_recipients(uuid)', 'execute'),
-  'authenticated STILL holds EXECUTE on _notify_recipients after 0313''s create-or-replace (grant survives, per Postgres semantics)'
+  has_function_privilege('authenticated', 'public._dispatch_push_for_notification()', 'execute'),
+  'pre-existing EXECUTE grants STILL hold after 0313''s create-or-replace (grants survive, per Postgres semantics)'
 );
 
 -- The 0028 trigger binding is by function name, not by function body — a
