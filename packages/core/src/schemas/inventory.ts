@@ -36,8 +36,17 @@ const numericMoney = z.coerce
   .number({ invalid_type_error: 'Enter a number.' })
   .nonnegative('Enter 0 or more.')
   .max(1_000_000_000, 'That amount is too large.');
+// MED-11: `.nonnegative()` here matches numericMoney above, and matches the
+// inventory_items_quantity_on_hand_nonneg / _reorder_point_nonneg /
+// _reorder_quantity_nonneg CHECK constraints added in migration 0322 — this is
+// the only place the three fields it guards are validated, and it was the one
+// numeric helper in this file missing the floor. Without it the database now
+// rejects a negative with a raw check_violation instead of the form showing a
+// field error. Not used for any signed delta: the only consumers are
+// quantityOnHand, reorderPoint and reorderQuantity.
 const numericQty = z.coerce
   .number({ invalid_type_error: 'Enter a number.' })
+  .nonnegative('Enter 0 or more.')
   .max(1_000_000_000, 'That quantity is too large.');
 
 export const createItemSchema = z
