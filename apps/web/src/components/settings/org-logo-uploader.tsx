@@ -45,7 +45,14 @@ export function OrgLogoUploader({
     setBusy(true);
     try {
       const supabase = createClient();
-      const ext = file.name.split('.').pop() ?? 'png';
+      // Strip everything but alphanumerics out of the extension (same
+      // treatment po-attachments-panel.tsx already gives it). A file the OS
+      // let the user name `my logo` or `logo.tar.gz ` otherwise produced a
+      // path with a space or a stray separator in it, which the server-side
+      // shape check on the finalize step (setOrgLogoUrlAction) refuses — so
+      // an unsanitized extension here would fail a legitimate upload late,
+      // after the bytes were already in the bucket.
+      const ext = (file.name.split('.').pop() ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
       const path = `${organizationId}/logo-${Date.now()}.${ext}`;
       const upRes = await supabase.storage
         .from('org-logos')

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isValidStoragePath, poAttachmentPathShape } from '@/lib/storage-path';
+
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 const BUCKET = 'po-attachments';
@@ -109,11 +111,22 @@ export class PoAttachmentsService {
     if (poErr) throw new ServiceError('internal_error', poErr.message);
     if (!po) throw new ServiceError('not_found', 'Purchase order not found.');
 
-    // Defense-in-depth: the storage path must live under THIS org's folder
-    // (mirrors OrderAttachmentsService.add). Bucket RLS already blocks cross-org
-    // signed URLs, but this stops the metadata row from referencing another
-    // org's storage path.
-    if (!input.storagePath.startsWith(`${this.ctx.organizationId}/`)) {
+    // HI-8: the storage path must match EXACTLY what the uploaders mint —
+    // `{org}/{purchaseOrderId}/{file}` (mirrors OrderAttachmentsService.add).
+    // The old `startsWith(`${orgId}/`)` prefix check was satisfiable by
+    // `${orgId}/../../item-images/<victim-org>/<victim-item>/cover.jpg`: the
+    // storage client interpolates the path into a fetch() URL whose `..`
+    // segments the WHATWG parser resolves before the request leaves Node, so
+    // the prefix held while the path escaped both the org folder and the
+    // bucket — and `download()` below hands whatever it names to the zip
+    // bundle. Pinning the PO id as well as the org id also stops PO A's
+    // attachment row from being filed against PO B's uploaded invoice.
+    if (
+      !isValidStoragePath(
+        input.storagePath,
+        poAttachmentPathShape(this.ctx.organizationId, input.purchaseOrderId),
+      )
+    ) {
       throw new ServiceError('validation_error', 'Invalid storage path — wrong org prefix.');
     }
 

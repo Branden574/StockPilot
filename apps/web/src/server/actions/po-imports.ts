@@ -3,6 +3,10 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import {
+  isAllowedPoImportUploadMime,
+  PO_IMPORT_UPLOAD_MIME_ERROR,
+} from '@/lib/po-imports/mime';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { PoImportsService } from '@/server/services/po-imports';
@@ -22,8 +26,15 @@ import {
   type AmbiguousColumnMeaning,
 } from '@stockpilot/core';
 
-const ALLOWED_MIME = new Set(['application/pdf', 'text/csv', 'application/vnd.ms-excel']);
 const MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * MED-22 — the boundary half of the PO-import MIME allowlist. The list itself
+ * lives in `lib/po-imports/mime.ts` and the SERVICE enforces the same one; see
+ * that module's header for why both layers keep a check and why one copy of the
+ * list is non-negotiable. Keeping the edge check means a bad request is refused
+ * before a service is even instantiated, matching every other action here.
+ */
 
 const presignSchema = z.object({
   fileName: z.string().min(1).max(255),
@@ -43,16 +54,24 @@ export async function presignPoUploadAction(input: {
 }): Promise<ActionResult<{ uploadUrl: string; storagePath: string }>> {
   const parsed = presignSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid file metadata');
-  if (!ALLOWED_MIME.has(parsed.data.fileMimeType)) {
-    return err('validation_error', 'Only PDF or CSV files are allowed');
+  if (!isAllowedPoImportUploadMime(parsed.data.fileMimeType)) {
+    return err('validation_error', PO_IMPORT_UPLOAD_MIME_ERROR);
   }
   try {
     // Route through the gated service twin — presigning an upload url into the
     // po-imports bucket is import-privileged (po_imports module +
     // purchase_orders:manage), not something any org member may do. The old
     // inline requireOrgContext + createClient path carried NO such gate.
+    //
+    // MED-22: `fileMimeType` is now PASSED THROUGH, because the service uses it
+    // to choose the stored file extension itself instead of parsing it out of
+    // the caller's `fileName` (which was a path-injection sink). The service
+    // re-checks the allowlist — the check above is the edge, not the gate.
     const svc = await PoImportsService.forCurrentUser();
-    const result = await svc.presignUpload({ fileName: parsed.data.fileName });
+    const result = await svc.presignUpload({
+      fileName: parsed.data.fileName,
+      fileMimeType: parsed.data.fileMimeType,
+    });
     return ok(result);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache';
 
 import { isManagerOrAbove } from '@stockpilot/core';
 
+import { isValidStoragePath, orderAttachmentPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
@@ -199,9 +200,22 @@ export class OrderAttachmentsService {
         'Attachments can only be added once the order is out for delivery or completed.',
       );
     }
-    // Defense-in-depth: the uploaded object must live under this org's prefix
-    // (the bucket RLS enforces the same, but fail fast with a clean error).
-    if (!input.storagePath.startsWith(`${this.ctx.organizationId}/`)) {
+    // HI-8: the uploaded object must match EXACTLY the path the uploader
+    // mints — `{org}/{orderRequestId}/{file}`. This was a
+    // `startsWith(`${orgId}/`)` prefix check, which is satisfied by
+    // `${orgId}/../../item-images/<victim-org>/<victim-item>/cover.jpg`:
+    // @supabase/storage-js interpolates the path into a fetch() URL and the
+    // WHATWG parser resolves `..` before the request leaves Node, so the
+    // prefix held while the path escaped the org folder AND the bucket, and
+    // came back as a signed URL RLS never saw. Pinning the ORDER id as well
+    // as the org id is new — the prefix check let a manager file order A's
+    // attachment row against order B's uploaded delivery proof.
+    if (
+      !isValidStoragePath(
+        input.storagePath,
+        orderAttachmentPathShape(this.ctx.organizationId, input.orderRequestId),
+      )
+    ) {
       throw new ServiceError('validation_error', 'Invalid storage path.');
     }
 

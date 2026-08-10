@@ -49,12 +49,34 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => stubHolder.stub!.client),
 }));
 
+/**
+ * MED-23 — setOrgLogoUrlAction now DOWNLOADS the object the submitted URL names
+ * and sniffs its real bytes before the URL becomes the org's logo, deleting the
+ * object if the bytes are not an image the org-logos bucket accepts. So the
+ * admin-client mock needs a storage leg, and the bytes it serves have to be
+ * settable per test. `logoStorage.body` is what the download returns; the
+ * download/remove spies are asserted directly.
+ */
+const { logoStorage } = vi.hoisted(() => ({
+  logoStorage: {
+    body: null as Uint8Array | null,
+    download: vi.fn(),
+    remove: vi.fn(),
+  },
+}));
+
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({
     auth: {
       admin: {
         deleteUser: vi.fn(async () => ({ error: null })),
       },
+    },
+    storage: {
+      from: vi.fn(() => ({
+        download: logoStorage.download,
+        remove: logoStorage.remove,
+      })),
     },
   })),
 }));
@@ -190,10 +212,32 @@ describe('setAvatarUrlAction', () => {
   });
 });
 
+/** A real 26-byte PNG: the 8-byte signature, IHDR length+tag, then 2x3
+ *  dimensions. Every byte is a literal from the PNG spec — the point is to
+ *  prove the sniff accepts a GENUINE image, so the refusals below cannot be
+ *  credited to a guard that rejects everything. */
+function pngBytes(): Uint8Array {
+  const b = new Uint8Array(26);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  b.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+  new DataView(b.buffer).setUint32(16, 2);
+  new DataView(b.buffer).setUint32(20, 3);
+  return b;
+}
+
+const LOGO_URL_BASE = 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/';
+
 describe('setOrgLogoUrlAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.role = 'admin';
+    logoStorage.body = pngBytes();
+    logoStorage.download.mockImplementation(async () =>
+      logoStorage.body
+        ? { data: { arrayBuffer: async () => logoStorage.body!.buffer.slice(0) }, error: null }
+        : { data: null, error: { message: 'not found' } },
+    );
+    logoStorage.remove.mockImplementation(async () => ({ data: null, error: null }));
     stubHolder.stub = makeSupabaseStub({
       'organizations.select': {
         data: [{ logo_url: 'https://old/logo.png' }],
@@ -226,6 +270,67 @@ describe('setOrgLogoUrlAction', () => {
     );
     expect(revalidateTag).toHaveBeenCalledWith('dashboard-org', 'max');
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard', 'layout');
+  });
+
+  it('MED-23 — a body whose BYTES are not an image is refused, the object is DELETED, and no logo is persisted', async () => {
+    // org-logos is a PUBLIC bucket. Its allowed_mime_types pin (0046) only
+    // inspects the Content-Type header the browser attached to its PUT, which
+    // is client-controlled — so an HTML document or an SVG carrying script
+    // uploads cleanly by declaring image/png and then lives at a permanent,
+    // unauthenticated URL on the Supabase origin. This action is what would
+    // publish that URL into every page header, PDF and export.
+    logoStorage.body = new TextEncoder().encode('<svg onload="alert(1)"></svg>');
+    const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-1.png` });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    // Verify-or-DELETE: the unverified object must not survive at its public URL.
+    expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-1.png']);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('MED-23 — a URL naming an object that was never uploaded is refused without persisting', async () => {
+    logoStorage.body = null; // download fails
+    const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-missing.png` });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    // Nothing was uploaded, so there is nothing to remove.
+    expect(logoStorage.remove).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('MED-23 — a genuine PNG is accepted and the object is NOT deleted (the guard is not simply refusing everything)', async () => {
+    logoStorage.body = pngBytes();
+    const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-2.png` });
+    expect(result.ok).toBe(true);
+    expect(logoStorage.download).toHaveBeenCalledWith('org-1/logo-2.png');
+    expect(logoStorage.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'logo-1.png/../../item-images/victim-org/victim-item/cover.jpg',
+    '%2e%2e/%2e%2e/maintenance-photos/victim/photo.jpg',
+    '%252e%252e/item-images/victim/x.jpg',
+    'sub/folder/logo.png',
+    'logo 1.png',
+  ])('HI-8 — the derived object path %s is shape-refused BEFORE any service-role storage call', async (tail) => {
+    // The org-prefix check on the URL is a PREFIX check, and a prefix check says
+    // nothing about the rest of the string: `<org>/../../<bucket>/...` starts
+    // with the expected prefix and still escapes the bucket once storage-js
+    // interpolates it into a fetch() URL. The derived path is therefore
+    // shape-validated before the admin download is attempted.
+    const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}${tail}` });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(logoStorage.download).not.toHaveBeenCalled();
+    expect(logoStorage.remove).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('clearing the logo (url: null) needs no object to exist and touches storage not at all', async () => {
+    const result = await setOrgLogoUrlAction({ url: null });
+    expect(result.ok).toBe(true);
+    expect(logoStorage.download).not.toHaveBeenCalled();
+    expect(logoStorage.remove).not.toHaveBeenCalled();
   });
 
   it('rejects a logo URL outside the org’s own storage folder (SSRF guard)', async () => {
