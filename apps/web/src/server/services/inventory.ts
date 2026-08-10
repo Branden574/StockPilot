@@ -167,6 +167,16 @@ export function mapMovementTypeToAuditEvent(movementType: MovementType): AuditEv
 // the filter string. Security audit 2026-06-09.
 const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// How many items' rack transfers may be in flight at once during a create-time
+// auto-place (placeManualCreateOnRack). Deliberately the SAME cap
+// placeItemsOntoRackByName picked for bulk "Set rack" (its local CONCURRENCY),
+// for the same two reasons stated there: sequential RPC round trips are what
+// made a 13-item place "take forever", and a cap keeps the connection pool sane
+// at the ceiling (60 sizes for a size run, 500 items for bulk Set rack). Kept
+// as one named constant so the create path cannot silently drift to a different
+// number than the bulk path.
+const RACK_PLACE_CONCURRENCY = 20;
+
 // Model B — "one product = one SKU": these are the SHARED product columns.
 // Editing any of them on ONE placement (inventory_items row) of a SKU must
 // fan out the same value to every OTHER non-deleted row sharing that item's
@@ -1884,7 +1894,7 @@ export class InventoryService {
     // succeeded.
     if (isManualCreatePath && input.quantityOnHand > 0 && typedBinLabel) {
       await this.placeManualCreateOnRack(
-        data.id as string,
+        [data.id as string],
         resolvedWarehouseId,
         typedBinLabel,
       ).catch((e) => {
@@ -2661,6 +2671,65 @@ export class InventoryService {
           'These variants were created, but their opening stock could not be recorded, so they were saved with zero on hand. Add the quantities with a stock adjustment.',
         );
       }
+    }
+
+    // ── Size-run auto-place (owner report 2026-08-10) ────────────────────────
+    // "type a rack, enter quantities per size, the stock lands on that rack" —
+    // the exact promise create() has kept since 2026-08-04, which this path
+    // never implemented. PR #69 wired auto-place into manual SINGLE create and
+    // bulk "Set rack" and skipped the size run entirely, so a 13-size shoe run
+    // typed onto rack 28-A produced 13 variants all reading "Unplaced /
+    // awaiting put-away": the rows carried `bin_location` (the text LABEL) and
+    // nothing ever moved the holding `tg_seed_initial_level` (0199) seeded at
+    // `primary_location_id` / the warehouse's Unplaced bucket. A GAP, not a
+    // regression.
+    //
+    // Same helper, same semantics as create()'s call site — read the long
+    // comment there for the full rationale. The three that matter most:
+    //
+    //  1. `primary_location_id` and the 'initial' movements' `to_location_id`
+    //     above are BYTE-UNCHANGED. A rack id must never be written into
+    //     `primary_location_id`: the location FILTER (instant-mode.ts) tests it
+    //     against a SITES-ONLY set and exports resolve it into a "Primary
+    //     location" column, so stamping a rack there makes auto-placed rows
+    //     vanish from location-filtered views and duplicates the rack label
+    //     into exports. Let the trigger seed wherever it seeds, then MOVE the
+    //     holding with transferStock.
+    //  2. AFTER the opening movements, never before. That block can throw and
+    //     compensate back to zero on-hand + zero levels; placing first would
+    //     write 'transfer' rows describing stock that the compensation then
+    //     erased. This ordering also matches create()'s (insert → 'initial' →
+    //     place), so the ledger reads as a human put-away on both paths.
+    //  3. Only the STOCKED variants. A size the user left at 0 has no holding
+    //     at all (0199 returns early on qty <= 0), so including it would buy a
+    //     wider read for nothing.
+    //
+    // `typedBinLabel` is derived by the SAME expression create() uses, off the
+    // SAME field: `input.binLocation` is what the Add Item form composes with
+    // `formatRackLabel(rackNumber, rackRow)` for a size run and with the
+    // identical `num`/`num-row` composition for a single item, so the two
+    // paths cannot disagree about what counts as a typed rack. There is no
+    // `isManualCreatePath` twin to check: this method has no `opts` at all and
+    // every caller of it — the web Add Item form, Expo's Add Item screen and
+    // POST /api/v1/items/sized-variants — is a hand-typed create. PO,
+    // receiving and CSV import never reach it.
+    //
+    // FAIL-SOFT, and per-variant inside the helper: the variants and their
+    // ledger are already committed, so no placement failure may undo or block
+    // them, and one variant's failed transfer must not cost the others theirs.
+    const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    const stockedForPlacement = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
+    if (typedBinLabel && stockedForPlacement.length > 0) {
+      await this.placeManualCreateOnRack(
+        stockedForPlacement,
+        resolvedWarehouseId,
+        typedBinLabel,
+      ).catch((e) => {
+        console.error('[sized variants] auto-place failed', {
+          itemIds: stockedForPlacement,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
     }
 
     return inserted.map((r) => ({ id: r.id, name: r.name, sku: r.sku }));
@@ -4387,15 +4456,23 @@ export class InventoryService {
 
   /**
    * Manual item creation's auto-place (owner request 2026-08-04) — called
-   * AFTER the item row and its 'initial' stock_movements ledger entry both
-   * already committed successfully. `tg_seed_initial_level` has, by this
-   * point, already seeded the item's item_stock_levels holding (at
+   * AFTER the item rows and their 'initial' stock_movements ledger entries
+   * all already committed successfully. `tg_seed_initial_level` has, by this
+   * point, already seeded each item's item_stock_levels holding (at
    * `primary_location_id` if the caller set a real one, else the
-   * warehouse's Unplaced bucket) — this method finds that holding and
-   * PHYSICALLY MOVES it onto the typed rack via transferStock, mirroring
+   * warehouse's Unplaced bucket) — this method finds those holdings and
+   * PHYSICALLY MOVES them onto the typed rack via transferStock, mirroring
    * exactly what `placeItemsOntoRackByName` (the bulk "Set rack" auto-place)
    * does for existing items: resolve-or-create through the SAME
    * `findOrCreateRackLocation`, then transfer, never a raw level write.
+   *
+   * TAKES A LIST (2026-08-10). It was single-item, which is why the SIZE-RUN
+   * create path (`bulkCreateSizedVariants`) shipped with no placement at all
+   * — a 13-size shoe run typed onto rack 28-A left every variant "Unplaced /
+   * awaiting put-away". Generalising the ONE helper both create paths share
+   * was the alternative to giving the size run its own second placement
+   * implementation. The single-item caller passes a one-element array and is
+   * otherwise unchanged; `.in('item_id', [id])` is the same query `.eq` was.
    *
    * Never touches `primary_location_id` or any other item column — the
    * item's declared primary location is a separate concern from where its
@@ -4403,18 +4480,24 @@ export class InventoryService {
    * already relies on since migration 0192 moved stock accounting off
    * primary_location_id and onto item_stock_levels).
    *
-   * Callers MUST treat this as fail-soft (see the .catch() at the call
+   * Callers MUST treat this as fail-soft (see the .catch() at each call
    * site): every failure here — the rack not resolving, the holdings read
-   * coming back empty, a single transfer throwing — simply leaves the
-   * item's stock wherever the trigger originally put it. It never throws
-   * out of its own accord for anything BUT what it cannot recover from
-   * (propagated so the caller's catch logs it once, not per-holding).
+   * coming back empty, a transfer throwing — simply leaves the affected
+   * item's stock wherever the trigger originally put it.
+   *
+   * PER-ITEM ISOLATION: a transfer that throws is caught and logged HERE,
+   * against the item it belongs to, so one variant of a size run failing can
+   * never stop the other twelve from being placed (the same per-unit
+   * best-effort `placeItemsOntoRackByName` applies per holding). The call
+   * sites keep their own catch-all for what is NOT per-item: the rack
+   * resolve and the holdings read.
    */
   private async placeManualCreateOnRack(
-    itemId: string,
+    itemIds: string[],
     warehouseId: string,
     rawLabel: string,
   ): Promise<void> {
+    if (itemIds.length === 0) return;
     const parts = parseRackLabel(rawLabel);
     const rackName = formatRackLabel(parts) || rawLabel;
     const rackId = await this.findOrCreateRackLocation(
@@ -4425,24 +4508,69 @@ export class InventoryService {
     );
     if (!rackId) return;
 
+    // ONE holdings read for the whole batch, not one per item: a 60-size run
+    // (the schema's ceiling) would otherwise pay 60 round trips to read what a
+    // single `.in` answers.
     const { data: holdings } = await this.ctx.supabase
       .from('item_stock_levels')
-      .select('location_id, quantity')
+      .select('item_id, location_id, quantity')
       .eq('organization_id', this.ctx.organizationId)
-      .eq('item_id', itemId)
+      .in('item_id', itemIds)
       .gt('quantity', 0);
-    const rows = (holdings ?? []) as Array<{ location_id: string; quantity: number }>;
+    const rows = (holdings ?? []) as Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+    }>;
+    // Group by OWNING item — `item_id` is now part of the projection above
+    // precisely because one read serves many items and a holding has to be
+    // attributable to exactly one of them. Anything not in the requested set is
+    // dropped rather than trusted: that turns a future edit to the projection
+    // (or a filter that somehow returned a foreign row) into "nothing placed"
+    // instead of a transfer issued against an undefined/foreign item id.
+    const requested = new Set(itemIds);
+    const byItem = new Map<string, typeof rows>();
     for (const row of rows) {
-      // Already on the resolved rack (e.g. the caller's own primaryLocationId
-      // happened to BE this rack) — nothing to move.
-      if (row.location_id === rackId) continue;
-      await this.transferStock({
-        itemId,
-        fromLocationId: row.location_id,
-        toLocationId: rackId,
-        quantity: Number(row.quantity),
-        notes: `Placed on rack ${rackName} at creation`,
-      });
+      if (!requested.has(row.item_id)) continue;
+      const arr = byItem.get(row.item_id) ?? [];
+      arr.push(row);
+      byItem.set(row.item_id, arr);
+    }
+
+    // Transfers run CONCURRENTLY across items in capped waves — 60 sequential
+    // RPC round trips is the "took forever" the bulk Set rack path already
+    // measured and fixed (see the CONCURRENCY note in
+    // placeItemsOntoRackByName, same cap for the same reason). Safe to
+    // parallelise ACROSS items and never within one: transfer_stock takes a
+    // `for update` row lock on inventory_items keyed by item, so two items
+    // never contend, while two holdings of the SAME item both draw down that
+    // one row and stay ordered.
+    const groups = [...byItem.entries()];
+    for (let i = 0; i < groups.length; i += RACK_PLACE_CONCURRENCY) {
+      await Promise.all(
+        groups.slice(i, i + RACK_PLACE_CONCURRENCY).map(async ([itemId, itemHoldings]) => {
+          try {
+            for (const row of itemHoldings) {
+              // Already on the resolved rack (e.g. the caller's own
+              // primaryLocationId happened to BE this rack) — nothing to move.
+              if (row.location_id === rackId) continue;
+              await this.transferStock({
+                itemId,
+                fromLocationId: row.location_id,
+                toLocationId: rackId,
+                quantity: Number(row.quantity),
+                notes: `Placed on rack ${rackName} at creation`,
+              });
+            }
+          } catch (e) {
+            console.error('[rack place] create-time transfer failed', {
+              item: itemId,
+              rack: rackName,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }),
+      );
     }
   }
 

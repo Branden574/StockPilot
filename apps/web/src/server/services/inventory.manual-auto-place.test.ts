@@ -53,9 +53,16 @@ const BASE = {
 // placeManualCreateOnRack to move stub `item_stock_levels.select` directly,
 // standing in for "the trigger already ran and put 5 units at wh-1's
 // Unplaced bucket" (or wherever the item's own primary_location_id pointed).
+//
+// `item_id` is part of the row because it is part of the SELECT: the helper
+// became list-taking on 2026-08-10 (so the size-run create path could share it
+// — see inventory.sized-run-auto-place.test.ts) and now attributes each holding
+// to its owning item instead of assuming a single one. Holdings whose item_id
+// is not one of the requested ids are ignored, so a row without it is not
+// placed at all.
 const SEEDED_AT_UNPLACED = {
   'item_stock_levels.select': {
-    data: [{ location_id: 'unplaced-wh1', quantity: 5 }],
+    data: [{ item_id: 'item-new', location_id: 'unplaced-wh1', quantity: 5 }],
     error: null,
   },
 };
@@ -263,7 +270,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
       // Models the trigger seeding at the caller's OWN primaryLocationId
       // (a real site) rather than the warehouse's Unplaced bucket.
       'item_stock_levels.select': {
-        data: [{ location_id: 'site-chosen-by-caller', quantity: 5 }],
+        data: [{ item_id: 'item-new', location_id: 'site-chosen-by-caller', quantity: 5 }],
         error: null,
       },
     });
