@@ -5,6 +5,16 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
+// ItemImagesService.record now sniffs via a RANGE READ of the object's
+// leading bytes (fetchObjectPrefix) instead of download(). The helper is the
+// storage-read seam here: makeStorageSpy wires it to the same `body` its
+// download stub used to serve, and the refusal assertions check IT was never
+// reached — same property as before (no storage read happens on hostile
+// input), stated against the call that now performs the read.
+const { fetchObjectPrefixMock } = vi.hoisted(() => ({ fetchObjectPrefixMock: vi.fn() }));
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: fetchObjectPrefixMock,
+}));
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
@@ -81,20 +91,20 @@ function pngBytes(): Uint8Array {
 
 /** A storage stub that records every call, so a test can assert the storage
  *  client was NEVER reached — the only assertion that proves the refusal
- *  happened before the object could be read. */
+ *  happened before the object could be read. `body` also becomes what the
+ *  (mocked) range-read helper serves as the object's leading bytes, mirroring
+ *  what the download stub used to return; null = the object does not exist. */
 function makeStorageSpy(body: Uint8Array | null) {
-  const download = vi.fn(async () =>
-    body
-      ? { data: { arrayBuffer: async () => body.buffer.slice(0) }, error: null }
-      : { data: null, error: { message: 'not found' } },
+  fetchObjectPrefixMock.mockImplementation(async () =>
+    body ? { prefix: body, totalSize: body.byteLength } : null,
   );
   const remove = vi.fn(async () => ({ data: null, error: null }));
   const createSignedUrl = vi.fn(async () => ({
     data: { signedUrl: 'https://signed.example/get' },
     error: null,
   }));
-  const api = { download, remove, createSignedUrl };
-  return { api, from: vi.fn(() => api), download, remove, createSignedUrl };
+  const api = { remove, createSignedUrl };
+  return { api, from: vi.fn(() => api), remove, createSignedUrl };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -116,8 +126,8 @@ describe('ItemImagesService.record — HI-8', () => {
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('validation_error');
     // The refusal must precede the storage call: a check that ran after the
-    // download would already have read the victim's object.
-    expect(storage.download).not.toHaveBeenCalled();
+    // prefix read would already have read the victim's object.
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
   });
 
   it('REFUSES a traversal in thumbPath even when storagePath is legitimate', async () => {
@@ -130,7 +140,7 @@ describe('ItemImagesService.record — HI-8', () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('validation_error');
-    expect(storage.download).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
   });
 
   it('REFUSES a path pinned to a DIFFERENT item — the shape pins the item id, not just the org', async () => {
@@ -154,7 +164,7 @@ describe('ItemImagesService.record — HI-8', () => {
     const row = await svc.record(ENTITY, `${ORG}/items/${ENTITY}/${FILE}.webp`, true, {
       thumbPath: `${ORG}/items/${ENTITY}/${FILE}-thumb.webp`,
     });
-    expect(storage.download).toHaveBeenCalledWith(`${ORG}/items/${ENTITY}/${FILE}.webp`);
+    expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), `${ORG}/items/${ENTITY}/${FILE}.webp`);
     expect(storage.remove).not.toHaveBeenCalled();
     expect(row).toMatchObject({ id: 'img-1' });
   });
@@ -182,7 +192,7 @@ describe('ItemImagesService.record — HI-8', () => {
   });
 
   it('MED-23 — a `record()` that was never preceded by a real upload writes no phantom row', async () => {
-    const storage = makeStorageSpy(null); // download fails: the object is absent
+    const storage = makeStorageSpy(null); // the prefix read fails: the object is absent
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [{ id: ENTITY }], error: null },
     });

@@ -6,6 +6,7 @@ import {
   isSniffedKindAllowedInBucket,
   sniffImage,
 } from '@/lib/image-signature';
+import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import {
   isValidStoragePath,
   itemImageAnyPathShape,
@@ -752,24 +753,28 @@ export class ItemImagesService {
     // sitting behind a signed URL on our own origin is a real payload host.
     //
     // Same verify-or-delete shape as the maintenance-attachments reference:
-    // download, sniff, and on any disagreement REMOVE the object and write no
-    // row — never leave an unverified object with a row pointing at it. The
-    // download doubles as the finalize-time existence check: a `record()` that
-    // was never preceded by a real PUT no longer creates a phantom row whose
-    // signed URL 404s in every list.
+    // read the object's LEADING BYTES (fetchObjectPrefix — a range read; the
+    // sniff verdict lives entirely in the first 4 KB, so a 10 MB master is
+    // never buffered here just to be classified), sniff, and on any
+    // disagreement REMOVE the object and write no row — never leave an
+    // unverified object with a row pointing at it. The prefix read doubles as
+    // the finalize-time existence check exactly as the old full download did:
+    // signing a nonexistent object errors, so a `record()` that was never
+    // preceded by a real PUT still creates no phantom row whose signed URL
+    // 404s in every list.
     //
     // Gated on the BUCKET's allowlist rather than merely "is some image", so
     // this surface can never accept a format 0046 pins item-images against.
     // Uses the caller's own RLS-scoped client, not service-role — the
     // "item-images authenticated read/staff delete" policies (0003/0140)
-    // already grant exactly this, so there is no reason to reach for
-    // createAdminClient here.
+    // already grant exactly this (the sign is an RLS-checked read), so there
+    // is no reason to reach for createAdminClient here.
     const bucket = this.ctx.supabase.storage.from('item-images');
-    const { data: blob, error: dlErr } = await bucket.download(storagePath);
-    if (dlErr || !blob) {
+    const head = await fetchObjectPrefix(bucket, storagePath);
+    if (!head) {
       throw new ServiceError('validation_error', 'invalid_image');
     }
-    const sniffed = sniffImage(new Uint8Array(await blob.arrayBuffer()));
+    const sniffed = sniffImage(head.prefix);
     if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'item-images')) {
       const orphans = opts.thumbPath ? [storagePath, opts.thumbPath] : [storagePath];
       await bucket.remove(orphans);

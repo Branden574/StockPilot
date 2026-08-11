@@ -13,6 +13,7 @@ import { reportError } from '@/lib/error-reporter';
 import { sanitizeFilenameSegment } from '@/lib/exports/filename';
 import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -293,10 +294,12 @@ export class MaintenanceAttachmentsService {
   }
 
   /**
-   * Downloads the just-uploaded object, sniffs REAL bytes (never the
-   * client's declared MIME), and records the row. A body that is not the
-   * image it claims to be — wrong bytes, or bytes/declared-MIME mismatch,
-   * or oversize — is DELETED, never stored, and writes NO row (photo test 6).
+   * Range-reads the just-uploaded object's leading bytes, sniffs REAL bytes
+   * (never the client's declared MIME), and records the row. A body that is
+   * not the image it claims to be — wrong bytes, or bytes/declared-MIME
+   * mismatch, or oversize — is DELETED, never stored, and writes NO row
+   * (photo test 6). The recorded byte_size is the object's FULL size (from
+   * the range response's own headers), not the sniffed prefix's length.
    */
   async finalize(
     requestId: string,
@@ -321,19 +324,24 @@ export class MaintenanceAttachmentsService {
     const thumbPath = deriveThumbPath(args.path);
 
     const admin = createAdminClient();
-    const { data: blob, error: dlErr } = await admin.storage.from(BUCKET).download(args.path);
-    // A download failure here also means "the object was never actually
-    // uploaded" — the finalize-time existence check (no phantom rows for a
-    // mint that was never followed by a real PUT). Nothing to remove.
-    if (dlErr || !blob) {
+    // Range read (fetchObjectPrefix), not a full download: the sniff verdict
+    // lives entirely in the leading 4 KB, and this used to buffer up to the
+    // bucket's 10 MB cap per finalize just to reach it. `totalSize` is the
+    // object's FULL size from storage's own response headers — it is what the
+    // size gate and the recorded byte_size use below, never the prefix length.
+    const head = await fetchObjectPrefix(admin.storage.from(BUCKET), args.path);
+    // A prefix-read failure here also means "the object was never actually
+    // uploaded" (signing a nonexistent object errors) — the finalize-time
+    // existence check (no phantom rows for a mint that was never followed by
+    // a real PUT). Nothing to remove.
+    if (!head) {
       this.notifyPhotoRejected(requestId, parent);
       throw new ServiceError('validation_error', 'invalid_image');
     }
-    const bytes = new Uint8Array(await blob.arrayBuffer());
 
-    const sniffed = sniffImage(bytes);
+    const sniffed = sniffImage(head.prefix);
     const declaredOk = sniffed !== null && MIME_FOR_KIND[sniffed.kind] === args.declaredMime;
-    const sizeOk = bytes.byteLength > 0 && bytes.byteLength <= MAINTENANCE_MAX_PHOTO_BYTES;
+    const sizeOk = head.totalSize > 0 && head.totalSize <= MAINTENANCE_MAX_PHOTO_BYTES;
     if (!sniffed || !declaredOk || !sizeOk) {
       await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
       this.notifyPhotoRejected(requestId, parent);
@@ -372,7 +380,7 @@ export class MaintenanceAttachmentsService {
         original_filename: args.originalFilename.slice(0, 300),
         safe_filename: sanitizeFilenameSegment(args.originalFilename).slice(0, 300) || 'photo',
         mime_type: MIME_FOR_KIND[sniffed.kind],
-        byte_size: bytes.byteLength,
+        byte_size: head.totalSize,
         width: sniffed.width,
         height: sniffed.height,
         uploaded_by: this.ctx.userId,
@@ -401,7 +409,7 @@ export class MaintenanceAttachmentsService {
         event: 'maintenance_request.attachment_added',
         entityType: 'maintenance_request',
         entityId: requestId,
-        extra: { attachment_id: row.id, byte_size: bytes.byteLength },
+        extra: { attachment_id: row.id, byte_size: head.totalSize },
       },
       this.ctx,
     );
