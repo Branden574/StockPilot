@@ -180,9 +180,13 @@ select is(
 -- ACL-survives-replace claim. The complementary assertion, that
 -- _notify_recipients now retains ONLY postgres and service_role, lives in
 -- supabase/tests/0318_secdef_grants.test.sql.
+-- INVERTED by 0329: trigger functions no longer carry caller EXECUTE at all.
+-- The original pin proved grants SURVIVE a create-or-replace (they do); 0329
+-- then deliberately revoked them - trigger firing never checks the DML
+-- user's EXECUTE, so the grant was pure attack surface.
 select ok(
-  has_function_privilege('authenticated', 'public._dispatch_push_for_notification()', 'execute'),
-  'pre-existing EXECUTE grants STILL hold after 0313''s create-or-replace (grants survive, per Postgres semantics)'
+  not has_function_privilege('authenticated', 'public._dispatch_push_for_notification()', 'execute'),
+  '0329 inverted: authenticated holds NO EXECUTE on _dispatch_push_for_notification (trigger fns are closed)'
 );
 
 -- The 0028 trigger binding is by function name, not by function body — a
