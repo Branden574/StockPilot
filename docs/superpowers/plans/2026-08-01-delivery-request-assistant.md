@@ -3689,7 +3689,7 @@ grep -rn "orderRef" apps/web/src apps/mobile packages
 
 Expected: no migration diff; exactly one recipient definition (`apps/web/src/lib/site.ts`); zero `orderRef` hits.
 
-- [ ] **Step 4: Walk the feature by hand in Demo Co.** Sign in as `demo@stockpilotusa.com` / `TFmlTTCWqXkbBiJP` at `/signin` (NOT `/login`), org Demo Co `71b27a4a-7948-4638-bc3f-535974713bd2`, and run each line, recording pass or fail:
+- [ ] **Step 4: Walk the feature by hand in Demo Co.** Sign in as `demo@stockpilotusa.com` at `/signin` (NOT `/login`) — the password is held in the team secret manager under `stockpilot/demo-org-qa-login` and is deliberately NOT recorded in this repository. Org Demo Co `71b27a4a-7948-4638-bc3f-535974713bd2`. Run each line, recording pass or fail:
   1. **Delivery order.** Add two items, pick a delivery site, set a needed-by date, add notes, submit. The success screen prints a real `SO-` number — cross-check it against `/dashboard/orders` and confirm the SAME number appears there.
   2. **Preview.** Open the preview. Both recipients visible under EMAIL RECIPIENTS, the helper text present, no editable field, the body shows the site, the address, the date in org time with the zone named, and every line item.
   3. **Open.** Press Open in Outlook. A compose window opens with To, CC, subject and body prefilled. **Do not press Send.**
