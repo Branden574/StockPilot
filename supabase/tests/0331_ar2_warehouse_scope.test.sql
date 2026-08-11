@@ -41,7 +41,7 @@ begin;
 
 -- Plan hand-count: 1 control + 8 narrowing (2..9) + 8 parity (10..17)
 -- + 5 structure (18..22) + 2 gate (23..24) = 24.
-select plan(24);
+select plan(25);
 
 \set orgS    '\'03310000-0000-0000-0000-000000000001\''
 \set orgF    '\'03310000-0000-0000-0000-000000000002\''
@@ -355,6 +355,18 @@ select throws_ok(
   '42501',
   'forbidden',
   '0331: an in-org VIEWER (below the staff write floor) is refused — definer status grants no new write'
+);
+
+-- NO EXISTENCE ORACLE: a NONEXISTENT item id must be indistinguishable from a
+-- real foreign one for an authenticated caller. The definer lookup bypasses
+-- RLS, so a silent return here (the pre-review shape) would have let an
+-- outsider probe which item UUIDs exist by comparing silence to 42501.
+set local "request.jwt.claim.sub" to :u_out;
+select throws_ok(
+  $$select public.apply_level_delta('00000000-dead-beef-0000-000000000331'::uuid, -1, 'placed')$$,
+  '42501',
+  'forbidden',
+  '0331: a nonexistent item id raises the SAME forbidden as a foreign one (no existence oracle)'
 );
 
 select * from finish();

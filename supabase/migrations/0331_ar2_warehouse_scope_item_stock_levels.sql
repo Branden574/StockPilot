@@ -161,18 +161,25 @@ begin
   if p_qty = 0 or p_qty is null then return; end if;
   select organization_id, warehouse_id into v_org, v_wh
     from public.inventory_items where id = p_item_id;
-  if v_org is null then return; end if;
 
   -- *** 0331 authorization gate — see header. auth.uid() IS NULL means a
   -- service_role/postgres connection (anon and PUBLIC hold no EXECUTE; every
   -- authenticated request carries a sub claim). Everyone else must be an
   -- accepted, non-disabled, unexpired staff+ member of the org that OWNS the
-  -- item (v_org comes from the item row above, never from the caller). ***
+  -- item (v_org comes from the item row above, never from the caller).
+  -- The gate runs BEFORE the not-found early-return on purpose: as definer,
+  -- the item lookup bypasses RLS, so returning silently for an unknown id but
+  -- raising for a real foreign one would let an authenticated outsider probe
+  -- which item UUIDs exist. Both cases now raise the same 42501. Service
+  -- connections keep the historical silent no-op for unknown ids (no
+  -- authenticated caller can reach here with one - every SQL caller resolves
+  -- the item first). ***
   if auth.uid() is not null then
-    if not public.has_org_role(v_org, 'staff') then
+    if v_org is null or not public.has_org_role(v_org, 'staff') then
       raise exception 'forbidden' using errcode = '42501';
     end if;
   end if;
+  if v_org is null then return; end if;
 
   -- ---- INCREMENT: land in Staging ----------------------------------------
   if p_qty > 0 then
