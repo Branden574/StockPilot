@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { BatchProgress, uploadWithProgress } from '@/lib/upload-with-progress';
+
 // Dynamic + conditional render — the lightbox carousel is 450+
 // lines including image-zoom math + transition state. Only opens
 // when the user clicks the maximize affordance; ship the chunk
@@ -57,6 +59,9 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = React.useState(false);
+  /** Real transported percentage for the active batch, or null when idle.
+   *  Never synthesised - see lib/upload-with-progress.ts. */
+  const [uploadPercent, setUploadPercent] = React.useState<number | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
   const [images, setImages] = React.useState<ImageRow[]>(initialImages);
   const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
@@ -73,6 +78,35 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   async function uploadFiles(files: FileList | File[]) {
     const list = Array.from(files);
     if (list.length === 0) return;
+
+    // Validate BEFORE building the progress denominator. A file rejected here
+    // never sends a byte, so leaving it in the total would strand the bar
+    // permanently short of 100%.
+    const accepted: File[] = [];
+    for (const original of list) {
+      if (!ACCEPT.includes(original.type)) {
+        toast.error(
+          `"${original.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`,
+        );
+        continue;
+      }
+      if (original.size > MAX_BYTES) {
+        toast.error(`"${original.name}" is over 10 MB. Pick a smaller image.`);
+        continue;
+      }
+      accepted.push(original);
+    }
+    if (accepted.length === 0) return;
+
+    // Weighted by ORIGINAL sizes so the denominator is fixed for the whole
+    // batch — see BatchProgress for why a compressed-size denominator would
+    // let the percentage travel backwards.
+    const batch = new BatchProgress(
+      accepted.map((f, i) => ({ key: `${i}:${f.name}`, weight: f.size })),
+    );
+    setUploadPercent(0);
+    const publishProgress = () => setUploadPercent(batch.percent);
+
     setUploading(true);
     // Snapshot once at the start so every file in this batch sees the
     // same emptiness signal — matches the prior sequential behavior.
@@ -86,16 +120,9 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // block the others (mirrors the prior `continue` semantics).
       const CONCURRENCY = 3;
       async function processOne(original: File, index: number): Promise<void> {
-        if (!ACCEPT.includes(original.type)) {
-          toast.error(
-            `"${original.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`,
-          );
-          return;
-        }
-        if (original.size > MAX_BYTES) {
-          toast.error(`"${original.name}" is over 10 MB. Pick a smaller image.`);
-          return;
-        }
+        // Validation already ran above, before the progress denominator was
+        // fixed — every file reaching here is one we intend to upload.
+        const progressKey = `${index}:${original.name}`;
         const { master, thumbBlob, lqip } = await compressImageVariants(original);
         const ext = master.name.split('.').pop() ?? 'webp';
 
@@ -107,26 +134,45 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
         // PUT master + thumb in parallel — the thumb is tiny (~5-15 KB)
         // so the wall-clock is dominated by the master upload anyway.
+        //
+        // XHR rather than fetch(): fetch() exposes no upload-progress signal
+        // at all, so a percentage built on it could only ever be invented.
+        // See lib/upload-with-progress.ts. Progress is reported from the
+        // MASTER only — the thumb is a rounding error next to it, and mixing
+        // two independent byte streams into one file's fraction would let the
+        // number wobble.
         const [masterRes, thumbRes] = await Promise.all([
-          fetch(presign.data.signedUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': master.type, 'x-upsert': 'true' },
+          uploadWithProgress({
+            url: presign.data.signedUrl,
             body: master,
+            contentType: master.type,
+            headers: { 'x-upsert': 'true' },
+            onProgress: ({ loaded, total }) => {
+              batch.set(progressKey, total > 0 ? loaded / total : 0);
+              publishProgress();
+            },
           }),
           thumbBlob
-            ? fetch(presign.data.thumbSignedUrl, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'image/webp', 'x-upsert': 'true' },
+            ? uploadWithProgress({
+                url: presign.data.thumbSignedUrl,
                 body: thumbBlob,
+                contentType: 'image/webp',
+                headers: { 'x-upsert': 'true' },
               })
             : Promise.resolve(null),
         ]);
         if (!masterRes.ok) {
+          // Settle as FAILED so this file keeps the fraction it actually
+          // reached. A failed upload must never let the batch read 100%.
+          batch.settle(progressKey, false);
+          publishProgress();
           toast.error(
             `Couldn't upload "${original.name}". Check your network and try again.`,
           );
           return;
         }
+        batch.settle(progressKey, true);
+        publishProgress();
         // Thumb failure is non-fatal — the master is up, the row will
         // just render from the master via the existing fallback path.
         const thumbOk = thumbRes ? thumbRes.ok : false;
@@ -150,11 +196,14 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
       // Drain the list in waves of CONCURRENCY using a worker pool —
       // simpler + cheaper than a full p-limit dep for a constant N.
+      // Drains `accepted`, not the raw list: the progress keys and the
+      // isFirst index are both defined over the accepted files, so a rejected
+      // file must not occupy a slot or shift an index.
       let cursor = 0;
-      const workers = Array.from({ length: Math.min(CONCURRENCY, list.length) }, async () => {
-        while (cursor < list.length) {
+      const workers = Array.from({ length: Math.min(CONCURRENCY, accepted.length) }, async () => {
+        while (cursor < accepted.length) {
           const i = cursor++;
-          await processOne(list[i]!, i);
+          await processOne(accepted[i]!, i);
         }
       });
       await Promise.all(workers);
@@ -162,6 +211,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       router.refresh();
     } finally {
       setUploading(false);
+      setUploadPercent(null);
     }
   }
 
@@ -269,7 +319,13 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         ) : (
           <ImagePlus className="h-5 w-5 text-muted-foreground" />
         )}
-        <p className="text-sm font-medium">{uploading ? 'Uploading…' : 'Drop images, or click to browse'}</p>
+        <p className="text-sm font-medium">
+          {uploading
+            ? uploadPercent === null
+              ? 'Preparing photos…'
+              : `Uploading… ${uploadPercent}%`
+            : 'Drop images, or click to browse'}
+        </p>
         <p className="text-xs text-muted-foreground">
           PNG, JPG, WebP, AVIF · up to 10 MB each · optimized in browser before upload
         </p>
