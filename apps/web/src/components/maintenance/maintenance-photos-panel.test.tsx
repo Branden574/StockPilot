@@ -33,6 +33,34 @@ describe('MaintenancePhotosPanel (component test 5)', () => {
     expect(screen.getByText('Photos (2/8)')).toBeInTheDocument();
   });
 
+  it('clicking a thumbnail opens the lightbox on the MASTER url, not the thumb', async () => {
+    const user = userEvent.setup();
+    render(<MaintenancePhotosPanel requestId="r1" photos={PHOTOS} onChange={vi.fn()} />);
+    // p2 has a distinct thumbUrl, so the pin proves master-vs-thumb selection.
+    await user.click(screen.getByRole('button', { name: 'View panel.png' }));
+    const dialog = await screen.findByRole('dialog');
+    const imgs = Array.from(dialog.querySelectorAll('img')).map((i) => i.getAttribute('src'));
+    expect(imgs).toContain('https://files.example.test/panel.png');
+    expect(imgs).not.toContain('https://files.example.test/panel-thumb.webp');
+  });
+
+  it('Escape closes the lightbox', async () => {
+    const user = userEvent.setup();
+    render(<MaintenancePhotosPanel requestId="r1" photos={PHOTOS} onChange={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'View leak.jpg' }));
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('Remove stays Remove: clicking it never opens the lightbox', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    render(<MaintenancePhotosPanel requestId="r1" photos={PHOTOS} onChange={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Remove leak.jpg' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('removing a photo calls the DELETE endpoint and notifies the parent to refetch', async () => {
     const onChange = vi.fn();
     const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
