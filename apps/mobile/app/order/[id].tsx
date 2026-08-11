@@ -77,6 +77,7 @@ import {
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -213,9 +214,13 @@ export default function OrderDetail() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  /** `percent` is the REAL transported percentage across the batch — floored,
+   *  monotonic, held at 99 unless every file genuinely succeeded (see
+   *  lib/storage-upload.ts UploadBatchProgress). Never synthesised. */
   const [uploadProgress, setUploadProgress] = React.useState<{
     done: number;
     total: number;
+    percent: number;
   } | null>(null);
   const [kind, setKind] = React.useState<Kind>('dropoff_photo');
   const [sigOpen, setSigOpen] = React.useState(false);
@@ -927,17 +932,27 @@ export default function OrderDetail() {
   // Uploads ONE asset (resize → storage → row). Returns success/failure
   // WITHOUT touching the shared `uploading` flag or refetching, so the single
   // and batch flows can share it. Per-file storage rollback on a row-insert
-  // failure is preserved so we never leave an orphaned object behind.
-  async function uploadOne(uri: string): Promise<{ ok: boolean; error?: string }> {
+  // failure is preserved so we never leave an orphaned object behind. The
+  // bytes stream straight off disk via lib/storage-upload's native
+  // createUploadTask (signed-URL PUT, same RLS insert gate enforced at mint)
+  // — which also retires this call site's fetch('file://').arrayBuffer() and
+  // reports REAL transported progress through `onProgress`.
+  async function uploadOne(
+    uri: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<{ ok: boolean; error?: string }> {
     if (!orgId || !id) return { ok: false, error: 'Not ready' };
     try {
       const resized = await resizeForUpload(uri);
       const path = `${orgId}/${id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) return { ok: false, error: upErr.message };
+      const up = await uploadFileToBucket({
+        bucket: BUCKET,
+        path,
+        fileUri: resized.uri,
+        contentType: mimeForExt(resized.ext),
+        onProgress,
+      });
+      if (!up.ok) return { ok: false, error: up.error };
       const { error: rowErr } = await supabase.from('order_request_attachments').insert({
         organization_id: orgId,
         order_request_id: id,
@@ -958,20 +973,31 @@ export default function OrderDetail() {
 
   async function uploadAsset(uri: string) {
     setUploading(true);
+    const batch = new UploadBatchProgress(['single']);
+    setUploadProgress({ done: 0, total: 1, percent: 0 });
     try {
-      const res = await uploadOne(uri);
+      const res = await uploadOne(uri, (fraction) => {
+        batch.report('single', fraction);
+        setUploadProgress({ done: 0, total: 1, percent: batch.percent });
+      });
+      // Honest settle: only a success may ever read 100%.
+      batch.settle('single', res.ok);
       if (!res.ok) Alert.alert('Upload failed', res.error ?? 'Please try again.');
       await loadAttachments();
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   }
 
   // Multi-file upload: concurrency capped at 2 (peak memory during concurrent
-  // resize on older iPhones), a live 'N/M' progress label, ONE refetch at the
-  // end, and a SINGLE aggregated failure Alert (stacked concurrent Alerts are
-  // unreliable on Android). Airplane-mode mid-batch → failures are reported,
-  // the batch finishes, and no storage objects are orphaned.
+  // resize on older iPhones), a live 'N/M + %' progress label, ONE refetch at
+  // the end, and a SINGLE aggregated failure Alert (stacked concurrent Alerts
+  // are unreliable on Android). Airplane-mode mid-batch → failures are
+  // reported, the batch finishes, and no storage objects are orphaned. The
+  // percent is count-weighted transported progress (UploadBatchProgress):
+  // monotonic, and a failed file keeps only the fraction it truly reached, so
+  // the label can never read 100% when an upload died.
   async function uploadAssets(uris: string[]) {
     if (uris.length === 0) return;
     if (uris.length === 1) {
@@ -979,17 +1005,25 @@ export default function OrderDetail() {
       return;
     }
     setUploading(true);
-    setUploadProgress({ done: 0, total: uris.length });
+    setUploadProgress({ done: 0, total: uris.length, percent: 0 });
     const failures: string[] = [];
     let done = 0;
-    const queue = [...uris];
+    // Keys are index-composited — the same uri picked twice must not share
+    // one progress slot.
+    const batch = new UploadBatchProgress(uris.map((_, i) => String(i)));
+    const queue = uris.map((uri, i) => ({ uri, key: String(i) }));
     const worker = async () => {
       while (queue.length > 0) {
-        const uri = queue.shift()!;
-        const res = await uploadOne(uri);
+        const { uri, key } = queue.shift()!;
+        const res = await uploadOne(uri, (fraction) => {
+          batch.report(key, fraction);
+          setUploadProgress({ done, total: uris.length, percent: batch.percent });
+        });
+        // Honest settle: a failed file keeps the fraction it reached.
+        batch.settle(key, res.ok);
         if (!res.ok) failures.push(res.error ?? 'Upload failed');
         done += 1;
-        setUploadProgress({ done, total: uris.length });
+        setUploadProgress({ done, total: uris.length, percent: batch.percent });
       }
     };
     try {
@@ -1650,7 +1684,9 @@ export default function OrderDetail() {
                         <ActivityIndicator color={c.paper} />
                         {uploadProgress ? (
                           <Mono size={13} color={c.paper}>
-                            {`Uploading ${uploadProgress.done}/${uploadProgress.total}…`}
+                            {uploadProgress.total > 1
+                              ? `Uploading ${uploadProgress.done}/${uploadProgress.total} · ${uploadProgress.percent}%`
+                              : `Uploading… ${uploadProgress.percent}%`}
                           </Mono>
                         ) : null}
                       </View>

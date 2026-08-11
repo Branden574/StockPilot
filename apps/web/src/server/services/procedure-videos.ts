@@ -151,6 +151,57 @@ export class ProcedureVideosService {
   }
 
   /**
+   * Returns presigned upload URLs the client can PUT directly to — one for
+   * the video master, one for its best-effort poster JPEG. Mirrors
+   * `ItemImagesService.createUploadUrl`, which exists for the same reason:
+   * the supabase-js SDK upload exposes no XHR upload progress, so the client
+   * PUTs to a presigned URL via `uploadWithProgress` instead.
+   *
+   * Path scheme is EXACTLY what `record()` below validates
+   * (`procedureVideoPathShape`): `{org}/{procedure}/{uuid}.{ext}` with the
+   * poster minted next to it as `{uuid}.poster.jpg` — both from the server's
+   * own org id, never from client input. Manager+ only (same
+   * `categories:manage` gate as `record`), and the parent procedure is
+   * verified in-org BEFORE minting so a forged procedure id from a hostile
+   * client can't mint a signed upload URL into a folder we have no business
+   * touching.
+   */
+  async createUploadUrl(procedureId: string, fileExt: string) {
+    assertModuleEnabled(this.ctx, 'procedures');
+    assertPermission(this.ctx, 'categories:manage');
+
+    const { data: proc, error: procErr } = await this.ctx.supabase
+      .from('procedures')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', procedureId)
+      .maybeSingle();
+    if (procErr) throw new ServiceError('internal_error', procErr.message);
+    if (!proc) throw new ServiceError('not_found', 'Procedure not found');
+
+    const safeExt = fileExt.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'mp4';
+    const uuid = crypto.randomUUID();
+    const path = `${this.ctx.organizationId}/${procedureId}/${uuid}.${safeExt}`;
+    const posterPath = `${this.ctx.organizationId}/${procedureId}/${uuid}.poster.jpg`;
+
+    const [masterRes, posterRes] = await Promise.all([
+      this.ctx.supabase.storage.from(PROCEDURE_VIDEOS_BUCKET).createSignedUploadUrl(path),
+      this.ctx.supabase.storage.from(PROCEDURE_VIDEOS_BUCKET).createSignedUploadUrl(posterPath),
+    ]);
+    if (masterRes.error)
+      throw new ServiceError('internal_error', masterRes.error.message);
+    if (posterRes.error)
+      throw new ServiceError('internal_error', posterRes.error.message);
+    return {
+      path,
+      signedUrl: masterRes.data.signedUrl,
+      token: masterRes.data.token,
+      posterPath,
+      posterSignedUrl: posterRes.data.signedUrl,
+    };
+  }
+
+  /**
    * Records a video row AFTER the client has already uploaded the file to
    * Supabase storage at the given path. Manager+ only. Emits a
    * `procedure.video.added` audit event.

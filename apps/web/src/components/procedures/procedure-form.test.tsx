@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const pushMock = vi.fn();
 const refreshMock = vi.fn();
 const createProcedureActionMock = vi.fn();
+const createVideoUploadActionMock = vi.fn();
 const recordProcedureVideoActionMock = vi.fn();
-const uploadMock = vi.fn();
+const uploadMasterMock = vi.fn();
 const removeMock = vi.fn();
 
 vi.mock('next/navigation', () => ({
@@ -21,19 +22,26 @@ vi.mock('sonner', () => ({
   },
 }));
 
+// Only `remove` remains on the SDK client — the master upload goes through
+// the presigned-URL + XHR PUT seam (upload-video-master.ts) now.
 vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
     storage: {
       from: () => ({
-        upload: (...a: unknown[]) => uploadMock(...a),
         remove: (...a: unknown[]) => removeMock(...a),
       }),
     },
   }),
 }));
 
+vi.mock('./upload-video-master', () => ({
+  uploadVideoMaster: (...a: unknown[]) => uploadMasterMock(...a),
+}));
+
 vi.mock('@/server/actions/procedures', () => ({
   createProcedureAction: (...a: unknown[]) => createProcedureActionMock(...a),
+  createProcedureVideoUploadAction: (...a: unknown[]) =>
+    createVideoUploadActionMock(...a),
   recordProcedureVideoAction: (...a: unknown[]) =>
     recordProcedureVideoActionMock(...a),
   updateProcedureAction: vi.fn(),
@@ -59,10 +67,23 @@ beforeEach(() => {
   pushMock.mockReset();
   refreshMock.mockReset();
   createProcedureActionMock.mockReset();
+  createVideoUploadActionMock.mockReset();
   recordProcedureVideoActionMock.mockReset();
-  uploadMock.mockReset();
+  uploadMasterMock.mockReset();
   removeMock.mockReset();
-  uploadMock.mockResolvedValue({ error: null });
+  createVideoUploadActionMock.mockImplementation(
+    async ({ procedureId }: { procedureId: string }) => ({
+      ok: true,
+      data: {
+        path: `org-1/${procedureId}/uuid-1.mp4`,
+        signedUrl: 'https://signed/master',
+        token: 'tok',
+        posterPath: `org-1/${procedureId}/uuid-1.poster.jpg`,
+        posterSignedUrl: 'https://signed/poster',
+      },
+    }),
+  );
+  uploadMasterMock.mockResolvedValue({ ok: true, status: 200 });
   removeMock.mockResolvedValue({ error: null });
   recordProcedureVideoActionMock.mockResolvedValue({ ok: true, data: {} });
 
@@ -112,7 +133,8 @@ describe('ProcedureForm — create mode submit flow', () => {
       expect(pushMock).toHaveBeenCalledWith('/dashboard/procedures/p-123');
     });
     // No videos to upload.
-    expect(uploadMock).not.toHaveBeenCalled();
+    expect(createVideoUploadActionMock).not.toHaveBeenCalled();
+    expect(uploadMasterMock).not.toHaveBeenCalled();
     expect(recordProcedureVideoActionMock).not.toHaveBeenCalled();
   });
 
@@ -163,11 +185,29 @@ describe('ProcedureForm — create mode submit flow', () => {
       title: 'two',
     });
 
-    // Storage paths are scoped to org_id/procedure_id.
-    expect(uploadMock).toHaveBeenCalledTimes(2);
-    const firstPath = uploadMock.mock.calls[0]?.[0] as string;
-    expect(firstPath.startsWith('org-1/p-456/')).toBe(true);
-    expect(firstPath.endsWith('.mp4')).toBe(true);
+    // Each upload minted its presigned URL against the created procedure id,
+    // then PUT the staged File itself through the honest-progress seam.
+    expect(createVideoUploadActionMock).toHaveBeenCalledTimes(2);
+    expect(createVideoUploadActionMock).toHaveBeenCalledWith({
+      procedureId: 'p-456',
+      fileExt: 'mp4',
+    });
+    expect(uploadMasterMock).toHaveBeenCalledTimes(2);
+    const firstUpload = uploadMasterMock.mock.calls[0]?.[0] as {
+      signedUrl: string;
+      file: File;
+      contentType: string;
+      onProgress?: unknown;
+    };
+    expect(firstUpload.signedUrl).toBe('https://signed/master');
+    expect(firstUpload.file).toBeInstanceOf(File);
+    expect(firstUpload.contentType).toBe('video/mp4');
+    // The batch percent is wired to real transport events.
+    expect(firstUpload.onProgress).toBeInstanceOf(Function);
+    // The recorded storage path is the SERVER-minted one.
+    expect(recordProcedureVideoActionMock.mock.calls[0]?.[0]).toMatchObject({
+      storagePath: 'org-1/p-456/uuid-1.mp4',
+    });
 
     await waitFor(() => {
       expect(pushMock).toHaveBeenCalledWith('/dashboard/procedures/p-456');
@@ -179,10 +219,11 @@ describe('ProcedureForm — create mode submit flow', () => {
       ok: true,
       data: { id: 'p-789' },
     });
-    // First upload succeeds, second fails.
-    uploadMock
-      .mockResolvedValueOnce({ error: null })
-      .mockResolvedValueOnce({ error: { message: 'storage gone bad' } });
+    // First upload succeeds, second fails — a non-2xx from storage resolves
+    // ok:false (upload-with-progress mirrors fetch's contract).
+    uploadMasterMock
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: false, status: 500 });
 
     render(
       <ProcedureForm
@@ -236,7 +277,8 @@ describe('ProcedureForm — create mode submit flow', () => {
     await waitFor(() => {
       expect(createProcedureActionMock).toHaveBeenCalled();
     });
-    expect(uploadMock).not.toHaveBeenCalled();
+    expect(createVideoUploadActionMock).not.toHaveBeenCalled();
+    expect(uploadMasterMock).not.toHaveBeenCalled();
     expect(recordProcedureVideoActionMock).not.toHaveBeenCalled();
     expect(pushMock).not.toHaveBeenCalled();
   });

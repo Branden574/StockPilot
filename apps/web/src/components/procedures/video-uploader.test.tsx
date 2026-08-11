@@ -29,6 +29,16 @@ vi.mock('@/lib/supabase/client', () => ({
 }));
 
 vi.mock('@/server/actions/procedures', () => ({
+  createProcedureVideoUploadAction: vi.fn(async () => ({
+    ok: true,
+    data: {
+      path: 'org-1/p-1/uuid-1.mp4',
+      signedUrl: 'https://signed/master',
+      token: 'tok',
+      posterPath: 'org-1/p-1/uuid-1.poster.jpg',
+      posterSignedUrl: 'https://signed/poster',
+    },
+  })),
   recordProcedureVideoAction: vi.fn(async () => ({ ok: true, data: {} })),
   deleteProcedureVideoAction: vi.fn(async () => ({ ok: true, data: undefined })),
 }));

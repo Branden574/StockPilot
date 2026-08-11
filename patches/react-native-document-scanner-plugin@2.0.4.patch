@@ -1,0 +1,15 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index fe3145a734a310011efb479defee514fce603525..73d7409c68ab771eb0ab25b6652c711933dc0e78 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -50,8 +50,8 @@ android {
+   }
+ 
+   compileOptions {
+-    sourceCompatibility JavaVersion.VERSION_1_8
+-    targetCompatibility JavaVersion.VERSION_1_8
++    sourceCompatibility JavaVersion.VERSION_17
++    targetCompatibility JavaVersion.VERSION_17
+   }
+ 
+   sourceSets {
