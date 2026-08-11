@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Download, Package, ShoppingCart, Truck } from 'lucide-react';
+import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { formatOrderNumber } from '@stockpilot/core';
 
@@ -9,6 +9,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
+import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -161,24 +162,13 @@ export default async function OrdersPage({
         </div>
         <div className="flex items-center gap-2">
           <PageTour tour={ORDERS_TOUR} />
-          {/* Export the org-wide order history. Gated on orders:approve
-              (manager+) — the same permission that lets this page show
-              every org order; requesters without it only see their own
-              requests and have nothing org-wide to export. The link
-              carries the active status tab so the CSV matches what's on
-              screen. */}
-          {canApprove && (
-            <Button asChild variant="outline">
-              <a
-                href={`/api/orders/export.csv?status=${tab}`}
-                download
-                aria-label="Export orders to CSV"
-              >
-                <Download className="mr-1.5 h-4 w-4" />
-                Export CSV
-              </a>
-            </Button>
-          )}
+          {/* Export the org-wide order history (CSV or PDF). Gated on
+              orders:approve (manager+) — the same permission that lets this
+              page show every org order; requesters without it only see
+              their own requests and have nothing org-wide to export. Both
+              links carry the active status tab so the file matches what's
+              on screen. */}
+          {canApprove && <OrdersExportMenu tab={tab} />}
           <Button asChild variant="gradient">
             <Link href="/dashboard/orders/new">+ Place order</Link>
           </Button>
