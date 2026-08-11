@@ -76,6 +76,51 @@ export function ItemHistorySheet({
   itemSku: string;
   onClose: () => void;
 }) {
+  const { mode } = useTheme();
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable
+        style={[
+          styles.scrim,
+          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+        ]}
+        onPress={onClose}
+      >
+        {/* key: remount the content per open/close transition AND per item, so
+            every session starts from the empty `loading: true` initial state —
+            reset-by-remount instead of a reset-on-open effect. */}
+        <ItemHistorySheetContent
+          key={`${String(visible)}:${itemId}`}
+          visible={visible}
+          itemId={itemId}
+          itemName={itemName}
+          itemSku={itemSku}
+          onClose={onClose}
+        />
+      </Pressable>
+    </Modal>
+  );
+}
+
+function ItemHistorySheetContent({
+  visible,
+  itemId,
+  itemName,
+  itemSku,
+  onClose,
+}: {
+  visible: boolean;
+  itemId: string;
+  itemName: string;
+  itemSku: string;
+  onClose: () => void;
+}) {
   const { c, mode } = useTheme();
   // The list is capped as a FRACTION of the screen, not at a fixed 460pt: on a
   // 4.7" phone a fixed cap pushes the "Load older movements" footer and the
@@ -129,14 +174,13 @@ export function ItemHistorySheet({
     [itemId],
   );
 
+  // The empty/loading reset the old version wrote here is now the component's
+  // initial state, restored by the remount key above on every open and item
+  // change; the effect only starts the fetch (every set inside load() is
+  // post-await, behind the seq guard).
   React.useEffect(() => {
     if (!visible || !itemId) return;
-    setRows([]);
-    setTotal(0);
-    setHasMore(false);
-    setOffset(0);
-    setError(null);
-    setLoading(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load(0);
   }, [visible, itemId, load]);
 
@@ -147,24 +191,10 @@ export function ItemHistorySheet({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <Pressable
-        style={[
-          styles.scrim,
-          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
-        ]}
-        onPress={onClose}
-      >
-        <Pressable
-          onPress={() => undefined}
-          style={[
-            styles.sheet,
+    <Pressable
+      onPress={() => undefined}
+      style={[
+        styles.sheet,
             {
               backgroundColor: c.card,
               paddingTop: Platform.OS === 'ios' ? 10 : 18,
@@ -285,9 +315,7 @@ export function ItemHistorySheet({
               </Button>
             </View>
           ) : null}
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </Pressable>
   );
 }
 

@@ -7,7 +7,6 @@ import {
   setAccountGateState,
   subscribeAccountGate,
   type AccountGateState,
-  type DisableEvidence,
 } from './account-disabled-state';
 import {
   accountScopedStorageKeys,
@@ -98,33 +97,21 @@ export interface AccountGate {
 
 export function useAccountGate(options: { onEvicted: () => void }): AccountGate {
   const { onEvicted } = options;
-  const [state, setState] = React.useState<AccountGateState>(getAccountGateState);
-  // Mirrored as its own piece of React state, not read fresh from the module
+  // useSyncExternalStore, not a mirrored useState + subscription effect: React
+  // re-reads both snapshots at subscription time, so auth-context's cold-launch
+  // probe landing between this component's first render and its subscription
+  // can never leave a disabled account inside the app.
+  const state = React.useSyncExternalStore(subscribeAccountGate, getAccountGateState);
+  // Evidence is subscribed as its own snapshot, not read fresh from the module
   // inside the eviction effect below. account-disabled-state.ts's
   // setAccountGateState can STRENGTHEN a repeat 'disabled' verdict from
   // 'sign-in' to 'session' (the sign-in screen raised the screen first; a
   // corroborated probe or broadcast confirms it is really this device's own
-  // session afterwards) WITHOUT the gate STATE itself changing. React bails
-  // out of a setState call whose value is unchanged, so `state` above would
-  // stay the same 'disabled' string and the effect would never re-run if it
-  // read evidence by calling getDisableEvidence() directly — the strengthen
-  // notification would arrive with nothing downstream able to act on it.
-  // Tracking it here, updated by the same subscription, is what lets that
-  // notification actually reach a re-render.
-  const [evidence, setEvidence] = React.useState<DisableEvidence | null>(getDisableEvidence);
+  // session afterwards) WITHOUT the gate STATE itself changing — the gate
+  // notifies on that strengthen precisely so this snapshot re-read can move
+  // `evidence` and re-run the eviction effect.
+  const evidence = React.useSyncExternalStore(subscribeAccountGate, getDisableEvidence);
   const evicting = React.useRef(false);
-
-  React.useEffect(() => {
-    // Re-read on mount as well as subscribing: auth-context's cold-launch probe
-    // can land between this component's first render and this effect, and a
-    // missed transition would leave a disabled account inside the app.
-    setState(getAccountGateState());
-    setEvidence(getDisableEvidence());
-    return subscribeAccountGate((next) => {
-      setState(next);
-      setEvidence(getDisableEvidence());
-    });
-  }, []);
 
   /**
    * One probe round trip, applied. Returns the raw verdict so the revocation

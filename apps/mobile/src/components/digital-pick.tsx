@@ -85,6 +85,7 @@ export function DigitalPick({
   );
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: load()'s only pre-await set clears a stale error (a no-op on mount, load-bearing for the reloadToken path); every result set is post-await
     void load();
   }, [load]);
 

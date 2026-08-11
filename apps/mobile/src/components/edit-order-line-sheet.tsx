@@ -106,6 +106,7 @@ export function EditOrderLineSheet({
   const lineId = line?.orderRequestLineId ?? null;
   React.useEffect(() => {
     if (!visible) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- modal reset on open; remount-keying unsafe here because the reseed also fires when a reload changes lineId/requested UNDER the open sheet, and a remount at that moment would orphan the in-flight write's busy state (which this effect deliberately preserves)
     setQty(String(requested));
     setError(null);
   }, [visible, lineId, requested]);

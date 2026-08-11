@@ -25,6 +25,7 @@ export function useRole(): { role: Role | null; isAdmin: boolean; loading: boole
 
   React.useEffect(() => {
     if (!user || !orgId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- session-cache sync: the sync sets clear on identity loss and serve the module-level role cache on a workspace switch; the fetch set is post-await. The cached value cannot be derived at render without dropping the "fetch once per session" contract.
       setRole(null);
       setLoading(false);
       return;

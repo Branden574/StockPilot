@@ -176,6 +176,7 @@ export function MoveStockModal({
   React.useEffect(() => {
     if (!visible) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- modal reset on open; remount-keying unsafe here because the reset is interleaved with the put-away source/destination resolution (14 state fields seeded by the same effect, some pre-fetch, some post-await) and keying would mean relocating the whole flow into a new inner component
     setLoading(true);
     setError(null);
     setQty('1');

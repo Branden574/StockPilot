@@ -123,6 +123,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   // (e.g. the sample row) mount before we measure it.
   React.useEffect(() => {
     if (phase !== 'running') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- spotlight measurement: the sync clears stop the previous step's highlight lingering while the debounced native measureTarget runs; the measured rect itself lands async
       setRect(null);
       return;
     }
