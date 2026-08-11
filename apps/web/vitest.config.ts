@@ -17,6 +17,10 @@ export default defineConfig({
     exclude: ['node_modules/**', '.next/**', 'dist/**', 'tests/e2e/**'],
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
+    // The suite has integration-shaped tests that intermittently exceed
+    // vitest's 5000ms defaults under load — raise both to stop the flakes.
+    testTimeout: 15000,
+    hookTimeout: 30000,
     environmentMatchGlobs: [
       ['src/components/**', 'happy-dom'],
       ['src/app/**', 'happy-dom'],
