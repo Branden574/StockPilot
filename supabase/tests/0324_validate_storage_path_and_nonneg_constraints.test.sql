@@ -1,12 +1,14 @@
--- pgTAP for 0324: the twelve constraints must be VALIDATED, and the one
--- deliberately-excluded constraint must still be NOT VALID.
+-- pgTAP for 0324 (+ the 0327 inversion): the twelve constraints must be
+-- VALIDATED, the one deliberately-excluded constraint must still be NOT VALID,
+-- and item_stock_levels.quantity — deferred by 0322/0324 until the RPC writers
+-- were fixed — must now carry its validated constraint (added by 0327).
 --
 -- Asserts the PROPERTY (this constraint is enforced for every row, or is
 -- deliberately deferred) rather than re-testing what the predicates match --
 -- 0323's own test already covers the predicate behaviour.
 
 begin;
-select plan(14);
+select plan(15);
 
 -- Helper shape: convalidated is the single source of truth for "has this been
 -- proven against existing rows".
@@ -61,20 +63,26 @@ select ok(_is_validated('inventory_items', 'inventory_items_reorder_quantity_non
 select ok(NOT _is_validated('order_requests', 'order_requests_delivery_target_chk'),
   'order_requests_delivery_target_chk is STILL not valid, by owner decision 2026-08-11: the 5 legacy charter-less delivery orders are left as-is, and the constraint keeps guarding new writes');
 
--- item_stock_levels.quantity must remain unconstrained until adjust_stock and
--- transfer_stock stop writing negatives. Pinned so the ordering cannot reverse.
+-- INVERTED by 0327: the ordering this pin protected has now been honored.
+-- 0327 fixed both RPC writers FIRST (adjust_stock's explicit-location draw is
+-- conditional; transfer_stock tests sufficiency IN the draw, so no negative is
+-- ever written, transiently or durably) and added the constraint in the SAME
+-- change. Pinned by NAME and by count so a rename, a second stray quantity
+-- constraint, or a silent drop all fail here.
 select is(
-  (select count(*)::int
+  (select array_agg(c.conname order by c.conname)
      from pg_constraint c
      join pg_class r on r.oid = c.conrelid
      join pg_namespace n on n.oid = r.relnamespace
     where n.nspname = 'public'
       and r.relname = 'item_stock_levels'
       and c.contype = 'c'
-      and pg_get_constraintdef(c.oid) ilike '%quantity%>=%0%'),
-  0,
-  'item_stock_levels.quantity is still unconstrained -- adjust_stock commits negatives and transfer_stock writes one before its guard, so the RPCs must be fixed FIRST'
+      and pg_get_constraintdef(c.oid) ilike '%quantity%'),
+  array['item_stock_levels_quantity_nonneg']::name[],
+  'item_stock_levels.quantity carries exactly one CHECK constraint, item_stock_levels_quantity_nonneg (RPC writers fixed first, in 0327)'
 );
+select ok(_is_validated('item_stock_levels', 'item_stock_levels_quantity_nonneg'),
+  'item_stock_levels_quantity_nonneg is validated for every existing row (production checked 2026-08-11: zero negative rows)');
 
 drop function _is_validated(text, text);
 select finish();
