@@ -90,7 +90,10 @@ export default function Home() {
   const [summary, setSummary] = React.useState<Summary | null>(null);
   const scanTargetRef = useTourTarget('home-scan');
   const [recent, setRecent] = React.useState<RecentMovement[]>([]);
-  const [orgName, setOrgName] = React.useState<string>('Your workspace');
+  // Derived, not stored: the header label IS the workspace switcher's active
+  // org name. It used to be useState set synchronously at the top of load(),
+  // which is the same value one render late (with the same fallbacks).
+  const orgName = user && activeOrgId ? activeOrgName ?? 'Workspace' : 'Your workspace';
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [unread, setUnread] = React.useState(0);
@@ -125,7 +128,6 @@ export default function Home() {
     // because activeOrgId is in this callback's deps.
     if (!user || !activeOrgId) return;
     const orgId = activeOrgId;
-    setOrgName(activeOrgName ?? 'Workspace');
 
     const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc, flaggedLow, movements] = await Promise.all([
       supabase
@@ -229,9 +231,10 @@ export default function Home() {
       }),
     );
     setLoading(false);
-  }, [user, activeOrgId, activeOrgName]);
+  }, [user, activeOrgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     load();
   }, [load]);
 

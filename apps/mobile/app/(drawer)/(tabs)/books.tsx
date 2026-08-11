@@ -408,6 +408,7 @@ export default function BooksScreen() {
 
   React.useEffect(() => {
     if (!orgId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void loadLookups();
   }, [orgId, loadLookups]);
 
@@ -415,7 +416,7 @@ export default function BooksScreen() {
   // Expanded SKU groups are per-page display state, so drop them too — an
   // expansion carried over from another result set reads as a glitch.
   React.useEffect(() => {
-    setPage(1);
+    setPage(1); // eslint-disable-line react-hooks/set-state-in-effect -- result-set reset: page/expansion are per-result-set display state and must drop when q/filter/workspace change; one-shot synchronous resets, no cascade (trailing form: inventory-list-wiring.test.ts pins `{ setPage(1);` verbatim)
     setExpandedSkuGroups(new Set());
   }, [q, filter, activeWarehouseId]);
 
