@@ -11,6 +11,7 @@ import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/use-theme';
 
@@ -51,10 +52,24 @@ export default function SupportScreen() {
         Alert.alert('Not signed in', 'Please sign in again and retry.');
         return;
       }
+      // Transcode/resize FIRST — every other mobile upload path does, and this
+      // one skipping it was a real defect: expo-image-picker 17 (SDK 56) flipped
+      // preferredAssetRepresentationMode, so an iOS library pick now hands back
+      // HEIC. The old code derived contentType from the extension with a ternary
+      // that falls through to 'image/jpeg' for anything not png/webp, so a .heic
+      // pick was stored as HEIC bytes LABELLED image/jpeg — a support screenshot
+      // no browser can render, arriving at the team as a broken image. Verified
+      // in prod on 2026-08-11: support-attachments held `…heic` at
+      // mimetype image/jpeg.
+      //
+      // resizeForUpload transcodes any non-web-safe format to JPEG (including on
+      // its already-small fast path) and reports the real extension, so the
+      // label and the bytes now always agree.
+      const resized = await resizeForUpload(asset.uri);
       // RN gotcha: bytes MUST come from fetch(uri).arrayBuffer() — blob()
       // uploads 0 bytes (same as po-attachments).
-      const arrayBuffer = await (await fetch(asset.uri)).arrayBuffer();
-      const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
+      const ext = resized.ext;
       const contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
       const rand = Math.random().toString(36).slice(2, 14);
       // Bucket policy (mig 0260) only allows uploads under the caller's own uid.
@@ -66,7 +81,11 @@ export default function SupportScreen() {
         Alert.alert('Upload failed', error.message);
         return;
       }
-      setAttachment({ uri: asset.uri, path });
+      // Preview the TRANSCODED file, not the original: on iOS the picked HEIC
+      // renders locally but is not what we stored, and showing the source while
+      // uploading the conversion would hide a transcode failure from the person
+      // attaching it.
+      setAttachment({ uri: resized.uri, path });
     } finally {
       setUploading(false);
     }
