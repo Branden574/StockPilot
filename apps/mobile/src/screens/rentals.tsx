@@ -85,6 +85,7 @@ export default function RentalsScreen() {
   }, [orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the deliberate pre-await clock snapshot (setNow, documented in load); the effect synchronizes with the server
     void load();
   }, [load]);
 

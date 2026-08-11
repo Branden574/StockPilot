@@ -47,6 +47,7 @@ export default function LocationsScreen() {
   }, [orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 

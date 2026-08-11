@@ -177,6 +177,7 @@ export default function StagingScreen() {
   }, [filter, activeWarehouseId, orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loader spinner reset: this effect re-runs on filter/warehouse/org changes and must sync-show the spinner before load()'s post-await sets; loading already initializes true so the mount run is a no-op re-set
     setLoading(true);
     void load();
   }, [load]);
