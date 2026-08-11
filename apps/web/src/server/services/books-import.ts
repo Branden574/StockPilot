@@ -6,7 +6,7 @@ import {
   ForbiddenError,
 } from '@/lib/auth/warehouse';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
-import { assertSafeFetchUrl, SsrfBlockedError } from '@/lib/ssrf-guard';
+import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
 
 import { PLANS, isUnlimited, type PlanId } from '@stockpilot/core';
@@ -27,6 +27,70 @@ const COVER_HOST_ALLOWLIST = [
   'www.loc.gov',
   'tile.loc.gov',
 ];
+
+/** 8s budget. Some cover servers are slow; 8s lets the slow ones resolve
+ *  without blocking the whole import. */
+const COVER_FETCH_TIMEOUT_MS = 8000;
+
+/** Hard ceiling on a rehosted cover. Enforced while STREAMING, not after
+ *  buffering — a hostile (or merely broken) cover host that omits or lies
+ *  about Content-Length must not be able to make a serverless function
+ *  buffer an unbounded body into memory. */
+const MAX_COVER_BYTES = 5 * 1024 * 1024;
+
+/** The only content types a rehosted cover may be STORED as. The remote
+ *  server's `content-type` is attacker-influenced input, and Supabase
+ *  Storage serves back whatever we upload it with — echoing e.g.
+ *  `text/html` would turn our own storage origin into a stored-XSS host.
+ *  Anything unrecognized is stored as a jpeg, matching the previous
+ *  `ext` fallback. */
+const COVER_MIME_BY_EXT = {
+  png: 'image/png',
+  webp: 'image/webp',
+  jpg: 'image/jpeg',
+} as const;
+
+/**
+ * Reads at most `maxBytes` from a response body, aborting the transfer the
+ * moment the cap is crossed. Returns null when the body is missing or the
+ * cap is exceeded.
+ */
+async function readBoundedBody(
+  res: Response,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  const body = res.body;
+  if (!body) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Already released by cancel() — nothing to do.
+    }
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
 
 /**
  * Download a cover image from a third-party URL and host it in our
@@ -50,33 +114,46 @@ async function rehostCover(
     // URLs. If any of them were ever compromised or returned an
     // attacker-controlled URL pointing at a private IP, fetching it
     // here would let the attacker probe internal infra (and on Vercel
-    // potentially hit IMDS for credentials). Allowlist the four real
+    // potentially hit IMDS for credentials). Allowlist the real
     // cover-image hosts we know about; reject everything else.
-    try {
-      await assertSafeFetchUrl(coverUrl, { hostAllowlist: COVER_HOST_ALLOWLIST });
-    } catch (e) {
-      if (e instanceof SsrfBlockedError) return null;
-      throw e;
-    }
-    // 8s budget. Some cover servers are slow; 8s lets the slow ones
-    // resolve without blocking the whole import.
-    const res = await fetch(coverUrl, {
-      signal: AbortSignal.timeout(8000),
+    //
+    // MED-25 (security wave E): this was `assertSafeFetchUrl()` followed by
+    // a bare `fetch()`. That pairing has two holes the guard's own doc
+    // comment calls out. (1) TOCTOU — the hostname is resolved once for
+    // validation and again by fetch(), so a DNS rebinder can answer public
+    // then private. (2) REDIRECTS — `fetch` follows them by default and
+    // nothing re-validates the hop, which matters here more than anywhere
+    // else in the codebase because the Open Library cover URLs we fetch
+    // are EXPECTED to redirect (covers.openlibrary.org -> ia*.us.archive
+    // .org). A cover host could redirect us straight to
+    // http://169.254.169.254/ and the allowlist would never see it.
+    // `safeFetch` pins the validated IP for the connect and re-runs the
+    // FULL guard (private ranges + this allowlist) on every hop's Location.
+    const res = await safeFetch(coverUrl, {
+      signal: AbortSignal.timeout(COVER_FETCH_TIMEOUT_MS),
       // Some cover servers gate on user-agent — pretend to be a browser.
       headers: { 'User-Agent': 'Mozilla/5.0 (StockPilot bulk-import)' },
+      hostAllowlist: COVER_HOST_ALLOWLIST,
     });
     if (!res.ok) return null;
-    const arr = await res.arrayBuffer();
-    if (arr.byteLength === 0 || arr.byteLength > 5 * 1024 * 1024) return null;
-    const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+
+    // Cheap reject on an advertised over-size before reading a byte; the
+    // streaming cap below is what actually enforces it.
+    const advertised = Number(res.headers.get('content-length'));
+    if (Number.isFinite(advertised) && advertised > MAX_COVER_BYTES) return null;
+
+    const arr = await readBoundedBody(res, MAX_COVER_BYTES);
+    if (!arr || arr.byteLength === 0) return null;
+    const remoteType = res.headers.get('content-type') ?? '';
     const ext =
-      contentType.includes('png') ? 'png' :
-      contentType.includes('webp') ? 'webp' : 'jpg';
+      remoteType.includes('png') ? 'png' :
+      remoteType.includes('webp') ? 'webp' : 'jpg';
+    const contentType = COVER_MIME_BY_EXT[ext];
     const path = `${ctx.organizationId}/${itemId}/cover.${ext}`;
 
     const { error: upErr } = await ctx.supabase.storage
       .from('item-images')
-      .upload(path, new Uint8Array(arr), {
+      .upload(path, arr, {
         contentType,
         cacheControl: '604800', // 1 week — covers don't change
         upsert: true,
