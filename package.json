@@ -24,6 +24,7 @@
     "db:push": "supabase db push",
     "db:migrate": "supabase migration up",
     "db:test": "supabase test db",
+    "security:test": "bash scripts/security-test.sh",
     "prepare": "husky || true"
   },
   "devDependencies": {
