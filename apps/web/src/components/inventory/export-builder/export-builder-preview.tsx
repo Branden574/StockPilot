@@ -6,6 +6,7 @@ import {
   getExportField,
   type InventoryExportField,
 } from '@/lib/exports/field-registry';
+import { cn } from '@/lib/utils';
 
 import type { ExportBuilderState } from './export-builder-state';
 
@@ -22,6 +23,20 @@ import type { ExportBuilderState } from './export-builder-state';
  */
 
 const EM_DASH = '—';
+
+/**
+ * The preview's alignment must come from the SAME registry field the PDF layout
+ * reads (`pdf-layout.ts` passes `f.align` straight through). Before this, every
+ * preview cell rendered flush-left while the PDF right-aligned the numeric
+ * columns — so the preview could never match the generated file for any numeric
+ * column, and a user tuning column order had no way to see what they would get.
+ *
+ * Deriving both from `field.align` means a future alignment change lands in one
+ * place and cannot silently desync the two again.
+ */
+function alignClass(align: InventoryExportField['align']): string {
+  return align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
+}
 
 export interface ExportBuilderPreviewProps {
   state: ExportBuilderState;
@@ -53,9 +68,16 @@ export function ExportBuilderPreview({
         ) : (
           <table aria-label="Export preview" className="w-full text-[12.5px]">
             <thead>
-              <tr className="bg-muted text-left">
+              <tr className="bg-muted">
                 {fields.map((field) => (
-                  <th key={field.key} scope="col" className="whitespace-nowrap px-2 py-1 font-medium">
+                  <th
+                    key={field.key}
+                    scope="col"
+                    className={cn(
+                      'whitespace-nowrap px-2 py-1 font-medium',
+                      alignClass(field.align),
+                    )}
+                  >
                     {headingFor(field)}
                   </th>
                 ))}
@@ -67,14 +89,20 @@ export function ExportBuilderPreview({
                   {fields.map((field) => {
                     if (field.key === 'image') {
                       return (
-                        <td key={field.key} className="px-2 py-1 text-[var(--ed-ink-4)]">
+                        <td
+                          key={field.key}
+                          className={cn(
+                            'px-2 py-1 text-[var(--ed-ink-4)]',
+                            alignClass(field.align),
+                          )}
+                        >
                           {headingFor(field) === 'Image URL' ? 'Image URL' : 'Image'}
                         </td>
                       );
                     }
                     const value = field.value(row);
                     return (
-                      <td key={field.key} className="px-2 py-1">
+                      <td key={field.key} className={cn('px-2 py-1', alignClass(field.align))}>
                         {value === null || value === undefined || value === ''
                           ? EM_DASH
                           : String(value)}

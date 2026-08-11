@@ -74,6 +74,7 @@ export interface InventoryExportField {
   pdfMinWidth: number;
   /** Optional PDF ceiling in POINTS. */
   pdfMaxWidth?: number;
+  /** See the alignment note above the registry entries. */
   align: 'left' | 'right' | 'center';
   cellType: InventoryExportCellType;
   /** False = this column's value must never wrap across lines (short codes,
@@ -259,7 +260,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfWidth: 0.9,
     pdfMinWidth: 49,
     pdfMaxWidth: 70,
-    align: 'right',
+    align: 'center',
     cellType: 'number',
     wrap: false,
     value: (r) => r.quantityOnHand,
@@ -277,7 +278,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfWidth: 1,
     pdfMinWidth: 58,
     pdfMaxWidth: 80,
-    align: 'right',
+    align: 'center',
     cellType: 'number',
     wrap: false,
     value: (r) => r.reorderPoint,
@@ -295,7 +296,7 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     pdfWidth: 1,
     pdfMinWidth: 66,
     pdfMaxWidth: 88,
-    align: 'right',
+    align: 'center',
     cellType: 'number',
     wrap: false,
     value: (r) => r.reorderQuantity,
