@@ -33,7 +33,6 @@ const BASE: MaintenanceResolvedEmailParams = {
   requestHandle: 'MR-2026-000123',
   requestSubject: 'Leaking roof tile in Hall B',
   recipientFirstName: 'Reggie',
-  recipientEmail: 'reggie@example.com',
   resolverName: 'Dana Keeler',
   resolutionNote: 'The roof tile has been replaced and the leak is fixed.',
   resolvedOnDisplay: 'Aug 6, 2026 · 2:41 PM PT',
