@@ -436,6 +436,30 @@ describe('ItemForm — the SIZED bulk path carries the sports values (review fin
     return { user, bulkCreateSizedVariantsAction };
   }
 
+  it('describes the RUN in the pre-save card, not "Single variant"', async () => {
+    // The card is a promise about what the save will do. The bulk-create branch
+    // sends `variants[]` and deliberately NOT `variantSize`, so the variant-key
+    // preview (which reads watch('variantSize')) is 'default' for this entire
+    // flow — and the card used to read "Single variant" while the save created
+    // one item per picked size.
+    await renderSizedShoesAndPickSizes();
+
+    expect(screen.queryByText('Single variant')).not.toBeInTheDocument();
+    expect(screen.getByText('2 variants: 9, 10')).toBeInTheDocument();
+  });
+
+  it('keeps the card in step as sizes are added and removed', async () => {
+    const { user } = await renderSizedShoesAndPickSizes();
+
+    // Deselecting back to one size must not leave a stale plural claim.
+    await user.click(screen.getByRole('button', { name: '10' }));
+    await waitFor(() => expect(screen.getByText('1 variant: 9')).toBeInTheDocument());
+
+    // And back to none returns to the genuine single-variant wording.
+    await user.click(screen.getByRole('button', { name: '9' }));
+    await waitFor(() => expect(screen.getByText('Single variant')).toBeInTheDocument());
+  });
+
   it('sends the inline productGroup with the size run — the preview promised a group, so one must be saved', async () => {
     const { user, bulkCreateSizedVariantsAction } = await renderSizedShoesAndPickSizes();
 

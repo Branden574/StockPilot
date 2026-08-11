@@ -661,7 +661,27 @@ export function ItemForm({
         // variant split that never happens.
       })
     : 'default';
-  const variantLabel = variantKeyPreview === 'default' ? null : humanizeVariantKey(variantKeyPreview);
+  // A sized RUN is not a single variant. `selectedSizes` is component state
+  // rather than an RHF field, and the bulk-create branch in onSubmit
+  // deliberately sends `variants[]` and NOT `variantSize` (the size is
+  // per-row and the system is derived server-side). So `variantKeyPreview`,
+  // which reads `watch('variantSize')`, is 'default' for the whole sized-run
+  // flow — and the panel promised "Single variant" while the save was about to
+  // create one item per selected size.
+  //
+  // Describe the run from the SAME state the save sends, so the card cannot
+  // disagree with what happens. Falls through to the single-variant key
+  // whenever no sizes are picked, which is every other flow, unchanged.
+  const variantLabel = React.useMemo(() => {
+    if (selectedSizes.length > 0) {
+      const shown = selectedSizes.slice(0, 5).map((v) => v.size);
+      const extra = selectedSizes.length - shown.length;
+      return `${selectedSizes.length} variant${selectedSizes.length === 1 ? '' : 's'}: ${shown.join(
+        ', ',
+      )}${extra > 0 ? ` +${extra}` : ''}`;
+    }
+    return variantKeyPreview === 'default' ? null : humanizeVariantKey(variantKeyPreview);
+  }, [selectedSizes, variantKeyPreview]);
   const watchedItemName = watch('name');
   const groupNamePreview =
     linkedGroup?.name ?? (watchedItemName?.trim() ? watchedItemName.trim() : null);

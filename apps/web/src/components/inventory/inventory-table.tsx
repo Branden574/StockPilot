@@ -3177,6 +3177,38 @@ function StyleGroupHeaderRow({
         ? `${group.sizeCount} variant${group.sizeCount === 1 ? '' : 's'}`
         : `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
 
+  // Rack summary across the run's members. This cell used to render
+  // `sizeLabel`, which merely repeated the badge already shown next to the name
+  // — so the Rack column read "3 variants · 9 pairs total" and told you nothing
+  // about where the stock physically is, the one thing the column exists for.
+  //
+  // Mirrors the SKU header's cell deliberately (same source of truth, same
+  // wording): the concrete label when every member agrees, an honest COUNT when
+  // they differ — never one member's rack, which would send staff to the wrong
+  // shelf — and an explicit "+N unset" tail, because a member with no rack is
+  // not a rack. Reads `placed_racks` (where the stock actually sits, from
+  // holdings) and falls back to the free-text label only for callers that don't
+  // compute holdings, exactly as the member rows below do.
+  const rackLabels: string[] = [];
+  let rackUnset = 0;
+  for (const it of items) {
+    // `[]` is meaningful (holdings computed, nothing placed) so only a missing
+    // field falls through to the legacy label.
+    const placed =
+      it.placed_racks ??
+      (readItemRack(it.custom_fields).rackLabel
+        ? [readItemRack(it.custom_fields).rackLabel as string]
+        : []);
+    if (placed.length === 0) {
+      rackUnset += 1;
+      continue;
+    }
+    for (const label of placed) if (!rackLabels.includes(label)) rackLabels.push(label);
+  }
+  const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
+    rackUnset > 0 ? ` +${rackUnset} unset` : ''
+  }`;
+
   return (
     <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
@@ -3299,7 +3331,21 @@ function StyleGroupHeaderRow({
         )}
       </td>
       <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
-      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{sizeLabel}</td>
+      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+        {rackLabels.length === 0 ? (
+          <span className="text-[var(--ed-ink-4)]">—</span>
+        ) : rackLabels.length === 1 && rackUnset === 0 ? (
+          <span className="font-mono tabular-nums">{rackLabels[0]}</span>
+        ) : (
+          <span
+            title={`Placements span: ${rackLabels.join(', ')}${
+              rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
+            }`}
+          >
+            {rackCountLabel}
+          </span>
+        )}
+      </td>
       <td className="px-3 text-right font-mono font-medium tabular-nums">
         {formatNumber(group.total)}
       </td>

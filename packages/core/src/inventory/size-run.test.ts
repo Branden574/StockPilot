@@ -5,6 +5,7 @@ import {
   groupBySizeRun,
   hasSizeSuffix,
   sizeRunStyleKey,
+  stripKnownSize,
   stripSizeSuffix,
   stripSkuSuffix,
   type SizeRunEntryMeta,
@@ -417,5 +418,119 @@ describe('groupBySizeRun — one contribution per stock-holding unit', () => {
     if (run?.kind !== 'size-run') throw new Error('no run');
     expect(run.group.total).toBe(10);
     expect(run.group.sizeCount).toBe(2);
+  });
+});
+
+describe('groupBySizeRun — the header representative must be members[0]', () => {
+  interface GRow {
+    id: string;
+    name: string;
+    qty: number;
+    groupId?: string | null;
+    variantSize?: string | null;
+  }
+  const gmeta = (r: GRow): SizeRunEntryMeta => ({
+    key: r.id,
+    name: r.name,
+    quantity: r.qty,
+    groupable: true,
+    groupId: r.groupId ?? null,
+    variantSize: r.variantSize ?? null,
+  });
+
+  /**
+   * A STORED run is size-ordered AFTER its members are collected, so
+   * `members[0]` is the smallest size — not the row that happened to arrive
+   * first. `baseName` was captured at group-creation time, i.e. from the
+   * FIRST-ARRIVING member, so the two disagreed whenever arrival order was not
+   * size order.
+   *
+   * That is not cosmetic. The inventory list's group header renders the name
+   * from `baseName` but takes its link, thumbnail, category, location, reorder
+   * point and charter from `members[0]` — so the row was labelled with one
+   * variant and navigated to a different one.
+   *
+   * Asserted as an INVARIANT (baseName is derived from members[0]) rather than
+   * as one expected string, so it holds for any arrival order.
+   */
+  it('derives baseName from the size-sorted members[0], not from arrival order', () => {
+    // Arrival order 9, 8, 10 — deliberately not size order.
+    const rows: GRow[] = [
+      { id: 'nine', name: 'Court Shoe - 9', qty: 1, groupId: 'g1', variantSize: '9' },
+      { id: 'eight', name: 'Court Shoe - 8', qty: 2, groupId: 'g1', variantSize: '8' },
+      { id: 'ten', name: 'Court Shoe - 10', qty: 3, groupId: 'g1', variantSize: '10' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    const g = out[0].group;
+
+    // Size ordering still holds.
+    expect(g.members.map((m) => m.id)).toEqual(['eight', 'nine', 'ten']);
+    // THE INVARIANT: the label must describe the row the header links to —
+    // members[0] is size 8, so the label may not carry any other member's size.
+    expect(g.baseName).toBe('Court Shoe');
+    expect(g.baseName).not.toContain('9');
+    expect(g.baseName).not.toContain('10');
+  });
+
+  it('holds the same invariant when arrival order already equals size order', () => {
+    const rows: GRow[] = [
+      { id: 'eight', name: 'Court Shoe - 8', qty: 2, groupId: 'g1', variantSize: '8' },
+      { id: 'nine', name: 'Court Shoe - 9', qty: 1, groupId: 'g1', variantSize: '9' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+
+    expect(out[0].group.baseName).toBe('Court Shoe');
+  });
+
+  it('strips a HALF size without the "." matching an arbitrary character', () => {
+    // '3.5' is a regex metacharacter away from matching "3X5"/"3-5". If the
+    // size were interpolated unescaped, a name like 'Cleat - 3X5' would strip.
+    const rows: GRow[] = [
+      { id: 'a', name: 'Cleat - 3.5', qty: 1, groupId: 'g1', variantSize: '3.5' },
+      { id: 'b', name: 'Cleat - 4', qty: 1, groupId: 'g1', variantSize: '4' },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+
+    expect(out[0].group.baseName).toBe('Cleat');
+    // The escape itself: an unrelated name must NOT be stripped by '3.5'.
+    expect(stripKnownSize('Cleat - 3X5', '3.5')).toBe('Cleat - 3X5');
+  });
+
+  it('leaves the name alone when it does not actually end in the stored size', () => {
+    // A renamed variant whose name no longer carries its size must not have an
+    // unrelated tail chopped off.
+    expect(stripKnownSize('Court Shoe Wide', '8')).toBe('Court Shoe Wide');
+    expect(stripKnownSize('Pegasus 41', '8')).toBe('Pegasus 41');
+  });
+
+  it('does NOT let a trailing number act as a size for name-derived grouping', () => {
+    // The guard for why stripKnownSize exists instead of widening the regex:
+    // two ungrouped model numbers must stay two rows, not collapse into a run.
+    const rows: GRow[] = [
+      { id: 'a', name: 'Nike Pegasus 41', qty: 1 },
+      { id: 'b', name: 'Nike Pegasus 40', qty: 1 },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+
+    expect(out.map((e) => e.kind)).toEqual(['single', 'single']);
+  });
+
+  it('leaves a legacy NAME-keyed run byte-identical (never sorted, so arrival order IS members[0])', () => {
+    // Regression guard for the fix itself: name-keyed runs are deliberately
+    // not re-ordered, so nothing about them may shift.
+    const rows: GRow[] = [
+      { id: 'a', name: 'Legacy Tee - XL', qty: 1 },
+      { id: 'b', name: 'Legacy Tee - S', qty: 2 },
+    ];
+    const out = groupBySizeRun(rows, gmeta);
+    if (out[0]?.kind !== 'size-run') throw new Error('expected size-run');
+    const g = out[0].group;
+
+    expect(g.members.map((m) => m.id)).toEqual(['a', 'b']);
+    expect(g.baseName).toBe('Legacy Tee');
+    expect(g.baseName).toBe(stripSizeSuffix(g.members[0]!.name));
   });
 });
