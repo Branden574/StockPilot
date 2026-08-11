@@ -39,7 +39,7 @@
 
 begin;
 
-select plan(24);
+select plan(25);
 
 \set orgT    '\'03270000-0000-0000-0000-000000000001\''
 \set orgU    '\'03270000-0000-0000-0000-000000000002\''
@@ -245,6 +245,18 @@ select ok(
 select ok(
   has_function_privilege('authenticated', 'public._cycle_count_org_stock_sum(uuid, uuid)', 'execute'),
   '0327: authenticated RETAINS EXECUTE (post_cycle_count is SECURITY INVOKER and calls it as the user)'
+);
+
+-- WIRING PIN. The behavioral fixture for "posting sees the whole org even
+-- when the caller's RLS is narrower" is unconstructible while
+-- item_stock_levels_select stays org-wide (AR-2), so a revert of
+-- post_cycle_count's body to the bare 0196 SELECT would pass every
+-- behavioral test above. This structural pin closes that surviving
+-- mutation: the reconciliation sum must flow through the definer helper.
+select ok(
+  (select p.prosrc like '%_cycle_count_org_stock_sum%' from pg_proc p
+    where p.oid = 'public.post_cycle_count(uuid)'::regprocedure),
+  '0327: post_cycle_count computes its reconciliation sum via _cycle_count_org_stock_sum (wiring pin)'
 );
 
 -- The manager gets the TRUE org-wide sum, literal-pinned: 3 (locFrom) + 4
