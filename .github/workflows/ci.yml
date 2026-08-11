@@ -31,6 +31,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Errors gate; warnings do not (eslint exits non-zero only on errors).
+      # Mobile reached zero lint errors on 2026-08-11 (PR #112, 163 -> 0) -
+      # this step is what keeps the count from silently regrowing.
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
