@@ -62,6 +62,9 @@ export async function uploadVideoMaster({
     url: signedUrl,
     body: file,
     contentType,
+    // The SDK upload this replaced set cacheControl: '3600'; the presigned
+    // PUT carries the same object metadata via the header form.
+    headers: { 'cache-control': 'max-age=3600' },
     onProgress: ({ loaded, total }) => {
       tracker.set(MASTER_KEY, total > 0 ? loaded / total : 0);
       publish();

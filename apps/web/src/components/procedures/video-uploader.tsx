@@ -143,6 +143,9 @@ export async function uploadPosterFor(
       url: posterSignedUrl,
       body: blob,
       contentType: 'image/jpeg',
+      // The SDK upload this replaced set cacheControl: '3600'; the presigned
+      // PUT carries the same object metadata via the header form.
+      headers: { 'cache-control': 'max-age=3600' },
     });
     return res.ok ? posterPath : null;
   } catch {
