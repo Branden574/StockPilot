@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
 import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import { BatchProgress, uploadWithProgress } from '@/lib/upload-with-progress';
 import {
   EMPTY_SPORTS_GROUP_FIELDS,
   GROUP_LEVEL_COLOR_SUBCATEGORIES,
@@ -290,6 +291,8 @@ export function ItemForm({
   const isEdit = Boolean(defaults?.id);
   const [staged, setStaged] = React.useState<StagedImage[]>([]);
   const [uploadingImages, setUploadingImages] = React.useState(false);
+  /** Transported percentage for the staged-photo batch, null when idle. */
+  const [uploadPercent, setUploadPercent] = React.useState<number | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
 
@@ -877,12 +880,23 @@ export function ItemForm({
   async function uploadStagedImages(itemId: string) {
     if (staged.length === 0) return { uploaded: 0, failed: 0 };
     setUploadingImages(true);
+    // Byte-weighted progress over the staged originals. The denominator is
+    // fixed up front so the percentage cannot travel backwards as each file
+    // finishes compressing - see lib/upload-with-progress.ts.
+    const batch = new BatchProgress(
+      staged
+        .map((item, i) => (item ? { key: `${i}`, weight: item.file.size } : null))
+        .filter((e): e is { key: string; weight: number } => e !== null),
+    );
+    setUploadPercent(0);
+    const publishProgress = () => setUploadPercent(batch.percent);
     let uploaded = 0;
     let failed = 0;
     try {
       for (let i = 0; i < staged.length; i++) {
         const item = staged[i];
         if (!item) continue;
+        const progressKey = `${i}`;
         // Generate master + thumb + LQIP from a single decode. Same
         // helper the item-detail uploader uses so create-flow uploads
         // populate the same thumb_path + lqip columns and get the
@@ -894,24 +908,39 @@ export function ItemForm({
           failed++;
           continue;
         }
+        // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
+        // any percentage over it would be fabricated. Progress comes from the
+        // master only - the thumb is a rounding error beside it.
         const [masterRes, thumbRes] = await Promise.all([
-          fetch(presign.data.signedUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': master.type, 'x-upsert': 'true' },
+          uploadWithProgress({
+            url: presign.data.signedUrl,
             body: master,
+            contentType: master.type,
+            headers: { 'x-upsert': 'true' },
+            onProgress: ({ loaded, total }) => {
+              batch.set(progressKey, total > 0 ? loaded / total : 0);
+              publishProgress();
+            },
           }),
           thumbBlob
-            ? fetch(presign.data.thumbSignedUrl, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'image/webp', 'x-upsert': 'true' },
+            ? uploadWithProgress({
+                url: presign.data.thumbSignedUrl,
                 body: thumbBlob,
+                contentType: 'image/webp',
+                headers: { 'x-upsert': 'true' },
               })
             : Promise.resolve(null),
         ]);
         if (!masterRes.ok) {
+          // Settled as failed, so this file keeps the fraction it reached and
+          // the batch can never read 100% with a failure in it.
+          batch.settle(progressKey, false);
+          publishProgress();
           failed++;
           continue;
         }
+        batch.settle(progressKey, true);
+        publishProgress();
         const thumbOk = thumbRes ? thumbRes.ok : false;
         const record = await recordImageAction({
           itemId,
@@ -925,6 +954,7 @@ export function ItemForm({
       }
     } finally {
       setUploadingImages(false);
+      setUploadPercent(null);
     }
     return { uploaded, failed };
   }
@@ -2248,7 +2278,11 @@ export function ItemForm({
           {isSubmitting || uploadingImages ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              {uploadingImages ? 'Uploading photos…' : 'Saving…'}
+              {uploadingImages
+                ? uploadPercent === null
+                  ? 'Uploading photos…'
+                  : `Uploading photos… ${uploadPercent}%`
+                : 'Saving…'}
             </>
           ) : isEdit ? (
             'Save changes'
