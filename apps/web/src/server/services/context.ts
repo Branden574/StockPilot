@@ -196,8 +196,16 @@ export class ServiceError extends Error {
  *     place instead of telling an enrolled user to "enroll".
  *   - UNENROLLED (policy demands MFA, no factor yet): the original
  *     `reason: 'mfa_required'` shape, byte-for-byte — enroll first.
+ *
+ * EXPORTED because the gate is duplicated outside `assertPermission`: the
+ * profile actions and the custom-fields service each re-check
+ * `mfaRequired && !mfaSatisfied` themselves (deliberately — they are their
+ * own entry points). Those copies used to hardcode the unenrolled shape,
+ * which sent an ENROLLED user a "enroll in MFA" message and left the
+ * step-up modal unfired. Any new copy of the gate must call this rather
+ * than construct its own ServiceError.
  */
-function mfaGateError(ctx: ServiceContext): ServiceError {
+export function mfaGateError(ctx: Pick<ServiceContext, 'mfaEnrolled'>): ServiceError {
   if (ctx.mfaEnrolled) {
     return new ServiceError(
       'forbidden',

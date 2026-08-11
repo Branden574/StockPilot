@@ -140,6 +140,17 @@ export async function GET(
     authorized = orgMatch != null;
   }
   if (!authorized) {
+    // DELIBERATELY NOT filtered on active/expires_at, unlike catalog
+    // resolution. A requester who submitted through a link that was later
+    // disabled or expired must still be able to track the order they already
+    // placed — revoking a link is meant to stop NEW submissions, not to
+    // orphan in-flight orders. The blast radius stays one order: the caller
+    // must also know the order id AND present the matching requester email
+    // (checked immediately below), and the payload is the redacted
+    // single-order shape. The legacy org token never had an active flag
+    // either, so this preserves the pre-hash behavior rather than widening
+    // it. If link revocation is ever required to kill tracking too, add
+    // .eq('active', true) here AND state the product decision.
     const { data: linkMatch } = await admin
       .from('public_request_links')
       .select('id')

@@ -11,7 +11,7 @@ import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -43,11 +43,10 @@ const nameSchema = z.object({
 async function gateMfa(): Promise<void> {
   const ctx = await withContext();
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-    throw new ServiceError(
-      'forbidden',
-      'Multi-factor authentication required. Enroll in MFA before performing this action.',
-      { reason: 'mfa_required' },
-    );
+    // Shape chosen by enrollment — see mfaGateError. An enrolled user must
+    // get 'aal2_required' so the step-up modal fires instead of telling
+    // someone who already has a factor to enroll one.
+    throw mfaGateError(ctx);
   }
 }
 
