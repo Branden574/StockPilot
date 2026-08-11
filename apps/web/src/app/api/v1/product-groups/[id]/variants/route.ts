@@ -18,6 +18,12 @@ export const dynamic = 'force-dynamic';
  * quantity, so there is nothing to count at group level: the pickers pull this
  * list and count each variant. Every row carries its own item id, because the
  * item id is what a `cycle_count_lines` row FKs.
+ *
+ * BY ID, AT ANY STATUS — `get()` is deliberately status-agnostic (see its note).
+ * The picker that leads here only ever offers active groups (the sibling list
+ * route), and this endpoint reads nothing: an archived group's variants staying
+ * readable by id is what lets a count already in flight keep resolving its rows.
+ * The variant filter below is unchanged and still drops archived ITEMS.
  */
 export async function GET(
   req: NextRequest,

@@ -145,7 +145,10 @@ const listHeader = <View style={{ height: 6 }} />;
 // NULL for every ungrouped item in every org (there is no backfill), so a
 // non-sports org's list is unchanged. The embedded product_groups row supplies
 // the counting unit for the header; a to-one embed costs no extra round trip
-// and resolves to nothing when group_id is null.
+// and resolves to nothing when group_id is null. The embed carries no status
+// filter ON PURPOSE — an item whose GROUP was archived is still an item on this
+// list, and its size-run header still has to say "52 pairs" rather than fall
+// back to a bare count (web's `displayByIds` takes the same stance).
 const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
            primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
            awaiting_first_receipt, group_id, variant_size,

@@ -36,6 +36,15 @@ export type AuditEvent =
   // event a reviewer needs when a grouping later looks wrong.
   | 'sports.group.created'
   | 'sports.group.matched'
+  /**
+   * A group was archived or restored — a SOFT, reversible status change, never a
+   * delete (product_groups has no hard-delete path at all). `extra` on the
+   * archive carries `acknowledged_active_variants`, because "retired a line
+   * whose sizes are still linked" and "tidied away an empty shell group" are
+   * different acts. No migration: audit_logs.event is un-CHECKed text.
+   */
+  | 'sports.group.archived'
+  | 'sports.group.restored'
   | 'sports.variant.created'
   | 'sports.variant.imported'
   | 'sports.import.mapping_confirmed'

@@ -2297,6 +2297,13 @@ export class InventoryService {
       // (product_group_in_org, 0298) would refuse a foreign group anyway, but
       // it surfaces as an opaque row-level-security error rather than a
       // sentence a user can act on.
+      //
+      // AN OWNERSHIP CHECK, NOT A STATUS CHECK — deliberately. The pickers that
+      // offer a group to attach to (`candidates`, `listForPicker`) are active-
+      // only, so an archived group id here was named by the caller; attaching to
+      // one is the reversible state ProductGroupsService.archive() already
+      // permits under acknowledgement, and restoring the group brings the whole
+      // run back. Only `deleted_at` disqualifies a group from being written to.
       const { data: g, error: gErr } = await this.ctx.supabase
         .from('product_groups')
         .select('id')

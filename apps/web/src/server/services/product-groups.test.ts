@@ -4,6 +4,7 @@ import { buildGroupKey, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
+import { audit } from './audit';
 import { ProductGroupsService } from './product-groups';
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
@@ -58,6 +59,35 @@ const CREATE_INPUT = {
   colorway: 'Black/White',
   defaultCountingUnit: 'pair' as const,
 };
+
+/**
+ * A stub that ACTUALLY APPLIES the status filter the service asked for.
+ *
+ * A test that only asserted `.eq('status', 'active')` was called proves the call
+ * shape and nothing about the result. This fake filters the rows it hands back by
+ * whatever status the query carried — so "the archived group is absent" is the
+ * assertion, and deleting the filter from the service makes the fake return the
+ * archived row and the test fail. A filter that stopped being applied would
+ * otherwise be invisible.
+ */
+function filteringGroupStub(rows: Array<Record<string, unknown>>) {
+  let stub: ReturnType<typeof makeSupabaseStub> | null = null;
+  stub = makeSupabaseStub({
+    'product_groups.select': () => {
+      // Recorded by the time the chain is awaited, which is when this runs.
+      const args = stub!.chainArgs.get('product_groups.select') ?? [];
+      const statusArg = args.find((a) => a[0] === 'status');
+      const wanted = statusArg?.[1] as string | undefined;
+      return {
+        // No status filter at all => every row, archived included. That is the
+        // failure this fake exists to make visible.
+        data: wanted === undefined ? rows : rows.filter((r) => r.status === wanted),
+        error: null,
+      };
+    },
+  });
+  return stub;
+}
 
 describe('ProductGroupsService.findOrCreate', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -785,6 +815,15 @@ describe('ProductGroupsService.listForPicker — discloses its cap', () => {
     expect(out.truncated).toBe(false);
   });
 
+  it('never offers an ARCHIVED group as a link destination', async () => {
+    const stub = filteringGroupStub([
+      { id: 'g-active', name: 'Active group', brand: null, model: null, status: 'active' },
+      { id: 'g-archived', name: 'Archived group', brand: null, model: null, status: 'archived' },
+    ]);
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).listForPicker();
+    expect(out.groups.map((g) => g.id)).toEqual(['g-active']);
+  });
+
   it('DISCLOSES a real cap rather than presenting a prefix as the whole list', async () => {
     const stub = makeSupabaseStub({
       'product_groups.select': {
@@ -800,5 +839,273 @@ describe('ProductGroupsService.listForPicker — discloses its cap', () => {
     const out = await new ProductGroupsService(sportsCtx(stub.client)).listForPicker(5);
     expect(out.groups).toHaveLength(5);
     expect(out.truncated).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Archive / restore. The page had NO way to retire a group, so a leftover shell
+// group was removed with hand-written SQL against production. The affordance is
+// a SOFT, reversible status change — never a delete — and it refuses to hide a
+// group whose sizes are still linked unless the operator says so explicitly.
+// ---------------------------------------------------------------------------
+
+describe('ProductGroupsService — an archived group is absent from the list that means "current"', () => {
+  const ROWS = [
+    groupRow({ id: 'grp-active', name: 'Active group' }),
+    groupRow({ id: 'grp-archived', name: 'Archived group', status: 'archived' }),
+  ];
+
+  it('leaves an archived group out of the default list', async () => {
+    const stub = filteringGroupStub(ROWS);
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).list();
+    expect(out.map((g) => g.id)).toEqual(['grp-active']);
+  });
+
+  it('returns it ONLY when a caller explicitly asks for archived — the restore path', async () => {
+    const stub = filteringGroupStub(ROWS);
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).list({
+      status: 'archived',
+    });
+    expect(out.map((g) => g.id)).toEqual(['grp-archived']);
+  });
+});
+
+describe('ProductGroupsService.archive', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** Stub for one archive: the group read, the variant count, the update. */
+  function archiveStub(
+    over: {
+      group?: Record<string, unknown>;
+      variantCount?: number | null;
+      countError?: { message: string } | null;
+      updated?: Array<Record<string, unknown>> | null;
+    } = {},
+  ) {
+    return makeSupabaseStub({
+      'product_groups.select': { data: [over.group ?? groupRow()], error: null },
+      'inventory_items.select': {
+        data: null,
+        error: over.countError ?? null,
+        count: over.variantCount === undefined ? 0 : over.variantCount,
+      },
+      'product_groups.update': {
+        data: over.updated === undefined ? [groupRow({ status: 'archived' })] : over.updated,
+        error: null,
+      },
+    });
+  }
+
+  it('REFUSES a group that still has variants linked, and names how many', async () => {
+    const stub = archiveStub({ variantCount: 3 });
+    const svc = new ProductGroupsService(sportsCtx(stub.client));
+
+    const failure = await svc.archive('grp-1').then(
+      () => null,
+      (e: unknown) => e as { code?: string; message: string },
+    );
+    expect(failure?.code).toBe('validation_error');
+    expect(failure?.message).toContain('3 variants');
+    // The refusal must SAY the override exists — a dead end is what gets worked
+    // around with hand-written SQL.
+    expect(failure?.message).toContain('anyway');
+    // Nothing was written, and nothing was recorded as though it had been.
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('counts in the singular for exactly one linked variant', async () => {
+    const stub = archiveStub({ variantCount: 1 });
+    const failure = await new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1').then(
+      () => null,
+      (e: unknown) => e as { message: string },
+    );
+    expect(failure?.message).toContain('1 variant is');
+    expect(failure?.message).not.toContain('1 variants');
+  });
+
+  it('counts LIVE, non-archived variants, scoped to this group by equality', async () => {
+    const stub = archiveStub({ variantCount: 0 });
+    await new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1');
+
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    // status <> 'archived', not = 'active': a discontinued variant is still on
+    // every screen that means current, so it still has to block.
+    expect(stub.chains.get('inventory_items.select')).toContain('neq');
+    expect(args).toContainEqual(['status', 'archived']);
+    // A soft-deleted row is not a variant at all.
+    expect(args).toContainEqual(['deleted_at', null]);
+    // group_id is NULLABLE, so it is compared with `.eq` to one id — never with
+    // `.in`/`not.in`, which silently drop NULL-column rows.
+    expect(args).toContainEqual(['group_id', 'grp-1']);
+    expect(args).toContainEqual(['organization_id', 'org-test']);
+  });
+
+  it('archives an EMPTY group with no acknowledgement, writing only status', async () => {
+    const stub = archiveStub({ variantCount: 0 });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1');
+    expect(out.status).toBe('archived');
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe('archived');
+    // NEVER a soft delete: every partial index on product_groups is
+    // `where deleted_at is null`, uniqueness included, so writing deleted_at
+    // would FREE the group_key and let a second group be created for an identity
+    // that is only archived and still waiting to be restored.
+    expect(patch).not.toHaveProperty('deleted_at');
+    expect(patch).not.toHaveProperty('group_key');
+    expect(patch).not.toHaveProperty('organization_id');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'sports.group.archived',
+        entityId: 'grp-1',
+        extra: { acknowledged_active_variants: false },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('lets an ACKNOWLEDGED archive through with variants still linked, and records that', async () => {
+    const stub = archiveStub({ variantCount: 4 });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1', {
+      acknowledgeActiveVariants: true,
+    });
+    expect(out.status).toBe('archived');
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe('archived');
+    expect(patch).not.toHaveProperty('deleted_at');
+    // The variants KEEP their group_id: nothing here writes inventory_items, so
+    // restoring the group brings the whole run back.
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'sports.group.archived',
+        extra: { acknowledged_active_variants: true },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('does NOT fail open when the update matches no row (RLS hid it): no error, no row', async () => {
+    const stub = archiveStub({ variantCount: 0, updated: null });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1'),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    // An archive that did not happen is never recorded as though it had.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('is FAIL-CLOSED when the variant count cannot be read', async () => {
+    const stub = archiveStub({ variantCount: 0, countError: { message: 'boom' } });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1'),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+  });
+
+  it('is FAIL-CLOSED when the count comes back missing rather than zero', async () => {
+    // No error and no count is not evidence of an empty group.
+    const stub = archiveStub({ variantCount: null });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1'),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+  });
+
+  it('is a no-op on an already-archived group: no write, no audit noise', async () => {
+    const stub = archiveStub({ group: groupRow({ status: 'archived' }) });
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).archive('grp-1');
+    expect(out.status).toBe('archived');
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('requires sports:manage — the permission every other group mutation takes', async () => {
+    const stub = archiveStub();
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client, { role: 'staff' })).archive('grp-1'),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    // Refused BEFORE any query: a gate that still reads is not a gate.
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('is refused with the sports module off, before any query', async () => {
+    const stub = archiveStub();
+    const svc = new ProductGroupsService(
+      makeServiceContext(stub.client, { enabledModules: new Set<ModuleId>(['inventory']) }),
+    );
+    await expect(svc.archive('grp-1')).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(stub.fromCalls).toEqual([]);
+  });
+});
+
+describe('ProductGroupsService.restore', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function restoreStub(
+    over: {
+      group?: Record<string, unknown>;
+      updated?: Array<Record<string, unknown>> | null;
+    } = {},
+  ) {
+    return makeSupabaseStub({
+      'product_groups.select': {
+        data: [over.group ?? groupRow({ status: 'archived' })],
+        error: null,
+      },
+      'product_groups.update': {
+        data: over.updated === undefined ? [groupRow({ status: 'active' })] : over.updated,
+        error: null,
+      },
+    });
+  }
+
+  it('puts an archived group back to active without touching anything else', async () => {
+    const stub = restoreStub();
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).restore('grp-1');
+    expect(out.status).toBe('active');
+
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe('active');
+    // Restore rebuilds nothing because archiving broke nothing: no variant
+    // write, no key recompute, no deleted_at.
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
+    expect(patch).not.toHaveProperty('group_key');
+    expect(patch).not.toHaveProperty('deleted_at');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'sports.group.restored', entityId: 'grp-1' }),
+      expect.anything(),
+    );
+  });
+
+  it('is also the way out of discontinued', async () => {
+    const stub = restoreStub({ group: groupRow({ status: 'discontinued' }) });
+    await new ProductGroupsService(sportsCtx(stub.client)).restore('grp-1');
+    const patch = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe('active');
+  });
+
+  it('does NOT fail open when the update matches no row', async () => {
+    const stub = restoreStub({ updated: null });
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).restore('grp-1'),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op on a group that is already active', async () => {
+    const stub = restoreStub({ group: groupRow() });
+    await new ProductGroupsService(sportsCtx(stub.client)).restore('grp-1');
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('requires sports:manage', async () => {
+    const stub = restoreStub();
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client, { role: 'staff' })).restore('grp-1'),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.fromCalls).toEqual([]);
   });
 });

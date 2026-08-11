@@ -109,6 +109,23 @@ export interface ProductGroupFilters {
 }
 
 /**
+ * The message an archive refusal carries. Same shape as the item archive's
+ * stock-guard copy (`formatArchiveStockBlockMessage`): name the COUNT, say what
+ * to do about it, and say plainly that a deliberate override exists — a refusal
+ * that hides the way forward just gets worked around with SQL, which is the
+ * thing this affordance exists to stop.
+ */
+function formatGroupVariantBlockMessage(activeVariants: number): string {
+  const noun = activeVariants === 1 ? 'variant' : 'variants';
+  const verb = activeVariants === 1 ? 'is' : 'are';
+  return (
+    `Cannot archive: ${activeVariants} ${noun} ${verb} still linked to this product group. ` +
+    `Unlink or archive ${activeVariants === 1 ? 'it' : 'them'} first, or archive the group ` +
+    `anyway — the ${noun} stay linked and come back with it when you restore it.`
+  );
+}
+
+/**
  * Product-group identity. Every method here is about WHICH product something
  * is, never about how much of it there is.
  *
@@ -125,6 +142,13 @@ export class ProductGroupsService {
     return new ProductGroupsService(await withContext());
   }
 
+  /**
+   * The groups a page renders. ACTIVE ONLY unless a caller names another
+   * status: this list is what "current" means, so an archived group is absent
+   * from it by default and is reachable only by asking for it explicitly
+   * (`{ status: 'archived' }`) — which is how the page's archived view finds a
+   * group to restore.
+   */
   async list(filters: ProductGroupFilters = {}): Promise<ProductGroupRow[]> {
     assertModuleEnabled(this.ctx, 'sports');
     let q = this.ctx.supabase
@@ -162,6 +186,9 @@ export class ProductGroupsService {
    * disclosure, which is recurring bug pattern #18. This reads only what an
    * `<option>` shows, pages past PostgREST's `max_rows`, and reports whether it
    * hit `cap` so the UI can say so instead of quietly truncating.
+   *
+   * ACTIVE ONLY, and not configurable: a picker offers a destination to link
+   * items INTO, and an archived group is not a destination anyone means to pick.
    */
   async listForPicker(
     cap = 2000,
@@ -195,6 +222,12 @@ export class ProductGroupsService {
     return { groups, truncated };
   }
 
+  /**
+   * One group by id, at ANY status — deliberately status-agnostic. Archive and
+   * restore both read the row they are about to flip, and an archived group has
+   * to stay reachable or it could never be restored. Callers that mean "current"
+   * use `list()`, which filters.
+   */
   async get(id: string): Promise<ProductGroupRow> {
     assertModuleEnabled(this.ctx, 'sports');
     const { data, error } = await this.ctx.supabase
@@ -209,7 +242,17 @@ export class ProductGroupsService {
     return data as unknown as ProductGroupRow;
   }
 
-  /** Exact key lookup. Returns null rather than throwing — callers branch on it. */
+  /**
+   * Exact key lookup. Returns null rather than throwing — callers branch on it.
+   *
+   * MATCHES AN ARCHIVED GROUP TOO, and must: `product_groups_org_key_uniq` is
+   * partial on `deleted_at is null`, and archiving writes only `status`, so an
+   * archived group still HOLDS its group_key. A status filter here would make
+   * findOrCreate miss that row and try to insert a second group for the same
+   * identity — a guaranteed 23505, and if the index were ever loosened, a
+   * duplicate identity created behind the archive's back. The archived group is
+   * returned as-is; restoring it makes it current again.
+   */
   async findByKey(groupKey: string): Promise<ProductGroupRow | null> {
     assertModuleEnabled(this.ctx, 'sports');
     const { data, error } = await this.ctx.supabase
@@ -404,7 +447,166 @@ export class ProductGroupsService {
     return data as unknown as ProductGroupRow;
   }
 
-  /** Derived roll-ups. Reads the view; never a stored total. */
+  /**
+   * How many LIVE, non-archived variants still point at this group — the number
+   * the archive guard names.
+   *
+   * `status <> 'archived'` rather than `= 'active'`: a discontinued variant is
+   * still on every screen that means "current", so it still has to block.
+   * `inventory_items.status` is NOT NULL (0002), so `.neq` cannot silently drop
+   * a row here the way it would on a nullable column (the PostgREST NULL trap
+   * that made placed stock unpickable in 0292) — and `group_id`, which IS
+   * nullable, is compared with `.eq` to one id, never with `.in`/`not.in`.
+   *
+   * FAIL-CLOSED, like the item archive's `holdingsForGuard`: a read error, or a
+   * count PostgREST declined to return, refuses the archive rather than letting
+   * it through unproven. Refusing a legitimate archive is recoverable; hiding a
+   * group whose sizes are still in use is the thing being prevented.
+   */
+  private async activeVariantCount(groupId: string): Promise<number> {
+    const { count, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('group_id', groupId)
+      .neq('status', 'archived')
+      .is('deleted_at', null);
+    if (error || count === null || count === undefined) {
+      throw new ServiceError(
+        'internal_error',
+        error?.message ??
+          'Could not count this product group’s variants before archiving.',
+      );
+    }
+    return Number(count);
+  }
+
+  /**
+   * Archive a group: a SOFT, REVERSIBLE status change — `restore()`'s twin, and
+   * the affordance whose absence forced a leftover test group to be deleted with
+   * hand-written SQL against production.
+   *
+   * `status = 'archived'`, NEVER `deleted_at`. Every partial index on
+   * product_groups is `where deleted_at is null`, uniqueness included
+   * (`product_groups_org_key_uniq (organization_id, group_key)`), so a soft
+   * delete would FREE the group_key and let the next findOrCreate mint a second
+   * group for an identity that is still sitting there waiting to be restored.
+   * Archiving keeps the key reserved and `findByKey` keeps matching the row (see
+   * its note), so the identity cannot be duplicated behind the archive's back.
+   * Nothing here writes `deleted_at`, and there is deliberately no hard delete.
+   *
+   * @param opts.acknowledgeActiveVariants When true, SKIP the variant guard —
+   *   the deliberate "retire this product line even though its sizes are still
+   *   on the shelf", modelled on the item archive's `acknowledgeStock`. The
+   *   guard kills the SILENT hide, not the ability to do it on purpose.
+   *   THOSE VARIANTS KEEP THEIR `group_id`: they go on pointing at an archived
+   *   group, which is exactly what makes this reversible — restoring the group
+   *   brings the whole run back intact. A delete could not offer that, because
+   *   `inventory_items.group_id` is ON DELETE SET NULL and every link would be
+   *   erased with no record of what it was.
+   */
+  async archive(
+    id: string,
+    opts: { acknowledgeActiveVariants?: boolean } = {},
+  ): Promise<ProductGroupRow> {
+    assertPermission(this.ctx, 'sports:manage');
+    assertModuleEnabled(this.ctx, 'sports');
+
+    // get() is status-agnostic, so this also reads an already-archived row: a
+    // second archive is a no-op, not an error, and writes no audit noise for a
+    // state that did not change (the same posture unlinkItems takes).
+    const current = await this.get(id);
+    if (current.status === 'archived') return current;
+
+    if (!opts.acknowledgeActiveVariants) {
+      const activeVariants = await this.activeVariantCount(id);
+      if (activeVariants > 0) {
+        throw new ServiceError(
+          'validation_error',
+          formatGroupVariantBlockMessage(activeVariants),
+          { code: 'PRODUCT_GROUP_HAS_ACTIVE_VARIANTS', activeVariants },
+        );
+      }
+    }
+
+    const { data, error } = await this.ctx.supabase
+      .from('product_groups')
+      .update({ status: 'archived', updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select(GROUP_COLUMNS)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // .update().eq() is FAIL-OPEN when RLS hides the row: no error, no row, and
+    // a caller that would report success for a write that never happened. The
+    // returned row is the only proof the intended row was the one affected.
+    if (!data) throw new ServiceError('not_found', 'Product group not found.');
+
+    void audit(
+      {
+        event: 'sports.group.archived',
+        entityType: 'product_group',
+        entityId: id,
+        before: { status: current.status },
+        after: { status: 'archived' },
+        // Records WHETHER the operator overrode the variant guard. "Archived
+        // with its sizes still linked" and "archived when it was empty" are
+        // different acts and the trail has to tell them apart.
+        extra: { acknowledged_active_variants: opts.acknowledgeActiveVariants === true },
+      },
+      this.ctx,
+    );
+    return data as unknown as ProductGroupRow;
+  }
+
+  /**
+   * Undo an archive. There is nothing to rebuild: archiving wrote `status` and
+   * nothing else, so every variant still points here and the roll-ups recompute
+   * from the variants at read time the moment the group is current again.
+   *
+   * Also the way out of 'discontinued', which is why the target is 'active'
+   * rather than "whatever it was before".
+   */
+  async restore(id: string): Promise<ProductGroupRow> {
+    assertPermission(this.ctx, 'sports:manage');
+    assertModuleEnabled(this.ctx, 'sports');
+
+    const current = await this.get(id);
+    if (current.status === 'active') return current;
+
+    const { data, error } = await this.ctx.supabase
+      .from('product_groups')
+      .update({ status: 'active', updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select(GROUP_COLUMNS)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // Same fail-open hazard, same confirmation as archive() above.
+    if (!data) throw new ServiceError('not_found', 'Product group not found.');
+
+    void audit(
+      {
+        event: 'sports.group.restored',
+        entityType: 'product_group',
+        entityId: id,
+        before: { status: current.status },
+        after: { status: 'active' },
+      },
+      this.ctx,
+    );
+    return data as unknown as ProductGroupRow;
+  }
+
+  /**
+   * Derived roll-ups. Reads the view; never a stored total.
+   *
+   * STATUS-BLIND BY DESIGN: it aggregates exactly the group ids it is handed, so
+   * whichever stance the caller's list took is the stance these figures follow.
+   * The archived view needs its totals as much as the active one does.
+   */
   async rollups(groupIds: string[]): Promise<Map<string, GroupRollup>> {
     assertModuleEnabled(this.ctx, 'sports');
     if (groupIds.length === 0) return new Map();
@@ -443,6 +645,13 @@ export class ProductGroupsService {
    * the caller still gets the name and unit, and `compareSizeValues` falls
    * back to its natural ladder. Groups the caller cannot see are simply absent
    * from the map — callers must handle a miss.
+   *
+   * ARCHIVED GROUPS INCLUDED, deliberately — the same reason `countingUnits`
+   * includes them. This is a RENDERER's lookup, not a picker's: a variant whose
+   * group was archived still has to print "52 pairs" on its own size-run header
+   * instead of falling back to a bare count. Nothing is offered as a choice from
+   * this map; the surfaces that offer a group to pick (`listForPicker`,
+   * `candidates`) filter archived out themselves.
    */
   async displayByIds(groupIds: string[]): Promise<Map<string, ProductGroupDisplay>> {
     assertModuleEnabled(this.ctx, 'sports');
@@ -690,6 +899,9 @@ export class ProductGroupsService {
    * name produces no candidates at all — matching is deterministic and never
    * name-string-only (requirements 13), and a name probe is exactly the
    * heuristic that would bake a wrong grouping into persistent identity.
+   *
+   * ACTIVE ONLY. These are groups a human is invited to link into, so an
+   * archived one is not offered — the same stance as `listForPicker`.
    */
   async candidates(parts: GroupKeyParts): Promise<ProductGroupRow[]> {
     assertModuleEnabled(this.ctx, 'sports');

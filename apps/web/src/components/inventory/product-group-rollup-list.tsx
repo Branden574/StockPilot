@@ -19,7 +19,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn, formatNumber } from '@/lib/utils';
 import { unlinkItemsAction } from '@/server/actions/product-group-linking';
-import { loadGroupVariantsAction, type GroupVariantRow } from '@/server/actions/product-groups';
+import {
+  archiveProductGroupAction,
+  loadGroupVariantsAction,
+  restoreProductGroupAction,
+  type GroupVariantRow,
+} from '@/server/actions/product-groups';
 
 /**
  * The product-groups roll-up list: one collapsed row per group, expanding to
@@ -45,6 +50,15 @@ import { loadGroupVariantsAction, type GroupVariantRow } from '@/server/actions/
  * visible: the reviewer sees a size that does not belong to this product and
  * takes it out. It is the exact undo of the linking tool's Link — a reason is
  * required, it is audited, and it never touches stock.
+ *
+ * Archive lives on the GROUP row, for the same reason: the group is the thing
+ * being retired. It is SOFT and reversible (`status = 'archived'`, never a
+ * delete), it is audited, and it never touches stock either — so unlike Unlink
+ * it asks for no reason, only a confirmation. A group whose sizes are still
+ * linked is REFUSED by the server, and the refusal becomes an explicit
+ * "Archive anyway" here rather than a dead-end toast (the same shape the bulk
+ * item archive uses for its stock guard). The archived view swaps the control
+ * for Restore.
  */
 
 export type RollupVariant = GroupVariantRow;
@@ -76,7 +90,18 @@ const TRACKING_TYPE_LABELS: Record<RollupVariant['trackingType'], string> = {
   serial_optional: 'Serial optional',
 };
 
-export function ProductGroupRollupList({ groups }: { groups: RollupGroup[] }) {
+export function ProductGroupRollupList({
+  groups,
+  /**
+   * True when this list is the ARCHIVED view. It changes one thing: the group
+   * row offers Restore instead of Archive. The page decides which set of rows it
+   * asked the server for; this component never mixes the two.
+   */
+  archived = false,
+}: {
+  groups: RollupGroup[];
+  archived?: boolean;
+}) {
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set<string>());
 
   const toggle = React.useCallback((id: string) => {
@@ -91,7 +116,13 @@ export function ProductGroupRollupList({ groups }: { groups: RollupGroup[] }) {
   return (
     <div className="border-border divide-border divide-y rounded-lg border">
       {groups.map((g) => (
-        <GroupRow key={g.id} group={g} expanded={expanded.has(g.id)} onToggle={() => toggle(g.id)} />
+        <GroupRow
+          key={g.id}
+          group={g}
+          archived={archived}
+          expanded={expanded.has(g.id)}
+          onToggle={() => toggle(g.id)}
+        />
       ))}
     </div>
   );
@@ -99,10 +130,12 @@ export function ProductGroupRollupList({ groups }: { groups: RollupGroup[] }) {
 
 function GroupRow({
   group,
+  archived,
   expanded,
   onToggle,
 }: {
   group: RollupGroup;
+  archived: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -112,6 +145,16 @@ function GroupRow({
   const [loading, setLoading] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [unlinking, setUnlinking] = React.useState<string | null>(null);
+  // null = the archive strip is closed. `{ blocked: null }` = asking for a plain
+  // confirmation. `{ blocked: <server message> }` = the variant guard refused,
+  // so the strip now shows what it said and offers the explicit override.
+  const [archiving, setArchiving] = React.useState<{ blocked: string | null } | null>(null);
+  // Which lifecycle write is in flight, for the LABELS only. `pending` covers
+  // every transition on this row (an expansion, an unlink), so using it to word a
+  // button would make Restore say "Restoring…" because something else was busy.
+  // Disabling still keys off `pending` — any in-flight write should block them
+  // all.
+  const [busy, setBusy] = React.useState<'archive' | 'restore' | null>(null);
   const [pending, startTransition] = React.useTransition();
 
   const load = React.useCallback(() => {
@@ -171,6 +214,48 @@ function GroupRow({
     });
   }
 
+  function archive(acknowledgeActiveVariants: boolean) {
+    setBusy('archive');
+    startTransition(async () => {
+      const res = await archiveProductGroupAction(
+        group.id,
+        acknowledgeActiveVariants ? { acknowledgeActiveVariants: true } : {},
+      );
+      setBusy(null);
+      if (!res.ok) {
+        // The variant guard is the ONLY validation_error this action raises, so
+        // a validation_error on a non-acknowledged attempt is unambiguously
+        // "sizes are still linked to this group". Show what the server said and
+        // offer the override, rather than a toast the operator cannot act on.
+        if (!acknowledgeActiveVariants && res.error.code === 'validation_error') {
+          setArchiving({ blocked: res.error.message });
+          return;
+        }
+        toast.error(res.error.message);
+        return;
+      }
+      setArchiving(null);
+      // The row leaves this list on refresh (the page asked the server for
+      // active groups), so the toast has to say where it went.
+      toast.success('Product group archived. It is in the archived view if you need it back.');
+      router.refresh();
+    });
+  }
+
+  function restore() {
+    setBusy('restore');
+    startTransition(async () => {
+      const res = await restoreProductGroupAction(group.id);
+      setBusy(null);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success('Product group restored.');
+      router.refresh();
+    });
+  }
+
   return (
     <div>
       <div className="flex items-start gap-3 px-3 py-2.5">
@@ -205,7 +290,45 @@ function GroupRow({
             Added up from this group&rsquo;s variants
           </p>
         </div>
+        <div className="shrink-0">
+          {archived ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={restore}
+              aria-label={`Restore ${group.name}`}
+            >
+              {busy === 'restore' ? 'Restoring…' : 'Restore'}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setArchiving(archiving ? null : { blocked: null })}
+              aria-label={`Archive ${group.name}`}
+            >
+              Archive
+            </Button>
+          )}
+        </div>
       </div>
+
+      {archiving && (
+        <div className="border-border bg-background border-t px-3 py-2.5 pl-11">
+          <ArchiveRow
+            groupName={group.name}
+            blocked={archiving.blocked}
+            pending={pending}
+            archivingNow={busy === 'archive'}
+            onCancel={() => setArchiving(null)}
+            onConfirm={() => archive(archiving.blocked !== null)}
+          />
+        </div>
+      )}
 
       {expanded && (
         <div className="border-border bg-muted/20 overflow-x-auto border-t">
@@ -336,6 +459,68 @@ function GroupRow({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The archive confirmation, in the same inline strip Unlink uses.
+ *
+ * TWO STATES, and the second one is the point. `blocked === null` is the plain
+ * "archive this group?" confirmation. Once the server has refused because the
+ * group still has variants linked, `blocked` carries the server's own sentence —
+ * which names the count — and the confirm becomes an explicit "Archive anyway".
+ * The refusal is never re-worded here: the number in it is the server's, and a
+ * client-side paraphrase would be one more thing that can drift out of date.
+ *
+ * NO REASON FIELD, unlike Unlink. Unlinking rewrites an item's identity, which
+ * the audit trail has to be able to explain; archiving hides a group and changes
+ * nothing else, and Restore puts it back exactly as it was.
+ */
+function ArchiveRow({
+  groupName,
+  blocked,
+  pending,
+  archivingNow,
+  onCancel,
+  onConfirm,
+}: {
+  groupName: string;
+  blocked: string | null;
+  /** Any write on this row is in flight — the buttons are disabled either way. */
+  pending: boolean;
+  /** THIS archive is the write in flight — only then does the label change. */
+  archivingNow: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-2">
+      <p className="max-w-xl flex-1 text-[11.5px] text-[var(--ed-ink-3)]">
+        {blocked ??
+          `Archive ${groupName}? It leaves the product-groups list and stops being offered when ` +
+            'items are linked. Its variants keep their stock and stay where they are, and you can ' +
+            'restore the group from the archived view.'}
+      </p>
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={blocked ? 'destructive' : 'default'}
+          disabled={pending}
+          onClick={onConfirm}
+          aria-label={
+            blocked
+              ? `Archive ${groupName} anyway, with its variants still linked`
+              : `Confirm archive of ${groupName}`
+          }
+        >
+          {archivingNow ? 'Archiving…' : blocked ? 'Archive anyway' : 'Confirm archive'}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -349,6 +349,13 @@ export async function linkFamily(
   if (input.groupId) {
     // .get() re-asserts the module and scopes by org; a group from another
     // org surfaces as not_found rather than being linked into.
+    //
+    // STATUS IS NOT CHECKED HERE, deliberately. The destination picker offers
+    // active groups only (`listForPicker`), so an archived id can only arrive
+    // from a caller that named it. Linking into an archived group is the same
+    // reversible state an acknowledged archive already leaves behind — variants
+    // pointing at an archived group, restored intact the moment the group is —
+    // so refusing it here would be stricter than archive() itself.
     groupId = (await groups.get(input.groupId)).id;
   } else {
     groupId = (await groups.findOrCreate(input.group!)).group.id;
