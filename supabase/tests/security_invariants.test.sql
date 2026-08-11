@@ -636,19 +636,22 @@ select is(
 -- ═══════════════════════════════════════════════════════════════════════════
 -- NOT ASSERTED HERE — ON PURPOSE
 --
--- The two ACCEPTED RISKS are pinned in
+-- The ACCEPTED RISKS are pinned in
 -- supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql,
 -- next to the evidence that justifies them, and are NOT duplicated here:
---   * item_stock_levels.quantity must stay unconstrained (0322 test, ~line 280)
---     — adjust_stock commits negatives today and transfer_stock writes a
---     negative before its guard, so a CHECK converts an existing bug into a
---     mid-transaction failure.
---   * item_stock_levels_select must stay org-only (0322 test, ~line 563) —
---     warehouse-scoping it makes post_cycle_count sum SHORT under the caller's
---     RLS and write a WRONG number with NO error: silent stock corruption.
+--   * (RESOLVED by 0327) item_stock_levels.quantity was unconstrained while
+--     adjust_stock committed negatives and transfer_stock wrote one before its
+--     guard. 0327 fixed both RPCs and added the validated
+--     item_stock_levels_quantity_nonneg constraint in the same change; the
+--     0322/0324 pins are now INVERTED to assert exactly that constraint.
+--   * item_stock_levels_select must stay org-only (0322 test, ~line 630) —
+--     apply_level_delta's draw-down selection still runs under the caller's
+--     RLS (post_cycle_count's Σ is definer-complete since 0327, but the
+--     draw-down is not), so warehouse-scoping the policy still breaks
+--     legitimate picks. Narrowing is also an explicit product decision.
 -- Duplicating those assertions would double the friction of the eventual fix
 -- and invite the two copies to drift. The cost of not duplicating is real and
--- should be named: deleting that file removes both pins, and nothing in this
+-- should be named: deleting that file removes the pin, and nothing in this
 -- file would notice. See docs/security/SECURITY-INVARIANTS.md, "Accepted risks".
 --
 -- Also not asserted, because no honest generic form exists at this level:

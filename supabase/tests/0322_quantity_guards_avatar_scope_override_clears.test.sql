@@ -47,7 +47,7 @@
 
 begin;
 
-select plan(46);
+select plan(53);
 
 \set orgA     '\'03220000-0000-0000-0000-000000000001\''
 \set orgB     '\'03220000-0000-0000-0000-000000000002\''
@@ -287,18 +287,68 @@ select throws_ok(
   'MED-11 legit: adjust_stock still reports insufficient_stock (P0001), NOT a check violation'
 );
 
--- item_stock_levels.quantity is DELIBERATELY unconstrained (see 0322 s.1):
--- transfer_stock writes a negative there transiently and adjust_stock's
--- explicit-location branch commits one. If a future migration adds a bare CHECK
--- here, this assertion fails and points at the two RPCs that must be fixed
--- first.
+-- 0327 INVERSION of the second half of this pin: the explicit-location branch
+-- is now guarded too. Seed a real holding THROUGH the RPC, then over-draw it
+-- while the item TOTAL stays >= 0 — exactly the case that used to COMMIT a
+-- durable negative row (0322 s.1 reproduced it locally: -8 against a location
+-- holding 0 succeeded).
+select lives_ok(
+  format($$select public.adjust_stock(%L, 5, 'add', %L, 'wc0322 seed', null, 'placed')$$, :itemA1, :locA1),
+  '0327 legit: a positive explicit-location adjustment still lands in the location'
+);
+-- On-hand is now 12 (7 + 5); the locA1 holding is 5. Drawing 6 PASSES the item
+-- TOTAL guard (12 - 6 >= 0) and must now be refused by the per-location guard
+-- with the SAME error the app already maps.
+select throws_ok(
+  format($$select public.adjust_stock(%L, -6, 'remove', %L, 'wc0322 overdraw', null, 'placed')$$, :itemA1, :locA1),
+  'P0001',
+  'insufficient_stock',
+  '0327 attack: an explicit-location over-draw raises insufficient_stock (P0001) instead of committing a negative row'
+);
 select is(
-  (select count(*) from pg_constraint
-    where conrelid = 'public.item_stock_levels'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%quantity%'),
+  (select quantity from public.item_stock_levels
+    where item_id = :itemA1 and location_id = :locA1),
+  5::numeric,
+  '0327: the refused over-draw left the holding untouched at 5'
+);
+select is(
+  (select count(*) from public.item_stock_levels
+    where item_id = :itemA1 and quantity < 0),
   0::bigint,
-  'MED-11 deferred: item_stock_levels.quantity is intentionally NOT constrained (transfer_stock/adjust_stock write negatives)'
+  '0327: NO negative item_stock_levels row exists after the refused over-draw'
+);
+-- The outage half: a covered draw still works, down to the exact boundary math.
+select lives_ok(
+  format($$select public.adjust_stock(%L, -3, 'remove', %L, 'wc0322 draw', null, 'placed')$$, :itemA1, :locA1),
+  '0327 legit: a covered explicit-location draw-down still works'
+);
+select is(
+  (select quantity from public.item_stock_levels
+    where item_id = :itemA1 and location_id = :locA1),
+  2::numeric,
+  '0327: the legitimate draw left the holding at exactly 2'
+);
+
+-- 0327 INVERSION of the MED-11 deferral: both RPC writers are fixed in 0327
+-- (adjust_stock's explicit-location draw is conditional; transfer_stock tests
+-- sufficiency IN the draw), so item_stock_levels.quantity now carries EXACTLY
+-- ONE CHECK constraint, pinned by NAME, and it is VALIDATED. A second stray
+-- quantity constraint, a rename, or a silent drop all fail here.
+select is(
+  (select array_agg(c.conname order by c.conname)
+     from pg_constraint c
+    where c.conrelid = 'public.item_stock_levels'::regclass
+      and c.contype = 'c'
+      and pg_get_constraintdef(c.oid) ilike '%quantity%'),
+  array['item_stock_levels_quantity_nonneg']::name[],
+  '0327: exactly one quantity CHECK constraint exists on item_stock_levels, named item_stock_levels_quantity_nonneg'
+);
+select is(
+  (select c.convalidated from pg_constraint c
+    where c.conrelid = 'public.item_stock_levels'::regclass
+      and c.conname = 'item_stock_levels_quantity_nonneg'),
+  true,
+  '0327: item_stock_levels_quantity_nonneg is VALIDATED (production verified zero negative rows 2026-08-11)'
 );
 
 

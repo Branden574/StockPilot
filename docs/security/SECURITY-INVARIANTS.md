@@ -582,25 +582,29 @@ as though they were done — is the point of this section. Both are pinned in
 pgTAP, so a future change that quietly "fixes" one fails a test that explains why
 it must not.
 
-### AR-1 — `item_stock_levels.quantity` stays unconstrained
+### AR-1 — `item_stock_levels.quantity` stays unconstrained — **RESOLVED (0327)**
 
 - **The tempting fix**: add `check (quantity >= 0)`.
-- **Why it was refused**: it would convert an existing bug into a
-  **mid-transaction failure**. `adjust_stock`'s explicit-location branch commits
-  negatives today, and `transfer_stock` writes a negative before its guard runs.
+- **Why it was refused at the time**: it would convert an existing bug into a
+  **mid-transaction failure**. `adjust_stock`'s explicit-location branch committed
+  negatives, and `transfer_stock` wrote a negative before its guard ran.
   A `CHECK` would abort those transactions at the write instead of at the guard,
   turning a data-quality problem into a functional outage on stock adjustment and
   transfer — and the error the application maps would change from
   `insufficient_stock` (P0001) to a check violation.
-- **The prerequisite**: fix both RPCs so no negative is ever written, then add the
-  constraint in the same change that removes the pin.
-- **Pinned at**:
-  [`0322_quantity_guards_avatar_scope_override_clears.test.sql`](../../supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql),
-  around line 280 — asserts **zero** `CHECK` constraints mentioning `quantity` on
-  that table, with the reason inline. The sibling assertion pins that
-  `adjust_stock` still raises `insufficient_stock` (P0001) rather than a check
-  violation, which is what would catch a regression to a bare constraint on the
-  wrong column.
+- **The prerequisite, and how it was met**: migration `0327` made
+  `adjust_stock`'s explicit-location draw conditional and moved
+  `transfer_stock`'s sufficiency test into the draw itself (both still raise
+  the same P0001 `insufficient_stock`), then added
+  `item_stock_levels_quantity_nonneg` — `NOT VALID` plus an immediate
+  `VALIDATE` (production checked 2026-08-11: zero negative rows) — in the
+  **same change** that inverted the pins.
+- **Pinned at (inverted)**: the `0322` and `0324` test files now assert
+  **exactly one validated** `CHECK` constraint on that column, by name;
+  [`0327_stock_rpc_integrity.test.sql`](../../supabase/tests/0327_stock_rpc_integrity.test.sql)
+  asserts the behavioural halves — an over-transfer still raises
+  `insufficient_stock` (P0001), **not** a 23514 from the constraint firing
+  first, and an explicit-location over-draw no longer commits a negative row.
 
 ### AR-2 — `item_stock_levels_select` stays org-scoped, not warehouse-scoped
 
@@ -614,8 +618,14 @@ it must not.
   fixing, and undetectable without reconciling against physical count.
 - **The prerequisite**: make `post_cycle_count` compute its delta without
   depending on the caller's row visibility, then narrow the policy in the same
-  change that removes the pin.
-- **Pinned at**: the same file, around line 563 — asserts the policy's `qual`
+  change that removes the pin. **Partially met by 0327**: `post_cycle_count`'s
+  Σ now goes through the `SECURITY DEFINER` helper
+  `_cycle_count_org_stock_sum`, so it is complete regardless of who posts. NOT
+  yet met: `apply_level_delta`'s draw-down selection is still `SECURITY
+  INVOKER` and caller-scoped, so narrowing the policy would still make
+  legitimate picks fail with `insufficient_placed_stock`. The narrowing itself
+  also remains an explicit product decision.
+- **Pinned at**: the same file — asserts the policy's `qual`
   text is still the org-only predicate, verbatim.
 
 ### Honest note on where these pins live
