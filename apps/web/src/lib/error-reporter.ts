@@ -11,7 +11,18 @@
  *
  * No PII fields by convention — pass only the error + a tag/context map
  * you'd be comfortable seeing in a generic webhook.
+ *
+ * CREDENTIAL REDACTION (security wave E, MED-1): every string that leaves
+ * this module — the console line AND the webhook body — goes through
+ * `redactTokens` first. Callers cannot be relied on to sanitize, because the
+ * leak is usually indirect: a failed `fetch`/`undici`/`next-image` request
+ * embeds the full URL (Supabase signed URL with its `?token=<jwt>`, an
+ * `/m/<token>` share link) in `error.message` and `error.stack`, and both
+ * were previously shipped verbatim. GC 27 — never log a share token or a
+ * signed URL.
  */
+
+import { redactTokens, redactTokensDeep } from './redact-urls';
 
 export interface ErrorContext {
   /** Where the error happened, e.g. "po-imports.approve" */
@@ -95,18 +106,28 @@ export async function reportError(
     app: 'stockpilot-web',
     tag: context.tag,
     level: context.level ?? 'error',
-    message: error.message,
-    stack: error.stack ?? null,
+    // MED-1: message/stack routinely carry the URL of whatever request
+    // failed. Redact before the value is stored on the payload at all, so
+    // there is no un-redacted copy for a later edit to accidentally ship.
+    message: redactTokens(error.message),
+    stack: error.stack ? redactTokens(error.stack) : null,
     digest: (error as Error & { digest?: string }).digest ?? null,
-    extra: {
+    extra: redactTokensDeep({
       organizationId: context.organizationId ?? null,
       userIdHash: context.userIdHash ?? null,
       ...(context.extra ?? {}),
-    },
+    }) as Record<string, unknown>,
   };
 
   // Always log so we don't lose the trace even when the webhook fails.
-  console.error(`[error] ${context.tag}`, error, payload.extra);
+  // The redacted message + stack, never the raw Error: console.error(err)
+  // prints `err.stack`, which is exactly where a signed URL hides.
+  console.error(
+    `[error] ${context.tag}`,
+    payload.message,
+    payload.stack ?? '',
+    payload.extra,
+  );
 
   const url = getWebhookUrl();
   if (!url) return;
@@ -120,7 +141,7 @@ export async function reportError(
   const body = isChatWebhook
     ? JSON.stringify({
         text:
-          `*🔥 ${payload.level.toUpperCase()} — ${payload.tag}* (${payload.env})\n` +
+          `*${payload.level.toUpperCase()} — ${payload.tag}* (${payload.env})\n` +
           `${payload.message}` +
           (payload.digest ? `\ndigest: \`${payload.digest}\`` : '') +
           (payload.stack ? `\n\`\`\`${payload.stack.slice(0, 1500)}\`\`\`` : ''),
