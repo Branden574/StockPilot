@@ -25,6 +25,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Chip } from '@/components/ui/chip';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import {
   actionsForStatus,
@@ -761,6 +762,18 @@ export default function PoImportDetailScreen() {
   );
 }
 
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  // Module scope, not inside ApproveSheet: components created during render
+  // get a new identity every render and remount their subtree (compiler rule
+  // react-hooks/static-components).
+  const { c } = useTheme();
+  return (
+    <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      {children}
+    </Mono>
+  );
+}
+
 function HeaderStat({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
   return (
@@ -1103,42 +1116,6 @@ function ApproveSheet({
       setSubmitting(false);
       submittingRef.current = false;
     }
-  }
-
-  function Chip({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 9,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: active ? c.ink : c.hair,
-          backgroundColor: active ? c.ink : c.paper2,
-        }}
-      >
-        <Mono size={12.5} color={active ? c.card : c.ink}>
-          {label}
-        </Mono>
-      </Pressable>
-    );
-  }
-
-  function FieldLabel({ children }: { children: React.ReactNode }) {
-    return (
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
-        {children}
-      </Mono>
-    );
   }
 
   return (

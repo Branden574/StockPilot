@@ -13,6 +13,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+import { Chip } from '@/components/ui/chip';
 import {
   decideNewRackPlacement,
   initialMoveQuantity,
@@ -408,34 +409,6 @@ export function MoveStockModal({
       ...suggestionButtons,
       { text: 'Create and put away', onPress: () => void performMove({ newRack }) },
     ]);
-  }
-
-  function Chip({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 9,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: active ? c.ink : c.hair,
-          backgroundColor: active ? c.ink : c.paper2,
-        }}
-      >
-        <Mono size={12.5} color={active ? c.card : c.ink}>
-          {label}
-        </Mono>
-      </Pressable>
-    );
   }
 
   return (
