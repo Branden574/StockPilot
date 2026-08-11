@@ -168,7 +168,7 @@ export async function POST(
       rawResponse = await claudeGenerateJsonString({
         prompt,
         media: [{ data: base64, mediaType: mimeType }],
-        schema: SHELF_SCAN_RESPONSE_SCHEMA as Record<string, unknown>,
+        schema: SHELF_SCAN_RESPONSE_SCHEMA,
       });
     } else {
       const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({

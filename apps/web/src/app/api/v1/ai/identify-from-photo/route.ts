@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type ResponseSchema } from '@google/generative-ai';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
   // Shared response shape — a Gemini responseSchema whose SchemaType enum
   // values are the lowercase JSON-Schema type strings, so it doubles as the
   // Claude forced-tool input_schema (see lib/ai/claude.ts).
-  const responseSchema = {
+  const responseSchema: ResponseSchema = {
     type: SchemaType.OBJECT,
     properties: {
       // 'book' or 'product' — the client branches on this: books flow to
@@ -171,7 +171,7 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
       raw = await claudeGenerateJsonString({
         prompt,
         media: [{ data: base64, mediaType: mimeType }],
-        schema: responseSchema as Record<string, unknown>,
+        schema: responseSchema,
       });
     } else {
       const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({

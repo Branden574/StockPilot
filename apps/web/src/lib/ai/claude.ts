@@ -99,7 +99,7 @@ export async function claudeGenerateText(opts: {
  */
 export async function claudeGenerateJson<T = unknown>(opts: {
   prompt: string;
-  schema: Record<string, unknown>;
+  schema: object;
   system?: string;
   media?: ClaudeMedia[];
   maxTokens?: number;
@@ -142,7 +142,7 @@ export async function claudeGenerateJson<T = unknown>(opts: {
  */
 export async function claudeGenerateJsonString(opts: {
   prompt: string;
-  schema: Record<string, unknown>;
+  schema: object;
   system?: string;
   media?: ClaudeMedia[];
   maxTokens?: number;
