@@ -2052,6 +2052,96 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
   });
 
+  // ── The group header's Rack cell ──────────────────────────────────────
+  // This cell used to render the size label, so the Rack column read
+  // "2 variants - 52 pairs total" and said nothing about where the stock is.
+  // Asserted through the RACK COLUMN specifically (by cell index), because the
+  // size label legitimately still appears elsewhere in the row.
+  function headerRackCell(container: HTMLElement): string {
+    const cells = bodyRows(container)[0]!.querySelectorAll('td');
+    // checkbox, Item, SKU, Category, Charter, Location, Rack -> index 6
+    return cells[6]?.textContent?.trim() ?? '';
+  }
+
+  it('shows the concrete rack in the header when every variant sits in the same one', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
+        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['31-B'] }),
+      ],
+    });
+
+    expect(headerRackCell(container)).toBe('31-B');
+  });
+
+  it('shows a COUNT, never one variant\'s rack, when placements differ', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
+        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['Z9'] }),
+      ],
+    });
+
+    const cell = headerRackCell(container);
+    expect(cell).toBe('2 racks');
+    // The honesty property: naming one of them would send staff to the wrong shelf.
+    expect(cell).not.toContain('31-B');
+    expect(cell).not.toContain('Z9');
+  });
+
+  it('counts variants with no rack separately rather than folding them into the rack count', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
+        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+      ],
+    });
+
+    // One real rack plus one unplaced variant: "1 rack +1 unset", never "2 racks".
+    expect(headerRackCell(container)).toBe('1 rack +1 unset');
+  });
+
+  it('shows a dash when nothing in the run is placed', () => {
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: [] }),
+        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+      ],
+    });
+
+    expect(headerRackCell(container)).toBe('\u2014');
+  });
+
+  it('does NOT repeat the size roll-up in the Rack column', () => {
+    const { container } = renderGrouped({
+      items: pegasus(),
+      productGroupUnits: { 'grp-1': 'pair' },
+    });
+
+    expect(headerRackCell(container)).not.toContain('variants');
+    expect(headerRackCell(container)).not.toContain('pairs total');
+  });
+
+  // ── Header label vs header link ───────────────────────────────────────
+  it('labels the header with the SAME variant it links to', () => {
+    // Arrival order 9 then 8 is not size order, and a stored run is size-sorted,
+    // so the label used to come from one variant while the link went to another.
+    const { container } = renderGrouped({
+      items: [
+        item({ id: 'nine', name: 'Court Shoe - 9', sku: 'CS-9', group_id: 'grp-9', variant_size: '9' }),
+        item({ id: 'eight', name: 'Court Shoe - 8', sku: 'CS-8', group_id: 'grp-9', variant_size: '8' }),
+      ],
+    });
+
+    const header = bodyRows(container)[0]!;
+    const link = header.querySelector('a[href*="/dashboard/inventory/"]');
+    expect(link).not.toBeNull();
+    // members[0] is size 8, so the link must target it...
+    expect(link!.getAttribute('href')).toContain('/dashboard/inventory/eight');
+    // ...and the label must not advertise a different variant's size.
+    expect(link!.textContent).toBe('Court Shoe');
+  });
+
   it('expands a grouped run in SIZE order, not the list sort order', async () => {
     const user = userEvent.setup();
     const { container } = renderGrouped({ items: pegasus() });

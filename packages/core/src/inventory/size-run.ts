@@ -49,6 +49,38 @@ export function stripSizeSuffix(name: string): string {
   return name.replace(SIZE_NAME_REGEX, '').trim();
 }
 
+/**
+ * Strip a KNOWN size from the end of a name, for display.
+ *
+ * `stripSizeSuffix` above pattern-matches against a fixed alternation of
+ * APPAREL tokens (XS..6XL). It deliberately does not recognize numeric sizes,
+ * and that is not an oversight to be corrected here: the same regex backs
+ * `sizeRunStyleKey`, so teaching it to treat a trailing number as a size would
+ * silently collapse "Nike Pegasus 41" and "Nike Pegasus 40" into one run — and
+ * every other product whose name ends in a model number, a year or a count.
+ *
+ * A STORED variant does not need the guess. It carries its own size, so the
+ * suffix can be removed by MATCHING THE KNOWN VALUE: "Court Shoe - 8" with
+ * size "8" becomes "Court Shoe", and a numeric run finally reads as a family
+ * name instead of one member's name. Falls back to the apparel regex when the
+ * size is unknown or the name does not actually end in it, so nothing that
+ * worked before changes.
+ *
+ * `size` is regex-escaped before use — half sizes like "3.5" contain a `.`
+ * that would otherwise match any character.
+ */
+export function stripKnownSize(name: string, size: string | null | undefined): string {
+  const trimmed = name.trim();
+  if (size) {
+    const escaped = size.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (escaped) {
+      const known = new RegExp(`(?:\\s*-\\s*|\\s+)${escaped}\\s*$`, 'i');
+      if (known.test(trimmed)) return trimmed.replace(known, '').trim();
+    }
+  }
+  return stripSizeSuffix(trimmed);
+}
+
 /** The size token at the end of `name` (uppercased, e.g. "2XL"), or null. */
 export function extractSize(name: string): string | null {
   if (!SIZE_NAME_REGEX.test(name)) return null;
@@ -210,6 +242,12 @@ export function groupBySizeRun<T>(
   // group-keyed run can be size-ordered once at the end (sorting inside the
   // loop would be O(n^2) and would still have to re-read every meta).
   const memberSizes = new Map<string, Array<string | null>>();
+  // Member names, parallel to `members` exactly like memberSizes, so a stored
+  // run's `baseName` can be re-derived from whichever member ends up FIRST
+  // after size-ordering. Kept as an array rather than re-invoking `meta` for
+  // the same reason the sizes are: `meta` is caller-supplied and may not be
+  // cheap.
+  const memberNames = new Map<string, string[]>();
   // Units already counted into each group's roll-up. A row whose unit is
   // already in here is still a MEMBER (it renders), it just does not add its
   // quantity again — see SizeRunEntryMeta.unitKey.
@@ -231,6 +269,7 @@ export function groupBySizeRun<T>(
         };
         groups.set(key, g);
         memberSizes.set(key, []);
+        memberNames.set(key, []);
         countedUnits.set(key, new Set<string>());
         out.push({ kind: 'size-run', group: g });
       }
@@ -239,6 +278,7 @@ export function groupBySizeRun<T>(
       if (g.countingUnit == null && m.countingUnit != null) g.countingUnit = m.countingUnit;
       g.members.push(e);
       memberSizes.get(key)!.push(m.variantSize ?? null);
+      memberNames.get(key)!.push(m.name);
       // ONE contribution per stock-holding unit. A second row for the same
       // variant (its second placement) renders but does not re-add its total.
       const seen = countedUnits.get(key)!;
@@ -261,6 +301,23 @@ export function groupBySizeRun<T>(
     const idx = g.members.map((_, i) => i);
     idx.sort((a, b) => compareSizeValues(sizes[a], sizes[b]));
     g.members = idx.map((i) => g.members[i]!);
+    // Re-derive baseName from the member that is now FIRST. It was captured at
+    // group-creation time, i.e. from the first-ARRIVING member, which is a
+    // different row whenever arrival order is not size order — and the
+    // inventory list's group header takes its name from baseName but its link,
+    // thumbnail, category, location, reorder point and charter from
+    // members[0]. The header therefore described one variant while navigating
+    // to another. One representative member now drives all of it.
+    //
+    // Name-keyed runs are skipped by the `continue` above, so they keep
+    // arrival order AND their original baseName — byte-identical.
+    //
+    // Uses the member's STORED size rather than the apparel regex, so a
+    // numeric run ("Court Shoe - 8") reads as the family name rather than as
+    // one member's name. See stripKnownSize for why the regex is not simply
+    // widened to accept numbers.
+    const firstIdx = idx[0]!;
+    g.baseName = stripKnownSize(memberNames.get(key)![firstIdx]!, sizes[firstIdx]);
   }
   return out;
 }
