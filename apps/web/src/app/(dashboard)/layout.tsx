@@ -153,6 +153,27 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     }
   }
 
+  // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
+  // satisfied regardless of org policy — otherwise an attacker with only
+  // the password walks into the dashboard at AAL1 under the default
+  // 'optional' policy. Same challenge flow policy-required users get:
+  // /signin/mfa (outside this layout, exempt in the middleware's
+  // signed-in bounce, and renders fine at AAL1 — so no redirect loop).
+  // getAuthenticatorAssuranceLevel() decodes the session JWT locally;
+  // an unreadable AAL fails CLOSED into the challenge page, which
+  // itself skips straight to /dashboard when the session is really AAL2.
+  if (hasVerifiedFactor) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.currentLevel !== 'aal2') {
+      const h = await headers();
+      const pathname = h.get('x-pathname') ?? '';
+      const qs = pathname.startsWith('/dashboard')
+        ? `?redirect=${encodeURIComponent(pathname)}`
+        : '';
+      redirect(`/signin/mfa${qs}`);
+    }
+  }
+
   const term = resolveTerminology(
     (orgRow?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,
   );

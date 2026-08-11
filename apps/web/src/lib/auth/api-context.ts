@@ -59,11 +59,17 @@ async function resolveApiMfaState(
   supabase: any,
   organizationId: string,
   role: Role,
+  // True when the (already validated) user has a verified TOTP factor —
+  // read off the GoTrue user object both paths have in hand, so it costs
+  // no extra auth round-trip. Enrollment escalates: an enrolled factor
+  // must be satisfied regardless of org policy (HI-6), and it decides the
+  // gate's error shape ('aal2_required' vs 'mfa_required').
+  hasVerifiedFactor: boolean,
   // When provided (bearer path), AAL is read from the token's verified `aal`
   // claim instead of getAuthenticatorAssuranceLevel() (which needs a stored
   // session the bearer client doesn't have). null = couldn't read → fail closed.
   bearerAal?: 'aal1' | 'aal2' | null,
-): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
+): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   let mfaRequired = false;
   let mfaSatisfied = false;
   try {
@@ -75,9 +81,14 @@ async function resolveApiMfaState(
     const policy =
       (org?.mfa_policy as 'optional' | 'admins_required' | 'all_required' | undefined) ??
       'optional';
-    mfaRequired =
+    const policyRequired =
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));
+    // ENROLLMENT ESCALATES (HI-6): mirrors resolveMfaState() in
+    // services/context.ts — a verified factor must be satisfied even under
+    // an 'optional' policy, or a stolen password alone reaches the API at
+    // AAL1 untouched.
+    mfaRequired = policyRequired || hasVerifiedFactor;
     if (mfaRequired) {
       if (bearerAal !== undefined) {
         // Bearer/API path: trust the verified token's own AAL claim.
@@ -95,9 +106,20 @@ async function resolveApiMfaState(
     // bearer/API path either. Mirrors resolveMfaState() in
     // services/context.ts for parity between cookie and bearer flows.
     console.error('[resolveApiMfaState] failed:', err);
-    return { mfaRequired: true, mfaSatisfied: false };
+    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
   }
-  return { mfaRequired, mfaSatisfied };
+  return { mfaRequired, mfaSatisfied, mfaEnrolled: hasVerifiedFactor };
+}
+
+/**
+ * True when a GoTrue user object carries at least one VERIFIED factor.
+ * `getUser()` returns the user's factors inline, so this costs nothing
+ * beyond the validation call both withApiContext paths already make.
+ * A missing `factors` array reads as unenrolled — identical to the
+ * pre-HI-6 behavior for that user, never wider.
+ */
+function userHasVerifiedFactor(user: { factors?: Array<{ status?: string }> | null }): boolean {
+  return (user.factors ?? []).some((f) => f.status === 'verified');
 }
 
 /**
@@ -246,6 +268,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       supabase,
       member.organization_id as string,
       member.role as Role,
+      userHasVerifiedFactor(userRes.user),
       // The bearer client has no stored session, so read AAL from the token
       // itself (already verified above by adminAuth.auth.getUser(bearer)).
       aalFromJwt(bearer),
@@ -268,6 +291,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       supabase,
       mfaRequired: mfa.mfaRequired,
       mfaSatisfied: mfa.mfaSatisfied,
+      mfaEnrolled: mfa.mfaEnrolled,
       enabledModules,
     };
   }
@@ -315,6 +339,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     supabase,
     member.organization_id as string,
     member.role as Role,
+    userHasVerifiedFactor(user),
   );
   const enabledModules = await resolveApiEnabledModules(
     supabase,
@@ -334,6 +359,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     supabase,
     mfaRequired: mfa.mfaRequired,
     mfaSatisfied: mfa.mfaSatisfied,
+    mfaEnrolled: mfa.mfaEnrolled,
     enabledModules,
   };
 }

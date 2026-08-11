@@ -8,7 +8,12 @@
  *  (a) policy required + NO verified factor  -> required=true,  satisfied=false (fail-closed)
  *  (b) policy required + verified + AAL2     -> required=true,  satisfied=true
  *  (c) policy required + verified + AAL1     -> required=true,  satisfied=false
- *  (d) policy NOT required                   -> required=false, satisfied=true
+ *  (d) ENROLLED under 'optional' policy      -> required=true (HI-6: enrollment
+ *      escalates — org policy alone must NOT decide enforcement for a user
+ *      who has a verified TOTP factor; satisfied only at AAL2)
+ *  (d5) UNENROLLED under 'optional'          -> required=false, satisfied=true
+ *      (the unattended-login path — e.g. the demo QA account has no factors
+ *      and MUST keep signing in untouched)
  *  (e) org lookup throws                      -> required=true,  satisfied=false (fail-closed)
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -62,7 +67,7 @@ import {
   getModulesForRequest,
   getOrgRowForRequest,
 } from '@/lib/dashboard/request-cache';
-import { withContext } from './context';
+import { assertPermission, ServiceError, withContext } from './context';
 
 import type { OrgRow } from '@/lib/dashboard/request-cache';
 import type { ModuleId } from '@stockpilot/core';
@@ -160,18 +165,50 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     expect(ctx.mfaSatisfied).toBe(false);
   });
 
-  it('(d) policy NOT required (optional) -> required=false, satisfied=true', async () => {
+  // INVERTED (HI-6, 2026-08-11): this case used to pin required=false for an
+  // enrolled user under 'optional' — the vulnerability itself. An attacker
+  // with only the password of a TOTP-enrolled user signed in at AAL1
+  // untouched. Enrollment now escalates: a verified factor must be
+  // satisfied regardless of org policy.
+  it('(d) ENROLLED under optional policy + AAL1 -> required=true, satisfied=false (HI-6)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal1' });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+    expect(ctx.mfaEnrolled).toBe(true);
+  });
+
+  it('(d4) ENROLLED under optional policy + AAL2 -> required=true, satisfied=true (no block)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(true);
+    expect(ctx.mfaEnrolled).toBe(true);
+  });
+
+  // CRITICAL pin: the unenrolled path under 'optional' must stay OPEN.
+  // The demo QA account (demo@stockpilotusa.com) has NO factors and logs
+  // in unattended — this case is what keeps that working.
+  it('(d5) UNENROLLED under optional policy -> required=false, satisfied=true (unattended login stays open)', async () => {
     arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1' });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(false);
+    expect(ctx.mfaSatisfied).toBe(true);
+    expect(ctx.mfaEnrolled).toBe(false);
+  });
+
+  it('(d2) admins_required + non-admin role + UNENROLLED -> required=false, satisfied=true', async () => {
+    arrange({ policy: 'admins_required', verifiedFactor: false, aal: 'aal1', role: 'staff' });
     const ctx = await withContext();
     expect(ctx.mfaRequired).toBe(false);
     expect(ctx.mfaSatisfied).toBe(true);
   });
 
-  it('(d2) admins_required + non-admin role -> required=false, satisfied=true', async () => {
-    arrange({ policy: 'admins_required', verifiedFactor: false, aal: 'aal1', role: 'staff' });
+  it('(d2b) admins_required + non-admin role + ENROLLED + AAL1 -> required=true (enrollment escalates past role exemption)', async () => {
+    arrange({ policy: 'admins_required', verifiedFactor: true, aal: 'aal1', role: 'staff' });
     const ctx = await withContext();
-    expect(ctx.mfaRequired).toBe(false);
-    expect(ctx.mfaSatisfied).toBe(true);
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
   });
 
   it('(d3) admins_required + admin role + no factor -> required=true, satisfied=false (fail-closed)', async () => {
@@ -186,5 +223,41 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     const ctx = await withContext();
     expect(ctx.mfaRequired).toBe(true);
     expect(ctx.mfaSatisfied).toBe(false);
+  });
+});
+
+describe('assertPermission — MFA gate error shape', () => {
+  it('ENROLLED + unsatisfied throws reason=aal2_required (the shape useStepUp consumes)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal1' });
+    const ctx = await withContext();
+    let thrown: unknown;
+    try {
+      assertPermission(ctx, 'items:read');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('forbidden');
+    expect((thrown as ServiceError).details).toEqual({ reason: 'aal2_required' });
+  });
+
+  it('UNENROLLED under a required policy throws the original reason=mfa_required shape', async () => {
+    arrange({ policy: 'all_required', verifiedFactor: false, aal: 'aal1' });
+    const ctx = await withContext();
+    let thrown: unknown;
+    try {
+      assertPermission(ctx, 'items:read');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('forbidden');
+    expect((thrown as ServiceError).details).toEqual({ reason: 'mfa_required' });
+  });
+
+  it('ENROLLED + satisfied (AAL2) does not throw the MFA gate', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    const ctx = await withContext();
+    expect(() => assertPermission(ctx, 'items:read')).not.toThrow();
   });
 });
