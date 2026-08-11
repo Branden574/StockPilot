@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration, type ResponseSchema } from '@google/generative-ai';
 
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { claudeGenerateJsonString } from './claude';
@@ -1637,7 +1637,7 @@ const identifyFromPhotoTool: ToolExecutor = {
     }
 
     const base64 = Buffer.from(bytes).toString('base64');
-    const responseSchema = {
+    const responseSchema: ResponseSchema = {
       type: SchemaType.OBJECT,
       properties: {
         title: { type: SchemaType.STRING },
@@ -1673,7 +1673,7 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
       raw = await claudeGenerateJsonString({
         prompt,
         media: [{ data: base64, mediaType: mimeType }],
-        schema: responseSchema as Record<string, unknown>,
+        schema: responseSchema,
       });
     } else {
       const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
