@@ -19,6 +19,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -1042,7 +1043,7 @@ export default function Scan() {
 function ScanReticle() {
   // 0 = top, 1 = bottom — interpolated to translateY across the
   // reticle's interior so the line never crosses the corner brackets.
-  const t = React.useRef(new Animated.Value(0)).current;
+  const t = useAnimatedValue(0);
   React.useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([

@@ -83,11 +83,6 @@ function CycleCountScanScreenInner() {
   const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
   const [scannedMap, setScannedMap] = React.useState<Map<string, number>>(new Map());
 
-  React.useEffect(() => {
-    if (!user || !id) return;
-    void loadLines();
-  }, [user, id]);
-
   async function loadLines() {
     if (!id) return;
     const snap = await getCycleCount(id);
@@ -108,6 +103,12 @@ function CycleCountScanScreenInner() {
     for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
     setScannedMap(seed);
   }
+
+  React.useEffect(() => {
+    if (!user || !id) return;
+    void loadLines();
+  }, [user, id]);
+
 
   async function recordCount(line: CachedCycleCountLine, qty: number) {
     if (!Number.isFinite(qty) || qty < 0) return;

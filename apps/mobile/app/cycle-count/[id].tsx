@@ -110,6 +110,24 @@ export default function CycleCountDetail() {
 
   // Resolve the user's org once — needed to scope server fetches.
 
+  function hydrateFromSnapshot(snap: { header: CachedCycleCountHeader; lines: CachedCycleCountLine[] }) {
+    setHeader(snap.header);
+    const ui: UiLine[] = snap.lines
+      .map((l) => ({
+        id: l.id,
+        itemId: l.itemId,
+        itemName: l.itemName,
+        itemSku: l.itemSku,
+        itemBarcode: l.itemBarcode,
+        itemVariantLabel: l.itemVariantLabel,
+        expected: l.expected,
+        counted: l.counted,
+        localDirty: l.localDirty,
+      }))
+      .sort((a, b) => a.itemName.localeCompare(b.itemName));
+    setLines(ui);
+  }
+
   /**
    * Load order:
    *   1. Read SQLite cache → if hit, render immediately.
@@ -256,23 +274,6 @@ export default function CycleCountDetail() {
     setLoading(false);
   }, [id, orgId]);
 
-  function hydrateFromSnapshot(snap: { header: CachedCycleCountHeader; lines: CachedCycleCountLine[] }) {
-    setHeader(snap.header);
-    const ui: UiLine[] = snap.lines
-      .map((l) => ({
-        id: l.id,
-        itemId: l.itemId,
-        itemName: l.itemName,
-        itemSku: l.itemSku,
-        itemBarcode: l.itemBarcode,
-        itemVariantLabel: l.itemVariantLabel,
-        expected: l.expected,
-        counted: l.counted,
-        localDirty: l.localDirty,
-      }))
-      .sort((a, b) => a.itemName.localeCompare(b.itemName));
-    setLines(ui);
-  }
 
   React.useEffect(() => {
     void load();

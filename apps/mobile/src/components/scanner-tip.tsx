@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 
 import { SHADOW, radius, space, theme } from '@/lib/theme';
@@ -51,11 +52,11 @@ export function ScannerTip({
 }) {
   const [reduceMotion, setReduceMotion] = React.useState(false);
   /** Backdrop fade: 0 → 1 (timing). */
-  const backdrop = React.useRef(new Animated.Value(0)).current;
+  const backdrop = useAnimatedValue(0);
   /** Card entrance: 0 → 1 drives opacity + translateY (spring). */
-  const card = React.useRef(new Animated.Value(0)).current;
+  const card = useAnimatedValue(0);
   /** Toggle demo: 0 = Auto, 1 = Manual (looped timing). */
-  const demo = React.useRef(new Animated.Value(0)).current;
+  const demo = useAnimatedValue(0);
 
   // One-shot reduce-motion probe (same pattern as cold-launch-splash.tsx).
   React.useEffect(() => {

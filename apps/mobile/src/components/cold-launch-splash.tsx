@@ -8,6 +8,7 @@ import {
   Text,
   View,
   useWindowDimensions,
+  useAnimatedValue,
 } from 'react-native';
 import Svg, { Circle, Defs, Mask, Path, Rect } from 'react-native-svg';
 
@@ -127,12 +128,12 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
   const gap = 14;
 
   // ── animated values: the entire sequence, all native-driven ─────────
-  const fade = React.useRef(new Animated.Value(1)).current; // crossfade out
-  const gridV = React.useRef(new Animated.Value(0)).current; // 0 → 1
-  const beamV = React.useRef(new Animated.Value(0)).current; // sweep 0 → 1
-  const beamO = React.useRef(new Animated.Value(0)).current; // beam opacity
-  const lockV = React.useRef(new Animated.Value(0)).current; // lockup opacity
-  const pulseV = React.useRef(new Animated.Value(0)).current; // 0 → 1
+  const fade = useAnimatedValue(1); // crossfade out
+  const gridV = useAnimatedValue(0); // 0 → 1
+  const beamV = useAnimatedValue(0); // sweep 0 → 1
+  const beamO = useAnimatedValue(0); // beam opacity
+  const lockV = useAnimatedValue(0); // lockup opacity
+  const pulseV = useAnimatedValue(0); // 0 → 1
 
   const handedOff = React.useRef(false);
   const onHandoffRef = React.useRef(onHandoff);
@@ -155,7 +156,9 @@ export function ColdLaunchSplash({ onHandoff, onDone }: ColdLaunchSplashProps) {
   }, [fade, reduceMotion]);
 
   const handoffRef = React.useRef(handoff);
-  handoffRef.current = handoff;
+  React.useEffect(() => {
+    handoffRef.current = handoff;
+  });
 
   React.useEffect(() => {
     let active = true;

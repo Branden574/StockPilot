@@ -111,7 +111,9 @@ export default function PoReceiveScreen() {
   // typed while modules were still loading. The ref always reads current
   // without making a module-list refresh a reason to reload.
   const sportsEnabledRef = React.useRef(sportsEnabled);
-  sportsEnabledRef.current = sportsEnabled;
+  React.useEffect(() => {
+    sportsEnabledRef.current = sportsEnabled;
+  });
 
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;

@@ -11,6 +11,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -68,7 +69,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const [step, setStep] = React.useState(0);
   const [rect, setRect] = React.useState<TargetRect | null>(null);
   const [reduced, setReduced] = React.useState(false);
-  const fade = React.useRef(new Animated.Value(0)).current;
+  const fade = useAnimatedValue(0);
   const autoStarted = React.useRef(false);
 
   React.useEffect(() => {

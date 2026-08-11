@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
@@ -40,7 +41,7 @@ export function BiometricLockScreen() {
   const [failedOnce, setFailedOnce] = React.useState(false);
 
   // Subtle pulse ring behind the biometric glyph
-  const pulse = React.useRef(new Animated.Value(0)).current;
+  const pulse = useAnimatedValue(0);
   React.useEffect(() => {
     Animated.loop(
       Animated.timing(pulse, {

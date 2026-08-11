@@ -15,6 +15,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -59,7 +60,7 @@ export default function ScanPo() {
   // with no server-streamed progress, so we drive an optimistic bar on elapsed
   // time: ease to ~92% over ~13s, hold there until the response lands, and cycle
   // descriptive stage labels so the user sees roughly where it is.
-  const progressAnim = React.useRef(new Animated.Value(0)).current;
+  const progressAnim = useAnimatedValue(0);
   const [stageLabel, setStageLabel] = React.useState('');
   const stageTimer = React.useRef<ReturnType<typeof setInterval> | null>(null);
 

@@ -260,8 +260,8 @@ export default function MaintenanceRequestDetailScreen() {
   const [resolvePending, setResolvePending] = React.useState(false);
   const [resolveError, setResolveError] = React.useState<string | null>(null);
   const [resolvePhotos, setResolvePhotos] = React.useState<ResolvePhotoEntry[]>([]);
-  const resolveGuardRef = React.useRef<PhotoAttemptGuard | null>(null);
-  if (!resolveGuardRef.current) resolveGuardRef.current = createPhotoAttemptGuard();
+  // Lazy useState, not a ref: .current during render is a compiler violation.
+  const [resolveGuard] = React.useState(() => createPhotoAttemptGuard());
 
   const [archivePending, setArchivePending] = React.useState(false);
 
@@ -384,7 +384,7 @@ export default function MaintenanceRequestDetailScreen() {
 
   async function runResolvePhotoUpload(entry: ResolvePhotoEntry) {
     if (!id) return;
-    const guard = resolveGuardRef.current!;
+    const guard = resolveGuard;
     const token = guard.start(entry.key);
     try {
       // kind: 'resolution' — the ONE thing that distinguishes this call
