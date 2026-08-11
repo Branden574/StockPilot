@@ -17,6 +17,7 @@ import {
 import { hasSeenScanTip, markScanTipSeen } from '@/lib/scanner-tip-flag';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
+import { fileSizeOf, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 import { useWorkspace } from '@/lib/use-workspace';
@@ -76,6 +77,10 @@ export function PoAttachments({ poId }: { poId: string }) {
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  /** Real transported percentage for the active upload, or null when idle.
+   *  Never synthesised — see lib/storage-upload.ts. Held at 99 until the
+   *  metadata row is in too, so the bar can't read done while it isn't. */
+  const [uploadPercent, setUploadPercent] = React.useState<number | null>(null);
   const [tipVisible, setTipVisible] = React.useState(false);
   // Resolver for the pending scan tap while the one-time tip is up. Resolving
   // true lets that SAME tap continue into the scanner (no second tap needed).
@@ -130,9 +135,11 @@ export function PoAttachments({ poId }: { poId: string }) {
    * Core upload shared by every attach source (camera, library, Files app,
    * document scanner): storage object first, then the po_attachments row.
    * Rolls the orphaned object back if the metadata insert is rejected (e.g.
-   * RLS — the user lacks purchase_orders:manage). NOTE the repo gotcha: the
-   * bytes MUST come from fetch(uri).arrayBuffer() — blob() uploads 0 bytes.
-   * Callers own the busy state.
+   * RLS — the user lacks purchase_orders:manage). The bytes stream straight
+   * off disk via lib/storage-upload's native createUploadTask (signed-URL
+   * PUT, same RLS insert gate enforced at mint) — which also retires this
+   * call site's fetch('file://').arrayBuffer() and gives REAL upload
+   * progress. Callers own the busy state.
    */
   async function uploadToPo(file: {
     uri: string;
@@ -147,30 +154,43 @@ export function PoAttachments({ poId }: { poId: string }) {
     }
     const rand = Math.random().toString(36).slice(2, 14);
     const path = `${orgId}/${poId}/${rand}.${file.ext}`;
-    const arrayBuffer = await (await fetch(file.uri)).arrayBuffer();
     const contentType = file.contentType ?? mimeForExt(file.ext);
-    const { error: upErr } = await supabase.storage
-      .from(BUCKET)
-      .upload(path, arrayBuffer, { contentType });
-    if (upErr) {
-      Alert.alert('Upload failed', upErr.message);
-      return;
+    // Size read from the filesystem (the streaming route never holds the
+    // bytes, so there is no byteLength to fall back on anymore).
+    const sizeBytes = file.sizeBytes ?? (await fileSizeOf(file.uri));
+    setUploadPercent(0);
+    try {
+      const up = await uploadFileToBucket({
+        bucket: BUCKET,
+        path,
+        fileUri: file.uri,
+        contentType,
+        // Floor + hold at 99: 100 is claimed only by genuine completion of
+        // upload AND row insert, never by rounding.
+        onProgress: (fraction) => setUploadPercent(Math.min(99, Math.floor(fraction * 100))),
+      });
+      if (!up.ok) {
+        Alert.alert('Upload failed', up.error);
+        return;
+      }
+      const { error: rowErr } = await supabase.from('po_attachments').insert({
+        organization_id: orgId,
+        purchase_order_id: poId,
+        storage_path: path,
+        file_name: file.fileName,
+        content_type: contentType,
+        size_bytes: sizeBytes,
+        uploaded_by: user.id,
+      });
+      if (rowErr) {
+        await supabase.storage.from(BUCKET).remove([path]);
+        Alert.alert('Could not attach', rowErr.message);
+        return;
+      }
+      await load();
+    } finally {
+      setUploadPercent(null);
     }
-    const { error: rowErr } = await supabase.from('po_attachments').insert({
-      organization_id: orgId,
-      purchase_order_id: poId,
-      storage_path: path,
-      file_name: file.fileName,
-      content_type: contentType,
-      size_bytes: file.sizeBytes ?? arrayBuffer.byteLength,
-      uploaded_by: user.id,
-    });
-    if (rowErr) {
-      await supabase.storage.from(BUCKET).remove([path]);
-      Alert.alert('Could not attach', rowErr.message);
-      return;
-    }
-    await load();
   }
 
   async function uploadAsset(asset: ImagePicker.ImagePickerAsset) {
@@ -387,6 +407,14 @@ export function PoAttachments({ poId }: { poId: string }) {
         </Pressable>
       )}
 
+      {busy && uploadPercent !== null && (
+        // Real transported progress for the in-flight upload — same track/fill
+        // idiom as the maintenance photo rows (app/maintenance/new.tsx).
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.max(4, uploadPercent)}%` }]} />
+        </View>
+      )}
+
       {loading ? (
         <ActivityIndicator color={theme.primary} style={{ marginTop: space.sm }} />
       ) : loadError && items.length === 0 ? (
@@ -468,6 +496,18 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
   },
   scanBtnText: { color: theme.text, fontWeight: '700', fontSize: 13 },
+  progressTrack: {
+    marginTop: space.sm,
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    backgroundColor: theme.border,
+  },
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.text,
+  },
   muted: { color: theme.textMuted, fontSize: 13, marginTop: space.sm },
   errorText: { color: '#c0392b', fontSize: 13, marginTop: space.sm },
   fileRow: {

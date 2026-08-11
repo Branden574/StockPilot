@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 
 import { ServiceError } from '@/server/services/context';
 import { ProceduresService } from '@/server/services/procedures';
@@ -113,6 +114,33 @@ export async function restoreProcedureAction(id: string): Promise<ActionResult<v
 // ---------------------------------------------------------------------------
 // Videos
 // ---------------------------------------------------------------------------
+
+const createVideoUploadSchema = z.object({
+  procedureId: z.string().uuid(),
+  fileExt: z.string().min(1).max(10),
+});
+
+export async function createProcedureVideoUploadAction(
+  input: z.infer<typeof createVideoUploadSchema>,
+): Promise<
+  ActionResult<{
+    path: string;
+    signedUrl: string;
+    token: string;
+    posterPath: string;
+    posterSignedUrl: string;
+  }>
+> {
+  const parsed = createVideoUploadSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await ProcedureVideosService.forCurrentUser();
+    const result = await svc.createUploadUrl(parsed.data.procedureId, parsed.data.fileExt);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
 
 export async function recordProcedureVideoAction(
   input: RecordProcedureVideoInput,

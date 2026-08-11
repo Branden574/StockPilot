@@ -17,12 +17,15 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { createClient } from '@/lib/supabase/client';
+import { BatchProgress } from '@/lib/upload-with-progress';
 import {
   createProcedureAction,
+  createProcedureVideoUploadAction,
   recordProcedureVideoAction,
   updateProcedureAction,
 } from '@/server/actions/procedures';
 
+import { uploadVideoMaster } from './upload-video-master';
 import {
   VideoUploader,
   extensionFromMime,
@@ -105,15 +108,18 @@ export function ProcedureForm({
   );
   const [busy, setBusy] = React.useState(false);
   const [staged, setStaged] = React.useState<StagedVideo[]>([]);
-  /** While > 0, the form is mid-batch uploading staged videos. */
+  /** While > 0, the form is mid-batch uploading staged videos. `percent` is
+   *  the byte-weighted REAL transported percentage across the whole batch
+   *  (see lib/upload-with-progress's BatchProgress) — never synthesised. */
   const [uploadCursor, setUploadCursor] = React.useState<{
     current: number;
     total: number;
+    percent: number;
   } | null>(null);
 
   function submitButtonCopy(): string {
     if (uploadCursor) {
-      return `Uploading ${uploadCursor.current} of ${uploadCursor.total}…`;
+      return `Uploading ${uploadCursor.current} of ${uploadCursor.total}… ${uploadCursor.percent}%`;
     }
     if (busy) return isEdit ? 'Saving…' : 'Creating…';
     return isEdit ? 'Save changes' : 'Create procedure';
@@ -131,9 +137,19 @@ export function ProcedureForm({
     // Snapshot the array now — the indices we use for orderIdx must be
     // stable across the loop even as we update per-item status.
     const snapshot = staged;
+    // Byte-weighted across the whole batch, denominator fixed up front —
+    // see BatchProgress for why a moving denominator would let the
+    // percentage travel backwards. Uploads are sequential, but a failed
+    // file settles as FAILED and keeps only the fraction it truly reached,
+    // so the batch can never read 100% when an upload died.
+    const batch = new BatchProgress(
+      snapshot.map((s) => ({ key: s.tempId, weight: s.sizeBytes })),
+    );
+    const publishProgress = (current: number) =>
+      setUploadCursor({ current, total: snapshot.length, percent: batch.percent });
     for (let i = 0; i < snapshot.length; i++) {
       const entry = snapshot[i]!;
-      setUploadCursor({ current: i + 1, total: snapshot.length });
+      publishProgress(i + 1);
       // Flip this row to "uploading".
       setStaged((arr) =>
         arr.map((s) => (s.tempId === entry.tempId ? { ...s, status: 'uploading' } : s)),
@@ -143,26 +159,42 @@ export function ProcedureForm({
         const ext =
           extensionFromMime(entry.mimeType) ||
           (entry.file.name.split('.').pop() ?? 'mp4');
-        const safeExt =
-          ext.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'mp4';
-        const uuid = crypto.randomUUID();
-        const path = `${organizationId}/${procedureId}/${uuid}.${safeExt}`;
 
-        const { error: upErr } = await supabase.storage
-          .from(PROCEDURE_VIDEOS_BUCKET)
-          .upload(path, entry.file, {
-            cacheControl: '3600',
-            contentType: entry.mimeType || 'video/mp4',
-            upsert: false,
-          });
-        if (upErr) throw new Error(upErr.message);
+        // Server mints the storage path + presigned PUT URLs from its own
+        // org id; recordProcedureVideoAction re-validates the same shape.
+        const presign = await createProcedureVideoUploadAction({
+          procedureId,
+          fileExt: ext,
+        });
+        if (!presign.ok) throw new Error(presign.error.message);
+        const path = presign.data.path;
+
+        // XHR PUT with real transported progress — the file goes to XHR as
+        // the Blob it already is (streamed, never arrayBuffer'd; these run
+        // up to 1 GB). See upload-video-master.ts for the honesty rules.
+        const upRes = await uploadVideoMaster({
+          signedUrl: presign.data.signedUrl,
+          file: entry.file,
+          contentType: entry.mimeType || 'video/mp4',
+          onProgress: ({ fraction }) => {
+            batch.set(entry.tempId, fraction);
+            publishProgress(i + 1);
+          },
+        });
+        if (!upRes.ok) {
+          batch.settle(entry.tempId, false);
+          publishProgress(i + 1);
+          throw new Error(`upload failed (HTTP ${upRes.status})`);
+        }
+        batch.settle(entry.tempId, true);
+        publishProgress(i + 1);
 
         // Best-effort poster frame so the Procedures grid renders a small
         // <img> instead of range-fetching the full video (see uploadPosterFor).
         const posterPath = await uploadPosterFor(
-          supabase,
           entry.file,
-          `${organizationId}/${procedureId}/${uuid}.poster.jpg`,
+          presign.data.posterSignedUrl,
+          presign.data.posterPath,
         );
 
         const record = await recordProcedureVideoAction({

@@ -17,8 +17,11 @@ import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
+import { uploadWithProgress } from '@/lib/upload-with-progress';
 import { captureVideoPoster } from '@/components/procedures/capture-poster';
+import { uploadVideoMaster } from '@/components/procedures/upload-video-master';
 import {
+  createProcedureVideoUploadAction,
   deleteProcedureVideoAction,
   recordProcedureVideoAction,
 } from '@/server/actions/procedures';
@@ -79,6 +82,9 @@ interface PendingUpload {
   key: string;
   name: string;
   status: 'uploading' | 'recording' | 'done' | 'error';
+  /** Real transported percentage for this file, or null before the first
+   *  transport event. Never synthesised — see lib/upload-with-progress.ts. */
+  percent: number | null;
   error?: string;
 }
 
@@ -121,24 +127,24 @@ function stripExtension(name: string): string {
  * Capture + upload a poster JPEG for a video file. Best-effort: returns the
  * poster storage path on success, null on any failure (capture or upload) —
  * the video records without a poster and the grid falls back to the
- * video-first-frame trick.
+ * video-first-frame trick. PUTs to the presigned poster URL minted alongside
+ * the master's (createProcedureVideoUploadAction) — no progress reporting;
+ * a ~30 KB JPEG is a rounding error next to the video.
  */
 export async function uploadPosterFor(
-  supabase: ReturnType<typeof createClient>,
   file: File,
+  posterSignedUrl: string,
   posterPath: string,
 ): Promise<string | null> {
   try {
     const blob = await captureVideoPoster(file);
     if (!blob) return null;
-    const { error } = await supabase.storage
-      .from(PROCEDURE_VIDEOS_BUCKET)
-      .upload(posterPath, blob, {
-        cacheControl: '3600',
-        contentType: 'image/jpeg',
-        upsert: false,
-      });
-    return error ? null : posterPath;
+    const res = await uploadWithProgress({
+      url: posterSignedUrl,
+      body: blob,
+      contentType: 'image/jpeg',
+    });
+    return res.ok ? posterPath : null;
   } catch {
     return null;
   }
@@ -162,20 +168,21 @@ function validateFile(file: File): string | null {
 /**
  * Drag-and-drop video uploader for procedures. Two modes:
  *
- *   immediate — used on the edit page. Uploads each dropped file directly
- *               to Supabase storage at
- *               `{org_id}/{procedure_id}/{uuid}.{ext}` (RLS gates the first
- *               path segment) and calls `recordProcedureVideoAction` to
- *               insert the DB row.
+ *   immediate — used on the edit page. Mints a presigned upload URL
+ *               (createProcedureVideoUploadAction — the server builds the
+ *               `{org_id}/{procedure_id}/{uuid}.{ext}` path from its own org
+ *               id) and PUTs the file to it via `uploadVideoMaster`, then
+ *               calls `recordProcedureVideoAction` to insert the DB row.
  *
  *   staged    — used on the create page. Validates + probes duration in
  *               the browser, then HANDS the file back to the parent form
  *               via `onStagedChange`. No network calls. The parent drives
  *               the upload loop after creating the procedure row.
  *
- * The Supabase JS SDK's `storage.from(...).upload(...)` does not expose
- * XHR upload progress, so each file shows a pending → done indicator
- * rather than a percent bar.
+ * The Supabase JS SDK's `storage.from(...).upload(...)` does not expose XHR
+ * upload progress, which is why the master goes through the presigned-URL +
+ * XHR PUT route instead (lib/upload-with-progress) — each uploading file
+ * shows the REAL transported percentage, never a synthesised one.
  */
 export function VideoUploader(props: VideoUploaderProps) {
   if (props.mode === 'staged') return <StagedUploader {...props} />;
@@ -216,11 +223,7 @@ function VideoRow({ icon, title, meta, status, actions }: VideoRowProps) {
 // Immediate mode — same behavior as before the refactor.
 // ---------------------------------------------------------------------------
 
-function ImmediateUploader({
-  procedureId,
-  organizationId,
-  initialVideos,
-}: ImmediateProps) {
+function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
@@ -252,36 +255,53 @@ function ImmediateUploader({
         continue;
       }
 
-      setPending((p) => [...p, { key, name: file.name, status: 'uploading' }]);
+      setPending((p) => [...p, { key, name: file.name, status: 'uploading', percent: null }]);
 
       try {
         const { duration } = await probeVideoMetadata(file);
         const ext = extensionFromMime(file.type) || (file.name.split('.').pop() ?? 'mp4');
-        const safeExt = ext.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'mp4';
-        const uuid = crypto.randomUUID();
-        const path = `${organizationId}/${procedureId}/${uuid}.${safeExt}`;
 
-        const { error: upErr } = await supabase.storage
-          .from(PROCEDURE_VIDEOS_BUCKET)
-          .upload(path, file, {
-            cacheControl: '3600',
-            contentType: file.type || 'video/mp4',
-            upsert: false,
-          });
-        if (upErr) {
+        // Server mints the storage path + presigned PUT URLs — the path is
+        // built from the SERVER's org id, and record() below re-validates it.
+        const presign = await createProcedureVideoUploadAction({ procedureId, fileExt: ext });
+        if (!presign.ok) {
           setPending((p) =>
-            p.map((x) => (x.key === key ? { ...x, status: 'error', error: upErr.message } : x)),
+            p.map((x) =>
+              x.key === key ? { ...x, status: 'error', error: presign.error.message } : x,
+            ),
           );
-          toast.error(`Couldn't upload "${file.name}": ${upErr.message}`);
+          toast.error(`Couldn't upload "${file.name}": ${presign.error.message}`);
+          continue;
+        }
+        const path = presign.data.path;
+
+        // XHR PUT with real transported progress — the file is handed to XHR
+        // as the Blob it already is (streamed from disk, never arrayBuffer'd;
+        // these run up to 1 GB). See upload-video-master.ts for the honesty
+        // rules: monotonic, held at 99 until success, never 100 on failure.
+        const upRes = await uploadVideoMaster({
+          signedUrl: presign.data.signedUrl,
+          file,
+          contentType: file.type || 'video/mp4',
+          onProgress: ({ percent }) => {
+            setPending((p) => p.map((x) => (x.key === key ? { ...x, percent } : x)));
+          },
+        });
+        if (!upRes.ok) {
+          const message = `upload failed (HTTP ${upRes.status})`;
+          setPending((p) =>
+            p.map((x) => (x.key === key ? { ...x, status: 'error', error: message } : x)),
+          );
+          toast.error(`Couldn't upload "${file.name}": ${message}`);
           continue;
         }
 
         // Poster frame — best-effort. A ~30 KB JPEG lets the Procedures grid
         // render an <img> instead of range-fetching the full video file.
         const posterPath = await uploadPosterFor(
-          supabase,
           file,
-          `${organizationId}/${procedureId}/${uuid}.poster.jpg`,
+          presign.data.posterSignedUrl,
+          presign.data.posterPath,
         );
 
         setPending((p) =>
@@ -395,7 +415,9 @@ function ImmediateUploader({
               )}
               <span className="truncate">{p.name}</span>
               {p.status === 'uploading' && (
-                <span className="text-muted-foreground">uploading…</span>
+                <span className="text-muted-foreground">
+                  {p.percent === null ? 'uploading…' : `uploading… ${p.percent}%`}
+                </span>
               )}
               {p.status === 'recording' && (
                 <span className="text-muted-foreground">finalizing…</span>
