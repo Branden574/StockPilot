@@ -67,6 +67,7 @@ import {
   SPORTS_ERROR_META,
   TRACKING_MODE_LABELS,
   buildVariantKey,
+  compareSizeValues,
   createItemSchema,
   formatRackLabel,
   normalizeRackFields,
@@ -674,8 +675,13 @@ export function ItemForm({
   // whenever no sizes are picked, which is every other flow, unchanged.
   const variantLabel = React.useMemo(() => {
     if (selectedSizes.length > 0) {
-      const shown = selectedSizes.slice(0, 5).map((v) => v.size);
-      const extra = selectedSizes.length - shown.length;
+      // Scale order, not click order. `selectedSizes` is append-ordered, so
+      // picking 9 then 8 then 10 listed "9, 8, 10" — which reads as a bug next
+      // to the chips, and a plain string sort would be worse ("10" before "8").
+      // compareSizeValues is the same comparator the list uses to order a run.
+      const ordered = [...selectedSizes].sort((a, b) => compareSizeValues(a.size, b.size));
+      const shown = ordered.slice(0, 5).map((v) => v.size);
+      const extra = ordered.length - shown.length;
       return `${selectedSizes.length} variant${selectedSizes.length === 1 ? '' : 's'}: ${shown.join(
         ', ',
       )}${extra > 0 ? ` +${extra}` : ''}`;
