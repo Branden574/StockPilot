@@ -119,6 +119,15 @@ const config: ExpoConfig = {
     // its default `false` so the bundled AV1 decoder stays linked); there is no
     // behaviour change from adding it.
     'expo-image',
+    // Required from Expo SDK 57 on — expo-status-bar's config plugin is now
+    // part of expo-doctor's plugin-presence check. Listed with NO props on
+    // purpose: the plugin's own implementation gates every write on
+    // `hidden != null` / `style != null`, so a props-less entry is a verified
+    // no-op for both the iOS Info.plist and the Android styles. The status bar
+    // is still driven at runtime by <StatusBar style={...} /> in
+    // app/_layout.tsx; giving the plugin a `style` here would bake a
+    // launch-time value into the native project and fight that.
+    'expo-status-bar',
     // Replaces the root-level `splash` key that SDK 56 removed (see the note
     // where it used to live). Values are carried over 1:1 from it. The
     // plugin's own defaults are NOT equivalent to the old key — it centres the
