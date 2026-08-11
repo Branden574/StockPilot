@@ -91,6 +91,18 @@ jobs:
       - name: Run pgTAP tests
         run: pnpm exec supabase test db
 
+      # The named security gate (scripts/security-test.sh): the allowlist-based
+      # invariant sweeps plus the security-focused pgTAP and vitest suites. It
+      # lives in THIS job because its database half needs the stack that the
+      # step above already started, and the runner already has node_modules.
+      #
+      # It deliberately re-runs files the two steps above also cover. The value
+      # is the label: a red "Security invariants" step means a security property
+      # broke, which is a different merge decision from a red test suite. Do not
+      # remove the overlap.
+      - name: Security invariants
+        run: pnpm security:test
+
       - name: Stop Supabase stack
         if: always()
         run: pnpm exec supabase stop --no-backup
