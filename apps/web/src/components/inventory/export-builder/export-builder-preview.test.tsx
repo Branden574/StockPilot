@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ExportPreviewResponse } from '@/lib/download-export';
+import { getExportField } from '@/lib/exports/field-registry';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 
 import { ExportBuilderPreview } from './export-builder-preview';
@@ -212,5 +213,56 @@ describe('ExportBuilderPreview — sample row cap', () => {
     // Verify that row 6 (and row 7) are NOT rendered
     expect(within(table).queryByText('Concrete Mathematics')).toBeNull();
     expect(within(table).queryByText('The Pragmatic Programmer')).toBeNull();
+  });
+});
+
+describe('ExportBuilderPreview — alignment fidelity with the generated file', () => {
+  /**
+   * The preview and the PDF must derive alignment from the SAME registry field.
+   * Before this, every preview cell was flush-left while pdf-layout.ts passed
+   * `f.align` through - so the preview could not match the generated file for
+   * any numeric column, and reordering columns gave no honest picture.
+   *
+   * Asserted as an INVARIANT over every selected field rather than as a list of
+   * expected classes, so a new field or an alignment change cannot slip past.
+   */
+  it('gives every header and cell the alignment its registry field declares', () => {
+    const state = initialExportBuilderState('book');
+    renderPreview({ state });
+    const table = screen.getByRole('table', { name: 'Export preview' });
+
+    const expected = (align: string) =>
+      align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
+
+    const fields = state.fieldKeys
+      .map((k) => getExportField(k))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f));
+
+    const headers = within(table).getAllByRole('columnheader');
+    expect(headers).toHaveLength(fields.length);
+    fields.forEach((field, i) => {
+      expect(headers[i]!.className, `header ${field.key}`).toContain(expected(field.align));
+    });
+
+    const firstRow = within(table).getAllByRole('row')[1]!;
+    const cells = within(firstRow).getAllByRole('cell');
+    expect(cells).toHaveLength(fields.length);
+    fields.forEach((field, i) => {
+      expect(cells[i]!.className, `cell ${field.key}`).toContain(expected(field.align));
+    });
+  });
+
+  it('centers the quantity columns and keeps money flush-right', () => {
+    // The owner-reported case: a right-aligned "On hand" sits against the far
+    // edge of its column and reads as belonging to the neighbouring column.
+    // Integers have no decimal point to line up; money does, so money stays
+    // right-aligned and that difference is deliberate.
+    expect(getExportField('quantity_on_hand')!.align).toBe('center');
+    expect(getExportField('reorder_point')!.align).toBe('center');
+    expect(getExportField('reorder_quantity')!.align).toBe('center');
+
+    expect(getExportField('unit_cost')!.align).toBe('right');
+    expect(getExportField('retail_price')!.align).toBe('right');
+    expect(getExportField('inventory_value')!.align).toBe('right');
   });
 });
