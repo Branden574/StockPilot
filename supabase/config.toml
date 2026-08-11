@@ -38,6 +38,8 @@ buckets.item-images.allowed_mime_types = ["image/png", "image/jpeg", "image/webp
 
 buckets.item-attachments.public = false
 buckets.item-attachments.file_size_limit = "20MiB"
+# Dormant bucket (no app writer yet) — pinned conservatively; 0325 mirrors this in prod.
+buckets.item-attachments.allowed_mime_types = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic"]
 
 buckets.org-logos.public = true
 buckets.org-logos.file_size_limit = "2MiB"

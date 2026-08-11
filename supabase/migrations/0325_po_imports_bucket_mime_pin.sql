@@ -1,7 +1,8 @@
 -- 0325_po_imports_bucket_mime_pin.sql
 -- ============================================================================
--- Pin `allowed_mime_types` on the po-imports storage bucket — the LAST bucket
--- in this schema without one. 0021 created it with no pin at all and 0047 only
+-- Pin `allowed_mime_types` on the po-imports storage bucket — believed the
+-- last unpinned bucket when written; INV-24's first run found item-attachments
+-- too (second section below). 0021 created it with no pin at all and 0047 only
 -- closed the size leg (25 MB), so until now the bucket accepted a PUT of ANY
 -- declared content type. That is reachable, not theoretical: presignUpload
 -- (apps/web/src/server/services/po-imports.ts:522-523) mints a signed upload
@@ -60,3 +61,27 @@ update storage.buckets
         'image/jpeg', 'image/png', 'image/webp', 'image/heic'
       ]
   where id = 'po-imports';
+
+-- ── item-attachments: the OTHER unpinned bucket, found by INV-24's first run ─
+--
+-- The header above said po-imports was the last unpinned bucket; INV-24's
+-- first CI execution proved otherwise. item-attachments is an ORPHANED
+-- surface: 0003/0140 gave it org-scoped RLS policies and config.toml gives it
+-- a local size cap, but no app code uploads to it (zero references to
+-- 'item-attachments' in apps/web or apps/mobile) and production holds ZERO
+-- objects in it (verified 2026-08-11). In production the bucket ALSO has
+-- file_size_limit NULL — config.toml's 20 MiB never applied there because the
+-- prod bucket predates it.
+--
+-- Dormant surface, conservative pin: images + PDF at the config.toml cap.
+-- Deleting the bucket would be cleaner still, but bucket deletion is a
+-- destructive prod action that belongs to the owner, not a hardening
+-- migration. If an item-attachments feature ever ships, IT widens this pin
+-- with its own cited writer list, the way this file does for po-imports.
+update storage.buckets
+  set allowed_mime_types = array[
+        'application/pdf',
+        'image/jpeg', 'image/png', 'image/webp', 'image/heic'
+      ],
+      file_size_limit = coalesce(file_size_limit, 20971520)  -- 20 MiB, matches config.toml
+  where id = 'item-attachments';
