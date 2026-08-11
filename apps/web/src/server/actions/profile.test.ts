@@ -50,19 +50,21 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 /**
- * MED-23 — setOrgLogoUrlAction now DOWNLOADS the object the submitted URL names
- * and sniffs its real bytes before the URL becomes the org's logo, deleting the
- * object if the bytes are not an image the org-logos bucket accepts. So the
- * admin-client mock needs a storage leg, and the bytes it serves have to be
- * settable per test. `logoStorage.body` is what the download returns; the
- * download/remove spies are asserted directly.
+ * MED-23 — setOrgLogoUrlAction reads the LEADING BYTES of the object the
+ * submitted URL names (fetchObjectPrefix — a range read; the helper's own
+ * suite proves the range/streaming mechanics) and sniffs them before the URL
+ * becomes the org's logo, deleting the object if the bytes are not an image
+ * the org-logos bucket accepts. So the admin-client mock needs a storage leg
+ * for the delete, and the bytes the prefix read serves have to be settable per
+ * test. `logoStorage.body` is what the prefix read returns (null = the object
+ * does not exist); the prefix/remove spies are asserted directly.
  */
-const { logoStorage } = vi.hoisted(() => ({
+const { logoStorage, fetchObjectPrefixMock } = vi.hoisted(() => ({
   logoStorage: {
     body: null as Uint8Array | null,
-    download: vi.fn(),
     remove: vi.fn(),
   },
+  fetchObjectPrefixMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({
@@ -74,11 +76,14 @@ vi.mock('@/lib/supabase/admin', () => ({
     },
     storage: {
       from: vi.fn(() => ({
-        download: logoStorage.download,
         remove: logoStorage.remove,
       })),
     },
   })),
+}));
+
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: fetchObjectPrefixMock,
 }));
 
 vi.mock('@/server/services/audit', () => ({
@@ -232,10 +237,10 @@ describe('setOrgLogoUrlAction', () => {
     vi.clearAllMocks();
     sessionState.role = 'admin';
     logoStorage.body = pngBytes();
-    logoStorage.download.mockImplementation(async () =>
+    fetchObjectPrefixMock.mockImplementation(async () =>
       logoStorage.body
-        ? { data: { arrayBuffer: async () => logoStorage.body!.buffer.slice(0) }, error: null }
-        : { data: null, error: { message: 'not found' } },
+        ? { prefix: logoStorage.body, totalSize: logoStorage.body.byteLength }
+        : null,
     );
     logoStorage.remove.mockImplementation(async () => ({ data: null, error: null }));
     stubHolder.stub = makeSupabaseStub({
@@ -302,7 +307,7 @@ describe('setOrgLogoUrlAction', () => {
     logoStorage.body = pngBytes();
     const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-2.png` });
     expect(result.ok).toBe(true);
-    expect(logoStorage.download).toHaveBeenCalledWith('org-1/logo-2.png');
+    expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), 'org-1/logo-2.png');
     expect(logoStorage.remove).not.toHaveBeenCalled();
   });
 
@@ -321,7 +326,7 @@ describe('setOrgLogoUrlAction', () => {
     const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}${tail}` });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('validation_error');
-    expect(logoStorage.download).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
@@ -329,7 +334,7 @@ describe('setOrgLogoUrlAction', () => {
   it('clearing the logo (url: null) needs no object to exist and touches storage not at all', async () => {
     const result = await setOrgLogoUrlAction({ url: null });
     expect(result.ok).toBe(true);
-    expect(logoStorage.download).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
   });
 

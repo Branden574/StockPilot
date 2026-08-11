@@ -56,7 +56,7 @@
 
 begin;
 
-select plan(23);
+select plan(24);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -142,25 +142,15 @@ insert into _sec_inv_public_bucket_allow (id, why) values
   ('user-avatars','avatar is rendered in shared UI and email; READ scoping to the owner''s folder is asserted in 0322 s.2');
 
 -- ── E. Path-bearing columns with no traversal CHECK yet (KNOWN GAP) ────────
--- 0323 put the structural traversal floor under the nine path columns whose
--- values reach a storage client. These five do not have it. They are recorded
--- here rather than omitted so the gap is visible in CI output and in review,
--- and so a NEW path column still fails INV-15 instead of joining the gap
--- silently. Closing one of these means deleting its row here in the same change
--- as the constraint migration.
+-- EMPTY since 0326 closed the last five gaps (item_attachments,
+-- cycle_count_ai_scans, import_jobs, size_count_training_samples,
+-- support_tickets) — every path-bearing column in public now carries the 0323
+-- predicate, and INV-15 enforces all of them with no exemptions. The table
+-- stays so a future gap has somewhere visible to be recorded (and so INV-16
+-- refuses a stale entry when that gap is later closed); an entry here is a
+-- finding to be defended, never a default.
 create temporary table _sec_inv_path_check_gap (relname text, attname text, why text not null,
   primary key (relname, attname));
-insert into _sec_inv_path_check_gap (relname, attname, why) values
-  ('item_attachments',            'storage_path',       'not covered by 0323; table held 0 rows at the time of that change'),
-  ('po_imports',                  'storage_path',       'placeholder to keep this table shape valid — replaced below if absent'),
-  ('cycle_count_ai_scans',        'photo_storage_path', 'not covered by 0323; scan photos are written through the cycle-count service only'),
-  ('import_jobs',                 'storage_path',       'not covered by 0323; import files are written through the import service only'),
-  ('size_count_training_samples', 'image_storage_path', 'not covered by 0323; training images are written through the size-count service only'),
-  ('support_tickets',             'attachment_path',    'not covered by 0323; support attachments are written through the support service only');
--- po_imports.storage_path IS constrained by 0323; it is not a gap. Removing it
--- here keeps the gap list honest (INV-16 refuses a stale entry, which is what
--- would fire if this delete were dropped).
-delete from _sec_inv_path_check_gap where relname = 'po_imports';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -499,9 +489,10 @@ select is(
   'INV-15: every path-bearing column in public has a traversal-refusing CHECK, or a recorded gap'
 );
 
--- INV-16. No stale gap entry. When one of the five gaps is closed, its row here
--- must go in the same change — otherwise the list stops describing the real
--- exposure and the next reader trusts it.
+-- INV-16. No stale gap entry. When a gap is closed, its row here must go in
+-- the same change — otherwise the list stops describing the real exposure and
+-- the next reader trusts it. (This is how the original five 0323 gaps left:
+-- 0326 constrained them and deleted their rows in one diff.)
 select is(
   (select count(*)::int
      from _sec_inv_path_check_gap g
@@ -627,6 +618,18 @@ select cmp_ok(
   '>',
   0,
   'INV-23 control: the anon/PUBLIC write-policy sweep still finds policies to judge'
+);
+
+-- INV-24. Every bucket pins allowed_mime_types. po-imports was the last
+-- unpinned bucket (closed by 0325); an unpinned bucket accepts any
+-- content-type on a presigned upload, which is exactly the surface the
+-- magic-byte sniffer exists to close from the other side. This sweep makes
+-- the property durable against future bucket additions. INV-21 above is the
+-- vacuity control for this population too.
+select is(
+  (select count(*)::int from storage.buckets where allowed_mime_types is null),
+  0,
+  'INV-24: every storage bucket pins allowed_mime_types'
 );
 
 

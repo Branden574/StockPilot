@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createAdminClientMock, createSignedUrlMock, createSignedUrlsMock } = vi.hoisted(() => ({
+const { createAdminClientMock, createSignedUrlMock, createSignedUrlsMock, fetchObjectPrefixMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   createSignedUrlMock: vi.fn(),
   createSignedUrlsMock: vi.fn(),
+  fetchObjectPrefixMock: vi.fn(),
 }));
 
 // Pass-through so the wrapped per-path signer runs on every call (i.e.
@@ -15,6 +16,16 @@ vi.mock('next/cache', () => ({
 
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
+}));
+
+// record() sniffs the just-uploaded object via a RANGE READ of its leading
+// bytes (fetchObjectPrefix) instead of a full download(). The helper is the
+// seam — its own suite (lib/storage-object-prefix.test.ts) proves the
+// range/streaming mechanics; here it defaults to a genuine png prefix so the
+// audit-capture tests below exercise the ordinary "an image was uploaded"
+// path (mirrors supabase-mock's old download() default and its rationale).
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: fetchObjectPrefixMock,
 }));
 
 vi.mock('./context', () => ({
@@ -61,6 +72,18 @@ function svc(): ItemImagesService {
   return new ItemImagesService({} as ServiceContext);
 }
 
+/** A minimal but GENUINE 26-byte png (signature + IHDR + 2x3 dims), built
+ *  independently of supabase-mock's fixture — the default prefix the range
+ *  read resolves, so ordinary record() tests pass the sniff. */
+function mockPngPrefix(): Uint8Array {
+  const b = new Uint8Array(26);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  b.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+  new DataView(b.buffer).setUint32(16, 2);
+  new DataView(b.buffer).setUint32(20, 3);
+  return b;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   createAdminClientMock.mockReturnValue({
@@ -71,6 +94,8 @@ beforeEach(() => {
       }),
     },
   });
+  const png = mockPngPrefix();
+  fetchObjectPrefixMock.mockResolvedValue({ prefix: png, totalSize: png.byteLength });
 });
 
 /**

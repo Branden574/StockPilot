@@ -154,7 +154,44 @@ function isValidDimension(n: number): boolean {
   return n >= 1 && n <= INT4_MAX;
 }
 
+/**
+ * "The verdict depends on bytes past the end of what was supplied."
+ *
+ * The classifier distinguishes this from a plain `null` because its input is
+ * not always a whole file: fetchObjectPrefix (lib/storage-object-prefix.ts)
+ * feeds it a LEADING WINDOW of the object, and for one real class of file the
+ * window is not enough — a camera-original JPEG routinely carries more
+ * metadata than the window before its SOF marker (a 5-20 KB APP1 EXIF segment
+ * with an embedded thumbnail; multi-segment APP2 ICC profiles — the common
+ * U.S. Web Coated CMYK profile alone is ~557 KB; XMP packets). Collapsing
+ * "ran out of data mid-walk" into "not an image" is how a verify-or-delete
+ * guard DELETES a legitimate photo: the callers treat null as fake and remove
+ * the object. So truncation is reported distinctly, and the prefix reader
+ * responds by fetching the rest of the object before judging.
+ */
+const NEEDS_MORE_BYTES = Symbol('needs-more-bytes');
+type ClassifyResult = SniffedImage | null | typeof NEEDS_MORE_BYTES;
+
+/**
+ * Whether a sniff of these bytes is INDETERMINATE — i.e. `sniffImage` would
+ * return null only because the classification ran past the end of the buffer,
+ * not because the bytes are definitively not an image. Meaningful only when
+ * the buffer is a leading window of a larger object; for a whole file,
+ * "walked off the end" IS "malformed", which is why `sniffImage` itself maps
+ * this case to null.
+ */
+export function sniffNeedsMoreBytes(data: Uint8Array): boolean {
+  return classifyImageBytes(data) === NEEDS_MORE_BYTES;
+}
+
 export function sniffImage(data: Uint8Array): SniffedImage | null {
+  const verdict = classifyImageBytes(data);
+  // For a WHOLE file, a walk that ran out of bytes means the file is
+  // truncated/malformed — the pre-refactor behavior, preserved exactly.
+  return verdict === NEEDS_MORE_BYTES ? null : verdict;
+}
+
+function classifyImageBytes(data: Uint8Array): ClassifyResult {
   // PNG: the FULL 8-byte signature (not a truncated prefix), then the IHDR
   // chunk type at bytes 12-15 — the first chunk of a real PNG stream is
   // always IHDR, so a body that only shares a few leading signature bytes
@@ -183,6 +220,13 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
     return { kind: 'png', width, height };
   }
   // JPEG: SOI then walk markers to the first SOF.
+  //
+  // Every bail-out in this walk is one of two DIFFERENT verdicts, and the
+  // distinction is load-bearing (see NEEDS_MORE_BYTES above): structural
+  // impossibilities (a segment length of zero, a SOF declaring a zero
+  // dimension) are `null` — no amount of further data can redeem them —
+  // while "the walk ran past the end of the buffer" is NEEDS_MORE_BYTES,
+  // because a longer read of the same object could still land on a SOF.
   if (data.length > 4 && data[0] === 0xff && data[1] === 0xd8) {
     let offset = 2;
     while (offset + 1 < data.length) {
@@ -198,7 +242,7 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
       // otherwise-legitimate JPEG (its uploaded object was then deleted).
       let markerAt = offset + 1;
       while (data[markerAt] === 0xff) markerAt++;
-      if (markerAt >= data.length) return null;
+      if (markerAt >= data.length) return NEEDS_MORE_BYTES;
       const marker = data[markerAt]!;
       // Markers with no length/payload field: TEM (0x01) and RSTn
       // (0xD0-0xD7). Nothing to skip via a length read — advance past the
@@ -213,7 +257,7 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
         (marker >= 0xc9 && marker <= 0xcb) ||
         (marker >= 0xcd && marker <= 0xcf);
       if (isSof) {
-        if (markerAt + 7 >= data.length) return null;
+        if (markerAt + 7 >= data.length) return NEEDS_MORE_BYTES;
         const height = (data[markerAt + 4]! << 8) | data[markerAt + 5]!;
         const width = (data[markerAt + 6]! << 8) | data[markerAt + 7]!;
         // A SOF segment reporting a zero dimension is malformed, not a real
@@ -226,12 +270,15 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
         return { kind: 'jpeg', width, height };
       }
       const lenAt = markerAt + 1;
-      if (lenAt + 1 >= data.length) return null;
+      if (lenAt + 1 >= data.length) return NEEDS_MORE_BYTES;
       const length = (data[lenAt]! << 8) | data[lenAt + 1]!;
       if (length <= 0) return null;
       offset = lenAt + length;
     }
-    return null;
+    // The loop ended because `offset` reached (or a segment length carried it
+    // past) the end of the buffer without a SOF: on a leading window this is
+    // exactly the >4 KB-of-metadata camera JPEG, so ask for more bytes.
+    return NEEDS_MORE_BYTES;
   }
   // WEBP: 'RIFF'....'WEBP'. All four fourcc bytes are checked — a RIFF file
   // of a different flavor (e.g. 'WAVE') must not be sniffed as WEBP just
@@ -295,7 +342,12 @@ export function sniffImage(data: Uint8Array): SniffedImage | null {
     if (brands.some((b) => ISO_BMFF_HEIC_BRANDS.has(b))) {
       return { kind: 'heic', width: null, height: null };
     }
-    return null;
+    // No image brand seen — but if the declared ftyp box extends past the
+    // buffer, the deciding brand may sit in the unseen part of the list, so a
+    // leading window cannot condemn the file yet. (On a whole file this same
+    // shape — a boxSize overrunning the actual bytes — is malformed, and
+    // sniffImage maps it back to null.)
+    return boxSize > data.length ? NEEDS_MORE_BYTES : null;
   }
   return null;
 }

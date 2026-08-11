@@ -13,15 +13,15 @@ vi.mock('@/lib/rate-limit', () => ({
 }));
 
 // finalize()/remove()/signedViewUrls() use the SERVICE-ROLE client (never
-// ctx.supabase) for storage ops — download/remove/createSignedUrl are
-// admin-only, matching order-attachments.ts and item-images.ts. The shared
+// ctx.supabase) for storage ops — remove/createSignedUrl are admin-only,
+// matching order-attachments.ts and item-images.ts. The shared
 // makeSupabaseStub()'s default storage.from() doesn't implement
-// download/createSignedUploadUrl (po-imports.parse-suggest.test.ts's own
-// comment: "the shared makeSupabaseStub doesn't implement it"), so the admin
-// client is mocked directly here, same shape as item-images.test.ts.
-const { createAdminClientMock, downloadMock, adminRemoveMock, adminCreateSignedUrlsMock } = vi.hoisted(() => ({
+// createSignedUploadUrl (po-imports.parse-suggest.test.ts's own comment: "the
+// shared makeSupabaseStub doesn't implement it"), so the admin client is
+// mocked directly here, same shape as item-images.test.ts.
+const { createAdminClientMock, fetchObjectPrefixMock, adminRemoveMock, adminCreateSignedUrlsMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
-  downloadMock: vi.fn(),
+  fetchObjectPrefixMock: vi.fn(),
   adminRemoveMock: vi.fn(),
   // Minor 11 — signedViewUrls batches via createSignedUrls(paths, ttl)
   // instead of one createSignedUrl call per row; the mock matches the real
@@ -30,6 +30,16 @@ const { createAdminClientMock, downloadMock, adminRemoveMock, adminCreateSignedU
 }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
+}));
+// finalize() sniffs via a RANGE READ of the object's leading bytes
+// (fetchObjectPrefix), not a full download(). The helper is the seam: its own
+// suite (lib/storage-object-prefix.test.ts) proves the range/streaming
+// behaviour against a stubbed fetch; here it is mocked so each test states
+// the prefix bytes AND the full object size independently — which is exactly
+// what lets the byte_size tests below prove the recorded size is the FULL
+// size, never the prefix length.
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: fetchObjectPrefixMock,
 }));
 
 import { DEFAULT_MODULE_IDS, MAINTENANCE_MAX_PHOTOS, MAINTENANCE_MAX_PHOTO_BYTES, type ModuleId } from '@stockpilot/core';
@@ -83,8 +93,12 @@ function jpegBytes(width = 4, height = 5): Uint8Array {
     width & 0xff, 0x01, 0x00,
   ]);
 }
-function blobFor(bytes: Uint8Array) {
-  return { arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+/** What fetchObjectPrefix resolves for a healthy object: the leading bytes
+ *  plus the FULL size. Defaulting totalSize to the fixture's own length keeps
+ *  the ordinary tests honest; the size-specific tests pass a larger literal
+ *  to prove prefix length and recorded size are independent. */
+function prefixFor(bytes: Uint8Array, totalSize = bytes.byteLength) {
+  return { prefix: bytes, totalSize };
 }
 
 const REQ_ID = '11111111-1111-4111-8111-111111111111';
@@ -99,19 +113,18 @@ const UUID_1 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  downloadMock.mockReset();
+  fetchObjectPrefixMock.mockReset();
   adminRemoveMock.mockReset();
   adminCreateSignedUrlsMock.mockReset();
   createAdminClientMock.mockReturnValue({
     storage: {
       from: vi.fn(() => ({
-        download: downloadMock,
         remove: adminRemoveMock,
         createSignedUrls: adminCreateSignedUrlsMock,
       })),
     },
   });
-  downloadMock.mockResolvedValue({ data: null, error: { message: 'not stubbed for this test' } });
+  fetchObjectPrefixMock.mockResolvedValue(null);
   adminRemoveMock.mockResolvedValue({ data: null, error: null });
   // Default: sign whatever paths were asked for, echoing each one back with
   // a stable stub URL — matches the real batch response shape (one entry
@@ -373,9 +386,9 @@ describe('createUploadUrl (mint)', () => {
 });
 
 describe('finalize', () => {
-  it('downloads the object, sniffs REAL bytes, and inserts a row whose mime_type/byte_size/width/height come from the SNIFF, never the client', async () => {
+  it('range-reads the object, sniffs REAL bytes, and inserts a row whose mime_type/byte_size/width/height come from the SNIFF, never the client', async () => {
     const bytes = pngBytes(2, 3);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
@@ -392,7 +405,7 @@ describe('finalize', () => {
     });
 
     expect(res).toEqual({ id: 'att-1', width: 2, height: 3 });
-    expect(downloadMock).toHaveBeenCalledWith(path);
+    expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), path);
 
     const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
     expect(insert.mime_type).toBe('image/png');
@@ -414,9 +427,65 @@ describe('finalize', () => {
     );
   });
 
+  it('range-read size fidelity — the recorded byte_size is the FULL object size (10240), never the 4096-byte sniffed prefix', async () => {
+    // A 4096-byte prefix (the exact amount the range read returns for a
+    // large object) whose leading bytes are a genuine png, backed by a
+    // 10240-byte object. Both values literal-pinned: an implementation that
+    // recorded the prefix length would write 4096 here and fail.
+    const prefix = new Uint8Array(4096);
+    prefix.set(pngBytes(2, 3));
+    fetchObjectPrefixMock.mockResolvedValue({ prefix, totalSize: 10240 });
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+      'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+    await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+      path,
+      originalFilename: 'big-but-legit.png',
+      declaredMime: 'image/png',
+    });
+
+    const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.byte_size).toBe(10240);
+    expect(insert.byte_size).not.toBe(4096);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ extra: expect.objectContaining({ byte_size: 10240 }) }),
+      ctx,
+    );
+  });
+
+  it('prefix-only sniff still rejects a spoofed extension — 4096 bytes of non-image content in front of a large object is deleted, never recorded', async () => {
+    // The attack the range read must not weaken: an HTML payload named
+    // .png whose lying content-type got it past the bucket pin. Only the
+    // prefix is read now, so the refusal has to hold on the prefix ALONE —
+    // pinned with a full 4096-byte non-image prefix and a much larger
+    // claimed object behind it.
+    const prefix = new Uint8Array(4096).fill(0x20);
+    prefix.set(new TextEncoder().encode('<html><script>alert(1)</script>'));
+    fetchObjectPrefixMock.mockResolvedValue({ prefix, totalSize: 5 * 1024 * 1024 });
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
+
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'spoofed.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
+
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
+    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+  });
+
   it('Important 7 — safe_filename is sanitized: a path-traversal-shaped original_filename never reaches the insert verbatim', async () => {
     const bytes = pngBytes(2, 3);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
@@ -436,7 +505,7 @@ describe('finalize', () => {
 
   it('MUTATION GUARD — REJECTS a body whose magic bytes are not an image (photo test 6): deletes the uploaded object and throws validation_error invalid_image, writing NO row', async () => {
     const bytes = new TextEncoder().encode('<html><script>alert(1)</script>');
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
@@ -459,7 +528,7 @@ describe('finalize', () => {
 
   it('rejects a declaredMime mismatch (JPEG bytes + image/png declared) — the sniff itself still correctly detects jpeg (bytes win over the lying declaration), but finalize refuses the inconsistency and deletes the object', async () => {
     const bytes = jpegBytes(10, 20);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
@@ -478,10 +547,8 @@ describe('finalize', () => {
     expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
-  it('MUTATION GUARD — oversize: rejects a body larger than MAINTENANCE_MAX_PHOTO_BYTES and deletes the object', async () => {
-    const bytes = new Uint8Array(MAINTENANCE_MAX_PHOTO_BYTES + 1);
-    bytes.set(pngBytes(2, 3));
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+  it('MUTATION GUARD — oversize: rejects an object larger than MAINTENANCE_MAX_PHOTO_BYTES and deletes it. The prefix is a perfectly VALID png — only totalSize is over — so this pins the size gate to the FULL object size, which a prefix-length gate would wave through', async () => {
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(pngBytes(2, 3), MAINTENANCE_MAX_PHOTO_BYTES + 1));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
@@ -519,7 +586,7 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
@@ -533,7 +600,7 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
@@ -546,7 +613,7 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
@@ -559,7 +626,7 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
@@ -572,12 +639,12 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
   });
 
   it('MUTATION GUARD — cap re-check: rejects finalize once the request already holds MAINTENANCE_MAX_PHOTOS attachments, and rolls back the uploaded object (Important 3 — a mint-time count check alone is bypassable: 0315 lets any accepted org member PUT directly to storage, and mint itself can be called MAINTENANCE_MAX_PHOTOS times concurrently before any of them finalizes)', async () => {
     const bytes = pngBytes(2, 3);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.select': { data: [], error: null, count: MAINTENANCE_MAX_PHOTOS },
@@ -598,7 +665,7 @@ describe('finalize', () => {
 
   it('MUTATION GUARD (data-loss guard) — 23505 duplicate storage_path: throws conflict without removing storage (the winning row still references it), never deletes the object', async () => {
     const bytes = pngBytes(2, 3);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
@@ -624,8 +691,8 @@ describe('finalize', () => {
     expect(adminRemoveMock).not.toHaveBeenCalled();
   });
 
-  it('never writes a row when the object was never actually uploaded (download fails) — no phantom rows', async () => {
-    downloadMock.mockResolvedValue({ data: null, error: { message: 'The resource was not found' } });
+  it('never writes a row when the object was never actually uploaded (the prefix read fails) — no phantom rows', async () => {
+    fetchObjectPrefixMock.mockResolvedValue(null);
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
@@ -642,7 +709,7 @@ describe('finalize', () => {
 
   it('enforces the same ownership gate as mint — a non-owner/non-manage caller cannot finalize onto someone else\'s request', async () => {
     const bytes = pngBytes(2, 3);
-    downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
     const { ctx } = build(
       {
         'maintenance_requests.select': {
@@ -659,7 +726,7 @@ describe('finalize', () => {
         declaredMime: 'image/png',
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
   });
 
   it('rejects finalize on a closed request', async () => {
@@ -676,13 +743,13 @@ describe('finalize', () => {
         declaredMime: 'image/png',
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
   });
 
   describe('kind (migration 0317/spec §2.2)', () => {
     it('records kind on the INSERT payload — chainArgs pin on the insert object — defaulting to \'requester\' when omitted', async () => {
       const bytes = pngBytes(2, 3);
-      downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+      fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
       const { stub, ctx } = build({
         'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
         'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
@@ -701,7 +768,7 @@ describe('finalize', () => {
 
     it('kind=\'resolution\' lands on the INSERT payload verbatim for a manage-holder, and the live cap re-check is scoped by .eq(\'kind\', \'resolution\')', async () => {
       const bytes = pngBytes(2, 3);
-      downloadMock.mockResolvedValue({ data: blobFor(bytes), error: null });
+      fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
       const { stub, ctx } = build(
         {
           'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
@@ -740,7 +807,7 @@ describe('finalize', () => {
           kind: 'resolution',
         }),
       ).rejects.toMatchObject({ code: 'forbidden' });
-      expect(downloadMock).not.toHaveBeenCalled();
+      expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     });
 
     it('an invalid kind literal (\'proof\') is rejected with validation_error BEFORE any storage download, LITERAL-pinned against the requester/resolution allow-list', async () => {
@@ -758,7 +825,7 @@ describe('finalize', () => {
         code: 'validation_error',
         message: 'Invalid photo kind. Must be one of: requester, resolution.',
       });
-      expect(downloadMock).not.toHaveBeenCalled();
+      expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     });
   });
 });

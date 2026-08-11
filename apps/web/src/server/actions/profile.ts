@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
+import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -295,9 +296,13 @@ export async function setOrgLogoUrlAction(input: {
       // why the prefix check above already exists; bytes are the other half.
       //
       // Verify-or-delete, same shape as the maintenance-attachments
-      // reference: download, sniff, and on any disagreement REMOVE the object
-      // and refuse — never leave an unverified object reachable at a URL a
-      // client already knows.
+      // reference: read the object's LEADING BYTES (fetchObjectPrefix — a
+      // range read; the helper widens to a full read on its own only for
+      // files the 4 KB window cannot decide, e.g. an EXIF/ICC-heavy JPEG
+      // logo, so the full object is normally never buffered here), sniff,
+      // and on any
+      // disagreement REMOVE the object and refuse — never leave an
+      // unverified object reachable at a URL a client already knows.
       const objectPath = candidate.slice(orgLogoBucketUrlPrefix().length);
       // The prefix check is a PREFIX check (HI-8): `{org}/../../item-images/...`
       // starts with the expected prefix and still escapes the bucket once
@@ -310,11 +315,11 @@ export async function setOrgLogoUrlAction(input: {
         );
       }
       const logos = createAdminClient().storage.from('org-logos');
-      const { data: blob, error: dlErr } = await logos.download(objectPath);
-      if (dlErr || !blob) {
+      const head = await fetchObjectPrefix(logos, objectPath);
+      if (!head) {
         return err('validation_error', 'That logo upload could not be read. Try uploading again.');
       }
-      const sniffed = sniffImage(new Uint8Array(await blob.arrayBuffer()));
+      const sniffed = sniffImage(head.prefix);
       if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'org-logos')) {
         await logos.remove([objectPath]);
         return err(

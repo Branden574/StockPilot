@@ -5,6 +5,7 @@ import {
   MIME_FOR_KIND,
   SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS,
   sniffImage,
+  sniffNeedsMoreBytes,
   type SniffedImage,
 } from './image-signature';
 
@@ -30,6 +31,24 @@ function webpBytes(): Uint8Array {
   const b = new Uint8Array(16);
   b.set([0x52, 0x49, 0x46, 0x46]); // 'RIFF'
   b.set([0x57, 0x45, 0x42, 0x50], 8); // 'WEBP'
+  return b;
+}
+/** A camera-original-shaped JPEG: SOI, then a single APP1 (EXIF) segment
+ *  whose body is `metaBytes` long — real cameras put a 5-20 KB embedded
+ *  thumbnail there, and multi-segment ICC profiles push further still — then
+ *  the same SOF0 segment jpegBytes() uses. The SOF marker (and with it the
+ *  whole verdict) sits at byte 6 + metaBytes, i.e. deliberately BEYOND a
+ *  4096-byte leading window for the default metaBytes. */
+function exifHeavyJpegBytes(metaBytes = 12 * 1024, width = 4, height = 5): Uint8Array {
+  const app1Len = metaBytes + 2; // the length field counts itself, not the marker
+  const sof = [
+    0xff, 0xc0, 0x00, 0x0b, 0x08, (height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff,
+    width & 0xff, 0x01, 0x00,
+  ];
+  const b = new Uint8Array(6 + metaBytes + sof.length);
+  b.set([0xff, 0xd8, 0xff, 0xe1, (app1Len >> 8) & 0xff, app1Len & 0xff]);
+  b.fill(0x45, 6, 6 + metaBytes); // APP1 body filler (never 0xFF — no fake markers)
+  b.set(sof, 6 + metaBytes);
   return b;
 }
 
@@ -338,5 +357,72 @@ describe('sniffer coverage vs the bucket allowlists it gates', () => {
       'image/jpeg',
       'image/webp',
     ]);
+  });
+});
+
+/**
+ * PREFIX-WINDOW SEMANTICS (fix-wave: Important 1).
+ *
+ * fetchObjectPrefix feeds the sniffer a 4096-byte LEADING WINDOW, and a
+ * camera-original JPEG routinely carries more pre-SOF metadata than that
+ * (5-20 KB APP1 EXIF thumbnails; ICC/XMP far larger). On the window alone the
+ * marker walk runs out of bytes without a verdict — and if that reads as
+ * plain null, every verify-or-delete caller DELETES a legitimate photo. So
+ * "ran out of data" must be distinguishable from "definitively not an image":
+ * `sniffNeedsMoreBytes` is that distinction, and this block pins BOTH sides
+ * of it plus the invariant that `sniffImage`'s whole-file semantics did not
+ * move (a truncated whole file is still null).
+ */
+describe('sniffNeedsMoreBytes — indeterminate window vs definitive fake', () => {
+  it('the finding, end to end: a real JPEG with 12 KB of pre-SOF EXIF sniffs as jpeg from its FULL bytes, but its 4096-byte leading window is null under sniffImage — and sniffNeedsMoreBytes reports the window as indeterminate, which is what routes the reader to fetch the rest instead of deleting the upload', () => {
+    const full = exifHeavyJpegBytes(12 * 1024, 4, 5);
+    expect(sniffImage(full)).toEqual({ kind: 'jpeg', width: 4, height: 5 });
+    const window = full.subarray(0, 4096);
+    expect(sniffImage(window)).toBeNull();
+    expect(sniffNeedsMoreBytes(window)).toBe(true);
+  });
+
+  it('a window ending exactly inside a SOF header (marker seen, dimensions cut off) is also indeterminate, not a fake', () => {
+    const full = exifHeavyJpegBytes(64, 4, 5); // SOF at byte 70
+    const midSof = full.subarray(0, 6 + 64 + 4); // SOF marker + length, dims cut
+    expect(sniffImage(midSof)).toBeNull();
+    expect(sniffNeedsMoreBytes(midSof)).toBe(true);
+  });
+
+  it('DEFINITIVE fakes are NOT indeterminate — no amount of further bytes redeems them, so the reader must never burn a full download on one', () => {
+    // A renamed EXE.
+    expect(sniffNeedsMoreBytes(new Uint8Array([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]))).toBe(false);
+    // An HTML body.
+    expect(sniffNeedsMoreBytes(new TextEncoder().encode('<html><script>alert(1)</script>'))).toBe(false);
+    // A zero-byte object.
+    expect(sniffNeedsMoreBytes(new Uint8Array(0))).toBe(false);
+    // A structurally impossible JPEG: segment length 0 can never be valid.
+    expect(sniffNeedsMoreBytes(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00]))).toBe(false);
+    // A SOF declaring a zero dimension is malformed, not truncated.
+    expect(sniffNeedsMoreBytes(jpegBytes(0, 5))).toBe(false);
+  });
+
+  it('COMPLETE verdicts are not indeterminate: a decided image never triggers a second read', () => {
+    expect(sniffNeedsMoreBytes(pngBytes(2, 3))).toBe(false);
+    expect(sniffNeedsMoreBytes(jpegBytes(4, 5))).toBe(false);
+    expect(sniffNeedsMoreBytes(webpBytes())).toBe(false);
+    expect(sniffNeedsMoreBytes(isoBmffBytes('avif'))).toBe(false);
+    expect(sniffNeedsMoreBytes(isoBmffBytes('heic'))).toBe(false);
+  });
+
+  it('an ISO-BMFF window whose ftyp box extends past the supplied bytes with no image brand YET seen is indeterminate (the deciding compatible brand may sit in the unseen tail) — but the same shape on a WHOLE file stays null under sniffImage', () => {
+    // Major brand 'miaf' (neither AVIF nor HEIC set), declared box size 24
+    // (room for two compatible brands), bytes cut at 16: the brand list is
+    // entirely in the unseen tail.
+    const cut = isoBmffBytes('miaf', ['avif', 'miaf']).subarray(0, 16);
+    expect(sniffNeedsMoreBytes(cut)).toBe(true);
+    expect(sniffImage(cut)).toBeNull();
+    // The full box decides avif — proving the unseen tail really could have
+    // changed the verdict.
+    expect(sniffImage(isoBmffBytes('miaf', ['avif', 'miaf']))).toEqual({
+      kind: 'avif',
+      width: null,
+      height: null,
+    });
   });
 });
