@@ -3,6 +3,7 @@ import 'server-only';
 import { unstable_cache } from 'next/cache';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 
 import type {
   PublicAvailability,
@@ -149,12 +150,17 @@ const resolvePublicRequestTokenCached = unstable_cache(
       return Boolean(data);
     };
 
+    // Migration 0330: the DB stores sha256(token); hash the presented
+    // plaintext and compare on the hash column. Equality via the btree
+    // index is fine here — see sha256Hex()'s doc comment for why a
+    // timing-safe compare buys nothing on this path.
+    const tokenHash = sha256Hex(token);
     const { data: linkRow } = await admin
       .from('public_request_links')
       .select(
         'id, organization_id, name, instructions, active, expires_at, available_from, available_until, availability_display, books_enabled, items_enabled, include_public_pool, default_max_qty',
       )
-      .eq('token', token)
+      .eq('token_hash', tokenHash)
       .maybeSingle();
 
     type LinkRow = {
@@ -214,7 +220,7 @@ const resolvePublicRequestTokenCached = unstable_cache(
     const { data: orgByToken } = await admin
       .from('organizations')
       .select(orgSelect)
-      .eq('public_request_token', token)
+      .eq('public_request_token_hash', tokenHash)
       .maybeSingle();
     const legacyOrg = orgByToken as OrgRow | null;
     if (!legacyOrg || !(await moduleEnabled(legacyOrg.id))) return null;

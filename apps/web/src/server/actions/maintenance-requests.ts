@@ -148,6 +148,26 @@ export async function addMaintenanceNoteAction(
  *  it leaked), it does not permanently disable link minting for the
  *  request; the org-level `includeShareLinksInEmail` setting is the
  *  mechanism for that. */
+/**
+ * Mints a fresh share link (rotating any existing one) and returns the URL
+ * — the ONE moment the plaintext is ever available (mig 0330 hashes it at
+ * rest). The panel shows it with a copy-now affordance; it is never
+ * re-displayable, and generating again invalidates this URL.
+ */
+export async function issueMaintenanceShareLinkAction(
+  id: string,
+): Promise<ActionResult<{ url: string; expiresAt: string }>> {
+  try {
+    assertValidId(id);
+    const ctx = await withContext();
+    const link = await new MaintenanceShareLinksService(ctx).issueLink(id);
+    revalidatePath(`/dashboard/maintenance/${id}`);
+    return { ok: true, url: link.url, expiresAt: link.expiresAt };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function revokeMaintenanceShareLinkAction(id: string): Promise<ActionResult<object>> {
   try {
     assertValidId(id);

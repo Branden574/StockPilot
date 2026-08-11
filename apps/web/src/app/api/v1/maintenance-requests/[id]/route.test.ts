@@ -15,7 +15,7 @@ import { GET, PATCH } from './route';
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/server/services/maintenance-requests', () => ({ MaintenanceRequestsService: vi.fn() }));
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
-// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+// Only the CLASS is mocked (getActiveLinkStatus is wired per-test below) —
 // maintenanceShareLinksEnabled stays the REAL implementation, which reads
 // `ctx.supabase`'s own 'organization_modules.select' canning (already
 // configured per-test via buildCtx({ settings })), the exact org-setting
@@ -34,7 +34,7 @@ const get = vi.fn();
 const update = vi.fn();
 const emailInput = vi.fn();
 const signedViewUrls = vi.fn();
-const ensureActiveLink = vi.fn();
+const getActiveLinkStatus = vi.fn();
 
 const DETAIL = {
   id: REQUEST_ID,
@@ -115,7 +115,7 @@ beforeEach(() => {
   update.mockReset();
   emailInput.mockReset();
   signedViewUrls.mockReset();
-  ensureActiveLink.mockReset();
+  getActiveLinkStatus.mockReset();
   get.mockResolvedValue(DETAIL);
   // Mirrors the real emailInput() shape closely enough for these tests: the
   // one field the route/tests care about (shareUrl) passes through exactly
@@ -152,7 +152,7 @@ beforeEach(() => {
       kind: 'requester',
     },
   ]);
-  ensureActiveLink.mockResolvedValue({ token: 'tok', url: 'https://stockpilotusa.com/m/tok', expiresAt: '2027-01-01T00:00:00.000Z' });
+  getActiveLinkStatus.mockResolvedValue({ expiresAt: '2027-01-01T00:00:00.000Z' });
   vi.mocked(MaintenanceRequestsService).mockImplementation(
     () => ({ get, update, emailInput }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
   );
@@ -160,7 +160,7 @@ beforeEach(() => {
     () => ({ signedViewUrls }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
   );
   vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ ensureActiveLink }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
+    () => ({ getActiveLinkStatus }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
   );
 });
 
@@ -179,7 +179,7 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
-  it('returns request + photos + emailInput with the ensured share link when the org allows it', async () => {
+  it('mig 0330 — returns request + photos + emailInput (shareUrl ALWAYS null: hashed at rest, unreadable at render) + token-free shareLink status when the org allows it', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: true } }) as never);
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     expect(res.status).toBe(200);
@@ -195,8 +195,12 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
       height: 600,
       kind: 'requester',
     });
-    expect(body.emailInput.shareUrl).toBe('https://stockpilotusa.com/m/tok');
-    expect(ensureActiveLink).toHaveBeenCalledWith(REQUEST_ID);
+    // SECURITY PROPERTY: no token material anywhere in the payload — the
+    // status object is expiresAt-only and emailInput.shareUrl is null.
+    expect(body.emailInput.shareUrl).toBeNull();
+    expect(body.shareLink).toEqual({ expiresAt: '2027-01-01T00:00:00.000Z' });
+    expect(JSON.stringify(body)).not.toContain('/m/');
+    expect(getActiveLinkStatus).toHaveBeenCalledWith(REQUEST_ID);
   });
 
   it('surfaces resolvedAt/resolvedByName/resolutionNote and each photo\'s kind (Maintenance Resolved detail fields, Task 8)', async () => {
@@ -236,43 +240,45 @@ describe('GET /api/v1/maintenance-requests/[id]', () => {
     expect(body.request.resolutionNote).toBeNull();
   });
 
-  it('omits the share link (shareUrl: null) when the org setting disables it, and never mints one', async () => {
+  it('omits the share-link status (shareLink: null) when the org setting disables it, and never reads one', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: false } }) as never);
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.emailInput.shareUrl).toBeNull();
-    expect(ensureActiveLink).not.toHaveBeenCalled();
+    expect(body.shareLink).toBeNull();
+    expect(getActiveLinkStatus).not.toHaveBeenCalled();
   });
 
-  it('defaults to ON (shareUrl minted) when no organization_modules settings row exists', async () => {
+  it('defaults to ON (shareLink status read) when no organization_modules settings row exists', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: null }) as never);
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     const body = await res.json();
-    expect(body.emailInput.shareUrl).toBe('https://stockpilotusa.com/m/tok');
+    expect(body.shareLink).toEqual({ expiresAt: '2027-01-01T00:00:00.000Z' });
+    expect(body.emailInput.shareUrl).toBeNull();
   });
 
-  it('never mints a share link for a request with zero photos', async () => {
+  it('never reads share-link status for a request with zero photos', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: true } }) as never);
     get.mockResolvedValueOnce({ ...DETAIL, photoCount: 0 });
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     const body = await res.json();
-    expect(body.emailInput.shareUrl).toBeNull();
-    expect(ensureActiveLink).not.toHaveBeenCalled();
+    expect(body.shareLink).toBeNull();
+    expect(getActiveLinkStatus).not.toHaveBeenCalled();
   });
 
-  it('does not fail the whole detail read when the caller cannot mint a share link (read_all viewer of a foreign request)', async () => {
+  it('does not fail the whole detail read when the caller cannot read share-link status (read_all viewer of a foreign request)', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: true } }) as never);
-    ensureActiveLink.mockRejectedValueOnce(new ServiceError('forbidden', 'Missing permission: maintenance_requests:manage'));
+    getActiveLinkStatus.mockRejectedValueOnce(new ServiceError('forbidden', 'Missing permission: maintenance_requests:manage'));
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.emailInput.shareUrl).toBeNull();
+    expect(body.shareLink).toBeNull();
   });
 
-  it('surfaces a non-ServiceError failure from the share-link mint as 500, never a silent degraded read', async () => {
+  it('surfaces a non-ServiceError failure from the share-link status read as 500, never a silent degraded read', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ settings: { includeShareLinksInEmail: true } }) as never);
-    ensureActiveLink.mockRejectedValueOnce(new Error('boom'));
+    getActiveLinkStatus.mockRejectedValueOnce(new Error('boom'));
     const res = await GET(getReq(), { params: params(REQUEST_ID) });
     expect(res.status).toBe(500);
     const body = await res.json();

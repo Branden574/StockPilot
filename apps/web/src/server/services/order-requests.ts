@@ -5,6 +5,7 @@ import { can, formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 import { reportError as reportSrvError } from '@/lib/error-reporter';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import {
@@ -105,6 +106,12 @@ export interface OrderRequestRow {
   return_token: string | null;
   /** One-time return-prompt email marker (mig 0278). NULL = never sent. */
   return_prompt_sent_at: string | null;
+  /** Per-request public-tracking token (mig 0330). Minted at PUBLIC submit
+   *  only (requester_user_id null); status emails embed it as the /r/track
+   *  `&t=` scope now that the org/link catalog tokens are hashed at rest
+   *  and unreadable at send time. Grants only this one order's redacted
+   *  status view, alongside the matching requester email. */
+  public_track_token: string | null;
 }
 
 export interface OrderRequestLineRow {
@@ -3000,35 +3007,39 @@ export class OrderRequestsService {
     // service gate with RLS: admin+ only.
     assertPermission(this.ctx, 'organization:update');
     const token = generateToken();
-    // Load the CURRENT token first: since migration 0261 the /r/<token>
+    const tokenHash = sha256Hex(token);
+    // Load the CURRENT token hash first: since migration 0261 the /r/<token>
     // read path resolves public_request_links FIRST, and the org's legacy
     // token lives on its migrated "General request link". Rotating only the
     // organizations column would leave the old token alive in the links
     // table — rotation would silently stop invalidating the old URL. So the
-    // matching link row (same token) is rotated in the same operation.
+    // matching link row (same hash — mig 0330 stores only sha256(token)) is
+    // rotated in the same operation. The plaintext is returned ONCE; it is
+    // never retrievable after this call.
     const { data: orgRow, error: readErr } = await this.ctx.supabase
       .from('organizations')
-      .select('public_request_token')
+      .select('public_request_token_hash')
       .eq('id', this.ctx.organizationId)
       .maybeSingle();
     if (readErr) throw new ServiceError('internal_error', readErr.message);
-    const oldToken =
-      (orgRow as { public_request_token: string | null } | null)?.public_request_token ?? null;
+    const oldTokenHash =
+      (orgRow as { public_request_token_hash: string | null } | null)
+        ?.public_request_token_hash ?? null;
     const { error } = await this.ctx.supabase
       .from('organizations')
       .update({
-        public_request_token: token,
+        public_request_token_hash: tokenHash,
         public_request_token_rotated_at: new Date().toISOString(),
       })
       .eq('id', this.ctx.organizationId);
     if (error) throw new ServiceError('internal_error', error.message);
     let linkSynced = false;
-    if (oldToken) {
+    if (oldTokenHash) {
       const { data: updatedLinks, error: linkErr } = await this.ctx.supabase
         .from('public_request_links')
-        .update({ token })
+        .update({ token_hash: tokenHash })
         .eq('organization_id', this.ctx.organizationId)
-        .eq('token', oldToken)
+        .eq('token_hash', oldTokenHash)
         .select('id');
       if (linkErr) throw new ServiceError('internal_error', linkErr.message);
       linkSynced = (updatedLinks ?? []).length > 0;
@@ -3047,7 +3058,7 @@ export class OrderRequestsService {
         .insert({
           organization_id: this.ctx.organizationId,
           name: 'General request link',
-          token,
+          token_hash: tokenHash,
           active: true,
           availability_display: 'exact',
           books_enabled: true,
@@ -3149,7 +3160,10 @@ export class OrderRequestsService {
   }
 
   async getPublicSettings(): Promise<{
-    token: string | null;
+    /** Whether an org-level public token exists at all — the plaintext is
+     *  hashed at rest (mig 0330) and never re-displayable; rotation is the
+     *  only way to obtain a URL, and it returns the plaintext once. */
+    hasToken: boolean;
     rotatedAt: string | null;
     blurb: string | null;
     publicOrderableWarehouseIds: string[];
@@ -3157,7 +3171,7 @@ export class OrderRequestsService {
     assertModuleEnabled(this.ctx, 'public_requests');
     const { data: org, error: oErr } = await this.ctx.supabase
       .from('organizations')
-      .select('public_request_token, public_request_token_rotated_at, public_request_blurb')
+      .select('public_request_token_hash, public_request_token_rotated_at, public_request_blurb')
       .eq('id', this.ctx.organizationId)
       .maybeSingle();
     if (oErr) throw new ServiceError('internal_error', oErr.message);
@@ -3166,7 +3180,7 @@ export class OrderRequestsService {
       .select('id, is_public_orderable')
       .eq('organization_id', this.ctx.organizationId);
     return {
-      token: (org?.public_request_token as string | null) ?? null,
+      hasToken: Boolean(org?.public_request_token_hash),
       rotatedAt: (org?.public_request_token_rotated_at as string | null) ?? null,
       blurb: (org?.public_request_blurb as string | null) ?? null,
       publicOrderableWarehouseIds: (whs ?? [])
@@ -3196,29 +3210,20 @@ export class OrderRequestsService {
       // per-event. Public-link requesters (no requester_user_id) are
       // treated as transactional and always emailed.
       if (!(await this.wantsEmail(kind, row))) return;
-      // M3: public-link requesters (no requester_user_id) get a
-      // /r/track link in the email — that route's GET requires the
-      // org's public_request_token, so load it here and pass through.
-      // For authenticated requesters the email links to the
-      // dashboard and doesn't need the token, but loading once and
-      // sending it through is harmless.
-      let publicRequestToken: string | null = null;
-      if (!row.requester_user_id) {
-        const { data: orgRow } = await this.ctx.supabase
-          .from('organizations')
-          .select('public_request_token')
-          .eq('id', this.ctx.organizationId)
-          .maybeSingle();
-        publicRequestToken =
-          (orgRow as { public_request_token?: string | null } | null)?.public_request_token ?? null;
-      }
+      // M3 (reshaped by mig 0330): public-link requesters (no
+      // requester_user_id) get a /r/track link in the email — the `&t=`
+      // scope is now the request's OWN public_track_token (already on the
+      // row; the builder reads it directly), minted at public submit. The
+      // org/link catalog tokens are hashed at rest and cannot be read back
+      // at send time; the per-request token also survives a catalog-token
+      // rotation, which used to kill every previously-emailed track link.
+      // Authenticated requesters link to the dashboard and need no token.
       await sendOrderRequestEmail({
         kind,
         request: row,
         recipientEmail,
         recipientName,
         appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
-        publicRequestToken,
       });
     } catch (e) {
       console.warn('[order-requests] email send failed', e);

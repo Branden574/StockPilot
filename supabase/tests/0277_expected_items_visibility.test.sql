@@ -83,11 +83,11 @@ values
 -- Public link with an explicit catalog entry for the phantom: every OTHER
 -- 0261 eligibility condition holds, so only awaiting_first_receipt decides.
 insert into public.public_request_links
-  (id, organization_id, name, token, active, books_enabled, items_enabled,
+  (id, organization_id, name, token_hash, active, books_enabled, items_enabled,
    include_public_pool)
 values
   (:link, :org, 'EXP link',
-   'ab027700token0000000000000000000000000000000000000000000000001',
+   encode(extensions.digest('ab027700token0000000000000000000000000000000000000000000000001', 'sha256'), 'hex'),
    true, true, false, false)
   on conflict (id) do nothing;
 insert into public.public_link_catalog_entries (link_id, item_id)

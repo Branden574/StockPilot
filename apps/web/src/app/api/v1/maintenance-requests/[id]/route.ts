@@ -17,18 +17,22 @@ export const dynamic = 'force-dynamic';
  * Request detail for the mobile app and any REST consumer — the Bearer
  * parity for the web detail page's server load. Assembles three services'
  * output (MaintenanceRequestsService.get, MaintenanceAttachmentsService.
- * signedViewUrls, MaintenanceShareLinksService.ensureActiveLink) into one
- * response; each service still owns its own authorization, this route only
- * composes their results.
+ * signedViewUrls, MaintenanceShareLinksService.getActiveLinkStatus) into
+ * one response; each service still owns its own authorization, this route
+ * only composes their results.
  *
- * ensureActiveLink()'s bar for MINTING a link (requester+submit, or manage)
- * is narrower than get()'s bar for VIEWING the request (owner OR read_all
- * OR manage) — a read_all-only holder looking at someone else's request can
- * legitimately see it but is not privileged to hand out a durable public
- * link to it. That mismatch must never fail the WHOLE detail read: any
- * ServiceError out of the share-link step (forbidden, or module_disabled if
- * the module happens to be off — reads survive a disable per 0314 Q3, but
- * ensureActiveLink stays gated) degrades to shareUrl: null instead of
+ * Mig 0330: the share-link token is hashed at rest, so a GET can no longer
+ * fold an existing link's URL into emailInput (and an auto-mint here could
+ * only rotate — killing whatever URL was already shared — while still
+ * displaying nothing). The response carries `shareLink: { expiresAt } |
+ * null` STATUS instead (token-free), plus `emailInput.shareUrl: null`; a
+ * client that wants a URL calls POST .../share-link explicitly (show-once,
+ * rotates) and merges the returned URL into its compose flow itself.
+ *
+ * getActiveLinkStatus()'s bar (requester+submit, or manage) is narrower
+ * than get()'s bar for VIEWING the request (owner OR read_all OR manage).
+ * That mismatch must never fail the WHOLE detail read: any ServiceError
+ * out of the share-link step degrades to shareLink: null instead of
  * propagating. A non-ServiceError (a real bug) still surfaces normally.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -49,20 +53,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const request = await svc.get(id);
     const photos = await new MaintenanceAttachmentsService(ctx).signedViewUrls(id);
 
-    let shareUrl: string | null = null;
+    let shareLink: { expiresAt: string } | null = null;
     if (request.photoCount > 0 && (await maintenanceShareLinksEnabled(ctx))) {
       try {
-        shareUrl = (await new MaintenanceShareLinksService(ctx).ensureActiveLink(id)).url;
+        shareLink = await new MaintenanceShareLinksService(ctx).getActiveLinkStatus(id);
       } catch (shareErr) {
         if (!(shareErr instanceof ServiceError)) throw shareErr;
       }
     }
-    const emailInput = await svc.emailInput(id, { shareUrl });
+    const emailInput = await svc.emailInput(id, { shareUrl: null });
 
     return NextResponse.json({
       request,
       photos,
       emailInput,
+      shareLink,
       canManage: can(ctx, 'maintenance_requests:manage'),
     });
   } catch (e) {

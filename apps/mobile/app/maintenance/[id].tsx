@@ -79,6 +79,7 @@ import {
   archiveMaintenanceRequest,
   assignMaintenanceOwner,
   getMaintenanceRequest,
+  issueMaintenanceShareLink,
   listMaintenanceMembers,
   listMaintenanceNotes,
   recordDraftOpened,
@@ -95,10 +96,13 @@ import {
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
   OVERSIZED_MESSAGE,
+  SHARE_LINK_EXISTS_NOTICE,
+  SHARE_LINK_SHOW_ONCE_NOTICE,
   SUCCESS_MESSAGE,
   openMaintenanceDraft,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  withShareUrl,
   type EmailTransport,
 } from '@/lib/maintenance-email-actions';
 import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
@@ -228,6 +232,12 @@ export default function MaintenanceRequestDetailScreen() {
   const [photos, setPhotos] = React.useState<MobileMaintenancePhoto[]>([]);
   const [emailInput, setEmailInput] = React.useState<MaintenanceEmailInput | null>(null);
   const [canManage, setCanManage] = React.useState(false);
+  // Mig 0330: token-free status ("a link exists, expires then") from the
+  // GET; the URL itself only ever exists in `generatedShareUrl`, set by an
+  // explicit Generate action (show-once — gone on unmount, by design).
+  const [shareLink, setShareLink] = React.useState<{ expiresAt: string } | null>(null);
+  const [generatedShareUrl, setGeneratedShareUrl] = React.useState<string | null>(null);
+  const [sharePending, setSharePending] = React.useState(false);
   const [openCount, setOpenCount] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<{
@@ -283,6 +293,7 @@ export default function MaintenanceRequestDetailScreen() {
         setDetail(res.request);
         setPhotos(res.photos);
         setEmailInput(res.emailInput);
+        setShareLink(res.shareLink);
         setOpenCount(res.request.outlookDraftOpenCount);
         setCanManage(res.canManage);
       } catch (e) {
@@ -298,11 +309,31 @@ export default function MaintenanceRequestDetailScreen() {
   }, [enabled, id, refreshKey]);
 
   // Pure, deterministic (no clock, no DOM) — recomputed only when the
-  // server payload changes, matching web's identical useMemo.
+  // server payload or a freshly-generated share URL changes, matching web's
+  // identical useMemo (there the merge happens via the share-link context).
   const prepared = React.useMemo(
-    () => (emailInput ? prepareMaintenanceEmail(emailInput) : null),
-    [emailInput],
+    () => (emailInput ? prepareMaintenanceEmail(withShareUrl(emailInput, generatedShareUrl)) : null),
+    [emailInput, generatedShareUrl],
   );
+
+  // Explicit Generate/Regenerate (mig 0330): the ONLY way to obtain a URL.
+  // Rotates server-side, so any previously shared URL stops working.
+  async function generateShareLink() {
+    if (!id) return;
+    setSharePending(true);
+    try {
+      const res = await issueMaintenanceShareLink(id);
+      setGeneratedShareUrl(res.url);
+      setShareLink({ expiresAt: res.expiresAt });
+    } catch (e) {
+      Alert.alert(
+        'Could not generate the link',
+        e instanceof Error ? e.message : 'Try again in a moment.',
+      );
+    } finally {
+      setSharePending(false);
+    }
+  }
 
   async function runOpen(transport: EmailTransport) {
     if (!prepared || !id) return;
@@ -335,7 +366,9 @@ export default function MaintenanceRequestDetailScreen() {
   }
 
   function openPhotosPage() {
-    const url = emailInput?.shareUrl;
+    // Only a URL generated THIS session is openable (mig 0330 — the server
+    // never sends one back).
+    const url = generatedShareUrl;
     if (!url) return;
     Linking.openURL(url).catch(() => {
       // Nothing further to do — this opens a plain public page, not an
@@ -826,7 +859,20 @@ export default function MaintenanceRequestDetailScreen() {
             >
               Copy Email Details
             </Button>
-            {emailInput?.shareUrl ? (
+            {photos.length > 0 ? (
+              <Button
+                block
+                variant="outline"
+                disabled={sharePending}
+                onPress={() => void generateShareLink()}
+                leading={<Images size={16} color={c.ink} strokeWidth={1.5} />}
+              >
+                {shareLink || generatedShareUrl
+                  ? 'Generate new photo share link'
+                  : 'Generate photo share link'}
+              </Button>
+            ) : null}
+            {generatedShareUrl ? (
               <Button
                 block
                 variant="outline"
@@ -837,6 +883,32 @@ export default function MaintenanceRequestDetailScreen() {
               </Button>
             ) : null}
           </View>
+
+          {generatedShareUrl ? (
+            <View style={{ marginTop: 12 }}>
+              <Body size={12.5} color={c.ink}>
+                {SHARE_LINK_SHOW_ONCE_NOTICE}
+              </Body>
+              {/* Same no-clipboard-module posture as the copy box above
+                  (audit Q9): the selectable, read-only input IS the copy
+                  affordance. Generated URLs also fold into the email drafts
+                  automatically (withShareUrl above). */}
+              <TextInput
+                editable={false}
+                selectTextOnFocus
+                value={generatedShareUrl}
+                style={[styles.copyBox, { color: c.ink, borderColor: c.hair, minHeight: 44, marginTop: 6 }]}
+                accessibilityLabel="Photo share link to copy manually"
+              />
+              <Body size={11.5} muted style={{ marginTop: 6 }}>
+                {COPY_HELPER_TEXT}
+              </Body>
+            </View>
+          ) : shareLink ? (
+            <Body size={11.5} muted style={{ marginTop: 10 }}>
+              {SHARE_LINK_EXISTS_NOTICE}
+            </Body>
+          ) : null}
 
           {lastResult?.outcome === 'opened' ? (
             <Card padding={10} style={{ marginTop: 12 }}>

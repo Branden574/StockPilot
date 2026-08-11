@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Copy, CopyPlus, ExternalLink, Loader2, Pencil, Plus } from 'lucide-react';
+import { Check, Copy, CopyPlus, Loader2, Pencil, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -35,8 +35,13 @@ import type { PublicLinkRow } from '@/server/services/public-links';
 
 /**
  * Links table for /dashboard/settings/public-requests: one row per shareable
- * /r/<token> link with copy / preview / enable-disable / edit actions and a
+ * /r/<token> link with enable-disable / duplicate / edit actions and a
  * name-first create flow (the token is minted server-side by the service).
+ *
+ * SHOW-ONCE (mig 0330): tokens are hashed at rest, so an existing row's URL
+ * cannot be re-displayed or copied from this table anymore. The URL is
+ * offered exactly once, in the dialog right after Create (and, for existing
+ * links, by Rotate in the editor, which mints a replacement).
  */
 export function PublicLinksManager({
   appUrl,
@@ -49,7 +54,6 @@ export function PublicLinksManager({
   const base = appUrl.replace(/\/$/, '');
 
   const [error, setError] = React.useState<string | null>(null);
-  const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [togglingId, setTogglingId] = React.useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = React.useState<string | null>(null);
   const [confirmDisable, setConfirmDisable] = React.useState<PublicLinkRow | null>(null);
@@ -58,14 +62,20 @@ export function PublicLinksManager({
   const [createName, setCreateName] = React.useState('');
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
+  // The freshly-created link's one-time URL (plaintext token straight from
+  // the create action's response — it exists nowhere else, and navigating
+  // away discards it forever).
+  const [createdLink, setCreatedLink] = React.useState<{ id: string; url: string } | null>(null);
+  const [createdCopied, setCreatedCopied] = React.useState(false);
 
-  async function copyUrl(link: PublicLinkRow) {
+  async function copyCreatedUrl() {
+    if (!createdLink) return;
     try {
-      await navigator.clipboard.writeText(`${base}/r/${link.token}`);
-      setCopiedId(link.id);
-      setTimeout(() => setCopiedId((cur) => (cur === link.id ? null : cur)), 1500);
+      await navigator.clipboard.writeText(createdLink.url);
+      setCreatedCopied(true);
+      setTimeout(() => setCreatedCopied(false), 1500);
     } catch {
-      setError("Couldn't copy the link. Open the editor to copy it manually.");
+      setError("Couldn't copy the link. Select the URL text and copy it manually.");
     }
   }
 
@@ -112,7 +122,12 @@ export function PublicLinksManager({
     }
     setCreateOpen(false);
     setCreateName('');
-    router.push(`/dashboard/settings/public-requests/${res.data.id}`);
+    // Show-once handoff: the plaintext token exists only in this response.
+    // Surface the URL for copying BEFORE the admin moves on to the editor —
+    // once this dialog closes it is gone (Rotate in the editor mints a
+    // replacement).
+    setCreatedLink({ id: res.data.id, url: `${base}/r/${res.data.token}` });
+    setCreatedCopied(false);
   }
 
   return (
@@ -200,32 +215,11 @@ export function PublicLinksManager({
                     {new Date(link.created_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell>
+                    {/* No Copy URL / Preview here (mig 0330): the token is
+                        hashed at rest, so an existing row's URL cannot be
+                        rebuilt. Rotate in the editor is the show-once path
+                        to a fresh URL. */}
                     <div className="flex items-center justify-end gap-1.5">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyUrl(link)}
-                        title="Copy public URL"
-                      >
-                        {copiedId === link.id ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                        {copiedId === link.id ? 'Copied' : 'Copy URL'}
-                      </Button>
-                      <Button asChild type="button" variant="outline" size="sm">
-                        <a
-                          href={`${base}/r/${link.token}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open the live public page in a new tab"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          Preview
-                        </a>
-                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -336,6 +330,51 @@ export function PublicLinksManager({
             <Button type="button" onClick={() => void createLink()} disabled={creating}>
               {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Show-once URL handoff (mig 0330). Closing this dialog — by any
+          path — lands the admin in the new link's editor; the URL itself is
+          unrecoverable after that (Rotate mints a replacement). */}
+      <Dialog
+        open={createdLink !== null}
+        onOpenChange={(open) => {
+          if (!open && createdLink) {
+            const id = createdLink.id;
+            setCreatedLink(null);
+            router.push(`/dashboard/settings/public-requests/${id}`);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Link created — copy the URL now</DialogTitle>
+            <DialogDescription>
+              For security, this URL is shown only once and cannot be
+              displayed again. If you lose it, rotate the link in the editor
+              to get a new one.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input readOnly value={createdLink?.url ?? ''} onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" variant="outline" size="sm" onClick={() => void copyCreatedUrl()}>
+              {createdCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {createdCopied ? 'Copied' : 'Copy URL'}
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!createdLink) return;
+                const id = createdLink.id;
+                setCreatedLink(null);
+                router.push(`/dashboard/settings/public-requests/${id}`);
+              }}
+            >
+              Continue to editor
             </Button>
           </DialogFooter>
         </DialogContent>

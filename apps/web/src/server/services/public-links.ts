@@ -4,6 +4,7 @@ import { revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 
 import {
   assertModuleEnabled,
@@ -55,7 +56,6 @@ export interface PublicLinkRow {
   name: string;
   purpose: string | null;
   instructions: string | null;
-  token: string;
   active: boolean;
   expires_at: string | null;
   available_from: string | null;
@@ -133,8 +133,13 @@ export function publicCatalogTag(linkId: string): string {
  */
 export const PUBLIC_TOKEN_RESOLVE_TAG = 'public-org-by-token';
 
+// Deliberately NO token/token_hash column: since migration 0330 the DB holds
+// only sha256(token), and even the hash never leaves the service — list/get
+// feed client components, and echoing the hash there would put a stable
+// per-link identifier-of-a-credential into page payloads for no reason. The
+// plaintext token is returned exactly once, by create()/rotateToken().
 const LINK_SELECT =
-  'id, name, purpose, instructions, token, active, expires_at, available_from, ' +
+  'id, name, purpose, instructions, active, expires_at, available_from, ' +
   'available_until, availability_display, books_enabled, items_enabled, ' +
   'include_public_pool, default_max_qty, created_at, updated_at';
 
@@ -190,6 +195,12 @@ export class PublicLinksService {
     };
   }
 
+  /**
+   * Returns the plaintext token exactly ONCE — the DB stores only
+   * sha256(token) (migration 0330), so this return value is the only chance
+   * the caller ever gets to show/copy the /r/<token> URL. Later retrieval is
+   * rotateToken(), which mints a replacement.
+   */
   async create(input: PublicLinkInput): Promise<{ id: string; token: string }> {
     this.gate();
     const parsed = publicLinkSchema.parse(input);
@@ -201,7 +212,7 @@ export class PublicLinksService {
         name: parsed.name,
         purpose: parsed.purpose ?? null,
         instructions: parsed.instructions ?? null,
-        token,
+        token_hash: sha256Hex(token),
         active: parsed.active ?? true,
         expires_at: parsed.expiresAt ?? null,
         available_from: parsed.availableFrom ?? null,
@@ -238,7 +249,9 @@ export class PublicLinksService {
    * token, name suffixed "(copy)". The copy is ALWAYS inserted inactive — a
    * duplicated PUBLIC link must never go live without an explicit enable,
    * because the admin has not yet reviewed what the copied catalog exposes
-   * under the new URL.
+   * under the new URL. The fresh token is NOT returned: the copy starts
+   * disabled, and enabling it goes through the editor, whose rotate action
+   * is the show-once path for obtaining a URL.
    */
   async duplicate(id: string): Promise<{ id: string }> {
     this.gate();
@@ -262,7 +275,7 @@ export class PublicLinksService {
         name: `${src.name} (copy)`.slice(0, 160),
         purpose: src.purpose,
         instructions: src.instructions,
-        token,
+        token_hash: sha256Hex(token),
         // Never live on creation — see the method doc comment.
         active: false,
         expires_at: src.expires_at,
@@ -354,12 +367,16 @@ export class PublicLinksService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Public link not found');
     const disabled = before.active && parsed.active === false;
+    // token_hash never goes into audit rows: before 0330 this spread wrote
+    // the RAW token into the audit trail; the credential (or any stable
+    // derivative of it) does not belong there.
+    const { token_hash: _beforeHash, ...beforeForAudit } = before;
     await audit(
       {
         event: disabled ? 'public_link.disabled' : 'public_link.updated',
         entityType: 'public_request_link',
         entityId: id,
-        before,
+        before: beforeForAudit,
         after: { ...parsed },
         extra: { link_id: id },
       },
@@ -399,9 +416,13 @@ export class PublicLinksService {
   /**
    * Mints a fresh token for the link — the old URL stops resolving
    * immediately. When the link is the org's migrated "General request link"
-   * (its token matches organizations.public_request_token), the org column is
-   * kept in sync so the legacy fallback + /r/track token checks keep agreeing
-   * with the links table.
+   * (its token hash matches organizations.public_request_token_hash), the
+   * org column is kept in sync so the legacy fallback + /r/track token
+   * checks keep agreeing with the links table.
+   *
+   * The plaintext token is returned ONCE (migration 0330 stores only the
+   * hash) — the editor shows it with a copy affordance immediately, and it
+   * is never retrievable again.
    */
   async rotateToken(id: string): Promise<{ token: string }> {
     this.gate();
@@ -409,7 +430,7 @@ export class PublicLinksService {
     const token = generateToken();
     const { data, error } = await this.ctx.supabase
       .from('public_request_links')
-      .update({ token })
+      .update({ token_hash: sha256Hex(token) })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .select('id')
@@ -423,17 +444,17 @@ export class PublicLinksService {
     // table is authoritative for /r/<token> resolution.
     const { data: orgRow } = await this.ctx.supabase
       .from('organizations')
-      .select('public_request_token')
+      .select('public_request_token_hash')
       .eq('id', this.ctx.organizationId)
       .maybeSingle();
     if (
-      (orgRow as { public_request_token?: string | null } | null)?.public_request_token ===
-      before.token
+      (orgRow as { public_request_token_hash?: string | null } | null)
+        ?.public_request_token_hash === before.token_hash
     ) {
       await this.ctx.supabase
         .from('organizations')
         .update({
-          public_request_token: token,
+          public_request_token_hash: sha256Hex(token),
           public_request_token_rotated_at: new Date().toISOString(),
         })
         .eq('id', this.ctx.organizationId);
@@ -465,12 +486,14 @@ export class PublicLinksService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Public link not found');
+    // Same audit hygiene as update(): never write the token hash to audit.
+    const { token_hash: _beforeHash, ...beforeForAudit } = before;
     await audit(
       {
         event: 'public_link.disabled',
         entityType: 'public_request_link',
         entityId: id,
-        before,
+        before: beforeForAudit,
         extra: { link_id: id, action: 'deleted' },
       },
       this.ctx,
@@ -750,7 +773,7 @@ export class PublicLinksService {
 
   private async loadForAudit(id: string): Promise<{
     active: boolean;
-    token: string;
+    token_hash: string;
     name: string;
     include_public_pool: boolean;
     books_enabled: boolean;
@@ -759,7 +782,9 @@ export class PublicLinksService {
   }> {
     const { data, error } = await this.ctx.supabase
       .from('public_request_links')
-      .select('active, token, name, include_public_pool, books_enabled, items_enabled, default_max_qty')
+      .select(
+        'active, token_hash, name, include_public_pool, books_enabled, items_enabled, default_max_qty',
+      )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -767,7 +792,7 @@ export class PublicLinksService {
     if (!data) throw new ServiceError('not_found', 'Public link not found');
     return data as {
       active: boolean;
-      token: string;
+      token_hash: string;
       name: string;
       include_public_pool: boolean;
       books_enabled: boolean;

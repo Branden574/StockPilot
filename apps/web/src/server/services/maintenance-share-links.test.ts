@@ -81,17 +81,17 @@ describe('hashShareToken', () => {
   });
 });
 
-describe('ensureActiveLink', () => {
+describe('issueLink (rotate-or-create — mig 0330 show-once)', () => {
   it('checks parent visibility via the RLS-scoped ctx client BEFORE touching the admin client (chainArgs-pinned) — requester-own or read_all/manage both pass because RLS itself already encodes that boundary', async () => {
     const { stub, ctx } = build({
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
     buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: null },
     });
 
-    await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+    await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
 
     const args = stub.chainArgs.get('maintenance_requests.select')!;
     expect(args).toContainEqual(['organization_id', ctx.organizationId]);
@@ -102,7 +102,7 @@ describe('ensureActiveLink', () => {
     const { ctx } = build({ 'maintenance_requests.select': { data: null, error: null } });
     const adminStub = buildAdmin();
 
-    await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
+    await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
       code: 'not_found',
     });
     expect(adminStub.fromCalls).not.toContain('maintenance_request_share_links');
@@ -113,12 +113,12 @@ describe('ensureActiveLink', () => {
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
     const adminStub = buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: null },
     });
 
     const before = Date.now();
-    const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+    const res = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
     const after = Date.now();
 
     expect(res.token).toMatch(/^[0-9a-f]{64}$/);
@@ -136,7 +136,6 @@ describe('ensureActiveLink', () => {
     >;
     expect(insert.organization_id).toBe(ctx.organizationId);
     expect(insert.maintenance_request_id).toBe(REQ_ID);
-    expect(insert.token).toBe(res.token);
     expect(insert.active).toBe(true);
     expect(insert.expires_at).toBe(res.expiresAt);
     expect(insert.created_by).toBe(ctx.userId);
@@ -147,17 +146,47 @@ describe('ensureActiveLink', () => {
     );
   });
 
+  it('SECURITY PROPERTY (MED-26 a) — the row written to the DB carries token_hash = sha256(returned plaintext), a 64-hex digest, and NO plaintext token under any key', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
+    });
+    const adminStub = buildAdmin({
+      'maintenance_request_share_links.update': { data: null, error: null },
+      'maintenance_request_share_links.insert': { data: null, error: null },
+    });
+
+    const res = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
+
+    const insert = adminStub.chainArgs.get('maintenance_request_share_links.insert')![0]![0] as Record<
+      string,
+      unknown
+    >;
+    // Literal pin: the at-rest column is the digest of the plaintext the
+    // caller got — computed independently here with node:crypto, not by
+    // calling the service's own helper.
+    expect(insert.token_hash).toBe(createHash('sha256').update(res.token).digest('hex'));
+    expect(insert.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    // The legacy plaintext column is gone from the payload entirely, and no
+    // OTHER key smuggles the plaintext either (a digest of a 256-bit value
+    // can never equal its preimage, so a full-payload scan is meaningful).
+    expect(insert).not.toHaveProperty('token');
+    for (const value of Object.values(insert)) {
+      expect(value).not.toBe(res.token);
+      expect(String(value)).not.toContain(res.token);
+    }
+  });
+
   it('MUTATION GUARD (I2) — mints the token via crypto.getRandomValues on a 32-byte Uint8Array, not a weaker RNG', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
     buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: null },
     });
     const spy = vi.spyOn(globalThis.crypto, 'getRandomValues');
 
-    await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+    await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
 
     expect(spy).toHaveBeenCalledTimes(1);
     const arg = spy.mock.calls[0]![0];
@@ -165,193 +194,64 @@ describe('ensureActiveLink', () => {
     expect((arg as Uint8Array).length).toBe(32);
   });
 
-  it('MUTATION GUARD (I1b) — the existing-active-row lookup is scoped by org + request + active (chainArgs-pinned) — unscoped, this could resolve a DIFFERENT org/request\'s active row', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
-    });
-    const adminStub = buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
-      'maintenance_request_share_links.insert': { data: null, error: null },
-    });
-
-    await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-
-    const args = adminStub.chainArgsAll.get('maintenance_request_share_links.select')![0]!;
-    expect(args).toContainEqual(['organization_id', ctx.organizationId]);
-    expect(args).toContainEqual(['maintenance_request_id', REQ_ID]);
-    expect(args).toContainEqual(['active', true]);
-  });
-
   it('generates a different token on every call (no fixed/predictable value)', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
     buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: null },
     });
-    const a = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-    const b = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+    const a = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
+    const b = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
     expect(a.token).not.toBe(b.token);
   });
 
-  it('reuses an existing active, unexpired row — no new insert, no audit', async () => {
+  it('SECURITY PROPERTY (MED-26 d) — always rotates: deactivates any currently-active row BEFORE inserting the fresh one, so the previously-issued plaintext stops resolving', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
-    const futureIso = new Date(Date.now() + 90 * DAY_MS).toISOString();
     const adminStub = buildAdmin({
-      'maintenance_request_share_links.select': {
-        data: { token: 'a'.repeat(64), expires_at: futureIso },
-        error: null,
-      },
-    });
-
-    const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-
-    expect(res).toEqual({
-      token: 'a'.repeat(64),
-      url: `https://stockpilotusa.com/m/${'a'.repeat(64)}`,
-      expiresAt: futureIso,
-    });
-    expect(adminStub.chainArgs.has('maintenance_request_share_links.insert')).toBe(false);
-    expect(audit).not.toHaveBeenCalled();
-  });
-
-  it('deactivates a stale (expired-but-still-active) row before minting a fresh one — the partial unique index on (maintenance_request_id) WHERE active allows only ONE active row, so a stale row must be cleared or the insert 23505s', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
-    });
-    const pastIso = new Date(Date.now() - DAY_MS).toISOString();
-    const adminStub = buildAdmin({
-      'maintenance_request_share_links.select': { data: { token: 'b'.repeat(64), expires_at: pastIso }, error: null },
       'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: null },
     });
 
-    const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+    await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
 
-    expect(res.token).not.toBe('b'.repeat(64));
-    const updateArgs = adminStub.chainArgs.get('maintenance_request_share_links.update')![0]![0] as Record<
+    // The deactivate ran, targeting exactly this org+request's active row.
+    const updatePayload = adminStub.chainArgs.get('maintenance_request_share_links.update')![0]![0] as Record<
       string,
       unknown
     >;
-    expect(updateArgs.active).toBe(false);
-    // Fix wave m3: natural expiry must NOT stamp revoked_at — that column
-    // records an explicit revoke() call by a manage-holder. Conflating the
-    // two would make the audit trail claim someone revoked a link that
-    // actually just lapsed on its own.
-    expect(updateArgs).not.toHaveProperty('revoked_at');
-    expect(adminStub.chainArgs.has('maintenance_request_share_links.insert')).toBe(true);
-  });
-
-  it('MUTATION GUARD (I1c) — the stale-row deactivate UPDATE is scoped by org + request + active (chainArgs-pinned) — unscoped, this would deactivate=false across EVERY org\'s active links', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
-    });
-    const pastIso = new Date(Date.now() - DAY_MS).toISOString();
-    const adminStub = buildAdmin({
-      'maintenance_request_share_links.select': { data: { token: 'b'.repeat(64), expires_at: pastIso }, error: null },
-      'maintenance_request_share_links.update': { data: null, error: null },
-      'maintenance_request_share_links.insert': { data: null, error: null },
-    });
-
-    await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-
+    expect(updatePayload.active).toBe(false);
+    // Rotation must NOT stamp revoked_at — that column records an explicit
+    // revoke() call by a manage-holder (fix wave m3 posture, kept).
+    expect(updatePayload).not.toHaveProperty('revoked_at');
     const updateArgs = adminStub.chainArgs.get('maintenance_request_share_links.update')!;
     expect(updateArgs).toContainEqual(['organization_id', ctx.organizationId]);
     expect(updateArgs).toContainEqual(['maintenance_request_id', REQ_ID]);
     expect(updateArgs).toContainEqual(['active', true]);
+    // And a fresh row was inserted after it.
+    expect(adminStub.chainArgs.has('maintenance_request_share_links.insert')).toBe(true);
   });
 
-  it('a concurrent insert race (23505 against the partial unique index) hands back the WINNING row instead of an opaque internal_error', async () => {
+  it('a concurrent insert race (23505 against the partial unique index) surfaces as a retryable conflict — the winner\'s plaintext is unrecoverable (hash-at-rest), so it can never be handed back', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
-    const winnerIso = new Date(Date.now() + 180 * DAY_MS).toISOString();
-
-    // makeSupabaseStub takes one result PER key; a canned value may be a
-    // function, so use a call counter to return successive values for the
-    // two `maintenance_request_share_links.select` calls this path makes
-    // (the initial "no existing row" check, then the post-23505 re-fetch).
-    let selectCall = 0;
-    const adminStub = makeSupabaseStub({
-      'maintenance_request_share_links.select': () => {
-        selectCall += 1;
-        return selectCall === 1
-          ? { data: null, error: null }
-          : { data: { token: 'c'.repeat(64), expires_at: winnerIso }, error: null };
-      },
+    buildAdmin({
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': {
         data: null,
         error: { code: '23505', message: 'duplicate key value violates unique constraint' },
       },
     });
-    createAdminClientMock.mockReturnValue(adminStub.client);
 
-    const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-    expect(res).toEqual({
-      token: 'c'.repeat(64),
-      url: `https://stockpilotusa.com/m/${'c'.repeat(64)}`,
-      expiresAt: winnerIso,
+    await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
+      code: 'conflict',
     });
     // The loser never audits a creation it didn't actually perform.
     expect(audit).not.toHaveBeenCalled();
-  });
-
-  it('MUTATION GUARD (I1d) — the post-23505 re-fetch is scoped by org + request + active (chainArgs-pinned), same as the initial lookup', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
-    });
-    const winnerIso = new Date(Date.now() + 180 * DAY_MS).toISOString();
-    let selectCall = 0;
-    const adminStub = makeSupabaseStub({
-      'maintenance_request_share_links.select': () => {
-        selectCall += 1;
-        return selectCall === 1
-          ? { data: null, error: null }
-          : { data: { token: 'c'.repeat(64), expires_at: winnerIso }, error: null };
-      },
-      'maintenance_request_share_links.insert': {
-        data: null,
-        error: { code: '23505', message: 'duplicate key value violates unique constraint' },
-      },
-    });
-    createAdminClientMock.mockReturnValue(adminStub.client);
-
-    await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
-
-    const allCalls = adminStub.chainArgsAll.get('maintenance_request_share_links.select')!;
-    expect(allCalls).toHaveLength(2);
-    const refetchArgs = allCalls[1]!;
-    expect(refetchArgs).toContainEqual(['organization_id', ctx.organizationId]);
-    expect(refetchArgs).toContainEqual(['maintenance_request_id', REQ_ID]);
-    expect(refetchArgs).toContainEqual(['active', true]);
-  });
-
-  it('fix wave m2 — the post-23505 re-fetch is expiry-symmetric with the `existing` branch: a winning row that is (pathologically) already expired is never handed back as a live link', async () => {
-    const { ctx } = build({
-      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
-    });
-    const pastIso = new Date(Date.now() - DAY_MS).toISOString();
-    let selectCall = 0;
-    const adminStub = makeSupabaseStub({
-      'maintenance_request_share_links.select': () => {
-        selectCall += 1;
-        return selectCall === 1
-          ? { data: null, error: null }
-          : { data: { token: 'c'.repeat(64), expires_at: pastIso }, error: null };
-      },
-      'maintenance_request_share_links.insert': {
-        data: null,
-        error: { code: '23505', message: 'duplicate key value violates unique constraint' },
-      },
-    });
-    createAdminClientMock.mockReturnValue(adminStub.client);
-
-    await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
-      code: 'internal_error',
-    });
   });
 
   it('a non-23505 insert failure surfaces as internal_error', async () => {
@@ -359,10 +259,10 @@ describe('ensureActiveLink', () => {
       'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
     });
     buildAdmin({
-      'maintenance_request_share_links.select': { data: null, error: null },
+      'maintenance_request_share_links.update': { data: null, error: null },
       'maintenance_request_share_links.insert': { data: null, error: { message: 'connection reset' } },
     });
-    await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
+    await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
       code: 'internal_error',
     });
     expect(audit).not.toHaveBeenCalled();
@@ -370,7 +270,7 @@ describe('ensureActiveLink', () => {
 
   it('MUTATION GUARD — module gate: rejects when maintenance_requests is disabled for the org, and never reaches the admin client', async () => {
     const { ctx } = build({}, { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) });
-    await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
+    await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
       code: 'module_disabled',
     });
     expect(createAdminClientMock).not.toHaveBeenCalled();
@@ -389,7 +289,7 @@ describe('ensureActiveLink', () => {
       );
       const adminStub = buildAdmin();
 
-      await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
+      await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
         code: 'forbidden',
       });
       expect(adminStub.fromCalls).not.toContain('maintenance_request_share_links');
@@ -406,11 +306,11 @@ describe('ensureActiveLink', () => {
         { userId: 'requester-1', role: 'staff', permissions: new Set(['maintenance_requests:submit']) },
       );
       buildAdmin({
-        'maintenance_request_share_links.select': { data: null, error: null },
+        'maintenance_request_share_links.update': { data: null, error: null },
         'maintenance_request_share_links.insert': { data: null, error: null },
       });
 
-      const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+      const res = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
       expect(res.token).toMatch(/^[0-9a-f]{64}$/);
     });
 
@@ -426,7 +326,7 @@ describe('ensureActiveLink', () => {
       );
       const adminStub = buildAdmin();
 
-      await expect(new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID)).rejects.toMatchObject({
+      await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
         code: 'forbidden',
       });
       expect(adminStub.fromCalls).not.toContain('maintenance_request_share_links');
@@ -443,13 +343,85 @@ describe('ensureActiveLink', () => {
         { role: 'manager' },
       );
       buildAdmin({
-        'maintenance_request_share_links.select': { data: null, error: null },
+        'maintenance_request_share_links.update': { data: null, error: null },
         'maintenance_request_share_links.insert': { data: null, error: null },
       });
 
-      const res = await new MaintenanceShareLinksService(ctx).ensureActiveLink(REQ_ID);
+      const res = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
       expect(res.token).toMatch(/^[0-9a-f]{64}$/);
     });
+  });
+});
+
+describe('getActiveLinkStatus (token-free render-time read)', () => {
+  it('returns { expiresAt } for an active, unexpired link — and the payload carries NO token material (the select asks only for expires_at)', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
+    });
+    const futureIso = new Date(Date.now() + 90 * DAY_MS).toISOString();
+    const adminStub = buildAdmin({
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
+    });
+
+    const res = await new MaintenanceShareLinksService(ctx).getActiveLinkStatus(REQ_ID);
+    expect(res).toEqual({ expiresAt: futureIso });
+
+    const args = adminStub.chainArgs.get('maintenance_request_share_links.select')!;
+    expect(args).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(args).toContainEqual(['maintenance_request_id', REQ_ID]);
+    expect(args).toContainEqual(['active', true]);
+  });
+
+  it('an expired-but-still-active row reads as null (no link)', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
+    });
+    const pastIso = new Date(Date.now() - DAY_MS).toISOString();
+    buildAdmin({
+      'maintenance_request_share_links.select': { data: { expires_at: pastIso }, error: null },
+    });
+    await expect(new MaintenanceShareLinksService(ctx).getActiveLinkStatus(REQ_ID)).resolves.toBeNull();
+  });
+
+  it('no active row -> null', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: null }, error: null },
+    });
+    buildAdmin({ 'maintenance_request_share_links.select': { data: null, error: null } });
+    await expect(new MaintenanceShareLinksService(ctx).getActiveLinkStatus(REQ_ID)).resolves.toBeNull();
+  });
+
+  it('same tier as issueLink: a read_all-only non-owner is refused; the owning requester with submit passes', async () => {
+    const refused = build(
+      {
+        'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: 'someone-else' }, error: null },
+      },
+      { role: 'viewer', permissions: new Set(['maintenance_requests:read_all']) },
+    );
+    buildAdmin();
+    await expect(
+      new MaintenanceShareLinksService(refused.ctx).getActiveLinkStatus(REQ_ID),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+
+    const owner = build(
+      {
+        'maintenance_requests.select': { data: { id: REQ_ID, requester_user_id: 'requester-1' }, error: null },
+      },
+      { userId: 'requester-1', role: 'staff', permissions: new Set(['maintenance_requests:submit']) },
+    );
+    buildAdmin({ 'maintenance_request_share_links.select': { data: null, error: null } });
+    await expect(
+      new MaintenanceShareLinksService(owner.ctx).getActiveLinkStatus(REQ_ID),
+    ).resolves.toBeNull();
+  });
+
+  it('not_found when the parent request is not visible to this caller', async () => {
+    const { ctx } = build({ 'maintenance_requests.select': { data: null, error: null } });
+    const adminStub = buildAdmin();
+    await expect(new MaintenanceShareLinksService(ctx).getActiveLinkStatus(REQ_ID)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(adminStub.fromCalls).not.toContain('maintenance_request_share_links');
   });
 });
 
@@ -562,11 +534,34 @@ describe('resolveMaintenanceShareToken', () => {
     await expect(resolveMaintenanceShareToken(TOKEN)).resolves.toBeNull();
   });
 
-  it('MUTATION GUARD (I1a) — the token lookup is scoped by the token itself (chainArgs-pinned) — dropping this filter would resolve the FIRST row in the table for any input', async () => {
+  it('MUTATION GUARD (I1a) + SECURITY PROPERTY (MED-26 b) — the lookup filters on token_hash = sha256(presented plaintext), never on the plaintext itself (chainArgs-pinned, digest computed independently)', async () => {
     const adminStub = buildAdmin({ 'maintenance_request_share_links.select': { data: null, error: null } });
     await resolveMaintenanceShareToken(TOKEN);
     const args = adminStub.chainArgs.get('maintenance_request_share_links.select')!;
-    expect(args).toContainEqual(['token', TOKEN]);
+    expect(args).toContainEqual(['token_hash', createHash('sha256').update(TOKEN).digest('hex')]);
+    // The plaintext never reaches the query as a filter value.
+    expect(args).not.toContainEqual(['token', TOKEN]);
+    expect(args).not.toContainEqual(['token_hash', TOKEN]);
+  });
+
+  it('SECURITY PROPERTY (MED-26 c) — presenting the STORED HASH as if it were a token cannot resolve: the service digests every presented value, so the hash-of-the-hash is what gets compared, never the stored digest itself', async () => {
+    // The stored at-rest value for TOKEN:
+    const storedHash = createHash('sha256').update(TOKEN).digest('hex');
+    const adminStub = buildAdmin({ 'maintenance_request_share_links.select': { data: null, error: null } });
+
+    await resolveMaintenanceShareToken(storedHash);
+
+    const args = adminStub.chainArgs.get('maintenance_request_share_links.select')!;
+    // The comparison value is sha256(storedHash) — which can never equal
+    // storedHash (a digest has no fixed point reachable here), so a row
+    // whose token_hash IS storedHash can never match. If the service ever
+    // regressed to comparing the presented value directly, this filter
+    // would be ['token_hash', storedHash] and the assertion below trips.
+    expect(args).toContainEqual([
+      'token_hash',
+      createHash('sha256').update(storedHash).digest('hex'),
+    ]);
+    expect(args).not.toContainEqual(['token_hash', storedHash]);
   });
 
   it('MUTATION GUARD — inactive (revoked) link -> null, indistinguishable from unknown, even though the parent request/attachments queries WOULD otherwise resolve to real data', async () => {
@@ -1000,10 +995,11 @@ describe('resolveMaintenanceSharePhoto (the proxy route\'s only data source)', (
  * resolved.ts) rather than through `createAdminClientMock`, so these tests
  * build a plain `makeSupabaseStub()` and pass its `.client` straight in.
  */
-describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s photo data source)', () => {
+describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s photo data source; mig 0330: verifies a THREADED plaintext, never reads a token back)', () => {
   const ORG_ID = 'org-from-email';
   const REQ_ID = 'req-from-email';
   const TOKEN = 'a1'.repeat(32);
+  const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex');
   const futureIso = new Date(Date.now() + 30 * DAY_MS).toISOString();
   const pastIso = new Date(Date.now() - DAY_MS).toISOString();
 
@@ -1019,48 +1015,61 @@ describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s pho
     { storage_path: 'org/req/4.jpg', mime_type: 'image/jpeg', safe_filename: 'resolution-4.jpg', kind: 'resolution' },
   ];
 
-  it('no link row at all -> null, never touches the attachments table', async () => {
+  it('no threaded token -> null without a single query (nothing usable to verify)', async () => {
+    const stub = makeSupabaseStub({});
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, null);
+    expect(res).toBeNull();
+    expect(stub.chainArgs.has('maintenance_request_share_links.select')).toBe(false);
+  });
+
+  it('no matching link row (revoked, or rotated since the mint) -> null, never touches the attachments table', async () => {
     const stub = makeSupabaseStub({
       'maintenance_request_share_links.select': { data: null, error: null },
     });
-    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     expect(res).toBeNull();
     expect(stub.chainArgs.has('maintenance_request_attachments.select')).toBe(false);
   });
 
-  it('an expired link -> null (never a live token handed back)', async () => {
+  it('SECURITY PROPERTY (MED-26 b/c) — verifies the threaded plaintext by token_hash = sha256(plaintext), scoped org + request + active; the plaintext itself is never a filter value', async () => {
     const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: pastIso },
-        error: null,
-      },
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
       'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
     });
-    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
+    const args = stub.chainArgs.get('maintenance_request_share_links.select')!;
+    expect(args).toContainEqual(['organization_id', ORG_ID]);
+    expect(args).toContainEqual(['maintenance_request_id', REQ_ID]);
+    expect(args).toContainEqual(['active', true]);
+    expect(args).toContainEqual(['token_hash', TOKEN_HASH]);
+    expect(args).not.toContainEqual(['token', TOKEN]);
+    expect(args).not.toContainEqual(['token_hash', TOKEN]);
+  });
+
+  it('an expired link -> null (never a live token handed back)', async () => {
+    const stub = makeSupabaseStub({
+      'maintenance_request_share_links.select': { data: { expires_at: pastIso }, error: null },
+      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
+    });
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     expect(res).toBeNull();
   });
 
   it('a whole-query attachments error -> null (never silently zero entries)', async () => {
     const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: futureIso },
-        error: null,
-      },
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
       'maintenance_request_attachments.select': { data: null, error: { message: 'connection reset' } },
     });
-    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     expect(res).toBeNull();
   });
 
-  it('an active unexpired link + mixed-kind rows -> the token and ONLY the resolution rows, at their COMBINED-list indices (not a re-filtered 0/1/2)', async () => {
+  it('an active unexpired link + mixed-kind rows -> the THREADED token echoed back and ONLY the resolution rows, at their COMBINED-list indices (not a re-filtered 0/1/2)', async () => {
     const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: futureIso },
-        error: null,
-      },
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
       'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
     });
-    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     expect(res).toEqual({
       token: TOKEN,
       entries: [
@@ -1073,43 +1082,22 @@ describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s pho
 
   it('no kind=\'resolution\' rows -> a real link but an empty entries array (not null — the link itself is still usable)', async () => {
     const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: futureIso },
-        error: null,
-      },
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
       'maintenance_request_attachments.select': {
         data: [{ storage_path: 'org/req/0.jpg', mime_type: 'image/jpeg', safe_filename: 'requester-0.jpg', kind: 'requester' }],
         error: null,
       },
     });
-    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    const res = await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     expect(res).toEqual({ token: TOKEN, entries: [] });
-  });
-
-  it('MUTATION GUARD — the link lookup is scoped by org + request + active (chainArgs-pinned)', async () => {
-    const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: futureIso },
-        error: null,
-      },
-      'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
-    });
-    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
-    const args = stub.chainArgs.get('maintenance_request_share_links.select')!;
-    expect(args).toContainEqual(['organization_id', ORG_ID]);
-    expect(args).toContainEqual(['maintenance_request_id', REQ_ID]);
-    expect(args).toContainEqual(['active', true]);
   });
 
   it('reuses the SAME fetchValidAttachments ordering funnel — both .order calls are pinned, in sequence, same as resolveMaintenanceShareToken', async () => {
     const stub = makeSupabaseStub({
-      'maintenance_request_share_links.select': {
-        data: { token: TOKEN, expires_at: futureIso },
-        error: null,
-      },
+      'maintenance_request_share_links.select': { data: { expires_at: futureIso }, error: null },
       'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
     });
-    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID);
+    await listResolutionProofProxyPhotos(stub.client, ORG_ID, REQ_ID, TOKEN);
     const names = stub.chains.get('maintenance_request_attachments.select')!;
     const args = stub.chainArgs.get('maintenance_request_attachments.select')!;
     const orderIndices = names.reduce<number[]>((acc, n, i) => (n === 'order' ? [...acc, i] : acc), []);

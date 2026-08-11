@@ -292,8 +292,8 @@ select throws_ok(
 -- comment above the policy). Bound to org A's request 1.
 set local role to postgres;
 insert into public.maintenance_request_share_links
-  (organization_id, maintenance_request_id, token, expires_at, created_by)
-select organization_id, id, 'sharelinktoken1234567890', now() + interval '7 days', :mgr
+  (organization_id, maintenance_request_id, token_hash, expires_at, created_by)
+select organization_id, id, encode(extensions.digest('sharelinktoken1234567890', 'sha256'), 'hex'), now() + interval '7 days', :mgr
   from public.maintenance_requests where organization_id = :org_a and request_number = 1;
 
 -- Manager (holds manage) sees the link.
@@ -320,8 +320,8 @@ select is((select count(*)::int from public.maintenance_request_share_links), 0,
 set local "request.jwt.claim.sub" to '10000000-0000-0000-0000-000000000003';
 select throws_ok(
   format($$ insert into public.maintenance_request_share_links
-       (organization_id, maintenance_request_id, token, expires_at, created_by)
-     values ('a0000000-0000-0000-0000-00000000000a', %L, 'crossorgtokenabcdef123456',
+       (organization_id, maintenance_request_id, token_hash, expires_at, created_by)
+     values ('a0000000-0000-0000-0000-00000000000a', %L, encode(extensions.digest('crossorgtokenabcdef123456', 'sha256'), 'hex'),
              now() + interval '7 days', '10000000-0000-0000-0000-000000000003') $$,
     :'victim_id'),
   '42501', null, 'org-P manager cannot insert a share link bound to an org-V request');

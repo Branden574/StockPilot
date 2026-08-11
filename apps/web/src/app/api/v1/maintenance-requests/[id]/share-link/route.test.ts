@@ -16,7 +16,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 const BAD_ID = 'not-a-uuid';
 
-const ensureActiveLink = vi.fn();
+const issueLink = vi.fn();
 const revoke = vi.fn();
 
 function buildCtx() {
@@ -46,10 +46,10 @@ function params(id: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  ensureActiveLink.mockReset();
+  issueLink.mockReset();
   revoke.mockReset();
   vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ ensureActiveLink, revoke }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
+    () => ({ issueLink, revoke }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
   );
 });
 
@@ -58,19 +58,19 @@ describe('POST /api/v1/maintenance-requests/[id]/share-link', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(null);
     const res = await POST(postReq(REQUEST_ID), { params: params(REQUEST_ID) });
     expect(res.status).toBe(401);
-    expect(ensureActiveLink).not.toHaveBeenCalled();
+    expect(issueLink).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed id with 400 and never calls the service', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx() as never);
     const res = await POST(postReq(BAD_ID), { params: params(BAD_ID) });
     expect(res.status).toBe(400);
-    expect(ensureActiveLink).not.toHaveBeenCalled();
+    expect(issueLink).not.toHaveBeenCalled();
   });
 
   it('returns { url, expiresAt } with url starting APP_URL + /m/', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx() as never);
-    ensureActiveLink.mockResolvedValueOnce({
+    issueLink.mockResolvedValueOnce({
       token: 'abc123',
       url: 'https://stockpilotusa.com/m/abc123',
       expiresAt: '2027-01-01T00:00:00.000Z',
@@ -81,19 +81,19 @@ describe('POST /api/v1/maintenance-requests/[id]/share-link', () => {
     expect(body.url).toMatch(/^https:\/\/stockpilotusa\.com\/m\//);
     expect(body.expiresAt).toBe('2027-01-01T00:00:00.000Z');
     expect(body).not.toHaveProperty('token');
-    expect(ensureActiveLink).toHaveBeenCalledWith(REQUEST_ID);
+    expect(issueLink).toHaveBeenCalledWith(REQUEST_ID);
   });
 
   it('maps a forbidden ServiceError to 403', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx() as never);
-    ensureActiveLink.mockRejectedValueOnce(new ServiceError('forbidden', 'Missing permission: maintenance_requests:manage'));
+    issueLink.mockRejectedValueOnce(new ServiceError('forbidden', 'Missing permission: maintenance_requests:manage'));
     const res = await POST(postReq(REQUEST_ID), { params: params(REQUEST_ID) });
     expect(res.status).toBe(403);
   });
 
   it('maps a not_found ServiceError to 404', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx() as never);
-    ensureActiveLink.mockRejectedValueOnce(new ServiceError('not_found', 'Maintenance request not found'));
+    issueLink.mockRejectedValueOnce(new ServiceError('not_found', 'Maintenance request not found'));
     const res = await POST(postReq(REQUEST_ID), { params: params(REQUEST_ID) });
     expect(res.status).toBe(404);
   });

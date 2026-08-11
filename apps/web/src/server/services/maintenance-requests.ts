@@ -854,11 +854,14 @@ export class MaintenanceRequestsService {
       });
     }
 
-    // Share link for the email's proof-photo proxy URLs — same conditions as
-    // the detail page (photos of ANY kind + org setting), manage always
-    // eligible; a ServiceError from it degrades to "no link" rather than
-    // failing this already-committed resolution (the email falls back to
-    // its in-app line).
+    // Share link for the email's proof-photo proxy URLs — same conditions
+    // as before (photos of ANY kind + org setting), manage always eligible;
+    // a ServiceError from it degrades to "no link" rather than failing this
+    // already-committed resolution (the email falls back to its in-app
+    // line). Mig 0330: the DB now stores only the token's hash, so the
+    // PLAINTEXT minted here must be threaded into the email send below —
+    // the sender can no longer read it back at send time.
+    let shareToken: string | null = null;
     try {
       const { count: anyPhotos } = await this.db
         .from('maintenance_request_attachments')
@@ -866,7 +869,7 @@ export class MaintenanceRequestsService {
         .eq('organization_id', this.ctx.organizationId)
         .eq('maintenance_request_id', id);
       if ((anyPhotos ?? 0) > 0 && (await maintenanceShareLinksEnabled(this.ctx))) {
-        await new MaintenanceShareLinksService(this.ctx).ensureActiveLink(id);
+        shareToken = (await new MaintenanceShareLinksService(this.ctx).issueLink(id)).token;
       }
     } catch (e) {
       if (!(e instanceof ServiceError)) throw e;
@@ -888,7 +891,10 @@ export class MaintenanceRequestsService {
     // itself.
     void (async () => {
       try {
-        await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, { appUrl: APP_URL });
+        await maybeSendMaintenanceResolvedEmail(createAdminClient(), id, {
+          appUrl: APP_URL,
+          shareToken,
+        });
       } catch (err) {
         void reportError(err instanceof Error ? err : new Error(String(err)), {
           tag: 'maintenance_resolved.email',
