@@ -18,14 +18,16 @@
 --     cross-tenant sum impossible (a foreign item id sums the CALLER's org's
 --     empty holdings, not the foreign org's stock).
 --
---     HONEST NOTE on the definer property: item_stock_levels_select is still
---     the org-wide predicate (deferred in 0322 s.4 — a product decision), so
---     NO caller who passes the helper's manager gate can currently be blinded
---     by RLS, and an "RLS hides a holding from the assignee" fixture cannot
---     be constructed. The property that makes the sum future-proof is
---     therefore asserted structurally (prosecdef = true, search_path pinned)
---     rather than behaviourally, per the review rule that a test must state
---     what it could not do.
+--     HONEST NOTE on the definer property: at 0327 time
+--     item_stock_levels_select was still the org-wide predicate (deferred in
+--     0322 s.4), so NO caller who passed the helper's manager gate could be
+--     blinded by RLS, and an "RLS hides a holding from the assignee" fixture
+--     could not be constructed. The property that makes the sum future-proof
+--     was therefore asserted structurally (prosecdef = true, search_path
+--     pinned) rather than behaviourally. (0331 has since warehouse-narrowed
+--     the policy — managers remain unnarrowed by its privileged disjunct, so
+--     these assertions and fixtures hold unchanged; 0331's own test carries
+--     the scoped-caller behavioral proofs.)
 --
 --   • post_cycle_count end-to-end THROUGH the wired helper, as an
 --     authenticated manager: negative variance reconciles the (NULL-kind,
@@ -248,9 +250,10 @@ select ok(
 );
 
 -- WIRING PIN. The behavioral fixture for "posting sees the whole org even
--- when the caller's RLS is narrower" is unconstructible while
--- item_stock_levels_select stays org-wide (AR-2), so a revert of
--- post_cycle_count's body to the bare 0196 SELECT would pass every
+-- when the caller's RLS is narrower" was unconstructible at 0327 time while
+-- item_stock_levels_select stayed org-wide (AR-2, since closed by 0331 —
+-- managers remain unnarrowed, so it is STILL unconstructible here), so a
+-- revert of post_cycle_count's body to the bare 0196 SELECT would pass every
 -- behavioral test above. This structural pin closes that surviving
 -- mutation: the reconciliation sum must flow through the definer helper.
 select ok(

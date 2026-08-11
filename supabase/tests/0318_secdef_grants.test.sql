@@ -287,12 +287,19 @@ select ok(
 -- 42-43. Structural pin on WHY Group 2's ensure_* helpers must keep
 -- `authenticated`: their callers are SECURITY INVOKER. If either of these ever
 -- flips to SECURITY DEFINER the retention becomes unnecessary — but until then,
--- removing it is an outage. Pinning prosecdef = false keeps the reasoning in
+-- removing it is an outage. Pinning prosecdef keeps the reasoning in
 -- the test rather than only in a comment.
+--
+-- 0331 INVERTED the apply_level_delta half: it is now SECURITY DEFINER (with
+-- its own org/staff self-authorization gate), the prerequisite for the AR-2
+-- warehouse-narrowing of item_stock_levels_select. The ensure_* helpers keep
+-- `authenticated` regardless: post_receipt_v2 is still SECURITY INVOKER and
+-- calls ensure_warehouse_placement_locations as the querying user, and the
+-- helpers self-scope, so the retained grant stays harmless.
 select ok(
-  (select not p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  (select p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname = 'apply_level_delta'),
-  'apply_level_delta is SECURITY INVOKER — this is why the ensure_* helpers keep authenticated'
+  'apply_level_delta is SECURITY DEFINER since 0331 (draw-down selection immune to the caller''s read scope)'
 );
 select ok(
   (select not p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
