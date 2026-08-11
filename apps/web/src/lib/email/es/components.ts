@@ -15,6 +15,13 @@
  * from user or database input MUST be passed through `escapeHtml()` by
  * the family template before it reaches a partial.
  *
+ * ATTRIBUTE parameters are the exception (security wave E, MED-24): `href`,
+ * `src` and `alt` are escaped by the PARTIAL, via `escapeAttr()`, not by the
+ * family. Attribute values are the one place a missed escape is an injection
+ * rather than a cosmetic bug, and a convention spread across ~29 templates is
+ * not a control. `escapeAttr` is idempotent, so the families that already
+ * pre-escape their URLs stay correct and byte-identical.
+ *
  * Dark mode: the archetypes carry only the `@media (prefers-color-scheme:
  * dark)` block. The binding implementation prompt additionally requires
  * `[data-ogsc]` duplicates for Outlook.com — those are emitted as a
@@ -52,6 +59,50 @@ export function escapeHtml(s: string): string {
         c
       ]!,
   );
+}
+
+/**
+ * A character reference that is already well-formed: `&amp;` `&#39;` `&#x27;`.
+ * Used to make {@link escapeAttr} idempotent — see below.
+ */
+const EXISTING_ENTITY = /^&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6});/;
+
+/**
+ * Escape a value being interpolated into an HTML ATTRIBUTE (security wave E,
+ * MED-24).
+ *
+ * Why a second function instead of reusing `escapeHtml`: the escaping
+ * contract above is a per-template CONVENTION, and it was not held. Every
+ * attribute in this layer is double-quoted, so `"` is the only character that
+ * can terminate a value early — but `button()`, `ctaRow()`, `heroSlot()` and
+ * `footer()` interpolated their `href` / `src` / `alt` RAW, leaving ~29
+ * family templates each responsible for remembering `escapeHtml`. Five call
+ * sites did; the rest passed values straight through, including one built as
+ * `mailto:${approverEmail}` from a database column. Escaping now happens
+ * INSIDE the partials, so a family template can no longer forget.
+ *
+ * IDEMPOTENT ON PURPOSE. The families that already call `escapeHtml` on an
+ * href keep working, and — critically — a URL's `&` query separator does not
+ * become `&amp;amp;`: `&` is escaped only when it does not already begin a
+ * valid character reference. Without that, wrapping the existing
+ * `escapeHtml(params.resetUrl)` call sites would corrupt every multi-param
+ * link in the reset / security / maintenance emails. Byte output for values
+ * that contain none of these characters — which is every asset URL and every
+ * design-package string, i.e. every dark-block token — is unchanged.
+ */
+export function escapeAttr(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (c === '"') out += '&quot;';
+    else if (c === "'") out += '&#39;';
+    else if (c === '<') out += '&lt;';
+    else if (c === '>') out += '&gt;';
+    else if (c === '&') {
+      out += EXISTING_ENTITY.test(s.slice(i, i + 34)) ? '&' : '&amp;';
+    } else out += c;
+  }
+  return out;
 }
 
 // ── Weight guard ────────────────────────────────────────────────────
@@ -421,7 +472,7 @@ export function heroSlot({ src, alt, note }: HeroSlotOptions): string {
   const comment = note ? `<!-- ${note} -->\n      ` : '';
   return `${comment}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
         <td class="sunk" align="center" style="background:${L.sunk};border:1px solid ${L.hair};border-radius:8px">
-          <img src="${src}" width="528" height="194" alt="${alt}" style="display:block;width:100%;max-width:528px;height:auto;border:0;border-radius:8px">
+          <img src="${escapeAttr(src)}" width="528" height="194" alt="${escapeAttr(alt)}" style="display:block;width:100%;max-width:528px;height:auto;border:0;border-radius:8px">
         </td>
       </tr></table>`;
 }
@@ -438,7 +489,7 @@ export interface ButtonOptions {
 /** Bulletproof button: bgcolor on the td + fully-styled inline anchor. */
 export function button({ label, href, arrow = true }: ButtonOptions): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn"><tr><td bgcolor="${L.btnBg}" style="border-radius:6px;background:${L.btnBg}">
-        <a href="${href}" style="display:inline-block;padding:13px 18px;background:${L.btnBg};color:${L.btnFg};border-radius:6px;font-family:${ES_F1_INLINE};font-size:13.5px;font-weight:500;text-decoration:none">${label}${arrow ? ' &rarr;' : ''}</a>
+        <a href="${escapeAttr(href)}" style="display:inline-block;padding:13px 18px;background:${L.btnBg};color:${L.btnFg};border-radius:6px;font-family:${ES_F1_INLINE};font-size:13.5px;font-weight:500;text-decoration:none">${label}${arrow ? ' &rarr;' : ''}</a>
       </td></tr></table>`;
 }
 
@@ -455,7 +506,7 @@ export function ctaRow({ primary, secondary, noteHtml }: CtaRowOptions): string 
   const row = secondary
     ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
         <td>${btn}</td>
-        <td style="padding-left:16px"><a class="ink2" href="${secondary.href}" style="font-size:13px;color:${L.ink2};text-decoration:underline">${secondary.label}</a></td>
+        <td style="padding-left:16px"><a class="ink2" href="${escapeAttr(secondary.href)}" style="font-size:13px;color:${L.ink2};text-decoration:underline">${secondary.label}</a></td>
       </tr></table>`
     : btn;
   const note = noteHtml
@@ -481,9 +532,14 @@ export interface LinkFallbackOptions {
   marginTop?: number;
 }
 
-/** "Or paste this link into your browser" fallback under a CTA. */
+/** "Or paste this link into your browser" fallback under a CTA.
+ *  `url` lands in TEXT content, so `<`/`&` are what matter here — but it is
+ *  the SAME value families pass to `button()`, and half of them pre-escape it,
+ *  so it goes through the idempotent `escapeAttr` rather than `escapeHtml`
+ *  (which would double-escape a `&` query separator into `&amp;amp;` and print
+ *  a broken link the recipient then copy-pastes). */
 export function linkFallback(url: string, { marginTop = 14 }: LinkFallbackOptions = {}): string {
-  return `<div class="ink3" style="margin-top:${marginTop}px;font-size:11.5px;color:${L.ink3};line-height:1.55">Or paste this link into your browser: <span class="ink2" style="font-family:${ES_MONO_INLINE};font-size:10.5px;color:${L.ink2};word-break:break-all">${url}</span></div>`;
+  return `<div class="ink3" style="margin-top:${marginTop}px;font-size:11.5px;color:${L.ink3};line-height:1.55">Or paste this link into your browser: <span class="ink2" style="font-family:${ES_MONO_INLINE};font-size:10.5px;color:${L.ink2};word-break:break-all">${escapeAttr(url)}</span></div>`;
 }
 
 // ── info-card / generic card ────────────────────────────────────────
@@ -1100,7 +1156,7 @@ export function footer({ kind, reasonHtml, note, urls = {} }: FooterOptions): st
   const links = FOOTER_LINK_SETS[kind]
     .map(
       ({ label, key }) =>
-        `<a class="ink2" href="${urls[key] ?? '#'}" style="color:${L.ink2}">${label}</a>`,
+        `<a class="ink2" href="${escapeAttr(urls[key] ?? '#')}" style="color:${L.ink2}">${label}</a>`,
     )
     .join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;');
   const intBadge =
