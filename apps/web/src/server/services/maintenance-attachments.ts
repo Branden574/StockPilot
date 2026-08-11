@@ -325,8 +325,10 @@ export class MaintenanceAttachmentsService {
 
     const admin = createAdminClient();
     // Range read (fetchObjectPrefix), not a full download: the sniff verdict
-    // lives entirely in the leading 4 KB, and this used to buffer up to the
-    // bucket's 10 MB cap per finalize just to reach it. `totalSize` is the
+    // lives in the leading 4 KB for everything but metadata-heavy JPEGs (the
+    // helper widens to a full read on its own for those), and this used to
+    // buffer up to the bucket's 10 MB cap per finalize just to reach it.
+    // `totalSize` is the
     // object's FULL size from storage's own response headers — it is what the
     // size gate and the recorded byte_size use below, never the prefix length.
     const head = await fetchObjectPrefix(admin.storage.from(BUCKET), args.path);

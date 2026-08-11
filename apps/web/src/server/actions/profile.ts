@@ -297,8 +297,10 @@ export async function setOrgLogoUrlAction(input: {
       //
       // Verify-or-delete, same shape as the maintenance-attachments
       // reference: read the object's LEADING BYTES (fetchObjectPrefix — a
-      // range read; the sniff verdict lives entirely in the first 4 KB, so
-      // the full logo is never buffered here), sniff, and on any
+      // range read; the helper widens to a full read on its own only for
+      // files the 4 KB window cannot decide, e.g. an EXIF/ICC-heavy JPEG
+      // logo, so the full object is normally never buffered here), sniff,
+      // and on any
       // disagreement REMOVE the object and refuse — never leave an
       // unverified object reachable at a URL a client already knows.
       const objectPath = candidate.slice(orgLogoBucketUrlPrefix().length);

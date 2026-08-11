@@ -21,6 +21,24 @@
  *      the first 4096 bytes, and cancel the reader — the rest of the object
  *      is never buffered — taking the full size from `Content-Length`.
  *
+ * ONE class of legitimate file cannot be judged inside the window: a JPEG
+ * whose SOF marker sits beyond 4 KB of leading metadata. Camera originals
+ * routinely carry a 5-20 KB APP1 EXIF segment (embedded thumbnail), and
+ * multi-segment APP2 ICC profiles or XMP packets can push the SOF hundreds of
+ * KB in — and such files genuinely reach production as item-image masters,
+ * because compressImageVariants uploads the ORIGINAL untranscoded file
+ * whenever its WebP re-encode is not smaller or the source will not decode
+ * client-side (CMYK JPEGs, which also carry the large ICC profiles). Judging
+ * those on the window alone returns "not an image", and the callers DELETE on
+ * that verdict. So when the sniff of the window is INDETERMINATE — the
+ * classifier ran out of bytes rather than reaching a verdict
+ * (sniffNeedsMoreBytes, lib/image-signature.ts) — and the object holds more
+ * bytes than the window, this helper falls back to reading the WHOLE object
+ * (memory-bounded by the size storage itself declared) and returns that as
+ * the prefix instead. Verdicts therefore match the old full-download behavior
+ * for every file, while everything decidable in 4 KB — every well-formed PNG
+ * and WebP, web-exported JPEGs, every fake — stays a 4 KB read.
+ *
  * The FULL size is returned alongside the prefix because one caller
  * (maintenance-attachments.finalize) records and gates on the object's real
  * byte size; sizing the prefix would silently record 4096 for every photo.
@@ -37,14 +55,21 @@
  * has been shape-validated by every caller before this function runs.
  */
 
+import { sniffNeedsMoreBytes } from './image-signature';
+
 export const SNIFF_PREFIX_BYTES = 4096;
 
 /** The lifetime of the signed URL minted for the range read. It is consumed
- *  once, immediately, by this process — 60s is generous headroom, not a grant. */
+ *  immediately by this process (once, or twice back-to-back when the
+ *  indeterminate-window fallback fires) — 60s is generous headroom, not a
+ *  grant. */
 const PREFIX_URL_TTL_SECONDS = 60;
 
 export type ObjectPrefix = {
-  /** The first min(SNIFF_PREFIX_BYTES, totalSize) bytes of the object. */
+  /** The first min(SNIFF_PREFIX_BYTES, totalSize) bytes of the object —
+   *  or the WHOLE object, when the window alone was indeterminate for the
+   *  sniff (the metadata-heavy-JPEG fallback in the header comment). Either
+   *  way: always a leading, contiguous run the sniffer can judge. */
   prefix: Uint8Array;
   /** The object's FULL size in bytes — never the prefix length. */
   totalSize: number;
@@ -104,10 +129,11 @@ async function readPrefixFromStream(
 }
 
 /**
- * Fetches the object's leading SNIFF_PREFIX_BYTES and its full size.
- * Null on ANY failure (missing object, sign refusal, bad status,
- * undeterminable size) — callers fail closed on null exactly as they did on a
- * failed `download()`.
+ * Fetches the object's leading SNIFF_PREFIX_BYTES and its full size — widened
+ * to the whole object when the window alone cannot decide the sniff (see the
+ * header comment). Null on ANY failure (missing object, sign refusal, bad
+ * status, undeterminable size) — callers fail closed on null exactly as they
+ * did on a failed `download()`.
  */
 export async function fetchObjectPrefix(
   bucket: PrefixCapableBucket,
@@ -123,6 +149,26 @@ export async function fetchObjectPrefix(
     return null;
   }
 
+  const head = await fetchLeadingWindow(signedUrl, fetchImpl);
+  if (!head) return null;
+
+  // The metadata-heavy-JPEG fallback: only when the sniff of the window is
+  // INDETERMINATE (classifier ran out of bytes — never for a definitive
+  // fake, which stays a cheap 4 KB read) and the object actually holds bytes
+  // the window did not. This re-fetch is what the OLD code did on every
+  // call; here it is the exception, not the rule.
+  if (head.totalSize > head.prefix.byteLength && sniffNeedsMoreBytes(head.prefix)) {
+    return fetchWholeObject(signedUrl, head.totalSize, fetchImpl);
+  }
+  return head;
+}
+
+/** The Range request for the leading window, and the full size from the
+ *  response's own headers. Null on any failure. */
+async function fetchLeadingWindow(
+  signedUrl: string,
+  fetchImpl: typeof fetch,
+): Promise<ObjectPrefix | null> {
   let res: Response;
   try {
     res = await fetchImpl(signedUrl, {
@@ -182,4 +228,45 @@ export async function fetchObjectPrefix(
 
   await res.body?.cancel().catch(() => undefined);
   return null;
+}
+
+/**
+ * The fallback read: the WHOLE object, for the window-indeterminate case.
+ * Re-uses the already-minted signed URL (still inside its TTL — both fetches
+ * happen back-to-back in the same call).
+ *
+ * Memory is bounded by `expectedSize` — the full size storage's OWN response
+ * headers declared on the window read — via the same read-then-cancel stream
+ * walk the 200 path uses, so a misbehaving stream can never buffer more than
+ * the size storage attested to (bucket caps keep that ≤ 15 MB, exactly what
+ * the old always-full download() buffered on EVERY call). Null on any
+ * failure: fail closed as unreadable — the callers' no-delete path — rather
+ * than risk condemning a legitimate file on a partial second read.
+ */
+async function fetchWholeObject(
+  signedUrl: string,
+  expectedSize: number,
+  fetchImpl: typeof fetch,
+): Promise<ObjectPrefix | null> {
+  let res: Response;
+  try {
+    res = await fetchImpl(signedUrl, { cache: 'no-store' });
+  } catch {
+    return null;
+  }
+  if (res.status !== 200) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!res.body) return null;
+  try {
+    const body = await readPrefixFromStream(res.body, expectedSize);
+    // A stream that ended short of the attested size is a failed read, not a
+    // smaller object — judging (and possibly deleting) on a partial body is
+    // exactly what this fallback exists to avoid.
+    if (body.byteLength < expectedSize) return null;
+    return { prefix: body, totalSize: expectedSize };
+  } catch {
+    return null;
+  }
 }

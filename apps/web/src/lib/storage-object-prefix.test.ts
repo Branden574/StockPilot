@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { sniffImage } from './image-signature';
 import { fetchObjectPrefix, SNIFF_PREFIX_BYTES } from './storage-object-prefix';
 
 /**
@@ -179,6 +180,118 @@ describe('fetchObjectPrefix', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ECONNRESET');
     });
+    expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+/**
+ * THE INDETERMINATE-WINDOW FALLBACK (fix-wave: Important 1).
+ *
+ * A real camera-original JPEG can carry more pre-SOF metadata (EXIF thumbnail,
+ * ICC, XMP) than the 4096-byte window, so the window alone sniffs as null —
+ * and the callers DELETE on null. The helper must therefore fall back to a
+ * full read when (and ONLY when) the window's sniff is indeterminate, so that
+ * verdicts match the old full-download behavior for every legitimate file
+ * while fakes and well-formed images stay a single 4 KB read.
+ */
+describe('fetchObjectPrefix — indeterminate-window fallback', () => {
+  /** A JPEG whose SOF sits past the window: SOI + one APP1 (EXIF) segment
+   *  with an 8192-byte body, then a SOF0 declaring 4x5. Total size 8209 —
+   *  every size below is literal-pinned against these bytes. */
+  function exifHeavyJpeg(): Uint8Array {
+    const metaBytes = 8192;
+    const app1Len = metaBytes + 2;
+    const b = new Uint8Array(6 + metaBytes + 11);
+    b.set([0xff, 0xd8, 0xff, 0xe1, (app1Len >> 8) & 0xff, app1Len & 0xff]);
+    b.fill(0x45, 6, 6 + metaBytes);
+    b.set([0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00], 6 + metaBytes);
+    return b;
+  }
+
+  /** First call: 206 with the leading window. Second call: whatever `second`
+   *  returns. Asserting on the mock's calls pins the fallback's shape. */
+  function twoPhaseFetch(full: Uint8Array, second: () => Response) {
+    return vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (headers.range) {
+        return new Response(bodyOf(full.subarray(0, SNIFF_PREFIX_BYTES)), {
+          status: 206,
+          headers: { 'content-range': `bytes 0-4095/${full.byteLength}` },
+        });
+      }
+      return second();
+    });
+  }
+
+  it('a JPEG with >4 KB of pre-SOF metadata: the window is indeterminate, so a SECOND, range-less fetch pulls the WHOLE object — and the returned bytes now sniff as the jpeg they always were (totalSize 8209, prefix 8209, NOT 4096)', async () => {
+    const full = exifHeavyJpeg();
+    expect(full.byteLength).toBe(8209);
+    const fetchImpl = twoPhaseFetch(full, () =>
+      new Response(bodyOf(full), { status: 200, headers: { 'content-length': '8209' } }),
+    );
+
+    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    expect(out).not.toBeNull();
+    expect(out!.totalSize).toBe(8209);
+    expect(out!.prefix.byteLength).toBe(8209);
+    expect(Array.from(out!.prefix)).toEqual(Array.from(full));
+    // The property the whole fallback exists for: the caller's sniff of this
+    // prefix ACCEPTS the file instead of deleting it.
+    expect(sniffImage(out!.prefix)).toEqual({ kind: 'jpeg', width: 4, height: 5 });
+    // Exactly two fetches: the ranged window, then the range-less full read.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const secondInit = fetchImpl.mock.calls[1]![1] as RequestInit | undefined;
+    expect((secondInit?.headers as Record<string, string> | undefined)?.range).toBeUndefined();
+  });
+
+  it('a DECIDABLE window never triggers a second fetch: a PNG (verdict inside 26 bytes) of a 10240-byte object is one ranged read, exactly as before the fallback existed', async () => {
+    // A real PNG head (the objectBytes fixture carries the signature but a
+    // garbage IHDR tag, which is a DEFINITIVE null — also a one-fetch case,
+    // but the decided-image case is the one that must be pinned cheap).
+    const full = new Uint8Array(10240);
+    full.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    full.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8); // IHDR
+    new DataView(full.buffer).setUint32(16, 2);
+    new DataView(full.buffer).setUint32(20, 3);
+    const fetchImpl = twoPhaseFetch(full, () => {
+      throw new Error('the fallback must not fire for a decided window');
+    });
+
+    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    expect(out).not.toBeNull();
+    expect(out!.totalSize).toBe(10240);
+    expect(out!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
+    expect(sniffImage(out!.prefix)).toEqual({ kind: 'png', width: 2, height: 3 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('a DEFINITIVE fake never triggers a second fetch either — an attacker cannot make the server buffer the full object by uploading garbage', async () => {
+    const full = new Uint8Array(10240).fill(0x41); // 'AAAA…', no image signature
+    const fetchImpl = twoPhaseFetch(full, () => {
+      throw new Error('the fallback must not fire for a definitive fake');
+    });
+
+    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    expect(out).not.toBeNull();
+    expect(out!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
+    expect(sniffImage(out!.prefix)).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed fallback read is null — fail CLOSED as unreadable (the callers no-delete path), never a verdict on a partial body', async () => {
+    const full = exifHeavyJpeg();
+    const fetchImpl = twoPhaseFetch(full, () => new Response('gone', { status: 403 }));
+    expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
+
+  it('a fallback stream that ends short of the attested size is null for the same reason — a truncated second read must not condemn the file', async () => {
+    const full = exifHeavyJpeg();
+    const fetchImpl = twoPhaseFetch(full, () =>
+      new Response(bodyOf(full.subarray(0, 5000)), {
+        status: 200,
+        headers: { 'content-length': '8209' },
+      }),
+    );
     expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
   });
 });

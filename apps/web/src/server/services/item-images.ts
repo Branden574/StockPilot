@@ -754,8 +754,10 @@ export class ItemImagesService {
     //
     // Same verify-or-delete shape as the maintenance-attachments reference:
     // read the object's LEADING BYTES (fetchObjectPrefix — a range read; the
-    // sniff verdict lives entirely in the first 4 KB, so a 10 MB master is
-    // never buffered here just to be classified), sniff, and on any
+    // helper widens to a full read on its own only for files the 4 KB window
+    // cannot decide, e.g. EXIF/ICC-heavy JPEG masters kept untranscoded by
+    // compressImageVariants, so a 10 MB master is normally never buffered
+    // here just to be classified), sniff, and on any
     // disagreement REMOVE the object and write no row — never leave an
     // unverified object with a row pointing at it. The prefix read doubles as
     // the finalize-time existence check exactly as the old full download did:
