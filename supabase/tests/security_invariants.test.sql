@@ -56,7 +56,7 @@
 
 begin;
 
-select plan(23);
+select plan(24);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -618,6 +618,18 @@ select cmp_ok(
   '>',
   0,
   'INV-23 control: the anon/PUBLIC write-policy sweep still finds policies to judge'
+);
+
+-- INV-24. Every bucket pins allowed_mime_types. po-imports was the last
+-- unpinned bucket (closed by 0325); an unpinned bucket accepts any
+-- content-type on a presigned upload, which is exactly the surface the
+-- magic-byte sniffer exists to close from the other side. This sweep makes
+-- the property durable against future bucket additions. INV-21 above is the
+-- vacuity control for this population too.
+select is(
+  (select count(*)::int from storage.buckets where allowed_mime_types is null),
+  0,
+  'INV-24: every storage bucket pins allowed_mime_types'
 );
 
 

@@ -93,6 +93,18 @@ describe('fetchObjectPrefix', () => {
     expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
   });
 
+  it('206 whose Content-Range total contradicts the body (bytes 0-4095/5 with 4096 bytes) fails CLOSED', async () => {
+    // A total smaller than the range just served is self-contradictory;
+    // trusting it would record byte_size=5 for a 4096+-byte object downstream.
+    const fetchImpl = vi.fn(async () =>
+      new Response(bodyOf(objectBytes(4096)), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-4095/5' },
+      }),
+    );
+    expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
+
   it('200 (server ignores Range) — slices the first 4096 bytes off the STREAM without buffering the rest, cancels the reader, and takes the full size from Content-Length', async () => {
     const full = objectBytes(10240);
     const CHUNK = 1024;

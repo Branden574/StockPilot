@@ -196,10 +196,13 @@ async function fetchLeadingWindow(
     if (total === null) return null;
     // The body is the (at most SNIFF_PREFIX_BYTES-long) range itself.
     const body = new Uint8Array(await res.arrayBuffer());
-    return {
-      prefix: body.byteLength > SNIFF_PREFIX_BYTES ? body.subarray(0, SNIFF_PREFIX_BYTES) : body,
-      totalSize: total,
-    };
+    const prefix = body.byteLength > SNIFF_PREFIX_BYTES ? body.subarray(0, SNIFF_PREFIX_BYTES) : body;
+    // A total SMALLER than the bytes we were just handed is self-contradictory
+    // (`bytes 0-4095/5` with a 4096-byte body). Trusting it would record a
+    // wrong byte_size downstream, so treat the response as unusable and fail
+    // closed, same as a malformed Content-Range.
+    if (total < prefix.byteLength) return null;
+    return { prefix, totalSize: total };
   }
 
   if (res.status === 200) {
