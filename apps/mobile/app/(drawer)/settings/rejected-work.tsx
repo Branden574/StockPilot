@@ -40,7 +40,12 @@ export default function RejectedWorkScreen() {
   const router = useRouter();
   const [rows, setRows] = React.useState<PendingActionRow[] | null>(null);
 
+  const [now, setNow] = React.useState(() => Date.now());
   const load = React.useCallback(async () => {
+    // Snapshot the clock with the data (compiler purity rule): the relative
+    // "when" labels refresh when the list does - every focus - not on
+    // arbitrary re-renders.
+    setNow(Date.now());
     try {
       // Match the true retention ceiling (REJECTED_KEEP_MAX, pruned to at cold
       // launch), not listRejected's smaller internal default — otherwise the
@@ -62,7 +67,6 @@ export default function RejectedWorkScreen() {
     }, [load]),
   );
 
-  const now = Date.now();
 
   function confirmClear() {
     Alert.alert(

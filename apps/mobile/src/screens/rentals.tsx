@@ -46,9 +46,14 @@ export default function RentalsScreen() {
   const [rows, setRows] = React.useState<RentalRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [now, setNow] = React.useState(() => Date.now());
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
+    // Snapshot the clock with the data, not during render (compiler purity
+    // rule): overdue badges refresh exactly when the list does - on mount and
+    // pull-to-refresh - instead of whenever an unrelated re-render happens.
+    setNow(Date.now());
     const { data } = await supabase
       .from('rentals')
       .select(
@@ -80,6 +85,7 @@ export default function RentalsScreen() {
   }, [orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the deliberate pre-await clock snapshot (setNow, documented in load); the effect synchronizes with the server
     void load();
   }, [load]);
 
@@ -108,14 +114,13 @@ export default function RentalsScreen() {
       onRefresh={refresh}
       trailing={canCreate ? <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} /> : undefined}
       keyExtractor={(r) => r.id}
-      renderItem={(r) => <RentalCard rental={r} />}
+      renderItem={(r) => <RentalCard rental={r} now={now} />}
     />
   );
 }
 
-function RentalCard({ rental }: { rental: RentalRow }) {
+function RentalCard({ rental, now }: { rental: RentalRow; now: number }) {
   const { c } = useTheme();
-  const now = Date.now();
   const isOverdue =
     rental.status === 'out' && new Date(rental.expected_return_at).getTime() < now;
   const pill =

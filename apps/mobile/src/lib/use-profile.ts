@@ -50,6 +50,7 @@ export function useProfile(): Profile {
 
   React.useEffect(() => {
     if (!user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- identity/cache sync: the sync sets clear on sign-out and reseed from the module-level cache; the network set is post-await. Deriving instead of storing would break the invalidateProfile contract (consumers must keep showing the last profile until a remount refetches).
       setProfile({ fullName: null, avatarUrl: null, email: null, initials: '··' });
       return;
     }

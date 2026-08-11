@@ -63,6 +63,7 @@ export default function NewSizeCountScreen() {
   React.useEffect(() => {
     if (!sportsEnabled) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced search: the sync set is the loading flag for a keystroke-driven server fetch; every data set is post-await
     setGroupsStatus('loading');
     const t = setTimeout(async () => {
       try {

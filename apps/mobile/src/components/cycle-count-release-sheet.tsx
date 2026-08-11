@@ -40,20 +40,40 @@ export function CycleCountReleaseSheet({
   onClose: () => void;
   onReleased: () => void;
 }) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* key: remount the content per open/close transition so every session
+          starts from a blank category/notes/error — reset-by-remount instead of
+          a reset-on-open effect. */}
+      <ReleaseSheetContent
+        key={String(visible)}
+        cycleCountId={cycleCountId}
+        onClose={onClose}
+        onReleased={onReleased}
+      />
+    </Modal>
+  );
+}
+
+function ReleaseSheetContent({
+  cycleCountId,
+  onClose,
+  onReleased,
+}: {
+  cycleCountId: string;
+  onClose: () => void;
+  onReleased: () => void;
+}) {
   const [category, setCategory] = React.useState<Category | null>(null);
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-
-  // Reset when the sheet is (re)opened.
-  React.useEffect(() => {
-    if (visible) {
-      setCategory(null);
-      setNotes('');
-      setError(null);
-      setSubmitting(false);
-    }
-  }, [visible]);
 
   const needsNotes = category === 'Other';
   const canSubmit =
@@ -87,25 +107,18 @@ export function CycleCountReleaseSheet({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1 }}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      <Pressable
+        onPress={onClose}
+        style={{
+          flex: 1,
+          justifyContent: 'flex-end',
+          backgroundColor: 'rgba(14,15,13,0.45)',
+        }}
       >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: 'rgba(14,15,13,0.45)',
-          }}
-        >
           <Pressable
             onPress={() => undefined}
             style={{
@@ -249,9 +262,8 @@ export function CycleCountReleaseSheet({
                 )}
               </Pressable>
             </View>
-          </Pressable>
         </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+      </Pressable>
+    </KeyboardAvoidingView>
   );
 }

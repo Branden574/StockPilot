@@ -10,6 +10,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -66,7 +67,7 @@ export function WhatsNew() {
   const [index, setIndex] = React.useState(0);
   const [open, setOpen] = React.useState(false);
   const [reduced, setReduced] = React.useState(false);
-  const fade = React.useRef(new Animated.Value(0)).current;
+  const fade = useAnimatedValue(0);
 
   React.useEffect(() => {
     if (!uid || shownForUserId === uid) return;

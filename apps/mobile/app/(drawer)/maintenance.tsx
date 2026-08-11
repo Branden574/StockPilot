@@ -93,10 +93,10 @@ export default function MaintenanceListScreen() {
   // a newer one, and only the guard — not timing — stops it from overwriting
   // rows a newer call already owns. Same two idioms this app already uses
   // inline elsewhere (see debounced-list-load.ts's own doc comment).
-  const schedulerRef = React.useRef<DebouncedScheduler | null>(null);
-  if (!schedulerRef.current) schedulerRef.current = createDebouncedScheduler(SEARCH_DEBOUNCE_MS);
-  const guardRef = React.useRef<SequenceGuard | null>(null);
-  if (!guardRef.current) guardRef.current = createSequenceGuard();
+  // Lazy useState initializers, not refs: reading .current during render is
+  // a React Compiler violation, and these are create-once instances anyway.
+  const [scheduler] = React.useState(() => createDebouncedScheduler(SEARCH_DEBOUNCE_MS));
+  const [guard] = React.useState(() => createSequenceGuard());
 
   const load = React.useCallback(async () => {
     // Invisible when off, not just unreachable: a disabled org never fires
@@ -106,19 +106,19 @@ export default function MaintenanceListScreen() {
       setRefreshing(false);
       return;
     }
-    const seq = guardRef.current!.next();
+    const seq = guard.next();
     setLoadError(null);
     try {
       const res = await listMaintenanceRequests({ scope, q: q.trim() || undefined, status });
-      if (!guardRef.current!.isCurrent(seq)) return; // stale — a newer load owns the list now
+      if (!guard.isCurrent(seq)) return; // stale — a newer load owns the list now
       setRows(res);
     } catch (e) {
-      if (!guardRef.current!.isCurrent(seq)) return;
+      if (!guard.isCurrent(seq)) return;
       setLoadError(
         e instanceof Error ? e.message : "Couldn't load maintenance requests. Try again.",
       );
     } finally {
-      if (guardRef.current!.isCurrent(seq)) {
+      if (guard.isCurrent(seq)) {
         setLoading(false);
         setRefreshing(false);
       }
@@ -130,7 +130,6 @@ export default function MaintenanceListScreen() {
   }, [enabled, scope, q, status]);
 
   React.useEffect(() => {
-    const scheduler = schedulerRef.current!;
     scheduler.schedule(() => void load());
     return () => scheduler.cancel();
   }, [load]);

@@ -11,6 +11,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -68,7 +69,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const [step, setStep] = React.useState(0);
   const [rect, setRect] = React.useState<TargetRect | null>(null);
   const [reduced, setReduced] = React.useState(false);
-  const fade = React.useRef(new Animated.Value(0)).current;
+  const fade = useAnimatedValue(0);
   const autoStarted = React.useRef(false);
 
   React.useEffect(() => {
@@ -122,6 +123,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   // (e.g. the sample row) mount before we measure it.
   React.useEffect(() => {
     if (phase !== 'running') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- spotlight measurement: the sync clears stop the previous step's highlight lingering while the debounced native measureTarget runs; the measured rect itself lands async
       setRect(null);
       return;
     }

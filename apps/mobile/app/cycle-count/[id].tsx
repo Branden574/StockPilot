@@ -110,6 +110,24 @@ export default function CycleCountDetail() {
 
   // Resolve the user's org once — needed to scope server fetches.
 
+  function hydrateFromSnapshot(snap: { header: CachedCycleCountHeader; lines: CachedCycleCountLine[] }) {
+    setHeader(snap.header);
+    const ui: UiLine[] = snap.lines
+      .map((l) => ({
+        id: l.id,
+        itemId: l.itemId,
+        itemName: l.itemName,
+        itemSku: l.itemSku,
+        itemBarcode: l.itemBarcode,
+        itemVariantLabel: l.itemVariantLabel,
+        expected: l.expected,
+        counted: l.counted,
+        localDirty: l.localDirty,
+      }))
+      .sort((a, b) => a.itemName.localeCompare(b.itemName));
+    setLines(ui);
+  }
+
   /**
    * Load order:
    *   1. Read SQLite cache → if hit, render immediately.
@@ -117,11 +135,11 @@ export default function CycleCountDetail() {
    *      (server-wins for clean lines, local-wins for dirty).
    *   3. If cache missed AND offline → show empty state.
    */
+  // NOTE: `loading` starts true and `emptyState`/`readError` start clean, so
+  // load() needs no synchronous pre-await resets on mount; the retry buttons
+  // reset those flags themselves before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id) return;
-    setLoading(true);
-    setEmptyState('none');
-    setReadError(null);
 
     const cached = await getCycleCount(id);
     if (cached) {
@@ -256,25 +274,12 @@ export default function CycleCountDetail() {
     setLoading(false);
   }, [id, orgId]);
 
-  function hydrateFromSnapshot(snap: { header: CachedCycleCountHeader; lines: CachedCycleCountLine[] }) {
-    setHeader(snap.header);
-    const ui: UiLine[] = snap.lines
-      .map((l) => ({
-        id: l.id,
-        itemId: l.itemId,
-        itemName: l.itemName,
-        itemSku: l.itemSku,
-        itemBarcode: l.itemBarcode,
-        itemVariantLabel: l.itemVariantLabel,
-        expected: l.expected,
-        counted: l.counted,
-        localDirty: l.localDirty,
-      }))
-      .sort((a, b) => a.itemName.localeCompare(b.itemName));
-    setLines(ui);
-  }
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
+    setLoading(true);
+    setReadError(null);
+    setEmptyState('none');
     void load();
   }, [load]);
 
@@ -403,6 +408,7 @@ export default function CycleCountDetail() {
           <Pressable
             style={styles.retryBtn}
             onPress={() => {
+              setLoading(true);
               setReadError(null);
               setEmptyState('none');
               void load();
@@ -432,6 +438,7 @@ export default function CycleCountDetail() {
           <Pressable
             style={styles.retryBtn}
             onPress={() => {
+              setLoading(true);
               setEmptyState('none');
               void load();
             }}

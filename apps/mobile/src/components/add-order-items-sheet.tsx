@@ -144,6 +144,7 @@ export function AddOrderItemsSheet({
   React.useEffect(() => {
     if (!visible) return;
     const seq = ++seqRef.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced search fetch: the sync set marks status pending for the query this run owns (mount AND every q change, so an initial value cannot cover it); every result set is post-await behind the seq guard
     setStatus('loading');
     const t = setTimeout(() => {
       void (async () => {
@@ -167,6 +168,7 @@ export function AddOrderItemsSheet({
   // previous session's selection can never be submitted by accident.
   React.useEffect(() => {
     if (!visible) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- modal reset on open; remount-keying unsafe here because the sheet owns its Modal and the query being reset also drives the debounced fetch effect above — keying would mean relocating all sheet state (draft, seq guard, submit pipeline) into a new inner component
     setDraft({});
     setError(null);
     setQ('');

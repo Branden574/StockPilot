@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
@@ -40,7 +41,7 @@ export function BiometricLockScreen() {
   const [failedOnce, setFailedOnce] = React.useState(false);
 
   // Subtle pulse ring behind the biometric glyph
-  const pulse = React.useRef(new Animated.Value(0)).current;
+  const pulse = useAnimatedValue(0);
   React.useEffect(() => {
     Animated.loop(
       Animated.timing(pulse, {
@@ -79,6 +80,7 @@ export function BiometricLockScreen() {
     if (!cap) return;
     if (!cap.hasHardware || !cap.isEnrolled) return;
     if (attempted) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- biometric auto-prompt: the sync busy/attempted sets latch the one-shot OS Face-ID prompt (the external system this effect drives); the unlock verdict lands post-await
     void tryUnlock();
   }, [cap, attempted, tryUnlock, splashActive]);
 

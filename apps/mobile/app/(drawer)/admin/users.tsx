@@ -138,6 +138,7 @@ export default function UsersAdmin() {
   }, [orgId, isAdmin]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the pre-await guard that resolves loading for the unauthorized; the effect synchronizes with the server
     if (!roleLoading) void load();
   }, [load, roleLoading]);
 
@@ -229,6 +230,10 @@ export default function UsersAdmin() {
         )}
       />
       <RolePickerSheet
+        // Reset-by-remount: each open (and each member) is a fresh session, so
+        // the sheet's category state starts from its useState initial values
+        // instead of an on-open reset effect.
+        key={editing ? editing.user_id : 'closed'}
         member={editing}
         orgId={orgId}
         onDismiss={() => setEditing(null)}
@@ -361,16 +366,21 @@ function RolePickerSheet({
   const { c } = useTheme();
   const [categories, setCategories] = React.useState<CategoryRow[]>([]);
   const [grantedIds, setGrantedIds] = React.useState<Set<string>>(new Set());
-  const [catsLoading, setCatsLoading] = React.useState(false);
 
   // Only viewers actually use the per-category grant table; load it lazily
   // when the sheet opens for a viewer member.
   const showCategoryAccess = member?.role === 'viewer';
 
+  // The parent keys this sheet per open (key={member.user_id}), so a fresh
+  // mount IS the "sheet opened" moment: catsLoading starts true exactly when
+  // the effect below will fetch, instead of a synchronous set-on-open.
+  const [catsLoading, setCatsLoading] = React.useState(
+    Boolean(member && orgId && showCategoryAccess),
+  );
+
   React.useEffect(() => {
     if (!member || !orgId || !showCategoryAccess) return;
     let cancelled = false;
-    setCatsLoading(true);
     void (async () => {
       const [catsResp, grantsResp] = await Promise.all([
         supabase

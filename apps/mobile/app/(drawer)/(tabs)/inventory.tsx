@@ -172,8 +172,11 @@ export default function Inventory() {
   const { fontScale } = useWindowDimensions();
   const stackRows = shouldStackRow(fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const [orgId, setOrgId] = React.useState<string | null>(null);
   const { activeOrgId, activeWarehouseId } = useWorkspace();
+  // Derived, not stored: orgId IS the workspace switcher's active org. It used
+  // to be useState mirrored from activeOrgId by an effect, which is the same
+  // value one render late.
+  const orgId = activeOrgId;
   // The WHOLE filtered set, not a page of it (one request, capped at
   // POSTGREST_MAX_ROWS). Pagination happens below, over GROUPS, so a SKU's
   // placements can never land on two pages.
@@ -485,23 +488,21 @@ export default function Inventory() {
     [],
   );
 
-  // Source the org from the workspace switcher. This used to be a
-  // standalone organization_members.limit(1) query that ignored the active
-  // org — so a multi-org user who switched orgs kept seeing the FIRST org's
-  // items while activeWarehouseId came from the *switched* org, producing a
-  // permanently empty list (org A ∧ warehouse-of-org-B matches nothing).
+  // The org comes from the workspace switcher (see the derived `orgId`
+  // above). It used to be a standalone organization_members.limit(1) query
+  // that ignored the active org — so a multi-org user who switched orgs kept
+  // seeing the FIRST org's items while activeWarehouseId came from the
+  // *switched* org, producing a permanently empty list (org A ∧
+  // warehouse-of-org-B matches nothing).
   React.useEffect(() => {
-    if (!activeOrgId) {
-      setOrgId(null);
-      return;
-    }
-    setOrgId(activeOrgId);
-    // Only set the org + load lookups here. The debounced effect below owns
-    // ALL list fetching (it depends on orgId/q/filter/warehouse/page). Calling
-    // load() here too fired a SECOND identical full list+image fetch on every
+    if (!activeOrgId) return;
+    // Only load lookups here. The debounced effect below owns ALL list
+    // fetching (it depends on orgId/q/filter/warehouse/page). Calling load()
+    // here too fired a SECOND identical full list+image fetch on every
     // mount / org switch, racing the debounced one — pure wasted work. Matches
     // books.tsx, which has only the debounced fetch. The 250ms first-paint
     // delay is masked by the loading skeleton.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void loadLookups(activeOrgId);
   }, [activeOrgId, loadLookups]);
 
@@ -512,7 +513,7 @@ export default function Inventory() {
   // two screens the owner compares side by side. Both sets are cleared, exactly
   // as onPageChange below already clears both.
   React.useEffect(() => {
-    setPage(1);
+    setPage(1); // eslint-disable-line react-hooks/set-state-in-effect -- result-set reset: page/expansion are per-result-set display state and must drop when q/filter/workspace change; one-shot synchronous resets, no cascade (trailing form: inventory-list-wiring.test.ts pins `{ setPage(1);` verbatim)
     setExpandedGroups(new Set());
     setExpandedSkuGroups(new Set());
   }, [q, filter, activeWarehouseId]);

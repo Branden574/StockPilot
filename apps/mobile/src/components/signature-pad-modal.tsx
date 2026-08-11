@@ -53,7 +53,10 @@ export function SignaturePadModal({
   const [submitting, setSubmitting] = useState(false);
   const svgRef = useRef<any>(null);
 
-  const panResponder = useRef(
+  // Lazy useState, not useRef(...).current: reading .current during render
+  // is a compiler violation; the responder is create-once and every handler
+  // uses functional setState, so nothing here goes stale.
+  const [panResponder] = useState(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
@@ -82,7 +85,7 @@ export function SignaturePadModal({
         });
       },
     }),
-  ).current;
+  );
 
   const handleClear = () => {
     setStrokes([]);

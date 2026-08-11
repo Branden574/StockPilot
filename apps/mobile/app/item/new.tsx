@@ -460,6 +460,7 @@ export default function NewItem() {
   // would put XXL and 2XL on screen as two chips for one shirt — and today
   // EVERY category takes this branch, because no category has a scale yet.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- category-change reset: the sync sets clear the per-category size draft and raise the loading flag before the post-await scale fetch
     setSizeQty({});
     if (!sizesEnabled) {
       setSizeOptions([]);

@@ -60,8 +60,10 @@ export default function TrainingReviewScreen() {
   const [samples, setSamples] = React.useState<Sample[]>([]);
   const [loading, setLoading] = React.useState(true);
 
+  // NOTE: `loading` starts true, so load() needs no synchronous pre-await set
+  // on mount; the filter chips raise the flag themselves before changing the
+  // filter that re-fires the effect below.
   const load = React.useCallback(async (f: string) => {
-    setLoading(true);
     try {
       // Encoded: a numeric label carries a '.', and the filter value goes
       // straight into the query string.
@@ -76,6 +78,7 @@ export default function TrainingReviewScreen() {
   }, []);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load(filter);
   }, [filter, load]);
 
@@ -148,7 +151,16 @@ export default function TrainingReviewScreen() {
         {FILTERS.map((f) => {
           const active = filter === f;
           return (
-            <Pressable key={f} onPress={() => setFilter(f)} style={[styles.chip, active && styles.chipActive]}>
+            <Pressable
+              key={f}
+              onPress={() => {
+                // Raise the spinner only when the filter actually changes —
+                // re-tapping the active chip does not re-fire the load effect.
+                if (f !== filter) setLoading(true);
+                setFilter(f);
+              }}
+              style={[styles.chip, active && styles.chipActive]}
+            >
               <Text style={[styles.chipText, active && styles.chipTextActive]}>
                 {f === 'NONE' ? 'Not sticker' : f}
               </Text>

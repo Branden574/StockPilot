@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Animated, Easing, View } from 'react-native';
+import { Animated, Easing, View, useAnimatedValue } from 'react-native';
 
 import { Hair } from '@/components/ui/card';
 import { useTheme } from '@/lib/use-theme';
@@ -21,7 +21,7 @@ function Block({
   style?: object;
 }) {
   const { c } = useTheme();
-  const opacity = React.useRef(new Animated.Value(0.55)).current;
+  const opacity = useAnimatedValue(0.55);
   React.useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([

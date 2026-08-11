@@ -139,17 +139,31 @@ export default function TrainingCaptureScreen() {
   const MAX_CONCURRENT = 2;
   const queueRef = React.useRef<Array<{ uri: string; label: string; neg: boolean }>>([]);
   const activeRef = React.useRef(0);
+  // Identity-stable drain ([] deps): everything is read through refs, and the
+  // re-entry after each settle goes through runQueueRef instead of the
+  // callback's own binding (compiler: accessed-before-declared). This also
+  // fixes the stale-closure the old shape had - a .finally captured the drain
+  // from ITS render, which used that render's uploadSample; now both always
+  // resolve to the latest.
+  const uploadSampleRef = React.useRef(uploadSample);
+  React.useEffect(() => {
+    uploadSampleRef.current = uploadSample;
+  });
+  const runQueueRef = React.useRef<() => void>(() => {});
   const runQueue = React.useCallback(() => {
     while (activeRef.current < MAX_CONCURRENT && queueRef.current.length > 0) {
       const job = queueRef.current.shift()!;
       activeRef.current += 1;
-      void uploadSample(job.uri, job.label, job.neg).finally(() => {
+      void uploadSampleRef.current(job.uri, job.label, job.neg).finally(() => {
         activeRef.current -= 1;
         setInFlight((n) => Math.max(0, n - 1));
-        runQueue();
+        runQueueRef.current();
       });
     }
-  }, [uploadSample]);
+  }, []);
+  React.useEffect(() => {
+    runQueueRef.current = runQueue;
+  });
   const enqueueUpload = React.useCallback(
     (uri: string, label: string, neg: boolean) => {
       queueRef.current.push({ uri, label, neg });

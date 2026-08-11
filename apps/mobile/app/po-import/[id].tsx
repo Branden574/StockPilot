@@ -25,6 +25,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Chip } from '@/components/ui/chip';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import {
   actionsForStatus,
@@ -266,9 +267,10 @@ export default function PoImportDetailScreen() {
     [id, orgId],
   );
 
+  // NOTE: `loadError` starts null, so load() needs no synchronous pre-await
+  // reset on mount; refresh() clears it itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
-    setLoadError(null);
     const [{ data: head, error: hErr }, { data: lineRows, error: lErr }] = await Promise.all([
       supabase
         .from('po_imports')
@@ -389,11 +391,13 @@ export default function PoImportDetailScreen() {
   }, [id, orgId, loadLineage]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
   async function refresh() {
     setRefreshing(true);
+    setLoadError(null);
     await load();
     setRefreshing(false);
   }
@@ -761,6 +765,18 @@ export default function PoImportDetailScreen() {
   );
 }
 
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  // Module scope, not inside ApproveSheet: components created during render
+  // get a new identity every render and remount their subtree (compiler rule
+  // react-hooks/static-components).
+  const { c } = useTheme();
+  return (
+    <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      {children}
+    </Mono>
+  );
+}
+
 function HeaderStat({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
   return (
@@ -915,6 +931,55 @@ function ApproveSheet({
   onClose: () => void;
   onApproved: (poId: string) => void;
 }) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* Reset-by-remount: keying the content on the open/closed flip gives
+          every open a fresh draft (warehouse/vendor defaults, cleared
+          decisions, cleared errors) — the reset the old visible-effect
+          performed; the content's own effect re-fetches the pickers. */}
+      <ApproveSheetContent
+        key={String(visible)}
+        visible={visible}
+        importId={importId}
+        orgId={orgId}
+        defaultWarehouseId={defaultWarehouseId}
+        defaultVendorId={defaultVendorId}
+        unmatchedLines={unmatchedLines}
+        itemsById={itemsById}
+        onClose={onClose}
+        onApproved={onApproved}
+      />
+    </Modal>
+  );
+}
+
+function ApproveSheetContent({
+  visible,
+  importId,
+  orgId,
+  defaultWarehouseId,
+  defaultVendorId,
+  unmatchedLines,
+  itemsById,
+  onClose,
+  onApproved,
+}: {
+  visible: boolean;
+  importId: string;
+  orgId: string;
+  defaultWarehouseId: string | null;
+  defaultVendorId: string | null;
+  unmatchedLines: ImportLine[];
+  itemsById: Record<string, ItemRef>;
+  onClose: () => void;
+  onApproved: (poId: string) => void;
+}) {
   const { c, mode } = useTheme();
   const [loading, setLoading] = React.useState(true);
   const [warehouses, setWarehouses] = React.useState<CachedWarehouse[]>([]);
@@ -924,8 +989,11 @@ function ApproveSheet({
   const [suggestions, setSuggestions] = React.useState<Record<string, MatchCandidate[]>>({});
   const [suggestionsNote, setSuggestionsNote] = React.useState<string | null>(null);
 
-  const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
-  const [vendorId, setVendorId] = React.useState<string | null>(null);
+  // Initial values are what the pre-remount-keying visible-effect used to
+  // reset each field to on open: the header's warehouse/vendor as defaults,
+  // everything else cleared.
+  const [warehouseId, setWarehouseId] = React.useState<string | null>(defaultWarehouseId);
+  const [vendorId, setVendorId] = React.useState<string | null>(defaultVendorId);
   const [locationId, setLocationId] = React.useState<string | null>(null);
   // TWO independent charters. Until 2026-07-22 this screen had ONE state,
   // labelled "BILL-TO CHARTER", wired into BOTH create-items (ownership) and
@@ -951,16 +1019,6 @@ function ApproveSheet({
   React.useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setSuggestionsNote(null);
-    setWarehouseId(defaultWarehouseId);
-    setVendorId(defaultVendorId);
-    setLocationId(null);
-    setItemCharterId(undefined);
-    setBillToCharterId(null);
-    setExpectedAtText('');
-    setDecisions({});
     void (async () => {
       const [whs, vendorsRes, chartersRes, locationsRes] = await Promise.all([
         listWarehouses(),
@@ -1105,51 +1163,8 @@ function ApproveSheet({
     }
   }
 
-  function Chip({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 9,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: active ? c.ink : c.hair,
-          backgroundColor: active ? c.ink : c.paper2,
-        }}
-      >
-        <Mono size={12.5} color={active ? c.card : c.ink}>
-          {label}
-        </Mono>
-      </Pressable>
-    );
-  }
-
-  function FieldLabel({ children }: { children: React.ReactNode }) {
-    return (
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
-        {children}
-      </Mono>
-    );
-  }
-
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <KeyboardAvoidingView
+    <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
@@ -1453,6 +1468,5 @@ function ApproveSheet({
           </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
-    </Modal>
   );
 }

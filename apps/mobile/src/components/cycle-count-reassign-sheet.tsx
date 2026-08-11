@@ -42,23 +42,58 @@ export function CycleCountReassignSheet({
   onClose: () => void;
   onReassigned: () => void;
 }) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* key: remount the content per open/close transition so every session
+          starts from a blank selection/reason — reset-by-remount instead of a
+          reset-on-open effect. */}
+      <ReassignSheetContent
+        key={String(visible)}
+        visible={visible}
+        cycleCountId={cycleCountId}
+        orgId={orgId}
+        currentAssigneeId={currentAssigneeId}
+        onClose={onClose}
+        onReassigned={onReassigned}
+      />
+    </Modal>
+  );
+}
+
+function ReassignSheetContent({
+  visible,
+  cycleCountId,
+  orgId,
+  currentAssigneeId,
+  onClose,
+  onReassigned,
+}: {
+  visible: boolean;
+  cycleCountId: string;
+  orgId: string | null;
+  currentAssigneeId: string | null;
+  onClose: () => void;
+  onReassigned: () => void;
+}) {
   const [members, setMembers] = React.useState<Member[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  // True exactly when the mount effect below will fetch — the remount above
+  // makes the initial value the spinner switch, replacing a sync setLoading.
+  const [loading, setLoading] = React.useState(visible && !!orgId);
   const [selected, setSelected] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!visible) return;
-    setSelected(null);
-    setReason('');
-    setError(null);
-    setSubmitting(false);
-    if (!orgId) return;
+    if (!visible || !orgId) return;
     let cancelled = false;
     (async () => {
-      setLoading(true);
       try {
         const { data: rows } = await supabase
           .from('organization_members')
@@ -100,6 +135,7 @@ export function CycleCountReassignSheet({
 
   const canSubmit = !!selected && reason.trim().length > 0 && !submitting;
 
+
   async function submit() {
     if (!selected || reason.trim().length === 0) return;
     setSubmitting(true);
@@ -121,17 +157,10 @@ export function CycleCountReassignSheet({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1 }}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
         <Pressable
           onPress={onClose}
           style={{
@@ -273,9 +302,8 @@ export function CycleCountReassignSheet({
                 )}
               </Pressable>
             </View>
-          </Pressable>
         </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+      </Pressable>
+    </KeyboardAvoidingView>
   );
 }

@@ -255,8 +255,8 @@ export default function NewMaintenanceRequest() {
 
   // ── Photos (step 2) ───────────────────────────────────────────────────
   const [photoEntries, setPhotoEntries] = React.useState<PhotoEntry[]>([]);
-  const guardRef = React.useRef<PhotoAttemptGuard | null>(null);
-  if (!guardRef.current) guardRef.current = createPhotoAttemptGuard();
+  // Lazy useState, not a ref: .current during render is a compiler violation.
+  const [guard] = React.useState(() => createPhotoAttemptGuard());
 
   function patchEntry(key: string, patch: Partial<PhotoEntry>) {
     setPhotoEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
@@ -264,7 +264,7 @@ export default function NewMaintenanceRequest() {
 
   async function runUpload(entry: PhotoEntry) {
     if (!createdId) return;
-    const guard = guardRef.current!;
+    
     const token = guard.start(entry.key);
     try {
       await uploadMaintenancePhoto(createdId, { uri: entry.uri, fileName: entry.fileName }, (fraction) => {

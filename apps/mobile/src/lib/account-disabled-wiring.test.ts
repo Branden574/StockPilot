@@ -196,15 +196,15 @@ describe('only a verdict about THIS device may destroy its queued work', () => {
     expect(code(gate)).not.toContain("if (state !== 'disabled' || evicting.current) return;");
   });
 
-  it('evidence is mirrored into React state, not read fresh inside the effect', () => {
+  it('evidence is subscribed as its own snapshot, not read fresh inside the effect', () => {
     // getDisableEvidence() read directly inside the eviction effect would miss
     // a STRENGTHEN-only update (M-1): setAccountGateState's repeat-verdict
     // branch can upgrade 'sign-in' to 'session' without the gate STATE
-    // changing, and React bails out of a setState call whose value is
-    // unchanged — the effect would never re-run. Tracking evidence as its own
-    // piece of state, updated by the same subscription, is what makes the
-    // notification in account-disabled-state.ts actually reach a re-render.
-    expect(gate).toContain('React.useState<DisableEvidence | null>(getDisableEvidence)');
+    // changing, so nothing state-keyed would ever re-run the effect. Tracking
+    // evidence as its own subscribed snapshot — re-read on every gate
+    // notification — is what makes the strengthen notification in
+    // account-disabled-state.ts actually reach a re-render.
+    expect(gate).toContain('React.useSyncExternalStore(subscribeAccountGate, getDisableEvidence)');
     const evictionEffect = gate.slice(gate.indexOf('shouldRunEviction({'));
     expect(evictionEffect).toContain('[state, evidence, onEvicted]');
   });

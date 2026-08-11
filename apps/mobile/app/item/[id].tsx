@@ -971,10 +971,12 @@ export default function ItemDetail() {
   const movementsRemaining = Math.max(0, movementsTotal - movements.length);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- tab-change fetch: the sync sets inside the loaders are their loading/error flags (also used by pull-to-refresh); every data set is post-await
     if (tab === 'movements') void loadMovements();
     if (tab === 'activity') void loadActivity();
   }, [tab, loadMovements, loadActivity]);
@@ -2045,18 +2047,43 @@ function MovementNoteModal({
   onClose: () => void;
   onSaved: (note: string | null) => void;
 }) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* Reset-by-remount: keying the content on the open/closed flip gives
+          every open a fresh draft/error/busy seeded from `initialNote` — the
+          reset the old visible-effect performed. */}
+      <MovementNoteModalContent
+        key={String(visible)}
+        movementId={movementId}
+        initialNote={initialNote}
+        onClose={onClose}
+        onSaved={onSaved}
+      />
+    </Modal>
+  );
+}
+
+function MovementNoteModalContent({
+  movementId,
+  initialNote,
+  onClose,
+  onSaved,
+}: {
+  movementId: string;
+  initialNote: string | null;
+  onClose: () => void;
+  onSaved: (note: string | null) => void;
+}) {
   const { c, mode } = useTheme();
   const [text, setText] = React.useState(initialNote ?? '');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (visible) {
-      setText(initialNote ?? '');
-      setError(null);
-      setBusy(false);
-    }
-  }, [visible, initialNote]);
 
   const hadNote = normalizeMovementNote(initialNote) !== null;
   // Nothing to save when the normalized draft equals the current note (incl.
@@ -2082,14 +2109,7 @@ function MovementNoteModal({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <KeyboardAvoidingView
+    <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
@@ -2178,7 +2198,6 @@ function MovementNoteModal({
           </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
-    </Modal>
   );
 }
 
@@ -2317,21 +2336,6 @@ function AdjustModal({
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
 }) {
-  const { c, mode } = useTheme();
-  const [delta, setDelta] = React.useState('');
-  const [reason, setReason] = React.useState('');
-
-  React.useEffect(() => {
-    if (visible) {
-      setDelta('');
-      setReason('');
-    }
-  }, [visible]);
-
-  const parsedDelta = parseInt(delta, 10);
-  const isValid = !Number.isNaN(parsedDelta) && parsedDelta !== 0;
-  const preview = isValid ? item.quantity_on_hand + parsedDelta : item.quantity_on_hand;
-
   return (
     <Modal
       visible={visible}
@@ -2340,7 +2344,41 @@ function AdjustModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <KeyboardAvoidingView
+      {/* Reset-by-remount: keying the content on the open/closed flip clears
+          the delta/reason draft on every open — the reset the old
+          visible-effect performed. */}
+      <AdjustModalContent
+        key={String(visible)}
+        item={item}
+        busy={busy}
+        onClose={onClose}
+        onConfirm={onConfirm}
+      />
+    </Modal>
+  );
+}
+
+function AdjustModalContent({
+  item,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  item: Item;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (delta: number, reason: string) => Promise<void>;
+}) {
+  const { c, mode } = useTheme();
+  const [delta, setDelta] = React.useState('');
+  const [reason, setReason] = React.useState('');
+
+  const parsedDelta = parseInt(delta, 10);
+  const isValid = !Number.isNaN(parsedDelta) && parsedDelta !== 0;
+  const preview = isValid ? item.quantity_on_hand + parsedDelta : item.quantity_on_hand;
+
+  return (
+    <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
@@ -2481,7 +2519,6 @@ function AdjustModal({
           </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
-    </Modal>
   );
 }
 
@@ -2564,9 +2601,10 @@ function SerialsCard({
     [itemId, organizationId],
   );
 
+  // NOTE: `loading` starts true and `error` starts null, so reload() needs no
+  // synchronous pre-await resets on mount; the post-add refresh below sets the
+  // flags itself before re-invoking reload().
   const reload = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
     const res = await fetchPage(0);
     if (res) {
       setRows(res.rows);
@@ -2577,6 +2615,7 @@ function SerialsCard({
   }, [fetchPage, onCountChange]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void reload();
   }, [reload]);
 
@@ -2816,6 +2855,8 @@ function SerialsCard({
         onClose={() => setAddOpen(false)}
         onAdded={() => {
           setAddOpen(false);
+          setLoading(true);
+          setError(null);
           void reload();
         }}
       />
@@ -2978,18 +3019,16 @@ function AddSerialsModal({
   onClose: () => void;
   onAdded: (added: number) => void;
 }) {
-  const { c, mode } = useTheme();
-  const [text, setText] = React.useState('');
+  // Warehouse list + selection live on the WRAPPER so the chosen warehouse
+  // deliberately persists across opens (kept when still valid, exactly as the
+  // old visible-effect's functional set did); the sheet's draft fields live in
+  // the keyed content below and reset by remount instead.
   const [warehouses, setWarehouses] = React.useState<{ id: string; name: string }[] | null>(null);
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [warehousesError, setWarehousesError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!visible) return;
-    setText('');
-    setError(null);
-    setBusy(false);
     let cancelled = false;
     void (async () => {
       const { data, error: whErr } = await supabase
@@ -3001,9 +3040,10 @@ function AddSerialsModal({
       if (cancelled) return;
       if (whErr) {
         setWarehouses([]);
-        setError(`Could not load warehouses: ${whErr.message}`);
+        setWarehousesError(`Could not load warehouses: ${whErr.message}`);
         return;
       }
+      setWarehousesError(null);
       const list = (data ?? []) as { id: string; name: string }[];
       setWarehouses(list);
       setWarehouseId((prev) => {
@@ -3019,6 +3059,59 @@ function AddSerialsModal({
     };
   }, [visible, organizationId, defaultWarehouseId]);
 
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* Reset-by-remount: keying the content on the open/closed flip clears
+          the serial draft / inline error / busy flag on every open — the reset
+          the old visible-effect performed. */}
+      <AddSerialsModalContent
+        key={String(visible)}
+        itemId={itemId}
+        organizationId={organizationId}
+        warehouses={warehouses}
+        warehouseId={warehouseId}
+        setWarehouseId={setWarehouseId}
+        warehousesError={warehousesError}
+        onClose={onClose}
+        onAdded={onAdded}
+      />
+    </Modal>
+  );
+}
+
+function AddSerialsModalContent({
+  itemId,
+  organizationId,
+  warehouses,
+  warehouseId,
+  setWarehouseId,
+  warehousesError,
+  onClose,
+  onAdded,
+}: {
+  itemId: string;
+  organizationId: string;
+  warehouses: { id: string; name: string }[] | null;
+  warehouseId: string | null;
+  setWarehouseId: (id: string) => void;
+  warehousesError: string | null;
+  onClose: () => void;
+  onAdded: (added: number) => void;
+}) {
+  const { c, mode } = useTheme();
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+  // One inline error slot, exactly as before the split: a submit error (fresh
+  // per open) or the warehouse-load error from the wrapper's fetch.
+  const error = submitError ?? warehousesError;
+
   const parsed = React.useMemo(() => validateSerialInput(text), [text]);
   const canSubmit =
     !busy && parsed.serials.length > 0 && parsed.errors.length === 0 && !!warehouseId;
@@ -3026,7 +3119,7 @@ function AddSerialsModal({
   async function submit() {
     if (!canSubmit || !warehouseId) return;
     setBusy(true);
-    setError(null);
+    setSubmitError(null);
     const { error: insErr } = await supabase.from('serial_registry').insert(
       parsed.serials.map((serial_number) => ({
         organization_id: organizationId,
@@ -3041,13 +3134,13 @@ function AddSerialsModal({
     if (insErr) {
       if (insErr.code === '23505') {
         const dup = duplicateSerialFromDbError(insErr.details ?? insErr.message);
-        setError(
+        setSubmitError(
           dup
             ? `Serial ${dup} already exists for this item. Remove it and try again.`
             : 'One of these serials already exists for this item.',
         );
       } else {
-        setError(insErr.message);
+        setSubmitError(insErr.message);
       }
       return;
     }
@@ -3055,14 +3148,7 @@ function AddSerialsModal({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <KeyboardAvoidingView
+    <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
@@ -3212,7 +3298,6 @@ function AddSerialsModal({
           </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
-    </Modal>
   );
 }
 

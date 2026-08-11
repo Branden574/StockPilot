@@ -686,6 +686,7 @@ export default function OrderDetail() {
     // effect, whose cleanup cancels the in-flight query, hanging the spinner.
     if (!sigOpen || sigUrl || !orgId || !id) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-dialog-open: the sync set is the spinner flag (needed again on reopen after a failed fetch); the data set is post-await
     setSigLoading(true);
     void (async () => {
       try {

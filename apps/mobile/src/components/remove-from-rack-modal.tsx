@@ -60,6 +60,46 @@ export function RemoveFromRackModal({
   onClose: () => void;
   onRemoved: () => void;
 }) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* key: remount the content per open/close transition so every session
+          starts from the blank selection/quantity/reason the old reset-on-open
+          effect wrote — reset-by-remount, with `loading: true` as the initial
+          state covering the fetch the mount effect starts. */}
+      <RemoveFromRackContent
+        key={String(visible)}
+        visible={visible}
+        itemId={itemId}
+        itemName={itemName}
+        organizationId={organizationId}
+        onClose={onClose}
+        onRemoved={onRemoved}
+      />
+    </Modal>
+  );
+}
+
+function RemoveFromRackContent({
+  visible,
+  itemId,
+  itemName,
+  organizationId,
+  onClose,
+  onRemoved,
+}: {
+  visible: boolean;
+  itemId: string;
+  itemName: string;
+  organizationId: string;
+  onClose: () => void;
+  onRemoved: () => void;
+}) {
   const { c, mode } = useTheme();
   const [loading, setLoading] = React.useState(true);
   const [holdings, setHoldings] = React.useState<Holding[]>([]);
@@ -72,11 +112,6 @@ export function RemoveFromRackModal({
   React.useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setFromId('');
-    setQty('');
-    setReason('');
     void (async () => {
       const res = await supabase
         .from('item_stock_levels')
@@ -175,17 +210,10 @@ export function RemoveFromRackModal({
   }
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1 }}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
         <Pressable
           onPress={onClose}
           style={{
@@ -350,9 +378,8 @@ export function RemoveFromRackModal({
                 </Button>
               </View>
             </View>
-          </Pressable>
         </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+      </Pressable>
+    </KeyboardAvoidingView>
   );
 }

@@ -125,6 +125,7 @@ export default function OrdersScreen() {
   }, [orgId, canApprove, userId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the pre-await empty-scope guard (a non-approver with no user id resolves to an empty list, never the full queue); the effect synchronizes with the server
     void load();
   }, [load]);
 

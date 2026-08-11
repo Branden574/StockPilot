@@ -104,6 +104,7 @@ export default function WarehousesAdmin() {
   }, [orgId, isAdmin]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the pre-await guard that resolves loading for the unauthorized; the effect synchronizes with the server
     if (!roleLoading) void load();
   }, [load, roleLoading]);
 
