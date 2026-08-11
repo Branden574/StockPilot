@@ -195,10 +195,25 @@ select is(
 -- 1. MED-11 — non-negative quantity constraints on inventory_items.
 -- ══════════════════════════════════════════════════════════════════════════
 
--- The three constraints exist, are CHECK constraints, and are NOT VALID (so a
--- production deploy cannot fail on legacy rows). convalidated = false is the
--- load-bearing half: a future migration that "cleans this up" by validating
--- them without first checking production must fail here.
+-- The three constraints exist and are now VALIDATED.
+--
+-- They were added NOT VALID so the deploy could not fail on legacy rows, and
+-- this test originally pinned `convalidated = false` to force any promotion to
+-- be deliberate rather than a drive-by "cleanup". That guard worked as
+-- designed: 0324 promotes them, and only after production was queried first —
+-- 516 inventory_items rows with zero negative quantity_on_hand, reorder_point
+-- or reorder_quantity. `validate constraint` takes SHARE UPDATE EXCLUSIVE, so
+-- it permits concurrent reads and writes; it is not the ACCESS EXCLUSIVE
+-- full-scan that adding a validating constraint would have caused.
+--
+-- Why the assertion is now "validated" rather than "not valid": pg_constraint
+-- cannot distinguish a constraint ADDED as validating from one added NOT VALID
+-- and later promoted — both end at convalidated = true. So the original intent
+-- (never ADD a validating constraint to a populated table) is not expressible
+-- as catalog state and lives in the migration headers and
+-- docs/security/destructive-actions.md instead. Asserting "validated" is the
+-- stronger security claim anyway: the invariant now holds for EVERY row, not
+-- only for rows written since the constraint appeared.
 select is(
   (select count(*) from pg_constraint
     where conrelid = 'public.inventory_items'::regclass
@@ -215,9 +230,9 @@ select is(
       and conname in ('inventory_items_quantity_on_hand_nonneg',
                       'inventory_items_reorder_point_nonneg',
                       'inventory_items_reorder_quantity_nonneg')
-      and convalidated = false),
+      and convalidated = true),
   3::bigint,
-  'MED-11: all three are NOT VALID, so legacy production rows are unscanned'
+  'MED-11: all three are VALIDATED by 0324 (production checked first: 516 rows, zero negatives), so the invariant holds for every existing row and not just new writes'
 );
 
 -- ATTACKER BLOCKED: the direct PostgREST-shaped write is refused. NOT VALID

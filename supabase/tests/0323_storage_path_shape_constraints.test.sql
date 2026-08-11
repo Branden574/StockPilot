@@ -73,11 +73,20 @@ values
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1-2. All nine constraints exist, and every one of them is NOT VALID.
 --
---   The NOT VALID assertion is a real requirement, not trivia: a future
---   migration that re-adds one of these as VALIDATING would take an ACCESS
---   EXCLUSIVE lock and full-scan the table on deploy, which is exactly the
---   outage 0323's header declines to risk. `convalidated = false` is how that
---   decision is pinned so a change has to be deliberate.
+--   Originally this pinned `convalidated = false`, because a migration that
+--   re-adds one of these as VALIDATING would take an ACCESS EXCLUSIVE lock and
+--   full-scan the table on deploy — the outage 0323's header declines to risk.
+--   That pin did its job: 0324 promotes all nine deliberately, and only after
+--   production was queried first (1,001 rows across all seven path columns,
+--   zero containing '..', '%', a leading '/', '//', a backslash or a control
+--   character). `validate constraint` takes only SHARE UPDATE EXCLUSIVE and so
+--   permits concurrent reads and writes.
+--
+--   The assertion is now "validated" because pg_constraint cannot distinguish a
+--   constraint ADDED as validating from one added NOT VALID and later promoted
+--   — both end at convalidated = true. The original rule therefore lives in the
+--   migration headers rather than in catalog state, and "validated" is the
+--   stronger claim: the invariant holds for EVERY row, not just new writes.
 -- ─────────────────────────────────────────────────────────────────────────
 select is(
   (select count(*)::int
@@ -102,7 +111,7 @@ select is(
   (select count(*)::int
      from pg_constraint
     where contype = 'c'
-      and convalidated
+      and NOT convalidated
       and conname in (
         'item_images_storage_path_safe',
         'item_images_thumb_path_safe',
@@ -115,7 +124,7 @@ select is(
         'maintenance_request_attachments_thumbnail_path_safe'
       )),
   0,
-  'every one is NOT VALID on purpose — none was added as a validating constraint'
+  'none is left unvalidated — 0324 promoted all nine after proving production clean, so the shape holds for every existing row'
 );
 
 
