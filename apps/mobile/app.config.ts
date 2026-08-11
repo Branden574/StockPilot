@@ -15,7 +15,7 @@ const config: ExpoConfig = {
   // published from a commit before this bump.
   // History: 1.0.3 = first universal (iPhone+iPad+Mac) build, LIVE on the App
   // Store; 1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.
-  version: '1.1.0',
+  version: '1.2.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   // `newArchEnabled` used to live here. Expo SDK 55 REMOVED it from the app

@@ -20,7 +20,7 @@
       "node": "22.19.0",
       "ios": {
         "resourceClass": "m-medium",
-        "image": "macos-sequoia-15.6-xcode-26.0"
+        "image": "macos-tahoe-26.5-xcode-26.6"
       },
       "channel": "preview",
       "env": {
@@ -34,7 +34,7 @@
       "environment": "production",
       "ios": {
         "resourceClass": "m-medium",
-        "image": "macos-sequoia-15.6-xcode-26.0"
+        "image": "macos-tahoe-26.5-xcode-26.6"
       },
       "channel": "production",
       "env": {
