@@ -1,4 +1,4 @@
-import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { BottomTabBarHeightContext } from 'expo-router/js-tabs';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, Menu, type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';

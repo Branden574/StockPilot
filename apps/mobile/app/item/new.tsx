@@ -168,7 +168,7 @@ function PhotosSection({
         </Pressable>
         {photos.map((p, idx) => (
           <View key={`${p.uri}-${idx}`} style={photoStyles.photoThumb}>
-            <Image source={{ uri: p.uri }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+            <Image source={{ uri: p.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
             <Pressable
               onPress={() => onRemove(idx)}
               style={({ pressed }) => [

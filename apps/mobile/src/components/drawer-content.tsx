@@ -1,4 +1,4 @@
-import { type DrawerContentComponentProps } from '@react-navigation/drawer';
+import { type DrawerContentComponentProps } from 'expo-router/drawer';
 import { useRouter, useSegments } from 'expo-router';
 import { LogOut } from 'lucide-react-native';
 import * as React from 'react';

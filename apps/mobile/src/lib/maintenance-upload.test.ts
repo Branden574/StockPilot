@@ -46,7 +46,12 @@ const fsMock = vi.hoisted(() => ({
   uploadAsync: vi.fn(),
   FileSystemUploadType: { BINARY_CONTENT: 0, MULTIPART: 1 },
 }));
-vi.mock('expo-file-system', () => fsMock);
+// Module id must stay in lockstep with maintenance-upload.ts's own import
+// specifier — 'expo-file-system/legacy' since SDK 54 moved the URI-string API
+// (createUploadTask/uploadAsync/FileSystemUploadType) there. Mocking the wrong
+// id doesn't just weaken the test: vitest then loads the REAL module, which
+// pulls in react-native's Flow-typed index.js and fails to parse.
+vi.mock('expo-file-system/legacy', () => fsMock);
 
 const manipulatorMock = vi.hoisted(() => ({
   manipulateAsync: vi.fn(),

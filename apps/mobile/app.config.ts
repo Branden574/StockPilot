@@ -15,10 +15,15 @@ const config: ExpoConfig = {
   // published from a commit before this bump.
   // History: 1.0.3 = first universal (iPhone+iPad+Mac) build, LIVE on the App
   // Store; 1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.
-  version: '1.1.0',
+  version: '1.2.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
-  newArchEnabled: true,
+  // `newArchEnabled` used to live here. Expo SDK 55 REMOVED it from the app
+  // config schema (and from @expo/config-plugins and expo-build-properties)
+  // because SDK 54 was the last release that could run the Legacy
+  // Architecture at all — the New Architecture is now the only one, so the
+  // flag has nothing left to switch. Do not re-add it; it is no longer a
+  // valid ExpoConfig key and will fail typecheck.
   icon: './assets/icon.png',
   updates: {
     url: 'https://u.expo.dev/68235e4f-fd32-4c8c-a2b5-9f9df663e6cc',
@@ -26,11 +31,12 @@ const config: ExpoConfig = {
   runtimeVersion: {
     policy: 'appVersion',
   },
-  splash: {
-    image: './assets/icon.png',
-    resizeMode: 'contain',
-    backgroundColor: '#0a0f1f',
-  },
+  // NOTE: the root-level `splash` key used to live here. Expo SDK 56 dropped it
+  // from ExpoConfig AND from @expo/prebuild-config (grep the installed
+  // @expo/prebuild-config@56 build output — it contains no splash handling at
+  // all), so leaving it would silently produce a default white launch screen.
+  // The identical configuration now lives in the 'expo-splash-screen' plugin
+  // below.
   ios: {
     // Universal app: runs natively on iPhone + iPad, and on Apple-Silicon Macs
     // as a "Designed for iPad" app (enabled via a checkbox in App Store Connect
@@ -107,6 +113,38 @@ const config: ExpoConfig = {
     ],
     'expo-secure-store',
     'expo-sqlite',
+    // Required from Expo SDK 56 on — expo-image gained a config plugin and
+    // `expo install --fix` / expo-doctor now refuse the project without it. It
+    // only writes one Podfile property (`expo-image.disable-libdav1d`, left at
+    // its default `false` so the bundled AV1 decoder stays linked); there is no
+    // behaviour change from adding it.
+    'expo-image',
+    // Required from Expo SDK 57 on — expo-status-bar's config plugin is now
+    // part of expo-doctor's plugin-presence check. Listed with NO props on
+    // purpose: the plugin's own implementation gates every write on
+    // `hidden != null` / `style != null`, so a props-less entry is a verified
+    // no-op for both the iOS Info.plist and the Android styles. The status bar
+    // is still driven at runtime by <StatusBar style={...} /> in
+    // app/_layout.tsx; giving the plugin a `style` here would bake a
+    // launch-time value into the native project and fight that.
+    'expo-status-bar',
+    // Replaces the root-level `splash` key that SDK 56 removed (see the note
+    // where it used to live). Values are carried over 1:1 from it. The
+    // plugin's own defaults are NOT equivalent to the old key — it centres the
+    // image at imageWidth 100 — so `enableFullScreenImage_legacy: true` is
+    // load-bearing: it is Expo's documented compatibility switch that keeps
+    // rendering the icon full-screen-contained exactly as the 1.1.0 build on
+    // the App Store does today. Do not drop it without deciding you WANT the
+    // new centred-logo look.
+    [
+      'expo-splash-screen',
+      {
+        image: './assets/icon.png',
+        resizeMode: 'contain',
+        backgroundColor: '#0a0f1f',
+        enableFullScreenImage_legacy: true,
+      },
+    ],
     // Registers the native push module + adds the iOS `aps-environment`
     // entitlement. Without this plugin the build has no push entitlement,
     // so getExpoPushTokenAsync() fails on device and no token is ever
@@ -121,11 +159,17 @@ const config: ExpoConfig = {
         faceIDPermission: 'StockPilot uses Face ID to sign you in securely without re-entering your password.',
       },
     ],
-    // Patches the generated Podfile so the `fmt` pod compiles under
-    // Xcode 16+ (defines FMT_USE_CONSTEVAL=0). See the plugin file for
-    // the full rationale. Required for `expo run:ios` to succeed until
-    // we bump to RN 0.81+.
-    './plugins/with-fmt-consteval-fix.js',
+    // NOTE: './plugins/with-fmt-consteval-fix.js' used to be listed here. It
+    // patched the generated Podfile with FMT_USE_CONSTEVAL=0 because React
+    // Native 0.79 pinned fmt 11.0.2, whose consteval format strings Xcode 16+
+    // rejects. React Native fixed that upstream in 0.83.5 by bumping to fmt
+    // 12.1.0 ("Build: Bump fmt to 12.1.0 to fix Xcode 26.4"), and SDK 55 ships
+    // RN 0.83.10 — verified locally: node_modules/react-native/
+    // third-party-podspecs/fmt.podspec declares spec.version = "12.1.0". The
+    // plugin was therefore deleted along with the @expo/config-plugins
+    // devDependency it needed. Do not resurrect it: it injects into the
+    // Podfile's post_install block by string-matching `  end\nend\n`, so it is
+    // a standing hazard every time the RN Podfile template changes shape.
     // Sentry crash/error reporting. The plugin wires the native SDK and, at
     // build time, uploads source maps when SENTRY_ORG / SENTRY_PROJECT /
     // SENTRY_AUTH_TOKEN are present (set as EAS secrets). With those unset the

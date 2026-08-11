@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { resizeForUpload } from './image-resize';
 
@@ -17,6 +17,11 @@ import { resizeForUpload } from './image-resize';
  * mis-targeted OTA bundle degrades to a friendly alert instead of a crash.
  * (expo-file-system predates 1.1.0 in this app, so its static import is safe.)
  * Keep it that way.
+ *
+ * ⚠️ `expo-file-system/legacy`, not `expo-file-system` — expo-file-system 19
+ * (Expo SDK 54) moved the URI-string API (`readAsStringAsync`, `getInfoAsync`,
+ * `EncodingType`) to the /legacy subpath; the same names on the default export
+ * are typed but THROW at runtime. See maintenance-upload.ts for the full note.
  */
 
 export type ScanPagesResult =
@@ -132,7 +137,10 @@ async function renderPdf(
   // Lazy — expo-print is a native module new in 1.1.0 (see module comment).
   const Print = await import('expo-print');
   const { uri } = await Print.printToFileAsync({ html: pagesHtml(dataUris) });
-  const info = await FileSystem.getInfoAsync(uri, { size: true });
+  // No `{ size: true }` opt-in any more: expo-file-system 19 dropped `size`
+  // from legacy `InfoOptions` (only `md5` remains) because the native handler
+  // always populates it and `FileInfo.size` became non-optional.
+  const info = await FileSystem.getInfoAsync(uri);
   // If sizing fails, report 0 — the caller falls back to the upload buffer's
   // byteLength for the metadata row, and the bucket cap still enforces 15 MB.
   return { uri, bytes: info.exists ? info.size : 0 };

@@ -2,7 +2,7 @@ import { BlurView } from 'expo-blur';
 import { Tabs, useRouter, useSegments } from 'expo-router';
 import { type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View, type ColorValue } from 'react-native';
 
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -176,7 +176,11 @@ export default function TabsLayout() {
 
 function slotOptions(id: TabSlotId): {
   title: string;
-  tabBarIcon: (props: { color: string; focused: boolean }) => React.ReactNode;
+  // `color` is ColorValue, not string: expo-router 56 absorbed React
+  // Navigation's bottom-tabs into itself and its BottomTabNavigationOptions
+  // types tabBarIcon's `color` as RN's ColorValue (string | OpaqueColorValue).
+  // Declaring `string` here makes this whole object unassignable to TabsProps.
+  tabBarIcon: (props: { color: ColorValue; focused: boolean }) => React.ReactNode;
 } {
   return {
     title: tabCandidate(id).title,
@@ -191,14 +195,21 @@ function TabIcon({
   color,
   focused,
 }: {
+  // ColorValue (not string) to match what expo-router 56's tabBarIcon hands
+  // us — see slotOptions above.
+  color: ColorValue;
   icon: LucideIcon;
-  color: string;
   focused: boolean;
 }) {
   return (
     <Icon
       size={Platform.OS === 'android' ? 22 : 24}
-      color={color}
+      // lucide-react-native types `color` as string. The cast is safe here
+      // because the only values that ever reach it are the plain hex strings
+      // this file passes to tabBarActiveTintColor / tabBarInactiveTintColor —
+      // the app never uses PlatformColor(), which is the only thing that makes
+      // a ColorValue a non-string OpaqueColorValue.
+      color={color as string}
       strokeWidth={focused ? 1.7 : 1.4}
     />
   );

@@ -52,8 +52,10 @@
       "sharp"
     ],
     "overrides": {
-      "@types/react": "19.0.14",
+      "@types/react": "19.2.18",
       "@types/react-dom": "19.0.4",
+      "react": "19.2.3",
+      "react-dom": "19.2.3",
       "postcss@8": "^8.5.23",
       "fast-uri@3": "^3.1.5",
       "dompurify@3": "^3.4.13",

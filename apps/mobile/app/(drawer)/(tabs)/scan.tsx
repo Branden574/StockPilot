@@ -1,5 +1,9 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as FileSystem from 'expo-file-system';
+// `/legacy` is load-bearing: expo-file-system 19 (SDK 54) moved the URI-string
+// API (readAsStringAsync, EncodingType) to this subpath. The same names on the
+// default export are still typed but THROW at runtime. See
+// src/lib/maintenance-upload.ts for the full note.
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter, type Href } from 'expo-router';
 import { X } from 'lucide-react-native';

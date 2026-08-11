@@ -219,7 +219,7 @@ export function ScannerTip({
 
 const styles = StyleSheet.create({
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(14,15,13,0.38)', // ink-tinted scrim, as biometric-optin-sheet
   },
   centerWrap: {
