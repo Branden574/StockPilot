@@ -13,14 +13,18 @@
 --     policy. That coupling is what keeps the conditional-write RPC paths
 --     working, so it is pinned here as intended behavior, not left implicit.
 --
---   • RPC PARITY (the point of the whole change): as a whT1-scoped STAFF
---     caller, an adjust_stock draw that can only be satisfied by consuming
---     holdings in BOTH warehouses succeeds and leaves the literal expected
---     quantities — identical to pre-0331 behavior, because apply_level_delta
---     is now SECURITY DEFINER and its draw-down selection cannot be narrowed
---     by the caller's read scope. transfer_stock FROM a whT2 location (outside
---     the caller's assignment) also still works — its conditional UPDATE runs
---     under the unchanged FOR ALL write policy.
+--   • RPC PARITY: as a whT1-scoped STAFF caller, an adjust_stock draw that
+--     can only be satisfied by consuming holdings in BOTH warehouses succeeds
+--     and leaves the literal expected quantities — identical to pre-0331
+--     behavior. HONEST SCOPE of these pins: they prove the NEW shape (the
+--     authorization gate + the narrowed SELECT policy) did not break
+--     scoped-staff draws; they are NOT a behavioral kill for an invoker
+--     revert of apply_level_delta, because the staff caller is never
+--     read-narrowed in the first place (see the staff pin below). The
+--     definer conversion is pinned structurally instead (tests 18/23/24
+--     here, plus 0318's inverted prosecdef pin). transfer_stock FROM a whT2
+--     location (outside the caller's assignment) also still works — its
+--     conditional UPDATE runs under the unchanged FOR ALL write policy.
 --
 --   • STRUCTURE: apply_level_delta is SECURITY DEFINER with a pinned
 --     search_path, closed to PUBLIC/anon, open to authenticated; and its
@@ -224,10 +228,22 @@ set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
 -- A draw of 9 can only be satisfied by consuming holdings in BOTH warehouses
--- (5 in whT1 + 4 in whT2). If apply_level_delta's selection were ever scoped
--- to the caller again, this exact call would either raise
--- insufficient_placed_stock or silently consume the null-warehouse Site row
--- instead of the whT2 holding — both pinned against below.
+-- (5 in whT1 + 4 in whT2).
+--
+-- HONEST NOTE on what tests 10-17 kill (and what they cannot): the staff
+-- fixture caller is never read-narrowed — item_stock_levels_write (0202) is
+-- FOR ALL with a staff USING floor, and permissive policies OR into SELECT
+-- (test 9 pins exactly this) — so reverting apply_level_delta to SECURITY
+-- INVOKER does NOT change this call's outcome. Verified by live mutation:
+-- with the verbatim 0292 invoker body swapped in, tests 10-17 still pass;
+-- only the structural pins fail. A behavioral revert fixture is
+-- unconstructible under current policies: viewers cannot reach any draw
+-- path, and staff/manager+ are unnarrowed. What these parity tests DO pin
+-- is that 0331's NEW gate and narrowed SELECT policy did not break
+-- scoped-staff draws — they fail on e.g. a manager-floor authorization gate
+-- or an over-narrowed write path. The invoker-revert mutant is killed by
+-- the structural pins instead: test 18 (prosecdef), tests 23/24 (the 42501
+-- gate), and 0318's inverted prosecdef pin.
 select lives_ok(
   format($$select public.adjust_stock(%L, -9, 'remove', null, 'ar2 parity draw')$$,
          :itemA),
