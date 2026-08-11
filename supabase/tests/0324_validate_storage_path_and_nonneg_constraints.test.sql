@@ -45,11 +45,21 @@ select ok(_is_validated('inventory_items', 'inventory_items_reorder_point_nonneg
 select ok(_is_validated('inventory_items', 'inventory_items_reorder_quantity_nonneg'),
   'inventory_items.reorder_quantity non-negative is validated');
 
--- The deliberate exclusion. Production holds 5 legacy 'delivery' orders with a
--- null delivery_charter_id, so validating this would fail the deploy. Pinned so
--- a later cleanup pass cannot silently validate it without resolving the rows.
+-- The deliberate exclusion, and it is now a SETTLED decision rather than an
+-- open question. Production holds 5 legacy 'delivery' orders (created
+-- 2026-05-12..15, predating the requirement) with a null delivery_charter_id,
+-- so validating this constraint would fail the deploy.
+--
+-- Owner decision 2026-08-11: LEAVE THEM. Backfilling means choosing a delivery
+-- charter per order, which is a judgement about real historical orders that no
+-- migration should guess, and the rows are five closed records from a three-day
+-- window with no operational consequence. The constraint keeps guarding every
+-- NEW write meanwhile, which is the entire attack surface.
+--
+-- Pinned so a later cleanup pass cannot silently validate it -- doing so would
+-- fail the deploy on those five rows.
 select ok(NOT _is_validated('order_requests', 'order_requests_delivery_target_chk'),
-  'order_requests_delivery_target_chk is STILL not valid on purpose -- 5 legacy delivery orders carry no charter, and choosing one for each is an owner data decision');
+  'order_requests_delivery_target_chk is STILL not valid, by owner decision 2026-08-11: the 5 legacy charter-less delivery orders are left as-is, and the constraint keeps guarding new writes');
 
 -- item_stock_levels.quantity must remain unconstrained until adjust_stock and
 -- transfer_stock stop writing negatives. Pinned so the ordering cannot reverse.

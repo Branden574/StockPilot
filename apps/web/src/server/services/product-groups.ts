@@ -305,6 +305,39 @@ export class ProductGroupsService {
 
     const existing = await this.findByKey(groupKey);
     if (existing) {
+      // An ARCHIVED group matched. Restore it rather than refusing.
+      //
+      // Owner decision, and it matches the precedent already in this codebase:
+      // migration 0266 archives an item on zero stock and its own column comment
+      // says `auto_archived` "gates auto-restore-on-restock". Archive here means
+      // "this family is out of use"; a new variant arriving under the same exact
+      // identity is the world contradicting that, so the archive is what is
+      // stale, not the receipt.
+      //
+      // Refusing was the alternative and is worse: findOrCreate runs inside PO
+      // import and receiving, so a refusal aborts a run halfway with stock
+      // already physically on the dock and no in-app way forward.
+      //
+      // It is NOT silent. The restore writes its own audit row alongside the
+      // match, so "who un-archived this group, and why" is answerable: the
+      // answer is a receipt, and the event says so.
+      if (existing.status === 'archived') {
+        const restored = await this.reactivateMatchedGroup(existing.id);
+        void audit(
+          {
+            event: 'sports.group.restored',
+            entityType: 'product_group',
+            entityId: existing.id,
+            extra: { reason: 'variant_matched_archived_group', groupKey },
+          },
+          this.ctx,
+        );
+        void audit(
+          { event: 'sports.group.matched', entityType: 'product_group', entityId: existing.id },
+          this.ctx,
+        );
+        return { group: restored, created: false };
+      }
       void audit(
         { event: 'sports.group.matched', entityType: 'product_group', entityId: existing.id },
         this.ctx,
@@ -568,6 +601,38 @@ export class ProductGroupsService {
    * Also the way out of 'discontinued', which is why the target is 'active'
    * rather than "whatever it was before".
    */
+  /**
+   * Flip an archived group back to active for a matched-variant restore.
+   *
+   * Deliberately does NOT call `assertPermission('sports:manage')` the way the
+   * public `restore()` does, and that is the whole reason it exists rather than
+   * reusing it. `findOrCreate` admits EITHER `items:create` or `sports:manage`
+   * (see its header), so an `items:create`-only caller — the item form, and the
+   * PO-import and receiving paths — would be refused at this step by the public
+   * method, which is precisely the mid-run abort the auto-restore decision was
+   * meant to avoid. The caller has already been authorized at findOrCreate's
+   * entry; re-asserting a STRICTER permission here would be a silent narrowing.
+   *
+   * Private, and the only caller is the archived branch of findOrCreate. It
+   * writes no audit row of its own — findOrCreate records the restore with the
+   * reason, since only the caller knows why.
+   */
+  private async reactivateMatchedGroup(id: string): Promise<ProductGroupRow> {
+    const { data, error } = await this.ctx.supabase
+      .from('product_groups')
+      .update({ status: 'active', updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select(GROUP_COLUMNS)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // Same fail-open hazard as archive()/restore(): a bare .update().eq() cannot
+    // distinguish "zero rows matched" from success, so confirm the row.
+    if (!data) throw new ServiceError('not_found', 'Product group not found.');
+    return data as unknown as ProductGroupRow;
+  }
+
   async restore(id: string): Promise<ProductGroupRow> {
     assertPermission(this.ctx, 'sports:manage');
     assertModuleEnabled(this.ctx, 'sports');

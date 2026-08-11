@@ -124,6 +124,94 @@ describe('ProductGroupsService.findOrCreate', () => {
     expect(second.chains.has('product_groups.insert')).toBe(false);
   });
 
+  // ── Owner decision: a matched ARCHIVED group is RESTORED, not refused ──
+  //
+  // The alternative was refusing, and it is worse: findOrCreate runs inside PO
+  // import and receiving, so a refusal aborts a run halfway with stock already
+  // on the dock. Archive means "out of use"; a variant arriving under the exact
+  // same identity is the world contradicting the archive. This mirrors the item
+  // auto-archive precedent, whose own migration comment says auto_archived
+  // "gates auto-restore-on-restock".
+  it('restores an archived group that matches, and returns it ACTIVE', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow({ status: 'archived' })], error: null },
+      'product_groups.update': { data: groupRow({ status: 'active' }), error: null },
+    });
+
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT);
+
+    expect(out.created).toBe(false);
+    // The caller must receive the ACTIVE row, not the stale archived one it
+    // matched on - otherwise the variant is attached to a group the caller
+    // believes is archived.
+    expect(out.group.status).toBe('active');
+    // Restored in place, never duplicated behind the archive.
+    expect(stub.chains.has('product_groups.insert')).toBe(false);
+    const updateArgs = stub.chainArgs.get('product_groups.update')?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updateArgs.status).toBe('active');
+  });
+
+  it('restores for an items:create-only caller — the PO-import path must not be refused', async () => {
+    // THE TRAP THIS PINS: the public restore() asserts 'sports:manage'. Reusing
+    // it here would refuse the item form, PO import and receiving, which hold
+    // items:create only - reintroducing the exact mid-run abort the auto-restore
+    // decision exists to prevent. findOrCreate already authorized the caller, so
+    // the internal restore must not re-assert a STRICTER permission.
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow({ status: 'archived' })], error: null },
+      'product_groups.update': { data: groupRow({ status: 'active' }), error: null },
+    });
+    const ctx = sportsCtx(stub.client, { permissions: new Set(['items:create']) });
+
+    const out = await new ProductGroupsService(ctx).findOrCreate(CREATE_INPUT);
+
+    expect(out.group.status).toBe('active');
+  });
+
+  it('records the restore in the audit trail with its reason, so it is not silent', async () => {
+    const { audit } = await import('./audit');
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow({ status: 'archived' })], error: null },
+      'product_groups.update': { data: groupRow({ status: 'active' }), error: null },
+    });
+
+    await new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT);
+
+    const restored = vi
+      .mocked(audit)
+      .mock.calls.find(([e]) => (e as { event?: string }).event === 'sports.group.restored');
+    expect(restored, 'a restore must leave an audit row').toBeTruthy();
+    expect((restored![0] as { extra?: Record<string, unknown> }).extra?.reason).toBe(
+      'variant_matched_archived_group',
+    );
+  });
+
+  it('leaves an ACTIVE match completely alone — no needless status write', async () => {
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow({ status: 'active' })], error: null },
+    });
+
+    const out = await new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT);
+
+    expect(out.group.status).toBe('active');
+    expect(stub.chains.has('product_groups.update')).toBe(false);
+  });
+
+  it('fails CLOSED when the restore update matches no row', async () => {
+    // Recurring pattern: .update().eq() cannot tell "zero rows" from success.
+    const stub = makeSupabaseStub({
+      'product_groups.select': { data: [groupRow({ status: 'archived' })], error: null },
+      'product_groups.update': { data: null, error: null },
+    });
+
+    await expect(
+      new ProductGroupsService(sportsCtx(stub.client)).findOrCreate(CREATE_INPUT),
+    ).rejects.toThrow(/not found/i);
+  });
+
   it('re-reads instead of throwing when a concurrent writer wins the 23505 race', async () => {
     let selectCall = 0;
     const stub = makeSupabaseStub({
