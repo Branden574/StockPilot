@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Download, Package, ShoppingCart, Truck } from 'lucide-react';
+import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { formatOrderNumber } from '@stockpilot/core';
 
@@ -9,6 +9,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
+import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,63 +25,19 @@ import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
   OrderRequestsService,
-  type OrderRequestStatus,
   type OrderRequestSummary,
 } from '@/server/services/order-requests';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDERS_TOUR } from '@/lib/onboarding/tours';
+import {
+  ORDER_EXPORT_STATUS_TABS as TAB_FILTERS,
+  ORDER_EXPORT_TAB_LABELS as TAB_LABELS,
+  isOrderStatusTab,
+  type OrderStatusTab as StatusTab,
+} from '@/lib/orders/export';
 
 const PAGE_SIZE = 50;
-
-type StatusTab =
-  | 'all_active'
-  | 'needs_approval'
-  | 'picking'
-  | 'packing'
-  | 'staged'
-  | 'in_transit'
-  | 'backordered'
-  | 'completed'
-  | 'denied_cancelled';
-
-const TAB_LABELS: Record<StatusTab, string> = {
-  all_active: 'All active',
-  needs_approval: 'Needs approval',
-  picking: 'Picking',
-  packing: 'Packing',
-  staged: 'Staged',
-  in_transit: 'In transit',
-  backordered: 'Backordered',
-  completed: 'Completed',
-  denied_cancelled: 'Denied/Cancelled',
-};
-
-const TAB_FILTERS: Record<StatusTab, OrderRequestStatus | OrderRequestStatus[]> = {
-  all_active: [
-    'pending_approval',
-    'approved',
-    'pick_slip_generated',
-    'picking_in_progress',
-    'picking_complete',
-    'packing_slip_generated',
-    'staged_for_pickup',
-    'staged_for_delivery',
-    'in_transit',
-    // A backordered order is still LIVE — it's awaiting a manager to resume or
-    // close it. Include it in All active AND give it its own tab, or it would
-    // be reachable only by direct link / notification.
-    'backordered',
-  ],
-  needs_approval: 'pending_approval',
-  picking: ['pick_slip_generated', 'picking_in_progress', 'picking_complete'],
-  packing: 'packing_slip_generated',
-  staged: ['staged_for_pickup', 'staged_for_delivery'],
-  in_transit: 'in_transit',
-  backordered: 'backordered',
-  completed: 'completed',
-  denied_cancelled: ['denied', 'cancelled'],
-};
 
 const TAB_ORDER: StatusTab[] = [
   'all_active',
@@ -94,9 +51,9 @@ const TAB_ORDER: StatusTab[] = [
   'denied_cancelled',
 ];
 
-function isStatusTab(value: string | undefined): value is StatusTab {
-  return TAB_ORDER.includes(value as StatusTab);
-}
+// Vocabulary lives in lib/orders/export.ts (single source for the page tabs
+// and BOTH export formats); TAB_ORDER stays here — it is UI presentation
+// order, not vocabulary.
 
 export default async function OrdersPage({
   searchParams,
@@ -111,7 +68,7 @@ export default async function OrdersPage({
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');
 
-  const tab: StatusTab = isStatusTab(params.status) ? params.status : 'needs_approval';
+  const tab: StatusTab = isOrderStatusTab(params.status) ? params.status : 'needs_approval';
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
 
@@ -161,24 +118,13 @@ export default async function OrdersPage({
         </div>
         <div className="flex items-center gap-2">
           <PageTour tour={ORDERS_TOUR} />
-          {/* Export the org-wide order history. Gated on orders:approve
-              (manager+) — the same permission that lets this page show
-              every org order; requesters without it only see their own
-              requests and have nothing org-wide to export. The link
-              carries the active status tab so the CSV matches what's on
-              screen. */}
-          {canApprove && (
-            <Button asChild variant="outline">
-              <a
-                href={`/api/orders/export.csv?status=${tab}`}
-                download
-                aria-label="Export orders to CSV"
-              >
-                <Download className="mr-1.5 h-4 w-4" />
-                Export CSV
-              </a>
-            </Button>
-          )}
+          {/* Export the org-wide order history (CSV or PDF). Gated on
+              orders:approve (manager+) — the same permission that lets this
+              page show every org order; requesters without it only see
+              their own requests and have nothing org-wide to export. Both
+              links carry the active status tab so the file matches what's
+              on screen. */}
+          {canApprove && <OrdersExportMenu tab={tab} />}
           <Button asChild variant="gradient">
             <Link href="/dashboard/orders/new">+ Place order</Link>
           </Button>

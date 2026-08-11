@@ -23,7 +23,9 @@ export function sanitizeFilenameSegment(value: string): string {
 }
 
 export interface ExportFilenameInput {
-  slug: 'books' | 'inventory';
+  /** 'orders' joined for the order-history PDF export (2026-08-11); the
+   *  legacy orders CSV keeps csvFilename() like the other GET .csv routes. */
+  slug: 'books' | 'inventory' | 'orders';
   scope: 'selected' | 'filtered' | 'all';
   format: 'csv' | 'xlsx' | 'pdf';
   /** The chosen preset's name, when it is not the ad-hoc "Custom" one. */
