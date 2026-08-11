@@ -235,7 +235,6 @@ export async function maybeSendMaintenanceResolvedEmail(
         requestHandle: handle,
         requestSubject: request.subject ?? '',
         recipientFirstName: firstNameOf(request.requester_name_snapshot),
-        recipientEmail: request.requester_email_snapshot,
         resolverName: request.resolved_by_name_snapshot ?? 'Your team',
         resolutionNote: request.resolution_note ?? '',
         resolvedOnDisplay,

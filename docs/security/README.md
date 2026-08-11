@@ -199,8 +199,9 @@ Written so each line can be checked.
 - **pnpm 9.12.3 executes lifecycle scripts by default** — the top open
   supply-chain item. CI is covered by `--frozen-lockfile`; the developer workstation
   is not.
-- **Expo SDK 53 is past its support window**, so a framework-level native security
-  fix has a multi-week delivery path through a store review.
+- **Mobile is on Expo SDK 57 (RN 0.86)**, current at the time of writing, but a
+  framework-level native security fix still has a multi-week delivery path
+  through an EAS build and a store review.
 - **Log retention is 7 days**, which bounds incident reconstruction. Log drains are
   deferred on cost.
 
@@ -243,9 +244,8 @@ rather than absent.
 
 Recorded here so they are tracked rather than remembered.
 
-1. Promote the nine `NOT VALID` storage-path constraints with `validate constraint`
-   after re-running 0323's row-count check. Safe (`SHARE UPDATE EXCLUSIVE`), and a
-   separate deliberate step.
+1. Done - 0324 (`0324_validate_storage_path_and_nonneg_constraints.sql`): the nine
+   `NOT VALID` storage-path constraints are promoted with `validate constraint`.
 2. Close the five storage-path column gaps (INV-D2), removing each allowlist row in
    the same change.
 3. Add a sweep asserting every cron route validates its shared secret — feasible,

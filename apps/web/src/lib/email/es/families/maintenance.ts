@@ -82,8 +82,6 @@ export interface MaintenanceResolvedEmailParams {
   requestSubject: string;
   /** Requester's first name; missing → "Hi —" (support-family convention). */
   recipientFirstName?: string | null;
-  /** Requester's address (footer reason only — never rendered as a link target here). */
-  recipientEmail: string;
   /** The resolver's display-name snapshot. */
   resolverName: string;
   /** The resolution note, rendered VERBATIM — escaped, `\n` → `<br>`. Never truncated. */

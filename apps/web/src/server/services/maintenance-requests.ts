@@ -695,6 +695,7 @@ export class MaintenanceRequestsService {
       throw new ServiceError('forbidden', 'Not your request.');
     }
     if (detail.archivedAt) throw new ServiceError('conflict', 'This request is archived.');
+    if (detail.cancelledAt) throw new ServiceError('conflict', 'This request is already cancelled.');
     // Maintenance Resolved: a resolved request is closed the SAME way an
     // archived one is — cancel() means "never mind, this is no longer
     // relevant," which does not apply to a request the team has already
@@ -709,6 +710,17 @@ export class MaintenanceRequestsService {
       .update({ status: 'cancelled', cancelled_at: now, updated_at: now })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
+      // TOCTOU guard — the same three write-time .is() predicates
+      // resolve()'s UPDATE carries. The read-time checks above race this
+      // write: a request resolved (or archived, or cancelled by a repeat
+      // click) between get()'s read and here would otherwise still match
+      // on org+id alone and be clobbered to cancelled, silently
+      // overwriting the recorded close-out. With the predicates, a row
+      // whose state moved matches zero rows and the C2 guard below turns
+      // that into the same conflict the pre-checks would have raised.
+      .is('resolved_at', null)
+      .is('archived_at', null)
+      .is('cancelled_at', null)
       .select('id')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);

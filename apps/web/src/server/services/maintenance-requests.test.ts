@@ -1314,6 +1314,66 @@ describe('cancel', () => {
     });
   });
 
+  it('cannot cancel an already-CANCELLED request — conflict at the pre-read, no second write', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': {
+          data: { ...BASE_ROW, cancelled_at: '2026-08-01T00:00:00Z', status: 'cancelled' },
+          error: null,
+        },
+        // A SUCCEEDING update fixture, deliberately — same rationale as
+        // archive()'s already-archived test: without it the mock's zero-row
+        // default lets the generic C2 guard throw the same 'conflict' this
+        // test expects, masking deletion of the specific pre-read guard.
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:submit']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This request is already cancelled.',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('TOCTOU WRITE-GUARD: a request resolved BETWEEN cancel()\'s pre-read and its write is REFUSED — the UPDATE carries write-time .is() state predicates, never touches the resolution columns, and the zero-row result is a conflict', async () => {
+    // Seed the race: the pre-read still sees an OPEN row (resolved_at null
+    // — the resolve landed AFTER get() returned), and the canned zero-row
+    // update is exactly what the write-time .is('resolved_at', null)
+    // predicate produces against the now-resolved row. Without that
+    // predicate the UPDATE would match on org+id alone in production and
+    // clobber the recorded resolution to status='cancelled'.
+    const { stub, ctx } = build(
+      {
+        'maintenance_requests.select': { data: { ...BASE_ROW, requester_user_id: 'other-user' }, error: null },
+        'maintenance_requests.update': { data: null, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await expect(new MaintenanceRequestsService(ctx).cancel('r1')).rejects.toMatchObject({ code: 'conflict' });
+
+    // The write itself must carry the state predicates (resolve()'s own
+    // 3-guard shape) — the mock ignores filters when deciding what to
+    // return, so this test FAILS if the .is() guards are removed even
+    // though the canned zero-row above would still reject.
+    const updateArgs = stub.chainArgs.get('maintenance_requests.update')!;
+    expect(updateArgs).toContainEqual(['resolved_at', null]);
+    expect(updateArgs).toContainEqual(['archived_at', null]);
+    expect(updateArgs).toContainEqual(['cancelled_at', null]);
+
+    // GC 12 (history is sacred): the cancel patch must never overwrite or
+    // clear a resolution column — resolved_at/status stay whatever the
+    // winning resolve() wrote.
+    const patch = updateArgs[0]![0] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('resolved_at');
+    expect(patch).not.toHaveProperty('resolved_by');
+    expect(patch).not.toHaveProperty('resolved_by_name_snapshot');
+    expect(patch).not.toHaveProperty('resolution_note');
+
+    // No phantom audit for a refused cancel.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('C2 PHANTOM-SUCCESS GUARD: a zero-row update throws conflict instead of reporting a false success', async () => {
     const { ctx } = build({
       'maintenance_requests.select': { data: BASE_ROW, error: null },
