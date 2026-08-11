@@ -106,6 +106,7 @@ function CycleCountScanScreenInner() {
 
   React.useEffect(() => {
     if (!user || !id) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void loadLines();
   }, [user, id]);
 

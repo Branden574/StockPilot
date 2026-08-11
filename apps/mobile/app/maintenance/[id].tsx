@@ -280,6 +280,7 @@ export default function MaintenanceRequestDetailScreen() {
 
   React.useEffect(() => {
     if (!enabled || !id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- keyed refetch (refreshKey): the sync sets are the guard/loading/error flags for a server fetch this effect re-runs after mutations; every data set is post-await
       setLoading(false);
       return;
     }

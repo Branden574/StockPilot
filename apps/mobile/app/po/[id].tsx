@@ -115,10 +115,11 @@ export default function PoReceiveScreen() {
     sportsEnabledRef.current = sportsEnabled;
   });
 
+  // NOTE: `loading` starts true and `loadError` starts null, so load() needs
+  // no synchronous pre-await resets on mount; the "Try again" button resets
+  // both itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
-    setLoading(true);
-    setLoadError(null);
     const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
@@ -345,6 +346,7 @@ export default function PoReceiveScreen() {
   }, [id, orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
@@ -499,7 +501,11 @@ export default function PoReceiveScreen() {
           <Text style={styles.errorTitle}>Could not load this PO</Text>
           <Text style={styles.errorBody}>{loadError}</Text>
           <Pressable
-            onPress={() => void load()}
+            onPress={() => {
+              setLoading(true);
+              setLoadError(null);
+              void load();
+            }}
             style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
           >
             <Text style={styles.scanBtnText}>Try again</Text>

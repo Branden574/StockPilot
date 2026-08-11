@@ -234,6 +234,7 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
   // the Items tab uses).
   React.useEffect(() => {
     const seq = ++seqRef.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced search: the sync set is the loading flag for a tab/query/workspace change; every data set is post-await
     setStatus('loading');
     const t = setTimeout(() => {
       void (async () => {

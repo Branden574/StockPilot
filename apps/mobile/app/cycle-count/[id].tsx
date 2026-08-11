@@ -135,11 +135,11 @@ export default function CycleCountDetail() {
    *      (server-wins for clean lines, local-wins for dirty).
    *   3. If cache missed AND offline → show empty state.
    */
+  // NOTE: `loading` starts true and `emptyState`/`readError` start clean, so
+  // load() needs no synchronous pre-await resets on mount; the retry buttons
+  // reset those flags themselves before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id) return;
-    setLoading(true);
-    setEmptyState('none');
-    setReadError(null);
 
     const cached = await getCycleCount(id);
     if (cached) {
@@ -276,6 +276,7 @@ export default function CycleCountDetail() {
 
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
@@ -404,6 +405,7 @@ export default function CycleCountDetail() {
           <Pressable
             style={styles.retryBtn}
             onPress={() => {
+              setLoading(true);
               setReadError(null);
               setEmptyState('none');
               void load();
@@ -433,6 +435,7 @@ export default function CycleCountDetail() {
           <Pressable
             style={styles.retryBtn}
             onPress={() => {
+              setLoading(true);
               setEmptyState('none');
               void load();
             }}
