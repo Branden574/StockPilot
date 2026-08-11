@@ -7,6 +7,7 @@ import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 import { isLinkOpen } from '@/server/services/public-catalog';
 
 import type { OrderRequestRow } from '@/server/services/order-requests';
@@ -193,7 +194,11 @@ export async function POST(req: NextRequest) {
   // window and closed mode. Email is keyed on the lowercased value
   // so case rotation can't create a new bucket per submission.
   const emailKey = body.requesterEmail.trim().toLowerCase();
-  const tokenKey = body.token;
+  // Bucket key is the token's sha256, never the raw value: rate_limit_buckets
+  // rows persist their key, and a raw token there is a working credential at
+  // rest (the same GC 27 posture as the /m share-link buckets). The digest
+  // keys the same one bucket per token.
+  const tokenKey = sha256Hex(body.token);
   const [ipLimit, emailLimit, tokenLimit] = await Promise.all([
     checkRateLimit(
       `public-order-request:${ip}`,
@@ -315,12 +320,15 @@ export async function POST(req: NextRequest) {
     available_until: string | null;
     default_max_qty: number | null;
   };
+  // Mig 0330: only sha256(token) is at rest — hash the presented plaintext
+  // and match on the hash column (DB equality on a digest of a 256-bit
+  // random input; see sha256Hex()'s doc comment for the timing rationale).
   const { data: linkRowRaw, error: linkErr } = await admin
     .from('public_request_links')
     .select(
       'id, organization_id, active, expires_at, available_from, available_until, default_max_qty',
     )
-    .eq('token', body.token)
+    .eq('token_hash', sha256Hex(body.token))
     .maybeSingle();
   if (linkErr) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
@@ -346,7 +354,7 @@ export async function POST(req: NextRequest) {
     const { data: org, error: orgErr } = await admin
       .from('organizations')
       .select('id')
-      .eq('public_request_token', body.token)
+      .eq('public_request_token_hash', sha256Hex(body.token))
       .maybeSingle();
     if (orgErr) {
       return NextResponse.json({ error: 'internal_error' }, { status: 500 });
@@ -529,6 +537,12 @@ export async function POST(req: NextRequest) {
   // we store ONLY its sha256 hash and email the plaintext.
   const plaintextToken = randomBytes(32).toString('hex');
   const tokenHash = createHash('sha256').update(plaintextToken).digest('hex');
+  // Per-request tracking token (mig 0330): the catalog token the requester
+  // submitted with is hashed at rest now, so later status emails cannot
+  // rebuild a /r/track `&t=` from it — this per-request token is what they
+  // embed instead (raw at rest by design, same posture as return_token:
+  // single-order scope, useless without the matching requester email).
+  const trackToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
   // Cheap reaper — clear stale unconfirmed rows so the table doesn't
@@ -562,6 +576,7 @@ export async function POST(req: NextRequest) {
       pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
+      public_track_token: trackToken,
     })
     .select('*')
     .single();
@@ -649,13 +664,12 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     id: header.id,
     // Include `t=` so the URL is self-contained — the GET track route
-    // requires the token to scope the lookup. The browser-side form
-    // used to append it client-side; folding it in here means any API
-    // consumer (and any server-rendered email template) can use the
-    // returned URL verbatim.
+    // requires the token to scope the lookup. Since mig 0330 the `t` is the
+    // request's OWN track token, not the catalog token: it survives a
+    // catalog-token rotation and grants only this one order's status view.
     trackUrl:
       `/r/track?id=${header.id}` +
       `&email=${encodeURIComponent(requesterEmail)}` +
-      `&t=${encodeURIComponent(body.token)}`,
+      `&t=${encodeURIComponent(trackToken)}`,
   });
 }

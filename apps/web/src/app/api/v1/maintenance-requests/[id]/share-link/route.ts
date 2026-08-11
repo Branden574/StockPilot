@@ -10,14 +10,17 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Ensure (mint-or-return) the active share link for this request.
+ * Issue a FRESH share link for this request, rotating (deactivating) any
+ * existing one — mig 0330 hashes the token at rest, so mint time is the
+ * only moment a URL can be returned; callers must treat it as show-once
+ * (copy/use it immediately; POSTing again replaces it and kills this URL).
  *
  * Response is deliberately `{ url, expiresAt }` ONLY — never the raw
- * `token` field MaintenanceShareLinksService.ensureActiveLink() also
- * returns. The url already embeds the token (`${APP_URL}/m/${token}`);
- * echoing it back a second time as a bare field would just be a second,
- * easier-to-misuse place for the credential to leak into logs/analytics
- * that only meant to capture "a url was returned".
+ * `token` field MaintenanceShareLinksService.issueLink() also returns. The
+ * url already embeds the token (`${APP_URL}/m/${token}`); echoing it back
+ * a second time as a bare field would just be a second, easier-to-misuse
+ * place for the credential to leak into logs/analytics that only meant to
+ * capture "a url was returned".
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
@@ -29,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   try {
-    const link = await new MaintenanceShareLinksService(ctx).ensureActiveLink(id);
+    const link = await new MaintenanceShareLinksService(ctx).issueLink(id);
     return NextResponse.json({ url: link.url, expiresAt: link.expiresAt });
   } catch (e) {
     if (e instanceof ServiceError) {

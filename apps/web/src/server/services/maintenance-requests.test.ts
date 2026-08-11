@@ -30,12 +30,12 @@ vi.mock('@/server/services/maintenance-notify', () => ({
   notifyMaintenanceEvent: notifyMaintenanceEventMock,
 }));
 // resolve()'s share-link step (Task 4): mock both exports of the module —
-// the class (ensureActiveLink spy) and the shared enabled-check function —
+// the class (issueLink spy) and the shared enabled-check function —
 // so tests can control whether a link is minted without touching real
-// storage/DB. Defaults mirror "eligible": enabled=true, ensureActiveLink
+// storage/DB. Defaults mirror "eligible": enabled=true, issueLink
 // resolves a link.
-const { ensureActiveLinkMock, maintenanceShareLinksEnabledMock } = vi.hoisted(() => ({
-  ensureActiveLinkMock: vi.fn(async () => ({
+const { issueLinkMock, maintenanceShareLinksEnabledMock } = vi.hoisted(() => ({
+  issueLinkMock: vi.fn(async () => ({
     token: 'tok',
     url: 'https://stockpilotusa.com/m/tok',
     expiresAt: '2027-01-01T00:00:00Z',
@@ -44,7 +44,7 @@ const { ensureActiveLinkMock, maintenanceShareLinksEnabledMock } = vi.hoisted(()
 }));
 vi.mock('@/server/services/maintenance-share-links', () => ({
   MaintenanceShareLinksService: class {
-    ensureActiveLink = ensureActiveLinkMock;
+    issueLink = issueLinkMock;
   },
   maintenanceShareLinksEnabled: maintenanceShareLinksEnabledMock,
 }));
@@ -1603,7 +1603,7 @@ describe('resolve', () => {
     );
   });
 
-  it('ensureActiveLink is called only when photoCount > 0 AND the org setting allows', async () => {
+  it('issueLink is called only when photoCount > 0 AND the org setting allows', async () => {
     const { ctx } = build(
       {
         'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
@@ -1614,11 +1614,28 @@ describe('resolve', () => {
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
-    expect(ensureActiveLinkMock).toHaveBeenCalledTimes(1);
-    expect(ensureActiveLinkMock).toHaveBeenCalledWith('r1');
+    expect(issueLinkMock).toHaveBeenCalledTimes(1);
+    expect(issueLinkMock).toHaveBeenCalledWith('r1');
   });
 
-  it('ensureActiveLink is NOT called when photoCount is 0', async () => {
+  it('mig 0330 threading — the PLAINTEXT token issueLink minted is passed to maybeSendMaintenanceResolvedEmail as opts.shareToken (the sender cannot read it back from the DB)', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 2 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    await vi.waitFor(() => expect(maybeSendMaintenanceResolvedEmailMock).toHaveBeenCalledTimes(1));
+    const call = maybeSendMaintenanceResolvedEmailMock.mock.calls[0]!;
+    // Literal pin against the hoisted mock's minted token ('tok').
+    expect(call[2]).toMatchObject({ shareToken: 'tok' });
+  });
+
+  it('mig 0330 threading — when no link is minted (no photos), opts.shareToken is null, never undefined-through-omission of the field contract', async () => {
     const { ctx } = build(
       {
         'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
@@ -1629,10 +1646,26 @@ describe('resolve', () => {
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
-    expect(ensureActiveLinkMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(maybeSendMaintenanceResolvedEmailMock).toHaveBeenCalledTimes(1));
+    const call = maybeSendMaintenanceResolvedEmailMock.mock.calls[0]!;
+    expect(call[2]).toMatchObject({ shareToken: null });
   });
 
-  it('ensureActiveLink is NOT called when the org setting disallows share links, even with photos', async () => {
+  it('issueLink is NOT called when photoCount is 0', async () => {
+    const { ctx } = build(
+      {
+        'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },
+        'user_profiles.select': { data: PROFILE, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
+        'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+      },
+      { permissions: new Set(['maintenance_requests:manage']) },
+    );
+    await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
+    expect(issueLinkMock).not.toHaveBeenCalled();
+  });
+
+  it('issueLink is NOT called when the org setting disallows share links, even with photos', async () => {
     maintenanceShareLinksEnabledMock.mockResolvedValueOnce(false);
     const { ctx } = build(
       {
@@ -1644,11 +1677,11 @@ describe('resolve', () => {
       { permissions: new Set(['maintenance_requests:manage']) },
     );
     await new MaintenanceRequestsService(ctx).resolve('r1', NOTE_INPUT);
-    expect(ensureActiveLinkMock).not.toHaveBeenCalled();
+    expect(issueLinkMock).not.toHaveBeenCalled();
   });
 
-  it('a ServiceError from ensureActiveLink degrades silently — resolve() still succeeds', async () => {
-    ensureActiveLinkMock.mockRejectedValueOnce(new ServiceError('forbidden', 'no'));
+  it('a ServiceError from issueLink degrades silently — resolve() still succeeds', async () => {
+    issueLinkMock.mockRejectedValueOnce(new ServiceError('forbidden', 'no'));
     const { ctx } = build(
       {
         'maintenance_requests.select': { data: RESOLVE_HEADER, error: null },

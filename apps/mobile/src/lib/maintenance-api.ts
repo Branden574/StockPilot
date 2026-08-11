@@ -137,14 +137,30 @@ export async function listMaintenanceRequests(args: {
   return res.requests;
 }
 
-/** Full detail read — the Bearer parity for the web detail page's server load. */
+/** Full detail read — the Bearer parity for the web detail page's server
+ *  load. Since mig 0330 (share tokens hashed at rest) `emailInput.shareUrl`
+ *  is always null here and `shareLink` carries token-free STATUS only —
+ *  a URL exists solely in the moment `issueMaintenanceShareLink` mints one. */
 export async function getMaintenanceRequest(id: string): Promise<{
   request: MobileMaintenanceRequestDetail;
   photos: MobileMaintenancePhoto[];
   emailInput: MaintenanceEmailInput;
+  shareLink: { expiresAt: string } | null;
   canManage: boolean;
 }> {
   return api(`/api/v1/maintenance-requests/${id}`);
+}
+
+/**
+ * Mint a FRESH photo share link (rotating any existing one) — POST parity
+ * for web's issueMaintenanceShareLinkAction. Show-once: the returned url is
+ * the only copy of the plaintext that will ever exist client-side; calling
+ * again replaces the link and kills this URL.
+ */
+export async function issueMaintenanceShareLink(
+  id: string,
+): Promise<{ url: string; expiresAt: string }> {
+  return api(`/api/v1/maintenance-requests/${id}/share-link`, { method: 'POST' });
 }
 
 /**

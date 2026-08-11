@@ -39,9 +39,9 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
  *  a bare `string`. */
 export type MaintenanceAttachmentMime = 'image/png' | 'image/jpeg' | 'image/webp';
 
-/** Matches organizations.public_request_token / public_request_links.token
- *  (migration 0261): 64 hex characters from `crypto.getRandomValues(32
- *  bytes)`. The DB column only constrains length (16-128); this regex is a
+/** Matches the /r and /m public-token mint shape (migrations 0261/0314; the
+ *  plaintext is hashed at rest since 0330): 64 hex characters from
+ *  `crypto.getRandomValues(32 bytes)`. This regex is a
  *  stricter pre-DB-hit guard — every token this service ever mints is
  *  lowercase hex (`mintToken` below always lower-cases via `toString(16)`),
  *  so anything else is provably not a real token and short-circuits BEFORE
@@ -58,17 +58,24 @@ function mintToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** SHA-256 hex digest of the FULL token — the rate-limit bucket key shared
- *  by every public `/m/<token>` surface (the page AND the photo proxy route
- *  key off the SAME bucket per token, fix wave C1/m6). Never a raw or
- *  sliced token: a `rate_limit_buckets` row keyed by `token.slice(0, 32)`
- *  persists a working CREDENTIAL FRAGMENT at rest (GC 27), and a 32-char
- *  slice of a 64-char token keeps only half its entropy, so two distinct
- *  minted tokens could theoretically collide onto the same bucket — one
- *  visitor's rate-limit hit would then throttle a completely different
- *  request's link. A full digest is irreversible and (practically)
- *  collision-free, and this is the same `createHash('sha256')` convention
- *  `/r/confirm/submit/route.ts` already uses for its own public token.
+/** SHA-256 hex digest of the FULL token. Two jobs since migration 0330:
+ *
+ *  1. THE at-rest form of the credential itself —
+ *     `maintenance_request_share_links.token_hash` stores only this digest,
+ *     and `resolveActiveShareRequest` compares the presented plaintext's
+ *     digest against it (DB equality on a 256-bit-random input's hash; a
+ *     timing-safe compare buys nothing here — an anonymous HTTP caller
+ *     cannot measure a btree index comparison through pooling and network
+ *     jitter, and the input has no low-entropy structure for a timing
+ *     oracle to exploit).
+ *  2. The rate-limit bucket key shared by every public `/m/<token>` surface
+ *     (the page AND the photo proxy route key off the SAME bucket per
+ *     token, fix wave C1/m6). Never a raw or sliced token: a
+ *     `rate_limit_buckets` row keyed by `token.slice(0, 32)` persists a
+ *     working CREDENTIAL FRAGMENT at rest (GC 27).
+ *
+ *  Same `createHash('sha256')` convention `/r/confirm/submit/route.ts`
+ *  already uses for its own public token.
  */
 export function hashShareToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -172,6 +179,10 @@ function isValidAttachmentRow(row: AttachmentRow): boolean {
  * returns the SAME generic `null` — unknown, revoked, and expired tokens
  * are indistinguishable to every caller of this function (no timing-obvious
  * branch, no distinct message).
+ *
+ * Mig 0330 (the "future hash-at-rest migration" the paragraph above
+ * anticipated): the lookup is now `token_hash = sha256(presented)` — the
+ * plaintext exists only in the visitor's URL, never in the database.
  */
 async function resolveActiveShareRequest(
   token: string,
@@ -182,7 +193,7 @@ async function resolveActiveShareRequest(
   const { data: link } = await admin
     .from('maintenance_request_share_links')
     .select('maintenance_request_id, organization_id, active, expires_at')
-    .eq('token', token)
+    .eq('token_hash', hashShareToken(token))
     .maybeSingle();
   if (!link) return null;
   const row = link as {
@@ -237,7 +248,7 @@ async function fetchValidAttachments(
  * and default ON, matching every other module settings reader in this
  * codebase (packages/core/src/b2b/pricing-mode.ts's own precedent). A plain
  * read, not a permission check — the real authorization for MINTING a link
- * still lives entirely in `ensureActiveLink` (requester+submit, or manage);
+ * still lives entirely in `issueLink` (requester+submit, or manage);
  * this only decides whether a caller even asks. Reads via `ctx.supabase`
  * (RLS-scoped, user-authed) — same client every existing call site already
  * used, never the admin client, since any org member can read their own
@@ -261,7 +272,15 @@ export class MaintenanceShareLinksService {
   constructor(private readonly ctx: ServiceContext) {}
 
   /**
-   * Returns the existing ACTIVE, unexpired link or mints one. URL shape is
+   * Mints a FRESH link for the request, deactivating any currently-active
+   * one first — rotate-or-create, never get-or-return. Migration 0330
+   * stores only sha256(token) at rest, so an existing row's plaintext is
+   * unrecoverable by design: the plaintext returned here is shown/copied
+   * ONCE by the caller and never re-displayable. (Pre-0330 this method was
+   * `ensureActiveLink` and idempotently returned the stored token; that
+   * contract is impossible now, and every caller has moved from
+   * mint-at-render to mint-on-explicit-action so a page view can no longer
+   * silently invalidate a link someone already emailed out.) URL shape is
    * always `${APP_URL}/m/${token}` — an APP URL, never a signed storage URL
    * (the token IS the credential; nothing storage-shaped belongs in it).
    *
@@ -280,7 +299,7 @@ export class MaintenanceShareLinksService {
    * can't see gets a `not_found` here, never a `forbidden` — same "don't
    * confirm a foreign row exists" posture as `MaintenanceRequestsService.get()`.
    */
-  async ensureActiveLink(requestId: string): Promise<MaintenanceShareLink> {
+  async issueLink(requestId: string): Promise<MaintenanceShareLink> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
 
     const { data: parent, error } = await this.ctx.supabase
@@ -301,43 +320,20 @@ export class MaintenanceShareLinksService {
 
     const admin = createAdminClient();
 
-    // Look for ANY currently-active row, regardless of expiry — the partial
-    // unique index `maintenance_request_share_links_one_active_uniq` (0314)
-    // allows only ONE row with active=true per request, so a stale row past
-    // its expires_at (nothing flips `active` automatically on expiry) still
-    // occupies that slot and would collide with a fresh insert below.
-    const { data: existing, error: existingErr } = await admin
+    // Deactivate ANY currently-active row (active or stale-past-expiry) —
+    // the partial unique index `maintenance_request_share_links_one_active_
+    // uniq` (0314) allows only ONE active=true row per request, so the
+    // fresh insert below would 23505 against a survivor. `revoked_at` stays
+    // NULL here on purpose (fix wave m3) — that column records an explicit
+    // `revoke()` call by a manage-holder; rotation/expiry are different
+    // events, and `revoke()` below stays the only writer of that column.
+    const { error: deactivateErr } = await admin
       .from('maintenance_request_share_links')
-      .select('token, expires_at')
+      .update({ active: false })
       .eq('organization_id', this.ctx.organizationId)
       .eq('maintenance_request_id', requestId)
-      .eq('active', true)
-      .maybeSingle();
-    if (existingErr) throw new ServiceError('internal_error', existingErr.message);
-
-    if (existing) {
-      const existingRow = existing as { token: string; expires_at: string };
-      if (!isExpired(existingRow.expires_at)) {
-        return toShareLink(existingRow.token, existingRow.expires_at);
-      }
-      // Stale: deactivate it before minting a fresh row, or the insert
-      // below 23505s against the partial unique index. `revoked_at` stays
-      // NULL here on purpose (fix wave m3) — that column records an
-      // explicit `revoke()` call by a manage-holder; natural expiry is a
-      // different event and conflating the two would make the audit trail
-      // claim someone revoked a link that actually just lapsed on its own.
-      // `active=false` + `revoked_at IS NULL` + `expires_at` in the past is
-      // the "expired, never revoked" state; `revoked_at IS NOT NULL` is
-      // "someone killed it early" — `revoke()` below is the only writer of
-      // that column.
-      const { error: deactivateErr } = await admin
-        .from('maintenance_request_share_links')
-        .update({ active: false })
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('maintenance_request_id', requestId)
-        .eq('active', true);
-      if (deactivateErr) throw new ServiceError('internal_error', deactivateErr.message);
-    }
+      .eq('active', true);
+    if (deactivateErr) throw new ServiceError('internal_error', deactivateErr.message);
 
     const token = mintToken();
     const expiresAt = new Date(
@@ -346,37 +342,25 @@ export class MaintenanceShareLinksService {
     const { error: insErr } = await admin.from('maintenance_request_share_links').insert({
       organization_id: this.ctx.organizationId,
       maintenance_request_id: requestId,
-      token,
+      // Hash at rest (mig 0330): the plaintext exists only in this stack
+      // frame and the return value below.
+      token_hash: hashShareToken(token),
       active: true,
       expires_at: expiresAt,
       created_by: this.ctx.userId,
     });
     if (insErr) {
-      // A genuine concurrent ensureActiveLink call can still win the race
-      // between the `existing` check above and this insert (the unique
-      // index is what actually serializes it, not this service). Rather
-      // than surface an opaque internal_error to a caller who did nothing
-      // wrong, hand back whichever row the index let through.
+      // A concurrent issueLink can still win the race between the
+      // deactivate above and this insert (the unique index is what
+      // actually serializes it, not this service). Pre-0330 the loser
+      // handed back the winner's stored token; with only the hash at rest
+      // that is impossible, so the loser reports a retryable conflict —
+      // the caller's next explicit attempt rotates again cleanly.
       if (insErr.code === '23505') {
-        const { data: won, error: wonErr } = await admin
-          .from('maintenance_request_share_links')
-          .select('token, expires_at')
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('maintenance_request_id', requestId)
-          .eq('active', true)
-          .maybeSingle();
-        if (!wonErr && won) {
-          const wonRow = won as { token: string; expires_at: string };
-          // Expiry-symmetric with the `existing` branch above (fix wave
-          // m2): the row that won the race was just inserted with a fresh
-          // 180-day TTL, so this is practically unreachable — but a raced
-          // re-fetch must never hand back a link this function itself
-          // considers already-dead just because it skipped the same check
-          // the non-raced path always runs.
-          if (!isExpired(wonRow.expires_at)) {
-            return toShareLink(wonRow.token, wonRow.expires_at);
-          }
-        }
+        throw new ServiceError(
+          'conflict',
+          'A share link was just created for this request. Try again to replace it.',
+        );
       }
       throw new ServiceError('internal_error', insErr.message);
     }
@@ -391,6 +375,46 @@ export class MaintenanceShareLinksService {
       this.ctx,
     );
     return toShareLink(token, expiresAt);
+  }
+
+  /**
+   * Whether an ACTIVE, unexpired link currently exists (and when it
+   * expires) — the render-time read the detail page/mobile GET use now
+   * that mint-at-render is gone. Same eligibility gate as issueLink()
+   * (owning requester with submit, or manage), same not-found posture.
+   * Deliberately returns NO token material of any kind.
+   */
+  async getActiveLinkStatus(requestId: string): Promise<{ expiresAt: string } | null> {
+    assertModuleEnabled(this.ctx, 'maintenance_requests');
+
+    const { data: parent, error } = await this.ctx.supabase
+      .from('maintenance_requests')
+      .select('id, requester_user_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', requestId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!parent) throw new ServiceError('not_found', 'Maintenance request not found');
+
+    const row = parent as { id: string; requester_user_id: string | null };
+    const isOwningRequester =
+      row.requester_user_id === this.ctx.userId && can(this.ctx, 'maintenance_requests:submit');
+    if (!isOwningRequester) {
+      assertPermission(this.ctx, 'maintenance_requests:manage');
+    }
+
+    const admin = createAdminClient();
+    const { data: existing, error: existingErr } = await admin
+      .from('maintenance_request_share_links')
+      .select('expires_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('maintenance_request_id', requestId)
+      .eq('active', true)
+      .maybeSingle();
+    if (existingErr) throw new ServiceError('internal_error', existingErr.message);
+    if (!existing) return null;
+    const { expires_at: expiresAt } = existing as { expires_at: string };
+    return isExpired(expiresAt) ? null : { expiresAt };
   }
 
   /** manage-only. Deactivates every currently-active link for the request.
@@ -573,40 +597,48 @@ export async function resolveMaintenanceSharePhoto(
 }
 
 /**
- * The resolution email's (Task 6) ONLY photo-URL data source. Looks up the
- * request's currently ACTIVE, unexpired share link by (organization_id,
- * maintenance_request_id) — the sender knows the request, not a token, so
- * this is a sibling lookup to `resolveActiveShareRequest` (which runs the
- * reverse direction, token -> request) rather than a call through it. Reuses
- * the SAME `fetchValidAttachments` ordering funnel every other public
- * surface builds on, so the indices returned here are the request's
- * COMBINED attachment-list positions (requester + resolution photos
- * interleaved in `sort_order`/`created_at` order) — exactly what
- * `/m/<token>/photo/<n>` expects, never a locally re-filtered "resolution-
- * only" index that would point at the wrong photo.
+ * The resolution email's (Task 6) ONLY photo-URL data source. Since mig
+ * 0330 the DB holds only sha256(token), so the send path can no longer READ
+ * a token back at send time — `MaintenanceRequestsService.resolve()` mints
+ * the link (issueLink) while the plaintext is in hand and THREADS it into
+ * the email sender, which passes it here as `plaintextToken`. This function
+ * verifies that plaintext still names the request's currently ACTIVE,
+ * unexpired link (hash compare, org+request scoped — resolve()'s
+ * fire-and-forget email can lose a race against an explicit revoke() or a
+ * newer rotation, and a dead token must never be embedded into an email)
+ * and returns the proof-photo entries. Reuses the SAME
+ * `fetchValidAttachments` ordering funnel every other public surface builds
+ * on, so the indices returned here are the request's COMBINED
+ * attachment-list positions (requester + resolution photos interleaved in
+ * `sort_order`/`created_at` order) — exactly what `/m/<token>/photo/<n>`
+ * expects, never a locally re-filtered "resolution-only" index that would
+ * point at the wrong photo.
  *
- * Deliberately does NOT mint a link — `MaintenanceRequestsService.resolve()`
- * already decides whether to call `ensureActiveLink` (photos exist + the
- * org's `includeShareLinksInEmail` setting) before the at-most-once email
- * fires. This function only reads whatever already exists at send time, and
- * returns `null` whenever there is nothing usable (no link ever minted,
- * revoked, or expired) so the caller falls back to the renderer's own
- * no-photos fallback line rather than embed a URL that would 404.
+ * Deliberately does NOT mint a link — resolve() already decides whether to
+ * mint (photos exist + the org's `includeShareLinksInEmail` setting) before
+ * the at-most-once email fires. Returns `null` whenever there is nothing
+ * usable (no token threaded, or the threaded token no longer matches the
+ * live link) so the caller falls back to the renderer's own no-photos
+ * fallback line rather than embed a URL that would 404.
  */
 export async function listResolutionProofProxyPhotos(
   admin: SupabaseClient,
   organizationId: string,
   maintenanceRequestId: string,
+  plaintextToken: string | null,
 ): Promise<{ token: string; entries: { index: number; filename: string }[] } | null> {
+  if (!plaintextToken || !TOKEN_SHAPE.test(plaintextToken)) return null;
+
   const { data: link } = await admin
     .from('maintenance_request_share_links')
-    .select('token, expires_at')
+    .select('expires_at')
     .eq('organization_id', organizationId)
     .eq('maintenance_request_id', maintenanceRequestId)
+    .eq('token_hash', hashShareToken(plaintextToken))
     .eq('active', true)
     .maybeSingle();
   if (!link) return null;
-  const row = link as { token: string; expires_at: string };
+  const row = link as { expires_at: string };
   if (isExpired(row.expires_at)) return null;
 
   const attachments = await fetchValidAttachments(admin, organizationId, maintenanceRequestId);
@@ -617,5 +649,5 @@ export async function listResolutionProofProxyPhotos(
     return acc;
   }, []);
 
-  return { token: row.token, entries };
+  return { token: plaintextToken, entries };
 }

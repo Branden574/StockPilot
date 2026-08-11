@@ -4,6 +4,7 @@ import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,12 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  *
  * Three independent checks must all pass before we return a payload:
  *   1. The request id exists.
- *   2. The org's `public_request_token` matches the `?token=` query.
+ *   2. The `?token=` query authorizes the read: it is either the request's
+ *      OWN `public_track_token` (mig 0330 — what status emails embed), or a
+ *      live org/link catalog token, verified by comparing sha256(token)
+ *      against `organizations.public_request_token_hash` /
+ *      `public_request_links.token_hash` (the plaintext is no longer at
+ *      rest anywhere).
  *   3. The stored `requester_email` matches `?email=` (case-insensitive).
  *
  * Any failure returns a single generic 404 — we never leak which check
@@ -47,9 +53,12 @@ export async function GET(
   // limiter outage) since this is unauthenticated. Limits are generous for real
   // humans — incl. a shared office/NAT IP — but a scripted loop trips fast.
   const ip = clientIpFromRequest(req);
+  // Bucket key is the token's sha256 — rate_limit_buckets rows persist the
+  // key, and a raw token there is a credential at rest (mig 0330 posture).
+  const tokenBucketKey = sha256Hex(token);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-order-read:ip:${ip}`, 120, ONE_HOUR_MS, 'closed'),
-    checkRateLimit(`public-order-read:token:${token}`, 600, ONE_HOUR_MS, 'closed'),
+    checkRateLimit(`public-order-read:token:${tokenBucketKey}`, 600, ONE_HOUR_MS, 'closed'),
   ]);
   const denied = !ipLimit.allowed ? ipLimit : !tokenLimit.allowed ? tokenLimit : null;
   if (denied) {
@@ -60,7 +69,8 @@ export async function GET(
       extra: {
         bucket: !ipLimit.allowed ? 'ip' : 'token',
         count: denied.count,
-        tokenPrefix: token.slice(0, 8),
+        // Prefix of the HASH, never of the presented credential.
+        tokenPrefix: tokenBucketKey.slice(0, 8),
       },
     });
     return NextResponse.json(
@@ -71,26 +81,16 @@ export async function GET(
 
   const admin = createAdminClient();
 
-  const { data: org } = await admin
-    .from('organizations')
-    .select('id')
-    .eq('public_request_token', token)
-    .maybeSingle();
-  if (!org) {
-    return NextResponse.json({ error: 'not_found' }, { status: 404 });
-  }
-  const orgId = (org as { id: string }).id;
-
   const { data: header } = await admin
     .from('order_requests')
     .select(
       `id, status, requester_email, requester_name, notes, denied_reason,
        created_at, approved_at, packing_slip_generated_at, staged_at,
        in_transit_at, signed_at, completed_at, cancelled_at,
-       organization_id, warehouse_id, fulfillment_type, return_token`,
+       organization_id, warehouse_id, fulfillment_type, return_token,
+       public_track_token`,
     )
     .eq('id', id)
-    .eq('organization_id', orgId)
     .maybeSingle();
   if (!header) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
@@ -114,7 +114,43 @@ export async function GET(
     warehouse_id: string;
     fulfillment_type: 'pickup' | 'delivery';
     return_token: string | null;
+    public_track_token: string | null;
   };
+  const orgId = h.organization_id;
+
+  // Token authorization (mig 0330) — three accepted credentials, all
+  // scoped to the request's own org, all failing to the same generic 404:
+  //   a) the request's per-request track token (what status emails embed) —
+  //      NULL-guarded so a row without one can never match an empty/na
+  //      probe (a null <> anything the schema allowed through);
+  //   b) the org's catalog token, compared as sha256(token) against the
+  //      hashed at-rest column;
+  //   c) any of the org's public_request_links tokens, likewise by hash —
+  //      the submit flow hands out link-token track URLs, so a link token
+  //      must keep authorizing the read exactly like the legacy org token.
+  const tokenHash = sha256Hex(token);
+  let authorized = h.public_track_token !== null && token === h.public_track_token;
+  if (!authorized) {
+    const { data: orgMatch } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('id', orgId)
+      .eq('public_request_token_hash', tokenHash)
+      .maybeSingle();
+    authorized = orgMatch != null;
+  }
+  if (!authorized) {
+    const { data: linkMatch } = await admin
+      .from('public_request_links')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('token_hash', tokenHash)
+      .maybeSingle();
+    authorized = linkMatch != null;
+  }
+  if (!authorized) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
   if (!h.requester_email || h.requester_email.toLowerCase() !== email) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }

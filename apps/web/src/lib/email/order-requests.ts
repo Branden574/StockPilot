@@ -58,13 +58,14 @@ interface SendInput {
   recipientName: string | null;
   appUrl: string;
   /**
-   * F2: org's `public_request_token`. Required for public-link
-   * requesters so the email's "Track" CTA includes `&t=…` — the GET
-   * /api/v1/public/order-requests/[id] handler scopes the lookup by
-   * org public_request_token and silently 404s without it. Only
-   * consulted when `request.requester_user_id` is null (public
-   * submission). Optional/nullable so internal callers don't have
-   * to supply it.
+   * F2, reshaped by mig 0330: the PLAINTEXT catalog token (/r/<token>),
+   * suppliable ONLY by callers that hold it in hand at send time — in
+   * practice just the public submit route, whose request body carries it.
+   * It can no longer be read from the DB (hashed at rest), so status
+   * transition emails omit it; their "Track" CTA `&t=` scope comes from
+   * `request.public_track_token` instead (see buildTrackUrl). When absent,
+   * catalog-linking CTAs (e.g. the cancelled email's "start a new
+   * request") degrade to no link rather than a broken one.
    */
   publicRequestToken?: string | null;
   /**
@@ -259,9 +260,14 @@ function buildTrackUrl(
     return `${appUrl}/dashboard/orders/${row.id}`;
   }
   const base = `${appUrl}/r/track?id=${row.id}&email=${encodeURIComponent(recipientEmail)}`;
-  return publicRequestToken
-    ? `${base}&t=${encodeURIComponent(publicRequestToken)}`
-    : base;
+  // Mig 0330: the request's OWN public_track_token is the durable `&t=`
+  // scope (minted at public submit; unlike the org/link catalog token it is
+  // readable at send time and survives catalog-token rotation). The
+  // caller-supplied catalog token remains an accepted fallback for the one
+  // send that happens while the plaintext is still in hand (the submit
+  // route's confirm email) and for legacy rows without a track token.
+  const trackToken = row.public_track_token ?? publicRequestToken;
+  return trackToken ? `${base}&t=${encodeURIComponent(trackToken)}` : base;
 }
 
 /**

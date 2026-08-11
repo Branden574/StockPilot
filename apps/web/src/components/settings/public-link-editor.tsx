@@ -137,16 +137,21 @@ export function PublicLinkEditor({
   );
 
   // ── Link header (URL / status / rotate / delete) ──────────────────────────
-  const [token, setToken] = React.useState(link.token);
+  // Mig 0330: the token is hashed at rest, so the URL of an EXISTING link
+  // is not re-displayable. `freshToken` holds a plaintext token minted by
+  // Regenerate THIS session — the only state a URL can ever be shown from,
+  // and it is gone on reload (show-once).
+  const [freshToken, setFreshToken] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
   const [headerError, setHeaderError] = React.useState<string | null>(null);
   const [rotateOpen, setRotateOpen] = React.useState(false);
   const [rotating, setRotating] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
-  const publicUrl = `${base}/r/${token}`;
+  const publicUrl = freshToken ? `${base}/r/${freshToken}` : null;
 
   async function copyUrl() {
+    if (!publicUrl) return;
     try {
       await navigator.clipboard.writeText(publicUrl);
       setCopied(true);
@@ -165,7 +170,8 @@ export function PublicLinkEditor({
       setHeaderError(res.error.message);
       return;
     }
-    setToken(res.data.token);
+    setFreshToken(res.data.token);
+    setCopied(false);
     setRotateOpen(false);
     router.refresh();
   }
@@ -499,19 +505,33 @@ export function PublicLinkEditor({
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Input value={publicUrl} readOnly className="font-mono text-xs" />
-          <Button type="button" variant="outline" onClick={copyUrl}>
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {copied ? 'Copied' : 'Copy'}
-          </Button>
-          <Button asChild type="button" variant="outline">
-            <a href={publicUrl} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-3.5 w-3.5" />
-              Preview
-            </a>
-          </Button>
-        </div>
+        {publicUrl ? (
+          <>
+            <p className="text-[11.5px] font-medium">
+              New URL generated — copy it now. For security it is shown only this once; regenerating
+              replaces it.
+            </p>
+            <div className="flex items-center gap-2">
+              <Input value={publicUrl} readOnly className="font-mono text-xs" />
+              <Button type="button" variant="outline" onClick={copyUrl}>
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Preview
+                </a>
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="text-muted-foreground text-xs">
+            For security the URL of this link is not stored and cannot be shown again. Use
+            “Regenerate URL” to mint a new one — it is shown once for copying, and the old URL stops
+            working immediately.
+          </p>
+        )}
         {headerError ? (
           <p role="alert" className="text-destructive text-xs">
             {headerError}

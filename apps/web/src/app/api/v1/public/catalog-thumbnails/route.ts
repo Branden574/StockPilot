@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 import { ItemImagesService } from '@/server/services/item-images';
 import { isLinkOpen } from '@/server/services/public-catalog';
 
@@ -44,10 +45,11 @@ export async function GET(req: NextRequest) {
   // `public_link_eligible_items` predicate as the page and the submit
   // endpoint, so thumbnails can't be used to enumerate items a link
   // doesn't expose.
+  // Mig 0330: compare sha256(token) against the hashed at-rest column.
   const { data: linkRow } = await admin
     .from('public_request_links')
     .select('id, organization_id, active, expires_at, available_from, available_until')
-    .eq('token', token)
+    .eq('token_hash', sha256Hex(token))
     .maybeSingle();
   type LinkRow = {
     id: string;
@@ -77,7 +79,7 @@ export async function GET(req: NextRequest) {
     const { data: org } = await admin
       .from('organizations')
       .select('id')
-      .eq('public_request_token', token)
+      .eq('public_request_token_hash', sha256Hex(token))
       .maybeSingle();
     if (!org) {
       return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });

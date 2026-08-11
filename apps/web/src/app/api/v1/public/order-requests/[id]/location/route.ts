@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 import { getPublicDriverLocation } from '@/server/services/delivery-tracking';
 
 export const runtime = 'nodejs';
@@ -48,24 +49,45 @@ export async function GET(
   }
 
   const admin = createAdminClient();
-  const { data: org } = await admin
-    .from('organizations')
-    .select('id')
-    .eq('public_request_token', token)
-    .maybeSingle();
-  if (!org) {
-    return NextResponse.json({ available: false });
-  }
-  const orgId = (org as { id: string }).id;
-
   const { data: header } = await admin
     .from('order_requests')
-    .select('id, requester_email')
+    .select('id, organization_id, requester_email, public_track_token')
     .eq('id', id)
-    .eq('organization_id', orgId)
     .maybeSingle();
-  const h = header as { requester_email: string | null } | null;
+  const h = header as {
+    organization_id: string;
+    requester_email: string | null;
+    public_track_token: string | null;
+  } | null;
   if (!h || (h.requester_email ?? '').trim().toLowerCase() !== email) {
+    return NextResponse.json({ available: false });
+  }
+  const orgId = h.organization_id;
+
+  // Same three accepted credentials as the status read (mig 0330): the
+  // request's own track token, or a live org/link catalog token compared
+  // as sha256(token) against the hashed at-rest columns.
+  const tokenHash = sha256Hex(token);
+  let authorized = h.public_track_token !== null && token === h.public_track_token;
+  if (!authorized) {
+    const { data: orgMatch } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('id', orgId)
+      .eq('public_request_token_hash', tokenHash)
+      .maybeSingle();
+    authorized = orgMatch != null;
+  }
+  if (!authorized) {
+    const { data: linkMatch } = await admin
+      .from('public_request_links')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('token_hash', tokenHash)
+      .maybeSingle();
+    authorized = linkMatch != null;
+  }
+  if (!authorized) {
     return NextResponse.json({ available: false });
   }
 

@@ -14,9 +14,16 @@ vi.mock('sonner', () => ({
 }));
 
 type ActionResult = { ok: true } | { error: { message: string } };
+type IssueResult = ({ ok: true } & { url: string; expiresAt: string }) | { error: { message: string } };
 const revoke = vi.fn(async (..._args: unknown[]): Promise<ActionResult> => ({ ok: true }));
+const issue = vi.fn(async (..._args: unknown[]): Promise<IssueResult> => ({
+  ok: true,
+  url: GENERATED_URL,
+  expiresAt: '2027-02-01T00:00:00.000Z',
+}));
 vi.mock('@/server/actions/maintenance-requests', () => ({
   revokeMaintenanceShareLinkAction: (...args: unknown[]) => revoke(...args),
+  issueMaintenanceShareLinkAction: (...args: unknown[]) => issue(...args),
 }));
 
 import { ShareLinkPanel } from './share-link-panel';
@@ -25,7 +32,8 @@ import { ShareLinkPanel } from './share-link-panel';
 // (maintenance-share-links.ts mintToken()); this fixture only needs to be
 // unique enough that a stray match would be unambiguous.
 const TOKEN = 'deadbeefcafe1234deadbeefcafe1234deadbeefcafe1234deadbeefcafe12';
-const LINK = { url: `https://stockpilotusa.com/m/${TOKEN}`, expiresAt: '2027-01-31T00:00:00.000Z' };
+const GENERATED_URL = `https://stockpilotusa.com/m/${TOKEN}`;
+const STATUS = { expiresAt: '2027-01-31T00:00:00.000Z' };
 
 let originalClipboard: PropertyDescriptor | undefined;
 
@@ -61,16 +69,38 @@ const FORBIDDEN = [
   'Zendesk comment',
 ];
 
-describe('ShareLinkPanel', () => {
-  it('shows the empty state and no Copy/Revoke controls when there is no active link', () => {
-    render(<ShareLinkPanel requestId="r1" link={null} canRevoke={true} />);
+describe('ShareLinkPanel (mig 0330 — show-once)', () => {
+  it('no active link: shows the empty state, a "Generate link" button, and no Copy/Revoke controls', () => {
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
     expect(screen.getByText(/No active share link/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate link' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
   });
 
-  it('never renders the raw token as visible page text — only the Copy affordance can reach it', () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+  it('SECURITY PROPERTY — an existing active link (server status) renders NO URL, NO Copy button, and explains the URL cannot be shown again; the affordance is "Generate new link"', () => {
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
+    expect(screen.getByText(/cannot be shown again/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate new link' })).toBeInTheDocument();
+    // No token/URL material anywhere — the server literally cannot supply it.
+    expect(document.body.innerHTML).not.toContain('/m/');
+  });
+
+  it('Generate mints via the issue action and then offers Copy for the freshly-returned URL — the show-once moment', async () => {
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+    expect(issue).toHaveBeenCalledWith('r1');
+    expect(await screen.findByText(/copy it now/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Copy URL/ }));
+    expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(GENERATED_URL);
+    expect(await screen.findByText('Copied')).toBeInTheDocument();
+  });
+
+  it('never renders the raw token as visible page text, even right after generating — only the Copy affordance can reach it', async () => {
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+    await screen.findByText(/copy it now/i);
     // The token must not appear as literal text anywhere in the rendered
     // output (no href-as-text, no title, no data attribute, no plain <a>
     // whose visible label is the URL).
@@ -79,20 +109,21 @@ describe('ShareLinkPanel', () => {
   });
 
   it('discloses the ~180-day photo-access grant and that the link is revocable', () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     expect(screen.getByText(/180 days/)).toBeInTheDocument();
-    expect(screen.getByText(/Revocable at any time/)).toBeInTheDocument();
+    expect(screen.getByText(/Revocable at/)).toBeInTheDocument();
   });
 
-  it('Copy URL copies the exact link to the clipboard, never rendering it into the DOM', async () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
-    await userEvent.click(screen.getByRole('button', { name: /Copy URL/ }));
-    expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(LINK.url);
-    expect(await screen.findByText('Copied')).toBeInTheDocument();
+  it('a failed generate surfaces via toast and never shows a Copy affordance', async () => {
+    issue.mockResolvedValueOnce({ error: { message: 'Missing permission: maintenance_requests:manage' } });
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+    expect(toastError).toHaveBeenCalledWith('Missing permission: maintenance_requests:manage');
+    expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
   });
 
   it('Revoke opens a confirm dialog, then calls the revoke action and refreshes on success', async () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     expect(screen.getByText('Revoke this share link?')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
@@ -100,9 +131,18 @@ describe('ShareLinkPanel', () => {
     expect(refreshMock).toHaveBeenCalled();
   });
 
+  it('revoking right after generating drops the fresh URL — a dead link is never left copyable', async () => {
+    render(<ShareLinkPanel requestId="r1" status={null} canRevoke={true} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+    await screen.findByText(/copy it now/i);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
+    expect(screen.queryByRole('button', { name: /Copy URL/ })).not.toBeInTheDocument();
+  });
+
   it('surfaces a failed revoke via toast without refreshing', async () => {
     revoke.mockResolvedValueOnce({ error: { message: 'No active share link found for this request.' } });
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(toastError).toHaveBeenCalledWith('No active share link found for this request.');
@@ -110,7 +150,7 @@ describe('ShareLinkPanel', () => {
   });
 
   it('the OPEN Revoke confirm dialog never contains forbidden ticket/notification vocabulary (fix wave Important 3 — Task 14 lesson carried forward: a portalled dialog hides copy from a pre-open sweep)', async () => {
-    render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={true} />);
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
     expect(screen.getByText('Revoke this share link?')).toBeInTheDocument();
     for (const banned of FORBIDDEN) {
@@ -118,22 +158,23 @@ describe('ShareLinkPanel', () => {
     }
   });
 
-  describe('canRevoke={false} — the owning-requester COPY-ONLY tier (fix wave Important 2)', () => {
-    it('renders Copy but never a Revoke button, even with an active link', () => {
-      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
-      expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+  describe('canRevoke={false} — the owning-requester tier (fix wave Important 2)', () => {
+    it('renders Generate but never a Revoke button, even with an active link', () => {
+      render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={false} />);
+      expect(screen.getByRole('button', { name: 'Generate new link' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
     });
 
     it('MUTATION GUARD — never mounts the revoke confirm dialog markup at all, so it cannot be coaxed open by any means', () => {
-      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
+      render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke={false} />);
       expect(screen.queryByText('Revoke this share link?')).not.toBeInTheDocument();
     });
 
-    it('Copy URL still works normally in the copy-only tier', async () => {
-      render(<ShareLinkPanel requestId="r1" link={LINK} canRevoke={false} />);
-      await userEvent.click(screen.getByRole('button', { name: /Copy URL/ }));
-      expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(LINK.url);
+    it('Generate + Copy still work normally in this tier', async () => {
+      render(<ShareLinkPanel requestId="r1" status={null} canRevoke={false} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+      await userEvent.click(await screen.findByRole('button', { name: /Copy URL/ }));
+      expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(GENERATED_URL);
     });
   });
 });

@@ -131,10 +131,18 @@ async function countResolutionPhotos(
   return count ?? 0;
 }
 
+/**
+ * `opts.shareToken` — the PLAINTEXT share-link token resolve() minted just
+ * before scheduling this send, or null when it minted none (no photos, org
+ * setting off, or the mint failed). Mig 0330 stores only the token's hash,
+ * so this threading is the ONLY way the email can embed working
+ * /m/<token>/photo/<n> proxy URLs; listResolutionProofProxyPhotos verifies
+ * it still names the request's live link before it is used.
+ */
 export async function maybeSendMaintenanceResolvedEmail(
   admin: SupabaseClient,
   requestId: string,
-  opts: { appUrl: string },
+  opts: { appUrl: string; shareToken?: string | null },
 ): Promise<MaintenanceResolvedEmailResult> {
   try {
     const { data: row } = await admin
@@ -204,7 +212,12 @@ export async function maybeSendMaintenanceResolvedEmail(
       // /m/<token>/photo/<n> actually serves.
       const shareEnabled = await shareLinksEnabledForEmail(admin, request.organization_id);
       const proof = shareEnabled
-        ? await listResolutionProofProxyPhotos(admin, request.organization_id, requestId)
+        ? await listResolutionProofProxyPhotos(
+            admin,
+            request.organization_id,
+            requestId,
+            opts.shareToken ?? null,
+          )
         : null;
 
       let proofPhotos: MaintenanceResolvedProofPhoto[];

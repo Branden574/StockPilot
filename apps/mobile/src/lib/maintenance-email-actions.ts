@@ -137,3 +137,33 @@ export const CONDENSED_NOTICE =
  *  to attempt first — this IS the copy affordance, not a failure fallback
  *  for one). */
 export const COPY_HELPER_TEXT = 'Press and hold inside the box to select and copy.';
+
+// ── Share link (mig 0330: hashed at rest → show-once) ────────────────────
+
+/**
+ * Folds a share URL generated THIS session into the email input the compose
+ * builder sees. Mig 0330 hashes share tokens at rest, so the detail GET can
+ * never carry `shareUrl` anymore (it is always null there); the ONLY source
+ * of a URL is `issueMaintenanceShareLink`'s response, held in screen state.
+ * Pure and null-transparent so the screen's `prepared` memo stays a
+ * deterministic function of its inputs: with no generated URL the input
+ * passes through untouched — the same body the builder already produces
+ * for orgs with share links disabled.
+ */
+export function withShareUrl<T extends { shareUrl: string | null }>(
+  emailInput: T,
+  generatedUrl: string | null,
+): T {
+  return generatedUrl ? { ...emailInput, shareUrl: generatedUrl } : emailInput;
+}
+
+/** Shown above the selectable share-URL box right after generating. The
+ *  "only this once" claim is literal: the token is hashed at rest, so the
+ *  URL is unrecoverable after this screen state is gone. */
+export const SHARE_LINK_SHOW_ONCE_NOTICE =
+  'Link generated — copy or share it now. For security it is shown only this once; generating again replaces it.';
+
+/** Shown when the server reports an active link whose URL this device does
+ *  not hold (generated elsewhere, or before an app restart). */
+export const SHARE_LINK_EXISTS_NOTICE =
+  'An active share link exists, but its URL cannot be shown again. Generate a new link to get one — the current link stops working.';

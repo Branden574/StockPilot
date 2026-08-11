@@ -263,12 +263,17 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       { storage_path: 'org/req/4.jpg', mime_type: 'image/jpeg', safe_filename: 'resolution-4.jpg', kind: 'resolution' },
     ];
 
-    it('an active share link + 3 kind=resolution rows among 5 total -> proofPhoto srcs are ${appUrl}/m/<token>/photo/<i> at the COMBINED-list indices', async () => {
+    it('a THREADED share token (mig 0330) that verifies against the live link + 3 kind=resolution rows among 5 total -> proofPhoto srcs are ${appUrl}/m/<token>/photo/<i> at the COMBINED-list indices', async () => {
       const stub = makeStub({
-        'maintenance_request_share_links.select': { data: { token: TOKEN, expires_at: FUTURE_ISO }, error: null },
+        // The DB now returns only expires_at — the token is the threaded
+        // plaintext, never a column read.
+        'maintenance_request_share_links.select': { data: { expires_at: FUTURE_ISO }, error: null },
         'maintenance_request_attachments.select': { data: MIXED_ATTACHMENTS, error: null },
       });
-      const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
+      const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, {
+        appUrl: APP_URL,
+        shareToken: TOKEN,
+      });
       expect(res).toEqual({ sent: true });
 
       const args = sendEmailMock.mock.calls[0]![0] as { html: string };
@@ -279,6 +284,18 @@ describe('maybeSendMaintenanceResolvedEmail', () => {
       // re-filtered 0/1/2 (which would collide with index 1 above).
       expect(args.html).not.toContain(`photo/0"`);
       expect(args.html).not.toContain(`photo/2"`);
+    });
+
+    it('mig 0330 — NO threaded shareToken -> the share-link table may be probed but no photo URLs are embedded; falls back to the count line; sendEmail still called', async () => {
+      const stub = makeStub({
+        'maintenance_request_share_links.select': { data: { expires_at: FUTURE_ISO }, error: null },
+        'maintenance_request_attachments.select': { data: null, error: null, count: 3 },
+      });
+      const res = await maybeSendMaintenanceResolvedEmail(stub.client, REQUEST_ID, { appUrl: APP_URL });
+      expect(res).toEqual({ sent: true });
+      const args = sendEmailMock.mock.calls[0]![0] as { html: string };
+      expect(args.html).not.toMatch(/photo\/\d+"/);
+      expect(args.html).toContain('3 proof photos are on the request in StockPilot.');
     });
 
     it('no active link (none minted, or revoked/expired) -> proofPhotos empty, proofPhotoTotal from the independent resolution-kind count; sendEmail STILL called (photos are not a send precondition)', async () => {

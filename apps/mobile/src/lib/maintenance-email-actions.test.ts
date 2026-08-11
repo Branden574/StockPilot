@@ -17,6 +17,9 @@ import {
   openOutlookDraft,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  SHARE_LINK_EXISTS_NOTICE,
+  SHARE_LINK_SHOW_ONCE_NOTICE,
+  withShareUrl,
 } from './maintenance-email-actions';
 
 // expo-linking is a real, already-installed dependency (~7.1.7 —
@@ -205,5 +208,39 @@ describe('exported copy is the literal, brief-pinned text', () => {
         expect(text).not.toContain(banned);
       }
     }
+  });
+});
+
+describe('withShareUrl — mig 0330 show-once merge (the ONLY way a share URL reaches a compose draft now)', () => {
+  const BASE = {
+    requestNumber: 'MR-2026-000123',
+    subject: 'AC broken',
+    shareUrl: null as string | null,
+  };
+
+  it('folds a freshly-generated URL into the email input, leaving every other field untouched', () => {
+    const merged = withShareUrl(BASE, 'https://stockpilotusa.com/m/abc123');
+    expect(merged.shareUrl).toBe('https://stockpilotusa.com/m/abc123');
+    expect(merged.requestNumber).toBe('MR-2026-000123');
+    expect(merged.subject).toBe('AC broken');
+  });
+
+  it('with no generated URL the input passes through UNTOUCHED (identity, not a null-overwriting copy) — the server always sends shareUrl null since 0330, and this must not fabricate anything', () => {
+    expect(withShareUrl(BASE, null)).toBe(BASE);
+  });
+
+  it('never mutates the original input (the screen memo depends on referential honesty)', () => {
+    const before = { ...BASE };
+    withShareUrl(BASE, 'https://stockpilotusa.com/m/abc123');
+    expect(BASE).toEqual(before);
+  });
+
+  it('the show-once notices are the literal pinned copy', () => {
+    expect(SHARE_LINK_SHOW_ONCE_NOTICE).toBe(
+      'Link generated — copy or share it now. For security it is shown only this once; generating again replaces it.',
+    );
+    expect(SHARE_LINK_EXISTS_NOTICE).toBe(
+      'An active share link exists, but its URL cannot be shown again. Generate a new link to get one — the current link stops working.',
+    );
   });
 });

@@ -61,8 +61,8 @@ vi.mock('@/server/services/maintenance-requests', () => ({ MaintenanceRequestsSe
 const signedViewUrls = vi.fn();
 vi.mock('@/server/services/maintenance-attachments', () => ({ MaintenanceAttachmentsService: vi.fn() }));
 
-const ensureActiveLink = vi.fn();
-// Only the CLASS is mocked (ensureActiveLink is wired per-test below) —
+const getActiveLinkStatus = vi.fn();
+// Only the CLASS is mocked (getActiveLinkStatus is wired per-test below) —
 // maintenanceShareLinksEnabled stays the REAL implementation, which reads
 // `ctx.supabase`'s own 'organization_modules.select' canning, the exact
 // org-setting read this page used to duplicate locally before Task 4 lifted
@@ -166,7 +166,7 @@ beforeEach(() => {
   listNotes.mockReset();
   emailInput.mockReset();
   signedViewUrls.mockReset();
-  ensureActiveLink.mockReset();
+  getActiveLinkStatus.mockReset();
   listTimelineEvents.mockReset();
 
   get.mockResolvedValue(detailFixture());
@@ -205,7 +205,7 @@ beforeEach(() => {
     () => ({ signedViewUrls }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
   );
   vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ ensureActiveLink }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
+    () => ({ getActiveLinkStatus }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
   );
   vi.mocked(withContext).mockResolvedValue(buildCtx() as never);
 });
@@ -282,8 +282,8 @@ describe('internal notes gating (brief §5/§23 — manage-only, never a request
   });
 });
 
-describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication)', () => {
-  it('a read_all-only viewer of a foreign request still gets a working page when ensureActiveLink refuses', async () => {
+describe('share-link status read degrades gracefully (Task 10 I3 / Task 11 adjudication; mig 0330 — no render-time mint)', () => {
+  it('a read_all-only viewer of a foreign request still gets a working page when getActiveLinkStatus refuses', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'viewer-1', permissions: ['maintenance_requests:read_all'] }) as never,
     );
@@ -291,12 +291,12 @@ describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication
     signedViewUrls.mockResolvedValueOnce([
       { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
     ]);
-    ensureActiveLink.mockRejectedValueOnce(
+    getActiveLinkStatus.mockRejectedValueOnce(
       new ServiceError('forbidden', 'Missing permission: maintenance_requests:manage'),
     );
 
     // The read must not fail — this is the exact mutation self-check named
-    // in this task: "fail the whole page when share minting is refused".
+    // in this task: "fail the whole page when the status read is refused".
     render(await MaintenanceRequestDetailPage(args()));
 
     expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: null });
@@ -305,7 +305,7 @@ describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication
     expect(screen.queryByText('Photo share link')).not.toBeInTheDocument();
   });
 
-  it('a non-ServiceError failure from ensureActiveLink propagates instead of silently degrading', async () => {
+  it('a non-ServiceError failure from getActiveLinkStatus propagates instead of silently degrading', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'viewer-1', permissions: ['maintenance_requests:read_all'] }) as never,
     );
@@ -313,21 +313,21 @@ describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication
     signedViewUrls.mockResolvedValueOnce([
       { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
     ]);
-    ensureActiveLink.mockRejectedValueOnce(new Error('boom'));
+    getActiveLinkStatus.mockRejectedValueOnce(new Error('boom'));
     await expect(MaintenanceRequestDetailPage(args())).rejects.toThrow('boom');
   });
 
-  it('never attempts to mint a link when the request has zero photos', async () => {
+  it('never reads share-link status when the request has zero photos', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
     );
     get.mockResolvedValueOnce(detailFixture());
     signedViewUrls.mockResolvedValueOnce([]);
     render(await MaintenanceRequestDetailPage(args()));
-    expect(ensureActiveLink).not.toHaveBeenCalled();
+    expect(getActiveLinkStatus).not.toHaveBeenCalled();
   });
 
-  it('a manage-holder with photos sees the ShareLinkPanel showing the minted link', async () => {
+  it('mig 0330 — a manage-holder with photos sees the ShareLinkPanel in status mode; render NEVER mints, emailInput gets shareUrl null, and no /m/ URL exists anywhere in the page HTML', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
     );
@@ -335,19 +335,18 @@ describe('share-link mint degrades gracefully (Task 10 I3 / Task 11 adjudication
     signedViewUrls.mockResolvedValueOnce([
       { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
     ]);
-    ensureActiveLink.mockResolvedValueOnce({
-      token: 'tok',
-      url: 'https://stockpilotusa.com/m/tok',
-      expiresAt: '2027-01-01T00:00:00.000Z',
-    });
+    getActiveLinkStatus.mockResolvedValueOnce({ expiresAt: '2027-01-01T00:00:00.000Z' });
     render(await MaintenanceRequestDetailPage(args()));
     expect(screen.getByText('Photo share link')).toBeInTheDocument();
-    expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: 'https://stockpilotusa.com/m/tok' });
+    // SECURITY PROPERTY: the server can no longer produce a share URL at
+    // render time — the token is hashed at rest.
+    expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: null });
+    expect(document.body.innerHTML).not.toContain('/m/');
   });
 });
 
-describe('share-link affordance tier (fix wave Important 2 — ensureActiveLink admits the owning requester, so the panel must too)', () => {
-  it('Minor fold-in: the owning requester with photos gets a real minted share link end-to-end — sees Copy, never Revoke', async () => {
+describe('share-link affordance tier (fix wave Important 2 — issueLink admits the owning requester, so the panel must too)', () => {
+  it('Minor fold-in: the owning requester with photos sees the panel with Generate, never Revoke (mig 0330: no Copy until they generate)', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'u-1', permissions: ['maintenance_requests:submit'] }) as never,
     );
@@ -355,24 +354,20 @@ describe('share-link affordance tier (fix wave Important 2 — ensureActiveLink 
     signedViewUrls.mockResolvedValueOnce([
       { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
     ]);
-    ensureActiveLink.mockResolvedValueOnce({
-      token: 'tok',
-      url: 'https://stockpilotusa.com/m/tok',
-      expiresAt: '2027-01-01T00:00:00.000Z',
-    });
+    getActiveLinkStatus.mockResolvedValueOnce({ expiresAt: '2027-01-01T00:00:00.000Z' });
     render(await MaintenanceRequestDetailPage(args()));
 
-    expect(ensureActiveLink).toHaveBeenCalledWith(VALID_ID);
-    expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: 'https://stockpilotusa.com/m/tok' });
+    expect(getActiveLinkStatus).toHaveBeenCalledWith(VALID_ID);
+    expect(emailInput).toHaveBeenCalledWith(VALID_ID, { shareUrl: null });
     expect(screen.getByText('Photo share link')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate new link' })).toBeInTheDocument();
     // MUTATION GUARD (3): a non-manage owning requester must never see
     // Revoke — revoke() (maintenance-share-links.ts) is genuinely
     // manage-only server-side, so a Revoke button here would only 403.
     expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
   });
 
-  it('a manage-holder still sees BOTH Copy and Revoke (unchanged tier)', async () => {
+  it('a manage-holder still sees BOTH Generate and Revoke (unchanged tier)', async () => {
     vi.mocked(withContext).mockResolvedValue(
       buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
     );
@@ -380,13 +375,9 @@ describe('share-link affordance tier (fix wave Important 2 — ensureActiveLink 
     signedViewUrls.mockResolvedValueOnce([
       { id: 'p1', originalFilename: 'ac.jpg', url: 'https://signed/ac.jpg', thumbUrl: null, width: 800, height: 600 },
     ]);
-    ensureActiveLink.mockResolvedValueOnce({
-      token: 'tok',
-      url: 'https://stockpilotusa.com/m/tok',
-      expiresAt: '2027-01-01T00:00:00.000Z',
-    });
+    getActiveLinkStatus.mockResolvedValueOnce({ expiresAt: '2027-01-01T00:00:00.000Z' });
     render(await MaintenanceRequestDetailPage(args()));
-    expect(screen.getByRole('button', { name: /Copy URL/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate new link' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
   });
 

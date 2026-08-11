@@ -19,6 +19,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { reportError } from '@/lib/error-reporter';
 import { recordMaintenanceDraftOpenedAction } from '@/server/actions/maintenance-requests';
 
+import { useMaintenanceShareLink } from './share-link-context';
+
 /**
  * The heart of the maintenance-request feature: turns a SAVED request into a
  * prefilled Outlook draft addressed to real people (dc4@learn4life.org,
@@ -68,10 +70,26 @@ const OVERSIZED_MESSAGE =
 const COPY_FAILURE_MESSAGE = 'Could not copy the request automatically. Select the text below and copy it manually.';
 
 export function MaintenanceEmailAction({ requestId, emailInput, initialOpenCount, photoDownloads }: Props) {
+  // Mig 0330: the share-link token is hashed at rest, so the server can no
+  // longer fold an existing link's URL into emailInput at render time. If
+  // the user generated a link THIS session (ShareLinkPanel, via the shared
+  // context), fold that fresh URL into the draft; otherwise compose without
+  // one — the same body the builder already produces for orgs with share
+  // links disabled. Without the provider (post-create review screen) the
+  // context defaults to null and this is a no-op.
+  const { generatedUrl } = useMaintenanceShareLink();
+  const effectiveEmailInput = React.useMemo(
+    () => (generatedUrl ? { ...emailInput, shareUrl: generatedUrl } : emailInput),
+    [emailInput, generatedUrl],
+  );
+
   // Prepared once per render — a pure, deterministic function of emailInput
   // (no clock, no DOM). Recomputing on every emailInput change (e.g. a photo
   // was added/removed on the same page) keeps the compose links honest.
-  const prepared = React.useMemo(() => prepareMaintenanceEmail(emailInput), [emailInput]);
+  const prepared = React.useMemo(
+    () => prepareMaintenanceEmail(effectiveEmailInput),
+    [effectiveEmailInput],
+  );
 
   // null = no fallback panel showing. 'oversized' = the linkFits guard
   // tripped before anything was attempted (a measured length problem, no

@@ -8,7 +8,8 @@ import { MaintenanceEmailAction } from '@/components/maintenance/maintenance-ema
 import { MaintenanceNotesPanel, type MaintenanceNoteRow } from '@/components/maintenance/maintenance-notes-panel';
 import { MaintenanceReview } from '@/components/maintenance/maintenance-review';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
-import { ShareLinkPanel, type MaintenanceShareLinkInfo } from '@/components/maintenance/share-link-panel';
+import { MaintenanceShareLinkProvider } from '@/components/maintenance/share-link-context';
+import { ShareLinkPanel, type MaintenanceShareLinkStatus } from '@/components/maintenance/share-link-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { Badge } from '@/components/ui/badge';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -91,22 +92,27 @@ export default async function MaintenanceRequestDetailPage({
   const requesterPhotos = photos.filter((p) => (p.kind ?? 'requester') === 'requester');
   const resolutionPhotos = photos.filter((p) => p.kind === 'resolution');
 
-  // Share-link mint: mirrors the mobile REST route's GET handler exactly.
-  // ensureActiveLink()'s bar (manage, OR the owning requester holding
-  // submit) is narrower than get()'s bar for merely VIEWING (owner OR
-  // read_all OR manage) — a read_all-only viewer of someone else's request
-  // must still get a working page. Any ServiceError out of the mint
-  // attempt degrades to shareLink: null; a non-ServiceError (a real bug)
-  // still propagates to the error boundary, same as the route.
-  let shareLink: MaintenanceShareLinkInfo | null = null;
+  // Share-link STATUS read (mig 0330): rendering no longer mints — the
+  // token is hashed at rest, so an auto-mint here could only ever ROTATE
+  // (invalidating whatever URL was already emailed out) and still could
+  // not display anything. getActiveLinkStatus()'s bar (manage, OR the
+  // owning requester holding submit) is narrower than get()'s bar for
+  // merely VIEWING (owner OR read_all OR manage) — a read_all-only viewer
+  // of someone else's request must still get a working page. Any
+  // ServiceError degrades to shareLinkStatus: null; a non-ServiceError (a
+  // real bug) still propagates to the error boundary, same as the route.
+  let shareLinkStatus: MaintenanceShareLinkStatus | null = null;
   if (photos.length > 0 && (await maintenanceShareLinksEnabled(ctx))) {
     try {
-      shareLink = await new MaintenanceShareLinksService(ctx).ensureActiveLink(id);
+      shareLinkStatus = await new MaintenanceShareLinksService(ctx).getActiveLinkStatus(id);
     } catch (shareErr) {
       if (!(shareErr instanceof ServiceError)) throw shareErr;
     }
   }
-  const emailInput = await svc.emailInput(id, { shareUrl: shareLink?.url ?? null });
+  // shareUrl is null at render — the plaintext URL only exists in the
+  // moment ShareLinkPanel generates one; MaintenanceEmailAction folds that
+  // fresh URL in client-side through MaintenanceShareLinkProvider.
+  const emailInput = await svc.emailInput(id, { shareUrl: null });
 
   const sp = await searchParams;
   if (sp.review === '1') {
@@ -192,6 +198,12 @@ export default async function MaintenanceRequestDetailPage({
         </div>
       </div>
 
+      {/* Mig 0330: the provider is the seam that carries a freshly-
+          generated share URL from ShareLinkPanel (aside) into
+          MaintenanceEmailAction (main column) — the ONLY way a compose
+          draft can include the link now that the server cannot re-read
+          the plaintext at render time. */}
+      <MaintenanceShareLinkProvider>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <section className="bg-card rounded-xl border p-4">
@@ -427,16 +439,16 @@ export default async function MaintenanceRequestDetailPage({
             </dl>
           </section>
 
-          {/* Important 2 (fix wave): ensureActiveLink's own tier (maintenance-
+          {/* Important 2 (fix wave): issueLink's own tier (maintenance-
               share-links.ts) deliberately admits the owning requester
               (submit + owns it), not just manage — the affordance here must
-              match. The owning requester gets a COPY-ONLY view (canRevoke
+              match. The owning requester gets Generate-only (canRevoke
               false): revoke() is genuinely manage-only server-side, so a
               Revoke button for a non-manager owner would only ever 403. A
               read_all-only non-owner is neither manage nor the owning
               requester and sees no panel at all. */}
           {canManage || isOwningRequester ? (
-            <ShareLinkPanel requestId={detail.id} link={shareLink} canRevoke={canManage} />
+            <ShareLinkPanel requestId={detail.id} status={shareLinkStatus} canRevoke={canManage} />
           ) : null}
 
           {canManage ? (
@@ -450,6 +462,7 @@ export default async function MaintenanceRequestDetailPage({
           ) : null}
         </aside>
       </div>
+      </MaintenanceShareLinkProvider>
     </div>
   );
 }
