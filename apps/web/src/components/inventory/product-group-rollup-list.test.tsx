@@ -10,12 +10,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 //   • Unlink is wired into the linked-items view (the brief requires unlink
 //     support in the tool, not only on the API).
 
-const { routerMock, loadVariantsMock, unlinkMock, toastMock } = vi.hoisted(() => ({
-  routerMock: { refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() },
-  loadVariantsMock: vi.fn(),
-  unlinkMock: vi.fn(),
-  toastMock: { error: vi.fn(), success: vi.fn() },
-}));
+const { routerMock, loadVariantsMock, unlinkMock, archiveMock, restoreMock, toastMock } = vi.hoisted(
+  () => ({
+    routerMock: { refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() },
+    loadVariantsMock: vi.fn(),
+    unlinkMock: vi.fn(),
+    archiveMock: vi.fn(),
+    restoreMock: vi.fn(),
+    toastMock: { error: vi.fn(), success: vi.fn() },
+  }),
+);
 
 vi.mock('next/navigation', () => ({ useRouter: () => routerMock }));
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -37,6 +41,8 @@ vi.mock('next/link', () => ({
 }));
 vi.mock('@/server/actions/product-groups', () => ({
   loadGroupVariantsAction: loadVariantsMock,
+  archiveProductGroupAction: archiveMock,
+  restoreProductGroupAction: restoreMock,
 }));
 vi.mock('@/server/actions/product-group-linking', () => ({
   unlinkItemsAction: unlinkMock,
@@ -86,6 +92,8 @@ beforeEach(() => {
     data: { variants: [variant(), variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 })] },
   });
   unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1 } });
+  archiveMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
+  restoreMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
 });
 
 describe('ProductGroupRollupList — on-demand expansion', () => {
@@ -164,5 +172,89 @@ describe('ProductGroupRollupList — unlink', () => {
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Not allowed.'));
     expect(screen.getByText('PEG-9')).toBeInTheDocument();
     expect(routerMock.refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductGroupRollupList — archive', () => {
+  it('confirms first, then archives WITHOUT acknowledging the variant guard', async () => {
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} />);
+
+    // Opening the strip must not be the write.
+    await user.click(screen.getByRole('button', { name: /^archive nike pegasus 41$/i }));
+    expect(archiveMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }));
+    await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('grp-1', {}));
+    // The acknowledgement is never sent unprompted — the safe default is the
+    // server's refusal, not a silent override.
+    expect(archiveMock.mock.calls[0]?.[1]).not.toHaveProperty('acknowledgeActiveVariants');
+    expect(routerMock.refresh).toHaveBeenCalled();
+  });
+
+  it('turns the guard refusal into an explicit "Archive anyway" carrying the acknowledgement', async () => {
+    const user = userEvent.setup();
+    archiveMock.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'Cannot archive: 3 variants are still linked to this product group.',
+      },
+    });
+    render(<ProductGroupRollupList groups={[group()]} />);
+
+    await user.click(screen.getByRole('button', { name: /^archive nike pegasus 41$/i }));
+    await user.click(screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }));
+
+    // The server's own sentence — count included — is what the operator reads;
+    // the client never paraphrases a number it did not compute.
+    expect(
+      await screen.findByText(/3 variants are still linked to this product group/),
+    ).toBeInTheDocument();
+    expect(routerMock.refresh).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /archive nike pegasus 41 anyway/i }));
+    await waitFor(() =>
+      expect(archiveMock).toHaveBeenLastCalledWith('grp-1', { acknowledgeActiveVariants: true }),
+    );
+    expect(routerMock.refresh).toHaveBeenCalled();
+  });
+
+  it('keeps the group and never refreshes when the archive is refused outright', async () => {
+    const user = userEvent.setup();
+    archiveMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'forbidden', message: 'Missing permission: sports:manage' },
+    });
+    render(<ProductGroupRollupList groups={[group()]} />);
+
+    await user.click(screen.getByRole('button', { name: /^archive nike pegasus 41$/i }));
+    await user.click(screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }));
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith('Missing permission: sports:manage'),
+    );
+    // A forbidden is NOT the variant guard, so it must not be offered as an
+    // overridable one.
+    expect(screen.queryByRole('button', { name: /anyway/i })).not.toBeInTheDocument();
+    expect(routerMock.refresh).not.toHaveBeenCalled();
+  });
+
+  it('offers Restore and no Archive in the archived view', async () => {
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} archived />);
+
+    expect(screen.queryByRole('button', { name: /^archive/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /restore nike pegasus 41/i }));
+
+    await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('grp-1'));
+    expect(archiveMock).not.toHaveBeenCalled();
+    expect(routerMock.refresh).toHaveBeenCalled();
+  });
+
+  it('offers Archive and no Restore in the active view', () => {
+    render(<ProductGroupRollupList groups={[group()]} />);
+    expect(screen.getByRole('button', { name: /^archive nike pegasus 41$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^restore/i })).not.toBeInTheDocument();
   });
 });

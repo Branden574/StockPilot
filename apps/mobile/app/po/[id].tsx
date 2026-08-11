@@ -204,6 +204,11 @@ export default function PoReceiveScreen() {
       new Set(flatLines.map((l) => l.groupId).filter((v): v is string => Boolean(v))),
     );
     if (groupIds.length > 0 && sportsEnabledRef.current) {
+      // Read BY ID, at any status: these are the groups this PO's own lines
+      // already point at, and a receipt in flight must keep rendering its size
+      // runs even if someone archived the group meanwhile. Only `deleted_at`
+      // excludes a row. (Web's `displayByIds` is the same read with the same
+      // stance; the pickers that OFFER a group are active-only.)
       const { data: groupRows, error: groupErr } = await supabase
         .from('product_groups')
         .select('id, name, default_counting_unit, size_scale_id')

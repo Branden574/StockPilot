@@ -1,5 +1,7 @@
 'use server';
 
+import { revalidatePath } from 'next/cache';
+
 import { compareSizeValues, err, ok, uuidSchema, type ActionResult } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
@@ -75,6 +77,59 @@ export async function loadGroupVariantsAction(
         status: v.status,
       })),
     });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', 'Something went wrong. Please try again.');
+  }
+}
+
+/**
+ * Archive a product group — the affordance the page had none of, which is why a
+ * leftover shell group had to be removed with hand-written SQL in production.
+ *
+ * SOFT and reversible: the service writes `status = 'archived'` and never
+ * `deleted_at`, so the group_key stays reserved and `restoreProductGroupAction`
+ * below brings the whole group back, variants included. There is no delete
+ * action here on purpose.
+ *
+ * `acknowledgeActiveVariants` is the deliberate override for a group whose sizes
+ * are still linked. Omitted/false is the safe default: the service refuses and
+ * names the count, and the UI turns that refusal into an explicit
+ * "Archive anyway" rather than a dead-end toast — the same shape as the item
+ * archive's acknowledgeStock.
+ */
+export async function archiveProductGroupAction(
+  groupId: unknown,
+  opts: { acknowledgeActiveVariants?: boolean } = {},
+): Promise<ActionResult<{ id: string }>> {
+  const parsed = uuidSchema.safeParse(groupId);
+  if (!parsed.success) return err('validation_error', 'Invalid product group.');
+  try {
+    const svc = await ProductGroupsService.forCurrentUser();
+    await svc.archive(parsed.data, {
+      acknowledgeActiveVariants: opts.acknowledgeActiveVariants === true,
+    });
+    revalidatePath('/dashboard/product-groups');
+    return ok({ id: parsed.data });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', 'Something went wrong. Please try again.');
+  }
+}
+
+/** Undo an archive: status back to Active, with every variant still linked. */
+export async function restoreProductGroupAction(
+  groupId: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  const parsed = uuidSchema.safeParse(groupId);
+  if (!parsed.success) return err('validation_error', 'Invalid product group.');
+  try {
+    const svc = await ProductGroupsService.forCurrentUser();
+    await svc.restore(parsed.data);
+    revalidatePath('/dashboard/product-groups');
+    return ok({ id: parsed.data });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);

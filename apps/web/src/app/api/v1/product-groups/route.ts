@@ -20,6 +20,12 @@ export const dynamic = 'force-dynamic';
  * Each row carries its DERIVED roll-up (variant count + total). Derived, at
  * read time, from `product_group_rollups` — a group owns no quantity and this
  * endpoint must never look like it does.
+ *
+ * ACTIVE GROUPS ONLY. This is a PICKER's source — the phone is choosing a group
+ * to count against — so it takes `ProductGroupsService.list()`'s default status
+ * and deliberately does not expose a `status` parameter: an archived group is
+ * not something to start a count on, and archived groups are read back only from
+ * the web page that restores them.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
