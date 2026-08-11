@@ -43,12 +43,24 @@ export interface ServiceContext {
   supabase: Awaited<ReturnType<typeof createClient>>;
   /**
    * Whether the user's session must satisfy MFA AAL2 before any
-   * permission gate fires. Computed once at context build time
-   * by reading the org's mfa_policy and the session's current AAL.
+   * permission gate fires. Computed once at context build time:
+   * true when the org's mfa_policy demands it for this role OR when
+   * the user has a verified TOTP factor enrolled (HI-6 — an enrolled
+   * factor must be satisfied regardless of org policy, or a stolen
+   * password alone signs in untouched under an 'optional' policy).
    */
   mfaRequired: boolean;
   /** True only when the session is currently at AAL2. */
   mfaSatisfied: boolean;
+  /**
+   * True when the user has at least one VERIFIED TOTP factor. Decides the
+   * error shape when the gate fires: enrolled users get
+   * `reason: 'aal2_required'` (step up in place via useStepUp / the mobile
+   * challenge screen), unenrolled users keep `reason: 'mfa_required'`
+   * (enroll first). Optional: synthetic system contexts omit it and are
+   * treated as unenrolled.
+   */
+  mfaEnrolled?: boolean;
   /**
    * Modules enabled for this org; core modules are always treated as
    * enabled even if absent.
@@ -60,7 +72,7 @@ async function resolveMfaState(
   supabase: Awaited<ReturnType<typeof createClient>>,
   organizationId: string,
   role: Role,
-): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
+): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   try {
     // DEDUPE: the org row (incl. mfa_policy) was already fetched by the
     // dashboard layout via this request-cached helper — reuse it instead of
@@ -72,32 +84,43 @@ async function resolveMfaState(
       | 'all_required'
       | null
       | undefined) ?? 'optional';
-    const mfaRequired =
+    const policyRequired =
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));
+    // ENROLLMENT ESCALATES (HI-6): a user who HAS a verified TOTP factor must
+    // satisfy it regardless of org policy. Without this, org policy alone
+    // drove enforcement, so an attacker holding only the password of a
+    // TOTP-enrolled user signed in at AAL1 untouched under the default
+    // 'optional' policy. The factor list is request-cached (the layout
+    // already loaded it), so this adds no round-trip.
+    const factors = await getMfaFactorsForRequest();
+    const hasVerifiedFactor = factors.some((f) => f.status === 'verified');
+    const mfaRequired = policyRequired || hasVerifiedFactor;
     if (!mfaRequired) {
-      return { mfaRequired: false, mfaSatisfied: true };
+      return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
     }
     // SHORT-CIRCUIT: a user with NO verified factor can never be at AAL2, so
     // skip the `auth.mfa.getAuthenticatorAssuranceLevel()` round-trip and
-    // fail closed directly. The factor list is request-cached (the layout
-    // already loaded it). Only when a verified factor exists do we spend the
-    // AAL round-trip to confirm the session actually stepped up. Same
-    // fail-closed outcome as before, fewer round-trips.
-    const factors = await getMfaFactorsForRequest();
-    const hasVerifiedFactor = factors.some((f) => f.status === 'verified');
+    // fail closed directly (only reachable via the policy branch). Only when
+    // a verified factor exists do we spend the AAL round-trip to confirm the
+    // session actually stepped up. Same fail-closed outcome as before,
+    // fewer round-trips.
     if (!hasVerifiedFactor) {
-      return { mfaRequired: true, mfaSatisfied: false };
+      return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
     }
     const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    return { mfaRequired: true, mfaSatisfied: data?.currentLevel === 'aal2' };
+    return {
+      mfaRequired: true,
+      mfaSatisfied: data?.currentLevel === 'aal2',
+      mfaEnrolled: true,
+    };
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
     // org lookup must NOT silently let an admin bypass MFA. The user
     // sees a clear "MFA required" error instead of silent bypass;
     // matches enterprise expectations from the org MFA policy.
     console.error('[resolveMfaState] failed:', err);
-    return { mfaRequired: true, mfaSatisfied: false };
+    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
   }
 }
 
@@ -111,7 +134,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // dashboard layout and `withContext` share ONE `organization_modules`
   // round-trip per render (it also absorbs/logs query errors, returning an
   // empty set = core-only nav, never a wider entitlement than the org has).
-  const [{ mfaRequired, mfaSatisfied }, enabledModules] = await Promise.all([
+  const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
     resolveMfaState(supabase, ctx.organizationId, ctx.role),
     getModulesForRequest(ctx.organizationId),
   ]);
@@ -124,6 +147,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     supabase,
     mfaRequired,
     mfaSatisfied,
+    mfaEnrolled,
     enabledModules,
   };
 });
@@ -163,19 +187,40 @@ export class ServiceError extends Error {
   }
 }
 
-export function assertPermission(ctx: ServiceContext, permission: Permission) {
-  // MFA gate FIRST. If the org policy requires MFA and the session
-  // is at AAL1, no permission check applies — the user must
-  // step up before doing anything privileged. The dashboard layout
-  // already shows a banner pointing them to /dashboard/settings/mfa
-  // (which doesn't go through assertPermission, so enrollment still
-  // works at AAL1).
-  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-    throw new ServiceError(
+/**
+ * The error thrown when the MFA gate fires. Two shapes, chosen by enrollment:
+ *
+ *   - ENROLLED (verified factor, session not stepped up): `reason:
+ *     'aal2_required'` — the exact shape the useStepUp() modal already
+ *     consumes at its wired sites, so the UI prompts for a TOTP code in
+ *     place instead of telling an enrolled user to "enroll".
+ *   - UNENROLLED (policy demands MFA, no factor yet): the original
+ *     `reason: 'mfa_required'` shape, byte-for-byte — enroll first.
+ */
+function mfaGateError(ctx: ServiceContext): ServiceError {
+  if (ctx.mfaEnrolled) {
+    return new ServiceError(
       'forbidden',
-      'Multi-factor authentication required. Enroll in MFA before performing this action.',
-      { reason: 'mfa_required' },
+      'Re-authenticate with MFA before performing this action.',
+      { reason: 'aal2_required' },
     );
+  }
+  return new ServiceError(
+    'forbidden',
+    'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    { reason: 'mfa_required' },
+  );
+}
+
+export function assertPermission(ctx: ServiceContext, permission: Permission) {
+  // MFA gate FIRST. If MFA is required (org policy, or the user's own
+  // enrolled factor) and the session is at AAL1, no permission check
+  // applies — the user must step up before doing anything privileged.
+  // The dashboard layout already shows a banner pointing them to
+  // /dashboard/settings/mfa (which doesn't go through assertPermission,
+  // so enrollment still works at AAL1).
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    throw mfaGateError(ctx);
   }
   if (!can(ctx, permission)) {
     throw new ServiceError('forbidden', `Missing permission: ${permission}`);
@@ -195,11 +240,7 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
  */
 export function assertAnyPermission(ctx: ServiceContext, permissions: readonly Permission[]) {
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-    throw new ServiceError(
-      'forbidden',
-      'Multi-factor authentication required. Enroll in MFA before performing this action.',
-      { reason: 'mfa_required' },
-    );
+    throw mfaGateError(ctx);
   }
   if (permissions.some((p) => can(ctx, p))) return;
   throw new ServiceError('forbidden', `Missing permission: ${permissions.join(' or ')}`);
