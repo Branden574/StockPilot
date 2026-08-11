@@ -18,7 +18,12 @@ const config: ExpoConfig = {
   version: '1.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
-  newArchEnabled: true,
+  // `newArchEnabled` used to live here. Expo SDK 55 REMOVED it from the app
+  // config schema (and from @expo/config-plugins and expo-build-properties)
+  // because SDK 54 was the last release that could run the Legacy
+  // Architecture at all — the New Architecture is now the only one, so the
+  // flag has nothing left to switch. Do not re-add it; it is no longer a
+  // valid ExpoConfig key and will fail typecheck.
   icon: './assets/icon.png',
   updates: {
     url: 'https://u.expo.dev/68235e4f-fd32-4c8c-a2b5-9f9df663e6cc',
@@ -121,11 +126,17 @@ const config: ExpoConfig = {
         faceIDPermission: 'StockPilot uses Face ID to sign you in securely without re-entering your password.',
       },
     ],
-    // Patches the generated Podfile so the `fmt` pod compiles under
-    // Xcode 16+ (defines FMT_USE_CONSTEVAL=0). See the plugin file for
-    // the full rationale. Required for `expo run:ios` to succeed until
-    // we bump to RN 0.81+.
-    './plugins/with-fmt-consteval-fix.js',
+    // NOTE: './plugins/with-fmt-consteval-fix.js' used to be listed here. It
+    // patched the generated Podfile with FMT_USE_CONSTEVAL=0 because React
+    // Native 0.79 pinned fmt 11.0.2, whose consteval format strings Xcode 16+
+    // rejects. React Native fixed that upstream in 0.83.5 by bumping to fmt
+    // 12.1.0 ("Build: Bump fmt to 12.1.0 to fix Xcode 26.4"), and SDK 55 ships
+    // RN 0.83.10 — verified locally: node_modules/react-native/
+    // third-party-podspecs/fmt.podspec declares spec.version = "12.1.0". The
+    // plugin was therefore deleted along with the @expo/config-plugins
+    // devDependency it needed. Do not resurrect it: it injects into the
+    // Podfile's post_install block by string-matching `  end\nend\n`, so it is
+    // a standing hazard every time the RN Podfile template changes shape.
     // Sentry crash/error reporting. The plugin wires the native SDK and, at
     // build time, uploads source maps when SENTRY_ORG / SENTRY_PROJECT /
     // SENTRY_AUTH_TOKEN are present (set as EAS secrets). With those unset the
