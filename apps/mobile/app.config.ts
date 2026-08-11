@@ -31,11 +31,12 @@ const config: ExpoConfig = {
   runtimeVersion: {
     policy: 'appVersion',
   },
-  splash: {
-    image: './assets/icon.png',
-    resizeMode: 'contain',
-    backgroundColor: '#0a0f1f',
-  },
+  // NOTE: the root-level `splash` key used to live here. Expo SDK 56 dropped it
+  // from ExpoConfig AND from @expo/prebuild-config (grep the installed
+  // @expo/prebuild-config@56 build output — it contains no splash handling at
+  // all), so leaving it would silently produce a default white launch screen.
+  // The identical configuration now lives in the 'expo-splash-screen' plugin
+  // below.
   ios: {
     // Universal app: runs natively on iPhone + iPad, and on Apple-Silicon Macs
     // as a "Designed for iPad" app (enabled via a checkbox in App Store Connect
@@ -112,6 +113,29 @@ const config: ExpoConfig = {
     ],
     'expo-secure-store',
     'expo-sqlite',
+    // Required from Expo SDK 56 on — expo-image gained a config plugin and
+    // `expo install --fix` / expo-doctor now refuse the project without it. It
+    // only writes one Podfile property (`expo-image.disable-libdav1d`, left at
+    // its default `false` so the bundled AV1 decoder stays linked); there is no
+    // behaviour change from adding it.
+    'expo-image',
+    // Replaces the root-level `splash` key that SDK 56 removed (see the note
+    // where it used to live). Values are carried over 1:1 from it. The
+    // plugin's own defaults are NOT equivalent to the old key — it centres the
+    // image at imageWidth 100 — so `enableFullScreenImage_legacy: true` is
+    // load-bearing: it is Expo's documented compatibility switch that keeps
+    // rendering the icon full-screen-contained exactly as the 1.1.0 build on
+    // the App Store does today. Do not drop it without deciding you WANT the
+    // new centred-logo look.
+    [
+      'expo-splash-screen',
+      {
+        image: './assets/icon.png',
+        resizeMode: 'contain',
+        backgroundColor: '#0a0f1f',
+        enableFullScreenImage_legacy: true,
+      },
+    ],
     // Registers the native push module + adds the iOS `aps-environment`
     // entitlement. Without this plugin the build has no push entitlement,
     // so getExpoPushTokenAsync() fails on device and no token is ever

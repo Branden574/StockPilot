@@ -797,7 +797,7 @@ function PhotoRow({ entry, onRetry }: { entry: PhotoEntry; onRetry: () => void }
     <Card padding={10} style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         <View style={photoStyles.thumb}>
-          <Image source={{ uri: entry.uri }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+          <Image source={{ uri: entry.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           {entry.status === 'uploading' ? (
