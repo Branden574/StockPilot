@@ -442,10 +442,19 @@ describe('ItemForm — the SIZED bulk path carries the sports values (review fin
     // preview (which reads watch('variantSize')) is 'default' for this entire
     // flow — and the card used to read "Single variant" while the save created
     // one item per picked size.
-    await renderSizedShoesAndPickSizes();
+    const { user } = await renderSizedShoesAndPickSizes();
 
     expect(screen.queryByText('Single variant')).not.toBeInTheDocument();
     expect(screen.getByText('2 variants: 9, 10')).toBeInTheDocument();
+
+    // Listed in SCALE order, not click order. Reverse the append order by
+    // deselecting 9 and re-picking it, so selectedSizes becomes [10, 9]. The
+    // card must still read "9, 10" - and note a plain string sort would give
+    // "10, 9" here, since "10" < "9" lexicographically.
+    await user.click(screen.getByRole('button', { name: '9' }));
+    await user.click(screen.getByRole('button', { name: '9' }));
+    await waitFor(() => expect(screen.getByText('2 variants: 9, 10')).toBeInTheDocument());
+    expect(screen.queryByText('2 variants: 10, 9')).not.toBeInTheDocument();
   });
 
   it('keeps the card in step as sizes are added and removed', async () => {
