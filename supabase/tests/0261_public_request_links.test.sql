@@ -97,13 +97,13 @@ values
   on conflict (id) do nothing;
 
 insert into public.public_request_links
-  (id, organization_id, name, token, active, expires_at, availability_display,
+  (id, organization_id, name, token_hash, active, expires_at, availability_display,
    books_enabled, items_enabled, include_public_pool, default_max_qty)
 values
-  (:link_main,     :orga, 'Main link',     'ab026100tokenmain0000000000000000000000000000000000000000000001', true,  null,                'exact',  true,  false, true,  10),
-  (:link_expired,  :orga, 'Expired link',  'ab026100tokenexp00000000000000000000000000000000000000000000002', true,  now() - interval '1 day', 'bucket', true, false, true, null),
-  (:link_inactive, :orga, 'Inactive link', 'ab026100tokenoff00000000000000000000000000000000000000000000003', false, null,                'bucket', true,  false, true,  null),
-  (:link_items,    :orga, 'Items link',    'ab026100tokenitems000000000000000000000000000000000000000000004', true,  null,                'bucket', false, true,  false, null)
+  (:link_main,     :orga, 'Main link',     encode(extensions.digest('ab026100tokenmain0000000000000000000000000000000000000000000001', 'sha256'), 'hex'), true,  null,                'exact',  true,  false, true,  10),
+  (:link_expired,  :orga, 'Expired link',  encode(extensions.digest('ab026100tokenexp00000000000000000000000000000000000000000000002', 'sha256'), 'hex'), true,  now() - interval '1 day', 'bucket', true, false, true, null),
+  (:link_inactive, :orga, 'Inactive link', encode(extensions.digest('ab026100tokenoff00000000000000000000000000000000000000000000003', 'sha256'), 'hex'), false, null,                'bucket', true,  false, true,  null),
+  (:link_items,    :orga, 'Items link',    encode(extensions.digest('ab026100tokenitems000000000000000000000000000000000000000000004', 'sha256'), 'hex'), true,  null,                'bucket', false, true,  false, null)
   on conflict (id) do nothing;
 
 insert into public.public_link_catalog_entries (link_id, item_id, max_qty_per_request) values
@@ -207,9 +207,9 @@ select is(
   4, 'S4: org viewer can read the org''s links');
 -- …but cannot write links or entries.
 select throws_ok(
-  $$ insert into public.public_request_links (organization_id, name, token)
+  $$ insert into public.public_request_links (organization_id, name, token_hash)
        values ('ab026100-0000-0000-0000-00000000000a', 'Sneaky',
-               'ab026100tokensneak000000000000000000000000000000000000000000005') $$,
+               encode(extensions.digest('ab026100tokensneak000000000000000000000000000000000000000000005', 'sha256'), 'hex')) $$,
   '42501', null,
   'S4b: viewer INSERT on public_request_links is rejected by RLS');
 select throws_ok(
@@ -225,10 +225,10 @@ set local "request.jwt.claim.sub" to 'ab026100-0000-0000-0000-000000000001';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select lives_ok(
-  $$ insert into public.public_request_links (id, organization_id, name, token)
+  $$ insert into public.public_request_links (id, organization_id, name, token_hash)
        values ('ab026100-0000-0000-0000-0000000000a5',
                'ab026100-0000-0000-0000-00000000000a', 'Admin link',
-               'ab026100tokenadmin000000000000000000000000000000000000000000006') $$,
+               encode(extensions.digest('ab026100tokenadmin000000000000000000000000000000000000000000006', 'sha256'), 'hex')) $$,
   'S4d: admin creates a link');
 select lives_ok(
   $$ insert into public.public_link_catalog_entries (link_id, item_id, max_qty_per_request)
@@ -252,10 +252,10 @@ set local "request.jwt.claim.sub" to 'ab026100-0000-0000-0000-000000000002';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select lives_ok(
-  $$ insert into public.public_request_links (id, organization_id, name, token)
+  $$ insert into public.public_request_links (id, organization_id, name, token_hash)
        values ('ab026100-0000-0000-0000-0000000000a6',
                'ab026100-0000-0000-0000-00000000000a', 'Grantee link',
-               'ab026100tokengrant000000000000000000000000000000000000000000007') $$,
+               encode(extensions.digest('ab026100tokengrant000000000000000000000000000000000000000000007', 'sha256'), 'hex')) $$,
   'S4g: viewer granted public_links:manage can create a link');
 reset role;
 
