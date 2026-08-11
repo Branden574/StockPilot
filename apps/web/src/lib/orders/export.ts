@@ -18,13 +18,27 @@ import type {
 /** Both export routes cap at the same row count. */
 export const ORDER_EXPORT_ROW_CAP = 10_000;
 
-// Mirror of the orders list page's status tabs → status-set mapping so an
-// "Export" control on the list exports exactly the tab the user is viewing.
-// Kept here (not imported from the page) because the page is a server
-// component with a lot of unrelated render code; the small duplication is
-// cheaper than coupling the routes to the page module.
+/** The orders list page's status tabs. THE single source: the page imports
+ *  these maps (page ← lib is the legal direction; routes must not import
+ *  page modules), so a new status/tab joins the vocabulary exactly once to
+ *  reach the page tabs AND both export formats. */
+export type OrderStatusTab =
+  | 'all_active'
+  | 'needs_approval'
+  | 'picking'
+  | 'packing'
+  | 'staged'
+  | 'in_transit'
+  | 'backordered'
+  | 'completed'
+  | 'denied_cancelled';
+
+export function isOrderStatusTab(value: string | undefined): value is OrderStatusTab {
+  return value !== undefined && value in ORDER_EXPORT_STATUS_TABS;
+}
+
 export const ORDER_EXPORT_STATUS_TABS: Record<
-  string,
+  OrderStatusTab,
   OrderRequestStatus | OrderRequestStatus[]
 > = {
   all_active: [
@@ -49,9 +63,9 @@ export const ORDER_EXPORT_STATUS_TABS: Record<
   denied_cancelled: ['denied', 'cancelled'],
 };
 
-/** Human labels per tab key, mirroring the orders page's TAB_LABELS. The PDF
- *  document title names the view that was exported; the CSV has no title. */
-export const ORDER_EXPORT_TAB_LABELS: Record<string, string> = {
+/** Human labels per tab key — the page's tab strip and the PDF document
+ *  title both read from THIS map. */
+export const ORDER_EXPORT_TAB_LABELS: Record<OrderStatusTab, string> = {
   all_active: 'All active',
   needs_approval: 'Needs approval',
   picking: 'Picking',
@@ -112,7 +126,7 @@ export function resolveOrderExportStatusFilter(
   raw: string | null,
 ): OrderRequestStatus | OrderRequestStatus[] | undefined {
   if (!raw) return undefined;
-  if (raw in ORDER_EXPORT_STATUS_TABS) return ORDER_EXPORT_STATUS_TABS[raw];
+  if (isOrderStatusTab(raw)) return ORDER_EXPORT_STATUS_TABS[raw];
   if (EXPORTABLE_ORDER_STATUSES.has(raw as OrderRequestStatus)) {
     return raw as OrderRequestStatus;
   }
@@ -161,7 +175,7 @@ export function orderExportCells(
  * takes), so the label honestly says the whole history was exported.
  */
 export function orderExportViewLabel(raw: string | null): string {
-  if (raw && raw in ORDER_EXPORT_TAB_LABELS) return ORDER_EXPORT_TAB_LABELS[raw]!;
+  if (raw && isOrderStatusTab(raw)) return ORDER_EXPORT_TAB_LABELS[raw];
   if (raw && EXPORTABLE_ORDER_STATUSES.has(raw as OrderRequestStatus)) {
     const words = raw.replace(/_/g, ' ');
     return words.charAt(0).toUpperCase() + words.slice(1);

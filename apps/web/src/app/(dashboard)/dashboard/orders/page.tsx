@@ -25,63 +25,19 @@ import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
   OrderRequestsService,
-  type OrderRequestStatus,
   type OrderRequestSummary,
 } from '@/server/services/order-requests';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDERS_TOUR } from '@/lib/onboarding/tours';
+import {
+  ORDER_EXPORT_STATUS_TABS as TAB_FILTERS,
+  ORDER_EXPORT_TAB_LABELS as TAB_LABELS,
+  isOrderStatusTab,
+  type OrderStatusTab as StatusTab,
+} from '@/lib/orders/export';
 
 const PAGE_SIZE = 50;
-
-type StatusTab =
-  | 'all_active'
-  | 'needs_approval'
-  | 'picking'
-  | 'packing'
-  | 'staged'
-  | 'in_transit'
-  | 'backordered'
-  | 'completed'
-  | 'denied_cancelled';
-
-const TAB_LABELS: Record<StatusTab, string> = {
-  all_active: 'All active',
-  needs_approval: 'Needs approval',
-  picking: 'Picking',
-  packing: 'Packing',
-  staged: 'Staged',
-  in_transit: 'In transit',
-  backordered: 'Backordered',
-  completed: 'Completed',
-  denied_cancelled: 'Denied/Cancelled',
-};
-
-const TAB_FILTERS: Record<StatusTab, OrderRequestStatus | OrderRequestStatus[]> = {
-  all_active: [
-    'pending_approval',
-    'approved',
-    'pick_slip_generated',
-    'picking_in_progress',
-    'picking_complete',
-    'packing_slip_generated',
-    'staged_for_pickup',
-    'staged_for_delivery',
-    'in_transit',
-    // A backordered order is still LIVE — it's awaiting a manager to resume or
-    // close it. Include it in All active AND give it its own tab, or it would
-    // be reachable only by direct link / notification.
-    'backordered',
-  ],
-  needs_approval: 'pending_approval',
-  picking: ['pick_slip_generated', 'picking_in_progress', 'picking_complete'],
-  packing: 'packing_slip_generated',
-  staged: ['staged_for_pickup', 'staged_for_delivery'],
-  in_transit: 'in_transit',
-  backordered: 'backordered',
-  completed: 'completed',
-  denied_cancelled: ['denied', 'cancelled'],
-};
 
 const TAB_ORDER: StatusTab[] = [
   'all_active',
@@ -95,9 +51,9 @@ const TAB_ORDER: StatusTab[] = [
   'denied_cancelled',
 ];
 
-function isStatusTab(value: string | undefined): value is StatusTab {
-  return TAB_ORDER.includes(value as StatusTab);
-}
+// Vocabulary lives in lib/orders/export.ts (single source for the page tabs
+// and BOTH export formats); TAB_ORDER stays here — it is UI presentation
+// order, not vocabulary.
 
 export default async function OrdersPage({
   searchParams,
@@ -112,7 +68,7 @@ export default async function OrdersPage({
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');
 
-  const tab: StatusTab = isStatusTab(params.status) ? params.status : 'needs_approval';
+  const tab: StatusTab = isOrderStatusTab(params.status) ? params.status : 'needs_approval';
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
 
