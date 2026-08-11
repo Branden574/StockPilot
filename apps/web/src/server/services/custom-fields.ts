@@ -14,7 +14,7 @@ import {
 // lives in @stockpilot/core/customization/custom-fields.
 export { RESERVED_CUSTOM_FIELD_KEYS };
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { ServiceError, mfaGateError, withContext, type ServiceContext } from './context';
 
 type CustomFieldEntity = 'item';
 
@@ -282,11 +282,10 @@ export class CustomFieldsService {
    */
   private assertAdmin(): void {
     if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) {
-      throw new ServiceError(
-        'forbidden',
-        'Multi-factor authentication required. Enroll in MFA before performing this action.',
-        { reason: 'mfa_required' },
-      );
+      // Shape chosen by enrollment — see mfaGateError. An enrolled user must
+      // get 'aal2_required' so the step-up modal fires instead of telling
+      // someone who already has a factor to enroll one.
+      throw mfaGateError(this.ctx);
     }
     if (this.ctx.role !== 'owner' && this.ctx.role !== 'admin') {
       throw new ServiceError('forbidden', 'Only owners and admins can manage custom fields.');

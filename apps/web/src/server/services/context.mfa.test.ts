@@ -67,7 +67,7 @@ import {
   getModulesForRequest,
   getOrgRowForRequest,
 } from '@/lib/dashboard/request-cache';
-import { assertPermission, ServiceError, withContext } from './context';
+import { assertPermission, mfaGateError, ServiceError, withContext } from './context';
 
 import type { OrgRow } from '@/lib/dashboard/request-cache';
 import type { ModuleId } from '@stockpilot/core';
@@ -259,5 +259,44 @@ describe('assertPermission — MFA gate error shape', () => {
     arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
     const ctx = await withContext();
     expect(() => assertPermission(ctx, 'items:read')).not.toThrow();
+  });
+});
+
+/**
+ * The gate is duplicated OUTSIDE assertPermission — profile actions
+ * (server/actions/profile.ts gateMfa) and the custom-fields service
+ * (assertAdmin) each re-check mfaRequired/mfaSatisfied for themselves. Both
+ * used to construct their own ServiceError with a hardcoded
+ * reason:'mfa_required', which told an ENROLLED user to "enroll in MFA" and
+ * left the step-up modal unfired. They now delegate to the exported
+ * mfaGateError, so these pins guard the shared helper directly: a future
+ * caller that hardcodes a shape instead of calling it will diverge from
+ * these expectations.
+ */
+describe('mfaGateError — the shared shape for gates outside assertPermission', () => {
+  it('ENROLLED yields reason=aal2_required (step up in place)', () => {
+    const e = mfaGateError({ mfaEnrolled: true });
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e.code).toBe('forbidden');
+    expect(e.details).toEqual({ reason: 'aal2_required' });
+    expect(e.message).toBe('Re-authenticate with MFA before performing this action.');
+  });
+
+  it('UNENROLLED yields the original reason=mfa_required (enroll first)', () => {
+    const e = mfaGateError({ mfaEnrolled: false });
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e.code).toBe('forbidden');
+    expect(e.details).toEqual({ reason: 'mfa_required' });
+    expect(e.message).toBe(
+      'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    );
+  });
+
+  it('a synthetic context with mfaEnrolled undefined is treated as UNENROLLED', () => {
+    // System/service contexts omit the flag; falling back to the enrolled
+    // shape would prompt for a code no such principal can produce.
+    expect(mfaGateError({ mfaEnrolled: undefined }).details).toEqual({
+      reason: 'mfa_required',
+    });
   });
 });

@@ -35,9 +35,19 @@ export async function POST(req: NextRequest) {
   // web `deleteOwnAccountAction` gateMfa() check. withApiContext resolves
   // mfaRequired/mfaSatisfied but the route must act on them — otherwise an
   // AAL1 bearer token could delete the account under an MFA-required policy.
+  // Error CODE chosen by enrollment, mirroring services/context.ts
+  // mfaGateError: an ENROLLED caller gets 'aal2_required' so the mobile
+  // step-up screen prompts for a TOTP code, while an unenrolled caller under
+  // an MFA-required policy keeps the original 'mfa_required' (enroll first).
+  // Telling someone who already has a factor to enroll one is a dead end.
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
     return NextResponse.json(
-      { error: 'mfa_required', message: 'Multi-factor authentication required.' },
+      ctx.mfaEnrolled
+        ? {
+            error: 'aal2_required',
+            message: 'Re-authenticate with MFA before performing this action.',
+          }
+        : { error: 'mfa_required', message: 'Multi-factor authentication required.' },
       { status: 403 },
     );
   }
