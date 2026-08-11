@@ -644,11 +644,12 @@ select is(
 --     guard. 0327 fixed both RPCs and added the validated
 --     item_stock_levels_quantity_nonneg constraint in the same change; the
 --     0322/0324 pins are now INVERTED to assert exactly that constraint.
---   * item_stock_levels_select must stay org-only (0322 test, ~line 630) —
---     apply_level_delta's draw-down selection still runs under the caller's
---     RLS (post_cycle_count's Σ is definer-complete since 0327, but the
---     draw-down is not), so warehouse-scoping the policy still breaks
---     legitimate picks. Narrowing is also an explicit product decision.
+--   * (RESOLVED by 0331) item_stock_levels_select had to stay org-only while
+--     apply_level_delta's draw-down selection ran under the caller's RLS.
+--     0331 made apply_level_delta SECURITY DEFINER (with its own org/staff
+--     gate) and warehouse-narrowed the policy in the same change; the 0322
+--     pin (~line 630) is now INVERTED to assert the warehouse-scoped qual
+--     verbatim, and 0331's own test carries the behavioral parity proof.
 -- Duplicating those assertions would double the friction of the eventual fix
 -- and invite the two copies to drift. The cost of not duplicating is real and
 -- should be named: deleting that file removes the pin, and nothing in this

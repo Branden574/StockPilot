@@ -606,37 +606,58 @@ it must not.
   `insufficient_stock` (P0001), **not** a 23514 from the constraint firing
   first, and an explicit-location over-draw no longer commits a negative row.
 
-### AR-2 — `item_stock_levels_select` stays org-scoped, not warehouse-scoped
+### AR-2 — `item_stock_levels_select` stays org-scoped, not warehouse-scoped — **RESOLVED (0331)**
 
 - **The tempting fix**: narrow the policy to the caller's assigned warehouses,
   matching the warehouse scoping applied elsewhere in wave C.
-- **Why it was refused**: `post_cycle_count` derives its delta from a
-  **sum over `item_stock_levels` evaluated under the caller's RLS**. Narrowing
+- **Why it was refused at the time**: `post_cycle_count` derived its delta from
+  a **sum over `item_stock_levels` evaluated under the caller's RLS**. Narrowing
   the policy makes that sum come up **short** for a caller with partial warehouse
   access, and the function then writes a **wrong number with no error**. That is
   silent stock corruption — strictly worse than the over-broad read it would be
   fixing, and undetectable without reconciling against physical count.
-- **The prerequisite**: make `post_cycle_count` compute its delta without
-  depending on the caller's row visibility, then narrow the policy in the same
-  change that removes the pin. **Partially met by 0327**: `post_cycle_count`'s
-  Σ now goes through the `SECURITY DEFINER` helper
-  `_cycle_count_org_stock_sum`, so it is complete regardless of who posts. NOT
-  yet met: `apply_level_delta`'s draw-down selection is still `SECURITY
-  INVOKER` and caller-scoped, so narrowing the policy would still make
-  legitimate picks fail with `insufficient_placed_stock`. The narrowing itself
-  also remains an explicit product decision.
-- **Pinned at**: the same file — asserts the policy's `qual`
-  text is still the org-only predicate, verbatim.
+- **The prerequisite, and how it was met**: make every RPC read of the table
+  independent of the caller's row visibility, then narrow the policy in the
+  same change that inverts the pin. Met in two halves: `0327` routed
+  `post_cycle_count`'s Σ through the `SECURITY DEFINER` helper
+  `_cycle_count_org_stock_sum`; `0331` made `apply_level_delta` (the last
+  caller-scoped reader — its draw-down loops SELECT the holdings they consume)
+  `SECURITY DEFINER` with an internal gate (staff+ member of the org owning
+  the target item, derived from the item row; null-subject connections are the
+  service path — anon EXECUTE is revoked), then recreated
+  `item_stock_levels_select` in `0322`'s prescribed `purchase_orders_select`
+  shape via the holding's location (`is_org_member` AND (manager+ OR the
+  location's warehouse ∈ `my_warehouse_ids()` OR the location has no
+  warehouse)). `adjust_stock`/`transfer_stock` never SELECT the table — their
+  conditional draws run under the untouched FOR ALL write policy.
+- **What it changes, honestly**: because `item_stock_levels_write` (0202) is
+  `FOR ALL` with a **staff** `USING` floor and permissive policies OR, staff+
+  keep org-wide SELECT visibility through the write policy; the narrowing
+  bites **read-only members** (viewers — the actual warehouse-scoped
+  population in production). Holdings are **charter-blind by design**:
+  `my_warehouse_ids()` ignores charter scoping, so a charter-scoped viewer
+  sees all holdings quantities at their warehouse even where item rows are
+  charter-narrowed — 0322's prescription; anonymous quantities only.
+- **Pinned at (inverted)**: `0322`'s test now asserts the **warehouse-scoped**
+  `qual` verbatim;
+  [`0331_ar2_warehouse_scope.test.sql`](../../supabase/tests/0331_ar2_warehouse_scope.test.sql)
+  carries the behavioral halves — viewer narrowing (assigned + null-warehouse
+  rows only), RPC parity for a warehouse-scoped caller (a draw spanning a
+  hidden warehouse still succeeds with identical quantities; a transfer out of
+  a hidden location still works), and the definer/grant structure of
+  `apply_level_delta`. `0318`'s test inverted its `prosecdef = false` pin.
 
 ### Honest note on where these pins live
 
-Both are pinned in `0322`'s test, next to the evidence that justifies them, and
-are **not** duplicated in `security_invariants.test.sql`. Duplicating would
-double the friction of the eventual fix and invite the two copies to drift. The
-cost of not duplicating should be named: **deleting that file removes both pins,
-and nothing in the invariant sweep would notice.** There is no way to assert "a
-test file still exists" from inside pgTAP. Treat `0322`'s test file as
-load-bearing.
+Both accepted risks are now **resolved and inverted**. AR-1's pins live in the
+`0322`/`0324` tests (exactly one validated `CHECK`, by name) and `0327`'s test
+(behavioral). AR-2's surviving pins live in `0322`'s test (the warehouse-scoped
+`qual`, verbatim) and `0331`'s test (behavioral parity + structure). None are
+duplicated in `security_invariants.test.sql` — duplicating would invite drift.
+The cost of not duplicating should be named: **deleting a migration test file
+removes its pins, and nothing in the invariant sweep would notice.** There is no
+way to assert "a test file still exists" from inside pgTAP. Treat `0322`'s,
+`0327`'s and `0331`'s test files as load-bearing.
 
 ---
 

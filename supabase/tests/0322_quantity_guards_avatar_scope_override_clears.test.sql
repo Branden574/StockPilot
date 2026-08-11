@@ -620,17 +620,21 @@ select is(
 );
 reset role;
 
--- item_stock_levels is DEFERRED, and that is asserted so the deferral is
--- visible in CI rather than only in a report. post_cycle_count derives its
--- delta from Sigma(item_stock_levels) under the caller's RLS, so narrowing this
--- policy silently corrupts stock. When that is fixed, update this assertion in
--- the same change that narrows the policy.
+-- item_stock_levels was DEFERRED here (0322 s.4) and CLOSED by 0331, which
+-- met the recorded prerequisite first: post_cycle_count's Sigma flows through
+-- the SECURITY DEFINER _cycle_count_org_stock_sum (0327) and
+-- apply_level_delta's draw-down selection is SECURITY DEFINER with its own
+-- org/staff gate (0331), so neither depends on the caller's read scope and
+-- the narrowing can no longer corrupt stock. This pin is INVERTED in the same
+-- change that narrowed the policy: it now asserts the 0331 warehouse-scoped
+-- qual VERBATIM (captured from pg_get_expr on PG17), so any later loosening
+-- OR tightening of this policy must come back through a reviewed test edit.
 select is(
   (select qual from pg_policies
     where schemaname = 'public' and tablename = 'item_stock_levels'
       and policyname = 'item_stock_levels_select'),
-  '( SELECT is_org_member(item_stock_levels.organization_id) AS is_org_member)',
-  'MED-16 deferred: item_stock_levels_select is still org-only (see 0322 s.4 for the prerequisite)'
+  E'(( SELECT is_org_member(item_stock_levels.organization_id) AS is_org_member) AND (( SELECT has_org_role(item_stock_levels.organization_id, ''manager''::text) AS has_org_role) OR (EXISTS ( SELECT 1\n   FROM locations l\n  WHERE ((l.id = item_stock_levels.location_id) AND ((l.warehouse_id IS NULL) OR (l.warehouse_id IN ( SELECT mw.warehouse_id\n           FROM my_warehouse_ids() mw(warehouse_id)))))))))',
+  'AR-2 closed (0331): item_stock_levels_select carries the warehouse-scoped qual, verbatim'
 );
 
 
