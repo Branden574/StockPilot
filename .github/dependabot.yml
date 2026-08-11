@@ -45,6 +45,16 @@ updates:
       - dependency-name: 'react-dom'
       - dependency-name: '@types/react'
       - dependency-name: '@types/react-dom'
+      # The Supabase stack moves together and touches auth/session/RLS
+      # behavior end to end: the `supabase` CLI version decides which
+      # Postgres/GoTrue images the pgTAP CI boots (PR #98's group bump
+      # broke the org-mismatch suites exactly this way), supabase-js is
+      # every DB call in web+mobile, and @supabase/ssr is cookie/session
+      # handling. These are deliberate, individually-validated upgrades
+      # with the runbook open — never grouped drive-bys. Security
+      # advisories still open PRs regardless of this ignore.
+      - dependency-name: 'supabase'
+      - dependency-name: '@supabase/*'
 
   - package-ecosystem: github-actions
     directory: /
