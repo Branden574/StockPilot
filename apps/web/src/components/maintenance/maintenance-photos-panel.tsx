@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
 import { compressImageVariants } from '@/lib/image-variants';
 import { Button } from '@/components/ui/button';
+import { ImageLightbox } from '@/components/inventory/image-lightbox';
 
 export interface PanelPhoto {
   id: string;
@@ -125,6 +126,9 @@ async function uploadOne(requestId: string, file: File, kind: MaintenanceAttachm
 export function MaintenancePhotosPanel({ requestId, photos, onChange, kind = 'requester' }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploads, setUploads] = useState<QueuedUpload[]>([]);
+  // Which photo the lightbox is showing; null = closed. The lightbox gets the
+  // MASTER url (p.url) — thumbs are small variants and would blur at zoom.
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const busy = uploads.some((u) => u.status === 'uploading');
 
   function queueKey(file: File): string {
@@ -217,12 +221,19 @@ export function MaintenancePhotosPanel({ requestId, photos, onChange, kind = 're
         <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
           {photos.map((p) => (
             <li key={p.id} className="group relative">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={p.thumbUrl ?? p.url}
-                alt={p.originalFilename}
-                className="h-24 w-full rounded-lg border object-cover"
-              />
+              <button
+                type="button"
+                aria-label={`View ${p.originalFilename}`}
+                className="block w-full cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => setLightboxIndex(photos.findIndex((x) => x.id === p.id))}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.thumbUrl ?? p.url}
+                  alt={p.originalFilename}
+                  className="h-24 w-full rounded-lg border object-cover"
+                />
+              </button>
               <button
                 type="button"
                 aria-label={`Remove ${p.originalFilename}`}
@@ -262,6 +273,15 @@ export function MaintenancePhotosPanel({ requestId, photos, onChange, kind = 're
           ))}
         </ul>
       ) : null}
+      {/* No onDelete on purpose — deletion stays on the panel's Remove
+          buttons, matching the order-proof precedent in the lightbox's own
+          docstring: one deletion surface is enough. */}
+      <ImageLightbox
+        images={photos.map((p) => ({ id: p.id, url: p.url }))}
+        startIndex={lightboxIndex ?? 0}
+        open={lightboxIndex !== null}
+        onClose={() => setLightboxIndex(null)}
+      />
     </section>
   );
 }
