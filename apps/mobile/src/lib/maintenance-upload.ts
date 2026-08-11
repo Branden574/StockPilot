@@ -12,6 +12,16 @@
  * constructs a JS Blob at all, which is also the only route that reports live
  * upload progress — a plain `supabase-js` `.upload()` call cannot.
  *
+ * ⚠️ IMPORT PATH IS LOAD-BEARING: `expo-file-system/legacy`, not
+ * `expo-file-system`. expo-file-system 19 (Expo SDK 54) replaced the default
+ * export with the new File/Directory API and moved the whole URI-string API to
+ * the `/legacy` subpath. `createUploadTask` / `uploadAsync` are still *typed*
+ * on the default export but now THROW at runtime (see the package's
+ * `legacyWarnings.ts` — every one of them is annotated "This method will throw
+ * in runtime"), so a plain `from 'expo-file-system'` import here typechecks and
+ * then fails on the first photo upload. The new API has no progress-reporting
+ * upload at all, so /legacy is the only route that keeps step 3 below intact.
+ *
  * `uploadMaintenancePhoto` is the WHOLE orchestration for ONE photo, and it
  * is intentionally stateless/idempotent: calling it again for the same asset
  * (a Retry tap) is a complete, independent attempt with no leftover state
@@ -19,7 +29,7 @@
  * decide whether an in-flight attempt's progress/result is still the one it
  * should apply to visible state — see its own doc comment.
  */
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';

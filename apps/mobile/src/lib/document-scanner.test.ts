@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,7 +14,10 @@ import { resizeForUpload } from './image-resize';
 // touches is mocked here. The scanner plugin itself is only ever imported
 // lazily inside scanDocumentPages(), so it stays out of collection entirely
 // (mocked per-test with vi.doMock below).
-vi.mock('expo-file-system', () => ({
+// Module id must stay in lockstep with document-scanner.ts's own import
+// specifier — 'expo-file-system/legacy' since SDK 54 (the URI-string API moved
+// there; the same names on the default export throw at runtime).
+vi.mock('expo-file-system/legacy', () => ({
   EncodingType: { Base64: 'base64', UTF8: 'utf8' },
   readAsStringAsync: vi.fn(),
   getInfoAsync: vi.fn(),

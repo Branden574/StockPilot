@@ -646,7 +646,13 @@ function promptDeleteConfirmation(signOut: () => Promise<void> | void): void {
         {
           text: 'Delete forever',
           style: 'destructive',
-          onPress: (input) => {
+          // `input?: string` is annotated, not inferred: RN 0.81 widened
+          // AlertButton.onPress to a UNION of `(value?: string) => void` and
+          // `(value?: {login,password}) => void` (for 'login-password'
+          // prompts). TypeScript cannot contextually type a parameter against
+          // a union of signatures, so an un-annotated `input` is an implicit
+          // `any` under `strict`. This prompt is 'plain-text', so string.
+          onPress: (input?: string) => {
             if ((input ?? '').trim() !== 'DELETE') {
               Alert.alert('Not deleted', 'You did not type DELETE exactly. Your account is unchanged.');
               return;

@@ -1,5 +1,8 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as FileSystem from 'expo-file-system';
+// `/legacy` is load-bearing: expo-file-system 19 (SDK 54) moved the URI-string
+// API (getInfoAsync) to this subpath. The same names on the default export are
+// still typed but THROW at runtime. See src/lib/maintenance-upload.ts.
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as React from 'react';
@@ -149,7 +152,11 @@ export default function AiScanScreen() {
       // Sanity-check size after compression. (A fetch HEAD on a file:// URI
       // does NOT populate content-length, so the previous check was dead and
       // never fired.) getInfoAsync always returns size for file:// locations.
-      const info = await FileSystem.getInfoAsync(compressed.uri, { size: true });
+      // No `{ size: true }` opt-in any more: expo-file-system 19 dropped
+      // `size` from legacy `InfoOptions` (it only carries `md5` now) because
+      // the native handler populates `size` unconditionally and `FileInfo.size`
+      // became non-optional. Same bytes reported, one fewer argument.
+      const info = await FileSystem.getInfoAsync(compressed.uri);
       if (info.exists && typeof info.size === 'number' && info.size > MAX_PHOTO_BYTES) {
         throw new Error('Photo too large after compression. Try again.');
       }
