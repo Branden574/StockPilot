@@ -28,6 +28,7 @@ import {
   ctaRow,
   detailGrid,
   emailShell,
+  escapeAttr,
   escapeHtml,
   footer,
   headline,
@@ -151,7 +152,7 @@ export function renderPasswordResetEmail(params: PasswordResetEmailParams): Rend
         '0 36px 30px',
         infoCard({
           titleHtml: 'Didn&rsquo;t request this?',
-          bodyHtml: `Your password hasn&rsquo;t changed and no one has accessed your account. You can safely ignore this email — or <a class="ink2" href="${urls.support}" style="color:${L.ink2}">tell support</a> if resets keep arriving that you didn&rsquo;t ask for.`,
+          bodyHtml: `Your password hasn&rsquo;t changed and no one has accessed your account. You can safely ignore this email — or <a class="ink2" href="${escapeAttr(urls.support)}" style="color:${L.ink2}">tell support</a> if resets keep arriving that you didn&rsquo;t ask for.`,
         }),
       ),
       footer({

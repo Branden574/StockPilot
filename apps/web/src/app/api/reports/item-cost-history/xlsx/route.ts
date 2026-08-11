@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { escapeForSpreadsheet } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
@@ -78,8 +79,14 @@ export async function GET(request: Request) {
       ws.addRow(
         headers.map((h) => {
           const v = r[h];
-          // Defuse spreadsheet-formula injection on string cells.
-          if (typeof v === 'string' && /^[=+\-@]/.test(v)) return `'${v}`;
+          // Defuse spreadsheet-formula injection on string cells through the
+          // SHARED guard (lib/csv.ts) that toCsv() and toInventoryXlsx() use.
+          // This route used to hand-roll `/^[=+\-@]/`, which misses the TAB
+          // and CARRIAGE-RETURN lead-ins Excel also treats as a formula
+          // start — one exporter with a weaker guard than every other.
+          // Numbers stay numbers: only string cells go through the guard, so
+          // 'Unit cost' is still a numeric cell in the sheet.
+          if (typeof v === 'string') return escapeForSpreadsheet(v);
           return v ?? '';
         }),
       );
