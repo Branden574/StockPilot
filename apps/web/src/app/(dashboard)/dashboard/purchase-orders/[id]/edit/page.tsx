@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { PoForm, type InitialPoValues } from '@/components/po/po-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -51,7 +52,12 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
     // still awaiting their first receipt — an existing draft line for an
     // expected item must keep resolving, and re-ordering one must reuse
     // the row instead of inviting a duplicate.
-    inventorySvc.list({ limit: 1000, expected: 'any' }),
+    //
+    // itemTypes (PURCHASE_ORDER_ITEM_TYPES): without it list() falls back to
+    // its `item_type = 'product'` default and an existing BOOK line resolves
+    // to nothing — the line renders blank even though it carries a real
+    // itemId. The picker's server search sends the same set.
+    inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),
@@ -133,6 +139,10 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
               unit_cost: i.unit_cost,
               groupId: i.group_id,
               variantSize: i.variant_size,
+              // Drives the "Book" marker + ISBN on a picker row. For a book,
+              // barcode IS the ISBN.
+              itemType: i.item_type,
+              barcode: i.barcode,
             }))}
             productGroups={productGroups}
             groupItems={groupItemRows.map((i) => ({

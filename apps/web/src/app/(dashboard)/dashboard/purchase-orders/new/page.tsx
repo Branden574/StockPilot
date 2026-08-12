@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { PoForm } from '@/components/po/po-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -30,7 +31,12 @@ export default async function NewPoPage() {
     // expected:'any' (mig 0277): the PO item picker must ALSO offer items
     // still awaiting their first receipt — re-ordering an expected SKU has
     // to reuse the existing row, or the picker invites a duplicate item.
-    inventorySvc.list({ limit: 1000, expected: 'any' }),
+    //
+    // itemTypes (PURCHASE_ORDER_ITEM_TYPES): without it list() falls back to
+    // its `item_type = 'product'` default and NO book ever reaches this form,
+    // even though books are demonstrably purchasable. The picker's server
+    // search sends the same set, so the two can never disagree.
+    inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),
@@ -76,6 +82,10 @@ export default async function NewPoPage() {
               unit_cost: i.unit_cost,
               groupId: i.group_id,
               variantSize: i.variant_size,
+              // Drives the "Book" marker + ISBN on a picker row. For a book,
+              // barcode IS the ISBN.
+              itemType: i.item_type,
+              barcode: i.barcode,
             }))}
             productGroups={productGroups}
             groupItems={groupItemRows.map((i) => ({
