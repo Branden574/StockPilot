@@ -130,6 +130,17 @@ export function createMultipartBoundary(): string {
  * filenames reach us from the image picker (`asset.fileName`), so a name
  * carrying a quote or newline must not be able to forge a part header.
  */
+/**
+ * A part's Content-Type reaches this builder from the same trust tier as the
+ * filename (OS/picker-derived — e.g. expo-image-picker's asset.mimeType), so
+ * it gets the same treatment: anything that is not a plain `type/subtype`
+ * token is replaced rather than interpolated into the header block, which
+ * would otherwise let a CR/LF forge additional headers or part boundaries.
+ */
+function safeContentType(value: string): string {
+  return /^[\w.+-]+\/[\w.+-]+$/.test(value) ? value : 'application/octet-stream';
+}
+
 function escapeDispositionValue(value: string): string {
   return value.replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/"/g, '%22');
 }
@@ -163,7 +174,7 @@ export async function buildMultipartBody(args: {
         `--${boundary}\r\n` +
           `Content-Disposition: form-data; name="${escapeDispositionValue(file.field)}"; ` +
           `filename="${escapeDispositionValue(file.fileName)}"\r\n` +
-          `Content-Type: ${file.contentType}\r\n\r\n`,
+          `Content-Type: ${safeContentType(file.contentType)}\r\n\r\n`,
       ),
     );
     chunks.push(bytes);
