@@ -19,7 +19,28 @@ export const CRATE_COLORS = [
 
 export type CrateColorSlug = (typeof CRATE_COLORS)[number]['slug'];
 
+/**
+ * Resolve a stored crate color to its registry entry. CASE-INSENSITIVE and
+ * whitespace-trimming, deliberately.
+ *
+ * It used to be an exact `c.slug === slug` match, and that single line was the
+ * root of a whole family of disagreements: three helpers called it three
+ * different ways (two lower-cased first, one did not), so `formatCrateLabel`
+ * silently DROPPED a perfectly well-known color merely because the row spelled
+ * it "Blue" — turning "Blue 42" into "42" and making the placement gate say
+ * "recorded in 42 … will change to 42".
+ *
+ * Mixed case reaches the database through shipped UI: the Transfer dialog's
+ * crate-color box is free text ("e.g. Blue") and `findOrCreateRackOrCrate`
+ * dedupes on `lower(name)`, so an existing row's `crate_color` keeps whatever
+ * casing first created it forever. Writers normalise now (see
+ * `normalizeCrateColor`), but years of rows already say "Blue", so the READER
+ * has to be forgiving. Widening a lookup can only turn a miss into a hit, so
+ * every caller either improves or is unaffected.
+ */
 export function getCrateColor(slug: string | null | undefined) {
   if (!slug) return null;
-  return CRATE_COLORS.find((c) => c.slug === slug) ?? null;
+  const key = String(slug).trim().toLowerCase();
+  if (key.length === 0) return null;
+  return CRATE_COLORS.find((c) => c.slug === key) ?? null;
 }

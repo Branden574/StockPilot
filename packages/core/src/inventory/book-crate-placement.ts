@@ -27,14 +27,26 @@
  *   decision — they are stock waiting to be put away, not a location.
  *
  * CONFIRMATION RULE: overwriting a crate a human already recorded is a
- * destructive edit, so the server refuses it unless the caller acknowledges.
- * `compareBookCratePlacement` below decides what counts as "overwriting"; the
- * tie-breaker whenever a case is ambiguous is ASK, never silently overwrite.
+ * destructive edit, so the server refuses it unless the caller acknowledges
+ * THAT SPECIFIC CHANGE — an item id plus a fingerprint of the crate the caller
+ * says it displayed, never a blanket boolean. `compareBookCratePlacement`
+ * decides what counts as "overwriting"; the tie-breaker whenever a case is
+ * ambiguous is ASK, never silently overwrite.
+ *
+ * TWO CONSEQUENCES OF THE SYNCHRONISATION RULE, both load-bearing:
+ *
+ *   • The gate must compute the comparison BEFORE it looks at any
+ *     acknowledgement. An acknowledgement that short-circuits the comparison is
+ *     not approval, it is a bypass — and a client whose acknowledgement comes
+ *     from a render-time snapshot then destroys whatever the row says NOW.
+ *   • The gate must not ASK about a change the sync will not make. A book whose
+ *     stock stays SPLIT keeps its summary untouched, so confirming the change
+ *     changes nothing. `bookCratePlacementWillSync` is the shared predicate
+ *     that keeps the two sides from disagreeing.
  *
  * PURE MODULE. No DB, no IO — the server does the reading, this decides.
  */
 
-import { formatCrateLabel } from './book-storage';
 import { getCrateColor } from './crate-colors';
 
 /**
@@ -75,6 +87,32 @@ export function normalizeCrateColor(value: string | null | undefined): string | 
 }
 
 /**
+ * The value to STORE for a crate color — the WRITE-side twin of
+ * `normalizeCrateColor`, which is a comparison key and must not be used as
+ * storage.
+ *
+ * A known color is canonicalised to its registry slug, so "Blue", " BLUE " and
+ * "blue" all land in the column as "blue" and no reader has to be clever about
+ * case. An UNKNOWN color is kept trimmed but VERBATIM — lower-casing it would
+ * throw away the only spelling anyone has of a color the registry has never
+ * heard of, and the comparison path normalises it anyway.
+ *
+ * Every writer of a crate color goes through this: `locations.crate_color` (the
+ * single insert in LocationsService.create, which every inline rack/crate
+ * creation path and the mobile transfer route funnel into) and the item-level
+ * `book_crate_color` summary. Mixed case reached the database because the
+ * Transfer dialog's color box is free text and `findOrCreateRackOrCrate`
+ * dedupes on `lower(name)`, so a row created as "Blue" kept that spelling
+ * forever — and an exact-match registry lookup then dropped the color, turning
+ * "Blue 42" into "42".
+ */
+export function normalizeCrateColorForWrite(value: string | null | undefined): string | null {
+  const raw = normalizeText(value);
+  if (!raw) return null;
+  return getCrateColor(raw)?.slug ?? raw;
+}
+
+/**
  * The comparison key for a crate NUMBER: trimmed, lower-cased.
  *
  * FREE TEXT, DELIBERATELY UNVALIDATED. Production `book_crate_number` values
@@ -91,24 +129,53 @@ export function normalizeCrateNumber(value: string | null | undefined): string |
 /**
  * The label a CONFIRMATION uses for one side of the comparison.
  *
- * `formatCrateLabel` is the SUMMARY spelling and answers "which crate is this
- * book in" — a color with no number is not a crate there, so it renders null.
- * The gate asks a different question: "is a recorded value being destroyed",
- * and a recorded color with no number IS such a value (`fieldOverwritten`
- * fires on it). Reusing the summary spelling produced a self-contradictory
- * payload — changed: true carrying currentLabel: null and nextLabel: null,
- * which reads "recorded in no crate … will change to no crate" and gives the
- * client nothing to render.
+ * ═══ THE GATE LABEL IS NOT THE SUMMARY LABEL — do not re-merge them ═══
  *
- * So: number present → the summary spelling ("Blue 4", "4"). Number absent but
- * a color recorded → the color alone ("Blue"). Nothing recorded → null, which
- * now genuinely means nothing.
+ * `formatCrateLabel` (book-storage.ts) is the SUMMARY spelling and answers
+ * "which crate is this book in": the NUMBER is the identity, so a color with
+ * no number renders null, and a color it does not recognise is dropped because
+ * the number alone still names the crate.
+ *
+ * The gate asks a different question — "is a value a human recorded about to be
+ * destroyed" — and BOTH of those drops are wrong for it:
+ *
+ *   • a recorded color with no number IS such a value (`fieldOverwritten`
+ *     fires on it), and delegating produced `changed: true` carrying
+ *     currentLabel null and nextLabel null: "recorded in no crate … will
+ *     change to no crate";
+ *   • dropping an unrecognised color made 'taupe 4' → 'blue 4' render as
+ *     "recorded in 4 … will change to 4" — two strings a human reads as
+ *     IDENTICAL, so the natural response is to click Continue and erase the
+ *     color that was actually being destroyed.
+ *
+ * This used to be written as `formatCrateLabel(...) ?? formatCrateColorLabel(...)`,
+ * which only reached the repaired fallback when the NUMBER was blank — i.e.
+ * never, for the common numbered-crate case. So it COMPOSES instead, from
+ * `formatCrateColorLabel` (case-insensitive, unknown color kept verbatim) and
+ * the raw number.
+ *
+ *   ('blue','4')   → "Blue 4"      ('Blue','42')  → "Blue 42"
+ *   ('taupe','4')  → "taupe 4"     (null,'42')    → "42"
+ *   ('blue',null)  → "Blue"        (null,null)    → null
+ *
+ * INVARIANT (pinned by the label-matrix tests): whenever
+ * `compareBookCratePlacement` reports `changed: true`, these two labels differ.
+ * A confirmation that says "X will change to X" is worse than no confirmation
+ * at all. The one residual collision is a crate NUMBER whose free text happens
+ * to equal "<ColorLabel> <other number>" — ('blue','Shelf') vs (null,'Blue
+ * Shelf') both render "Blue Shelf". That is a re-partition of identical text
+ * between two columns rather than a move between two crates, and the
+ * field-level `describeBookCrateChange` lines the dialog renders still name
+ * exactly which column moves.
  */
 export function formatCratePlacementLabel(
   crateColor: string | null | undefined,
   crateNumber: string | null | undefined,
 ): string | null {
-  return formatCrateLabel(crateColor, crateNumber) ?? formatCrateColorLabel(crateColor);
+  const color = formatCrateColorLabel(crateColor);
+  const number = normalizeText(crateNumber);
+  if (color && number) return `${color} ${number}`;
+  return color ?? number;
 }
 
 export interface BookCratePlacementInput {
@@ -213,10 +280,55 @@ export function isCrateDestination(input: {
 // is a courtesy, never an authority: the server compares against the row it
 // just read, and a placement that slips past a stale prediction is still
 // refused and still re-rendered from THIS payload.
+//
+// ═══ THE ACKNOWLEDGEMENT IS SCOPED, NEVER A BLANKET OFF-SWITCH ═══
+//
+// It used to be a bare `acknowledgeCrateChange: boolean`, and the server
+// returned BEFORE computing any comparison when it was set. That is not "the
+// user approved THIS change", it is "do not compare at all" — and because the
+// client derived the flag from its own render-time snapshot, the FIRST AND
+// ONLY request already carried it for every book that predicted a change. So:
+// staging shows "Blue 4", someone edits the item to "Red 7" from the mobile
+// item screen, the operator places onto a rack, the confirmation says "crate 4
+// will be cleared", one request goes out pre-acknowledged, the gate is skipped,
+// and Red 7 is destroyed. The user acknowledged erasing Blue 4 and the system
+// erased Red 7 — the exact silent overwrite the gate exists to refuse.
+//
+// So an acknowledgement now names WHAT WAS SHOWN: an item id plus a
+// fingerprint of the crate the client displayed for it. The server computes
+// the conflict set FIRST, from the row it just read, and waives ONLY the
+// conflicts whose fingerprint matches. Anything it was not shown still
+// refuses, carrying the fresh payload so the client re-confirms against
+// current truth.
+//
+// The fingerprint is a staleness proof, not an unforgeable capability token —
+// a caller who already knows the current value can echo it. It does not need
+// to be more: the user is authorised to change the crate; the gate exists to
+// stop them changing it BLIND.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION =
   'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION' as const;
+
+/**
+ * A stable, comparable fingerprint of the crate a book is recorded in.
+ *
+ * Built from the NORMALISED pair, so it answers "is this the same crate the
+ * user was looking at" rather than "is this byte-identical": " Blue "/" 4 "
+ * and "blue"/"4" fingerprint the same, and a client that rendered "Bin"
+ * still matches a row storing "BIN".
+ *
+ * JSON, not a joined string — `crate_number` is free text and production holds
+ * "Blue Shelf", so ('blue','shelf 2') and ('blue shelf','2') would collide on
+ * any separator that can appear inside a value. Same reasoning as the batching
+ * key in syncBookCratePlacement.
+ */
+export function bookCrateFingerprint(
+  crateColor: string | null | undefined,
+  crateNumber: string | null | undefined,
+): string {
+  return JSON.stringify([normalizeCrateColor(crateColor), normalizeCrateNumber(crateNumber)]);
+}
 
 export interface BookCrateChangeItem {
   itemId: string;
@@ -225,11 +337,158 @@ export interface BookCrateChangeItem {
   currentLabel: string | null;
   /** "Green 2" — or null when the destination is a rack (the crate is cleared). */
   nextLabel: string | null;
+  /**
+   * `bookCrateFingerprint` of the CURRENT crate this line described. The client
+   * echoes it back to acknowledge THIS change and nothing else.
+   */
+  currentFingerprint: string;
+}
+
+/** One line of a scoped acknowledgement: "I was shown item X in crate F." */
+export interface BookCrateAcknowledgedChange {
+  itemId: string;
+  currentFingerprint: string;
 }
 
 export interface BookCrateChangeDetail {
   reason: typeof BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION;
   items: BookCrateChangeItem[];
+}
+
+/**
+ * The acknowledgement for a set of change lines: exactly the ids and
+ * fingerprints that were rendered, and nothing else.
+ *
+ * Deliberately derived from the SHOWN items rather than assembled by hand at
+ * each call site — the whole defect was a flag that existed independently of
+ * what the user saw. Two fields per item keeps a 200-book bulk placement small
+ * (~90 bytes each).
+ *
+ * The DESTINATION is deliberately NOT part of it. The server resolves the
+ * destination from the same request and reads its crate columns off the
+ * `locations` row, so there is nothing for the client to attest — and a
+ * client-computed destination fingerprint would go stale the moment
+ * `findOrCreateRackOrCrate` reuses an existing "Blue #4" for a typed "blue #4",
+ * producing a mismatch the client could never resolve.
+ */
+export function toBookCrateAcknowledgement(
+  items: ReadonlyArray<Pick<BookCrateChangeItem, 'itemId' | 'currentFingerprint'>>,
+): BookCrateAcknowledgedChange[] {
+  return items.map((i) => ({ itemId: i.itemId, currentFingerprint: i.currentFingerprint }));
+}
+
+/**
+ * Did we already acknowledge EXACTLY this refusal?
+ *
+ * The client asks the user again whenever the server's payload says something
+ * its last acknowledgement did not cover — which is precisely the stale-snapshot
+ * case: the dialog showed "Blue 4", acknowledged Blue 4, and the server came
+ * back naming Red 7. Re-asking there is the whole point of the scoped
+ * acknowledgement; re-asking when the payload is identical to what we already
+ * answered would be a loop, so that case falls through to the plain error.
+ *
+ * Order-insensitive: a 200-book batch must not re-ask because the server
+ * enumerated the same books in a different order.
+ */
+export function bookCrateAcknowledgementsMatch(
+  sent: ReadonlyArray<BookCrateAcknowledgedChange> | null | undefined,
+  required: ReadonlyArray<BookCrateAcknowledgedChange>,
+): boolean {
+  const key = (a: BookCrateAcknowledgedChange) => `${a.itemId} ${a.currentFingerprint}`;
+  const have = new Set((sent ?? []).map(key));
+  return required.every((r) => have.has(key(r)));
+}
+
+/**
+ * Index an acknowledgement for lookup. FIRST entry per item wins: a caller
+ * that sends two fingerprints for one book is trying to cover both answers to
+ * a question it was only asked once.
+ */
+export function bookCrateAcknowledgementIndex(
+  ack: ReadonlyArray<BookCrateAcknowledgedChange> | null | undefined,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const a of ack ?? []) {
+    if (!a || typeof a.itemId !== 'string') continue;
+    if (out.has(a.itemId)) continue;
+    out.set(a.itemId, a.currentFingerprint);
+  }
+  return out;
+}
+
+/**
+ * Was THIS change — this item, in this crate, right now — the one the client
+ * showed and the user agreed to?
+ */
+export function isBookCrateChangeAcknowledged(
+  index: ReadonlyMap<string, string>,
+  change: Pick<BookCrateChangeItem, 'itemId' | 'currentFingerprint'>,
+): boolean {
+  return index.get(change.itemId) === change.currentFingerprint;
+}
+
+/**
+ * ONE constructor for a change line, so the fingerprint can never drift from
+ * the labels it fingerprints. Returns null when nothing changes — the caller
+ * must then NOT confirm.
+ *
+ * Both halves build their lines through here: the server gate (from the row it
+ * just read) and the bulk dialog's local prediction (from its snapshot). That
+ * is what makes a stale prediction detectable rather than authoritative — the
+ * two fingerprints are computed by the same function from the same fields, so
+ * they match exactly when, and only when, the snapshot is still true.
+ */
+export function describeBookCrateConflict(
+  input: BookCratePlacementInput & { itemId: string; itemName: string },
+): BookCrateChangeItem | null {
+  const cmp = compareBookCratePlacement(input);
+  if (!cmp.changed) return null;
+  return {
+    itemId: input.itemId,
+    itemName: input.itemName,
+    currentLabel: cmp.currentLabel,
+    nextLabel: cmp.nextLabel,
+    currentFingerprint: bookCrateFingerprint(input.currentColor, input.currentNumber),
+  };
+}
+
+/**
+ * Will the reconciliation ACTUALLY rewrite this book's summary after this
+ * placement — or will it deliberately skip?
+ *
+ * `syncBookCratePlacement` only writes when every PLACED holding resolves to a
+ * single rack/crate; a book whose stock is split across two placements is left
+ * alone, because stamping the newest crate would assert something false about
+ * the other half. For this org that skip is the COMMON outcome, not the rare
+ * one — 405 units sit directly on Site DC4 (migration 0292), a NULL-kind
+ * location that is a perfectly real second placement.
+ *
+ * The gate therefore has to ask the same question the sync will answer, or it
+ * demands acknowledgement for a change that provably cannot happen: the
+ * operator is told "crate 4 will be cleared", clicks Continue, and nothing is
+ * cleared. A confirmation that is routinely false trains people to click
+ * through the one that is true.
+ *
+ * `placedHoldings` must already EXCLUDE staging/unplaced (stock waiting to be
+ * put away is not a location the book is in) — same filter the sync applies.
+ * Returns true when the destination would be the only placement left, which is
+ * exactly when the sync writes.
+ */
+export function bookCratePlacementWillSync(input: {
+  placedHoldings: ReadonlyArray<{ locationId: string; quantity: number }>;
+  destinationLocationId: string;
+  fromLocationId: string;
+  quantity: number;
+}): boolean {
+  for (const h of input.placedHoldings) {
+    if (h.locationId === input.destinationLocationId) continue;
+    // This placement drains the source; a holding it empties is not a rival
+    // placement afterwards.
+    const remaining =
+      h.locationId === input.fromLocationId ? h.quantity - input.quantity : h.quantity;
+    if (remaining > 0) return false;
+  }
+  return true;
 }
 
 /**
@@ -240,6 +499,12 @@ export interface BookCrateChangeDetail {
  * (another conflict, a details-less error) returns null and the caller falls
  * back to showing the plain message — a malformed payload must never render
  * an empty "are you sure?" with nothing in it.
+ *
+ * `currentFingerprint` is REQUIRED, and a payload missing one is rejected
+ * outright. A change line that cannot be acknowledged cannot be answered: the
+ * dialog would render "Continue placement", send an acknowledgement that
+ * matches nothing, and be refused again forever. Falling back to the plain
+ * error message is the honest outcome.
  */
 export function parseBookCrateChangeDetail(details: unknown): BookCrateChangeDetail | null {
   if (!details || typeof details !== 'object') return null;
@@ -251,11 +516,13 @@ export function parseBookCrateChangeDetail(details: unknown): BookCrateChangeDet
     if (!raw || typeof raw !== 'object') return null;
     const it = raw as Record<string, unknown>;
     if (typeof it.itemId !== 'string' || typeof it.itemName !== 'string') return null;
+    if (typeof it.currentFingerprint !== 'string' || it.currentFingerprint.length === 0) return null;
     items.push({
       itemId: it.itemId,
       itemName: it.itemName,
       currentLabel: typeof it.currentLabel === 'string' ? it.currentLabel : null,
       nextLabel: typeof it.nextLabel === 'string' ? it.nextLabel : null,
+      currentFingerprint: it.currentFingerprint,
     });
   }
   return { reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION, items };
@@ -308,7 +575,12 @@ export function describeBookCrateChange(input: BookCratePlacementInput): string[
  * always reads the same way; books with no recorded crate sort last because
  * they are the uninteresting case (nothing is being destroyed for them).
  */
-export function summarizeBookCrateChanges(items: BookCrateChangeItem[]): {
+export function summarizeBookCrateChanges(
+  // Structurally typed to the two fields it reads, not to the full change
+  // line: this is presentation, and it has no business requiring the
+  // acknowledgement fingerprint just to count groups.
+  items: ReadonlyArray<Pick<BookCrateChangeItem, 'currentLabel' | 'nextLabel'>>,
+): {
   total: number;
   nextLabel: string | null;
   groups: Array<{ currentLabel: string | null; count: number }>;

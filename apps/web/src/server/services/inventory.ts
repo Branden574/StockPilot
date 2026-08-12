@@ -25,11 +25,20 @@ import type {
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
-import type { BookCrateChangeDetail, BookStorageInfo } from '@stockpilot/core';
+import type {
+  BookCrateAcknowledgedChange,
+  BookCrateChangeDetail,
+  BookCrateChangeItem,
+  BookStorageInfo,
+} from '@stockpilot/core';
 import {
   BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
+  bookCrateAcknowledgementIndex,
+  bookCratePlacementWillSync,
   buildVariantKey,
-  compareBookCratePlacement,
+  normalizeCrateColorForWrite,
+  describeBookCrateConflict,
+  isBookCrateChangeAcknowledged,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
@@ -501,12 +510,14 @@ export type { PlaceDest } from '@/lib/locations/destination-option';
 
 /**
  * Thrown when a placement would OVERWRITE a book's recorded crate and the
- * caller has not acknowledged it. Carried on ServiceError.details so the
- * action layer can forward it verbatim; the client retries the SAME request
- * with `acknowledgeCrateChange: true`.
+ * caller has not acknowledged THAT change. Carried on ServiceError.details so
+ * the action layer can forward it verbatim; the client retries the SAME
+ * request with `acknowledgedCrateChanges` built from this payload — id plus
+ * crate fingerprint per line, never a blanket boolean.
  *
- * Every field here is safe to show a user: two rendered labels and the item's
- * own name. No ids, no raw DB text.
+ * Every field here is safe to show a user: two rendered labels, the item's own
+ * name, and a fingerprint of the crate that name is recorded in. No raw DB
+ * text.
  *
  * DECLARED IN @stockpilot/core, re-exported here. The client component that
  * renders this refusal cannot import a `server-only` service, and a second
@@ -2034,7 +2045,10 @@ export class InventoryService {
     if (input.itemType === 'book') {
       overrides.book_rack_number = dupRack.number;
       overrides.book_rack_row = dupRack.row;
-      overrides.book_crate_color = input.crateColor;
+      // NORMALISE on write — the item summary's crate color is compared and
+      // rendered through the CRATE_COLORS registry, so mixed case must not
+      // enter it any more than it may enter locations.crate_color.
+      overrides.book_crate_color = normalizeCrateColorForWrite(input.crateColor);
       overrides.book_crate_number = input.crateNumber;
       overrides.bin_location = `${rackLabel} · ${input.crateColor}${input.crateNumber}`;
     } else {
@@ -4319,15 +4333,34 @@ export class InventoryService {
   /**
    * THE CONFIRMATION GATE. Called BEFORE any stock moves.
    *
-   * Compares each book's DB-current crate against the crate the destination
-   * really carries. If a placement would overwrite (or erase) a crate a human
-   * already recorded and `acknowledgeCrateChange` is not true, this throws a
-   * `conflict` ServiceError whose `details` carry the structured
-   * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION payload — and NO STOCK MOVES. The
-   * client re-sends the identical request with the acknowledgement set.
+   * Order matters, and it is the whole fix:
+   *
+   *   1. COMPUTE the conflict set from the rows just read. Always. There is no
+   *      argument that skips this step.
+   *   2. DROP the conflicts the reconciliation provably will not perform (see
+   *      `bookCratePlacementWillSync`) — a prompt for a change that cannot
+   *      happen is a false alarm, and this org gets it on the common path.
+   *   3. WAIVE only the conflicts the caller was actually SHOWN, matched by
+   *      item id AND crate fingerprint.
+   *   4. REFUSE the rest with the fresh payload, so the client re-confirms
+   *      against current truth. NO STOCK MOVES on that path.
+   *
+   * `opts.acknowledged` used to be a bare boolean, and step 1 was skipped
+   * whenever it was set — so "the user approved this change" and "do not
+   * compare at all" were the same request. Combined with a client that derived
+   * the flag from its render-time snapshot, the first and only request already
+   * carried it: a book edited to Red 7 after the page rendered was silently
+   * erased by a confirmation that named Blue 4. An acknowledgement now proves
+   * the client was looking at the value that is in the row NOW.
    *
    * First assignment (the book has no crate recorded) and a placement into the
    * same crate both pass silently: nothing is being destroyed.
+   *
+   * `opts.moves` is what makes step 2 possible — the source holding and
+   * quantity per item, so the gate can tell whether this placement leaves the
+   * destination as the book's only placement. FAIL-CLOSED: an item with no
+   * entry (or a holdings read that errors) is treated as "the sync will write",
+   * i.e. it still asks.
    *
    * Returns the summaries it read so the caller can reuse them for the audit
    * before→after without a second query.
@@ -4335,40 +4368,135 @@ export class InventoryService {
   async assertBookCratePlacementAllowed(
     itemIds: string[],
     dest: PlaceDest,
-    opts: { acknowledgeCrateChange?: boolean } = {},
+    opts: {
+      acknowledged?: ReadonlyArray<BookCrateAcknowledgedChange>;
+      moves?: ReadonlyMap<string, { fromLocationId: string; quantity: number }>;
+      /** The resolved destination `locations.id`. Required for step 2. */
+      toLocationId?: string;
+    } = {},
   ): Promise<Map<string, { name: string; crateColor: string | null; crateNumber: string | null }>> {
     const summaries = await this.readBookCrateSummaries(itemIds);
-    if (summaries.size === 0 || opts.acknowledgeCrateChange) return summaries;
+    if (summaries.size === 0) return summaries;
 
-    const conflicts: BookCrateChangeDetail['items'] = [];
+    // 1. THE CONFLICT SET, from the row just read — never from the caller.
+    const conflicts: BookCrateChangeItem[] = [];
     for (const [itemId, current] of summaries) {
-      const cmp = compareBookCratePlacement({
+      const conflict = describeBookCrateConflict({
+        itemId,
+        itemName: current.name,
         currentColor: current.crateColor,
         currentNumber: current.crateNumber,
         nextColor: dest.crateColor ?? null,
         nextNumber: dest.crateNumber ?? null,
       });
-      if (!cmp.changed) continue;
-      conflicts.push({
-        itemId,
-        itemName: current.name,
-        currentLabel: cmp.currentLabel,
-        nextLabel: cmp.nextLabel,
-      });
+      if (conflict) conflicts.push(conflict);
     }
     if (conflicts.length === 0) return summaries;
 
+    // 2. Drop the ones whose summary the reconciliation will deliberately
+    //    leave alone. Only reached when something genuinely conflicts, so the
+    //    common placement still costs exactly one query.
+    const willSync = await this.readBookCrateSyncPrediction(
+      conflicts.map((c) => c.itemId),
+      opts,
+    );
+    const real = conflicts.filter((c) => willSync.get(c.itemId) !== false);
+    if (real.length === 0) return summaries;
+
+    // 3. Waive ONLY what was shown, item by item.
+    const ackIndex = bookCrateAcknowledgementIndex(opts.acknowledged);
+    const unacknowledged = real.filter((c) => !isBookCrateChangeAcknowledged(ackIndex, c));
+    if (unacknowledged.length === 0) return summaries;
+
+    // 4. Refuse — carrying EVERY real conflict, not just the unacknowledged
+    //    ones. The client rebuilds its acknowledgement from this payload, so a
+    //    partial payload would drop the lines it already answered and refuse
+    //    the retry forever.
     const detail: BookCrateChangeDetail = {
       reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
-      items: conflicts,
+      items: real,
     };
     throw new ServiceError(
       'conflict',
-      conflicts.length === 1
-        ? `${conflicts[0]!.itemName} is recorded in ${conflicts[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${conflicts[0]!.nextLabel ?? 'no crate'}.`
-        : `${conflicts.length} books are recorded in a different crate. Placing them here will change that.`,
+      real.length === 1
+        ? `${real[0]!.itemName} is recorded in ${real[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${real[0]!.nextLabel ?? 'no crate'}.`
+        : `${real.length} books are recorded in a different crate. Placing them here will change that.`,
       detail as unknown as Record<string, unknown>,
     );
+  }
+
+  /**
+   * Per item: will `syncBookCratePlacement` actually rewrite the summary after
+   * this placement, or will it skip because the book stays split?
+   *
+   * Reads the same holdings the reconciliation will read, with the SAME
+   * discipline: no `.in('locations.kind', …)` filter (recurring pattern #23 —
+   * that drops NULL-kind rows, and a NULL-kind Site holding is precisely the
+   * "this book is also somewhere else" evidence the split rule needs), and
+   * staging/unplaced classified out in JS.
+   *
+   * FAIL-CLOSED everywhere: no `toLocationId`, no per-item move, or a failed
+   * read all answer "assume it writes", which keeps the confirmation. The one
+   * thing that must never happen is waiving a prompt for a write that then
+   * happens.
+   *
+   * RACE, accepted and bounded: a concurrent pick could drain the rival holding
+   * between this read and the sync, so a waived placement could end up writing.
+   * The window is one request, and what it writes is the location the stock
+   * demonstrably now sits in — the summary follows physical truth, which is the
+   * module's whole rule. The opposite trade (asking on every split placement
+   * forever, for an org where the split is the normal case) trains operators to
+   * click through the prompt that matters.
+   */
+  private async readBookCrateSyncPrediction(
+    itemIds: string[],
+    opts: {
+      moves?: ReadonlyMap<string, { fromLocationId: string; quantity: number }>;
+      toLocationId?: string;
+    },
+  ): Promise<Map<string, boolean>> {
+    const out = new Map<string, boolean>();
+    const { moves, toLocationId } = opts;
+    if (!toLocationId || !moves || moves.size === 0) return out;
+    const known = itemIds.filter((id) => moves.has(id));
+    if (known.length === 0) return out;
+
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('item_id, location_id, quantity, locations!inner(id, kind, type)')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', known)
+      .gt('quantity', 0);
+    if (error) return out;
+
+    const placedByItem = new Map<string, Array<{ locationId: string; quantity: number }>>();
+    for (const row of (data ?? []) as unknown as Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+      locations: { kind: string | null; type: string | null } | null;
+    }>) {
+      const loc = row.locations;
+      if (!loc) continue;
+      if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
+      const list = placedByItem.get(row.item_id) ?? [];
+      list.push({ locationId: row.location_id, quantity: row.quantity });
+      placedByItem.set(row.item_id, list);
+    }
+
+    for (const itemId of known) {
+      const move = moves.get(itemId)!;
+      out.set(
+        itemId,
+        bookCratePlacementWillSync({
+          placedHoldings: placedByItem.get(itemId) ?? [],
+          destinationLocationId: toLocationId,
+          fromLocationId: move.fromLocationId,
+          quantity: move.quantity,
+        }),
+      );
+    }
+    return out;
   }
 
   /**
@@ -4498,7 +4626,11 @@ export class InventoryService {
         continue;
       }
       const [loc] = [...placed.values()];
-      const color = loc!.crate_color?.trim() || null;
+      // Normalised, not raw: this value is copied onto the ITEM summary, where
+      // it is compared against the destination's crate on the next placement.
+      // Copying a legacy "Blue" through verbatim would seed the item with a
+      // spelling the write path no longer produces.
+      const color = normalizeCrateColorForWrite(loc!.crate_color);
       const number = loc!.crate_number?.trim() || null;
       // JSON, not a space-joined string. `crate_number` is FREE TEXT and
       // production already stores values containing a space ("Blue Shelf"), so

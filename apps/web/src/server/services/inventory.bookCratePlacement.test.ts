@@ -1,3 +1,4 @@
+import { bookCrateFingerprint } from '@stockpilot/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
@@ -133,12 +134,15 @@ describe('assertBookCratePlacementAllowed', () => {
           itemName: 'Persepolis',
           currentLabel: 'Blue 4',
           nextLabel: 'Green 2',
+          // The payload names the crate it is refusing over, so the client's
+          // acknowledgement can be about THAT crate and nothing else.
+          currentFingerprint: bookCrateFingerprint('blue', '4'),
         },
       ],
     });
   });
 
-  it('PASSES the identical placement once acknowledgeCrateChange is true', async () => {
+  it('PASSES once the caller acknowledges THAT SPECIFIC change', async () => {
     const { svc } = svcWith({
       'inventory_items.select': {
         data: [
@@ -153,7 +157,101 @@ describe('assertBookCratePlacementAllowed', () => {
 
     await expect(
       svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
-        acknowledgeCrateChange: true,
+        acknowledged: [
+          { itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('blue', '4') },
+        ],
+      }),
+    ).resolves.toBeInstanceOf(Map);
+  });
+
+  it('a STALE acknowledgement is refused, and the refusal names the CURRENT crate', async () => {
+    // THE DATA-LOSS BUG. The staging tab rendered "Blue 4"; someone re-crated
+    // the book to Red 7 from the item screen; the operator places onto a rack.
+    // The client's first and only request already carried an acknowledgement —
+    // and the gate used to return before comparing anything, so Red 7 was
+    // destroyed by a confirmation that named Blue 4.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'red',
+            book_crate_number: '7',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const err = (await svc
+      .assertBookCratePlacementAllowed([BOOK_A], RACK_22B, {
+        acknowledged: [
+          { itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('blue', '4') },
+        ],
+      })
+      .catch((e: unknown) => e)) as ServiceError;
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err.code).toBe('conflict');
+    // Re-asked against CURRENT truth, not the snapshot the client sent.
+    expect(err.details).toMatchObject({
+      items: [{ currentLabel: 'Red 7', currentFingerprint: bookCrateFingerprint('red', '7') }],
+    });
+    expect(err.message).toContain('Red 7');
+  });
+
+  it('acknowledging one book does not waive ANOTHER book in the same batch', async () => {
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+          itemRow(BOOK_B, 'Maus I', 'book', {
+            book_crate_color: 'red',
+            book_crate_number: '7',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const err = (await svc
+      .assertBookCratePlacementAllowed([BOOK_A, BOOK_B], CRATE_GREEN_2, {
+        acknowledged: [
+          { itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('blue', '4') },
+        ],
+      })
+      .catch((e: unknown) => e)) as ServiceError;
+
+    expect(err.code).toBe('conflict');
+    // The payload carries EVERY real conflict, not just the unanswered one —
+    // the client rebuilds its acknowledgement from this list, so dropping the
+    // already-answered line would refuse the retry forever.
+    const detail = err.details as { items: Array<{ itemId: string }> };
+    expect(detail.items.map((i) => i.itemId)).toEqual([BOOK_A, BOOK_B]);
+  });
+
+  it('a fingerprint matching a DIFFERENT spelling of the same crate still waives', async () => {
+    // "Bin" and "BIN" are one crate, and a client that rendered either has seen
+    // the same value. Normalisation lives in the fingerprint, not at the seam.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'BLUE',
+            book_crate_number: ' Bin ',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    await expect(
+      svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+        acknowledged: [
+          { itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('blue', 'BIN') },
+        ],
       }),
     ).resolves.toBeInstanceOf(Map);
   });
@@ -275,6 +373,100 @@ describe('assertBookCratePlacementAllowed', () => {
       svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2),
     ).resolves.toBeInstanceOf(Map);
     expect(stub.fromCalls).toContain('inventory_items');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // …and never ASK about a change that provably will not happen.
+  //
+  // syncBookCratePlacement deliberately SKIPS a book whose stock is split
+  // across two placements. For this org that is the common outcome, not the
+  // rare one (405 units sit directly on Site DC4 — migration 0292), so the
+  // gate used to raise a destructive-edit prompt and then change nothing.
+  // ─────────────────────────────────────────────────────────────────────────
+  const CRATE_GREEN_2_ID = 'loc-green-2';
+  const blueFourItems = {
+    'inventory_items.select': {
+      data: [
+        itemRow(BOOK_A, 'Persepolis', 'book', {
+          book_crate_color: 'blue',
+          book_crate_number: '4',
+        }),
+      ],
+      error: null,
+    },
+  };
+
+  it('does NOT ask when the book stays SPLIT — the summary will be left alone', async () => {
+    const { svc } = svcWith({
+      ...blueFourItems,
+      'item_stock_levels.select': {
+        // Also sitting on a NULL-kind Site. Not a system bucket, so it counts.
+        data: [holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' })],
+        error: null,
+      },
+    });
+
+    await expect(
+      svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+        toLocationId: CRATE_GREEN_2_ID,
+        moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 5 }]]),
+      }),
+    ).resolves.toBeInstanceOf(Map);
+  });
+
+  it('STILL asks when the destination becomes the only placement', async () => {
+    const { svc } = svcWith({
+      ...blueFourItems,
+      'item_stock_levels.select': {
+        // Everything is in staging — a system bucket, so nothing rivals the
+        // destination and the sync will genuinely rewrite the summary.
+        data: [holding(BOOK_A, 'loc-staging', { kind: 'staging' })],
+        error: null,
+      },
+    });
+
+    const err = (await svc
+      .assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+        toLocationId: CRATE_GREEN_2_ID,
+        moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 5 }]]),
+      })
+      .catch((e: unknown) => e)) as ServiceError;
+    expect(err.code).toBe('conflict');
+  });
+
+  it('FAILS CLOSED: a holdings read error keeps the confirmation', async () => {
+    const { svc } = svcWith({
+      ...blueFourItems,
+      'item_stock_levels.select': { data: null, error: { message: 'connection reset' } },
+    });
+
+    const err = (await svc
+      .assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+        toLocationId: CRATE_GREEN_2_ID,
+        moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 5 }]]),
+      })
+      .catch((e: unknown) => e)) as ServiceError;
+    expect(err.code).toBe('conflict');
+  });
+
+  it('costs NO holdings read when nothing conflicts — the fast path stays fast', async () => {
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'green',
+            book_crate_number: '2',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    await svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+      toLocationId: CRATE_GREEN_2_ID,
+      moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 5 }]]),
+    });
+    expect(stub.fromCalls).not.toContain('item_stock_levels');
   });
 });
 
@@ -482,7 +674,10 @@ describe('syncBookCratePlacement', () => {
     const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
     expect(calls).toHaveLength(2);
     expect(calls.map((c) => c.args)).toEqual([
-      { p_item_ids: [BOOK_A], p_crate_color: 'Blue', p_crate_number: 'Shelf 2' },
+      // 'Blue' canonicalises to the registry slug on the way onto the item
+      // summary; 'Blue Shelf' is not a registry color, so it keeps the only
+      // spelling anyone has of it. Neither batch merges into the other.
+      { p_item_ids: [BOOK_A], p_crate_color: 'blue', p_crate_number: 'Shelf 2' },
       { p_item_ids: [BOOK_B], p_crate_color: 'Blue Shelf', p_crate_number: '2' },
     ]);
   });

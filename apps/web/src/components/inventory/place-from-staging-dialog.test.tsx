@@ -1,4 +1,4 @@
-import type { BookStorageInfo } from '@stockpilot/core';
+import { bookCrateFingerprint, type BookStorageInfo } from '@stockpilot/core';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -232,7 +232,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
     // Nothing is being overwritten, so nothing is acknowledged.
-    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgeCrateChange).toBeUndefined();
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
 
   it('a DIFFERENT crate warns naming the OLD and the NEW value, and Go back returns to the form', async () => {
@@ -267,7 +267,10 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
     expect(mockPlaceStockAction.mock.calls[0]![0]).toMatchObject({
       destination: { existingLocationId: 'c-blue42' },
-      acknowledgeCrateChange: true,
+      // SCOPED to the crate the dialog just named — never a blanket "yes".
+      acknowledgedCrateChanges: [
+        { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+      ],
     });
   });
 
@@ -305,7 +308,9 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
     expect(mockPlaceStockAction.mock.calls[0]![0]).toMatchObject({
       destination: { newRack: { warehouseId: 'wh-1', crateColor: 'green', crateNumber: '7' } },
-      acknowledgeCrateChange: true,
+      acknowledgedCrateChanges: [
+        { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+      ],
     });
   });
 
@@ -358,6 +363,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
               itemName: 'The Outsiders',
               currentLabel: 'Blue 4',
               nextLabel: 'Blue 42',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
             },
           ],
         },
@@ -369,14 +375,144 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
-    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgeCrateChange).toBeUndefined();
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
     const confirm = screen.getByRole('alertdialog');
     expect(confirm).toHaveTextContent('1 title will be recorded in Blue 42');
     expect(confirm).toHaveTextContent('1 title now in Blue 4');
 
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(2);
-    expect(mockPlaceStockAction.mock.calls[1]![0].acknowledgeCrateChange).toBe(true);
+    // Built from the SERVER's payload, not from the client's own snapshot.
+    expect(mockPlaceStockAction.mock.calls[1]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+    ]);
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE PREDICTING PATH — what the FIRST request actually carries.
+  //
+  // Every test above this block that exercised the retry set bookStorage:null
+  // precisely so nothing was predicted, which left the predicting path — the
+  // normal case for all 114 books carrying book_crate_* — untested for what it
+  // sends. It sent a blanket `acknowledgeCrateChange: true` on its first and
+  // only request, and the server skipped the comparison entirely.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it('the FIRST request from a PREDICTING dialog carries no blanket waiver', async () => {
+    const user = userEvent.setup();
+    renderBookDialog(); // bookStorage = Blue 4, so the prediction DOES fire
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #42');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+
+    const sent = mockPlaceStockAction.mock.calls[0]![0] as Record<string, unknown>;
+    // No boolean off-switch of any spelling survives.
+    expect(sent.acknowledgeCrateChange).toBeUndefined();
+    expect(Object.values(sent).some((v) => v === true)).toBe(false);
+    // What it does carry names the item AND the crate it displayed.
+    expect(sent.acknowledgedCrateChanges).toEqual([
+      { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+    ]);
+  });
+
+  it('a rack-creation confirmation does NOT smuggle a crate acknowledgement', async () => {
+    const user = userEvent.setup();
+    // Nothing recorded, so the only question is "create rack 100-A?". Answering
+    // it must not also answer a crate question the user was never asked.
+    renderBookDialog({ bookStorage: null });
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), '100-A');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+  });
+
+  it('a STALE snapshot is refused, re-confirmed against fresh truth, and Red 7 survives', async () => {
+    const user = userEvent.setup();
+    // Staging rendered "Blue 4". Since then the book was re-crated to Red 7
+    // from the item screen, so the server refuses the pre-acknowledged request.
+    mockPlaceStockAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'The Outsiders is recorded in Red 7. Placing it here will change that to no crate.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'book-1',
+              itemName: 'The Outsiders',
+              currentLabel: 'Red 7',
+              nextLabel: null,
+              currentFingerprint: bookCrateFingerprint('red', '7'),
+            },
+          ],
+        },
+      },
+    });
+    renderBookDialog(); // snapshot says Blue 4
+    await openDialog(user);
+    await chooseDestination(user, '22-B');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // The dialog first asks about the crate it can see.
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Crate number 4 will be cleared.');
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+
+    // ...and that acknowledgement named Blue 4, which is not what the row says.
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+    ]);
+    // Refused. RED 7 SURVIVES: the retry has not been sent yet, and the user is
+    // being asked again — this time about Red 7.
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Red 7');
+    expect(confirm).not.toHaveTextContent('Blue 4');
+
+    // Only an explicit acknowledgement OF RED 7 lets it through.
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(2);
+    expect(mockPlaceStockAction.mock.calls[1]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('red', '7') },
+    ]);
+  });
+
+  it('a refusal that repeats what we ALREADY acknowledged is an error, not a loop', async () => {
+    const user = userEvent.setup();
+    const refusal = {
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'The Outsiders is recorded in Blue 4. Placing it here will change that to Blue 42.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'book-1',
+              itemName: 'The Outsiders',
+              currentLabel: 'Blue 4',
+              nextLabel: 'Blue 42',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+            },
+          ],
+        },
+      },
+    };
+    mockPlaceStockAction.mockResolvedValue(refusal);
+    renderBookDialog();
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #42');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+
+    // The acknowledgement matched the payload exactly, so re-asking the same
+    // question would spin forever. It surfaces the error instead.
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockToast.error).toHaveBeenCalledWith(refusal.error.message);
   });
 
   it('disables both confirmation buttons while the placement is in flight', async () => {

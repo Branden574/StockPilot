@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { formatRackLabel, normalizeRackFields, parseRackLabel } from '@stockpilot/core';
+import {
+  formatRackLabel,
+  normalizeCrateColorForWrite,
+  normalizeRackFields,
+  parseRackLabel,
+} from '@stockpilot/core';
 import { z } from 'zod';
 
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
@@ -100,7 +105,19 @@ export class LocationsService {
         // is written, so normalising here covers every rack-creating surface.
         rack_number: rack.number || null,
         rack_row: rack.row,
-        crate_color: input.crateColor ?? null,
+        // NORMALISE the crate color on the way in — this insert is the ONLY
+        // place `locations.crate_color` is written, so it is the one gate that
+        // can keep mixed case out of the column. It gets there through shipped
+        // UI: the Transfer dialog's crate-color box is free text ("e.g. Blue")
+        // and `findOrCreateRackOrCrate` dedupes on `lower(name)`, so a row
+        // created as "Blue" keeps that spelling forever and every reader that
+        // matched the registry exactly then dropped the color. A known color
+        // stores as its slug ("blue"); an unknown one keeps the user's own
+        // spelling, because it is the only record of a color the registry has
+        // never heard of. Every rack/crate-creating surface — both put-away
+        // dialogs, the Transfer dialog, the bulk Set-rack path and the mobile
+        // /api/v1 transfer route — reaches the column through here.
+        crate_color: normalizeCrateColorForWrite(input.crateColor),
         crate_number: input.crateNumber ?? null,
       })
       .select('*')

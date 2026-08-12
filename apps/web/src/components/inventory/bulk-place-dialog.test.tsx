@@ -1,4 +1,4 @@
-import type { BookStorageInfo } from '@stockpilot/core';
+import { bookCrateFingerprint, type BookStorageInfo } from '@stockpilot/core';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -219,7 +219,17 @@ describe('BulkPlaceDialog — book crates', () => {
 
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
     expect(mockBulkPlace).toHaveBeenCalledTimes(1);
-    expect(mockBulkPlace.mock.calls[0]![0].acknowledgeCrateChange).toBe(true);
+    // One entry per LISTED title, each pinned to the crate it was listed in.
+    // The two books with nothing recorded are not overwrites, so they are
+    // absent — a click on Continue answers only the question that was asked.
+    const ack = mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges as Array<{
+      itemId: string;
+      currentFingerprint: string;
+    }>;
+    expect(ack).toHaveLength(6);
+    expect(ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('blue', '4'))).toHaveLength(4);
+    expect(ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('green', '2'))).toHaveLength(2);
+    expect(ack.some((a) => a.itemId.startsWith('none-'))).toBe(false);
   });
 
   it('a RACK destination warns that every recorded crate is cleared', async () => {
@@ -245,7 +255,7 @@ describe('BulkPlaceDialog — book crates', () => {
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockBulkPlace).toHaveBeenCalledTimes(1);
-    expect(mockBulkPlace.mock.calls[0]![0].acknowledgeCrateChange).toBeUndefined();
+    expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
 
   it("re-renders the SERVER's refusal and retries it acknowledged", async () => {
@@ -258,8 +268,20 @@ describe('BulkPlaceDialog — book crates', () => {
         details: {
           reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
           items: [
-            { itemId: 'i-1', itemName: 'Persepolis', currentLabel: 'Blue 4', nextLabel: 'Red 7' },
-            { itemId: 'i-2', itemName: 'Maus I', currentLabel: 'Green 2', nextLabel: 'Red 7' },
+            {
+              itemId: 'i-1',
+              itemName: 'Persepolis',
+              currentLabel: 'Blue 4',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+            },
+            {
+              itemId: 'i-2',
+              itemName: 'Maus I',
+              currentLabel: 'Green 2',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('green', '2'),
+            },
           ],
         },
       },
@@ -274,7 +296,74 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(confirm).toHaveTextContent('2 titles will be recorded in Red 7');
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
     expect(mockBulkPlace).toHaveBeenCalledTimes(2);
-    expect(mockBulkPlace.mock.calls[1]![0].acknowledgeCrateChange).toBe(true);
+    expect(mockBulkPlace.mock.calls[1]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'i-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+      { itemId: 'i-2', currentFingerprint: bookCrateFingerprint('green', '2') },
+    ]);
+  });
+
+  it('the FIRST request from a PREDICTING bulk dialog carries no blanket waiver', async () => {
+    const user = userEvent.setup();
+    // Every row carries a summary, so the prediction fires — the case the
+    // earlier retry test deliberately avoided by setting bookStorage: null.
+    renderDialog(EIGHT_BOOKS);
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 8$/i }));
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+
+    const sent = mockBulkPlace.mock.calls[0]![0] as Record<string, unknown>;
+    expect(sent.acknowledgeCrateChange).toBeUndefined();
+    expect(Object.values(sent).some((v) => v === true)).toBe(false);
+    expect(Array.isArray(sent.acknowledgedCrateChanges)).toBe(true);
+  });
+
+  it('ONE stale title refuses the batch and re-asks with the crate it really holds', async () => {
+    const user = userEvent.setup();
+    // The selection shows Persepolis in Blue 4. It is really in Red 7 now, so
+    // the batch is refused even though the other five lines were accurate.
+    mockBulkPlace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: '2 books are recorded in a different crate. Placing them here will change that.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'blue-0',
+              itemName: 'Blue book 0',
+              currentLabel: 'Red 7',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('red', '7'),
+            },
+            {
+              itemId: 'green-0',
+              itemName: 'Green book 0',
+              currentLabel: 'Green 2',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('green', '2'),
+            },
+          ],
+        },
+      },
+    });
+    renderDialog(EIGHT_BOOKS);
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 8$/i }));
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+
+    // Nothing placed; asked again from the SERVER's list.
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('1 title now in Red 7');
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockBulkPlace).toHaveBeenCalledTimes(2);
+    expect(mockBulkPlace.mock.calls[1]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'blue-0', currentFingerprint: bookCrateFingerprint('red', '7') },
+      { itemId: 'green-0', currentFingerprint: bookCrateFingerprint('green', '2') },
+    ]);
   });
 
   it('names the destination on success', async () => {

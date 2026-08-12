@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { bookCrateFingerprint } from '@stockpilot/core';
+
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 // ---------------------------------------------------------------------------
@@ -136,6 +138,9 @@ function greenCrateHolding(id = BOOK_ID) {
   };
 }
 
+/** The scoped acknowledgement a client that displayed "Blue 4" would send. */
+const ACK_BLUE_4 = [{ itemId: BOOK_ID, currentFingerprint: bookCrateFingerprint('blue', '4') }];
+
 function placeInGreenCrate(over: Record<string, unknown> = {}) {
   return placeStockAction({
     itemId: BOOK_ID,
@@ -165,7 +170,7 @@ describe('placeStockAction — destination crate metadata', () => {
 
     // The request body carries ONLY a location id. There is nowhere for a
     // caller to assert what that crate is — the columns are read server-side.
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
     expect(res.ok).toBe(true);
 
     const locationSelect = stub.chainArgs.get('locations.select')![0]![0] as string;
@@ -189,7 +194,7 @@ describe('placeStockAction — destination crate metadata', () => {
       holdingRows: [greenCrateHolding()],
     });
 
-    await placeInGreenCrate({ acknowledgeCrateChange: true });
+    await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
 
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
     expect(call.args).toEqual({
@@ -221,6 +226,7 @@ describe('placeStockAction — the crate confirmation gate', () => {
             itemName: 'Persepolis',
             currentLabel: 'Blue 4',
             nextLabel: 'Green 2',
+            currentFingerprint: bookCrateFingerprint('blue', '4'),
           },
         ],
       });
@@ -233,7 +239,7 @@ describe('placeStockAction — the crate confirmation gate', () => {
   it('ack=true → the same request proceeds and the stock moves', async () => {
     installContext({ itemRows: [blueFourBook()], holdingRows: [greenCrateHolding()] });
 
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
 
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
@@ -319,12 +325,108 @@ describe('placeStockAction — the crate confirmation gate', () => {
     expect(mockTransferStock).toHaveBeenCalledOnce();
   });
 
-  it('OLDER CALLERS keep working: omitting acknowledgeCrateChange is a valid request', async () => {
+  it('a STALE acknowledgement is REFUSED and the current crate survives', async () => {
+    // The end-to-end shape of the data-loss bug: staging rendered "Blue 4",
+    // someone re-crated the book to Red 7, and the client's first and only
+    // request already carried the acknowledgement it computed from that
+    // snapshot. Nothing may move, and Red 7 must still be on the item.
+    installContext({
+      itemRows: [
+        {
+          id: BOOK_ID,
+          name: 'Persepolis',
+          item_type: 'book',
+          custom_fields: { book_crate_color: 'red', book_crate_number: '7' },
+        },
+      ],
+      holdingRows: [greenCrateHolding()],
+    });
+
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      // Re-asked against the row the server just read, not the client's idea.
+      expect(res.error.details).toMatchObject({
+        items: [
+          {
+            currentLabel: 'Red 7',
+            currentFingerprint: bookCrateFingerprint('red', '7'),
+          },
+        ],
+      });
+    }
+    // NOTHING moved and NOTHING was rewritten — Red 7 is intact.
+    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(mockStampPlacementBin).not.toHaveBeenCalled();
+  });
+
+  it('…and proceeds once THAT crate is acknowledged', async () => {
+    const stub = installContext({
+      itemRows: [
+        {
+          id: BOOK_ID,
+          name: 'Persepolis',
+          item_type: 'book',
+          custom_fields: { book_crate_color: 'red', book_crate_number: '7' },
+        },
+      ],
+      holdingRows: [greenCrateHolding()],
+    });
+
+    const res = await placeInGreenCrate({
+      acknowledgedCrateChanges: [
+        { itemId: BOOK_ID, currentFingerprint: bookCrateFingerprint('red', '7') },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    expect(call.args).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
+  });
+
+  it('does NOT ask at all when the book stays SPLIT — nothing will be rewritten', async () => {
+    // The reviewer's secondary finding. This book also holds stock in another
+    // crate, so syncBookCratePlacement will deliberately leave its summary
+    // alone. Demanding acknowledgement for a change that cannot happen trains
+    // operators to click through the prompt that matters.
+    const stub = installContext({
+      itemRows: [blueFourBook()],
+      holdingRows: [
+        greenCrateHolding(),
+        {
+          item_id: BOOK_ID,
+          location_id: 'other-crate',
+          quantity: 3,
+          locations: {
+            id: 'other-crate',
+            kind: 'crate',
+            type: 'bin',
+            crate_color: 'blue',
+            crate_number: '4',
+          },
+        },
+      ],
+    });
+
+    // NO acknowledgement of any kind.
+    const res = await placeInGreenCrate();
+
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    // ...and the summary really was left alone, exactly as promised.
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    if (res.ok) expect(res.data.crateSyncSkipped).toBe(true);
+  });
+
+  it('OLDER CALLERS keep working: omitting the acknowledgement is a valid request', async () => {
     installContext({
       itemRows: [{ id: BOOK_ID, name: 'Persepolis', item_type: 'book', custom_fields: {} }],
       holdingRows: [greenCrateHolding()],
     });
-    // No acknowledgeCrateChange key at all — parses, and places.
+    // No acknowledgedCrateChanges key at all — parses, and places.
     const res = await placeStockAction({
       itemId: BOOK_ID,
       fromLocationId: FROM_LOC,
@@ -360,7 +462,7 @@ describe('placeStockAction — summary reconciliation', () => {
       ],
     });
 
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
 
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
@@ -372,7 +474,7 @@ describe('placeStockAction — summary reconciliation', () => {
 
   it('a single-location placement does NOT report a skip', async () => {
     installContext({ itemRows: [blueFourBook()], holdingRows: [greenCrateHolding()] });
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.crateSyncSkipped).toBeUndefined();
   });
@@ -384,7 +486,7 @@ describe('placeStockAction — summary reconciliation', () => {
       setBookStorage: { data: null, error: { message: 'boom' } },
     });
 
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
 
     // The stock really moved — never hand-roll a rollback of a real movement.
     expect(mockTransferStock).toHaveBeenCalledOnce();
@@ -395,7 +497,7 @@ describe('placeStockAction — summary reconciliation', () => {
 
   it('a clean placement does NOT set crateSyncFailed', async () => {
     installContext({ itemRows: [blueFourBook()], holdingRows: [greenCrateHolding()] });
-    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    const res = await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.crateSyncFailed).toBeUndefined();
   });
@@ -454,7 +556,7 @@ describe('bulkPlaceStockAction — the crate gate applies to the whole batch', (
     const res = await bulkPlaceStockAction({
       placements: TWO,
       destination: { existingLocationId: GREEN_CRATE },
-      acknowledgeCrateChange: true,
+      acknowledgedCrateChanges: ACK_BLUE_4,
     });
 
     expect(res.ok).toBe(true);

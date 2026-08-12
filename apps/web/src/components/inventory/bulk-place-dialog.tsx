@@ -1,9 +1,12 @@
 'use client';
 
 import {
-  compareBookCratePlacement,
+  bookCrateAcknowledgementsMatch,
+  describeBookCrateConflict,
   describeNewRackPlacement,
   parseBookCrateChangeDetail,
+  toBookCrateAcknowledgement,
+  type BookCrateAcknowledgedChange,
   type BookCrateChangeItem,
   type BookStorageInfo,
 } from '@stockpilot/core';
@@ -102,7 +105,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
   const [pendingConfirm, setPendingConfirm] = React.useState<{
     content: PlacementConfirmContent;
     destination: ActionDestination;
-    acknowledgeCrateChange: boolean;
+    /**
+     * EXACTLY the crate changes this dialog listed — per book, with the crate
+     * it named fingerprinted. A book whose row changed since the selection
+     * rendered fingerprints differently, so the server refuses the batch and
+     * re-asks rather than taking one click as consent for 200 unseen changes.
+     */
+    acknowledged: BookCrateAcknowledgedChange[];
     describe: ChosenDestination | null;
   } | null>(null);
 
@@ -202,19 +211,20 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     const changed: BookCrateChangeItem[] = [];
     for (const r of rows) {
       if (r.itemType !== 'book' || !r.bookStorage) continue;
-      const cmp = compareBookCratePlacement({
+      // ONE constructor with the server gate, so the fingerprint each line
+      // carries is computed exactly the way the server will recompute it.
+      // `bookStorage` is a render-time snapshot: when it has gone stale the
+      // fingerprints simply disagree and the server re-asks — which is the
+      // point. A prediction is a courtesy, never an authority.
+      const conflict = describeBookCrateConflict({
+        itemId: r.itemId,
+        itemName: r.name,
         currentColor: r.bookStorage.crateColor,
         currentNumber: r.bookStorage.crateNumber,
         nextColor: next.color,
         nextNumber: next.number,
       });
-      if (!cmp.changed) continue;
-      changed.push({
-        itemId: r.itemId,
-        itemName: r.name,
-        currentLabel: cmp.currentLabel,
-        nextLabel: cmp.nextLabel,
-      });
+      if (conflict) changed.push(conflict);
     }
     return changed;
   }
@@ -276,7 +286,9 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
         confirmLabel: creating ? `Create and place ${rows.length}` : 'Continue placement',
       },
       destination,
-      acknowledgeCrateChange: crateItems.length > 0,
+      // Only the books this dialog actually listed, each pinned to the crate it
+      // was listed as being in.
+      acknowledged: toBookCrateAcknowledgement(crateItems),
       describe: dest,
     });
   }
@@ -297,7 +309,10 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
 
   async function place(
     destination: ActionDestination,
-    opts: { acknowledgeCrateChange?: boolean; describe?: ChosenDestination | null } = {},
+    opts: {
+      acknowledged?: BookCrateAcknowledgedChange[];
+      describe?: ChosenDestination | null;
+    } = {},
   ) {
     setSubmitting(true);
     const res = await bulkPlaceStockAction({
@@ -308,7 +323,9 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       })),
       notes: notes.trim() || undefined,
       destination,
-      ...(opts.acknowledgeCrateChange ? { acknowledgeCrateChange: true } : {}),
+      ...(opts.acknowledged && opts.acknowledged.length > 0
+        ? { acknowledgedCrateChanges: opts.acknowledged }
+        : {}),
     });
     setSubmitting(false);
 
@@ -316,9 +333,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       // The batch gate is all-or-nothing and fires BEFORE anything moves, so a
       // refusal here means nothing was placed. Re-render it from the server's
       // own payload — it names every affected book, including any our local
-      // prediction missed — and retry once with the acknowledgement.
+      // prediction missed OR got wrong — and retry with an acknowledgement
+      // built from THAT payload. Re-asked only while the payload says something
+      // our last acknowledgement did not cover; an identical refusal is a real
+      // error, not a staleness loop.
       const detail = parseBookCrateChangeDetail(res.error.details);
-      if (detail && !opts.acknowledgeCrateChange) {
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
+      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
         setPendingConfirm({
           content: {
             title: 'Change the recorded crate?',
@@ -327,11 +348,14 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
             confirmLabel: 'Continue placement',
           },
           destination,
-          acknowledgeCrateChange: true,
+          acknowledged: fresh,
           describe: opts.describe ?? null,
         });
         return;
       }
+      // Not a question we can ask again — close the confirmation rather than
+      // leave a Continue button that can only fail the same way.
+      setPendingConfirm(null);
       toast.error(res.error.message);
       return;
     }
@@ -511,7 +535,7 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
         onConfirm={() => {
           if (!pendingConfirm) return;
           void place(pendingConfirm.destination, {
-            acknowledgeCrateChange: pendingConfirm.acknowledgeCrateChange,
+            acknowledged: pendingConfirm.acknowledged,
             describe: pendingConfirm.describe,
           });
         }}

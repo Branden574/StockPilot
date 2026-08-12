@@ -448,7 +448,7 @@ export async function transferStockAction(
     // The Staging put-away (placeStockAction) gates on
     // assertBookCratePlacementAllowed and reconciles with
     // syncBookCratePlacement, because its dialog can ask the question and
-    // answer it with `acknowledgeCrateChange`. THIS action backs the Transfer
+    // answer it with `acknowledgedCrateChanges`. THIS action backs the Transfer
     // modal, which has no such affordance: adding the gate would start
     // refusing ordinary transfers, and adding the sync WITHOUT the gate would
     // silently overwrite a crate a person recorded — the exact thing the gate
@@ -488,13 +488,34 @@ export async function transferStockAction(
 // ---------------------------------------------------------------------------
 
 /**
- * `acknowledgeCrateChange` — the client's answer to the server's
- * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal. Optional and defaulting to
- * false, so every existing caller keeps working: a first assignment, a
+ * `acknowledgedCrateChanges` — the client's answer to the server's
+ * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal, SCOPED to the exact changes
+ * it displayed: one entry per book, naming the item and a fingerprint of the
+ * crate that book was shown to be in.
+ *
+ * This replaced a bare `acknowledgeCrateChange: boolean`, which the gate read
+ * as "do not compare at all" — so a stale client that showed "Blue 4" could
+ * pre-acknowledge its first and only request and silently destroy a "Red 7"
+ * written after the page rendered. A fingerprint that no longer matches the
+ * row is simply not an acknowledgement of the change the server found.
+ *
+ * Optional, so every existing caller keeps working: a first assignment, a
  * same-crate placement and every non-book placement never reach the gate at
- * all. Only a genuine overwrite needs it.
+ * all. Capped at 200, matching the bulk placement cap — one entry per
+ * placement, never more.
  */
-const acknowledgeCrateChangeSchema = z.boolean().optional().default(false);
+const acknowledgedCrateChangesSchema = z
+  .array(
+    z.object({
+      itemId: z.string().uuid(),
+      // Opaque to this layer: produced and compared by bookCrateFingerprint in
+      // @stockpilot/core. Length-capped so a forged request cannot post 200
+      // unbounded strings.
+      currentFingerprint: z.string().min(1).max(256),
+    }),
+  )
+  .max(200)
+  .optional();
 
 const placeStockSchema = z.object({
   itemId: z.string().uuid(),
@@ -502,7 +523,7 @@ const placeStockSchema = z.object({
   quantity: z.number().positive(),
   notes: z.string().max(2000).optional(),
   destination: destinationSchema,
-  acknowledgeCrateChange: acknowledgeCrateChangeSchema,
+  acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
 });
 
 export type PlaceStockInput = z.input<typeof placeStockSchema>;
@@ -588,10 +609,18 @@ export async function placeStockAction(
 
     const invSvc = new InventoryService(ctx);
     // THE GATE, before anything moves: refuse to silently overwrite a crate a
-    // human already recorded. Throws ServiceError('conflict') carrying
+    // human already recorded, waiving ONLY the specific change the client says
+    // it displayed. Throws ServiceError('conflict') carrying
     // BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION; no stock moves on that path.
+    // `moves` lets the gate skip books whose summary the reconciliation will
+    // deliberately leave alone (split holdings) instead of asking about a
+    // change that cannot happen.
     await invSvc.assertBookCratePlacementAllowed([data.itemId], dest, {
-      acknowledgeCrateChange: data.acknowledgeCrateChange,
+      acknowledged: data.acknowledgedCrateChanges,
+      toLocationId,
+      moves: new Map([
+        [data.itemId, { fromLocationId: data.fromLocationId, quantity: data.quantity }],
+      ]),
     });
 
     await invSvc.transferStock({
@@ -665,7 +694,7 @@ const bulkPlaceStockSchema = z.object({
   // inline, which meant every field added to the shared one was silently
   // dropped by bulk. There is now exactly one destination shape.
   destination: destinationSchema,
-  acknowledgeCrateChange: acknowledgeCrateChangeSchema,
+  acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
 });
 
 export type BulkPlaceStockInput = z.input<typeof bulkPlaceStockSchema>;
@@ -743,10 +772,21 @@ export async function bulkPlaceStockAction(
     // batch is refused with the structured payload naming every affected book.
     // All-or-nothing here on purpose — a half-placed batch where the user then
     // confirms would double-move the ones that already went.
+    // A batch acknowledgement is per-book, so one stale line refuses the batch
+    // and re-asks with fresh truth rather than waiving all 200.
     await invSvc.assertBookCratePlacementAllowed(
       data.placements.map((p) => p.itemId),
       dest,
-      { acknowledgeCrateChange: data.acknowledgeCrateChange },
+      {
+        acknowledged: data.acknowledgedCrateChanges,
+        toLocationId,
+        moves: new Map(
+          data.placements.map((p) => [
+            p.itemId,
+            { fromLocationId: p.fromLocationId, quantity: p.quantity },
+          ]),
+        ),
+      },
     );
     let placed = 0;
     const placedItemIds: string[] = [];

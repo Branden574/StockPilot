@@ -1,9 +1,13 @@
 'use client';
 
 import {
+  bookCrateAcknowledgementsMatch,
   describeBookCrateChange,
+  describeBookCrateConflict,
   describeNewRackPlacement,
   parseBookCrateChangeDetail,
+  toBookCrateAcknowledgement,
+  type BookCrateAcknowledgedChange,
   type BookStorageInfo,
 } from '@stockpilot/core';
 import { Loader2, PackageCheck } from 'lucide-react';
@@ -121,7 +125,13 @@ export function PlaceFromStagingDialog({
   const [pendingConfirm, setPendingConfirm] = React.useState<{
     content: PlacementConfirmContent;
     destination: ActionDestination;
-    acknowledgeCrateChange: boolean;
+    /**
+     * EXACTLY the crate changes this dialog put on screen — item id plus a
+     * fingerprint of the crate it named. Never a blanket "yes": if the row
+     * changed underneath us since it rendered, the fingerprint no longer
+     * matches and the server refuses, re-asking with current truth.
+     */
+    acknowledged: BookCrateAcknowledgedChange[];
   } | null>(null);
   // Server failures render inline (persistent) as well as via toast — same
   // rationale as StockTransferDialog: a toast alone auto-dismisses outside
@@ -201,7 +211,7 @@ export function PlaceFromStagingDialog({
   // and the "Did you mean…" one-tap alternatives share ONE write path.
   async function place(
     destination: ActionDestination,
-    opts: { acknowledgeCrateChange?: boolean; describe?: ChosenDestination } = {},
+    opts: { acknowledged?: BookCrateAcknowledgedChange[]; describe?: ChosenDestination } = {},
   ) {
     setSubmitting(true);
     setServerError(null);
@@ -211,7 +221,9 @@ export function PlaceFromStagingDialog({
       quantity: qtyNum,
       notes: notes.trim() || undefined,
       destination,
-      ...(opts.acknowledgeCrateChange ? { acknowledgeCrateChange: true } : {}),
+      ...(opts.acknowledged && opts.acknowledged.length > 0
+        ? { acknowledgedCrateChanges: opts.acknowledged }
+        : {}),
     });
     setSubmitting(false);
 
@@ -219,11 +231,14 @@ export function PlaceFromStagingDialog({
       // The server refused because this placement overwrites a crate a human
       // recorded. Our local prediction can be stale (the row may have changed
       // since the page rendered, and a non-Staging surface may not predict at
-      // all), so the refusal is rendered from ITS payload and retried with the
-      // acknowledgement. Only ever asked once: if we already acknowledged and
-      // it still refuses, that is a real error.
+      // all), so the refusal is rendered from ITS payload and retried with an
+      // acknowledgement built from THAT payload — the server's own reading of
+      // the row, not our snapshot. Asked at most once more: a refusal that
+      // survives an acknowledgement matching the server's own labels is a real
+      // error, not a staleness loop.
       const detail = parseBookCrateChangeDetail(res.error.details);
-      if (detail && !opts.acknowledgeCrateChange) {
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
+      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
         setPendingConfirm({
           content: {
             title: 'Change this book’s crate?',
@@ -232,10 +247,15 @@ export function PlaceFromStagingDialog({
             confirmLabel: 'Continue placement',
           },
           destination,
-          acknowledgeCrateChange: true,
+          acknowledged: fresh,
         });
         return;
       }
+      // Not a question we can ask again — close the confirmation and surface
+      // the error on the form behind it. Leaving an already-answered
+      // confirmation open would offer a Continue button that can only fail
+      // again, with the inline error hidden underneath it.
+      setPendingConfirm(null);
       setServerError(res.error.message);
       toast.error(res.error.message);
       return;
@@ -282,9 +302,27 @@ export function PlaceFromStagingDialog({
     // 1. Does this OVERWRITE a crate someone recorded? Predicted with the same
     //    comparator the server gate uses, against the book's summary and the
     //    destination's own crate columns (never re-typed metadata).
+    //
+    //    `bookStorage` is an RSC snapshot taken when the page rendered, so this
+    //    prediction can be WRONG — someone may have re-crated the book from the
+    //    item screen since. That is fine now and used to be a data-loss bug:
+    //    the acknowledgement below names the crate this dialog actually showed,
+    //    so a snapshot that no longer matches the row is refused by the server
+    //    and re-asked against current truth instead of waving the write through.
     const next = destinationCrate(dest);
-    const crateLines =
+    const crateChange =
       isBook && bookStorage
+        ? describeBookCrateConflict({
+            itemId,
+            itemName,
+            currentColor: bookStorage.crateColor,
+            currentNumber: bookStorage.crateNumber,
+            nextColor: next.color,
+            nextNumber: next.number,
+          })
+        : null;
+    const crateLines =
+      isBook && bookStorage && crateChange
         ? describeBookCrateChange({
             currentColor: bookStorage.crateColor,
             currentNumber: bookStorage.crateNumber,
@@ -344,7 +382,11 @@ export function PlaceFromStagingDialog({
         confirmLabel: creating ? 'Create and place' : 'Continue placement',
       },
       destination,
-      acknowledgeCrateChange: crateLines.length > 0,
+      // ONLY the change this dialog just described, fingerprinted. An empty
+      // array when the confirmation is purely about minting a rack: that
+      // question has nothing to do with the book's crate, and answering it must
+      // not also answer one the user was never asked.
+      acknowledged: crateChange ? toBookCrateAcknowledgement([crateChange]) : [],
     });
   }
 
@@ -539,7 +581,7 @@ export function PlaceFromStagingDialog({
           if (!pendingConfirm) return;
           const dest = chosenDestination();
           void place(pendingConfirm.destination, {
-            acknowledgeCrateChange: pendingConfirm.acknowledgeCrateChange,
+            acknowledged: pendingConfirm.acknowledged,
             ...(dest ? { describe: dest } : {}),
           });
         }}

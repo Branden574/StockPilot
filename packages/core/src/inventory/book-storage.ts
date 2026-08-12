@@ -112,10 +112,17 @@ function strOrNull(v: unknown): string | null {
  * not a crate — `formatCrateLabel` yields null for it.
  *
  * Color rendering goes through the CRATE_COLORS registry so a stored slug
- * ("blue") prints as its label ("Blue"). An UNRECOGNISED color is never
- * invented away: the label path drops it (the number alone identifies the
- * crate) and the location-name path keeps the raw text, because a location
- * name must stay reconstructible from what the user typed.
+ * ("blue") prints as its label ("Blue"). `getCrateColor` is case-insensitive,
+ * so a legacy row spelling it "Blue" resolves too — it used to be an exact
+ * match, and this function then dropped a well-known color as "unrecognised"
+ * and rendered the bare number.
+ *
+ * A genuinely UNRECOGNISED color is never invented away: this SUMMARY path
+ * drops it (the number alone identifies the crate) and the location-name path
+ * keeps the raw text, because a location name must stay reconstructible from
+ * what the user typed. The placement GATE keeps it too — see
+ * `formatCratePlacementLabel`, which is a different spelling on purpose and
+ * must not be re-merged with this one.
  */
 export function formatCrateLabel(
   crateColor: string | null | undefined,
