@@ -14,6 +14,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   useAnimatedValue,
 } from 'react-native';
@@ -25,8 +26,11 @@ import { API_BASE } from '@/lib/api';
 import { scanDocumentPages } from '@/lib/document-scanner';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart, type MultipartFilePart } from '@/lib/multipart-upload';
+import { buildDisplayNames } from '@/lib/po-scan-display-names';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
+
+import { PO_IMPORT_DISPLAY_NAME_MAX } from '@stockpilot/core';
 
 interface CapturedFrame {
   uri: string;
@@ -50,6 +54,17 @@ export default function ScanPo() {
   const { session } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [frames, setFrames] = React.useState<CapturedFrame[]>([]);
+  /**
+   * The human name for each capture, INDEX-ALIGNED with `frames` — the same
+   * alignment the API's `displayNames` array is defined by (see
+   * lib/po-scan-display-names). Index 0 doubles as the single combined-mode
+   * field, exactly as it does on web, so a name typed before a second page was
+   * added carries over to the first PO instead of vanishing.
+   *
+   * Deliberately NOT prefilled from the file name: a phone capture is called
+   * `image.jpg` or `po-frame-1.jpg`, which is the noise this field replaces.
+   */
+  const [names, setNames] = React.useState<string[]>([]);
   const [cameraOpen, setCameraOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // With 2+ captures: true = each file is its OWN PO import (default); false =
@@ -165,7 +180,30 @@ export default function ScanPo() {
   }
 
   function removeFrame(uri: string) {
-    setFrames((cur) => cur.filter((f) => f.uri !== uri));
+    // Remove BY INDEX so the name at that slot goes with the photo. Filtering
+    // the two lists on different criteria is how name 3 ends up on page 2.
+    const idx = frames.findIndex((f) => f.uri === uri);
+    if (idx < 0) return;
+    setFrames((cur) => cur.filter((_, i) => i !== idx));
+    setNames((cur) => cur.filter((_, i) => i !== idx));
+  }
+
+  function setName(index: number, value: string) {
+    setNames((cur) => {
+      const next = [...cur];
+      // Pad rather than leave holes: a sparse array serializes `null` holes and
+      // reads back `undefined`, which the builder would have to special-case.
+      for (let i = next.length; i < index; i++) next[i] = '';
+      next[index] = value;
+      return next;
+    });
+  }
+
+  /** Both capture lists are cleared together — a stale name must never attach
+   *  itself to the NEXT scan's first page. */
+  function resetCaptures() {
+    setFrames([]);
+    setNames([]);
   }
 
   async function submit() {
@@ -205,7 +243,11 @@ export default function ScanPo() {
       // Frames whose resize failed and were skipped — surfaced to the user
       // rather than silently omitted from the scan.
       const droppedFrames: string[] = [];
-      for (const f of frames) {
+      // Indices (into `frames`/`names`) of the frames that SURVIVE to the wire,
+      // in send order. The name array is built through this, never through the
+      // captured order — a dropped page must take its name with it.
+      const sentIndices: number[] = [];
+      for (const [frameIndex, f] of frames.entries()) {
         let uri = f.uri;
         let name = f.fileName;
         let type = f.mimeType;
@@ -236,6 +278,7 @@ export default function ScanPo() {
         // Repeated 'file' field, one per frame, in capture order — the route
         // reads form.getAll('file') and treats that order as page order.
         fileParts.push({ field: 'file', uri, fileName: name, contentType: type });
+        sentIndices.push(frameIndex);
       }
       // Every frame failed to resize: there is nothing safe to send.
       if (fileParts.length === 0) {
@@ -262,14 +305,24 @@ export default function ScanPo() {
       // hang surfaces as a retryable error instead of an endless spinner.
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 70_000);
+      // Only meaningful for 2+ frames; the server treats a single file as
+      // combined regardless. Unchanged from before naming shipped.
+      const mode = frames.length > 1 && separate ? 'separate' : 'combined';
+      // `displayNames` — ONE JSON array entry per IMPORT, built from the files
+      // ACTUALLY being sent. `null` means "omit the field", which keeps an
+      // unnamed scan byte-identical to the request this screen sent before
+      // naming existed (and is exactly what the route's old-client path
+      // expects). See lib/po-scan-display-names for the full contract.
+      const displayNames = buildDisplayNames({ names, sentIndices, mode });
       let res: Response;
       try {
         res = await postMultipart(`${API_BASE}/api/po-imports/scan`, {
           files: fileParts,
-          // Only meaningful for 2+ frames; the server treats a single file as
-          // combined regardless.
           fields: [
-            { name: 'mode', value: frames.length > 1 && separate ? 'separate' : 'combined' },
+            { name: 'mode', value: mode },
+            ...(displayNames
+              ? [{ name: 'displayNames', value: JSON.stringify(displayNames) }]
+              : []),
           ],
           headers: { Authorization: `Bearer ${token}` },
           signal: ctrl.signal,
@@ -302,7 +355,7 @@ export default function ScanPo() {
       if (json.mode === 'separate' && Array.isArray(json.imports)) {
         const made = (json.imports as unknown[]).length;
         const failedCount = Array.isArray(json.failed) ? (json.failed as unknown[]).length : 0;
-        setFrames([]);
+        resetCaptures();
         Alert.alert(
           'Imported',
           `${made} import${made === 1 ? '' : 's'} created${
@@ -337,7 +390,7 @@ export default function ScanPo() {
           { text: 'Later', style: 'cancel' },
         ],
       );
-      setFrames([]);
+      resetCaptures();
     } catch (err) {
       const msg =
         err instanceof Error && err.name === 'AbortError'
@@ -351,6 +404,11 @@ export default function ScanPo() {
       setBusy(false);
     }
   }
+
+  // 2+ captures each becoming their OWN import means each needs its OWN name,
+  // so the single field above the buttons gives way to one input per page —
+  // the same split the web scan form makes.
+  const perFileNames = frames.length > 1 && separate;
 
   if (cameraOpen) {
     return (
@@ -392,13 +450,37 @@ export default function ScanPo() {
           }}
         />
       </View>
-      <ScrollView contentContainerStyle={{ padding: space.md, paddingBottom: 200 }}>
+      <ScrollView
+        contentContainerStyle={{ padding: space.md, paddingBottom: 200 }}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Text style={styles.title}>Scan a PO</Text>
         <Text style={styles.subtitle}>
           Take a photo of a printed purchase order. Up to {MAX_FRAMES} pages —
           we extract vendor, line items, and totals automatically, then you
           review and approve right here.
         </Text>
+
+        {!perFileNames && (
+          <View style={styles.nameField}>
+            <Text style={styles.nameLabel}>PO name</Text>
+            <TextInput
+              value={names[0] ?? ''}
+              onChangeText={(v) => setName(0, v)}
+              placeholder="Example: August DC4 Book Order"
+              placeholderTextColor={theme.textMuted}
+              maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
+              editable={!busy}
+              autoCapitalize="words"
+              returnKeyType="done"
+              style={styles.nameInput}
+            />
+            <Text style={styles.nameHint}>
+              Optional — without one it is listed by its file name.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.actionRow}>
           <Pressable
@@ -430,22 +512,57 @@ export default function ScanPo() {
           </Pressable>
         </View>
 
-        {frames.length > 0 && (
-          <View style={styles.thumbnails}>
-            {frames.map((f) => (
-              <Pressable
-                key={f.uri}
-                onLongPress={() => removeFrame(f.uri)}
-                style={styles.thumbnail}
-              >
-                <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
-                <View style={styles.thumbnailOverlay}>
-                  <Text style={styles.thumbnailHint}>Hold to remove</Text>
+        {frames.length > 0 &&
+          (perFileNames ? (
+            // Each capture is its own PO, so each gets its own row + name.
+            <View style={styles.frameList}>
+              {frames.map((f, i) => (
+                <View key={f.uri} style={styles.frameRow}>
+                  <Pressable
+                    onLongPress={() => removeFrame(f.uri)}
+                    style={styles.frameRowThumb}
+                  >
+                    <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
+                    <View style={styles.thumbnailOverlay}>
+                      <Text style={styles.thumbnailHint}>Hold</Text>
+                    </View>
+                  </Pressable>
+                  <View style={styles.frameRowBody}>
+                    <Text style={styles.nameLabel}>PO {i + 1} name</Text>
+                    <TextInput
+                      value={names[i] ?? ''}
+                      onChangeText={(v) => setName(i, v)}
+                      placeholder="Example: August DC4 Book Order"
+                      placeholderTextColor={theme.textMuted}
+                      maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
+                      editable={!busy}
+                      autoCapitalize="words"
+                      returnKeyType="done"
+                      style={styles.nameInput}
+                    />
+                  </View>
                 </View>
-              </Pressable>
-            ))}
-          </View>
-        )}
+              ))}
+              <Text style={styles.nameHint}>
+                Names are optional. Hold a photo to remove it.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.thumbnails}>
+              {frames.map((f) => (
+                <Pressable
+                  key={f.uri}
+                  onLongPress={() => removeFrame(f.uri)}
+                  style={styles.thumbnail}
+                >
+                  <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
+                  <View style={styles.thumbnailOverlay}>
+                    <Text style={styles.thumbnailHint}>Hold to remove</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ))}
 
         {frames.length > 1 && !busy && (
           <View style={styles.modeCard}>
@@ -629,6 +746,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   thumbnailHint: { color: '#fff', fontSize: 10 },
+  nameField: { gap: 6, marginBottom: space.lg },
+  nameLabel: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
+  nameInput: {
+    backgroundColor: theme.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    borderRadius: radius.md,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    color: theme.text,
+    fontSize: 15,
+  },
+  nameHint: { color: theme.textMuted, fontSize: 12, lineHeight: 16 },
+  frameList: { gap: space.sm, marginBottom: space.lg },
+  frameRow: { flexDirection: 'row', gap: space.sm, alignItems: 'center' },
+  frameRowThumb: {
+    width: 56,
+    height: 72,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+    backgroundColor: theme.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
+  frameRowBody: { flex: 1, gap: 4 },
   modeCard: {
     backgroundColor: theme.card,
     borderWidth: 1,
