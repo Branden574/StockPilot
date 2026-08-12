@@ -12,11 +12,15 @@ export const dynamic = 'force-dynamic';
 // Vercel to allow up to 60s before terminating.
 export const maxDuration = 60;
 
+// Kept in lockstep with PO_IMPORT_SCAN_MIME_TYPES (lib/po-imports/mime.ts,
+// which explains why heic and heif always travel as a pair) and with the
+// po-imports bucket pin (migrations 0325 + 0332).
 const ACCEPT_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/heic',
+  'image/heif',
   'application/pdf',
 ]);
 

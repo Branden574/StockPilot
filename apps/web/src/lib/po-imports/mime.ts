@@ -66,11 +66,22 @@ export function poImportUploadExtensionFor(mime: string): string | null {
  * never reach the text parser. Mirrors the `/api/po-imports/scan` route's own
  * boundary check so the service twin refuses the same set the route does
  * instead of trusting its caller.
+ *
+ * `image/heif` sits beside `image/heic` because they are the SAME picture:
+ * both label an ISO-BMFF HEIF container, and which of the two a browser
+ * reports for one iPhone photo depends on the OS/browser, not on the bytes.
+ * Allowing only `heic` therefore refused a coin-flip half of the drag-drops
+ * on the web scan form. Everything downstream already treats them alike —
+ * `lib/image-variants.ts:194` transcodes both, and `lib/ai/claude.ts:56-62`
+ * relabels any non-jpeg/png/gif/webp subtype to jpeg for vision. The bucket
+ * pin (migration 0325, widened by 0332) and the route's own ACCEPT_TYPES
+ * carry the identical pair; all three must move together.
  */
 export const PO_IMPORT_SCAN_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/heic',
+  'image/heif',
   'application/pdf',
 ]);
