@@ -1,6 +1,48 @@
+import { inflateSync } from 'node:zlib';
+
 import { describe, expect, it } from 'vitest';
 
+import { renderCustomerPackingSlipPdf } from './packing-slip-customer';
 import { renderWarehousePackingSlipPdf } from './packing-slip-warehouse';
+
+/**
+ * Every text run in a @react-pdf document lands in a FlateDecode content
+ * stream, and each run is drawn as hex-string glyph codes (`[<53>…] TJ` /
+ * `<5369…> Tj`), so raw bytes never contain the strings the page draws.
+ * Inflate every stream…endstream section that decompresses cleanly, then
+ * decode every hex string back to characters. These slips use Helvetica (a
+ * standard-14 font, WinAnsi-encoded), so the glyph codes ARE the character
+ * codes and the result reads as the page's visible text in draw order.
+ */
+function extractPdfText(pdf: Buffer): string {
+  const streams: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const start = pdf.indexOf('stream', cursor);
+    if (start === -1) break;
+    // Skip the keyword + the EOL that follows it (\r\n or \n per spec).
+    let dataStart = start + 'stream'.length;
+    if (pdf[dataStart] === 0x0d) dataStart += 1;
+    if (pdf[dataStart] === 0x0a) dataStart += 1;
+    const end = pdf.indexOf('endstream', dataStart);
+    if (end === -1) break;
+    try {
+      streams.push(inflateSync(pdf.subarray(dataStart, end)).toString('latin1'));
+    } catch {
+      // Not a flate stream (font file, image, …) — skip it.
+    }
+    cursor = end + 'endstream'.length;
+  }
+  return (streams.join('\n').match(/<[0-9a-fA-F]+>/g) ?? [])
+    .map((h) =>
+      (h.slice(1, -1).match(/.{2}/g) ?? [])
+        .map((b) => String.fromCharCode(parseInt(b, 16)))
+        .join(''),
+    )
+    .join('');
+}
+
+const DIGITAL_SIGNATURE_LABEL = 'Signature captured digitally in StockPilot';
 
 const baseInput = {
   detail: {
@@ -104,5 +146,24 @@ describe('renderWarehousePackingSlipPdf', () => {
       rackHoldingsByItemId,
     });
     expect(buf.byteLength).toBeGreaterThan(2000);
+  }, 30000);
+
+  it('prints the signed-digitally checkbox label in the signature block', async () => {
+    const buf = await renderWarehousePackingSlipPdf(baseInput);
+    expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    const text = extractPdfText(buf);
+    expect(text).toContain(DIGITAL_SIGNATURE_LABEL);
+    // The row belongs to the manual signature block — pin the ordering so a
+    // refactor can't drift it above the ink lines it annotates.
+    expect(text.indexOf(DIGITAL_SIGNATURE_LABEL)).toBeGreaterThan(text.indexOf('DATE / TIME'));
+  }, 30000);
+
+  it("does NOT print the checkbox label on the customer slip — its signature semantics are the customer's own", async () => {
+    const buf = await renderCustomerPackingSlipPdf(baseInput);
+    expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    // Sanity: the extractor works on this document too (shared brand band)…
+    expect(extractPdfText(buf)).toContain('PACKING SLIP');
+    // …so the label's absence is a real absence, not a broken extractor.
+    expect(extractPdfText(buf)).not.toContain(DIGITAL_SIGNATURE_LABEL);
   }, 30000);
 });
