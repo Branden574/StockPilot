@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
+import { PoImportRenameButton } from '@/components/po-imports/po-import-rename-button';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
@@ -74,9 +75,23 @@ export default async function PoImportDetailPage({
         >
           ← Back to imports
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          {header.file_name}
-        </h1>
+        {/* The human name is the H1 (mig 0332); an import nobody named still
+            titles itself with its filename, exactly as before. The REAL
+            uploaded filename always stays on the page as metadata below —
+            it is what troubleshooting ("which document was this?") needs. */}
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {header.display_name ?? header.file_name}
+          </h1>
+          <PoImportRenameButton
+            poImportId={header.id}
+            currentName={header.display_name}
+            fileName={header.file_name}
+          />
+        </div>
+        <p className="text-muted-foreground mt-1 text-xs">
+          Source file: {header.file_name}
+        </p>
         {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
             it changes how everything below it should be read, so it must not
             be reachable only after scrolling past the line table. */}

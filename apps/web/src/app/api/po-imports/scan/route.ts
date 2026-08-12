@@ -6,6 +6,8 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { PoImportsService } from '@/server/services/po-imports';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
+import { optionalPoImportDisplayNameSchema } from '@stockpilot/core';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // Vision extraction can take 6-10s on a large multi-page PO. Tell
@@ -33,11 +35,104 @@ const MAX_FILES = 5;
 const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
 
 /**
+ * Hard ceiling on the raw `displayNames` field before it is even parsed.
+ * MAX_FILES names of 160 characters plus JSON punctuation is well under 1 KB;
+ * 4 KB leaves room for escaping without letting an unbounded text part into
+ * JSON.parse.
+ */
+const MAX_DISPLAY_NAMES_BYTES = 4096;
+
+/**
+ * Parses the `displayNames` JSON array — see this module's POST header for the
+ * contract. Returns one entry per import (nulls for unnamed), or a message.
+ *
+ * `expected` is the number of imports this request will create, NOT the number
+ * of files: combined mode merges N files into one import and therefore takes
+ * exactly one name.
+ */
+function parseDisplayNames(
+  raw: FormDataEntryValue | null,
+  expected: number,
+): { names: Array<string | null> } | { error: string } {
+  // Omitted → every import unnamed. This is the old-client path and must stay
+  // a success, never a validation error.
+  if (raw == null) return { names: Array.from({ length: expected }, () => null) };
+  if (typeof raw !== 'string') {
+    return { error: 'displayNames must be a JSON array of names.' };
+  }
+  if (raw.length > MAX_DISPLAY_NAMES_BYTES) {
+    return { error: 'displayNames is too large.' };
+  }
+  // An empty string is treated as "omitted" — some form serializers send a
+  // present-but-blank field, and refusing that would break naming for no gain.
+  if (raw.trim() === '') return { names: Array.from({ length: expected }, () => null) };
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    return { error: 'displayNames must be a JSON array of names.' };
+  }
+  if (!Array.isArray(decoded)) {
+    return { error: 'displayNames must be a JSON array of names.' };
+  }
+  // LOUD, not lenient: padding or truncating here is exactly how name N ends up
+  // on file N-1, permanently and invisibly.
+  if (decoded.length !== expected) {
+    return {
+      error: `displayNames must have exactly ${expected} entr${expected === 1 ? 'y' : 'ies'} — one per import — but got ${decoded.length}.`,
+    };
+  }
+
+  const names: Array<string | null> = [];
+  for (const entry of decoded) {
+    if (entry !== null && typeof entry !== 'string') {
+      return { error: 'Each displayNames entry must be a string or null.' };
+    }
+    const parsed = optionalPoImportDisplayNameSchema.safeParse(entry);
+    if (!parsed.success) {
+      return { error: parsed.error.issues[0]?.message ?? 'That import name is not valid.' };
+    }
+    names.push(parsed.data);
+  }
+  return { names };
+}
+
+/**
  * Phone-scanned PO endpoint.
  *
  * Accepts multipart/form-data with one or more `file` fields (multi-frame
  * captures or multi-page scans). Optional `vendorId` and `warehouseId`
  * fields hint the vendor mapping lookup.
+ *
+ * NAMING (mig 0332) — the wire contract, ONE shape only:
+ *
+ *   `displayNames` — a single field holding a JSON ARRAY of (string | null),
+ *   index-aligned with the imports this request will create:
+ *
+ *     • SEPARATE mode — one import per file, so the array has exactly ONE
+ *       ENTRY PER FILE and entry[i] names file[i].
+ *     • COMBINED mode — the files are pages of ONE purchase order, so the
+ *       array has exactly ONE entry, which names that single import.
+ *     • Omitted entirely — every import is created unnamed, exactly as before
+ *       this field existed. That is what an older mobile build sends, and it
+ *       must keep working; nothing here is required.
+ *
+ *   A length that does not match the import count is a 400, never a guess. The
+ *   silent alternative (pad, truncate, or slide) mis-associates names across
+ *   files, which is permanent and looks exactly like a user's own typo.
+ *
+ *   WHY JSON AND NOT A REPEATED `displayName` FIELD: repeated multipart parts
+ *   look like the natural fit, but "file 2 has no name" has to travel as an
+ *   EMPTY part — and an empty-valued part is not reliably preserved across
+ *   multipart implementations (happy-dom's parser, which this route's tests run
+ *   under, drops them outright). One dropped empty shifts every later name onto
+ *   the wrong file. A JSON array carries `null` as a real value, so the
+ *   alignment cannot be lost in transport, and a truncated array is caught by
+ *   the length check instead of being silently obeyed.
+ *
+ * Names are validated SERVER-SIDE against the shared schema — the browser's
+ * input `maxLength` is a courtesy, not a control.
  *
  * Runs Gemini Flash extraction, persists a po_imports row + lines, and
  * returns the import id so the caller (mobile or web) can navigate to
@@ -153,6 +248,21 @@ export async function POST(req: Request) {
   const mode =
     form.get('mode') === 'separate' && files.length >= 2 ? 'separate' : 'combined';
 
+  // Names, parsed AFTER the mode is settled because the required array length
+  // is "one per IMPORT" — see the contract in this route's header. Validated
+  // here (400 with the real message) rather than left to the service, so a bad
+  // name in a 5-file batch is refused BEFORE any vision call is paid for; the
+  // service still re-validates every one of them.
+  const expectedNames = mode === 'separate' ? files.length : 1;
+  const namesResult = parseDisplayNames(form.get('displayNames'), expectedNames);
+  if ('error' in namesResult) {
+    return NextResponse.json(
+      { error: 'validation_error', message: namesResult.error },
+      { status: 400 },
+    );
+  }
+  const displayNames = namesResult.names;
+
   const svc = new PoImportsService(ctx);
 
   if (mode === 'separate') {
@@ -165,9 +275,16 @@ export async function POST(req: Request) {
       lowConfidenceLines: number;
     }> = [];
     const failed: Array<{ fileName: string; message: string }> = [];
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       try {
-        const r = await svc.createFromScan({ files: [file], vendorId, warehouseId });
+        // file[i] gets name[i]. The array is already length-checked against
+        // files.length above, so this index cannot silently miss.
+        const r = await svc.createFromScan({
+          files: [file],
+          vendorId,
+          warehouseId,
+          displayName: displayNames[index] ?? null,
+        });
         imports.push({
           id: r.id,
           fileName: file.fileName,
@@ -204,7 +321,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await svc.createFromScan({ files, vendorId, warehouseId });
+    // ONE import, therefore exactly ONE name (the length check above already
+    // refused anything else).
+    const result = await svc.createFromScan({
+      files,
+      vendorId,
+      warehouseId,
+      displayName: displayNames[0] ?? null,
+    });
     return NextResponse.json({
       ok: true,
       id: result.id,

@@ -36,6 +36,101 @@ export const poImportStatusSchema = z.enum([
 export type PoImportStatus = z.infer<typeof poImportStatusSchema>;
 
 /**
+ * Ceiling for po_imports.display_name — the SAME number the column's CHECK
+ * enforces (`length(display_name) between 1 and 160`, migration 0332). Kept as
+ * a constant so the UI's counter, the zod bound and the DB guard can only ever
+ * be changed together.
+ */
+export const PO_IMPORT_DISPLAY_NAME_MAX = 160;
+
+/**
+ * Characters an import name may not contain: the ASCII control range plus DEL,
+ * plus the Unicode bidirectional overrides/isolates.
+ *
+ * This is the SAME class `sanitizeName` uses in
+ * apps/web/src/server/actions/profile.ts:24-25 — deliberately reused rather
+ * than re-derived, because two slightly different "unsafe name character"
+ * definitions in one codebase is how one of them ends up wrong. The bidi
+ * codepoints are the interesting half: U+202A..U+202E and U+2066..U+2069 let a
+ * name render right-to-left and visually reorder everything after it in a table
+ * row, so an import can be made to LOOK like a different import.
+ *
+ * NOT global (no /g): a global regex carries `lastIndex` across `.test()` calls
+ * and would alternate pass/fail on the same input.
+ */
+export const UNSAFE_DISPLAY_NAME_CHARS = /[\u0000-\u001F\u007F\u202A-\u202E\u2066-\u2069]/;
+
+/**
+ * THE normalizer every writer runs before validating or persisting an import
+ * name. Trim only — no case folding, no whitespace collapsing, no character
+ * stripping: a name with an embedded control character must be REFUSED by
+ * `poImportDisplayNameError` below, and silently collapsing one into a space
+ * here would launder exactly the input the refusal exists for.
+ *
+ * Returns null for "no name", which is what the nullable column stores.
+ */
+export function normalizePoImportDisplayName(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * The single authoritative rule set for an import name, expressed once as a
+ * plain function so both zod schemas below (and any non-zod caller) share it.
+ * Returns a user-facing message, or null when the name is acceptable.
+ *
+ * Ordinary punctuation is PRESERVED on purpose — `-`, `_`, `&`, `'`, `(`, `)`,
+ * `#`, `.`, `,`, `/` and friends all survive, because real import names read
+ * "August DC4 Book Order (Follett) #2" and an allowlist that mangled them
+ * would push users straight back to living with `image.jpg`.
+ *
+ * Expects an ALREADY-normalized value (see normalizePoImportDisplayName).
+ */
+export function poImportDisplayNameError(value: string): string | null {
+  if (value.length === 0) return 'Enter a name for this import.';
+  if (UNSAFE_DISPLAY_NAME_CHARS.test(value)) {
+    return 'Remove control and text-direction characters from the name.';
+  }
+  if (value.length > PO_IMPORT_DISPLAY_NAME_MAX) {
+    return `Name is too long (${PO_IMPORT_DISPLAY_NAME_MAX} characters max).`;
+  }
+  return null;
+}
+
+/** A REQUIRED import name (the rename flow). Trims, then applies the rules. */
+export const poImportDisplayNameSchema = z
+  .string()
+  .transform((s) => normalizePoImportDisplayName(s) ?? '')
+  .superRefine((value, ctx) => {
+    const message = poImportDisplayNameError(value);
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  });
+
+/**
+ * An OPTIONAL import name (every create path). Absent, null and blank all mean
+ * the same thing — "no name, fall back to file_name" — so they all normalize to
+ * null instead of erroring, which is what keeps an older client that sends no
+ * name at all working unchanged. A name that IS supplied gets the full rules.
+ */
+export const optionalPoImportDisplayNameSchema = z
+  .string()
+  .nullish()
+  .transform((s) => normalizePoImportDisplayName(s))
+  .superRefine((value, ctx) => {
+    if (value === null) return;
+    const message = poImportDisplayNameError(value);
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  });
+
+/** Input to the rename action/service method. */
+export const renamePoImportSchema = z.object({
+  poImportId: z.string().uuid(),
+  displayName: poImportDisplayNameSchema,
+});
+export type RenamePoImportInput = z.infer<typeof renamePoImportSchema>;
+
+/**
  * Canonical parsed-line shape produced by the parser; mirrors the
  * po_import_lines columns. Numbers are JS-side numbers; nulls are the
  * canonical "missing" value.

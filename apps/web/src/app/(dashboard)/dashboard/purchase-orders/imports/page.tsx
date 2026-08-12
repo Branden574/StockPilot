@@ -177,7 +177,7 @@ export default async function PoImportsPage({
               total > 0
                 ? 'This page is past the end of the list — jump back with the pagination below.'
                 : q
-                  ? 'Try a different file name, supplier, or PO number, or clear the search.'
+                  ? 'Try a different import name, file name, supplier, or PO number, or clear the search.'
                   : 'Switch tabs above to see imports in other stages.'
             }
           />
@@ -186,7 +186,7 @@ export default async function PoImportsPage({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>File</TableHead>
+                  <TableHead>Name</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Uploaded</TableHead>
@@ -196,12 +196,23 @@ export default async function PoImportsPage({
                 {rows.map((i) => (
                   <TableRow key={i.id}>
                     <TableCell>
+                      {/* Primary label is the human name (mig 0332); the real
+                          uploaded filename stays visible underneath, because
+                          "which document was this?" is still a question people
+                          answer from this list. An unnamed import (every
+                          historical row) renders exactly as it always did: the
+                          filename as the link, nothing below it. */}
                       <Link
                         href={`/dashboard/purchase-orders/imports/${i.id}`}
                         className="font-medium hover:underline"
                       >
-                        {i.file_name}
+                        {i.display_name ?? i.file_name}
                       </Link>
+                      {i.display_name && (
+                        <p className="text-muted-foreground mt-0.5 truncate text-xs">
+                          {i.file_name}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {i.source_type}
