@@ -73,6 +73,24 @@ vi.mock('@/components/maintenance/report-problem-button', () => ({
   },
 }));
 
+// Delivery-request re-entry — a recording spy like ReportProblemButton
+// above: the wrapper's own dialog/assistant wiring is covered by
+// send-delivery-request-button.test.tsx; THIS file pins the host's gating
+// (requester-only, delivery-only, non-terminal status) and the exact props
+// it derives from the order detail.
+const sendDeliveryRequestProps = vi.fn();
+vi.mock('@/components/orders/send-delivery-request-button', () => ({
+  SendDeliveryRequestButton: (props: Record<string, unknown>) => {
+    sendDeliveryRequestProps(props);
+    return null;
+  },
+}));
+
+const getCachedOrgTimezoneMock = vi.fn(async (_orgId: string) => 'America/Chicago');
+vi.mock('@/lib/dashboard/cached-org', () => ({
+  getCachedOrgTimezone: (orgId: string) => getCachedOrgTimezoneMock(orgId),
+}));
+
 const ctxHolder = vi.hoisted(() => ({
   current: {
     role: 'staff' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
@@ -272,5 +290,90 @@ describe('orders/[id] host — ReportProblemButton gating (I1, fix wave 2)', () 
     checkModuleAccessMock.mockImplementation(async () => ({ enabled: true, canManage: false }));
     await renderPage();
     expect(checkModuleAccessMock).toHaveBeenCalledWith('maintenance_requests');
+  });
+});
+
+/** A line with an item row, as OrderRequestsService.get returns them —
+ *  exactly the fields the page reads plus what the delivery-request
+ *  re-entry flattens (item id/name/sku + quantity_requested). */
+const DELIVERY_LINE = {
+  id: 'L1',
+  order_request_id: ORDER_ID,
+  item_id: 'i1',
+  quantity_requested: 3,
+  quantity_fulfilled: 0,
+  quantity_picked: 0,
+  unit_cost_at_request: 0,
+  notes: null,
+  item: {
+    id: 'i1',
+    name: 'Google Chrome Book',
+    sku: 'SP-BVK31-LH9',
+    quantity_on_hand: 50,
+    charter_name: null,
+    charter_code: null,
+  },
+};
+
+/** An eligible delivery order owned by the VIEWER (requester_user_id 'u1'
+ *  matches the mocked session's userId) — the exact principal the
+ *  post-placement success dialog rendered the assistant for. */
+function ownDeliveryDetail(requestOverrides: Record<string, unknown> = {}) {
+  return detailFixture({
+    request: requestFixture({
+      fulfillment_type: 'delivery',
+      requester_user_id: 'u1',
+      notes: 'Front office, ask for Jane',
+      needed_by: '2026-08-20T17:00:00Z',
+      ...requestOverrides,
+    }),
+    lines: [DELIVERY_LINE],
+    requesterEmail: 'jane@example.org',
+  });
+}
+
+describe('orders/[id] host — delivery-request assistant re-entry gating + props', () => {
+  it('own delivery order in an active state -> renders the action with the exact props the dialog path passes (timezone from getCachedOrgTimezone, lines flattened from the detail)', async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail());
+    await renderPage();
+    expect(sendDeliveryRequestProps).toHaveBeenCalledTimes(1);
+    expect(sendDeliveryRequestProps).toHaveBeenCalledWith({
+      orderId: ORDER_ID,
+      orderNumber: 42,
+      warehouseName: 'Main DC',
+      destination: null,
+      requestedFor: 'Jane Smith',
+      requesterEmail: 'jane@example.org',
+      neededBy: '2026-08-20T17:00:00Z',
+      orgTimezone: 'America/Chicago',
+      notes: 'Front office, ask for Jane',
+      lines: [
+        { itemId: 'i1', quantity: 3, name: 'Google Chrome Book', sku: 'SP-BVK31-LH9' },
+      ],
+    });
+    expect(getCachedOrgTimezoneMock).toHaveBeenCalledWith('org-1');
+  });
+
+  it('a PICKUP order never shows the action, even for its own requester in an active state', async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail({ fulfillment_type: 'pickup' }));
+    await renderPage();
+    expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancelled', 'denied', 'completed'] as const)(
+    'a %s delivery order never shows the action — nothing left to deliver',
+    async (status) => {
+      orderGet.mockResolvedValue(ownDeliveryDetail({ status }));
+      await renderPage();
+      expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
+    },
+  );
+
+  it("someone ELSE's delivery order never shows the action — the re-entry belongs to the order placer, same principal the success dialog rendered for", async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail({ requester_user_id: 'other-user' }));
+    await renderPage();
+    expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
+    // And the gated timezone read is not paid for a viewer who gets no button.
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
   });
 });
