@@ -25,8 +25,9 @@ import type {
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
-import type { BookStorageInfo } from '@stockpilot/core';
+import type { BookCrateChangeDetail, BookStorageInfo } from '@stockpilot/core';
 import {
+  BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
   buildVariantKey,
   compareBookCratePlacement,
   formatArchiveStockBlockMessage,
@@ -506,21 +507,16 @@ export type { PlaceDest } from '@/lib/locations/destination-option';
  *
  * Every field here is safe to show a user: two rendered labels and the item's
  * own name. No ids, no raw DB text.
+ *
+ * DECLARED IN @stockpilot/core, re-exported here. The client component that
+ * renders this refusal cannot import a `server-only` service, and a second
+ * copy of the reason string would drift the moment one side was edited — so
+ * both halves of the contract read the same declaration
+ * (packages/core/src/inventory/book-crate-placement.ts). Existing importers of
+ * these names from this module keep working.
  */
-export const BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION =
-  'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION' as const;
-
-export interface BookCrateChangeDetail {
-  reason: typeof BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION;
-  items: Array<{
-    itemId: string;
-    itemName: string;
-    /** "Blue 4" — what the item says today, read from the DB moments ago. */
-    currentLabel: string | null;
-    /** "Green 2", or null when the destination is a rack (the crate is cleared). */
-    nextLabel: string | null;
-  }>;
-}
+export { BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION } from '@stockpilot/core';
+export type { BookCrateChangeDetail } from '@stockpilot/core';
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -4385,11 +4381,23 @@ export class InventoryService {
    *   • holdings SPLIT across locations → leave the summary alone, because
    *     stamping the newest crate would assert something false about the rest.
    *
-   * Returns the item ids whose summary it FAILED to write. The caller must
-   * surface that: the placement itself is still true (the stock really moved,
-   * and rolling a real movement back by hand is never the answer), but the
-   * printed label may now be stale and the user has to know. This deliberately
-   * does NOT follow stampPlacementBin's console.warn-and-forget.
+   * Returns the item ids whose summary it FAILED to write, and separately the
+   * ids it deliberately SKIPPED because their holdings are split. The caller
+   * must surface both: the placement itself is still true (the stock really
+   * moved, and rolling a real movement back by hand is never the answer), but
+   * in the first case the printed label may now be stale and in the second the
+   * label was intentionally left describing a different location. Skipping is
+   * not an error, yet a silent skip is indistinguishable from a silent
+   * success — and split holdings are the COMMON case for an org whose books
+   * also sit directly on a Site (405 units on DC4 alone, per migration 0292),
+   * so "worked, changed nothing, said nothing" would be the normal outcome.
+   * This deliberately does NOT follow stampPlacementBin's console.warn-and-
+   * forget.
+   *
+   * NEVER THROWS. Every caller runs it AFTER transferStock has committed, so
+   * an escaping exception would surface as "placement failed" for a placement
+   * that demonstrably succeeded — and the operator would retry and move the
+   * stock twice. Any unexpected failure degrades to `failedItemIds`.
    *
    * `opts.audit` carries the placement facts the trail needs (which location,
    * how much). The event NAME is the existing `inventory.item.updated` that
@@ -4405,11 +4413,35 @@ export class InventoryService {
         quantityByItemId?: Map<string, number>;
       };
     } = {},
-  ): Promise<{ failedItemIds: string[] }> {
-    if (itemIds.length === 0) return { failedItemIds: [] };
+  ): Promise<{ failedItemIds: string[]; skippedItemIds: string[] }> {
+    try {
+      return await this.syncBookCratePlacementInner(itemIds, opts);
+    } catch (e) {
+      // The stock is already placed. Report, never rethrow — see the contract
+      // above. `readBookCrateSummaries` throws on a query error, and an
+      // unhandled throw here would be indistinguishable from a failed
+      // placement to the caller.
+      console.error('[placement] book crate summary sync threw (stock still placed)', {
+        error: e instanceof Error ? e.message : String(e),
+        items: itemIds.length,
+      });
+      return { failedItemIds: [...itemIds], skippedItemIds: [] };
+    }
+  }
+
+  private async syncBookCratePlacementInner(
+    itemIds: string[],
+    opts: {
+      audit?: {
+        toLocationId: string;
+        quantityByItemId?: Map<string, number>;
+      };
+    },
+  ): Promise<{ failedItemIds: string[]; skippedItemIds: string[] }> {
+    if (itemIds.length === 0) return { failedItemIds: [], skippedItemIds: [] };
     const summaries = await this.readBookCrateSummaries(itemIds);
     const bookIds = [...summaries.keys()];
-    if (bookIds.length === 0) return { failedItemIds: [] };
+    if (bookIds.length === 0) return { failedItemIds: [], skippedItemIds: [] };
 
     // ONE bounded read of every positive holding for these books. No kind
     // filter in the query: `.in('locations.kind', [...])` silently drops
@@ -4424,7 +4456,7 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', bookIds)
       .gt('quantity', 0);
-    if (error) return { failedItemIds: bookIds };
+    if (error) return { failedItemIds: bookIds, skippedItemIds: [] };
 
     type HoldingRow = {
       item_id: string;
@@ -4452,17 +4484,28 @@ export class InventoryService {
     // Group by the crate the sync would write, so N books landing in one crate
     // cost ONE RPC call instead of N.
     const batches = new Map<string, { color: string | null; number: string | null; ids: string[] }>();
+    const skippedItemIds: string[] = [];
     for (const itemId of bookIds) {
       const placed = placedByItem.get(itemId);
       // No placed holding at all (everything still staged, or the stock left)
       // — nothing authoritative to synchronize to. Leave the summary alone.
       if (!placed || placed.size === 0) continue;
-      // SPLIT: holdings authoritative, summary untouched.
-      if (placed.size > 1) continue;
+      // SPLIT: holdings authoritative, summary untouched — and REPORTED, so
+      // the caller can say so instead of showing a plain success toast for a
+      // sync that deliberately changed nothing.
+      if (placed.size > 1) {
+        skippedItemIds.push(itemId);
+        continue;
+      }
       const [loc] = [...placed.values()];
       const color = loc!.crate_color?.trim() || null;
       const number = loc!.crate_number?.trim() || null;
-      const key = `${color ?? ''} ${number ?? ''}`;
+      // JSON, not a space-joined string. `crate_number` is FREE TEXT and
+      // production already stores values containing a space ("Blue Shelf"), so
+      // ('Blue', 'Shelf 2') and ('Blue Shelf', '2') collide on a joined key —
+      // and the first pair to claim it would be stamped onto the other's books.
+      // That is precisely the silent wrong-label this module exists to prevent.
+      const key = JSON.stringify([color, number]);
       const batch = batches.get(key) ?? { color, number, ids: [] };
       batch.ids.push(itemId);
       batches.set(key, batch);
@@ -4523,7 +4566,7 @@ export class InventoryService {
         );
       }
     }
-    return { failedItemIds };
+    return { failedItemIds, skippedItemIds };
   }
 
   /**

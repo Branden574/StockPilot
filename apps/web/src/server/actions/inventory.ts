@@ -440,6 +440,24 @@ export async function transferStockAction(
     }
 
     const svc = new InventoryService(ctx);
+    // DELIBERATELY NOT SYNCED HERE (yet): the book CRATE summary — the same
+    // deferral POST /api/v1/items/[id]/transfer documents, for the same
+    // reason, and written down here so the divergence is a decision rather
+    // than an omission someone finds later.
+    //
+    // The Staging put-away (placeStockAction) gates on
+    // assertBookCratePlacementAllowed and reconciles with
+    // syncBookCratePlacement, because its dialog can ask the question and
+    // answer it with `acknowledgeCrateChange`. THIS action backs the Transfer
+    // modal, which has no such affordance: adding the gate would start
+    // refusing ordinary transfers, and adding the sync WITHOUT the gate would
+    // silently overwrite a crate a person recorded — the exact thing the gate
+    // exists to prevent. The consequence is known and bounded: moving a
+    // crated book's stock through Transfer leaves its summary describing where
+    // it used to be, until the next put-away reconciles it.
+    //
+    // `dest` already carries the crate columns, so this becomes two calls the
+    // moment the Transfer dialog grows the same confirmation step.
     await svc.transferStock({
       itemId: data.itemId,
       fromLocationId: data.fromLocationId,
@@ -491,7 +509,20 @@ export type PlaceStockInput = z.input<typeof placeStockSchema>;
 
 export async function placeStockAction(
   input: PlaceStockInput,
-): Promise<ActionResult<{ toLocationId: string; crateSyncFailed?: boolean }>> {
+): Promise<
+  ActionResult<{
+    toLocationId: string;
+    /** The stock moved, but the book's crate SUMMARY could not be written. */
+    crateSyncFailed?: boolean;
+    /**
+     * The stock moved, and the summary was deliberately LEFT ALONE because
+     * this title now holds stock in more than one location. Not a failure —
+     * but the dialog must say so, or a placement that changed no label is
+     * indistinguishable from one that did.
+     */
+    crateSyncSkipped?: boolean;
+  }>
+> {
   const parsed = placeStockSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -575,7 +606,7 @@ export async function placeStockAction(
     // Re-synchronize the book crate SUMMARY from the holdings that now exist.
     // The stock has already moved, so a failure here is reported, never
     // rolled back — see syncBookCratePlacement's contract.
-    const { failedItemIds } = await invSvc.syncBookCratePlacement([data.itemId], {
+    const { failedItemIds, skippedItemIds } = await invSvc.syncBookCratePlacement([data.itemId], {
       audit: {
         toLocationId,
         quantityByItemId: new Map([[data.itemId, data.quantity]]),
@@ -588,6 +619,7 @@ export async function placeStockAction(
     return ok({
       toLocationId,
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -644,7 +676,11 @@ export async function bulkPlaceStockAction(
   ActionResult<{
     placed: number;
     failed: Array<{ itemId: string; message: string }>;
+    /** The stock moved, but some book's crate SUMMARY could not be written. */
     crateSyncFailed?: boolean;
+    /** The stock moved; some title holds stock in more than one location, so
+     *  its summary was deliberately left alone (see syncBookCratePlacement). */
+    crateSyncSkipped?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -742,7 +778,7 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds } = await invSvc.syncBookCratePlacement(placedItemIds, {
+    const { failedItemIds, skippedItemIds } = await invSvc.syncBookCratePlacement(placedItemIds, {
       audit: {
         toLocationId,
         quantityByItemId: new Map(data.placements.map((p) => [p.itemId, p.quantity])),
@@ -756,6 +792,7 @@ export async function bulkPlaceStockAction(
       placed,
       failed,
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
     });
   } catch (e) {
     return toResult(e);

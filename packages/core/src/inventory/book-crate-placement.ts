@@ -37,6 +37,20 @@
 import { formatCrateLabel } from './book-storage';
 import { getCrateColor } from './crate-colors';
 
+/**
+ * Display name for a crate COLOR: the CRATE_COLORS label when the value is a
+ * known slug ("blue" → "Blue"), otherwise the raw text kept verbatim.
+ *
+ * A color is NEVER shown on its own as a swatch — every surface that renders
+ * the hex also renders this string, because color alone is not information a
+ * color-blind picker can act on.
+ */
+export function formatCrateColorLabel(value: string | null | undefined): string | null {
+  const raw = normalizeText(value);
+  if (!raw) return null;
+  return getCrateColor(raw.toLowerCase())?.label ?? raw;
+}
+
 /** Trim; '' and whitespace-only become null. */
 function normalizeText(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
@@ -72,6 +86,29 @@ export function normalizeCrateColor(value: string | null | undefined): string | 
 export function normalizeCrateNumber(value: string | null | undefined): string | null {
   const raw = normalizeText(value);
   return raw === null ? null : raw.toLowerCase();
+}
+
+/**
+ * The label a CONFIRMATION uses for one side of the comparison.
+ *
+ * `formatCrateLabel` is the SUMMARY spelling and answers "which crate is this
+ * book in" — a color with no number is not a crate there, so it renders null.
+ * The gate asks a different question: "is a recorded value being destroyed",
+ * and a recorded color with no number IS such a value (`fieldOverwritten`
+ * fires on it). Reusing the summary spelling produced a self-contradictory
+ * payload — changed: true carrying currentLabel: null and nextLabel: null,
+ * which reads "recorded in no crate … will change to no crate" and gives the
+ * client nothing to render.
+ *
+ * So: number present → the summary spelling ("Blue 4", "4"). Number absent but
+ * a color recorded → the color alone ("Blue"). Nothing recorded → null, which
+ * now genuinely means nothing.
+ */
+export function formatCratePlacementLabel(
+  crateColor: string | null | undefined,
+  crateNumber: string | null | undefined,
+): string | null {
+  return formatCrateLabel(crateColor, crateNumber) ?? formatCrateColorLabel(crateColor);
 }
 
 export interface BookCratePlacementInput {
@@ -141,8 +178,8 @@ export function compareBookCratePlacement(
     numberChanged,
     // Labels are built from the RAW values so the user sees what is actually
     // stored ("Bin", "Blue Shelf"), not the lower-cased comparison key.
-    currentLabel: formatCrateLabel(input.currentColor, input.currentNumber),
-    nextLabel: formatCrateLabel(input.nextColor, input.nextNumber),
+    currentLabel: formatCratePlacementLabel(input.currentColor, input.currentNumber),
+    nextLabel: formatCratePlacementLabel(input.nextColor, input.nextNumber),
     isFirstAssignment: currentColor === null && currentNumber === null,
   };
 }
@@ -161,4 +198,139 @@ export function isCrateDestination(input: {
   crateNumber?: string | null;
 }): boolean {
   return normalizeText(input.crateColor) !== null || normalizeText(input.crateNumber) !== null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE CONFIRMATION CONTRACT — server refusal ⇄ client acknowledgement
+//
+// The gate lives on the server (it re-reads the DB), but the payload it
+// throws is rendered by a client component that cannot import a service. Both
+// halves therefore name the SAME constant and the SAME shape from here.
+//
+// The client ALSO predicts the refusal locally (it knows the book's summary
+// and the destination it is about to send) so it can ask once, up front,
+// instead of submitting, being refused, and asking afterwards. The prediction
+// is a courtesy, never an authority: the server compares against the row it
+// just read, and a placement that slips past a stale prediction is still
+// refused and still re-rendered from THIS payload.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION =
+  'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION' as const;
+
+export interface BookCrateChangeItem {
+  itemId: string;
+  itemName: string;
+  /** "Blue 4" — what the item says today. Null when it records no crate. */
+  currentLabel: string | null;
+  /** "Green 2" — or null when the destination is a rack (the crate is cleared). */
+  nextLabel: string | null;
+}
+
+export interface BookCrateChangeDetail {
+  reason: typeof BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION;
+  items: BookCrateChangeItem[];
+}
+
+/**
+ * Narrow an `ActionError.details` blob to the confirmation payload.
+ *
+ * Server actions type `details` as `Record<string, unknown>`, so the client
+ * has to check rather than cast. Anything that is not exactly this payload
+ * (another conflict, a details-less error) returns null and the caller falls
+ * back to showing the plain message — a malformed payload must never render
+ * an empty "are you sure?" with nothing in it.
+ */
+export function parseBookCrateChangeDetail(details: unknown): BookCrateChangeDetail | null {
+  if (!details || typeof details !== 'object') return null;
+  const d = details as { reason?: unknown; items?: unknown };
+  if (d.reason !== BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION) return null;
+  if (!Array.isArray(d.items) || d.items.length === 0) return null;
+  const items: BookCrateChangeItem[] = [];
+  for (const raw of d.items) {
+    if (!raw || typeof raw !== 'object') return null;
+    const it = raw as Record<string, unknown>;
+    if (typeof it.itemId !== 'string' || typeof it.itemName !== 'string') return null;
+    items.push({
+      itemId: it.itemId,
+      itemName: it.itemName,
+      currentLabel: typeof it.currentLabel === 'string' ? it.currentLabel : null,
+      nextLabel: typeof it.nextLabel === 'string' ? it.nextLabel : null,
+    });
+  }
+  return { reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION, items };
+}
+
+/**
+ * The exact sentences a confirmation shows for ONE book, naming every field
+ * that changes and never more.
+ *
+ * Field-level on purpose: "Blue 4 → Blue 7" makes a reader diff two strings to
+ * find the one digit that moved. Each line states the field, the old value and
+ * the new one, and a cleared field says "cleared" rather than "to none" so the
+ * rack case reads as the erasure it is.
+ *
+ * Returns [] when nothing changes — the caller must then NOT confirm, which is
+ * what keeps a same-crate or first-ever placement exactly as fast as before.
+ */
+export function describeBookCrateChange(input: BookCratePlacementInput): string[] {
+  const cmp = compareBookCratePlacement(input);
+  if (!cmp.changed) return [];
+  const lines: string[] = [];
+  if (cmp.colorChanged) {
+    const from = formatCrateColorLabel(input.currentColor);
+    const to = formatCrateColorLabel(input.nextColor);
+    lines.push(
+      to ? `Crate color will change from ${from} to ${to}.` : `Crate color ${from} will be cleared.`,
+    );
+  }
+  if (cmp.numberChanged) {
+    const from = normalizeText(input.currentNumber);
+    const to = normalizeText(input.nextNumber);
+    lines.push(
+      to
+        ? `Crate number will change from ${from} to ${to}.`
+        : `Crate number ${from} will be cleared.`,
+    );
+  }
+  return lines;
+}
+
+/**
+ * ONE aggregated sentence-set for a BULK placement, instead of N dialogs.
+ *
+ * Every book in a bulk placement lands in the SAME destination, so the only
+ * thing that varies is where each one is recorded today. Grouping by that
+ * turns 200 rows into "4 titles now in Blue 4, 2 titles now in Green 2, 2
+ * titles with no crate" — which is the shape a human can actually check.
+ *
+ * Groups are ordered largest-first, then alphabetically, so the same selection
+ * always reads the same way; books with no recorded crate sort last because
+ * they are the uninteresting case (nothing is being destroyed for them).
+ */
+export function summarizeBookCrateChanges(items: BookCrateChangeItem[]): {
+  total: number;
+  nextLabel: string | null;
+  groups: Array<{ currentLabel: string | null; count: number }>;
+} {
+  const counts = new Map<string, { currentLabel: string | null; count: number }>();
+  for (const it of items) {
+    const key = it.currentLabel ?? ' none';
+    const entry = counts.get(key) ?? { currentLabel: it.currentLabel, count: 0 };
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+  const groups = [...counts.values()].sort((a, b) => {
+    if (a.currentLabel === null) return 1;
+    if (b.currentLabel === null) return -1;
+    if (b.count !== a.count) return b.count - a.count;
+    return a.currentLabel.localeCompare(b.currentLabel);
+  });
+  return {
+    total: items.length,
+    // Every item shares one destination, so the first item's next label speaks
+    // for all of them.
+    nextLabel: items[0]?.nextLabel ?? null,
+    groups,
+  };
 }

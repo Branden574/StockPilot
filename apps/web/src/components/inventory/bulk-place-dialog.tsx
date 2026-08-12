@@ -1,10 +1,29 @@
 'use client';
 
-import { AlertTriangle, Loader2, PackageCheck } from 'lucide-react';
+import {
+  compareBookCratePlacement,
+  describeNewRackPlacement,
+  parseBookCrateChangeDetail,
+  type BookCrateChangeItem,
+  type BookStorageInfo,
+} from '@stockpilot/core';
+import { Loader2, PackageCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  CrateColorSelect,
+  CrateNumberInput,
+  DestinationCrateNote,
+  DestinationKindToggle,
+  NO_CRATE_COLOR,
+  type NewDestinationKind,
+} from '@/components/inventory/crate-fields';
+import {
+  PlacementConfirmDialog,
+  type PlacementConfirmContent,
+} from '@/components/inventory/placement-confirm-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -25,19 +44,31 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { describeNewRackPlacement } from '@stockpilot/core';
 
 import type { DestinationOption } from '@/lib/locations/destination-option';
+import {
+  destinationCrate,
+  destinationLabel,
+  destinationPhrase,
+  isCrateChoice,
+  type ChosenDestination,
+} from '@/lib/locations/placement-destination';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
 
 const NEW_RACK_SENTINEL = '__new__';
 
+type ActionDestination = Parameters<typeof bulkPlaceStockAction>[0]['destination'];
+
 export interface BulkPlaceRow {
   itemId: string;
   name: string;
+  /** 'book' unlocks the crate destination — see the mixed-selection rule below. */
+  itemType: string;
   sourceLocationId: string;
   quantity: number;
   warehouseId: string | null;
+  /** The book's recorded crate summary, for the aggregated change warning. */
+  bookStorage?: BookStorageInfo | null;
 }
 
 interface BulkPlaceDialogProps {
@@ -57,19 +88,22 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
 
   const [destId, setDestId] = React.useState<string>('');
   const [notes, setNotes] = React.useState('');
+  const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
+  const [crateColor, setCrateColor] = React.useState('');
+  const [crateNumber, setCrateNumber] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
-  // The 2026-07-23 new-rack confirmation, same as PlaceFromStagingDialog. Bulk
-  // place had NO guard, so a typed rack name minted a rack and dumped EVERY
-  // selected row's stock into it silently — the same incident, worse. Set only
-  // when a genuinely-new rack is about to be created; holds the copy + the
-  // one-tap near-match alternatives.
-  const [pendingNewRack, setPendingNewRack] = React.useState<{
-    title: string;
-    message: string;
-    suggestions: string[];
-    destination: Parameters<typeof bulkPlaceStockAction>[0]['destination'];
+  // ONE confirmation for the whole batch, however many questions it raises: a
+  // genuinely-new rack/crate (the 2026-07-23 guard — bulk had none, so a typed
+  // name minted a rack and dumped EVERY selected row into it) and/or the crate
+  // overwrite the server gates on. Never N dialogs: the crate warning is
+  // aggregated by the crate each title is recorded in today.
+  const [pendingConfirm, setPendingConfirm] = React.useState<{
+    content: PlacementConfirmContent;
+    destination: ActionDestination;
+    acknowledgeCrateChange: boolean;
+    describe: ChosenDestination | null;
   } | null>(null);
 
   // All selected rows must share ONE warehouse — a rack belongs to a single
@@ -86,23 +120,104 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
 
   const totalUnits = rows.reduce((s, r) => s + r.quantity, 0);
   const isNew = destId === NEW_RACK_SENTINEL;
+  const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
+
+  // MIXED SELECTIONS ARE RACK-ONLY (for inline creation).
+  //
+  // `book_crate_*` is a BOOK key — a non-book placed in a crate gets no crate
+  // summary at all, so offering the crate form for a mixed selection would ask
+  // for metadata that silently applies to some rows and not others. The two
+  // honest options were "rack only" and "two clearly separated sections", and
+  // rack-only wins because the crate branch is not a display variant, it is a
+  // different `locations.kind`. An EXISTING crate stays selectable for a mixed
+  // batch (that has always been possible, and the stock really can go there) —
+  // the note below just says plainly which rows get a label out of it.
+  const bookCount = rows.filter((r) => r.itemType === 'book').length;
+  const allBooks = rows.length > 0 && bookCount === rows.length;
+  const nonBookCount = rows.length - bookCount;
 
   React.useEffect(() => {
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset fields on open */
     setDestId('');
     setNotes('');
+    setNewKind('rack');
     setRackNumber('');
     setRackRow('');
-    setPendingNewRack(null);
+    setCrateColor('');
+    setCrateNumber('');
+    setPendingConfirm(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open]);
 
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
+    setPendingConfirm(null);
+  }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber]);
+
+  const newFieldsFilled =
+    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
   const canSubmit =
     !submitting &&
     singleWarehouse &&
     rows.length > 0 &&
-    (isNew ? rackNumber.trim().length > 0 : destId.length > 0);
+    (isNew ? newFieldsFilled : destId.length > 0);
+
+  function chosenDestination(): ChosenDestination | null {
+    if (isNew) {
+      return allBooks && newKind === 'crate'
+        ? { mode: 'new-crate', crateColor, crateNumber }
+        : { mode: 'new-rack', rackNumber, rackRow };
+    }
+    return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
+  }
+
+  function toActionDestination(dest: ChosenDestination): ActionDestination {
+    if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
+    if (dest.mode === 'new-crate') {
+      return {
+        newRack: {
+          warehouseId: warehouseId!,
+          crateNumber: dest.crateNumber.trim(),
+          ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+        },
+      };
+    }
+    return {
+      newRack: {
+        warehouseId: warehouseId!,
+        rackNumber: dest.rackNumber.trim(),
+        ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
+      },
+    };
+  }
+
+  /**
+   * Which selected BOOKS would have a recorded crate overwritten, using the
+   * same comparator the server gate runs. Non-books are absent by
+   * construction: they carry no crate summary to destroy.
+   */
+  function predictCrateChanges(dest: ChosenDestination): BookCrateChangeItem[] {
+    const next = destinationCrate(dest);
+    const changed: BookCrateChangeItem[] = [];
+    for (const r of rows) {
+      if (r.itemType !== 'book' || !r.bookStorage) continue;
+      const cmp = compareBookCratePlacement({
+        currentColor: r.bookStorage.crateColor,
+        currentNumber: r.bookStorage.crateNumber,
+        nextColor: next.color,
+        nextNumber: next.number,
+      });
+      if (!cmp.changed) continue;
+      changed.push({
+        itemId: r.itemId,
+        itemName: r.name,
+        currentLabel: cmp.currentLabel,
+        nextLabel: cmp.nextLabel,
+      });
+    }
+    return changed;
+  }
 
   function submit() {
     if (!warehouseId) {
@@ -110,48 +225,59 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       return;
     }
 
-    if (!isNew) {
-      if (!destId) {
-        toast.error('Select a destination location.');
-        return;
-      }
-      void place({ existingLocationId: destId });
+    const dest = chosenDestination();
+    if (!dest) {
+      toast.error('Select a destination location.');
+      return;
+    }
+    if (isNew && !newFieldsFilled) {
+      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
       return;
     }
 
-    if (!rackNumber.trim()) {
-      toast.error('Enter a rack number.');
+    const destination = toActionDestination(dest);
+    const crateItems = predictCrateChanges(dest);
+
+    const creation =
+      dest.mode === 'existing'
+        ? null
+        : describeNewRackPlacement({
+            label: destinationLabel(dest),
+            warehouseName,
+            quantity: totalUnits,
+            existingLabels: destinations.map((d) => d.name),
+            noun: isCrateChoice(dest) ? 'crate' : 'rack',
+          });
+    const creating = creation !== null && !creation.exists;
+
+    if (!creating && crateItems.length === 0) {
+      void place(destination, { describe: dest });
       return;
     }
 
-    // A typed rack destination: confirm before minting it (same guard as the
-    // single-item dialog). findOrCreateRackOrCrate reuses a name match, so an
-    // EXISTING label is not a creation and needs no confirmation — placing into
-    // a rack that already exists stays one action.
-    const label = rackRow.trim() ? `${rackNumber.trim()}-${rackRow.trim()}` : rackNumber.trim();
-    const destination: Parameters<typeof bulkPlaceStockAction>[0]['destination'] = {
-      newRack: {
-        warehouseId,
-        rackNumber: rackNumber.trim(),
-        ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+    const notices: string[] = [];
+    if (nonBookCount > 0 && isCrateChoice(dest)) {
+      notices.push(
+        `${nonBookCount} of the ${rows.length} selected rows ${nonBookCount === 1 ? 'is not a book' : 'are not books'}, so no crate is recorded for ${nonBookCount === 1 ? 'it' : 'them'}.`,
+      );
+    }
+
+    setPendingConfirm({
+      content: {
+        title: creating ? creation!.title : 'Change the recorded crate?',
+        message: creating
+          ? creation!.message
+          : `Placing this selection into ${destinationLabel(dest)} changes the crate recorded on ${crateItems.length} ${crateItems.length === 1 ? 'title' : 'titles'}.`,
+        ...(creating && creation!.suggestions.length > 0
+          ? { suggestions: creation!.suggestions }
+          : {}),
+        ...(crateItems.length > 0 ? { crateItems } : {}),
+        ...(notices.length > 0 ? { notices } : {}),
+        confirmLabel: creating ? `Create and place ${rows.length}` : 'Continue placement',
       },
-    };
-    const decision = describeNewRackPlacement({
-      label,
-      warehouseName,
-      quantity: totalUnits,
-      existingLabels: destinations.map((d) => d.name),
-      noun: 'rack',
-    });
-    if (decision.exists) {
-      void place(destination);
-      return;
-    }
-    setPendingNewRack({
-      title: decision.title,
-      message: decision.message,
-      suggestions: decision.suggestions,
       destination,
+      acknowledgeCrateChange: crateItems.length > 0,
+      describe: dest,
     });
   }
 
@@ -162,12 +288,17 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (!match) return;
-    setPendingNewRack(null);
-    void place({ existingLocationId: match.id });
+    setPendingConfirm(null);
+    void place(
+      { existingLocationId: match.id },
+      { describe: { mode: 'existing', option: match } },
+    );
   }
 
-  async function place(destination: Parameters<typeof bulkPlaceStockAction>[0]['destination']) {
-    setPendingNewRack(null);
+  async function place(
+    destination: ActionDestination,
+    opts: { acknowledgeCrateChange?: boolean; describe?: ChosenDestination | null } = {},
+  ) {
     setSubmitting(true);
     const res = await bulkPlaceStockAction({
       placements: rows.map((r) => ({
@@ -177,24 +308,54 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       })),
       notes: notes.trim() || undefined,
       destination,
+      ...(opts.acknowledgeCrateChange ? { acknowledgeCrateChange: true } : {}),
     });
     setSubmitting(false);
 
     if (!res.ok) {
+      // The batch gate is all-or-nothing and fires BEFORE anything moves, so a
+      // refusal here means nothing was placed. Re-render it from the server's
+      // own payload — it names every affected book, including any our local
+      // prediction missed — and retry once with the acknowledgement.
+      const detail = parseBookCrateChangeDetail(res.error.details);
+      if (detail && !opts.acknowledgeCrateChange) {
+        setPendingConfirm({
+          content: {
+            title: 'Change the recorded crate?',
+            message: res.error.message,
+            crateItems: detail.items,
+            confirmLabel: 'Continue placement',
+          },
+          destination,
+          acknowledgeCrateChange: true,
+          describe: opts.describe ?? null,
+        });
+        return;
+      }
       toast.error(res.error.message);
       return;
     }
 
     const { placed, failed } = res.data;
+    const where = opts.describe ? ` ${destinationPhrase(opts.describe)}` : '';
     if (failed.length === 0) {
-      toast.success(`Placed ${placed} ${placed === 1 ? 'item' : 'items'}.`);
+      toast.success(`Placed ${placed} ${placed === 1 ? 'item' : 'items'}${where}.`);
     } else if (placed > 0) {
       toast.warning(`Placed ${placed}, but ${failed.length} could not be placed.`);
     } else {
       toast.error('Nothing could be placed.');
     }
+    if (res.data.crateSyncFailed) {
+      toast.warning('Some crate labels could not be updated — check those books’ details.');
+    } else if (res.data.crateSyncSkipped) {
+      toast.warning(
+        'Some titles now hold stock in more than one location, so their crate labels were left unchanged.',
+      );
+    }
+    setPendingConfirm(null);
     setOpen(false);
     onPlaced();
+    // A partial placement leaves the remainder in staging; it has to come back.
     router.refresh();
   }
 
@@ -231,37 +392,91 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
                       {d.name}
                     </SelectItem>
                   ))}
-                  <SelectItem value={NEW_RACK_SENTINEL}>+ New rack</SelectItem>
+                  <SelectItem value={NEW_RACK_SENTINEL}>
+                    {allBooks ? '+ New rack / crate' : '+ New rack'}
+                  </SelectItem>
                 </SelectContent>
               </Select>
+              {selectedDestination && (
+                <DestinationCrateNote
+                  crateColor={selectedDestination.crateColor}
+                  crateNumber={selectedDestination.crateNumber}
+                />
+              )}
+              {selectedDestination?.kind === 'crate' && nonBookCount > 0 && (
+                <p className="text-muted-foreground text-xs">
+                  {nonBookCount} of the {rows.length} selected rows{' '}
+                  {nonBookCount === 1 ? 'is not a book' : 'are not books'} — no crate is recorded
+                  for {nonBookCount === 1 ? 'it' : 'them'}.
+                </p>
+              )}
             </div>
 
             {isNew && (
-              <div className="grid grid-cols-2 gap-3 rounded-md border p-3">
-                <div className="space-y-1.5">
-                  <Label>
-                    Rack number <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    placeholder="e.g. A1"
-                    value={rackNumber}
-                    onChange={(e) => setRackNumber(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Row (optional)</Label>
-                  <Input
-                    placeholder="e.g. Row 3"
-                    value={rackRow}
-                    onChange={(e) => setRackRow(e.target.value)}
-                  />
-                </div>
+              <div className="space-y-3 rounded-md border p-3">
+                {allBooks ? (
+                  <DestinationKindToggle value={newKind} onChange={setNewKind} />
+                ) : (
+                  <p className="text-muted-foreground text-xs">
+                    The selection includes items that are not books, so a new location here is a
+                    rack. Place books on their own to create a crate.
+                  </p>
+                )}
+
+                {(!allBooks || newKind === 'rack') && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bulk-rack-number">
+                        Rack number <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="bulk-rack-number"
+                        placeholder="e.g. A1"
+                        value={rackNumber}
+                        onChange={(e) => setRackNumber(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bulk-rack-row">Row (optional)</Label>
+                      <Input
+                        id="bulk-rack-row"
+                        placeholder="e.g. Row 3"
+                        value={rackRow}
+                        onChange={(e) => setRackRow(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {allBooks && newKind === 'crate' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
+                      <CrateColorSelect
+                        id="bulk-crate-color"
+                        value={crateColor}
+                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bulk-crate-number">
+                        Crate number <span className="text-destructive">*</span>
+                      </Label>
+                      <CrateNumberInput
+                        id="bulk-crate-number"
+                        value={crateNumber}
+                        onChange={setCrateNumber}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
+              <Label htmlFor="bulk-notes">Notes (optional)</Label>
               <Textarea
+                id="bulk-notes"
                 rows={2}
                 value={notes}
                 maxLength={2000}
@@ -272,73 +487,36 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           </div>
         )}
 
-        {pendingNewRack && (
-          <div
-            role="alertdialog"
-            aria-label={pendingNewRack.title}
-            className="border-amber-500/40 bg-amber-500/10 space-y-2 rounded-md border p-3"
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="text-amber-600 dark:text-amber-500 h-4 w-4 shrink-0" />
-              <p className="text-sm font-medium">{pendingNewRack.title}</p>
-            </div>
-            <p className="text-muted-foreground text-sm">{pendingNewRack.message}</p>
-            {pendingNewRack.suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-0.5">
-                {pendingNewRack.suggestions.map((s) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant="outline"
-                    disabled={submitting}
-                    onClick={() => placeIntoSuggestion(s)}
-                  >
-                    Use {s} instead
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         <DialogFooter>
-          {pendingNewRack ? (
-            <>
-              <Button
-                variant="outline"
-                onClick={() => setPendingNewRack(null)}
-                disabled={submitting}
-              >
-                Back
-              </Button>
-              <Button onClick={() => void place(pendingNewRack.destination)} disabled={submitting}>
-                {submitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <PackageCheck className="h-4 w-4" /> Create and place {rows.length}
-                  </>
-                )}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button onClick={submit} disabled={!canSubmit}>
-                {submitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <PackageCheck className="h-4 w-4" /> Place {rows.length}
-                  </>
-                )}
-              </Button>
-            </>
-          )}
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!canSubmit}>
+            {submitting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <PackageCheck className="h-4 w-4" /> Place {rows.length}
+              </>
+            )}
+          </Button>
         </DialogFooter>
       </DialogContent>
+
+      <PlacementConfirmDialog
+        open={pendingConfirm !== null}
+        content={pendingConfirm?.content ?? null}
+        submitting={submitting}
+        onCancel={() => setPendingConfirm(null)}
+        onConfirm={() => {
+          if (!pendingConfirm) return;
+          void place(pendingConfirm.destination, {
+            acknowledgeCrateChange: pendingConfirm.acknowledgeCrateChange,
+            describe: pendingConfirm.describe,
+          });
+        }}
+        onUseSuggestion={placeIntoSuggestion}
+      />
     </Dialog>
   );
 }

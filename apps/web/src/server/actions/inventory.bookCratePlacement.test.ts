@@ -365,6 +365,16 @@ describe('placeStockAction — summary reconciliation', () => {
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    // ...and the client is TOLD, so a placement that deliberately changed no
+    // label cannot be mistaken for one that did.
+    if (res.ok) expect(res.data.crateSyncSkipped).toBe(true);
+  });
+
+  it('a single-location placement does NOT report a skip', async () => {
+    installContext({ itemRows: [blueFourBook()], holdingRows: [greenCrateHolding()] });
+    const res = await placeInGreenCrate({ acknowledgeCrateChange: true });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncSkipped).toBeUndefined();
   });
 
   it('a failed summary write is SURFACED, and the placement still stands', async () => {

@@ -228,12 +228,18 @@ export function StagingTable({
             {selectedRows.length} selected
           </span>
           <BulkPlaceDialog
+            // itemType and bookStorage travel WITH the row. Dropping them was
+            // why the bulk dialog could not tell a book from a Chromebook —
+            // and therefore could neither offer a crate nor warn that it was
+            // about to overwrite one.
             rows={selectedRows.map((r) => ({
               itemId: r.itemId,
               name: r.name,
+              itemType: r.itemType,
               sourceLocationId: r.sourceLocationId,
               quantity: r.quantity,
               warehouseId: r.warehouseId,
+              bookStorage: r.bookStorage,
             }))}
             destinationsMap={destinationsMap}
             warehouseNames={warehouseNames}
@@ -431,6 +437,7 @@ export function StagingTable({
                             warehouseName={warehouseNames[row.warehouseId!]}
                             availableQuantity={row.quantity}
                             destinations={destinations}
+                            bookStorage={row.bookStorage}
                             trigger={
                               <Button size="sm" variant="outline">
                                 Place

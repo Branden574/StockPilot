@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { formatCrateLabel } from './book-storage';
 import {
   compareBookCratePlacement,
+  describeBookCrateChange,
+  formatCrateColorLabel,
+  formatCratePlacementLabel,
   isCrateDestination,
   normalizeCrateColor,
   normalizeCrateNumber,
+  parseBookCrateChangeDetail,
+  summarizeBookCrateChanges,
 } from './book-crate-placement';
 
 /** Terse constructor so each case reads as current → next. */
@@ -183,5 +189,145 @@ describe('isCrateDestination — a NUMBER alone is a crate', () => {
     expect(isCrateDestination({})).toBe(false);
     expect(isCrateDestination({ crateColor: null, crateNumber: null })).toBe(false);
     expect(isCrateDestination({ crateColor: '  ', crateNumber: '  ' })).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE CONFIRMATION CONTRACT — what a client actually renders
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('formatCrateColorLabel', () => {
+  it('renders a registry slug as its LABEL, and keeps an unknown color verbatim', () => {
+    expect(formatCrateColorLabel('blue')).toBe('Blue');
+    expect(formatCrateColorLabel(' BLUE ')).toBe('Blue');
+    expect(formatCrateColorLabel('Taupe')).toBe('Taupe');
+  });
+  it('nothing recorded → null', () => {
+    expect(formatCrateColorLabel(null)).toBeNull();
+    expect(formatCrateColorLabel('   ')).toBeNull();
+  });
+});
+
+describe('a color-only crate no longer yields a self-contradictory payload', () => {
+  // THE BUG: `changed: true` carrying currentLabel null AND nextLabel null,
+  // which renders as "recorded in no crate … will change to no crate" — the
+  // gate firing on a change it could not describe. Crate data has been
+  // hand-entered for years, so a color with no number is real data.
+  it('a color with no number LABELS as its color, so the change is describable', () => {
+    const r = cmp('blue', null, null, null);
+    expect(r.changed).toBe(true);
+    expect(r.currentLabel).toBe('Blue');
+    expect(r.nextLabel).toBeNull();
+  });
+  it('an unknown color still labels — verbatim, as the user spelled it', () => {
+    expect(cmp('Taupe', null, null, null).currentLabel).toBe('Taupe');
+    expect(cmp('taupe', null, null, null).currentLabel).toBe('taupe');
+  });
+  it('the SUMMARY spelling is untouched — a number still drives that one', () => {
+    expect(formatCrateLabel('blue', null)).toBeNull();
+    expect(formatCratePlacementLabel('blue', '4')).toBe('Blue 4');
+  });
+});
+
+describe('describeBookCrateChange', () => {
+  const lines = (
+    cc: string | null,
+    cn: string | null,
+    nc: string | null,
+    nn: string | null,
+  ) => describeBookCrateChange({ currentColor: cc, currentNumber: cn, nextColor: nc, nextNumber: nn });
+
+  it('says NOTHING when nothing changes — the fast path stays fast', () => {
+    expect(lines('blue', '4', 'blue', '4')).toEqual([]);
+    expect(lines(null, null, 'blue', '4')).toEqual([]);
+  });
+  it('names the field, the old value and the new one', () => {
+    expect(lines('blue', '4', 'red', '7')).toEqual([
+      'Crate color will change from Blue to Red.',
+      'Crate number will change from 4 to 7.',
+    ]);
+  });
+  it('reports only the field that moved', () => {
+    expect(lines('blue', '4', 'blue', '7')).toEqual(['Crate number will change from 4 to 7.']);
+  });
+  it('a RACK destination reads as an erasure, not as "to none"', () => {
+    expect(lines('blue', '4', null, null)).toEqual([
+      'Crate color Blue will be cleared.',
+      'Crate number 4 will be cleared.',
+    ]);
+  });
+  it('keeps free-text numbers verbatim ("Bin", "Blue Shelf")', () => {
+    expect(lines(null, 'Bin', null, 'Blue Shelf')).toEqual([
+      'Crate number will change from Bin to Blue Shelf.',
+    ]);
+  });
+});
+
+describe('parseBookCrateChangeDetail', () => {
+  const valid = {
+    reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+    items: [{ itemId: 'i-1', itemName: 'Persepolis', currentLabel: 'Blue 4', nextLabel: 'Red 7' }],
+  };
+  it('accepts the payload the gate throws', () => {
+    expect(parseBookCrateChangeDetail(valid)).toEqual(valid);
+  });
+  it('normalises a missing label to null rather than undefined', () => {
+    const d = parseBookCrateChangeDetail({
+      reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+      items: [{ itemId: 'i-1', itemName: 'Persepolis' }],
+    });
+    expect(d!.items[0]).toEqual({
+      itemId: 'i-1',
+      itemName: 'Persepolis',
+      currentLabel: null,
+      nextLabel: null,
+    });
+  });
+  it('refuses anything else — an empty "are you sure?" is worse than none', () => {
+    expect(parseBookCrateChangeDetail(undefined)).toBeNull();
+    expect(parseBookCrateChangeDetail(null)).toBeNull();
+    expect(parseBookCrateChangeDetail({ reason: 'SOMETHING_ELSE', items: valid.items })).toBeNull();
+    expect(parseBookCrateChangeDetail({ ...valid, items: [] })).toBeNull();
+    expect(parseBookCrateChangeDetail({ ...valid, items: [{ itemName: 'no id' }] })).toBeNull();
+  });
+});
+
+describe('summarizeBookCrateChanges', () => {
+  const item = (id: string, currentLabel: string | null) => ({
+    itemId: id,
+    itemName: id,
+    currentLabel,
+    nextLabel: 'Red 7',
+  });
+
+  it('groups by the crate each title is recorded in TODAY — one warning, not N', () => {
+    const s = summarizeBookCrateChanges([
+      item('a', 'Blue 4'),
+      item('b', 'Green 2'),
+      item('c', 'Blue 4'),
+      item('d', null),
+      item('e', 'Blue 4'),
+      item('f', 'Green 2'),
+      item('g', 'Blue 4'),
+      item('h', null),
+    ]);
+    expect(s.total).toBe(8);
+    expect(s.nextLabel).toBe('Red 7');
+    // Largest group first; "nothing recorded" always last.
+    expect(s.groups).toEqual([
+      { currentLabel: 'Blue 4', count: 4 },
+      { currentLabel: 'Green 2', count: 2 },
+      { currentLabel: null, count: 2 },
+    ]);
+  });
+  it('ties break alphabetically so one selection always reads the same way', () => {
+    const s = summarizeBookCrateChanges([item('a', 'Green 2'), item('b', 'Blue 4')]);
+    expect(s.groups.map((g) => g.currentLabel)).toEqual(['Blue 4', 'Green 2']);
+  });
+  it('a rack destination summarises as no crate', () => {
+    const s = summarizeBookCrateChanges([
+      { itemId: 'a', itemName: 'a', currentLabel: 'Blue 4', nextLabel: null },
+    ]);
+    expect(s.nextLabel).toBeNull();
   });
 });

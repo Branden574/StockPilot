@@ -1,11 +1,29 @@
 'use client';
 
-import { describeNewRackPlacement } from '@stockpilot/core';
-import { AlertTriangle, Loader2, PackageCheck } from 'lucide-react';
+import {
+  describeBookCrateChange,
+  describeNewRackPlacement,
+  parseBookCrateChangeDetail,
+  type BookStorageInfo,
+} from '@stockpilot/core';
+import { Loader2, PackageCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  CrateColorSelect,
+  CrateNumberInput,
+  CurrentStorageSummary,
+  DestinationCrateNote,
+  DestinationKindToggle,
+  NO_CRATE_COLOR,
+  type NewDestinationKind,
+} from '@/components/inventory/crate-fields';
+import {
+  PlacementConfirmDialog,
+  type PlacementConfirmContent,
+} from '@/components/inventory/placement-confirm-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -27,9 +45,18 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import type { DestinationOption } from '@/lib/locations/destination-option';
+import {
+  destinationCrate,
+  destinationLabel,
+  destinationPhrase,
+  isCrateChoice,
+  type ChosenDestination,
+} from '@/lib/locations/placement-destination';
 import { placeStockAction } from '@/server/actions/inventory';
 
 const NEW_RACK_SENTINEL = '__new__';
+
+type ActionDestination = Parameters<typeof placeStockAction>[0]['destination'];
 
 interface PlaceFromStagingDialogProps {
   itemId: string;
@@ -45,6 +72,13 @@ interface PlaceFromStagingDialogProps {
   /** Quantity sitting in the source holding (the placement ceiling). */
   availableQuantity: number;
   destinations: DestinationOption[];
+  /**
+   * A BOOK's recorded rack/crate SUMMARY, or null for a non-book. Shown as
+   * context and used to PREDICT the server's confirmation gate locally, so the
+   * question is asked before the submit rather than after it. Never authority:
+   * the server re-reads the item before it writes.
+   */
+  bookStorage?: BookStorageInfo | null;
   trigger?: React.ReactNode;
 }
 
@@ -58,6 +92,7 @@ export function PlaceFromStagingDialog({
   warehouseName,
   availableQuantity,
   destinations,
+  bookStorage,
   trigger,
 }: PlaceFromStagingDialogProps) {
   const router = useRouter();
@@ -69,21 +104,24 @@ export function PlaceFromStagingDialog({
   const [quantity, setQuantity] = React.useState(String(availableQuantity));
   const [notes, setNotes] = React.useState('');
 
-  // Inline new-rack/crate fields
+  // Inline "+ New" fields. `newKind` is now an EXPLICIT choice — typing a crate
+  // color used to be the only thing that made a destination a crate, which
+  // meant the field deciding locations.kind was never actually asked about.
+  const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
   const [crateColor, setCrateColor] = React.useState('');
   const [crateNumber, setCrateNumber] = React.useState('');
 
   const [submitting, setSubmitting] = React.useState(false);
-  // When the chosen "+ New rack/crate" does NOT already exist in this warehouse,
-  // we pause on a confirmation before creating it — the 2026-07-23 guard. Null
-  // means no pending confirmation (the common path, an existing destination,
-  // never sets it). Holds the exact copy + one-tap near-match alternatives.
-  const [pendingNewRack, setPendingNewRack] = React.useState<{
-    title: string;
-    message: string;
-    suggestions: string[];
+  // ONE pending confirmation, whatever it has to ask about — a genuinely new
+  // rack/crate (the 2026-07-23 typo guard), an overwrite of the book's
+  // recorded crate (the server's gate, predicted locally), or both at once.
+  // Null on the common path, which stays exactly as fast as it was.
+  const [pendingConfirm, setPendingConfirm] = React.useState<{
+    content: PlacementConfirmContent;
+    destination: ActionDestination;
+    acknowledgeCrateChange: boolean;
   } | null>(null);
   // Server failures render inline (persistent) as well as via toast — same
   // rationale as StockTransferDialog: a toast alone auto-dismisses outside
@@ -92,6 +130,7 @@ export function PlaceFromStagingDialog({
 
   const isBook = itemType === 'book';
   const isNew = destId === NEW_RACK_SENTINEL;
+  const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
 
   // Reset form state whenever the dialog opens
   React.useEffect(() => {
@@ -100,12 +139,13 @@ export function PlaceFromStagingDialog({
     setDestId('');
     setQuantity(String(availableQuantity));
     setNotes('');
+    setNewKind('rack');
     setRackNumber('');
     setRackRow('');
     setCrateColor('');
     setCrateNumber('');
     setServerError(null);
-    setPendingNewRack(null);
+    setPendingConfirm(null);
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -115,20 +155,54 @@ export function PlaceFromStagingDialog({
   // it described. Cheap to recompute: hitting Place re-derives it.
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
-    setPendingNewRack(null);
-  }, [destId, rackNumber, rackRow, crateColor, crateNumber, quantity]);
+    setPendingConfirm(null);
+  }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber, quantity]);
 
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
 
-  const canSubmit =
-    !submitting &&
-    qtyValid &&
-    (isNew ? rackNumber.trim().length > 0 : destId.length > 0);
+  const newFieldsFilled =
+    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
+  const canSubmit = !submitting && qtyValid && (isNew ? newFieldsFilled : destId.length > 0);
+
+  /** The destination as chosen in this form — the input to every derivation. */
+  function chosenDestination(): ChosenDestination | null {
+    if (isNew) {
+      return newKind === 'crate'
+        ? { mode: 'new-crate', crateColor, crateNumber }
+        : { mode: 'new-rack', rackNumber, rackRow };
+    }
+    return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
+  }
+
+  function toActionDestination(dest: ChosenDestination): ActionDestination {
+    if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
+    if (dest.mode === 'new-crate') {
+      // NO rackNumber. A crate is identified by its NUMBER; sending a rack
+      // number as well is what used to make a crate resolve as a rack.
+      return {
+        newRack: {
+          warehouseId,
+          crateNumber: dest.crateNumber.trim(),
+          ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+        },
+      };
+    }
+    return {
+      newRack: {
+        warehouseId,
+        rackNumber: dest.rackNumber.trim(),
+        ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
+      },
+    };
+  }
 
   // Run the placement. Split out from the gate below so the confirmation step
   // and the "Did you mean…" one-tap alternatives share ONE write path.
-  async function place(destination: Parameters<typeof placeStockAction>[0]['destination']) {
+  async function place(
+    destination: ActionDestination,
+    opts: { acknowledgeCrateChange?: boolean; describe?: ChosenDestination } = {},
+  ) {
     setSubmitting(true);
     setServerError(null);
     const res = await placeStockAction({
@@ -137,17 +211,53 @@ export function PlaceFromStagingDialog({
       quantity: qtyNum,
       notes: notes.trim() || undefined,
       destination,
+      ...(opts.acknowledgeCrateChange ? { acknowledgeCrateChange: true } : {}),
     });
     setSubmitting(false);
 
     if (!res.ok) {
+      // The server refused because this placement overwrites a crate a human
+      // recorded. Our local prediction can be stale (the row may have changed
+      // since the page rendered, and a non-Staging surface may not predict at
+      // all), so the refusal is rendered from ITS payload and retried with the
+      // acknowledgement. Only ever asked once: if we already acknowledged and
+      // it still refuses, that is a real error.
+      const detail = parseBookCrateChangeDetail(res.error.details);
+      if (detail && !opts.acknowledgeCrateChange) {
+        setPendingConfirm({
+          content: {
+            title: 'Change this book’s crate?',
+            message: res.error.message,
+            crateItems: detail.items,
+            confirmLabel: 'Continue placement',
+          },
+          destination,
+          acknowledgeCrateChange: true,
+        });
+        return;
+      }
       setServerError(res.error.message);
       toast.error(res.error.message);
       return;
     }
 
-    toast.success(`Placed ${qtyNum} ${qtyNum === 1 ? 'unit' : 'units'} of ${itemName}.`);
+    const unit = isBook ? (qtyNum === 1 ? 'copy' : 'copies') : qtyNum === 1 ? 'unit' : 'units';
+    const where = opts.describe ? ` ${destinationPhrase(opts.describe)}` : '';
+    toast.success(`Placed ${qtyNum} ${unit} of ${itemName}${where}.`);
+    // The stock genuinely moved either way; these say the LABEL did not follow.
+    if (res.data.crateSyncFailed) {
+      toast.warning(
+        `${itemName} was placed, but its crate label could not be updated — check the book’s details.`,
+      );
+    } else if (res.data.crateSyncSkipped) {
+      toast.warning(
+        `${itemName} now has stock in more than one location, so its crate label was left unchanged.`,
+      );
+    }
+    setPendingConfirm(null);
     setOpen(false);
+    // Staging must re-render: a PARTIAL placement leaves the remainder in the
+    // source bucket, and that row has to come back with its new quantity.
     router.refresh();
   }
 
@@ -157,61 +267,84 @@ export function PlaceFromStagingDialog({
       return;
     }
 
-    if (!isNew) {
-      if (!destId) {
-        toast.error('Select a destination location.');
-        return;
+    const dest = chosenDestination();
+    if (!dest) {
+      toast.error('Select a destination location.');
+      return;
+    }
+    if (isNew && !newFieldsFilled) {
+      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
+      return;
+    }
+
+    const destination = toActionDestination(dest);
+
+    // 1. Does this OVERWRITE a crate someone recorded? Predicted with the same
+    //    comparator the server gate uses, against the book's summary and the
+    //    destination's own crate columns (never re-typed metadata).
+    const next = destinationCrate(dest);
+    const crateLines =
+      isBook && bookStorage
+        ? describeBookCrateChange({
+            currentColor: bookStorage.crateColor,
+            currentNumber: bookStorage.crateNumber,
+            nextColor: next.color,
+            nextNumber: next.number,
+          })
+        : [];
+
+    // 2. Does it MINT a location? describeNewRackPlacement checks the label
+    //    against this warehouse's existing rack/crate names — an existing
+    //    label is reused by the server, so it is not a creation and needs no
+    //    confirmation (zero friction on the common path).
+    const creation =
+      dest.mode === 'existing'
+        ? null
+        : describeNewRackPlacement({
+            label: destinationLabel(dest),
+            warehouseName,
+            quantity: qtyNum,
+            existingLabels: destinations.map((d) => d.name),
+            noun: isCrateChoice(dest) ? 'crate' : 'rack',
+          });
+    const creating = creation !== null && !creation.exists;
+
+    if (!creating && crateLines.length === 0) {
+      void place(destination, { describe: dest });
+      return;
+    }
+
+    // ONE dialog for both questions. Notices carry the things that are true
+    // but not questions: the remainder left behind by a partial placement, and
+    // the rack label this also changes.
+    const notices: string[] = [];
+    if (qtyNum < availableQuantity) {
+      notices.push(
+        `${availableQuantity - qtyNum} of ${availableQuantity} will stay in ${sourceLabel.toLowerCase()}, so this title will sit in more than one place.`,
+      );
+    }
+    if (isBook && bookStorage?.rackLabel && !isCrateChoice(dest)) {
+      const nextRack = destinationLabel(dest);
+      if (bookStorage.rackLabel.toLowerCase() !== nextRack.toLowerCase()) {
+        notices.push(`Rack will change from ${bookStorage.rackLabel} to ${nextRack}.`);
       }
-      void place({ existingLocationId: destId });
-      return;
     }
 
-    if (!rackNumber.trim()) {
-      toast.error('Enter a rack number.');
-      return;
-    }
-
-    // The chosen destination is a rack/crate typed inline. Before creating it we
-    // ask whether it is genuinely new — the 2026-07-23 guard against a slipped
-    // keystroke minting a rack. describeNewRackPlacement checks the label against
-    // this warehouse's EXISTING rack/crate names (findOrCreateRackOrCrate reuses
-    // a name match, so an existing label is not a creation and needs no
-    // confirmation — zero friction on the common path).
-    const isCrate = isBook && crateColor.trim().length > 0;
-    const label = isCrate
-      ? `${crateColor.trim()} #${crateNumber.trim() || rackNumber.trim()}`
-      : rackRow.trim()
-        ? `${rackNumber.trim()}-${rackRow.trim()}`
-        : rackNumber.trim();
-    const decision = describeNewRackPlacement({
-      label,
-      warehouseName,
-      quantity: qtyNum,
-      existingLabels: destinations.map((d) => d.name),
-      noun: isCrate ? 'crate' : 'rack',
-    });
-
-    const destination = {
-      newRack: {
-        warehouseId,
-        rackNumber: rackNumber.trim(),
-        ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-        ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
-        ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+    setPendingConfirm({
+      content: {
+        title: creating ? creation!.title : 'Change this book’s crate?',
+        message: creating
+          ? creation!.message
+          : `${itemName} is recorded in ${bookStorage?.crateLabel ?? 'a different crate'}.`,
+        ...(creating && creation!.suggestions.length > 0
+          ? { suggestions: creation!.suggestions }
+          : {}),
+        ...(crateLines.length > 0 ? { crateLines } : {}),
+        ...(notices.length > 0 ? { notices } : {}),
+        confirmLabel: creating ? 'Create and place' : 'Continue placement',
       },
-    } satisfies Parameters<typeof placeStockAction>[0]['destination'];
-
-    if (decision.exists) {
-      // Typed the name of a rack that already exists — the server will reuse it,
-      // nothing is created, so proceed without a confirmation.
-      void place(destination);
-      return;
-    }
-
-    setPendingNewRack({
-      title: decision.title,
-      message: decision.message,
-      suggestions: decision.suggestions,
+      destination,
+      acknowledgeCrateChange: crateLines.length > 0,
     });
   }
 
@@ -223,8 +356,11 @@ export function PlaceFromStagingDialog({
       (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (!match) return;
-    setPendingNewRack(null);
-    void place({ existingLocationId: match.id });
+    setPendingConfirm(null);
+    void place(
+      { existingLocationId: match.id },
+      { describe: { mode: 'existing', option: match } },
+    );
   }
 
   return (
@@ -248,6 +384,9 @@ export function PlaceFromStagingDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {/* Where this book is recorded today — context for the decision. */}
+          {isBook && bookStorage && <CurrentStorageSummary storage={bookStorage} />}
+
           {/* Fixed source */}
           <div className="space-y-1.5">
             <Label>From</Label>
@@ -272,48 +411,64 @@ export function PlaceFromStagingDialog({
                 <SelectItem value={NEW_RACK_SENTINEL}>+ New rack / crate</SelectItem>
               </SelectContent>
             </Select>
+            {/* An EXISTING crate already carries its metadata — show it rather
+                than making the user re-type what the location row holds. */}
+            {isBook && selectedDestination && (
+              <DestinationCrateNote
+                crateColor={selectedDestination.crateColor}
+                crateNumber={selectedDestination.crateNumber}
+              />
+            )}
           </div>
 
           {/* Inline new rack/crate inputs */}
           {isNew && (
             <div className="space-y-3 rounded-md border p-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>
-                    Rack number <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    placeholder="e.g. A1"
-                    value={rackNumber}
-                    onChange={(e) => setRackNumber(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Row (optional)</Label>
-                  <Input
-                    placeholder="e.g. Row 3"
-                    value={rackRow}
-                    onChange={(e) => setRackRow(e.target.value)}
-                  />
-                </div>
-              </div>
+              {isBook && <DestinationKindToggle value={newKind} onChange={setNewKind} />}
 
-              {isBook && (
+              {(!isBook || newKind === 'rack') && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label>Crate color (optional)</Label>
+                    <Label htmlFor="place-rack-number">
+                      Rack number <span className="text-destructive">*</span>
+                    </Label>
                     <Input
-                      placeholder="e.g. Blue"
-                      value={crateColor}
-                      onChange={(e) => setCrateColor(e.target.value)}
+                      id="place-rack-number"
+                      placeholder="e.g. A1"
+                      value={rackNumber}
+                      onChange={(e) => setRackNumber(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Crate number (optional)</Label>
+                    <Label htmlFor="place-rack-row">Row (optional)</Label>
                     <Input
-                      placeholder="e.g. 42"
+                      id="place-rack-row"
+                      placeholder="e.g. Row 3"
+                      value={rackRow}
+                      onChange={(e) => setRackRow(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {isBook && newKind === 'crate' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="place-crate-color">Crate color (optional)</Label>
+                    <CrateColorSelect
+                      id="place-crate-color"
+                      value={crateColor}
+                      onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="place-crate-number">
+                      Crate number <span className="text-destructive">*</span>
+                    </Label>
+                    <CrateNumberInput
+                      id="place-crate-number"
                       value={crateNumber}
-                      onChange={(e) => setCrateNumber(e.target.value)}
+                      onChange={setCrateNumber}
                     />
                   </div>
                 </div>
@@ -323,13 +478,14 @@ export function PlaceFromStagingDialog({
 
           {/* Quantity — supports split */}
           <div className="space-y-1.5">
-            <Label>
+            <Label htmlFor="place-quantity">
               Quantity{' '}
               <span className="text-muted-foreground font-normal">
                 (max {availableQuantity})
               </span>
             </Label>
             <Input
+              id="place-quantity"
               type="number"
               step="1"
               min="1"
@@ -346,8 +502,9 @@ export function PlaceFromStagingDialog({
 
           {/* Notes */}
           <div className="space-y-1.5">
-            <Label>Notes (optional)</Label>
+            <Label htmlFor="place-notes">Notes (optional)</Label>
             <Textarea
+              id="place-notes"
               rows={2}
               value={notes}
               maxLength={2000}
@@ -357,35 +514,6 @@ export function PlaceFromStagingDialog({
           </div>
         </div>
 
-        {pendingNewRack && (
-          <div
-            role="alertdialog"
-            aria-label={pendingNewRack.title}
-            className="border-amber-500/40 bg-amber-500/10 space-y-2 rounded-md border p-3"
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="text-amber-600 dark:text-amber-500 h-4 w-4 shrink-0" />
-              <p className="text-sm font-medium">{pendingNewRack.title}</p>
-            </div>
-            <p className="text-muted-foreground text-sm">{pendingNewRack.message}</p>
-            {pendingNewRack.suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-0.5">
-                {pendingNewRack.suggestions.map((s) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant="outline"
-                    disabled={submitting}
-                    onClick={() => placeIntoSuggestion(s)}
-                  >
-                    Use {s} instead
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {serverError && (
           <p role="alert" className="text-sm text-destructive">
             {serverError}
@@ -393,44 +521,30 @@ export function PlaceFromStagingDialog({
         )}
 
         <DialogFooter>
-          {pendingNewRack ? (
-            <>
-              <Button
-                variant="outline"
-                onClick={() => setPendingNewRack(null)}
-                disabled={submitting}
-              >
-                Back
-              </Button>
-              <Button
-                onClick={() =>
-                  void place({
-                    newRack: {
-                      warehouseId,
-                      rackNumber: rackNumber.trim(),
-                      ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-                      ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
-                      ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
-                    },
-                  })
-                }
-                disabled={submitting}
-              >
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create and place'}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button onClick={submit} disabled={!canSubmit}>
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Place stock'}
-              </Button>
-            </>
-          )}
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!canSubmit}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Place stock'}
+          </Button>
         </DialogFooter>
       </DialogContent>
+
+      <PlacementConfirmDialog
+        open={pendingConfirm !== null}
+        content={pendingConfirm?.content ?? null}
+        submitting={submitting}
+        onCancel={() => setPendingConfirm(null)}
+        onConfirm={() => {
+          if (!pendingConfirm) return;
+          const dest = chosenDestination();
+          void place(pendingConfirm.destination, {
+            acknowledgeCrateChange: pendingConfirm.acknowledgeCrateChange,
+            ...(dest ? { describe: dest } : {}),
+          });
+        }}
+        onUseSuggestion={placeIntoSuggestion}
+      />
     </Dialog>
   );
 }

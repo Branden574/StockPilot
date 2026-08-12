@@ -338,6 +338,11 @@ describe('syncBookCratePlacement', () => {
     const res = await svc.syncBookCratePlacement([BOOK_A]);
 
     expect(res.failedItemIds).toEqual([]);
+    // REPORTED, not silent. A skip that says nothing is indistinguishable from
+    // a success, and for an org whose books also sit on a Site (migration
+    // 0292: 405 units on DC4 alone) the skip is the COMMON outcome — the whole
+    // feature would look like it worked and changed nothing.
+    expect(res.skippedItemIds).toEqual([BOOK_A]);
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
   });
 
@@ -435,6 +440,53 @@ describe('syncBookCratePlacement', () => {
     expect(stub.fromCalls).not.toContain('item_stock_levels');
   });
 
+  it('NEVER throws when the summary read fails — the stock already moved', async () => {
+    // readBookCrateSummaries throws ServiceError on a query error. Every caller
+    // runs this AFTER transferStock has committed, so an escaping exception
+    // reads as "placement failed" for a placement that succeeded — and the
+    // operator retries and moves the stock a second time.
+    const { svc } = svcWith({
+      'inventory_items.select': { data: null, error: { message: 'connection reset' } },
+    });
+
+    await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
+      failedItemIds: [BOOK_A],
+      skippedItemIds: [],
+    });
+  });
+
+  it('does not merge two DIFFERENT crates that share a space-joined key', async () => {
+    // crate_number is free text and production holds "Blue Shelf", so
+    // ('Blue','Shelf 2') and ('Blue Shelf','2') keyed identically once — and
+    // the first pair to claim the key was written onto both batches' books.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', null),
+          itemRow(BOOK_B, 'Maus I', 'book', null),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-a', { kind: 'crate', crate_color: 'Blue', crate_number: 'Shelf 2' }),
+          holding(BOOK_B, 'loc-b', { kind: 'crate', crate_color: 'Blue Shelf', crate_number: '2' }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_storage': { data: 1, error: null },
+    });
+
+    await svc.syncBookCratePlacement([BOOK_A, BOOK_B]);
+
+    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.args)).toEqual([
+      { p_item_ids: [BOOK_A], p_crate_color: 'Blue', p_crate_number: 'Shelf 2' },
+      { p_item_ids: [BOOK_B], p_crate_color: 'Blue Shelf', p_crate_number: '2' },
+    ]);
+  });
+
   it('books landing in the SAME crate share ONE RPC call', async () => {
     const { svc, stub } = svcWith({
       'inventory_items.select': {
@@ -478,6 +530,7 @@ describe('syncBookCratePlacement', () => {
     // real movement is worse than a stale label. It reports instead.
     await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
       failedItemIds: [BOOK_A],
+      skippedItemIds: [],
     });
   });
 
@@ -498,6 +551,7 @@ describe('syncBookCratePlacement', () => {
 
     await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
       failedItemIds: [BOOK_A],
+      skippedItemIds: [],
     });
   });
 
@@ -539,7 +593,10 @@ describe('syncBookCratePlacement', () => {
 
   it('writes nothing for an empty id list — no round trip', async () => {
     const { svc, stub } = svcWith({});
-    await expect(svc.syncBookCratePlacement([])).resolves.toEqual({ failedItemIds: [] });
+    await expect(svc.syncBookCratePlacement([])).resolves.toEqual({
+      failedItemIds: [],
+      skippedItemIds: [],
+    });
     expect(stub.fromCalls).toEqual([]);
   });
 });

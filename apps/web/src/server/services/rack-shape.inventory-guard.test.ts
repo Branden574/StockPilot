@@ -49,6 +49,13 @@ const READ_ONLY = [
   'apps/web/src/server/loaders/orders-new-catalog.ts',
   'apps/web/src/lib/inventory-export.ts',
   'apps/mobile/app/(drawer)/(tabs)/books.tsx',
+  // THE mapper: the one place a `locations` row becomes a placement
+  // destination. It copies the pair into camelCase and hands it to
+  // stampPlacementBin, which normalises through the shared parser — so it
+  // reads, it never stores. It is listed because the guard's whole promise is
+  // that no file naming a rack key is unclassified, and this is now the file
+  // future readers are pointed at.
+  'apps/web/src/lib/locations/destination-option.ts',
 ] as const;
 
 /**
@@ -70,6 +77,14 @@ const READ_ONLY = [
  *
  * If either file reappears in the scan, someone re-introduced a hand-rolled
  * copy — send it back to `toPlaceDest` rather than re-adding it here.
+ *
+ * The mapper ITSELF used to escape the scan too, by accident rather than by
+ * design: it declares `rack_number?: string | null` and reads
+ * `loc.rack_number as string | null`, and the pattern demanded the key sit
+ * immediately before a `:` or `=`. So the guard's promise — "a new file can
+ * never slip in unclassified" — did not hold for the very module this comment
+ * points at. The pattern now tolerates an optional-property `?`, which brings
+ * exactly that one file in (it is classified READ_ONLY above).
  */
 
 function scanRackKeyFiles(): string[] {
@@ -78,7 +93,10 @@ function scanRackKeyFiles(): string[] {
     'grep',
     [
       '-rlE',
-      String.raw`\b(book_)?rack_(number|row)[[:space:]]*[:=]`,
+      // `\??` so an OPTIONAL property declaration ("rack_number?: string")
+      // counts as naming the key — without it the canonical mapper was
+      // invisible to its own guard.
+      String.raw`\b(book_)?rack_(number|row)\??[[:space:]]*[:=]`,
       'apps/web/src',
       'apps/mobile/app',
       'apps/mobile/src',
