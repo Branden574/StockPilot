@@ -49,6 +49,14 @@ export function PhotoViewer({
   // consumer is the tap handler's "am I zoomed" check at press time.
   const zoomedRef = React.useRef(false);
 
+  // The Modal unmounts its children when hidden, so the ScrollView remounts
+  // at zoom 1 — but THIS component stays mounted and the ref would remember
+  // the old zoom until the first scroll event. Re-sync it on visibility so a
+  // close-while-zoomed never leaves backdrop-tap-to-close inert on reopen.
+  React.useEffect(() => {
+    zoomedRef.current = false;
+  }, [visible]);
+
   return (
     <Modal
       visible={visible}
