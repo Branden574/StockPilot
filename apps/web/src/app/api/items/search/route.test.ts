@@ -281,3 +281,222 @@ describe('GET /api/items/search', () => {
     );
   });
 });
+
+// ── PO line-item picker flags ─────────────────────────────────────────────
+// All four are opt-in. The "forwards filters to InventoryService.list" test
+// above asserts the WHOLE filter object for a request that passes none of
+// them, so it is also the proof that an absent flag changes nothing.
+
+describe('GET /api/items/search — ?expected=any (PO pickers, mig 0277)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as any,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+  });
+
+  it("forwards expected:'any' so an item awaiting its first receipt is still offerable", async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=charlotte&expected=any'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expected: 'any' }),
+    );
+  });
+
+  it("does NOT widen status to 'all' — only the ?expected=1 chip view does that", async () => {
+    // 'any' is truthy; a bare truthiness check here would silently start
+    // offering ARCHIVED items in the PO picker.
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=charlotte&expected=any'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: undefined }),
+    );
+  });
+
+  it("?expected=1 still widens status to 'all' (unchanged)", async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=charlotte&expected=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expected: true, status: 'all' }),
+    );
+  });
+});
+
+describe('GET /api/items/search — ?isbn=1 (ISBN-10 ⇄ ISBN-13 equivalence)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as any,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+  });
+
+  it('expands a typed ISBN-13 to BOTH forms', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=9780142407332&isbn=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: '9780142407332',
+        isbnVariants: ['9780142407332', '014240733X'],
+      }),
+    );
+  });
+
+  it('expands a typed ISBN-10 to the SAME pair — the two are interchangeable', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=014240733X&isbn=1'));
+    const filters = inventoryListMock.mock.calls[0]?.[0] as { isbnVariants: string[] };
+    expect([...filters.isbnVariants].sort()).toEqual(['014240733X', '9780142407332']);
+  });
+
+  it('a hyphenated ISBN still expands (the barcode column stores it unhyphenated)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=978-0-14-240733-2&isbn=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ isbnVariants: ['9780142407332', '014240733X'] }),
+    );
+  });
+
+  it('a word query passes NO isbnVariants key at all', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=charlotte&isbn=1'));
+    const filters = inventoryListMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect('isbnVariants' in filters).toBe(false);
+  });
+
+  it('without ?isbn=1 an ISBN query passes no isbnVariants key (existing callers unchanged)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=9780142407332'));
+    const filters = inventoryListMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect('isbnVariants' in filters).toBe(false);
+  });
+});
+
+describe('GET /api/items/search — ?ids= (selected-line label resolution)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as any,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+  });
+
+  it('resolves by id with no q, across lifecycles, and bypasses the 2-char floor', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('ids=i1&ids=i2&type=product&type=book'));
+    expect(inventoryListMock).toHaveBeenCalledWith({
+      ids: ['i1', 'i2'],
+      itemType: undefined,
+      itemTypes: ['product', 'book'],
+      excludeBundles: false,
+      // A line can point at an item archived, or still awaiting its first
+      // receipt, AFTER it was put on the PO. Rendering it blank is the bug
+      // this mode exists to stop.
+      status: 'all',
+      expected: 'any',
+      warehouseId: undefined,
+      limit: 2,
+    });
+  });
+
+  it('caps at 100 ids per request', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    const qs = Array.from({ length: 130 }, (_, i) => `ids=i${i}`).join('&');
+    await GET(makeReq(qs));
+    const filters = inventoryListMock.mock.calls[0]?.[0] as { ids: string[]; limit: number };
+    expect(filters.ids).toHaveLength(100);
+    expect(filters.ids[0]).toBe('i0');
+    expect(filters.ids[99]).toBe('i99');
+    expect(filters.limit).toBe(100);
+  });
+
+  it('an empty ?ids list is not id-mode — the 2-char floor still short-circuits', async () => {
+    const res = await GET(makeReq('ids='));
+    expect(await res.json()).toEqual({ items: [], total: 0 });
+    expect(inventoryListMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/items/search — ?slim=1 (text-row pickers)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as any,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+  });
+
+  const bookRow = {
+    id: 'b1',
+    sku: 'BK-1',
+    barcode: '9780142407332',
+    name: "Charlotte's Web",
+    quantity_on_hand: 3,
+    reorder_point: 0,
+    unit_cost: 6.5,
+    retail_price: 9,
+    status: 'active',
+    category_id: 'c1',
+    primary_location_id: null,
+    warehouse_id: 'w1',
+    item_type: 'book',
+    custom_fields: { thumbnail_url: 'https://cf.example/b1.jpg', notes: 'x'.repeat(50) },
+    group_id: null,
+    variant_size: null,
+    updated_at: '2026-08-01T00:00:00Z',
+  };
+
+  it('returns ONLY the fields a picker row needs', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [bookRow], total: 1 });
+    const res = await GET(makeReq('q=charlotte&slim=1'));
+    const body = await res.json();
+    expect(body).toEqual({
+      items: [
+        {
+          id: 'b1',
+          sku: 'BK-1',
+          name: "Charlotte's Web",
+          barcode: '9780142407332',
+          item_type: 'book',
+          unit_cost: 6.5,
+          group_id: null,
+          variant_size: null,
+        },
+      ],
+      total: 1,
+    });
+  });
+
+  it('skips the signed-image batch entirely — no storage round trip per keystroke', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [bookRow], total: 1 });
+    await GET(makeReq('q=charlotte&slim=1'));
+    expect(primaryImagesMock).not.toHaveBeenCalled();
+  });
+
+  it('without ?slim=1 the full row shape and the image batch are unchanged', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [bookRow], total: 1 });
+    const res = await GET(makeReq('q=charlotte'));
+    const body = await res.json();
+    expect(primaryImagesMock).toHaveBeenCalledWith(['b1']);
+    expect(body.items[0].custom_fields).toEqual(bookRow.custom_fields);
+    expect(body.items[0].image_url).toBe('https://cf.example/b1.jpg');
+    expect(body.items[0].retail_price).toBe(9);
+  });
+});

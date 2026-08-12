@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { isbnVariants } from '@/lib/books/isbn-variants';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 
@@ -44,6 +45,12 @@ const VALID_SORTS = new Set<ItemListSort>([
  * one searches across items + POs + suppliers + warehouses and caps at
  * 5 per group. This one is items-only and supports the full filter set
  * the inventory page exposes.
+ *
+ * Also the shared search behind the cycle-count picker (`?browse=1`), the
+ * order add-items picker (repeated `?type=`) and the PO line-item picker
+ * (`?slim=1&isbn=1&expected=any`, plus `?ids=` for label resolution). Every
+ * flag added for one of those is opt-in: with none of them present the
+ * request behaves exactly as it always has.
  */
 export async function GET(req: Request): Promise<Response> {
   const ctx = await withApiContext(req);
@@ -60,7 +67,18 @@ export async function GET(req: Request): Promise<Response> {
   // floor — the instant-search flow keeps its guard so a keystroke of
   // "a" never triggers an unfiltered org-wide scan.
   const browse = params.get('browse') === '1';
-  if (!browse && raw.length < 2) {
+
+  // Resolve-by-id mode (`?ids=<uuid>&ids=<uuid>`). A picker that pages its
+  // results server-side still has to render the LABEL of an already-selected
+  // row that no longer appears in the current page — an edit-mode PO line
+  // pointing at an off-page item would otherwise render blank. This narrows
+  // to those exact ids (InventoryService.list's `ids` filter only ever
+  // SUBTRACTS from the org/RLS/warehouse-scoped set, so it can't widen
+  // visibility) and, like a label lookup must, ignores `q` entirely.
+  const ids = params.getAll('ids').filter(Boolean).slice(0, 100);
+  const byIds = ids.length > 0;
+
+  if (!browse && !byIds && raw.length < 2) {
     return NextResponse.json({ items: [], total: 0 });
   }
 
@@ -98,9 +116,24 @@ export async function GET(req: Request): Promise<Response> {
 
   // Expected-items visibility (mig 0277): mirrors the list pages —
   // '?expected=1' returns ONLY items awaiting their first receipt (the
-  // Expected chip view's in-view search); anything else excludes them,
-  // which InventoryService.list does by default.
-  const expected = params.get('expected') === '1';
+  // Expected chip view's in-view search); '?expected=any' applies NO
+  // predicate, which is what the PO item pickers need (re-ordering a SKU
+  // that is on order but never received must reuse the existing row rather
+  // than invite a duplicate — same rule the PO pages' server-side
+  // list({ expected: 'any' }) already follows); anything else excludes
+  // them, which InventoryService.list does by default.
+  const rawExpected = params.get('expected');
+  const expected: boolean | 'any' =
+    rawExpected === 'any' ? 'any' : rawExpected === '1';
+
+  // ISBN-10 ⇄ ISBN-13 equivalence (`?isbn=1`). A book is stocked under
+  // whichever ISBN form was captured at creation (barcode = ISBN, the same
+  // column po-imports-lines.ts matches an imported book line against), so a
+  // buyer typing the other form finds nothing without expanding it. Opt-in,
+  // and isbnVariants() returns [] for anything that isn't a 10/13-character
+  // ISBN, so a normal word query is unaffected either way.
+  const wantIsbn = params.get('isbn') === '1';
+  const isbnMatches = wantIsbn && raw ? isbnVariants(raw) : [];
 
   const rawSort = params.get('sort');
   const sort =
@@ -125,27 +158,72 @@ export async function GET(req: Request): Promise<Response> {
   const offset = Math.min(10_000, Math.max(0, Number(params.get('offset')) || 0));
 
   const inventorySvc = new InventoryService(ctx);
-  const result = await inventorySvc.list({
-    q: raw,
-    itemType,
-    itemTypes,
-    excludeBundles,
-    // The Expected view spans lifecycles (mobile's listStatusPredicate
-    // lifecycle:null; the Items/Books pages pass status:'all' the same
-    // way) — so searching inside the chip view also reaches a flagged
-    // item someone manually archived.
-    status: expected ? 'all' : status,
-    lowStock,
-    outOfStock,
-    expected,
-    sort,
-    categoryIds,
-    locationIds,
-    rack,
-    warehouseId,
-    limit,
-    offset,
-  });
+  const result = await inventorySvc.list(
+    byIds
+      ? {
+          // Label resolution, not search: no q, no chip filters. Lifecycle
+          // and expected predicates are both opened up because a line can
+          // legitimately point at an item that was archived, or that is
+          // still awaiting its first receipt, AFTER it was put on the PO —
+          // rendering that line blank is the bug this mode exists to stop.
+          ids,
+          itemType,
+          itemTypes,
+          excludeBundles,
+          status: 'all',
+          expected: 'any',
+          warehouseId,
+          limit: ids.length,
+        }
+      : {
+          q: raw,
+          itemType,
+          itemTypes,
+          excludeBundles,
+          // The Expected view spans lifecycles (mobile's listStatusPredicate
+          // lifecycle:null; the Items/Books pages pass status:'all' the same
+          // way) — so searching inside the chip view also reaches a flagged
+          // item someone manually archived. `expected: 'any'` is NOT that
+          // view: it must keep the caller's own status filter (default
+          // active-only), or a PO picker would start offering archived rows.
+          status: expected === true ? 'all' : status,
+          lowStock,
+          outOfStock,
+          expected,
+          ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
+          sort,
+          categoryIds,
+          locationIds,
+          rack,
+          warehouseId,
+          limit,
+          offset,
+        },
+  );
+
+  // Slim projection (`?slim=1`), for pickers that render a text row and no
+  // thumbnail — the PO item picker fires one request per debounced keystroke
+  // and has no use for a description, a custom_fields blob, or a batch of
+  // signed storage URLs it will never render. Skipping the image batch drops
+  // a whole storage round trip per keystroke. Opt-in: without the flag the
+  // response is exactly the shape every existing caller reads today.
+  if (params.get('slim') === '1') {
+    const slim = result.items.map((i) => ({
+      id: i.id as string,
+      sku: i.sku as string,
+      name: i.name as string,
+      // Books store their ISBN here (barcode = ISBN), which is what the
+      // picker row shows next to the Book marker.
+      barcode: (i as { barcode?: string | null }).barcode ?? null,
+      item_type: i.item_type as 'product' | 'book' | 'asset' | 'consumable',
+      unit_cost: Number(i.unit_cost) || 0,
+      // Sports variant identity (0298) — NULL on every item in every
+      // non-sports org. Carried so a picked variant keeps its identity.
+      group_id: (i as { group_id?: string | null }).group_id ?? null,
+      variant_size: (i as { variant_size?: string | null }).variant_size ?? null,
+    }));
+    return NextResponse.json({ items: slim, total: result.total });
+  }
 
   // Attach signed image URLs in batch. Mirrors what page.tsx does for
   // the SSR render so the client-side swap is visually consistent.

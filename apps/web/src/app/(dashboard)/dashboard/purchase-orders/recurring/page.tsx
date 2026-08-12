@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react';
 
 import { RecurringTemplatesSeedLoader } from '@/components/po/recurring-templates-seed-loader';
 import { requireOrgContext } from '@/lib/auth/session';
+import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
@@ -62,7 +63,12 @@ export default async function RecurringPosPage() {
     // ordering — the picker must offer items still awaiting their first
     // receipt so a template can reference them instead of inviting a
     // duplicate item (same rule as the PO create/edit pickers).
-    inventorySvc.list({ limit: 1000, expected: 'any' }),
+    //
+    // itemTypes (PURCHASE_ORDER_ITEM_TYPES): the SAME constant the PO
+    // create/edit pages pass, so a recurring template can order every type a
+    // one-off PO can. Without it list() falls back to `item_type = 'product'`
+    // and books are invisible here too.
+    inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
   ]);

@@ -29,6 +29,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isbnVariants } from '@/lib/books/isbn-variants';
+import { PURCHASE_ORDER_ITEM_TYPES } from '@/lib/purchase-orders/item-types';
 import { cn } from '@/lib/utils';
 import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 import { formatCurrency } from '@/lib/utils';
@@ -43,6 +45,92 @@ interface ItemOption {
   /** Sports variant identity (0298). NULL on every item in every non-sports org. */
   groupId?: string | null;
   variantSize?: string | null;
+  /**
+   * `inventory_items.item_type`. Only ever 'product' or 'book' on a PO
+   * (PURCHASE_ORDER_ITEM_TYPES) — drives the "Book" marker on a picker row.
+   */
+  itemType?: string | null;
+  /** For a book this IS the ISBN (barcode = ISBN, as the PO importer matches on). */
+  barcode?: string | null;
+}
+
+// ─── Server-backed item search ─────────────────────────────────────────────
+// The picker used to filter a page-level `list({ limit: 1000 })` array in the
+// browser, so anything past that cap was unfindable AND unofferable — which is
+// also how a whole item TYPE (books) could be missing without the picker ever
+// saying so. It now searches server-side through the SHARED
+// /api/items/search endpoint (withApiContext-gated, a thin wrapper over
+// InventoryService.list, so RLS, warehouse scoping and the archived / deleted /
+// rental exclusions all hold exactly as they do on the list pages).
+
+/** Rows a picker shows per query. Small on purpose: this is a line-item
+ *  combobox, not a catalog browser. */
+const SEARCH_LIMIT = 25;
+/** Trailing debounce — collapses a burst of keystrokes into one request. */
+const SEARCH_DEBOUNCE_MS = 250;
+/** /api/items/search short-circuits below 2 characters (its instant-search
+ *  guard); under that we filter the SSR list locally instead. */
+const MIN_SERVER_QUERY = 2;
+
+/** The `?slim=1` row shape /api/items/search returns. */
+interface SlimSearchRow {
+  id: string;
+  sku: string;
+  name: string;
+  barcode: string | null;
+  item_type: string;
+  unit_cost: number;
+  group_id: string | null;
+  variant_size: string | null;
+}
+
+function toItemOption(r: SlimSearchRow): ItemOption {
+  return {
+    id: r.id,
+    name: r.name,
+    sku: r.sku,
+    unit_cost: Number(r.unit_cost) || 0,
+    groupId: r.group_id,
+    variantSize: r.variant_size,
+    itemType: r.item_type,
+    barcode: r.barcode,
+  };
+}
+
+/** Item-type params shared by both requests below, so search results and
+ *  label resolution can never span different types. */
+function appendPoItemTypes(p: URLSearchParams): void {
+  for (const t of PURCHASE_ORDER_ITEM_TYPES) p.append('type', t);
+}
+
+function buildSearchUrl(q: string): string {
+  const p = new URLSearchParams();
+  p.set('q', q);
+  // Text rows only — no thumbnails to sign, no custom_fields blob to ship.
+  p.set('slim', '1');
+  // ISBN-10 ⇄ ISBN-13 equivalence: a book stocked under one form must be
+  // findable by the other.
+  p.set('isbn', '1');
+  // mig 0277: re-ordering a SKU that is on order but never received has to
+  // reuse the existing row instead of inviting a duplicate.
+  p.set('expected', 'any');
+  p.set('sort', 'name_asc');
+  p.set('limit', String(SEARCH_LIMIT));
+  appendPoItemTypes(p);
+  return `/api/items/search?${p.toString()}`;
+}
+
+function buildResolveByIdsUrl(ids: string[]): string {
+  const p = new URLSearchParams();
+  for (const id of ids) p.append('ids', id);
+  p.set('slim', '1');
+  appendPoItemTypes(p);
+  return `/api/items/search?${p.toString()}`;
+}
+
+/** Digits + a trailing X check character, for ISBN comparison. */
+function isbnKey(s: string): string {
+  return s.replace(/[^0-9Xx]/g, '').toUpperCase();
 }
 
 interface Option {
@@ -125,9 +213,11 @@ interface ItemPickerProps {
   /**
    * Extra items consulted ONLY to resolve the currently-selected item's
    * label — never merged into the searchable list. A line added via "Add
-   * size run" may point at an item past `items`' page-level cap; without
-   * this fallback that line would render as unselected even though it has a
-   * real itemId.
+   * size run" may point at an item past `items`' page-level cap, and an
+   * edit-mode line may point at one no query on this screen returned;
+   * without this fallback either renders as unselected even though it has a
+   * real itemId. PoForm feeds it the size-run variants plus the rows it
+   * resolved by id.
    */
   extraItems?: ItemOption[];
 }
@@ -142,35 +232,119 @@ function ItemPicker({
 }: ItemPickerProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  /** Server rows for the CURRENT query; null = none yet for this query. */
+  const [results, setResults] = React.useState<ItemOption[] | null>(null);
+  const [searching, setSearching] = React.useState(false);
+  const [searchFailed, setSearchFailed] = React.useState(false);
+  /** Monotonic request id. A response whose id is not the latest is dropped,
+   *  so a slow early request can never overwrite a newer one's rows. */
+  const seqRef = React.useRef(0);
+
+  const trimmedQuery = query.trim();
+  const usingServer = trimmedQuery.length >= MIN_SERVER_QUERY;
 
   // Derive the label shown in the trigger. `extraItems` is a fallback ONLY —
-  // it never affects search results below, just this lookup.
+  // it never affects search results below, just this lookup. It carries both
+  // the size-run variants and the by-id-resolved rows for lines pointing at
+  // an item that no query on this screen happens to have returned.
   const selectedItem =
-    items.find((i) => i.id === itemId) ?? extraItems?.find((i) => i.id === itemId) ?? null;
+    items.find((i) => i.id === itemId) ??
+    extraItems?.find((i) => i.id === itemId) ??
+    results?.find((i) => i.id === itemId) ??
+    null;
   const triggerLabel = selectedItem
     ? `${selectedItem.sku} · ${selectedItem.name}`
     : newItemName
       ? `New: ${newItemName}`
       : null;
 
-  // Items filtered by the current query.
-  const filtered = React.useMemo(() => {
-    const q = query.trim().toLowerCase();
+  // Debounced server search. AbortController cancels the in-flight request
+  // when the query changes or the popover closes; `seqRef` is the second,
+  // independent guard against an out-of-order response landing.
+  React.useEffect(() => {
+    if (!open || !usingServer) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle: drop stale rows the instant the query stops being a server query
+      setResults(null);
+      setSearching(false);
+      setSearchFailed(false);
+      return;
+    }
+    // Async fetch lifecycle: mark the rows stale the instant the query
+    // changes, so "Create …" cannot be offered against an older answer.
+    setSearching(true);
+    setSearchFailed(false);
+    const seq = ++seqRef.current;
+    const ac = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(buildSearchUrl(trimmedQuery), { signal: ac.signal });
+        if (!res.ok) throw new Error(`item search failed (${res.status})`);
+        const body = (await res.json()) as { items?: SlimSearchRow[] };
+        if (seq !== seqRef.current) return;
+        setResults((body.items ?? []).map(toItemOption));
+        setSearching(false);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        if (seq !== seqRef.current) return;
+        // Fall back to filtering the server-rendered page list, which is what
+        // this picker did before it searched at all — a failed request must
+        // degrade, not blank the picker out.
+        setResults(null);
+        setSearching(false);
+        setSearchFailed(true);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ac.abort();
+    };
+  }, [open, usingServer, trimmedQuery]);
+
+  // Local filter over the server-rendered page list. Used for a 0–1 character
+  // query (below the endpoint's own floor) and as the degraded fallback when
+  // a search request fails.
+  const localFiltered = React.useMemo(() => {
+    const q = trimmedQuery.toLowerCase();
     if (!q) return items;
     return items.filter(
       (i) =>
         i.name.toLowerCase().includes(q) ||
-        i.sku.toLowerCase().includes(q),
+        i.sku.toLowerCase().includes(q) ||
+        (i.barcode ?? '').toLowerCase().includes(q),
     );
-  }, [items, query]);
+  }, [items, trimmedQuery]);
 
-  // Show "Create '<typed>'" only when there's a non-empty query that doesn't
-  // exactly match an existing item name (case-insensitive).
-  const trimmedQuery = query.trim();
+  const visible = React.useMemo(
+    () => (usingServer && !searchFailed ? (results ?? []) : localFiltered),
+    [usingServer, searchFailed, results, localFiltered],
+  );
+  /** True while the rows on screen do not yet answer the typed query. */
+  const pending = usingServer && searching && !searchFailed;
+
+  // "Create '<typed>'" suppression. Comparing only against the local array by
+  // NAME (the old rule) would offer to mint a duplicate for any item that
+  // exists but did not happen to be on the page — under server paging that is
+  // every off-page book. The typed query now suppresses create when it EXACTLY
+  // matches an existing name, SKU, barcode or ISBN in the result set for that
+  // query, and create is never offered while results are still pending.
+  const exactExisting = React.useMemo(() => {
+    const q = trimmedQuery.toLowerCase();
+    if (!q) return false;
+    // [] for anything that is not a 10/13-character ISBN, so a word query
+    // gets no ISBN treatment at all.
+    const variants = new Set(isbnVariants(trimmedQuery));
+    return visible.some((i) => {
+      if (i.name.toLowerCase() === q) return true;
+      if (i.sku.toLowerCase() === q) return true;
+      const bc = (i.barcode ?? '').trim();
+      if (!bc) return false;
+      if (bc.toLowerCase() === q) return true;
+      return variants.size > 0 && variants.has(isbnKey(bc));
+    });
+  }, [visible, trimmedQuery]);
+
   const showCreate =
-    trimmedQuery.length > 0 &&
-    trimmedQuery.length <= 200 &&
-    !items.some((i) => i.name.toLowerCase() === trimmedQuery.toLowerCase());
+    trimmedQuery.length > 0 && trimmedQuery.length <= 200 && !pending && !exactExisting;
 
   function handlePickExisting(item: ItemOption) {
     onPickExisting(item);
@@ -215,11 +389,22 @@ function ItemPicker({
               autoFocus
               value={query}
               onValueChange={setQuery}
-              placeholder="Search by SKU or name, or type a new item name…"
+              placeholder="Search by name, SKU, barcode or ISBN, or type a new item name…"
               className="placeholder:text-muted-foreground flex-1 bg-transparent text-sm outline-none"
             />
+            {pending && (
+              <Loader2
+                aria-label="Searching"
+                className="text-muted-foreground h-3.5 w-3.5 shrink-0 animate-spin"
+              />
+            )}
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1.5">
+            {searchFailed && (
+              <p className="text-muted-foreground px-2 py-1.5 text-[11px]">
+                Search is unavailable — showing items from this page only.
+              </p>
+            )}
             {showCreate && (
               <Command.Item
                 value={`__create__${trimmedQuery}`}
@@ -234,13 +419,17 @@ function ItemPicker({
                 </span>
               </Command.Item>
             )}
-            {filtered.length === 0 && !showCreate && (
+            {pending && visible.length === 0 && (
+              <p className="text-muted-foreground py-6 text-center text-sm">Searching…</p>
+            )}
+            {!pending && visible.length === 0 && !showCreate && (
               <Command.Empty className="text-muted-foreground py-6 text-center text-sm">
                 No matches. Type a name to create a new item.
               </Command.Empty>
             )}
-            {filtered.map((i) => {
+            {visible.map((i) => {
               const isActive = i.id === itemId;
+              const isBook = i.itemType === 'book';
               return (
                 <Command.Item
                   key={i.id}
@@ -255,6 +444,19 @@ function ItemPicker({
                   )}
                   <span className="text-muted-foreground mr-2 font-mono text-[11px]">{i.sku}</span>
                   <span className="flex-1 truncate">{i.name}</span>
+                  {/* Books are first-class PO lines, so a row says which it is
+                      and shows the ISBN it was matched on. Same row, same
+                      height — muted trailing metadata, no new component. */}
+                  {isBook && (
+                    <span className="text-muted-foreground ml-2 shrink-0 text-[10px] uppercase tracking-wide">
+                      Book
+                    </span>
+                  )}
+                  {isBook && i.barcode && (
+                    <span className="text-muted-foreground ml-1.5 shrink-0 font-mono text-[11px]">
+                      {i.barcode}
+                    </span>
+                  )}
                 </Command.Item>
               );
             })}
@@ -421,6 +623,92 @@ export function PoForm({
   const total = lines.reduce((s, l) => s + l.quantityOrdered * l.unitCost, 0);
 
   const [sizeRunOpen, setSizeRunOpen] = React.useState(false);
+
+  // ── Selected-line label resolution ───────────────────────────────────────
+  // A line's item does NOT have to be in the page-level list: an edit-mode
+  // draft can point at an item past the 1000-row cap, at one archived since
+  // the PO was written, or (before this change) at a type the page never
+  // fetched at all. Any of those rendered the line blank — it looked
+  // unselected while still carrying a real itemId. Resolve the missing ids
+  // by ID through the same shared endpoint and feed them to the picker as
+  // extra label sources.
+  const knownById = React.useMemo(() => {
+    const m = new Map<string, ItemOption>();
+    for (const i of items) m.set(i.id, i);
+    for (const i of groupItems ?? []) if (!m.has(i.id)) m.set(i.id, i);
+    return m;
+  }, [items, groupItems]);
+
+  const selectedItemIds = React.useMemo(
+    () => Array.from(new Set(lines.map((l) => l.itemId).filter((v): v is string => Boolean(v)))),
+    [lines],
+  );
+
+  const [resolvedById, setResolvedById] = React.useState<Record<string, ItemOption>>({});
+  // Ids already requested, so editing a quantity (which re-runs the effect via
+  // `lines`) can never re-fire the same fetch. A ref, not state, because it
+  // must not itself trigger a render.
+  const requestedIdsRef = React.useRef<Set<string>>(new Set());
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const missing = selectedItemIds.filter(
+      (id) => !knownById.has(id) && !requestedIdsRef.current.has(id),
+    );
+    if (missing.length === 0) return;
+    for (const id of missing) requestedIdsRef.current.add(id);
+    // Deliberately NOT aborted on cleanup: this effect re-runs on every line
+    // edit, and aborting would cancel a resolution whose ids are already
+    // marked requested — leaving that label permanently blank. `mountedRef`
+    // is what stops the state write after unmount.
+    // The endpoint caps at 100 ids per request; chunk so a large size run
+    // (or a long pasted draft) still resolves every line.
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      void (async () => {
+        try {
+          const res = await fetch(buildResolveByIdsUrl(chunk));
+          if (!res.ok) throw new Error(`item resolve failed (${res.status})`);
+          const body = (await res.json()) as { items?: SlimSearchRow[] };
+          if (!mountedRef.current) return;
+          const next: Record<string, ItemOption> = {};
+          for (const r of body.items ?? []) next[r.id] = toItemOption(r);
+          if (Object.keys(next).length === 0) return;
+          setResolvedById((prev) => ({ ...prev, ...next }));
+        } catch {
+          // Un-mark so a later render retries; leaving them marked would
+          // freeze the label blank for the rest of the session.
+          for (const id of chunk) requestedIdsRef.current.delete(id);
+        }
+      })();
+    }
+  }, [selectedItemIds, knownById]);
+
+  /**
+   * Remember an item the user just picked out of a SEARCH RESULT. Those rows
+   * live in the picker's per-query state, which is dropped the moment the
+   * query is cleared — without this the line would go blank the instant it
+   * was filled in, and the by-id effect would fire a pointless request to
+   * re-fetch a row we are already holding.
+   */
+  const rememberItem = React.useCallback((item: ItemOption) => {
+    requestedIdsRef.current.add(item.id);
+    setResolvedById((prev) => (prev[item.id] ? prev : { ...prev, [item.id]: item }));
+  }, []);
+
+  /** Label-only sources for the picker: size-run variants, by-id resolutions
+   *  and anything picked out of a search result. Never merged into the
+   *  searchable result set. */
+  const pickerExtraItems = React.useMemo(
+    () => [...(groupItems ?? []), ...Object.values(resolvedById)],
+    [groupItems, resolvedById],
+  );
 
   // The orderable size runs: product groups this org's catalog actually has
   // two or more variants for. A one-variant group is not a run and offering it
@@ -684,14 +972,15 @@ export function PoForm({
                       items={items}
                       itemId={line.itemId}
                       newItemName={line.newItemName}
-                      extraItems={groupItems}
-                      onPickExisting={(item) =>
+                      extraItems={pickerExtraItems}
+                      onPickExisting={(item) => {
+                        rememberItem(item);
                         updateLine(idx, {
                           itemId: item.id,
                           newItemName: undefined,
                           unitCost: item.unit_cost,
-                        })
-                      }
+                        });
+                      }}
                       onPickNew={(name) =>
                         updateLine(idx, {
                           itemId: undefined,

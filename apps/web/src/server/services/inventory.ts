@@ -167,6 +167,37 @@ export function mapMovementTypeToAuditEvent(movementType: MovementType): AuditEv
 // the filter string. Security audit 2026-06-09.
 const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * The free-text `q` OR-clause, built once and reused by BOTH the main list
+ * query and the parallel value-footer sum query so the two can never disagree
+ * about which rows the search matched.
+ *
+ * `isbnVariants` (opt-in, see ItemListFilters) appends the equivalent ISBN
+ * forms as an exact `barcode.in.(…)` disjunct INSIDE the same clause — a
+ * second `.or()` call would AND against the first and match nothing. Absent
+ * it, the returned string is byte-for-byte the four-field clause this has
+ * always produced.
+ *
+ * Returns null when the sanitized term is empty (nothing to filter on).
+ */
+function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | null {
+  // PostgREST's .or() takes a raw filter string. Strip characters
+  // that would let a search term escape its clause and fan out the
+  // filter tree (commas, parens, asterisks, percent signs). Also
+  // cap at a sane length so a 10MB search term can't be ingested.
+  const term = rawQ.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+  if (!term) return null;
+  const clause =
+    `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`;
+  // ISBNs are digits plus a trailing 'X' check character — anything else is
+  // not an ISBN and must never reach the filter string.
+  const variants = (isbnVariants ?? [])
+    .map((v) => v.replace(/[^0-9Xx]/g, '').toUpperCase())
+    .filter((v) => v.length === 10 || v.length === 13);
+  if (variants.length === 0) return clause;
+  return `${clause},barcode.in.(${variants.map((v) => `"${v}"`).join(',')})`;
+}
+
 // How many items' rack transfers may be in flight at once during a create-time
 // auto-place (placeManualCreateOnRack). Deliberately the SAME cap
 // placeItemsOntoRackByName picked for bulk "Set rack" (its local CONCURRENCY),
@@ -372,6 +403,19 @@ export interface ItemListFilters {
    * zero-stock items are never flagged and stay visible by default.
    */
   expected?: boolean | 'any';
+  /**
+   * Equivalent ISBN forms to ALSO accept as a barcode match, folded into
+   * the same `q` OR-clause (never a separate `.or()`, which would AND
+   * against it and return nothing). Build them with
+   * `isbnVariants()` — a book is stocked under whichever of its ISBN-10 /
+   * ISBN-13 forms was captured at creation (barcode = ISBN), so typing the
+   * other form finds nothing without this.
+   *
+   * Opt-in and only consulted alongside `q`: absent (EVERY existing caller)
+   * the OR clause is byte-identical to what it has always been. Values are
+   * sanitized to [0-9X] here, so nothing a user types can escape the clause.
+   */
+  isbnVariants?: string[];
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -584,19 +628,8 @@ export class InventoryService {
     }
 
     if (filters.q && filters.q.trim()) {
-      // PostgREST's .or() takes a raw filter string. Strip characters
-      // that would let a search term escape its clause and fan out the
-      // filter tree (commas, parens, asterisks, percent signs). Also
-      // cap at a sane length so a 10MB search term can't be ingested.
-      const term = filters.q
-        .trim()
-        .slice(0, 120)
-        .replace(/[,()%*]/g, ' ');
-      if (term) {
-        query = query.or(
-          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
-        );
-      }
+      const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
+      if (clause) query = query.or(clause);
     }
     if (filters.barcode && filters.barcode.trim()) {
       query = query.eq('barcode', filters.barcode.trim());
@@ -751,12 +784,8 @@ export class InventoryService {
         sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
       }
       if (filters.q && filters.q.trim()) {
-        const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
-        if (term) {
-          sumQuery = sumQuery.or(
-            `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
-          );
-        }
+        const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
+        if (clause) sumQuery = sumQuery.or(clause);
       }
       if (filters.barcode && filters.barcode.trim()) {
         sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
@@ -1034,14 +1063,13 @@ export class InventoryService {
     // The clauses below mirror list()'s q / rack / category / location /
     // charter filters verbatim (same sanitization, same fail-open
     // edges) — third copy alongside list()'s main + sum builders, the
-    // established mirroring pattern in this file.
+    // established mirroring pattern in this file. `q` now goes through the
+    // SAME builder both of those use, so the badge can never disagree with
+    // the rows it counts. The Expected chip has no ISBN-variant caller, so
+    // it passes none — the clause is the plain four-field one.
     if (opts.q && opts.q.trim()) {
-      const term = opts.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
-      if (term) {
-        query = query.or(
-          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
-        );
-      }
+      const qClause = buildItemSearchClause(opts.q);
+      if (qClause) query = query.or(qClause);
     }
     if (opts.rack && opts.rack.trim()) {
       // Same shared clause builder as list() — including the legacy-composite
