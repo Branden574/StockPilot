@@ -3,9 +3,14 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import {
+  PLACE_DEST_COLUMNS,
+  toPlaceDest,
+  type PlaceDest,
+} from '@/lib/locations/destination-option';
 import { deriveLocationName } from '@/lib/locations/rack-name';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { InventoryService, type PlaceDest } from '@/server/services/inventory';
+import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ProductGroupsService } from '@/server/services/product-groups';
 import { ServiceError, withContext } from '@/server/services/context';
@@ -15,6 +20,7 @@ import {
   bulkCreateSizedVariantsSchema,
   createItemSchema,
   err,
+  isCrateDestination,
   ok,
   removeStockFromLocationSchema,
   updateItemSchema,
@@ -27,7 +33,15 @@ import {
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) {
-    return err(error.code, error.message);
+    // `details` is APP-AUTHORED structured metadata (e.g. the book-crate
+    // confirmation payload the client retries on) and is forwarded — except
+    // for internal_error, whose detail is raw DB/PostgREST text that must stay
+    // server-side (S13).
+    return err(
+      error.code,
+      error.message,
+      error.code === 'internal_error' ? undefined : error.details,
+    );
   }
   // Never surface a raw exception message (DB / network internals) to the
   // client — log it server-side for diagnosis and return a generic string.
@@ -285,19 +299,67 @@ export async function adjustStockAction(input: AdjustStockInput): Promise<Action
 // location id, or the fields needed to create a rack/crate on the fly.
 // ---------------------------------------------------------------------------
 
-const newRackSchema = z.object({
-  warehouseId: z.string().uuid(),
-  rackNumber: z.string().min(1).max(64),
-  rackRow: z.string().max(64).optional(),
-  crateColor: z.string().max(64).optional(),
-  crateNumber: z.string().max(64).optional(),
-  parentId: z.string().uuid().optional(),
-});
+const newRackSchema = z
+  .object({
+    warehouseId: z.string().uuid(),
+    // NOT required outright. A CRATE is identified by its color/number, and
+    // demanding a rack number for one was an artificial hurdle that also made
+    // the crate-vs-rack decision below unreachable for a number-only crate.
+    // The refine keeps it mandatory for an actual rack.
+    rackNumber: z.string().max(64).optional(),
+    rackRow: z.string().max(64).optional(),
+    crateColor: z.string().max(64).optional(),
+    // FREE TEXT — production holds 0, 1..16, "Bin", "BIN", "Blue Shelf".
+    // Never range-validate (see packages/core/src/inventory/book-storage.ts).
+    crateNumber: z.string().max(64).optional(),
+    parentId: z.string().uuid().optional(),
+  })
+  .refine(
+    (n) =>
+      isCrateDestination(n)
+        ? // A crate still needs SOMETHING to name it: its own number, or the
+          // rack number as the historical fallback deriveLocationName uses.
+          !!(n.crateNumber?.trim() || n.rackNumber?.trim())
+        : !!n.rackNumber?.trim(),
+    {
+      message: 'Give the rack a number, or the crate a number.',
+      path: ['rackNumber'],
+    },
+  );
 
 const destinationSchema = z.union([
   z.object({ existingLocationId: z.string().uuid() }),
   z.object({ newRack: newRackSchema }),
 ]);
+
+/**
+ * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
+ * ONE builder so all four write paths agree on the crate-vs-rack decision —
+ * they used to each test `crateColor ? 'crate' : 'rack'` inline, which turned
+ * a number-only crate into a rack (wrong kind, wrong dedupe bucket, no crate
+ * columns written).
+ */
+function newLocationInput(n: {
+  warehouseId: string;
+  rackNumber?: string | null;
+  rackRow?: string | null;
+  crateColor?: string | null;
+  crateNumber?: string | null;
+  parentId?: string | null;
+}) {
+  const isCrate = isCrateDestination(n);
+  return {
+    name: deriveLocationName(n),
+    type: isCrate ? ('bin' as const) : ('shelf' as const),
+    kind: isCrate ? ('crate' as const) : ('rack' as const),
+    warehouseId: n.warehouseId,
+    rackNumber: n.rackNumber ?? null,
+    rackRow: n.rackRow ?? null,
+    crateColor: n.crateColor ?? null,
+    crateNumber: n.crateNumber ?? null,
+    parentId: n.parentId ?? null,
+  };
+}
 
 /**
  * Verify a warehouse id belongs to the caller's org before creating a
@@ -373,17 +435,7 @@ export async function transferStockAction(
       // 0270). Asserts 'locations:manage' + assertPlanLimit('locations')
       // internally on the create-fallback path only.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate({
-        name: deriveLocationName(n),
-        type: n.crateColor ? 'bin' : 'shelf',
-        kind: n.crateColor ? 'crate' : 'rack',
-        warehouseId: n.warehouseId,
-        rackNumber: n.rackNumber,
-        rackRow: n.rackRow ?? null,
-        crateColor: n.crateColor ?? null,
-        crateNumber: n.crateNumber ?? null,
-        parentId: n.parentId ?? null,
-      });
+      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
       toLocationId = created.id;
     }
 
@@ -417,19 +469,29 @@ export async function transferStockAction(
 // placeStockAction — move staged qty onto an existing or inline-created location
 // ---------------------------------------------------------------------------
 
+/**
+ * `acknowledgeCrateChange` — the client's answer to the server's
+ * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal. Optional and defaulting to
+ * false, so every existing caller keeps working: a first assignment, a
+ * same-crate placement and every non-book placement never reach the gate at
+ * all. Only a genuine overwrite needs it.
+ */
+const acknowledgeCrateChangeSchema = z.boolean().optional().default(false);
+
 const placeStockSchema = z.object({
   itemId: z.string().uuid(),
   fromLocationId: z.string().uuid(),
   quantity: z.number().positive(),
   notes: z.string().max(2000).optional(),
   destination: destinationSchema,
+  acknowledgeCrateChange: acknowledgeCrateChangeSchema,
 });
 
-export type PlaceStockInput = z.infer<typeof placeStockSchema>;
+export type PlaceStockInput = z.input<typeof placeStockSchema>;
 
 export async function placeStockAction(
   input: PlaceStockInput,
-): Promise<ActionResult<{ toLocationId: string }>> {
+): Promise<ActionResult<{ toLocationId: string; crateSyncFailed?: boolean }>> {
   const parsed = placeStockSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -453,7 +515,7 @@ export async function placeStockAction(
       // the destination location belongs to the caller's org before transfer.
       const { data: loc } = await ctx.supabase
         .from('locations')
-        .select('id, warehouse_id, kind, rack_number, rack_row, name')
+        .select(PLACE_DEST_COLUMNS)
         .eq('id', data.destination.existingLocationId)
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -467,12 +529,9 @@ export async function placeStockAction(
         return err('validation_error', 'Pick a rack or crate as the destination.');
       }
       toLocationId = loc.id;
-      dest = {
-        kind: loc.kind,
-        rackNumber: (loc as { rack_number: string | null }).rack_number ?? null,
-        rackRow: (loc as { rack_row: string | null }).rack_row ?? null,
-        name: (loc as { name: string | null }).name ?? null,
-      };
+      // Crate metadata comes from THIS row, read moments ago — not from
+      // anything the client sent about the destination.
+      dest = toPlaceDest(loc as Record<string, unknown>);
     } else {
       const n = data.destination.newRack;
       // TENANT-ISOLATION GUARD: verify the warehouse belongs to the caller's
@@ -486,27 +545,24 @@ export async function placeStockAction(
       // fix) and the shared helper's doc comment for why matching stays
       // case-insensitive.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate({
-        name: deriveLocationName(n),
-        type: n.crateColor ? 'bin' : 'shelf',
-        kind: n.crateColor ? 'crate' : 'rack',
-        warehouseId: n.warehouseId,
-        rackNumber: n.rackNumber,
-        rackRow: n.rackRow ?? null,
-        crateColor: n.crateColor ?? null,
-        crateNumber: n.crateNumber ?? null,
-        parentId: n.parentId ?? null,
-      });
+      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
       toLocationId = created.id;
-      dest = {
-        kind: n.crateColor ? 'crate' : 'rack',
-        rackNumber: n.rackNumber ?? null,
-        rackRow: n.rackRow ?? null,
-        name: deriveLocationName(n),
-      };
+      // From the RESOLVED row, NOT from what the user typed. A
+      // case-insensitive reuse ("blue #4" matching the existing "Blue #4")
+      // returns the location that already exists, and its columns are the
+      // truth about that crate — stamping the typed spelling instead would
+      // make the item summary and the location row disagree.
+      dest = toPlaceDest(created as Record<string, unknown>);
     }
 
     const invSvc = new InventoryService(ctx);
+    // THE GATE, before anything moves: refuse to silently overwrite a crate a
+    // human already recorded. Throws ServiceError('conflict') carrying
+    // BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION; no stock moves on that path.
+    await invSvc.assertBookCratePlacementAllowed([data.itemId], dest, {
+      acknowledgeCrateChange: data.acknowledgeCrateChange,
+    });
+
     await invSvc.transferStock({
       itemId: data.itemId,
       fromLocationId: data.fromLocationId,
@@ -516,11 +572,23 @@ export async function placeStockAction(
     });
     // Stamp the placement label now that the stock physically sits here.
     await invSvc.stampPlacementBin([data.itemId], dest);
+    // Re-synchronize the book crate SUMMARY from the holdings that now exist.
+    // The stock has already moved, so a failure here is reported, never
+    // rolled back — see syncBookCratePlacement's contract.
+    const { failedItemIds } = await invSvc.syncBookCratePlacement([data.itemId], {
+      audit: {
+        toLocationId,
+        quantityByItemId: new Map([[data.itemId, data.quantity]]),
+      },
+    });
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
-    return ok({ toLocationId });
+    return ok({
+      toLocationId,
+      ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+    });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
     // text surfaces verbatim in the RPC error. The service wraps any RPC error
@@ -561,17 +629,24 @@ const bulkPlaceStockSchema = z.object({
     .min(1)
     .max(200),
   notes: z.string().max(2000).optional(),
-  destination: z.union([
-    z.object({ existingLocationId: z.string().uuid() }),
-    z.object({ newRack: newRackSchema }),
-  ]),
+  // REUSES the shared `destinationSchema`. This used to re-declare the union
+  // inline, which meant every field added to the shared one was silently
+  // dropped by bulk. There is now exactly one destination shape.
+  destination: destinationSchema,
+  acknowledgeCrateChange: acknowledgeCrateChangeSchema,
 });
 
-export type BulkPlaceStockInput = z.infer<typeof bulkPlaceStockSchema>;
+export type BulkPlaceStockInput = z.input<typeof bulkPlaceStockSchema>;
 
 export async function bulkPlaceStockAction(
   input: BulkPlaceStockInput,
-): Promise<ActionResult<{ placed: number; failed: Array<{ itemId: string; message: string }> }>> {
+): Promise<
+  ActionResult<{
+    placed: number;
+    failed: Array<{ itemId: string; message: string }>;
+    crateSyncFailed?: boolean;
+  }>
+> {
   const parsed = bulkPlaceStockSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -589,7 +664,7 @@ export async function bulkPlaceStockAction(
     if ('existingLocationId' in data.destination) {
       const { data: loc } = await ctx.supabase
         .from('locations')
-        .select('id, warehouse_id, kind, rack_number, rack_row, name')
+        .select(PLACE_DEST_COLUMNS)
         .eq('id', data.destination.existingLocationId)
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -601,12 +676,7 @@ export async function bulkPlaceStockAction(
         return err('validation_error', 'Pick a rack or crate as the destination.');
       }
       toLocationId = loc.id;
-      dest = {
-        kind: loc.kind,
-        rackNumber: (loc as { rack_number: string | null }).rack_number ?? null,
-        rackRow: (loc as { rack_row: string | null }).rack_row ?? null,
-        name: (loc as { name: string | null }).name ?? null,
-      };
+      dest = toPlaceDest(loc as Record<string, unknown>);
     } else {
       const n = data.destination.newRack;
       const { data: wh } = await ctx.supabase
@@ -623,29 +693,25 @@ export async function bulkPlaceStockAction(
       // fix) and the shared helper's doc comment for why matching stays
       // case-insensitive.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate({
-        name: deriveLocationName(n),
-        type: n.crateColor ? 'bin' : 'shelf',
-        kind: n.crateColor ? 'crate' : 'rack',
-        warehouseId: n.warehouseId,
-        rackNumber: n.rackNumber,
-        rackRow: n.rackRow ?? null,
-        crateColor: n.crateColor ?? null,
-        crateNumber: n.crateNumber ?? null,
-        parentId: n.parentId ?? null,
-      });
+      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
       toLocationId = created.id;
-      dest = {
-        kind: n.crateColor ? 'crate' : 'rack',
-        rackNumber: n.rackNumber ?? null,
-        rackRow: n.rackRow ?? null,
-        name: deriveLocationName(n),
-      };
+      // From the RESOLVED row, not the typed input — see placeStockAction.
+      dest = toPlaceDest(created as Record<string, unknown>);
     }
 
     // Place each item. A single failure (e.g. insufficient_stock if the row's
     // qty moved underneath us) is recorded and skipped — the rest still place.
     const invSvc = new InventoryService(ctx);
+    // THE GATE, once for the whole batch and BEFORE any stock moves: if any
+    // selected book would have its recorded crate overwritten, the entire
+    // batch is refused with the structured payload naming every affected book.
+    // All-or-nothing here on purpose — a half-placed batch where the user then
+    // confirms would double-move the ones that already went.
+    await invSvc.assertBookCratePlacementAllowed(
+      data.placements.map((p) => p.itemId),
+      dest,
+      { acknowledgeCrateChange: data.acknowledgeCrateChange },
+    );
     let placed = 0;
     const placedItemIds: string[] = [];
     const failed: Array<{ itemId: string; message: string }> = [];
@@ -673,11 +739,24 @@ export async function bulkPlaceStockAction(
     }
     // One label-stamp for every item that actually landed on the destination.
     await invSvc.stampPlacementBin(placedItemIds, dest);
+    // ...and one crate-summary reconciliation for the same set. Items that
+    // FAILED to transfer are deliberately excluded: their stock never moved,
+    // so nothing about their crate changed.
+    const { failedItemIds } = await invSvc.syncBookCratePlacement(placedItemIds, {
+      audit: {
+        toLocationId,
+        quantityByItemId: new Map(data.placements.map((p) => [p.itemId, p.quantity])),
+      },
+    });
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
-    return ok({ placed, failed });
+    return ok({
+      placed,
+      failed,
+      ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+    });
   } catch (e) {
     return toResult(e);
   }

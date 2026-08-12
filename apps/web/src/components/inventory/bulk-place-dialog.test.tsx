@@ -17,8 +17,8 @@ import { BulkPlaceDialog } from './bulk-place-dialog';
 // The 2026-07-23 incident warehouse: 1-A and 10-A exist, no 100-A.
 const DESTINATIONS_MAP = {
   'wh-1': [
-    { id: 'r-1a', name: '1-A', kind: 'rack' },
-    { id: 'r-10a', name: '10-A', kind: 'rack' },
+    { id: 'r-1a', name: '1-A', kind: 'rack', rackNumber: '1', rackRow: 'A', crateColor: null, crateNumber: null },
+    { id: 'r-10a', name: '10-A', kind: 'rack', rackNumber: '10', rackRow: 'A', crateColor: null, crateNumber: null },
   ],
 };
 

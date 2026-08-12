@@ -45,14 +45,32 @@ const WRITERS = [
  * exhaustive and a NEW file can never slip in unclassified.
  */
 const READ_ONLY = [
-  // hands the destination location's pair to stampPlacementBin (normalises)
-  'apps/web/src/app/api/v1/items/[id]/transfer/route.ts',
-  'apps/web/src/server/actions/inventory.ts',
   // display / export only — both compose the label, never store a pair
   'apps/web/src/server/loaders/orders-new-catalog.ts',
   'apps/web/src/lib/inventory-export.ts',
   'apps/mobile/app/(drawer)/(tabs)/books.tsx',
 ] as const;
+
+/**
+ * DELIBERATELY ABSENT, and the reason matters.
+ *
+ * `apps/web/src/server/actions/inventory.ts` and
+ * `apps/web/src/app/api/v1/items/[id]/transfer/route.ts` used to appear in
+ * READ_ONLY: each hand-copied the destination's `rack_number` / `rack_row` off
+ * a locations row into a PlaceDest, four times over, and each copy
+ * independently decided which columns to carry — which is how the crate pair
+ * ended up missing from all four.
+ *
+ * They now call the ONE mapper, `toPlaceDest` in
+ * `apps/web/src/lib/locations/destination-option.ts`, so they no longer name a
+ * rack key at all and the scan below stops seeing them. That mapper is the
+ * only place a locations row becomes a placement destination; it reads the
+ * snake_case columns and emits camelCase, then hands the pair to
+ * `stampPlacementBin`, which normalises through the shared parser.
+ *
+ * If either file reappears in the scan, someone re-introduced a hand-rolled
+ * copy — send it back to `toPlaceDest` rather than re-adding it here.
+ */
 
 function scanRackKeyFiles(): string[] {
   // -l: names only. Sources only; tests and built bundles are not writers.

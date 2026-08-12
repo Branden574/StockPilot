@@ -17,10 +17,26 @@ vi.mock('next/cache', () => ({
 // transferStock + stampPlacementBin (post-move label re-stamp, once per batch)
 // on InventoryService, findOrCreateRackOrCrate (dedup-safe rack lookup, Unit A)
 // on LocationsService.
-const { mockTransferStock, mockStampPlacementBin, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
+const {
+  mockTransferStock,
+  mockStampPlacementBin,
+  mockAssertBookCrate,
+  mockSyncBookCrate,
+  mockFindOrCreateRackOrCrate,
+  ctxRef,
+} = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
   mockStampPlacementBin: vi.fn(async () => undefined),
-  mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
+  // The book-crate confirmation gate + post-move summary reconciliation. Both
+  // default to "nothing to do" so the pre-existing rack cases below are
+  // unaffected; the dedicated crate suite drives their real behaviour.
+  mockAssertBookCrate: vi.fn(async () => new Map()),
+  mockSyncBookCrate: vi.fn(async () => ({ failedItemIds: [] as string[] })),
+  // Returns a `locations` ROW (the real method does select('*')), so tests can
+  // hand back the crate/rack columns the placement label is derived from.
+  mockFindOrCreateRackOrCrate: vi.fn(
+    async (): Promise<Record<string, unknown>> => ({ id: 'new-loc-99' }),
+  ),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -33,6 +49,8 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
     stampPlacementBin = mockStampPlacementBin;
+    assertBookCratePlacementAllowed = mockAssertBookCrate;
+    syncBookCratePlacement = mockSyncBookCrate;
   },
 }));
 
@@ -87,6 +105,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
   mockStampPlacementBin.mockResolvedValue(undefined);
+  mockAssertBookCrate.mockResolvedValue(new Map());
+  mockSyncBookCrate.mockResolvedValue({ failedItemIds: [] });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });
@@ -122,15 +142,29 @@ describe('bulkPlaceStockAction', () => {
 
     // One label-stamp for the whole batch, covering both placed items.
     expect(mockStampPlacementBin).toHaveBeenCalledOnce();
-    expect(mockStampPlacementBin).toHaveBeenCalledWith(
-      [ITEM_A, ITEM_B],
-      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
-    );
+    expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_A, ITEM_B], {
+      kind: 'rack',
+      rackNumber: null,
+      rackRow: null,
+      name: null,
+      crateColor: null,
+      crateNumber: null,
+    });
   });
 
   it('2. creates the new rack ONCE (via findOrCreateRackOrCrate — Unit A), then places all items into it', async () => {
     const newLocId = '99999999-9999-9999-9999-999999999999';
-    mockFindOrCreateRackOrCrate.mockResolvedValue({ id: newLocId });
+    // A full `locations` ROW — what the real findOrCreateRackOrCrate returns
+    // (select('*')) and what the label stamp is now derived from.
+    mockFindOrCreateRackOrCrate.mockResolvedValue({
+      id: newLocId,
+      kind: 'rack',
+      name: 'BULK-1',
+      rack_number: 'BULK-1',
+      rack_row: null,
+      crate_color: null,
+      crate_number: null,
+    });
 
     const res = await bulkPlaceStockAction({
       placements: TWO,
@@ -144,11 +178,16 @@ describe('bulkPlaceStockAction', () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.placed).toBe(2);
 
-    // Label stamp reflects the newly-created rack's own fields (BULK-1, no row).
-    expect(mockStampPlacementBin).toHaveBeenCalledWith(
-      [ITEM_A, ITEM_B],
-      { kind: 'rack', rackNumber: 'BULK-1', rackRow: null, name: 'BULK-1' },
-    );
+    // Label stamp reflects the RESOLVED location row's own fields, not the
+    // typed input (findOrCreateRackOrCrate may hand back a pre-existing rack).
+    expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_A, ITEM_B], {
+      kind: 'rack',
+      rackNumber: 'BULK-1',
+      rackRow: null,
+      name: 'BULK-1',
+      crateColor: null,
+      crateNumber: null,
+    });
   });
 
   it('3. rejects a cross-tenant existing destination — NO transfers', async () => {
@@ -195,10 +234,14 @@ describe('bulkPlaceStockAction', () => {
     }
 
     // Only the item that actually landed gets its label re-stamped.
-    expect(mockStampPlacementBin).toHaveBeenCalledWith(
-      [ITEM_A],
-      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
-    );
+    expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_A], {
+      kind: 'rack',
+      rackNumber: null,
+      rackRow: null,
+      name: null,
+      crateColor: null,
+      crateNumber: null,
+    });
   });
 
   it('6. rejects an empty placement list before touching context', async () => {

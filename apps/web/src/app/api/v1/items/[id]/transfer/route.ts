@@ -1,13 +1,15 @@
+import { isCrateDestination } from '@stockpilot/core';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { toPlaceDest, type PlaceDest } from '@/lib/locations/destination-option';
 import { deriveLocationName } from '@/lib/locations/rack-name';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
-import { InventoryService, type PlaceDest } from '@/server/services/inventory';
+import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 
 export const runtime = 'nodejs';
@@ -44,12 +46,24 @@ export const dynamic = 'force-dynamic';
  * warehouse is taken from the source location's own warehouse, so it can't be
  * seeded under a foreign org.
  */
-const newRackSchema = z.object({
-  rackNumber: z.string().min(1).max(64),
-  rackRow: z.string().max(64).optional(),
-  crateColor: z.string().max(64).optional(),
-  crateNumber: z.string().max(64).optional(),
-});
+const newRackSchema = z
+  .object({
+    // Optional, mirroring the web `newRackSchema`: a CRATE is identified by its
+    // color/number, so demanding a rack number for one was artificial — and it
+    // is what forced the crate-vs-rack decision to key off `crateColor` alone.
+    rackNumber: z.string().max(64).optional(),
+    rackRow: z.string().max(64).optional(),
+    crateColor: z.string().max(64).optional(),
+    // FREE TEXT — never range-validate (packages/core/.../book-storage.ts).
+    crateNumber: z.string().max(64).optional(),
+  })
+  .refine(
+    (n) =>
+      isCrateDestination(n)
+        ? !!(n.crateNumber?.trim() || n.rackNumber?.trim())
+        : !!n.rackNumber?.trim(),
+    { message: 'Give the rack a number, or the crate a number.', path: ['rackNumber'] },
+  );
 
 const bodySchema = z
   .object({
@@ -148,23 +162,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // rack name that already existed. Asserts 'locations:manage' and scopes
       // the insert to ctx.organizationId on the create-fallback path only
       // (racks/crates don't consume the sites plan limit).
+      const isCrate = isCrateDestination(n);
       const created = await new LocationsService(ctx).findOrCreateRackOrCrate({
         name: deriveLocationName(n),
-        type: n.crateColor ? 'bin' : 'shelf',
-        kind: n.crateColor ? 'crate' : 'rack',
+        type: isCrate ? 'bin' : 'shelf',
+        kind: isCrate ? 'crate' : 'rack',
         warehouseId: srcLoc.warehouse_id,
-        rackNumber: n.rackNumber,
+        rackNumber: n.rackNumber ?? null,
         rackRow: n.rackRow ?? null,
         crateColor: n.crateColor ?? null,
         crateNumber: n.crateNumber ?? null,
       });
       toLocationId = created.id as string;
-      dest = {
-        kind: n.crateColor ? 'crate' : 'rack',
-        rackNumber: n.rackNumber ?? null,
-        rackRow: n.rackRow ?? null,
-        name: deriveLocationName(n),
-      };
+      // From the RESOLVED row, not the typed input: a case-insensitive reuse
+      // returns the crate that already exists and ITS columns are the truth.
+      dest = toPlaceDest(created as Record<string, unknown>);
     } else {
       // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
       // reject the staging/unplaced system buckets. transfer_stock already asserts
@@ -173,7 +185,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // dual-org member) and yields a clean 400 rather than a generic RPC 500.
       const { data: destLoc } = await ctx.supabase
         .from('locations')
-        .select('id, kind, rack_number, rack_row, name')
+        .select('id, kind, rack_number, rack_row, crate_color, crate_number, name')
         .eq('id', body.toLocationId!)
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -194,12 +206,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         );
       }
       toLocationId = destLoc.id;
-      dest = {
-        kind: destLoc.kind,
-        rackNumber: (destLoc as { rack_number: string | null }).rack_number ?? null,
-        rackRow: (destLoc as { rack_row: string | null }).rack_row ?? null,
-        name: (destLoc as { name: string | null }).name ?? null,
-      };
+      dest = toPlaceDest(destLoc as Record<string, unknown>);
     }
 
     // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
@@ -216,6 +223,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // so bin_location tracks the rack — matching web placeStockAction. A plain
     // rack→rack move leaves the label alone, matching web transferStockAction.
     // Best-effort: stock is already placed, so a stamp failure never fails here.
+    //
+    // DELIBERATELY NOT SYNCED HERE (yet): the book CRATE summary. Web's
+    // placeStockAction runs assertBookCratePlacementAllowed before the move and
+    // syncBookCratePlacement after it, but that gate can REFUSE with
+    // BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION — and this route's clients have no
+    // confirmation UI to answer with yet. Wiring it before mobile can prompt
+    // would either start rejecting ordinary put-aways or, worse, force a blanket
+    // acknowledgement that silently overwrites a crate a person recorded.
+    // `dest` already carries the crate columns, so adding both calls here is a
+    // two-line change once the native flow can ask. Until then this route's
+    // behaviour is exactly what it was.
     if (srcLoc?.kind === 'staging' || srcLoc?.kind === 'unplaced') {
       await svc.stampPlacementBin([id], dest);
     }

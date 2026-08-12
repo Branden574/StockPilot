@@ -7,7 +7,8 @@ import {
   getWarehouseAccess,
   ForbiddenError,
 } from '@/lib/auth/warehouse';
-import { isRackShelfLocation } from '@/lib/locations/groups';
+import type { PlaceDest } from '@/lib/locations/destination-option';
+import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
@@ -24,8 +25,10 @@ import type {
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
+import type { BookStorageInfo } from '@stockpilot/core';
 import {
   buildVariantKey,
+  compareBookCratePlacement,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
@@ -38,6 +41,7 @@ import {
   orderNumberLabels,
   returnNumberLabels,
   parseRackLabel,
+  readBookStorage,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
@@ -487,16 +491,36 @@ export function derivePlacement(
 }
 
 /**
- * The bits of a put-away destination needed to stamp an item's placement
- * LABEL (bin_location + rack_* custom_fields). Built by the callers from the
- * chosen/created location — an existing rack/crate or an inline-created one.
+ * A put-away destination. Defined in `@/lib/locations/destination-option`
+ * beside its client-facing twin (both describe the same `locations` row, fed
+ * by the same column list) and re-exported here because this service's
+ * placement methods are its main consumer.
  */
-export type PlaceDest = {
-  kind: string | null;
-  rackNumber: string | null;
-  rackRow: string | null;
-  name: string | null;
-};
+export type { PlaceDest } from '@/lib/locations/destination-option';
+
+/**
+ * Thrown when a placement would OVERWRITE a book's recorded crate and the
+ * caller has not acknowledged it. Carried on ServiceError.details so the
+ * action layer can forward it verbatim; the client retries the SAME request
+ * with `acknowledgeCrateChange: true`.
+ *
+ * Every field here is safe to show a user: two rendered labels and the item's
+ * own name. No ids, no raw DB text.
+ */
+export const BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION =
+  'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION' as const;
+
+export interface BookCrateChangeDetail {
+  reason: typeof BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION;
+  items: Array<{
+    itemId: string;
+    itemName: string;
+    /** "Blue 4" — what the item says today, read from the DB moments ago. */
+    currentLabel: string | null;
+    /** "Green 2", or null when the destination is a rack (the crate is cleared). */
+    nextLabel: string | null;
+  }>;
+}
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -4236,6 +4260,272 @@ export class InventoryService {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // BOOK CRATE PLACEMENT
+  //
+  // Physical truth is item_stock_levels -> locations. The item-level
+  // book_crate_* keys are a SUMMARY. The ONE rule that decides when a
+  // placement may re-synchronize that summary — and what counts as an
+  // overwrite worth confirming — lives in
+  // packages/core/src/inventory/book-crate-placement.ts. Read it before
+  // changing anything below; these three methods only do the DB reads and
+  // writes that rule requires.
+  //
+  // PERMISSIONS: none of this asserts items:update or locations:manage. The
+  // summary sync is part of the physical placement, which is already gated on
+  // 'stock:transfer' inside transferStock(). A warehouse employee who is
+  // allowed to put stock away must stay able to place books.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Read the crate SUMMARY currently recorded on each of these items, straight
+   * from the DB. Non-books and unknown ids are simply absent from the map.
+   *
+   * This is the only trustworthy source for "what does the item say today".
+   * A client may send its own idea of the current crate for display, but that
+   * value is a stale snapshot — the row can have changed since the page
+   * rendered, or the request can be forged outright. Callers re-read through
+   * here immediately before writing, which also closes the concurrent-change
+   * window to a single round-trip.
+   */
+  async readBookCrateSummaries(
+    itemIds: string[],
+  ): Promise<Map<string, { name: string; crateColor: string | null; crateNumber: string | null }>> {
+    const out = new Map<
+      string,
+      { name: string; crateColor: string | null; crateNumber: string | null }
+    >();
+    if (itemIds.length === 0) return out;
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, name, item_type, custom_fields')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', itemIds)
+      .is('deleted_at', null);
+    if (error) throw new ServiceError('internal_error', error.message);
+    for (const row of (data ?? []) as Array<{
+      id: string;
+      name: string | null;
+      item_type: string | null;
+      custom_fields: Record<string, unknown> | null;
+    }>) {
+      if (row.item_type !== 'book') continue;
+      const storage = readBookStorage(row.custom_fields);
+      out.set(row.id, {
+        name: row.name ?? '',
+        crateColor: storage.crateColor,
+        crateNumber: storage.crateNumber,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * THE CONFIRMATION GATE. Called BEFORE any stock moves.
+   *
+   * Compares each book's DB-current crate against the crate the destination
+   * really carries. If a placement would overwrite (or erase) a crate a human
+   * already recorded and `acknowledgeCrateChange` is not true, this throws a
+   * `conflict` ServiceError whose `details` carry the structured
+   * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION payload — and NO STOCK MOVES. The
+   * client re-sends the identical request with the acknowledgement set.
+   *
+   * First assignment (the book has no crate recorded) and a placement into the
+   * same crate both pass silently: nothing is being destroyed.
+   *
+   * Returns the summaries it read so the caller can reuse them for the audit
+   * before→after without a second query.
+   */
+  async assertBookCratePlacementAllowed(
+    itemIds: string[],
+    dest: PlaceDest,
+    opts: { acknowledgeCrateChange?: boolean } = {},
+  ): Promise<Map<string, { name: string; crateColor: string | null; crateNumber: string | null }>> {
+    const summaries = await this.readBookCrateSummaries(itemIds);
+    if (summaries.size === 0 || opts.acknowledgeCrateChange) return summaries;
+
+    const conflicts: BookCrateChangeDetail['items'] = [];
+    for (const [itemId, current] of summaries) {
+      const cmp = compareBookCratePlacement({
+        currentColor: current.crateColor,
+        currentNumber: current.crateNumber,
+        nextColor: dest.crateColor ?? null,
+        nextNumber: dest.crateNumber ?? null,
+      });
+      if (!cmp.changed) continue;
+      conflicts.push({
+        itemId,
+        itemName: current.name,
+        currentLabel: cmp.currentLabel,
+        nextLabel: cmp.nextLabel,
+      });
+    }
+    if (conflicts.length === 0) return summaries;
+
+    const detail: BookCrateChangeDetail = {
+      reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
+      items: conflicts,
+    };
+    throw new ServiceError(
+      'conflict',
+      conflicts.length === 1
+        ? `${conflicts[0]!.itemName} is recorded in ${conflicts[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${conflicts[0]!.nextLabel ?? 'no crate'}.`
+        : `${conflicts.length} books are recorded in a different crate. Placing them here will change that.`,
+      detail as unknown as Record<string, unknown>,
+    );
+  }
+
+  /**
+   * RECONCILIATION, run AFTER the stock physically moved.
+   *
+   * Applies the summary rule (book-crate-placement.ts): one bounded read of
+   * every positive holding for these items, then per item —
+   *   • all PLACED holdings in exactly one rack/crate → synchronize the
+   *     summary to that location's crate columns (a rack clears it),
+   *   • holdings SPLIT across locations → leave the summary alone, because
+   *     stamping the newest crate would assert something false about the rest.
+   *
+   * Returns the item ids whose summary it FAILED to write. The caller must
+   * surface that: the placement itself is still true (the stock really moved,
+   * and rolling a real movement back by hand is never the answer), but the
+   * printed label may now be stale and the user has to know. This deliberately
+   * does NOT follow stampPlacementBin's console.warn-and-forget.
+   *
+   * `opts.audit` carries the placement facts the trail needs (which location,
+   * how much). The event NAME is the existing `inventory.item.updated` that
+   * every other custom_fields write already uses — the bulk "Set rack" branch
+   * emits the same one with a `bulk_op` discriminator. No parallel event.
+   */
+  async syncBookCratePlacement(
+    itemIds: string[],
+    opts: {
+      audit?: {
+        toLocationId: string;
+        /** Units placed per item; omitted keys simply record no quantity. */
+        quantityByItemId?: Map<string, number>;
+      };
+    } = {},
+  ): Promise<{ failedItemIds: string[] }> {
+    if (itemIds.length === 0) return { failedItemIds: [] };
+    const summaries = await this.readBookCrateSummaries(itemIds);
+    const bookIds = [...summaries.keys()];
+    if (bookIds.length === 0) return { failedItemIds: [] };
+
+    // ONE bounded read of every positive holding for these books. No kind
+    // filter in the query: `.in('locations.kind', [...])` silently drops
+    // NULL-kind rows (recurring pattern #23 — the bug migration 0292 fixed for
+    // the placed draw-down), and a NULL-kind SITE holding is exactly the kind
+    // of "this book is also somewhere else" evidence the split rule needs.
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select(
+        'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number)',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', bookIds)
+      .gt('quantity', 0);
+    if (error) return { failedItemIds: bookIds };
+
+    type HoldingRow = {
+      item_id: string;
+      location_id: string;
+      locations: {
+        id: string;
+        kind: string | null;
+        type: string | null;
+        crate_color: string | null;
+        crate_number: string | null;
+      };
+    };
+    const placedByItem = new Map<string, Map<string, HoldingRow['locations']>>();
+    for (const row of (data ?? []) as unknown as HoldingRow[]) {
+      const loc = row.locations;
+      if (!loc) continue;
+      // Staging/Unplaced are stock WAITING to be put away, not a location the
+      // book "is in" — they never count toward the split decision.
+      if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
+      const perItem = placedByItem.get(row.item_id) ?? new Map<string, HoldingRow['locations']>();
+      perItem.set(row.location_id, loc);
+      placedByItem.set(row.item_id, perItem);
+    }
+
+    // Group by the crate the sync would write, so N books landing in one crate
+    // cost ONE RPC call instead of N.
+    const batches = new Map<string, { color: string | null; number: string | null; ids: string[] }>();
+    for (const itemId of bookIds) {
+      const placed = placedByItem.get(itemId);
+      // No placed holding at all (everything still staged, or the stock left)
+      // — nothing authoritative to synchronize to. Leave the summary alone.
+      if (!placed || placed.size === 0) continue;
+      // SPLIT: holdings authoritative, summary untouched.
+      if (placed.size > 1) continue;
+      const [loc] = [...placed.values()];
+      const color = loc!.crate_color?.trim() || null;
+      const number = loc!.crate_number?.trim() || null;
+      const key = `${color ?? ''} ${number ?? ''}`;
+      const batch = batches.get(key) ?? { color, number, ids: [] };
+      batch.ids.push(itemId);
+      batches.set(key, batch);
+    }
+
+    const failedItemIds: string[] = [];
+    for (const batch of batches.values()) {
+      const { data: updated, error: rpcError } = await this.ctx.supabase.rpc(
+        'inventory_set_book_storage',
+        {
+          p_item_ids: batch.ids,
+          p_crate_color: batch.color,
+          p_crate_number: batch.number,
+        },
+      );
+      // FAIL-CLOSED ON THE REPORT, not on the stock (recurring pattern #2: a
+      // write whose affected-row count is never checked fails open). The RPC
+      // returns its real row count, so 0 rows means the summary did NOT change
+      // — RLS filtered them, or they were archived underneath us — and the
+      // caller must be told rather than shown a green toast.
+      if (rpcError || typeof updated !== 'number' || updated < batch.ids.length) {
+        if (rpcError) {
+          console.error('[placement] book crate summary sync failed (stock still placed)', {
+            error: rpcError.message,
+            items: batch.ids.length,
+          });
+        }
+        failedItemIds.push(...batch.ids);
+        continue;
+      }
+      // Trail: one row per item, before→after, on the SAME event the other
+      // custom_fields writers use. `summaries` was read before the RPC, so
+      // `before` is genuinely the previous crate rather than an echo.
+      for (const id of batch.ids) {
+        const previous = summaries.get(id);
+        void audit(
+          {
+            event: 'inventory.item.updated',
+            entityType: 'inventory_item',
+            entityId: id,
+            before: {
+              book_crate_color: previous?.crateColor ?? null,
+              book_crate_number: previous?.crateNumber ?? null,
+            },
+            after: { book_crate_color: batch.color, book_crate_number: batch.number },
+            extra: {
+              placement: 'book_crate',
+              changed_keys: ['book_crate_color', 'book_crate_number'],
+              ...(opts.audit
+                ? {
+                    to_location_id: opts.audit.toLocationId,
+                    quantity: opts.audit.quantityByItemId?.get(id) ?? null,
+                  }
+                : {}),
+            },
+          },
+          this.ctx,
+        );
+      }
+    }
+    return { failedItemIds };
+  }
+
   /**
    * Bulk "Set rack" placement: moves each item's stock onto the rack named
    * `name` in that item's own warehouse. Used so bulk Set rack physically
@@ -4644,11 +4934,26 @@ export class InventoryService {
     sourceLocationId: string; sourceKind: 'staging' | 'unplaced'; quantity: number;
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
+    /**
+     * A BOOK's current rack/crate SUMMARY (custom_fields book_* keys), so the
+     * put-away dialog can show "currently in Blue 4" without a second fetch.
+     * `null` for every non-book row.
+     *
+     * Derived from the SAME inventory_items embed the query already ran —
+     * `custom_fields` was simply added to its projection, so there is no extra
+     * query and no N+1. The raw `custom_fields` blob is deliberately NOT
+     * returned: it carries the org's own custom-field values and has no
+     * business crossing to a staging client.
+     *
+     * Reminder: this is a SUMMARY. The authoritative crate is the destination
+     * `locations` row — see packages/core/src/inventory/book-crate-placement.ts.
+     */
+    bookStorage: BookStorageInfo | null;
   }>> {
     // 1. Not-yet-placed levels (qty>0) joined to item + the staging/unplaced location.
     let q = this.ctx.supabase
       .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at)')
+      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields)')
       .eq('organization_id', this.ctx.organizationId)
       .in('locations.kind', ['staging', 'unplaced'])
       .gt('quantity', 0);
@@ -4763,6 +5068,14 @@ export class InventoryService {
         receiptNumber: meta?.receiptNumber ?? null,
         receivedAt,
         ageDays: deriveAgeDays(receivedAt, nowMs),
+        // Books only: the neutral rack_* keys belong to non-books and mean
+        // something different (0068), so reading them here would mislabel.
+        bookStorage:
+          r.inventory_items.item_type === 'book'
+            ? readBookStorage(
+                r.inventory_items.custom_fields as Record<string, unknown> | null,
+              )
+            : null,
       };
     });
   }

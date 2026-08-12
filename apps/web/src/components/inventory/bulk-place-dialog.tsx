@@ -27,15 +27,10 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { describeNewRackPlacement } from '@stockpilot/core';
 
+import type { DestinationOption } from '@/lib/locations/destination-option';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
 
 const NEW_RACK_SENTINEL = '__new__';
-
-interface DestinationOption {
-  id: string;
-  name: string;
-  kind: string;
-}
 
 export interface BulkPlaceRow {
   itemId: string;

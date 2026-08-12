@@ -16,9 +16,9 @@ import { PlaceFromStagingDialog } from './place-from-staging-dialog';
 
 // The warehouse from the 2026-07-23 incident: 1-A and 10-A exist, no 100-A.
 const DESTINATIONS = [
-  { id: 'r-1a', name: '1-A', kind: 'rack' },
-  { id: 'r-10a', name: '10-A', kind: 'rack' },
-  { id: 'r-22b', name: '22-B', kind: 'rack' },
+  { id: 'r-1a', name: '1-A', kind: 'rack', rackNumber: '1', rackRow: 'A', crateColor: null, crateNumber: null },
+  { id: 'r-10a', name: '10-A', kind: 'rack', rackNumber: '10', rackRow: 'A', crateColor: null, crateNumber: null },
+  { id: 'r-22b', name: '22-B', kind: 'rack', rackNumber: '22', rackRow: 'B', crateColor: null, crateNumber: null },
 ];
 
 function renderDialog() {

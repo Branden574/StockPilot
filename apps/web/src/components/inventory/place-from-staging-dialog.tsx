@@ -26,15 +26,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import type { DestinationOption } from '@/lib/locations/destination-option';
 import { placeStockAction } from '@/server/actions/inventory';
 
 const NEW_RACK_SENTINEL = '__new__';
-
-interface DestinationOption {
-  id: string;
-  name: string;
-  kind: string;
-}
 
 interface PlaceFromStagingDialogProps {
   itemId: string;
