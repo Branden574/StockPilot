@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api, API_BASE } from '@/lib/api';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { postMultipart } from '@/lib/multipart-upload';
 /** Apparel letters and US shoe sizes (halves included) resolve through the ONE
  *  shared vocabulary in @stockpilot/core, which the API route and migration
  *  0305's CHECK also derive from — so a label this screen offers can never be
@@ -110,19 +111,19 @@ export default function TrainingCaptureScreen() {
           data: { session },
         } = await supabase.auth.getSession();
         if (!session) throw new Error('not signed in');
-        const form = new FormData();
-        form.append('image', {
-          uri: compressed.uri,
-          name: 'sample.jpg',
-          type: 'image/jpeg',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
-        form.append('sizeLabel', isNegative ? 'NONE' : label);
-        if (isNegative) form.append('isNegative', 'true');
-        const res = await fetch(`${API_BASE}/api/v1/size-counts/training`, {
-          method: 'POST',
+        const fields = [{ name: 'sizeLabel', value: isNegative ? 'NONE' : label }];
+        if (isNegative) fields.push({ name: 'isNegative', value: 'true' });
+        const res = await postMultipart(`${API_BASE}/api/v1/size-counts/training`, {
+          files: [
+            {
+              field: 'image',
+              uri: compressed.uri,
+              fileName: 'sample.jpg',
+              contentType: 'image/jpeg',
+            },
+          ],
+          fields,
           headers: { Authorization: `Bearer ${session.access_token}` },
-          body: form,
         });
         if (!res.ok) throw new Error(String(res.status));
         const key = isNegative ? 'NONE' : label;

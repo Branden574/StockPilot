@@ -24,6 +24,7 @@ import { useAuth } from '@/lib/auth-context';
 import { API_BASE } from '@/lib/api';
 import { scanDocumentPages } from '@/lib/document-scanner';
 import { resizeForUpload } from '@/lib/image-resize';
+import { postMultipart, type MultipartFilePart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -200,7 +201,7 @@ export default function ScanPo() {
     }).start();
 
     try {
-      const fd = new FormData();
+      const fileParts: MultipartFilePart[] = [];
       for (const f of frames) {
         let uri = f.uri;
         let name = f.fileName;
@@ -220,16 +221,10 @@ export default function ScanPo() {
             console.warn('[scan-po] frame resize failed, uploading original', e);
           }
         }
-        // React Native FormData wants a { uri, name, type } shape.
-        fd.append('file', {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          uri,
-          name,
-          type,
-        } as any);
+        // Repeated 'file' field, one per frame, in capture order — the route
+        // reads form.getAll('file') and treats that order as page order.
+        fileParts.push({ field: 'file', uri, fileName: name, contentType: type });
       }
-      // Only meaningful for 2+ frames; the server treats a single file as combined.
-      fd.append('mode', frames.length > 1 && separate ? 'separate' : 'combined');
       const {
         data: { session: fresh },
       } = await supabase.auth.getSession();
@@ -243,12 +238,14 @@ export default function ScanPo() {
       const timeout = setTimeout(() => ctrl.abort(), 70_000);
       let res: Response;
       try {
-        res = await fetch(`${API_BASE}/api/po-imports/scan`, {
-          method: 'POST',
-          body: fd,
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+        res = await postMultipart(`${API_BASE}/api/po-imports/scan`, {
+          files: fileParts,
+          // Only meaningful for 2+ frames; the server treats a single file as
+          // combined regardless.
+          fields: [
+            { name: 'mode', value: frames.length > 1 && separate ? 'separate' : 'combined' },
+          ],
+          headers: { Authorization: `Bearer ${token}` },
           signal: ctrl.signal,
         });
       } finally {
