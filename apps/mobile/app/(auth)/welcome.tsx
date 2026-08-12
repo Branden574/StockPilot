@@ -10,13 +10,12 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useTheme } from '@/lib/use-theme';
 
 const FEATURES: { icon: LucideIcon; title: string; body: string }[] = [
@@ -37,8 +36,6 @@ const STATS: { value: string; label: string }[] = [
 
 export default function Welcome() {
   const { c } = useTheme();
-  const { fontScale } = useWindowDimensions();
-  const stackStats = shouldStackRow(fontScale);
   const router = useRouter();
 
   return (
@@ -72,19 +69,24 @@ export default function Welcome() {
         </View>
 
         {/* Proof stats */}
-        {/* Four cells across ~349pt give each label ~87pt. Past the shared
-            threshold the strip becomes one column so a label like "live
-            integrations" gets the full width instead of breaking per
-            character.
+        {/* Always a 2x2 grid on this phone-only screen. Four flex:1 cells in
+            one row made narrow values ('6') float inside wide equal cells —
+            a lopsided gap between '6' and '100%' — and squeezed each label to
+            ~87pt, wrapping "live integrations" into two ragged lines. Two
+            48%-width cells per row give every label ~170pt, so no label wraps
+            at default type sizes, and each row's values share a baseline
+            because both cells top-align their Display.
 
-            NO cap on the label: the stacking is the fix, and it has already
-            given the label the whole width by the time any ceiling could bind
-            — so a cap here would be pure suppression of the one line that says
-            what each number MEANS. The value it sits under is a `Display`,
-            which carries its own 48pt ceiling. */}
-        <View style={[styles.statRow, stackStats && styles.statRowStacked]}>
+            NO cap on the label: the Mono label stays UNCAPPED per the Dynamic
+            Type policy (ceilings are for chrome only, and every cap must pair
+            with a box fix) — a cap here would be pure suppression of the one
+            line that says what each number MEANS. At accessibility sizes a
+            label may wrap WITHIN its half-width cell, and the rowGap absorbs
+            the taller cell. The value it sits over is a `Display`, which
+            carries its own 48pt ceiling — do not touch that. */}
+        <View style={styles.statRow}>
           {STATS.map((s) => (
-            <View key={s.label} style={stackStats ? styles.statCellStacked : styles.statCell}>
+            <View key={s.label} style={styles.statCell}>
               <Display size={24}>{s.value}</Display>
               <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
                 {s.label}
@@ -154,9 +156,10 @@ const styles = StyleSheet.create({
   statRow: {
     marginTop: 30,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
+    rowGap: 18,
   },
-  statRowStacked: { flexDirection: 'column' },
-  statCell: { flex: 1 },
-  statCellStacked: { marginBottom: 14 },
+  // Just under 50% so the space-between gutter never forces a mid-row wrap.
+  statCell: { width: '48%' },
 });

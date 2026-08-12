@@ -45,6 +45,7 @@ import {
 } from '@stockpilot/core';
 
 import { MoveStockModal } from '@/components/move-stock-modal';
+import { PhotoViewer } from '@/components/photo-viewer';
 import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
@@ -428,6 +429,7 @@ export default function ItemDetail() {
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  const [photoViewerOpen, setPhotoViewerOpen] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
   const permissions = useEffectivePermissions();
@@ -1265,80 +1267,91 @@ export default function ItemDetail() {
           ) : null}
         </View>
 
-        {/* Image — tap to add or replace */}
+        {/* Image — with a photo, tapping it VIEWS full-screen (PhotoViewer);
+            the REPLACE pill is its own sibling Pressable stacked above, so
+            replace never hijacks the view tap. With no photo the whole tile
+            keeps opening the add sheet. photoBusy disables both paths. */}
         <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
-          <Pressable
-            onPress={openPhotoActions}
-            disabled={photoBusy}
-            style={({ pressed }) => ({ opacity: pressed && !photoBusy ? 0.85 : 1 })}
-            accessibilityRole="button"
-            accessibilityLabel={item.imageUrl ? 'Replace photo' : 'Add photo'}
-          >
-            <View
-              style={{
-                aspectRatio: 4 / 3,
-                borderRadius: 14,
-                overflow: 'hidden',
-                borderWidth: 1,
-                borderColor: c.hair,
-                backgroundColor: c.paper2,
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
+          <View>
+            <Pressable
+              onPress={item.imageUrl ? () => setPhotoViewerOpen(true) : openPhotoActions}
+              disabled={photoBusy}
+              style={({ pressed }) => ({ opacity: pressed && !photoBusy ? 0.85 : 1 })}
+              accessibilityRole="button"
+              accessibilityLabel={item.imageUrl ? 'View photo' : 'Add photo'}
             >
-              {item.imageUrl ? (
-                <CachedImage
-                  uri={item.imageUrl}
-                  style={{ width: '100%', height: '100%' }}
-                  recyclingKey={`${item.id}-${item.imageUrl}`}
-                />
-              ) : (
-                <View style={{ alignItems: 'center', gap: 8 }}>
-                  <Camera size={28} color={c.ink4} strokeWidth={1.4} />
-                  <Mono size={11} tracking={0.12} upper color={c.ink4}>
-                    Tap to add photo
-                  </Mono>
-                </View>
-              )}
-              {item.imageUrl && !photoBusy ? (
-                <View
-                  style={{
-                    position: 'absolute',
-                    bottom: 10,
-                    right: 10,
-                    backgroundColor: 'rgba(0,0,0,0.55)',
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    borderRadius: 8,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
-                >
-                  <Camera size={12} color="#fff" strokeWidth={1.6} />
-                  <Mono size={10} tracking={0.12} upper color="#fff">
-                    Replace
-                  </Mono>
-                </View>
-              ) : null}
-              {photoBusy ? (
-                <View
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.4)',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}
-                >
-                  <ActivityIndicator color="#fff" />
-                </View>
-              ) : null}
-            </View>
-          </Pressable>
+              <View
+                style={{
+                  aspectRatio: 4 / 3,
+                  borderRadius: 14,
+                  overflow: 'hidden',
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  backgroundColor: c.paper2,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+              >
+                {item.imageUrl ? (
+                  <CachedImage
+                    uri={item.imageUrl}
+                    style={{ width: '100%', height: '100%' }}
+                    recyclingKey={`${item.id}-${item.imageUrl}`}
+                  />
+                ) : (
+                  <View style={{ alignItems: 'center', gap: 8 }}>
+                    <Camera size={28} color={c.ink4} strokeWidth={1.4} />
+                    <Mono size={11} tracking={0.12} upper color={c.ink4}>
+                      Tap to add photo
+                    </Mono>
+                  </View>
+                )}
+                {photoBusy ? (
+                  <View
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      backgroundColor: 'rgba(0,0,0,0.4)',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <ActivityIndicator color="#fff" />
+                  </View>
+                ) : null}
+              </View>
+            </Pressable>
+            {item.imageUrl && !photoBusy ? (
+              <Pressable
+                onPress={openPhotoActions}
+                disabled={photoBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Replace photo"
+                hitSlop={6}
+                style={({ pressed }) => ({
+                  position: 'absolute',
+                  bottom: 10,
+                  right: 10,
+                  backgroundColor: 'rgba(0,0,0,0.55)',
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: pressed ? 0.8 : 1,
+                })}
+              >
+                <Camera size={12} color="#fff" strokeWidth={1.6} />
+                <Mono size={10} tracking={0.12} upper color="#fff">
+                  Replace
+                </Mono>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         {/* Tab bar */}
@@ -1714,6 +1727,15 @@ export default function ItemDetail() {
           if (tab === 'activity') void loadActivity();
         }}
       />
+
+      {item.imageUrl ? (
+        <PhotoViewer
+          uri={item.imageUrl}
+          visible={photoViewerOpen}
+          onClose={() => setPhotoViewerOpen(false)}
+          label={item.name}
+        />
+      ) : null}
     </View>
   );
 }
