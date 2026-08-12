@@ -14,6 +14,11 @@ import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
+import {
+  SendDeliveryRequestButton,
+  type DeliveryRequestLine,
+} from '@/components/orders/send-delivery-request-button';
+import type { StorefrontCharter } from '@/components/orders/v2/types';
 import { ShippingPanel } from '@/components/orders/shipping-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +41,7 @@ import {
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -220,6 +226,30 @@ export default async function OrderDetailPage({
   // viewer who actually holds the submit permission.
   const maintenanceGate = can(ctx, 'maintenance_requests:submit');
 
+  // Delivery-request assistant re-entry (owner ask 2026-08-12). The
+  // assistant (PR #51) had exactly one entry point: the post-placement
+  // success dialog's "Email delivery request". Dismiss that dialog and there
+  // was no way back — this is the way back. Gating mirrors the dialog's:
+  //   * Same principal — the success screen renders only for whoever just
+  //     SUBMITTED the order, so the re-entry belongs to the requester
+  //     (isOwnRequest), not to canApprove. The detail page itself is
+  //     readable org-wide; the button is not.
+  //   * Delivery orders only — the draft is a DELIVERY request to the DC.
+  //     (The success dialog technically renders for pickups too, but its
+  //     builder drops the destination for them; on this page a pickup order
+  //     has no delivery to request, so it gets no button.)
+  //   * Not on terminal statuses — a completed / denied / cancelled order
+  //     has nothing left to deliver.
+  const DELIVERY_REQUEST_BLOCKED: OrderRequestStatus[] = [
+    'completed',
+    'denied',
+    'cancelled',
+  ];
+  const showDeliveryRequest =
+    isOwnRequest &&
+    request.fulfillment_type === 'delivery' &&
+    !DELIVERY_REQUEST_BLOCKED.includes(request.status);
+
   // ---- Tier 2: every independent round trip the render might need, fired
   // together instead of one-at-a-time. Each slot is gated by a sync boolean
   // above and resolves to a cheap placeholder when its gate is false, so a
@@ -240,6 +270,8 @@ export default async function OrderDetailPage({
     shippingAccess,
     returnsAccess,
     maintenanceAccess,
+    deliveryRequestCharter,
+    deliveryRequestTimezone,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -425,6 +457,42 @@ export default async function OrderDetailPage({
     returnsModuleGate ? checkModuleAccess('returns') : Promise.resolve(null),
 
     maintenanceGate ? checkModuleAccess('maintenance_requests') : Promise.resolve(null),
+
+    // Delivery-request re-entry: the destination site for the draft body.
+    // Same source of truth the storefront's charter loader reads (charters
+    // id/name/code + jsonb address), fetched only when the button will
+    // actually render for an order that HAS a charter. A missing/failed row
+    // degrades to null — the assistant already tolerates the 5 legacy
+    // delivery rows with no charter.
+    showDeliveryRequest && request.delivery_charter_id
+      ? (async (): Promise<StorefrontCharter | null> => {
+          const supabase = await createClient();
+          const { data } = await supabase
+            .from('charters')
+            .select('id, name, code, address')
+            .eq('id', request.delivery_charter_id as string)
+            .maybeSingle();
+          const c = data as
+            | { id: string; name: string; code: string | null; address: unknown }
+            | null;
+          if (!c || typeof c.id !== 'string') return null;
+          const raw = c.address;
+          // jsonb: null, an object, or (defensively) a scalar — anything
+          // that is not a plain object is "no address", mirroring the
+          // storefront charter loader's mapping.
+          const address =
+            raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+              ? (raw as StorefrontCharter['address'])
+              : null;
+          return { id: c.id, name: c.name, code: c.code ?? null, address };
+        })()
+      : Promise.resolve<StorefrontCharter | null>(null),
+
+    // The org timezone the draft's needed-by line is printed in — the same
+    // getCachedOrgTimezone call the storefront page makes for the dialog.
+    showDeliveryRequest
+      ? getCachedOrgTimezone(ctx.organizationId)
+      : Promise.resolve<string | null>(null),
   ]);
 
   let viewerCanPick = true;
@@ -530,6 +598,25 @@ export default async function OrderDetailPage({
   // builds its existingByItem Map over the line rows, so with two lines of one
   // item only the LAST row is topped up. A per-line promise would name a number
   // that appears on no line; the item total is true whichever row it picks.
+  // The assistant's draft wants the same shape the storefront cart handed
+  // the success dialog: requested quantity per line + name/sku for the item
+  // list. Lines whose item row was deleted are dropped — the draft cannot
+  // name them, and the cart flow could never have produced them.
+  const deliveryRequestLines: DeliveryRequestLine[] = showDeliveryRequest
+    ? lines.flatMap((l) =>
+        l.item
+          ? [
+              {
+                itemId: l.item.id,
+                quantity: Number(l.quantity_requested) || 0,
+                name: l.item.name,
+                sku: l.item.sku,
+              },
+            ]
+          : [],
+      )
+    : [];
+
   const existingLineSummary = canAddLines
     ? [
         ...lines
@@ -586,6 +673,22 @@ export default async function OrderDetailPage({
               <Button asChild variant="outline">
                 <a href={requesterReturnPath}>Request a return</a>
               </Button>
+            )}
+            {showDeliveryRequest && (
+              <SendDeliveryRequestButton
+                orderId={id}
+                orderNumber={
+                  (request as { order_number?: number | null }).order_number ?? null
+                }
+                warehouseName={warehouseName ?? ''}
+                destination={deliveryRequestCharter}
+                requestedFor={detail.requesterName ?? requesterDisplay}
+                requesterEmail={detail.requesterEmail}
+                neededBy={(request as { needed_by?: string | null }).needed_by ?? ''}
+                orgTimezone={deliveryRequestTimezone ?? 'UTC'}
+                notes={request.notes ?? ''}
+                lines={deliveryRequestLines}
+              />
             )}
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />

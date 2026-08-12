@@ -164,6 +164,19 @@ export async function renderWarehousePackingSlipPdf(
               <Text style={signatureStyles.caption}>DATE / TIME</Text>
             </View>
           </View>
+          {/* Print-only checkbox, ALWAYS rendered unchecked — the driver
+              ticks it with a pen. When the receiver signs digitally instead
+              (the QR flow -> order_requests.signature_data_url) the ink
+              line above stays blank and the paper trail looks incomplete;
+              this box lets the paper say where the signature actually
+              lives. Right-aligned so it hangs under the DATE / TIME column,
+              visually closing the signature block. */}
+          <View style={signatureStyles.digitalRow}>
+            <View style={signatureStyles.digitalBox} />
+            <Text style={signatureStyles.digitalLabel}>
+              Signature captured digitally in StockPilot
+            </Text>
+          </View>
         </View>
 
         <View style={styles.footer}>
@@ -224,5 +237,26 @@ const signatureStyles = StyleSheet.create({
     letterSpacing: 1.8,
     color: '#8b887f',
     marginTop: 4,
+  },
+  // The digitally-signed checkbox row. Box ink matches the signature
+  // lines (#0c0c0e); label sits at the hint's 8.5pt in the eyebrow's
+  // muted ink so the row reads as part of the block, not a new section.
+  digitalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 12,
+  },
+  digitalBox: {
+    width: 9.5,
+    height: 9.5,
+    borderWidth: 0.9,
+    borderColor: '#0c0c0e',
+    borderStyle: 'solid',
+    marginRight: 6,
+  },
+  digitalLabel: {
+    fontSize: 8.5,
+    color: '#5a5853',
   },
 });
