@@ -26,6 +26,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { API_BASE } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
+import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -210,23 +211,23 @@ export default function AIChat() {
         maxEdge: 1600,
         quality: 0.8,
       });
-      const form = new FormData();
-      // React Native FormData file shape: { uri, name, type }.
-      form.append('file', {
-        uri: resizedUri,
-        name: `booklist.${ext}`,
-        type: ext === 'png' ? 'image/png' : 'image/jpeg',
-      } as unknown as Blob);
-
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      const res = await fetch(`${API_BASE}/api/books/extract-isbns-ai`, {
-        method: 'POST',
+      const res = await postMultipart(`${API_BASE}/api/books/extract-isbns-ai`, {
+        files: [
+          {
+            field: 'file',
+            uri: resizedUri,
+            // The route sniffs the kind from BOTH name and type, so the
+            // extension and the MIME have to agree.
+            fileName: `booklist.${ext}`,
+            contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+          },
+        ],
         headers: {
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
         },
-        body: form,
       });
       const json = (await res.json().catch(() => null)) as
         | { isbns?: string[]; totalFound?: number; message?: string }

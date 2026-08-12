@@ -29,6 +29,7 @@ import {
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
+import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
@@ -166,23 +167,18 @@ export default function AiScanScreen() {
       } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in.');
 
-      const form = new FormData();
-      // React Native's FormData accepts the {uri, name, type} shape.
-      // The cast satisfies the DOM-flavored typing pulled in by the
-      // web monorepo's tsconfig.
-      form.append('image', {
-        uri: compressed.uri,
-        name: 'scan.jpg',
-        type: 'image/jpeg',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
-
-      const res = await fetch(
+      const res = await postMultipart(
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan`,
         {
-          method: 'POST',
+          files: [
+            {
+              field: 'image',
+              uri: compressed.uri,
+              fileName: 'scan.jpg',
+              contentType: 'image/jpeg',
+            },
+          ],
           headers: { Authorization: `Bearer ${session.access_token}` },
-          body: form,
         },
       );
       if (!res.ok) {

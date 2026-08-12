@@ -8,7 +8,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-const ACCEPT = 'image/jpeg,image/png,image/webp,image/heic,application/pdf';
+// Mirrors the route's ACCEPT_TYPES / PO_IMPORT_SCAN_MIME_TYPES. `image/heif`
+// is here for the same reason it is there: it and `image/heic` are the same
+// iPhone picture under two labels, and which one arrives is the browser's
+// choice — a picker offering only one silently greys out half of them.
+const ACCEPT = 'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf';
 const MAX_FILES = 5;
 const MAX_BYTES = 8 * 1024 * 1024;
 

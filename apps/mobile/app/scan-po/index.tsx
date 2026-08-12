@@ -24,6 +24,7 @@ import { useAuth } from '@/lib/auth-context';
 import { API_BASE } from '@/lib/api';
 import { scanDocumentPages } from '@/lib/document-scanner';
 import { resizeForUpload } from '@/lib/image-resize';
+import { postMultipart, type MultipartFilePart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -200,7 +201,10 @@ export default function ScanPo() {
     }).start();
 
     try {
-      const fd = new FormData();
+      const fileParts: MultipartFilePart[] = [];
+      // Frames whose resize failed and were skipped — surfaced to the user
+      // rather than silently omitted from the scan.
+      const droppedFrames: string[] = [];
       for (const f of frames) {
         let uri = f.uri;
         let name = f.fileName;
@@ -217,19 +221,36 @@ export default function ScanPo() {
             type = resized.ext === 'png' ? 'image/png' : 'image/jpeg';
             name = f.fileName.replace(/\.[^.]+$/, `.${resized.ext}`);
           } catch (e) {
-            console.warn('[scan-po] frame resize failed, uploading original', e);
+            // Resize failed. The ORIGINAL is now dangerous to send: the helper
+            // buffers the whole body in JS (it cannot stream — see
+            // lib/multipart-upload.ts), and an un-resized library pick is
+            // 4-12MB, so a multi-frame scan would allocate tens of MB twice
+            // before the server rejected it anyway at MAX_BYTES_PER_FILE (8MB,
+            // api/po-imports/scan/route.ts:27). Drop the frame instead of
+            // risking an on-device OOM for an upload that cannot succeed.
+            console.warn('[scan-po] frame resize failed, dropping frame', e);
+            droppedFrames.push(f.fileName);
+            continue;
           }
         }
-        // React Native FormData wants a { uri, name, type } shape.
-        fd.append('file', {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          uri,
-          name,
-          type,
-        } as any);
+        // Repeated 'file' field, one per frame, in capture order — the route
+        // reads form.getAll('file') and treats that order as page order.
+        fileParts.push({ field: 'file', uri, fileName: name, contentType: type });
       }
-      // Only meaningful for 2+ frames; the server treats a single file as combined.
-      fd.append('mode', frames.length > 1 && separate ? 'separate' : 'combined');
+      // Every frame failed to resize: there is nothing safe to send.
+      if (fileParts.length === 0) {
+        Alert.alert(
+          'Could not prepare the photos',
+          'None of the captured pages could be processed for upload. Retake them and try again.',
+        );
+        return;
+      }
+      // Never let a dropped page pass silently — the user must know the scan
+      // covers fewer pages than they captured.
+      const droppedSuffix =
+        droppedFrames.length > 0
+          ? `\n\n${droppedFrames.length} page${droppedFrames.length === 1 ? '' : 's'} could not be processed and ${droppedFrames.length === 1 ? 'was' : 'were'} left out.`
+          : '';
       const {
         data: { session: fresh },
       } = await supabase.auth.getSession();
@@ -243,12 +264,14 @@ export default function ScanPo() {
       const timeout = setTimeout(() => ctrl.abort(), 70_000);
       let res: Response;
       try {
-        res = await fetch(`${API_BASE}/api/po-imports/scan`, {
-          method: 'POST',
-          body: fd,
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+        res = await postMultipart(`${API_BASE}/api/po-imports/scan`, {
+          files: fileParts,
+          // Only meaningful for 2+ frames; the server treats a single file as
+          // combined regardless.
+          fields: [
+            { name: 'mode', value: frames.length > 1 && separate ? 'separate' : 'combined' },
+          ],
+          headers: { Authorization: `Bearer ${token}` },
           signal: ctrl.signal,
         });
       } finally {
@@ -298,9 +321,9 @@ export default function ScanPo() {
       const reviewUrl = `${API_BASE}/dashboard/purchase-orders/imports/${importId}`;
       Alert.alert(
         'Extracted',
-        json.lowConfidenceLines > 0
+        (json.lowConfidenceLines > 0
           ? `${json.lowConfidenceLines} line${json.lowConfidenceLines === 1 ? '' : 's'} need a quick review.`
-          : 'Looks clean. Review and approve the import.',
+          : 'Looks clean. Review and approve the import.') + droppedSuffix,
         [
           {
             text: 'Review now',
