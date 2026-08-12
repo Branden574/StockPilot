@@ -396,9 +396,9 @@ describe('GET /api/items/search — ?ids= (selected-line label resolution)', () 
 
   it('resolves by id with no q, across lifecycles, and bypasses the 2-char floor', async () => {
     inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
-    await GET(makeReq('ids=i1&ids=i2&type=product&type=book'));
+    await GET(makeReq('ids=11111111-1111-4111-8111-111111111111&ids=22222222-2222-4222-8222-222222222222&type=product&type=book'));
     expect(inventoryListMock).toHaveBeenCalledWith({
-      ids: ['i1', 'i2'],
+      ids: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
       itemType: undefined,
       itemTypes: ['product', 'book'],
       excludeBundles: false,
@@ -414,12 +414,16 @@ describe('GET /api/items/search — ?ids= (selected-line label resolution)', () 
 
   it('caps at 100 ids per request', async () => {
     inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
-    const qs = Array.from({ length: 130 }, (_, i) => `ids=i${i}`).join('&');
+    // Real ids are uuids and the route shape-checks them, so the fixture uses
+    // 130 distinct well-formed uuids rather than 'i0'..'i129' placeholders.
+    const uuid = (n: number) =>
+      `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
+    const qs = Array.from({ length: 130 }, (_, i) => `ids=${uuid(i)}`).join('&');
     await GET(makeReq(qs));
     const filters = inventoryListMock.mock.calls[0]?.[0] as { ids: string[]; limit: number };
     expect(filters.ids).toHaveLength(100);
-    expect(filters.ids[0]).toBe('i0');
-    expect(filters.ids[99]).toBe('i99');
+    expect(filters.ids[0]).toBe(uuid(0));
+    expect(filters.ids[99]).toBe(uuid(99));
     expect(filters.limit).toBe(100);
   });
 
@@ -498,5 +502,39 @@ describe('GET /api/items/search — ?slim=1 (text-row pickers)', () => {
     expect(body.items[0].custom_fields).toEqual(bookRow.custom_fields);
     expect(body.items[0].image_url).toBe('https://cf.example/b1.jpg');
     expect(body.items[0].retail_price).toBe(9);
+  });
+});
+
+describe('?ids= is UUID-validated before it reaches the filter builder', () => {
+  beforeEach(() => {
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as never,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+  });
+
+  it('drops a malformed id and keeps the well-formed one', async () => {
+    inventoryListMock.mockResolvedValue({ items: [], total: 0 });
+    await GET(
+      makeReq('ids=not-a-uuid&ids=11111111-1111-4111-8111-111111111111'),
+    );
+    // Only the shape-checked id reaches list(); the junk value never becomes
+    // part of a PostgREST .in() list.
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['11111111-1111-4111-8111-111111111111'] }),
+    );
+  });
+
+  it('an all-malformed ids list does not become resolve-by-id mode', async () => {
+    inventoryListMock.mockResolvedValue({ items: [], total: 0 });
+    const res = await GET(makeReq('ids=drop%20table'));
+    // No valid id and no query -> the short-query guard returns empty rather
+    // than falling through to an unfiltered org-wide read.
+    expect(await res.json()).toEqual({ items: [], total: 0 });
+    expect(inventoryListMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,9 @@
 // apps/web/src/app/api/items/search/route.ts
 import { NextResponse } from 'next/server';
 
+const ITEM_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
@@ -75,7 +78,16 @@ export async function GET(req: Request): Promise<Response> {
   // to those exact ids (InventoryService.list's `ids` filter only ever
   // SUBTRACTS from the org/RLS/warehouse-scoped set, so it can't widen
   // visibility) and, like a label lookup must, ignores `q` entirely.
-  const ids = params.getAll('ids').filter(Boolean).slice(0, 100);
+  // UUID-validated before it reaches PostgREST: `ids` is the one param that
+  // flows into a raw `.in('id', ...)` list, and the repo's own precedent
+  // (PoImportsService.UUID_RE, po-imports.ts:370, guarding the lineage
+  // lookup) is to shape-check an id rather than hand an arbitrary string to
+  // the filter builder. A malformed value is dropped, not passed through -
+  // a label lookup has no reason to accept one.
+  const ids = params
+    .getAll('ids')
+    .filter((v) => ITEM_ID_RE.test(v))
+    .slice(0, 100);
   const byIds = ids.length > 0;
 
   if (!browse && !byIds && raw.length < 2) {
