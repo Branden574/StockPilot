@@ -4,11 +4,15 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookCrateAlertMessage,
+  bookCrateRefusal,
   decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
   moveDestinationScope,
+  newLocationFields,
+  newLocationReady,
   newRackLabel,
   resolveMoveSource,
   type MoveDestination,
@@ -331,32 +335,79 @@ describe('the write still goes through the transfer route', () => {
 // ── New-rack confirmation — the 2026-07-23 guard, mirrored on the phone ──────
 
 describe('newRackLabel', () => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // WHAT THESE USED TO PIN, AND WHY IT WAS THE BUG.
+  //
+  // `newRackLabel` decided crate-vs-rack from the COLOUR alone
+  // (`crateColor ? 'crate' : 'rack'`) — the exact heuristic the server removed
+  // in afcc5d82 — and fell back to the RACK number when no crate number was
+  // typed. The old cases here asserted both behaviours, so the defect was
+  // pinned rather than caught: a crate identified only by its number rendered
+  // as a rack, and "rack 7 + colour Blue" rendered "Blue #7", a crate the user
+  // never asked for.
+  //
+  // The branch is now an EXPLICIT `kind`, and the label comes from the ONE core
+  // planner the SERVER names the row with — so the sheet cannot confirm one
+  // string and create another (REPRO A').
+  // ─────────────────────────────────────────────────────────────────────────
+
   it('renders a rack with a row', () => {
-    expect(newRackLabel({ rackNumber: '22', rackRow: 'B', isBook: false })).toEqual({
+    expect(newRackLabel({ kind: 'rack', rackNumber: '22', rackRow: 'B' })).toEqual({
       label: '22-B',
       noun: 'rack',
     });
   });
 
   it('renders a bare rack number when there is no row', () => {
-    expect(newRackLabel({ rackNumber: '100-A', isBook: false })).toEqual({
+    expect(newRackLabel({ kind: 'rack', rackNumber: '100-A' })).toEqual({
       label: '100-A',
       noun: 'rack',
     });
   });
 
-  it('renders a crate for a book, falling back to the rack number for the crate number', () => {
-    expect(newRackLabel({ rackNumber: '7', crateColor: 'Blue', isBook: true })).toEqual({
-      label: 'Blue #7',
+  it('a NUMBER-ONLY crate is a crate — the colour is optional', () => {
+    // Unreachable before: the label keyed off the colour, so this rendered a
+    // rack, and submit was gated on a rack number that this branch never asks
+    // for.
+    expect(newRackLabel({ kind: 'crate', rackNumber: '', crateNumber: '42' })).toEqual({
+      label: 'Crate #42',
       noun: 'crate',
     });
     expect(
-      newRackLabel({ rackNumber: '7', crateColor: 'Blue', crateNumber: '42', isBook: true }),
+      newRackLabel({ kind: 'crate', rackNumber: '', crateColor: 'Blue', crateNumber: '42' }),
     ).toEqual({ label: 'Blue #42', noun: 'crate' });
   });
 
-  it('a crate colour on a non-book is ignored — non-books make racks', () => {
-    expect(newRackLabel({ rackNumber: '3', crateColor: 'Blue', isBook: false }).noun).toBe('rack');
+  it('the CRATE branch never borrows the rack number, however it was typed', () => {
+    // The old fallback made "rack 7 + colour Blue" mint "Blue #7". A crate is
+    // identified by its OWN number; without one there is nothing to name and
+    // the form is not ready to submit.
+    expect(newRackLabel({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' }).label).toBe('');
+    expect(newLocationReady({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' })).toBe(false);
+  });
+
+  it('the RACK branch never borrows the crate fields', () => {
+    // REPRO A: "RACK NUMBER A1" + "CRATE NUMBER 9" minted "Crate #9" and moved
+    // stock into it. The chosen branch is now the only thing that speaks.
+    expect(
+      newRackLabel({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
+    ).toEqual({ label: 'A1-Row 3', noun: 'rack' });
+  });
+
+  it('the payload carries ONE branch — the server refuses both together', () => {
+    expect(
+      newLocationFields({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
+    ).toEqual({ rackNumber: 'A1', rackRow: 'Row 3' });
+    expect(
+      newLocationFields({ kind: 'crate', rackNumber: 'A1', crateColor: 'blue', crateNumber: '9' }),
+    ).toEqual({ crateColor: 'blue', crateNumber: '9' });
+  });
+
+  it('a rack needs a number; a crate needs a number', () => {
+    expect(newLocationReady({ kind: 'rack', rackNumber: '   ' })).toBe(false);
+    expect(newLocationReady({ kind: 'rack', rackNumber: '22' })).toBe(true);
+    expect(newLocationReady({ kind: 'crate', rackNumber: '', crateNumber: '' })).toBe(false);
+    expect(newLocationReady({ kind: 'crate', rackNumber: '', crateNumber: 'Bin' })).toBe(true);
   });
 });
 
@@ -366,7 +417,7 @@ describe('decideNewRackPlacement', () => {
 
   it('a typed label that already exists is NOT a creation — no confirmation', () => {
     const d = decideNewRackPlacement({
-      rack: { rackNumber: '22', rackRow: 'b', isBook: false },
+      rack: { kind: 'rack', rackNumber: '22', rackRow: 'b' },
       warehouseName: 'Main',
       quantity: 5,
       existingLabels: EXISTING,
@@ -376,7 +427,7 @@ describe('decideNewRackPlacement', () => {
 
   it('a slipped "100-A" asks, names the warehouse and count, and offers 1-A', () => {
     const d = decideNewRackPlacement({
-      rack: { rackNumber: '100', rackRow: 'A', isBook: false },
+      rack: { kind: 'rack', rackNumber: '100', rackRow: 'A' },
       warehouseName: 'Main Warehouse',
       quantity: 242,
       existingLabels: EXISTING,
@@ -410,5 +461,115 @@ describe('the put-away modal wires the confirmation', () => {
   it('the near-match alternative places into an existing rack, creating nothing', () => {
     expect(modal).toContain('Use ${label} instead');
     expect(modal).toContain('performMove({ toLocationId: match.id })');
+  });
+});
+
+// ── The sheet asks rack-or-crate, and can answer the book-crate gate ─────────
+
+describe('the move-stock sheet expresses rack XOR crate', () => {
+  it('asks for the new location TYPE explicitly, for books', () => {
+    // It used to render "RACK NUMBER *" plus two optional crate boxes and no
+    // toggle at all, so the single field deciding locations.kind — and
+    // migration 0270's kind-scoped dedupe bucket — was never actually asked
+    // about, and rack+crate together was expressible with one tap.
+    expect(modal).toContain('NEW LOCATION TYPE');
+    expect(modal).toContain("setNewKind('rack')");
+    expect(modal).toContain("setNewKind('crate')");
+  });
+
+  it('the CRATE branch requires its own number and offers no rack fields', () => {
+    expect(modal).toContain('CRATE NUMBER *');
+    // The rack fields sit in the other half of the same ternary, so only one
+    // branch can ever be on screen.
+    expect(modal).toContain("!isBook || newKind === 'rack' ? (");
+  });
+
+  it('submit readiness and the payload both come from the shared helpers', () => {
+    // Not `rackNumber.trim().length > 0` — that gate is what made a
+    // number-only crate unreachable however the form was filled in.
+    expect(modal).toContain('newLocationReady(newLocation)');
+    expect(modal).toContain('newLocationFields(newLocation)');
+    expect(modal).not.toContain('rackNumber.trim().length > 0');
+  });
+
+  it('the confirmation and the payload are derived from the SAME object', () => {
+    // REPRO A': the sheet confirmed "Create new rack A1?" and created
+    // "Crate #9". One object now feeds decideNewRackPlacement and the body.
+    expect(modal).toContain('rack: newLocation,');
+  });
+});
+
+describe('the sheet answers the book-crate gate', () => {
+  it('re-asks from the SERVER payload and retries with a scoped acknowledgement', () => {
+    // POST /api/v1/items/<id>/transfer now runs the same gate web runs, so the
+    // phone must be able to answer or every crated book dead-ends on a toast.
+    expect(modal).toContain('bookCrateRefusal(e)');
+    expect(modal).toContain('toBookCrateAcknowledgement(detail.items)');
+    expect(modal).toContain('acknowledgedCrateChanges');
+    // Asked at most once more — a refusal that survives an acknowledgement
+    // matching the server's own labels is a real error, not a loop.
+    expect(modal).toContain('bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)');
+  });
+
+  it('says when the stock moved but the crate label did not follow', () => {
+    expect(modal).toContain('res.crateSyncFailed');
+    expect(modal).toContain('res.crateSyncStale');
+    expect(modal).toContain('res.crateSyncSkipped');
+  });
+});
+
+describe('bookCrateAlertMessage', () => {
+  it('names every book, where it is recorded and where this move puts it', () => {
+    expect(
+      bookCrateAlertMessage({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'Persepolis',
+            currentLabel: 'Blue 4',
+            nextLabel: null,
+            currentFingerprint: '["blue","4"]',
+          },
+        ],
+      }),
+    ).toBe('Persepolis is recorded in Blue 4 — this move records it in no crate.');
+  });
+});
+
+describe('bookCrateRefusal', () => {
+  it('recognises the structured payload on an ApiError', () => {
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'Persepolis',
+            currentLabel: 'Blue 4',
+            nextLabel: 'Green 2',
+            currentFingerprint: '["blue","4"]',
+          },
+        ],
+      },
+    });
+    expect(bookCrateRefusal(err)?.items).toHaveLength(1);
+  });
+
+  it('returns null for an ordinary error, so the message shows as-is', () => {
+    expect(bookCrateRefusal(new Error('Insufficient stock'))).toBeNull();
+    expect(bookCrateRefusal(null)).toBeNull();
+  });
+
+  it('rejects a payload whose line cannot be acknowledged', () => {
+    // A change line with no fingerprint would render a Continue button whose
+    // acknowledgement matches nothing and be refused forever.
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: 'i1', itemName: 'Persepolis', currentLabel: 'Blue 4', nextLabel: null }],
+      },
+    });
+    expect(bookCrateRefusal(err)).toBeNull();
   });
 });

@@ -43,7 +43,7 @@ vi.mock('@/server/services/audit', async (importOriginal) => {
 
 import { InventoryService } from '@/server/services/inventory';
 
-import { bulkPlaceStockAction, placeStockAction } from './inventory';
+import { bulkPlaceStockAction, placeStockAction, transferStockAction } from './inventory';
 
 // Prototype spies rather than a module mock: the REAL InventoryService runs,
 // with only the physical move and the rack-label stamp replaced. The crate gate
@@ -85,16 +85,19 @@ const GREEN_CRATE_ROW = {
 };
 
 function installContext(opts: {
-  locationRow?: Record<string, unknown> | null;
+  locationRow?: Record<string, unknown> | null | Array<Record<string, unknown>>;
   itemRows?: Array<Record<string, unknown>>;
   holdingRows?: Array<Record<string, unknown>>;
   setBookStorage?: { data: unknown; error: { message: string } | null };
+  /** What LocationsService.create returns for an inline "+ New" destination. */
+  insertedLocation?: Record<string, unknown>;
 } = {}): SupabaseStub {
   const stub = makeSupabaseStub({
     'locations.select': {
       data: 'locationRow' in opts ? opts.locationRow : GREEN_CRATE_ROW,
       error: null,
     },
+    'locations.insert': { data: opts.insertedLocation ?? null, error: null },
     'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
@@ -570,5 +573,293 @@ describe('bulkPlaceStockAction — the crate gate applies to the whole batch', (
       p_crate_color: 'green',
       p_crate_number: '2',
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE TRANSFER MODAL — it used to move crated stock and never touch the summary
+//
+// transferStockAction called transferStock and stopped. A book recorded
+// "Blue 4" with all 40 units in crate Blue 4, transferred onto a rack, went on
+// reading "Blue 4" in the Books list, on printed labels, in the CSV and in
+// Export Builder — and a picker walked to an empty crate. Its "+ New location"
+// branch could even MINT a crate and move every unit into it while the summary
+// still named the old one.
+//
+// It now runs the SAME gate and the SAME reconciliation as the put-away, and
+// the dialog grew the confirmation step to answer the gate with.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RACK_ROW_28A = {
+  id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  warehouse_id: GREEN_CRATE_ROW.warehouse_id,
+  kind: 'rack',
+  rack_number: '28',
+  rack_row: 'A',
+  crate_color: null,
+  crate_number: null,
+  name: '28-A',
+};
+
+/** The book's only holding, now on rack 28-A. */
+function rackHolding(id = BOOK_ID) {
+  return {
+    item_id: id,
+    location_id: RACK_ROW_28A.id,
+    quantity: 40,
+    locations: {
+      id: RACK_ROW_28A.id,
+      kind: 'rack',
+      type: 'shelf',
+      crate_color: null,
+      crate_number: null,
+    },
+  };
+}
+
+function transferToRack(over: Record<string, unknown> = {}) {
+  return transferStockAction({
+    itemId: BOOK_ID,
+    fromLocationId: FROM_LOC,
+    quantity: 40,
+    destination: { existingLocationId: RACK_ROW_28A.id },
+    ...over,
+  } as Parameters<typeof transferStockAction>[0]);
+}
+
+describe('transferStockAction — the crate summary follows the stock', () => {
+  it('REFUSES an unacknowledged overwrite, and NO stock moves', async () => {
+    installContext({
+      locationRow: RACK_ROW_28A,
+      itemRows: [blueFourBook()],
+      holdingRows: [rackHolding()],
+    });
+
+    const res = await transferToRack();
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      expect(res.error.details).toMatchObject({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: BOOK_ID, currentLabel: 'Blue 4', nextLabel: null }],
+      });
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it('once acknowledged, the move happens AND the crate summary is CLEARED', async () => {
+    // The whole defect in one assertion: 40 units leave crate Blue 4 for rack
+    // 28-A, so "Blue 4" must stop being what the item says.
+    const stub = installContext({
+      locationRow: RACK_ROW_28A,
+      itemRows: [blueFourBook()],
+      holdingRows: [rackHolding()],
+    });
+
+    const res = await transferToRack({ acknowledgedCrateChanges: ACK_BLUE_4 });
+
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    expect(call.args).toEqual({
+      p_item_ids: [BOOK_ID],
+      p_crate_color: null,
+      p_crate_number: null,
+    });
+  });
+
+  it('a transfer INTO a crate records that crate on the book', async () => {
+    const stub = installContext({
+      itemRows: [blueFourBook()],
+      holdingRows: [greenCrateHolding()],
+    });
+
+    const res = await transferStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 12,
+      destination: { existingLocationId: GREEN_CRATE },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    } as Parameters<typeof transferStockAction>[0]);
+
+    expect(res.ok).toBe(true);
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+      p_item_ids: [BOOK_ID],
+      p_crate_color: 'green',
+      p_crate_number: '2',
+    });
+  });
+
+  it('a NON-BOOK transfer writes no crate summary and is not gated', async () => {
+    const stub = installContext({
+      locationRow: RACK_ROW_28A,
+      itemRows: [{ id: BOOK_ID, name: 'Chromebook', item_type: 'product', custom_fields: {} }],
+      holdingRows: [rackHolding()],
+    });
+
+    const res = await transferToRack();
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('reports crateSyncStale when the crate is edited while the stock moves', async () => {
+    // The gate reads Blue 4 and is acknowledged; the reconciliation's own read
+    // comes back Red 7. The move stands, the label does not get overwritten,
+    // and the caller is told rather than shown a plain success.
+    const stub = installContext({
+      locationRow: RACK_ROW_28A,
+      holdingRows: [rackHolding()],
+    });
+    let read = 0;
+    stub.client.from = ((table: string) => {
+      // Every `inventory_items` select after the FIRST (the gate's) sees the
+      // row someone else has since edited.
+      const rows =
+        table === 'inventory_items'
+          ? read++ === 0
+            ? [blueFourBook()]
+            : [
+                {
+                  id: BOOK_ID,
+                  name: 'Persepolis',
+                  item_type: 'book',
+                  custom_fields: { book_crate_color: 'red', book_crate_number: '7' },
+                },
+              ]
+          : null;
+      const inner = makeSupabaseStub({
+        'inventory_items.select': { data: rows, error: null },
+        'locations.select': { data: RACK_ROW_28A, error: null },
+        'item_stock_levels.select': { data: [rackHolding()], error: null },
+      });
+      return inner.client.from(table);
+    }) as typeof stub.client.from;
+
+    const res = await transferToRack({ acknowledgedCrateChanges: ACK_BLUE_4 });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncStale).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RACK **XOR** CRATE — the regression, refused at the schema
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('a new destination is a rack OR a crate, never both', () => {
+  const WAREHOUSE = GREEN_CRATE_ROW.warehouse_id;
+
+  it('REPRO B: rack "A1" + row "Row 3" + crate "9" is a validation error, and nothing moves', async () => {
+    // On this branch that input silently produced name "Crate #9", kind
+    // 'crate', and dropped the row — where before it created rack "A1-Row 3".
+    // On a surface with no confirmation at all.
+    installContext({ itemRows: [blueFourBook()] });
+
+    const res = await transferStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: {
+        newRack: { warehouseId: WAREHOUSE, rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' },
+      },
+    } as Parameters<typeof transferStockAction>[0]);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('validation_error');
+      expect(res.error.message).toMatch(/either a rack or a crate/i);
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it('the SAME refusal on the put-away action — one rule, every surface', async () => {
+    installContext({ itemRows: [blueFourBook()] });
+
+    const res = await placeStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 12,
+      destination: {
+        newRack: { warehouseId: WAREHOUSE, rackNumber: 'A1', crateColor: 'blue' },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('validation_error');
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it('a NUMBER-ONLY crate is accepted and created as a CRATE', async () => {
+    const stub = installContext({
+      // No existing rack/crate in this warehouse — findOrCreateRackOrCrate
+      // falls through to create().
+      locationRow: [],
+      itemRows: [blueFourBook()],
+      holdingRows: [greenCrateHolding()],
+      insertedLocation: {
+        id: GREEN_CRATE,
+        kind: 'crate',
+        name: 'Crate #9',
+        rack_number: null,
+        rack_row: null,
+        crate_color: null,
+        crate_number: '9',
+      },
+    });
+
+    const res = await placeStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 12,
+      destination: { newRack: { warehouseId: WAREHOUSE, crateNumber: '9' } },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+
+    expect(res.ok).toBe(true);
+    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.kind).toBe('crate');
+    expect(insert.type).toBe('bin');
+    expect(insert.name).toBe('Crate #9');
+    expect(insert.crate_number).toBe('9');
+    // The rack columns stay empty — a crate is not half a rack.
+    expect(insert.rack_number).toBeNull();
+    expect(insert.rack_row).toBeNull();
+  });
+
+  it('a plain rack still creates a RACK, row and all', async () => {
+    const stub = installContext({
+      locationRow: [],
+      itemRows: [{ id: BOOK_ID, name: 'Chromebook', item_type: 'product', custom_fields: {} }],
+      holdingRows: [],
+      insertedLocation: {
+        id: RACK_ROW_28A.id,
+        kind: 'rack',
+        name: 'A1-Row 3',
+        rack_number: 'A1',
+        rack_row: 'Row 3',
+        crate_color: null,
+        crate_number: null,
+      },
+    });
+
+    const res = await placeStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 12,
+      destination: { newRack: { warehouseId: WAREHOUSE, rackNumber: 'A1', rackRow: 'Row 3' } },
+    });
+
+    expect(res.ok).toBe(true);
+    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.kind).toBe('rack');
+    expect(insert.name).toBe('A1-Row 3');
+    expect(insert.rack_number).toBe('A1');
+    expect(insert.rack_row).toBe('Row 3');
+    expect(insert.crate_color).toBeNull();
+    expect(insert.crate_number).toBeNull();
   });
 });

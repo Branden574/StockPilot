@@ -144,7 +144,12 @@ export function formatCrateLabel(
  *   (null,   '42')     → "Crate #42"   (a number alone IS a crate — see
  *                                       isCrateDestination in
  *                                       book-crate-placement.ts)
- *   ('blue', null)     → ""            (no identity yet — caller falls back)
+ *   ('blue', null)     → ""            (no identity yet)
+ *
+ * Callers do NOT invent a number for that last case. It used to fall back to
+ * the rack number ("Blue #A1"), which mixed two different destinations into one
+ * name; `planNewLocation` (new-location.ts) now refuses a colour with no number
+ * outright, and it is the only thing that should ever call this.
  */
 export function formatCrateLocationName(
   crateColor: string | null | undefined,

@@ -59,12 +59,24 @@ const API_URL = resolveApiUrl();
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
+  /**
+   * The server's APP-AUTHORED `details` blob, when it sent one.
+   *
+   * Our routes forward `ServiceError.details` for every code EXCEPT
+   * internal_error (whose detail is raw DB text — S13), so this is always
+   * structured metadata a screen may act on: today, the book-crate confirmation
+   * payload a put-away re-asks from. Without it the caller sees a sentence and
+   * a question it cannot answer, which is exactly why the transfer route used
+   * to skip the gate entirely.
+   */
+  readonly details?: unknown;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, details?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -141,13 +153,21 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       const raw = await res.text().catch(() => '');
       let message: string | null = null;
       let code: string | undefined;
+      let details: unknown;
       if (raw.trimStart().startsWith('{')) {
         try {
-          const body = JSON.parse(raw) as { message?: unknown; error?: unknown };
+          const body = JSON.parse(raw) as {
+            message?: unknown;
+            error?: unknown;
+            details?: unknown;
+          };
           const m = typeof body.message === 'string' ? body.message : null;
           const e = typeof body.error === 'string' ? body.error : null;
           message = m ?? e;
           code = e ?? undefined;
+          // Carried through UNINSPECTED — the shape is the caller's business,
+          // and every consumer narrows it before rendering.
+          details = body.details;
         } catch {
           message = null;
         }
@@ -169,7 +189,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       // answer, not an identity one), throttles to one getUser() per burst, and
       // never throws back into this path.
       notifyUnauthorized({ status: res.status });
-      throw new ApiError(message, res.status, code);
+      throw new ApiError(message, res.status, code, details);
     }
     return (await res.json()) as T;
   } catch (err) {

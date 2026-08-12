@@ -15,17 +15,27 @@ import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
 import {
+  bookCrateAlertMessage,
+  bookCrateRefusal,
   decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
   moveDestinationScope,
+  newLocationFields,
+  newLocationReady,
   resolveMoveSource,
   type MoveDestination,
   type MoveHolding,
   type MoveSource,
+  type NewLocationKind,
 } from '@/lib/move-stock-form';
 import { transferStock, type NewRack } from '@/lib/stock-api';
+import {
+  bookCrateAcknowledgementsMatch,
+  toBookCrateAcknowledgement,
+  type BookCrateAcknowledgedChange,
+} from '@stockpilot/core';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -167,7 +177,10 @@ export function MoveStockModal({
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  // Inline "+ New rack" fields — only used when toId === NEW_RACK.
+  // Inline "+ New" fields — only used when toId === NEW_RACK. `newKind` is an
+  // EXPLICIT choice: rack XOR crate, never inferred from which boxes are
+  // filled. See NewRackInput in src/lib/move-stock-form.ts.
+  const [newKind, setNewKind] = React.useState<NewLocationKind>('rack');
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
   const [crateColor, setCrateColor] = React.useState('');
@@ -182,6 +195,7 @@ export function MoveStockModal({
     setQty('1');
     setNotes('');
     setToId('');
+    setNewKind('rack');
     setRackNumber('');
     setRackRow('');
     setCrateColor('');
@@ -299,9 +313,24 @@ export function MoveStockModal({
 
   const isBook = itemType === 'book';
   const isNewRack = toId === NEW_RACK;
-  // A destination is chosen when an existing rack is picked, or "+ New rack" is
-  // selected AND a rack number has been typed.
-  const destChosen = isNewRack ? rackNumber.trim().length > 0 : !!toId;
+  // The "+ New" destination as the form currently stands. One object feeds the
+  // readiness check, the confirmation label and the payload, so the sheet can
+  // no longer confirm one thing and create another.
+  const newLocation = React.useMemo(
+    () => ({
+      kind: isBook ? newKind : ('rack' as NewLocationKind),
+      rackNumber,
+      rackRow,
+      crateColor,
+      crateNumber,
+    }),
+    [isBook, newKind, rackNumber, rackRow, crateColor, crateNumber],
+  );
+  // A destination is chosen when an existing rack is picked, or "+ New" is
+  // selected AND its OWN branch is complete. A crate is identified by its
+  // NUMBER, so a number-only crate is now reachable — the gate used to demand
+  // a rack number whichever branch you were in, which made it unreachable.
+  const destChosen = isNewRack ? newLocationReady(newLocation) : !!toId;
   const canSubmit = !!fromId && destChosen && qtyValid && !submitting;
 
   // Existing destinations exclude the chosen source rack (can't move to itself)
@@ -321,19 +350,63 @@ export function MoveStockModal({
   // its "Use 10-A instead" alternatives share ONE permission-checked path.
   async function performMove(
     destination: { newRack: NewRack } | { toLocationId: string },
+    opts: { acknowledged?: BookCrateAcknowledgedChange[] } = {},
   ) {
     setSubmitting(true);
     setError(null);
     try {
-      await transferStock(itemId, {
+      const res = await transferStock(itemId, {
         fromLocationId: fromId,
         quantity: qtyNum,
         notes: notes.trim() || undefined,
         ...destination,
+        ...(opts.acknowledged && opts.acknowledged.length > 0
+          ? { acknowledgedCrateChanges: opts.acknowledged }
+          : {}),
       });
+      // The stock moved. These say whether the book's CRATE LABEL followed it —
+      // silence would make a move that relabelled nothing look identical to one
+      // that did, which is the whole reason the summary drifted in the first
+      // place.
+      if (res.crateSyncFailed) {
+        Alert.alert(
+          'Moved, but the crate label did not update',
+          `${itemName} was moved. Its crate label could not be written — check the book's details.`,
+        );
+      } else if (res.crateSyncStale) {
+        Alert.alert(
+          'Moved — someone else changed the crate',
+          `${itemName} was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.`,
+        );
+      } else if (res.crateSyncSkipped) {
+        Alert.alert(
+          'Moved — crate label left unchanged',
+          `${itemName} now has stock in more than one location, so its crate label was left as it was.`,
+        );
+      }
       onMoved();
       onClose();
     } catch (e) {
+      // The server REFUSES a move that would overwrite a crate a human
+      // recorded, and names it. Re-ask here with the server's own reading of
+      // the row and retry with an acknowledgement built from THAT payload —
+      // never from anything this screen remembered. Asked at most once more: a
+      // refusal that survives an acknowledgement matching the server's own
+      // labels is a real error, not a staleness loop.
+      const detail = bookCrateRefusal(e);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
+      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+        // No inline error: this is a QUESTION, not a failure. `finally` clears
+        // the in-flight flag, so the sheet is interactive behind the Alert.
+        Alert.alert("Change this book's crate?", bookCrateAlertMessage(detail), [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Continue',
+            onPress: () => void performMove(destination, { acknowledged: fresh }),
+          },
+        ]);
+        return;
+      }
       const msg = e instanceof Error ? e.message : 'Could not move stock.';
       setError(msg);
       Alert.alert('Could not move stock', msg);
@@ -352,12 +425,10 @@ export function MoveStockModal({
       return;
     }
 
-    const newRack = {
-      rackNumber: rackNumber.trim(),
-      ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
-      ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
-      ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
-    };
+    // RACK XOR CRATE, built from the branch the user actually chose. The crate
+    // branch sends no rack pair and the rack branch sends no crate pair, so the
+    // combination the server refuses cannot leave this screen.
+    const newRack = newLocationFields(newLocation) as NewRack;
 
     // The 2026-07-23 guard: a typed rack/crate that does NOT already exist in
     // this warehouse gets an explicit confirmation before it is minted. The
@@ -376,7 +447,7 @@ export function MoveStockModal({
       .filter((d) => sourceWarehouseId == null || d.warehouseId === sourceWarehouseId)
       .map((d) => d.name);
     const decision = decideNewRackPlacement({
-      rack: { rackNumber, rackRow, crateColor, crateNumber, isBook },
+      rack: newLocation,
       warehouseName,
       quantity: qtyNum,
       existingLabels,
@@ -559,7 +630,7 @@ export function MoveStockModal({
                     ))}
                     {canCreateLocation ? (
                       <Chip
-                        label="+ New rack…"
+                        label={isBook ? '+ New rack / crate…' : '+ New rack…'}
                         active={isNewRack}
                         onPress={() => setToId(NEW_RACK)}
                       />
@@ -577,21 +648,51 @@ export function MoveStockModal({
                         padding: 12,
                       }}
                     >
-                      <RackField
-                        label="RACK NUMBER *"
-                        value={rackNumber}
-                        onChangeText={setRackNumber}
-                        placeholder="e.g. A1"
-                        c={c}
-                      />
-                      <RackField
-                        label="ROW (OPTIONAL)"
-                        value={rackRow}
-                        onChangeText={setRackRow}
-                        placeholder="e.g. Row 3"
-                        c={c}
-                      />
+                      {/* Rack OR crate, asked EXPLICITLY. The field that
+                          decides locations.kind — and therefore migration
+                          0270's kind-scoped dedupe bucket — used to be
+                          inferred from whether a colour happened to be typed.
+                          Each branch now asks for what its own kind needs and
+                          nothing else, so "rack A1 + crate 9" (REPRO A) has no
+                          expression on this screen. */}
                       {isBook ? (
+                        <View style={{ gap: 6 }}>
+                          <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                            NEW LOCATION TYPE
+                          </Mono>
+                          <View style={{ flexDirection: 'row', gap: 8 }}>
+                            <Chip
+                              label="Rack"
+                              active={newKind === 'rack'}
+                              onPress={() => setNewKind('rack')}
+                            />
+                            <Chip
+                              label="Crate"
+                              active={newKind === 'crate'}
+                              onPress={() => setNewKind('crate')}
+                            />
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {!isBook || newKind === 'rack' ? (
+                        <>
+                          <RackField
+                            label="RACK NUMBER *"
+                            value={rackNumber}
+                            onChangeText={setRackNumber}
+                            placeholder="e.g. A1"
+                            c={c}
+                          />
+                          <RackField
+                            label="ROW (OPTIONAL)"
+                            value={rackRow}
+                            onChangeText={setRackRow}
+                            placeholder="e.g. Row 3"
+                            c={c}
+                          />
+                        </>
+                      ) : (
                         <>
                           <RackField
                             label="CRATE COLOR (OPTIONAL)"
@@ -600,15 +701,18 @@ export function MoveStockModal({
                             placeholder="e.g. Blue"
                             c={c}
                           />
+                          {/* The NUMBER is the crate's identity — staff
+                              routinely number a crate before they know which
+                              coloured bin it lands in. */}
                           <RackField
-                            label="CRATE NUMBER (OPTIONAL)"
+                            label="CRATE NUMBER *"
                             value={crateNumber}
                             onChangeText={setCrateNumber}
                             placeholder="e.g. 42"
                             c={c}
                           />
                         </>
-                      ) : null}
+                      )}
                     </View>
                   ) : null}
                 </View>

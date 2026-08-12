@@ -98,6 +98,34 @@ function svcWith(results: Record<string, { data: unknown; error: { message: stri
   return { svc: new InventoryService(makeServiceContext(stub.client)), stub };
 }
 
+/**
+ * The gate's pre-move read, in the shape `syncBookCratePlacement` REQUIRES.
+ *
+ * It is the freshness proof: the reconciliation re-reads the same rows after
+ * the stock has moved and writes only where the two agree. Unless a test is
+ * specifically about a row CHANGING mid-flight (see the "concurrent edit"
+ * describe below), this mirrors the fixture — nobody edited anything.
+ */
+function verified(
+  entries: Array<
+    [string, { name?: string; crateColor?: string | null; crateNumber?: string | null }]
+  >,
+) {
+  return new Map(
+    entries.map(([id, v]) => [
+      id,
+      {
+        name: v.name ?? '',
+        crateColor: v.crateColor ?? null,
+        crateNumber: v.crateNumber ?? null,
+      },
+    ]),
+  );
+}
+
+const BLUE_4 = { crateColor: 'blue', crateNumber: '4' };
+const NO_CRATE = {};
+
 beforeEach(() => vi.clearAllMocks());
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -493,9 +521,12 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    const res = await svc.syncBookCratePlacement([BOOK_A]);
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
 
     expect(res.failedItemIds).toEqual([]);
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
     expect(call.args).toEqual({
       p_item_ids: [BOOK_A],
@@ -527,7 +558,9 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    const res = await svc.syncBookCratePlacement([BOOK_A]);
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
 
     expect(res.failedItemIds).toEqual([]);
     // REPORTED, not silent. A skip that says nothing is indistinguishable from
@@ -557,7 +590,9 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A]);
+    await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, { crateNumber: '4' }]]),
+    });
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
   });
 
@@ -580,7 +615,7 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A]);
+    await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, NO_CRATE]]) });
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
     expect(call.args).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
@@ -603,7 +638,7 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A]);
+    await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, BLUE_4]]) });
 
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
     expect(call.args).toEqual({
@@ -625,8 +660,11 @@ describe('syncBookCratePlacement', () => {
       },
     });
 
-    const res = await svc.syncBookCratePlacement([WIDGET]);
+    // A non-book was never in the gate's map, so `verified` is empty — and that
+    // must NOT read as "stale": there is no book here to reconcile at all.
+    const res = await svc.syncBookCratePlacement([WIDGET], { verified: new Map() });
     expect(res.failedItemIds).toEqual([]);
+    expect(res.staleItemIds).toEqual([]);
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
     // Not even a holdings read — there was no book to reconcile.
     expect(stub.fromCalls).not.toContain('item_stock_levels');
@@ -641,9 +679,13 @@ describe('syncBookCratePlacement', () => {
       'inventory_items.select': { data: null, error: { message: 'connection reset' } },
     });
 
-    await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
+    await expect(
+      svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, NO_CRATE]]) }),
+    ).resolves.toEqual({
+      syncedItemIds: [],
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
+      staleItemIds: [],
     });
   });
 
@@ -669,7 +711,12 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 1, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A, BOOK_B]);
+    await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, NO_CRATE],
+        [BOOK_B, NO_CRATE],
+      ]),
+    });
 
     const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
     expect(calls).toHaveLength(2);
@@ -701,7 +748,12 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 2, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A, BOOK_B]);
+    await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, NO_CRATE],
+        [BOOK_B, NO_CRATE],
+      ]),
+    });
 
     const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
     expect(calls).toHaveLength(1);
@@ -723,9 +775,13 @@ describe('syncBookCratePlacement', () => {
 
     // NEVER throws: the stock really moved and hand-rolling a rollback of a
     // real movement is worse than a stale label. It reports instead.
-    await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
+    await expect(
+      svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, NO_CRATE]]) }),
+    ).resolves.toEqual({
+      syncedItemIds: [],
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
+      staleItemIds: [],
     });
   });
 
@@ -744,9 +800,13 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_storage': { data: 0, error: null },
     });
 
-    await expect(svc.syncBookCratePlacement([BOOK_A])).resolves.toEqual({
+    await expect(
+      svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, NO_CRATE]]) }),
+    ).resolves.toEqual({
+      syncedItemIds: [],
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
+      staleItemIds: [],
     });
   });
 
@@ -769,6 +829,7 @@ describe('syncBookCratePlacement', () => {
     });
 
     await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
       audit: { toLocationId: 'loc-green', quantityByItemId: new Map([[BOOK_A, 12]]) },
     });
 
@@ -788,10 +849,319 @@ describe('syncBookCratePlacement', () => {
 
   it('writes nothing for an empty id list — no round trip', async () => {
     const { svc, stub } = svcWith({});
-    await expect(svc.syncBookCratePlacement([])).resolves.toEqual({
+    await expect(svc.syncBookCratePlacement([], { verified: new Map() })).resolves.toEqual({
+      syncedItemIds: [],
       failedItemIds: [],
       skippedItemIds: [],
+      staleItemIds: [],
     });
     expect(stub.fromCalls).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE DOUBLE READ — a concurrent edit is not something to overwrite
+//
+// The gate reads the row at T0 and refuses (or is acknowledged) against THAT
+// crate. The stock then moves. The reconciliation re-reads at T2 — and used to
+// use the fresh row for nothing but the item-type filter and the audit
+// `before`, stamping the destination over whatever it found. A crate edited in
+// between was destroyed with no confirmation at all: the exact silent overwrite
+// the gate in front of it exists to refuse, arriving through the back door.
+//
+// `verified` (what the gate returned) is now REQUIRED, and the write only
+// happens where the two reads agree.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('syncBookCratePlacement — the freshness check', () => {
+  const intoGreen2 = {
+    'item_stock_levels.select': {
+      data: [
+        holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' }),
+      ],
+      error: null,
+    },
+    'rpc:inventory_set_book_storage': { data: 1, error: null },
+  };
+
+  it('a crate edited BETWEEN the two reads is left alone, not overwritten', async () => {
+    // The gate cleared "Blue 4" (that is what the operator was shown and
+    // agreed to). While the stock moved, someone re-crated the book to Red 7
+    // from the item screen. Writing Green 2 now would destroy Red 7 on the
+    // strength of an answer about Blue 4.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'red',
+            book_crate_number: '7',
+          }),
+        ],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(res.staleItemIds).toEqual([BOOK_A]);
+    expect(res.syncedItemIds).toEqual([]);
+    // Not a FAILURE — nothing broke. The stock moved and someone else's edit
+    // stands; the caller has to say so either way.
+    expect(res.failedItemIds).toEqual([]);
+  });
+
+  it('an unchanged row still writes — the check is staleness, not paranoia', async () => {
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+        ],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.staleItemIds).toEqual([]);
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toMatchObject({
+      p_crate_color: 'green',
+      p_crate_number: '2',
+    });
+  });
+
+  it('a RESPELLING is not an edit — "BLUE"/" 4 " fingerprints as Blue 4', async () => {
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'BLUE',
+            book_crate_number: ' 4 ',
+          }),
+        ],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.staleItemIds).toEqual([]);
+  });
+
+  it('a concurrent edit that AGREES with the destination is not reported stale', async () => {
+    // Someone else set the book to Green 2 — the very crate its stock now sits
+    // in. Nothing is being overwritten, so crying "stale" would be a false
+    // alarm on a write that changes nothing.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'green',
+            book_crate_number: '2',
+          }),
+        ],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.staleItemIds).toEqual([]);
+  });
+
+  it('a book NOT in the gate-cleared set is never written over a recorded crate', async () => {
+    // FAIL CLOSED. An id the gate never saw (it became a book after T0, or a
+    // caller skipped the gate) has no acknowledgement behind it, so an
+    // overwrite of a recorded crate is refused rather than assumed.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+        ],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+    const res = await svc.syncBookCratePlacement([BOOK_A], { verified: new Map() });
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(res.staleItemIds).toEqual([BOOK_A]);
+  });
+
+  it('an ungated FIRST assignment still writes — filling a blank destroys nothing', async () => {
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Persepolis', 'book', null)],
+        error: null,
+      },
+      ...intoGreen2,
+    });
+    const res = await svc.syncBookCratePlacement([BOOK_A], { verified: new Map() });
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.staleItemIds).toEqual([]);
+  });
+
+  it('a book DELETED (or no longer a book) between the reads is reported, not silently OK', async () => {
+    // The narrow case: readBookCrateSummaries filters on deleted_at IS NULL and
+    // item_type = 'book', so the item simply vanishes from the second read.
+    // bookIds went empty and the method returned an all-clear — a silent no-op
+    // reported to the operator as a fully synchronized placement.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': { data: [], error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(res).toEqual({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [BOOK_A],
+    });
+    // No holdings read either — there was nothing left to reconcile.
+    expect(stub.fromCalls).not.toContain('item_stock_levels');
+  });
+
+  it('a NON-BOOK vanishing from the second read is NOT stale — it never was a book', async () => {
+    const { svc } = svcWith({ 'inventory_items.select': { data: [], error: null } });
+    await expect(
+      svc.syncBookCratePlacement([WIDGET], { verified: new Map() }),
+    ).resolves.toEqual({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [],
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BULK "SET RACK" — the fourth write path
+//
+// `inventory_set_rack` (migration 0068) writes only the RACK keys, and this op
+// then PHYSICALLY RELOCATES every selected item's stock onto that rack. A book
+// recorded "Blue 4" carried on reading "Blue 4" while crate Blue 4 held zero of
+// its units. This path carried no comment acknowledging that at all.
+//
+// It is deliberately NOT gated (the toolbar has no per-book confirmation
+// channel for a 500-item all-or-nothing op, and refusing would break a shipped
+// flow for the 114 books carrying book_crate_*) — so instead it reads the
+// summaries BEFORE the move as its freshness proof, reconciles after, and
+// reports how many labels changed. See the comment at the call site.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
+  const RACK_28A = 'loc-rack-28a';
+
+  function setRackStub(itemRows: Array<Record<string, unknown>>, holdings: unknown[]) {
+    return svcWith({
+      'inventory_items.select': { data: itemRows, error: null },
+      'item_stock_levels.select': { data: holdings, error: null },
+      // findOrCreateRackOrCrate resolves the existing rack 28-A.
+      'locations.select': {
+        data: [{ id: RACK_28A, name: '28-A', kind: 'rack' }],
+        error: null,
+      },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      'rpc:inventory_set_book_storage': { data: 1, error: null },
+    });
+  }
+
+  it('CLEARS a crated book’s summary once its stock sits on the rack', async () => {
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: BOOK_A,
+          name: 'Persepolis',
+          item_type: 'book',
+          warehouse_id: 'wh-1',
+          bin_location: null,
+          custom_fields: { book_crate_color: 'blue', book_crate_number: '4' },
+        },
+      ],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' })],
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    expect(call, 'bulk Set rack never reconciled the crate summary at all').toBeDefined();
+    expect(call!.args).toEqual({
+      p_item_ids: [BOOK_A],
+      p_crate_color: null,
+      p_crate_number: null,
+    });
+    // …and it is REPORTED, so the toast can say a label changed.
+    expect(res.crateCleared).toBe(1);
+  });
+
+  it('leaves a SPLIT book alone and says so', async () => {
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: BOOK_A,
+          name: 'Persepolis',
+          item_type: 'book',
+          warehouse_id: 'wh-1',
+          bin_location: null,
+          custom_fields: { book_crate_color: 'blue', book_crate_number: '4' },
+        },
+      ],
+      [
+        holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' }),
+        // Also on a NULL-kind Site — a real second placement (migration 0292).
+        holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' }),
+      ],
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBe(1);
+  });
+
+  it('CLEARING the rack (no number) touches no crate summary', async () => {
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: BOOK_A,
+          name: 'Persepolis',
+          item_type: 'book',
+          warehouse_id: 'wh-1',
+          bin_location: '28-A',
+          custom_fields: { book_crate_color: 'blue', book_crate_number: '4' },
+        },
+      ],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' })],
+    );
+
+    await svc.bulkUpdate({ ids: [BOOK_A], op: { kind: 'set_rack', rackNumber: null, rackRow: null } });
+
+    // Nothing was placed, so nothing about the crate changed.
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
   });
 });

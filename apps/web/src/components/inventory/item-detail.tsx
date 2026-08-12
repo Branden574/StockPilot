@@ -440,6 +440,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   }))}
                   holdings={holdings}
                   itemType={(item.item_type as string | null) ?? null}
+                  // CONTEXT ONLY — the dialog never predicts or acknowledges a
+                  // crate change from this snapshot; it confirms from the
+                  // server's own refusal payload. See the prop's doc comment.
+                  bookStorage={
+                    item.item_type === 'book'
+                      ? readBookStorage(item.custom_fields as Record<string, unknown> | null)
+                      : null
+                  }
                   canManageLocations={canManageLocations}
                 />
               )}

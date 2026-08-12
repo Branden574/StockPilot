@@ -252,13 +252,21 @@ export function compareBookCratePlacement(
 }
 
 /**
- * Is this inline-created destination a CRATE?
+ * Did the caller name a CRATE field at all?
  *
  * A crate NUMBER alone is enough. Four write paths used to decide with
  * `crateColor ? 'crate' : 'rack'`, so a user who typed a crate number but
  * picked no color silently got a RACK — the wrong `locations.kind`, the wrong
  * dedupe bucket (0270's unique index is kind-scoped) and no crate columns.
  * Colors are an optional visual aid; the number is the identity.
+ *
+ * THIS IS NOT THE WRITE-PATH DECISION. It answers one narrow question and says
+ * nothing about whether the fields are usable: a color with no number returns
+ * true here and is a validation ERROR downstream, and rack fields alongside
+ * crate fields are refused outright. `planNewLocation`
+ * (new-location.ts) is what every writer asks — it consumes this predicate and
+ * returns the kind, the name and the columns as one verdict, so they cannot
+ * disagree.
  */
 export function isCrateDestination(input: {
   crateColor?: string | null;

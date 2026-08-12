@@ -8,7 +8,6 @@ import {
   toPlaceDest,
   type PlaceDest,
 } from '@/lib/locations/destination-option';
-import { deriveLocationName } from '@/lib/locations/rack-name';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -20,14 +19,17 @@ import {
   bulkCreateSizedVariantsSchema,
   createItemSchema,
   err,
-  isCrateDestination,
+  newLocationFieldsShape,
   ok,
+  planNewLocation,
+  refineNewLocation,
   removeStockFromLocationSchema,
   updateItemSchema,
   type ActionResult,
   type AdjustStockInput,
   type CreateItemInput,
   type GroupKeyParts,
+  type NewLocationFields,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
@@ -302,30 +304,15 @@ export async function adjustStockAction(input: AdjustStockInput): Promise<Action
 const newRackSchema = z
   .object({
     warehouseId: z.string().uuid(),
-    // NOT required outright. A CRATE is identified by its color/number, and
-    // demanding a rack number for one was an artificial hurdle that also made
-    // the crate-vs-rack decision below unreachable for a number-only crate.
-    // The refine keeps it mandatory for an actual rack.
-    rackNumber: z.string().max(64).optional(),
-    rackRow: z.string().max(64).optional(),
-    crateColor: z.string().max(64).optional(),
-    // FREE TEXT — production holds 0, 1..16, "Bin", "BIN", "Blue Shelf".
-    // Never range-validate (see packages/core/src/inventory/book-storage.ts).
-    crateNumber: z.string().max(64).optional(),
+    // The four destination fields and the rule they obey come from ONE place —
+    // packages/core/src/inventory/new-location.ts — so the web actions, the
+    // mobile transfer route and every dialog refuse the same combinations with
+    // the same words. RACK **XOR** CRATE: both together is a validation error,
+    // never a precedence guess (see that header for REPRO A/B).
+    ...newLocationFieldsShape,
     parentId: z.string().uuid().optional(),
   })
-  .refine(
-    (n) =>
-      isCrateDestination(n)
-        ? // A crate still needs SOMETHING to name it: its own number, or the
-          // rack number as the historical fallback deriveLocationName uses.
-          !!(n.crateNumber?.trim() || n.rackNumber?.trim())
-        : !!n.rackNumber?.trim(),
-    {
-      message: 'Give the rack a number, or the crate a number.',
-      path: ['rackNumber'],
-    },
-  );
+  .superRefine(refineNewLocation);
 
 const destinationSchema = z.union([
   z.object({ existingLocationId: z.string().uuid() }),
@@ -333,30 +320,73 @@ const destinationSchema = z.union([
 ]);
 
 /**
- * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
- * ONE builder so all four write paths agree on the crate-vs-rack decision —
- * they used to each test `crateColor ? 'crate' : 'rack'` inline, which turned
- * a number-only crate into a rack (wrong kind, wrong dedupe bucket, no crate
- * columns written).
+ * `acknowledgedCrateChanges` — the client's answer to the server's
+ * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal, SCOPED to the exact changes
+ * it displayed: one entry per book, naming the item and a fingerprint of the
+ * crate that book was shown to be in.
+ *
+ * This replaced a bare `acknowledgeCrateChange: boolean`, which the gate read
+ * as "do not compare at all" — so a stale client that showed "Blue 4" could
+ * pre-acknowledge its first and only request and silently destroy a "Red 7"
+ * written after the page rendered. A fingerprint that no longer matches the
+ * row is simply not an acknowledgement of the change the server found.
+ *
+ * Optional, so every existing caller keeps working: a first assignment, a
+ * same-crate placement and every non-book placement never reach the gate at
+ * all. Capped at 200, matching the bulk placement cap — one entry per
+ * placement, never more.
+ *
+ * Declared here, above every action that uses it, because all three do:
+ * Staging put-away, bulk put-away and the Transfer modal.
  */
-function newLocationInput(n: {
-  warehouseId: string;
-  rackNumber?: string | null;
-  rackRow?: string | null;
-  crateColor?: string | null;
-  crateNumber?: string | null;
-  parentId?: string | null;
-}) {
-  const isCrate = isCrateDestination(n);
+const acknowledgedCrateChangesSchema = z
+  .array(
+    z.object({
+      itemId: z.string().uuid(),
+      // Opaque to this layer: produced and compared by bookCrateFingerprint in
+      // @stockpilot/core. Length-capped so a forged request cannot post 200
+      // unbounded strings.
+      currentFingerprint: z.string().min(1).max(256),
+    }),
+  )
+  .max(200)
+  .optional();
+
+/**
+ * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
+ * ONE builder, driven by the ONE core planner, so every write path agrees on
+ * what a set of fields creates AND on what it is called.
+ *
+ * The kind, the name and the columns now all come out of the same
+ * `planNewLocation` verdict, so they cannot disagree: the fields that named a
+ * rack cannot produce `kind:'crate'`, and the confirmation the client rendered
+ * from `deriveNewLocationName` is character-for-character the name inserted
+ * here (and therefore the one migration 0270's dedupe index matches).
+ */
+function newLocationInput(
+  n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
+) {
+  const plan = planNewLocation(n);
+  if (plan.kind === 'invalid') {
+    // Unreachable through `newRackSchema`, which refuses the same combination
+    // with the same message before this runs. Kept as a fail-closed assertion
+    // rather than a cast: this helper is one import away from a caller that
+    // forgot to validate, and guessing a destination is the whole defect.
+    throw new ServiceError('validation_error', plan.message);
+  }
+  const isCrate = plan.kind === 'crate';
   return {
-    name: deriveLocationName(n),
+    name: plan.name,
     type: isCrate ? ('bin' as const) : ('shelf' as const),
     kind: isCrate ? ('crate' as const) : ('rack' as const),
     warehouseId: n.warehouseId,
-    rackNumber: n.rackNumber ?? null,
-    rackRow: n.rackRow ?? null,
-    crateColor: n.crateColor ?? null,
-    crateNumber: n.crateNumber ?? null,
+    // DECOMPOSED by the planner ("22-B" typed into the number box → "22"/"B").
+    // LocationsService.create normalises again; passing the parsed pair keeps
+    // the confirmation label and the stored columns provably identical.
+    rackNumber: plan.rackNumber,
+    rackRow: plan.rackRow,
+    crateColor: plan.crateColor,
+    crateNumber: plan.crateNumber,
     parentId: n.parentId ?? null,
   };
 }
@@ -395,6 +425,8 @@ const transferStockActionSchema = z
     quantity: z.coerce.number().positive(),
     notes: z.string().max(2000).optional(),
     destination: destinationSchema,
+    // The Transfer modal answers the book-crate gate too — see the action body.
+    acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
   })
   .refine(
     (v) =>
@@ -407,7 +439,19 @@ export type TransferStockActionInput = z.infer<typeof transferStockActionSchema>
 
 export async function transferStockAction(
   input: TransferStockActionInput,
-): Promise<ActionResult<{ toLocationId: string }>> {
+): Promise<
+  ActionResult<{
+    toLocationId: string;
+    /** The stock moved, but the book's crate SUMMARY could not be written. */
+    crateSyncFailed?: boolean;
+    /** The stock moved; this title now holds stock in more than one location,
+     *  so its crate summary was deliberately left alone. */
+    crateSyncSkipped?: boolean;
+    /** The stock moved; someone else changed the book's crate while it was
+     *  moving, so the summary was left alone. */
+    crateSyncStale?: boolean;
+  }>
+> {
   const parsed = transferStockActionSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -418,12 +462,29 @@ export async function transferStockAction(
     // org-verification + both services (withContext is request-cached).
     const ctx = await withContext();
     let toLocationId: string;
+    let dest: PlaceDest;
 
     if ('existingLocationId' in data.destination) {
-      // Existing destination: transfer_stock (mig 0201) org-verifies BOTH
-      // location ids against the item's org inside the RPC, so no extra
-      // app-level lookup is needed here (unchanged from the pre-union path).
-      toLocationId = data.destination.existingLocationId;
+      // The destination's own crate columns are now needed here — the gate
+      // below has to know what the book's summary would BECOME, and the
+      // reconciliation after the move reads the same row. Read it rather than
+      // taking anything the client says about the destination, exactly as
+      // placeStockAction does; pinning it to ctx.organizationId at the same
+      // time is defense in depth over transfer_stock's own item-org check
+      // (mig 0201), and turns a cross-tenant id into a clean 400.
+      const { data: loc } = await ctx.supabase
+        .from('locations')
+        .select(PLACE_DEST_COLUMNS)
+        .eq('id', data.destination.existingLocationId)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!loc) {
+        return err('validation_error', 'Destination location not found in your organization.');
+      }
+      toLocationId = loc.id;
+      // Crate metadata from THIS row, read moments ago.
+      dest = toPlaceDest(loc as Record<string, unknown>);
     } else {
       const n = data.destination.newRack;
       if (!(await warehouseInOrg(ctx, n.warehouseId))) {
@@ -437,27 +498,43 @@ export async function transferStockAction(
       const locationsSvc = new LocationsService(ctx);
       const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
       toLocationId = created.id;
+      // From the RESOLVED row, not the typed input — a case-insensitive reuse
+      // returns the crate that already exists and ITS columns are the truth.
+      dest = toPlaceDest(created as Record<string, unknown>);
     }
 
     const svc = new InventoryService(ctx);
-    // DELIBERATELY NOT SYNCED HERE (yet): the book CRATE summary — the same
-    // deferral POST /api/v1/items/[id]/transfer documents, for the same
-    // reason, and written down here so the divergence is a decision rather
-    // than an omission someone finds later.
+    // ═══ THE CRATE SUMMARY FOLLOWS THE STOCK HERE TOO — DEFECT 3(1)(2) ═══
     //
-    // The Staging put-away (placeStockAction) gates on
-    // assertBookCratePlacementAllowed and reconciles with
-    // syncBookCratePlacement, because its dialog can ask the question and
-    // answer it with `acknowledgedCrateChanges`. THIS action backs the Transfer
-    // modal, which has no such affordance: adding the gate would start
-    // refusing ordinary transfers, and adding the sync WITHOUT the gate would
-    // silently overwrite a crate a person recorded — the exact thing the gate
-    // exists to prevent. The consequence is known and bounded: moving a
-    // crated book's stock through Transfer leaves its summary describing where
-    // it used to be, until the next put-away reconciles it.
+    // This action used to move stock and never touch `book_crate_*`, with a
+    // comment saying so. That was wrong in both directions. A book recorded
+    // "Blue 4" with all 40 units in crate Blue 4, transferred onto rack 28-A,
+    // went on reading "Blue 4" in the Books list, on printed labels, in the CSV
+    // and in Export Builder — and a picker walked to an empty crate. Worse, the
+    // dialog's own "+ New location" branch could MINT a crate and move every
+    // unit into it while the summary still named the old one, so the item named
+    // one crate and physically occupied another.
     //
-    // `dest` already carries the crate columns, so this becomes two calls the
-    // moment the Transfer dialog grows the same confirmation step.
+    // The comment's mitigation ("until the next put-away reconciles it") was
+    // never true for stock that is transferred rack-to-rack and never staged
+    // again, and never true at all for a mobile-first warehouse.
+    //
+    // So this now runs the SAME two calls the Staging put-away runs, and the
+    // Transfer dialog grew the SAME confirmation step to answer the gate with —
+    // that was the actual missing piece, not a reason to skip the gate.
+    //
+    // The rack LABEL (stampPlacementBin) is still deliberately not written
+    // here: a transfer is not a put-away, and that asymmetry predates this and
+    // is unchanged. The crate summary is different — book-crate-placement.ts
+    // makes it a derived view of the holdings, so leaving it describing a
+    // location the stock has left is a falsehood, not a stale convenience.
+    const verified = await svc.assertBookCratePlacementAllowed([data.itemId], dest, {
+      acknowledged: data.acknowledgedCrateChanges,
+      toLocationId,
+      moves: new Map([
+        [data.itemId, { fromLocationId: data.fromLocationId, quantity: data.quantity }],
+      ]),
+    });
     await svc.transferStock({
       itemId: data.itemId,
       fromLocationId: data.fromLocationId,
@@ -465,10 +542,25 @@ export async function transferStockAction(
       quantity: data.quantity,
       notes: data.notes,
     });
+    const { failedItemIds, skippedItemIds, staleItemIds } = await svc.syncBookCratePlacement(
+      [data.itemId],
+      {
+        verified,
+        audit: {
+          toLocationId,
+          quantityByItemId: new Map([[data.itemId, data.quantity]]),
+        },
+      },
+    );
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath(`/dashboard/inventory/${data.itemId}`);
-    return ok({ toLocationId });
+    return ok({
+      toLocationId,
+      ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+    });
   } catch (e) {
     // Same insufficient_stock → friendly-message mapping as placeStockAction
     // (raw RPC text lives on internalDetail post-S13 sanitization).
@@ -486,36 +578,6 @@ export async function transferStockAction(
 // ---------------------------------------------------------------------------
 // placeStockAction — move staged qty onto an existing or inline-created location
 // ---------------------------------------------------------------------------
-
-/**
- * `acknowledgedCrateChanges` — the client's answer to the server's
- * BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal, SCOPED to the exact changes
- * it displayed: one entry per book, naming the item and a fingerprint of the
- * crate that book was shown to be in.
- *
- * This replaced a bare `acknowledgeCrateChange: boolean`, which the gate read
- * as "do not compare at all" — so a stale client that showed "Blue 4" could
- * pre-acknowledge its first and only request and silently destroy a "Red 7"
- * written after the page rendered. A fingerprint that no longer matches the
- * row is simply not an acknowledgement of the change the server found.
- *
- * Optional, so every existing caller keeps working: a first assignment, a
- * same-crate placement and every non-book placement never reach the gate at
- * all. Capped at 200, matching the bulk placement cap — one entry per
- * placement, never more.
- */
-const acknowledgedCrateChangesSchema = z
-  .array(
-    z.object({
-      itemId: z.string().uuid(),
-      // Opaque to this layer: produced and compared by bookCrateFingerprint in
-      // @stockpilot/core. Length-capped so a forged request cannot post 200
-      // unbounded strings.
-      currentFingerprint: z.string().min(1).max(256),
-    }),
-  )
-  .max(200)
-  .optional();
 
 const placeStockSchema = z.object({
   itemId: z.string().uuid(),
@@ -542,6 +604,14 @@ export async function placeStockAction(
      * indistinguishable from one that did.
      */
     crateSyncSkipped?: boolean;
+    /**
+     * The stock moved, and the book's crate was CHANGED BY SOMEONE ELSE while
+     * it was moving (or the item was deleted / stopped being a book). The
+     * summary was left alone: the confirmation this request carried was about a
+     * different crate, so honouring it would be the silent overwrite the gate
+     * exists to refuse.
+     */
+    crateSyncStale?: boolean;
   }>
 > {
   const parsed = placeStockSchema.safeParse(input);
@@ -615,7 +685,7 @@ export async function placeStockAction(
     // `moves` lets the gate skip books whose summary the reconciliation will
     // deliberately leave alone (split holdings) instead of asking about a
     // change that cannot happen.
-    await invSvc.assertBookCratePlacementAllowed([data.itemId], dest, {
+    const verified = await invSvc.assertBookCratePlacementAllowed([data.itemId], dest, {
       acknowledged: data.acknowledgedCrateChanges,
       toLocationId,
       moves: new Map([
@@ -634,13 +704,20 @@ export async function placeStockAction(
     await invSvc.stampPlacementBin([data.itemId], dest);
     // Re-synchronize the book crate SUMMARY from the holdings that now exist.
     // The stock has already moved, so a failure here is reported, never
-    // rolled back — see syncBookCratePlacement's contract.
-    const { failedItemIds, skippedItemIds } = await invSvc.syncBookCratePlacement([data.itemId], {
-      audit: {
-        toLocationId,
-        quantityByItemId: new Map([[data.itemId, data.quantity]]),
+    // rolled back — see syncBookCratePlacement's contract. `verified` is the
+    // gate's own pre-move read: the sync re-reads and writes only where the two
+    // agree, so a crate edited while the stock was moving is left alone rather
+    // than overwritten by an acknowledgement that named a different crate.
+    const { failedItemIds, skippedItemIds, staleItemIds } = await invSvc.syncBookCratePlacement(
+      [data.itemId],
+      {
+        verified,
+        audit: {
+          toLocationId,
+          quantityByItemId: new Map([[data.itemId, data.quantity]]),
+        },
       },
-    });
+    );
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
@@ -649,6 +726,7 @@ export async function placeStockAction(
       toLocationId,
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -710,6 +788,9 @@ export async function bulkPlaceStockAction(
     /** The stock moved; some title holds stock in more than one location, so
      *  its summary was deliberately left alone (see syncBookCratePlacement). */
     crateSyncSkipped?: boolean;
+    /** The stock moved; some title's crate was edited by someone else while the
+     *  batch was placing, so its summary was left alone. */
+    crateSyncStale?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -774,7 +855,7 @@ export async function bulkPlaceStockAction(
     // confirms would double-move the ones that already went.
     // A batch acknowledgement is per-book, so one stale line refuses the batch
     // and re-asks with fresh truth rather than waiving all 200.
-    await invSvc.assertBookCratePlacementAllowed(
+    const verified = await invSvc.assertBookCratePlacementAllowed(
       data.placements.map((p) => p.itemId),
       dest,
       {
@@ -818,12 +899,16 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds, skippedItemIds } = await invSvc.syncBookCratePlacement(placedItemIds, {
-      audit: {
-        toLocationId,
-        quantityByItemId: new Map(data.placements.map((p) => [p.itemId, p.quantity])),
+    const { failedItemIds, skippedItemIds, staleItemIds } = await invSvc.syncBookCratePlacement(
+      placedItemIds,
+      {
+        verified,
+        audit: {
+          toLocationId,
+          quantityByItemId: new Map(data.placements.map((p) => [p.itemId, p.quantity])),
+        },
       },
-    });
+    );
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
@@ -833,6 +918,7 @@ export async function bulkPlaceStockAction(
       failed,
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
     });
   } catch (e) {
     return toResult(e);

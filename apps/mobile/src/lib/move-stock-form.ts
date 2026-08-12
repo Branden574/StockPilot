@@ -37,7 +37,13 @@
  * itself cannot be rendered under vitest.
  */
 
-import { describeNewRackPlacement, type NewRackPlacementDecision } from '@stockpilot/core';
+import {
+  describeNewRackPlacement,
+  parseBookCrateChangeDetail,
+  planNewLocation,
+  type BookCrateChangeDetail,
+  type NewRackPlacementDecision,
+} from '@stockpilot/core';
 
 export interface MoveDestination {
   id: string;
@@ -189,29 +195,78 @@ export function moveDestinationChoices(
 // be unit-tested; the modal only renders an Alert around the result.
 // ---------------------------------------------------------------------------
 
+/**
+ * A "+ New" destination as the sheet collects it.
+ *
+ * `kind` is an EXPLICIT choice, not something inferred from which boxes happen
+ * to be filled. The sheet used to render "RACK NUMBER *" plus two optional
+ * crate boxes with no toggle at all, which had two consequences and both were
+ * live defects:
+ *
+ *   • a number-only crate was UNREACHABLE — submit was gated on the rack
+ *     number, and the label derivation keyed crate-ness off the COLOUR alone
+ *     (`crateColor ? 'crate' : 'rack'`), the exact heuristic the server removed
+ *     in afcc5d82. The two halves of one boundary disagreed;
+ *   • rack A1 + crate 9 minted "Crate #9" with no confirmation, after asking
+ *     "Create new rack A1?" — the string confirmed and the string created
+ *     differed character for character (REPRO A / A').
+ *
+ * Rack XOR crate is now the rule on both sides of the boundary, and it is
+ * stated once, in packages/core/src/inventory/new-location.ts.
+ */
+export type NewLocationKind = 'rack' | 'crate';
+
 export interface NewRackInput {
+  /** Which branch the user chose. Books may choose 'crate'; nothing else may. */
+  kind: NewLocationKind;
   rackNumber: string;
   rackRow?: string | null;
   crateColor?: string | null;
   crateNumber?: string | null;
-  /** Books can create crates; everything else is a rack. Gates the crate fields. */
-  isBook: boolean;
 }
 
 /**
- * The display label a "+ New rack" form will create — the SAME derivation the
- * web dialog uses, so both platforms feed the identical string to the shared
- * copy builder. A crate reads "Blue #42"; a rack reads "22-B" or bare "22".
+ * The four fields as the SERVER will read them for the chosen branch — the
+ * crate branch sends no rack pair and the rack branch sends no crate pair, so
+ * the combination the server refuses cannot leave this screen.
+ *
+ * This is also what makes the confirmation honest: the same object produces the
+ * label shown and the payload sent.
  */
-export function newRackLabel(n: NewRackInput): { label: string; noun: 'rack' | 'crate' } {
-  const color = n.crateColor?.trim();
-  if (n.isBook && color) {
-    const num = n.crateNumber?.trim() || n.rackNumber.trim();
-    return { label: `${color} #${num}`, noun: 'crate' };
+export function newLocationFields(n: NewRackInput): {
+  rackNumber?: string;
+  rackRow?: string;
+  crateColor?: string;
+  crateNumber?: string;
+} {
+  if (n.kind === 'crate') {
+    const color = n.crateColor?.trim();
+    return {
+      crateNumber: n.crateNumber?.trim() ?? '',
+      ...(color ? { crateColor: color } : {}),
+    };
   }
   const row = n.rackRow?.trim();
-  const number = n.rackNumber.trim();
-  return { label: row ? `${number}-${row}` : number, noun: 'rack' };
+  return { rackNumber: n.rackNumber.trim(), ...(row ? { rackRow: row } : {}) };
+}
+
+/** Is the chosen branch complete enough to submit? A crate needs its NUMBER. */
+export function newLocationReady(n: NewRackInput): boolean {
+  return planNewLocation(newLocationFields(n)).kind !== 'invalid';
+}
+
+/**
+ * The display label a "+ New" form will create, and the noun to call it.
+ *
+ * Delegates to the ONE core planner — the same function the server names the
+ * `locations` row with — so the phone can no longer confirm one string and
+ * create another. A crate reads "Blue #42" / "Crate #42"; a rack reads "22-B"
+ * or bare "22". An incomplete form yields '' and the caller must not confirm.
+ */
+export function newRackLabel(n: NewRackInput): { label: string; noun: NewLocationKind } {
+  const plan = planNewLocation(newLocationFields(n));
+  if (plan.kind === 'invalid') return { label: '', noun: n.kind };
+  return { label: plan.name, noun: plan.noun };
 }
 
 /**
@@ -233,4 +288,39 @@ export function decideNewRackPlacement(input: {
     existingLabels: input.existingLabels,
     noun,
   });
+}
+
+// ---------------------------------------------------------------------------
+// The book-crate confirmation, on the phone.
+//
+// POST /api/v1/items/<id>/transfer now runs the same gate the web put-away
+// runs, and refuses a move that would overwrite a crate a human recorded with a
+// 409 carrying the structured payload. The sheet has to be able to ANSWER that,
+// or every crated book dead-ends on an error toast — which is precisely why the
+// route used to skip the gate and write nothing at all.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the book-crate confirmation payload out of an API error, if that is what
+ * it is. `transferStock()` attaches the parsed body to the thrown Error as
+ * `details`; anything else (a plain message, another conflict) yields null and
+ * the caller shows the message as-is.
+ */
+export function bookCrateRefusal(e: unknown): BookCrateChangeDetail | null {
+  if (!e || typeof e !== 'object') return null;
+  return parseBookCrateChangeDetail((e as { details?: unknown }).details);
+}
+
+/**
+ * The Alert body for a crate refusal: one line per book, naming where it is
+ * recorded today and where this move would put it. Native Alerts take a single
+ * string, so the lines are joined rather than rendered as a list.
+ */
+export function bookCrateAlertMessage(detail: BookCrateChangeDetail): string {
+  return detail.items
+    .map(
+      (i) =>
+        `${i.itemName} is recorded in ${i.currentLabel ?? 'no crate'} — this move records it in ${i.nextLabel ?? 'no crate'}.`,
+    )
+    .join('\n');
 }

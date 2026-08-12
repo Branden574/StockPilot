@@ -34,6 +34,7 @@ import type {
 import {
   BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
   bookCrateAcknowledgementIndex,
+  bookCrateFingerprint,
   bookCratePlacementWillSync,
   buildVariantKey,
   normalizeCrateColorForWrite,
@@ -528,6 +529,40 @@ export type { PlaceDest } from '@/lib/locations/destination-option';
  */
 export { BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION } from '@stockpilot/core';
 export type { BookCrateChangeDetail } from '@stockpilot/core';
+
+/**
+ * A book's crate SUMMARY as read from `inventory_items` at one instant.
+ *
+ * The gate reads one of these per book BEFORE the stock moves and the
+ * reconciliation reads a fresh one AFTER, and the pair is what proves nobody
+ * re-crated the book in between — see `syncBookCratePlacement`.
+ */
+export interface BookCrateSummary {
+  name: string;
+  crateColor: string | null;
+  crateNumber: string | null;
+}
+
+/**
+ * What a reconciliation did, per bucket. Every caller must surface all three:
+ * the stock moved in every case, so a silent bucket is a placement the operator
+ * believes relabelled something it did not.
+ */
+export interface BookCrateSyncResult {
+  /** The summary was rewritten to match the holdings (a rack CLEARS the crate). */
+  syncedItemIds: string[];
+  /** The write was attempted and FAILED — the printed label may now be stale. */
+  failedItemIds: string[];
+  /** Deliberately left alone: this title now holds stock in more than one place. */
+  skippedItemIds: string[];
+  /**
+   * The row CHANGED between the gate and the write — someone re-crated the book
+   * (or deleted it, or flipped it out of `item_type='book'`) while the stock was
+   * moving. Left alone rather than overwritten: the acknowledgement the operator
+   * gave was about a different crate.
+   */
+  staleItemIds: string[];
+}
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -3694,7 +3729,21 @@ export class InventoryService {
      * acknowledgeStock. Ignored for every other op.
      */
     acknowledgeStock?: boolean;
-  }): Promise<{ ok: number; skipped: number; placed?: number }> {
+  }): Promise<{
+    ok: number;
+    skipped: number;
+    placed?: number;
+    /**
+     * Set rack only: BOOKS whose crate summary was cleared because their stock
+     * now sits on the rack and nowhere else. Reported so the toast can say it —
+     * a crate label silently surviving a physical move is what sent pickers to
+     * empty crates.
+     */
+    crateCleared?: number;
+    /** Set rack only: books whose crate label could NOT be reconciled (split
+     *  holdings, a concurrent edit, or a failed write). Also reported. */
+    crateUnchanged?: number;
+  }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
     if (input.ids.length > 500) {
@@ -3817,19 +3866,81 @@ export class InventoryService {
       // clears the label). Best-effort: a placement hiccup must not undo the
       // label set, so failures are logged and `placed` just stays 0.
       let placed = 0;
+      let crateCleared = 0;
+      let crateUnchanged = 0;
       if (composedBin) {
+        // The crate summary as it stands BEFORE the stock moves. Read here for
+        // two reasons: it is the `verified` freshness proof syncBookCratePlacement
+        // requires, and reading it after the move would compare the row against
+        // itself and prove nothing.
+        const before = await this.readBookCrateSummaries(allowedIds).catch(() => null);
         placed = await this.placeItemsOntoRackByName(allowedIds, num, row, composedBin).catch(
           (e) => {
             console.error('[bulkUpdate set_rack] bulk placement failed', e);
             return 0;
           },
         );
+        // ═══ THE CRATE SUMMARY MUST FOLLOW THE STOCK — DEFECT 3(4) ═══
+        // inventory_set_rack above writes the RACK keys only (migration 0068).
+        // This branch then PHYSICALLY RELOCATES every selected item's stock onto
+        // that rack, so a book that read "Blue 4" carried on reading "Blue 4"
+        // while crate Blue 4 held zero of its units — a picker walks to an
+        // empty crate. The reconciliation clears it, because a book on a rack is
+        // in no crate.
+        //
+        // NOT GATED, and that is a decision rather than an omission. The gate
+        // (assertBookCratePlacementAllowed) REFUSES and asks a client to
+        // confirm; this op has no per-book confirmation channel — the toolbar
+        // fires one all-or-nothing "Set rack" for up to 500 mixed items — so
+        // wiring it here would newly reject a shipped flow for the 114 books
+        // that carry book_crate_*, with no way for the operator to answer. The
+        // trade is bounded and defensible: the physical move is the operator's
+        // own explicit instruction (they typed the rack), the summary is a
+        // DERIVED label whose only true value afterwards is "no crate", the
+        // sync still refuses to touch a split or concurrently-edited book, every
+        // write is audited before→after, and the count comes back so the toast
+        // can say how many labels changed. Leaving a label pointing at an empty
+        // crate is the strictly worse failure.
+        if (before) {
+          // NO `audit.toLocationId`: this op resolves a rack PER WAREHOUSE, so
+          // there is no single destination id to record, and stamping the rack
+          // NAME into a field every other caller fills with a uuid would put a
+          // lie in the trail. The before→after diff and the `bulk_op:'set_rack'`
+          // row emitted above already say what happened.
+          const sync = await this.syncBookCratePlacement(allowedIds, { verified: before });
+          // Count only books that HAD a crate recorded — those are the ones a
+          // label change is visible for. A book with no crate is written the
+          // same way and changes nothing anyone can see.
+          const hadCrate = (id: string) => {
+            const s = before.get(id);
+            return !!s && (s.crateColor !== null || s.crateNumber !== null);
+          };
+          crateCleared = sync.syncedItemIds.filter(hadCrate).length;
+          crateUnchanged = [
+            ...sync.failedItemIds,
+            ...sync.skippedItemIds,
+            ...sync.staleItemIds,
+          ].filter(hadCrate).length;
+        } else {
+          // No freshness proof, so nothing may be written — see
+          // syncBookCratePlacement's contract. The stock still moved and the
+          // rack label was still written; only the crate summary is untouched.
+          console.error(
+            '[bulkUpdate set_rack] crate summaries unreadable — crate labels left as they were',
+          );
+        }
       }
       // RLS filtered the gap (if any). Surface it in `skipped` so the
       // "Updated X · Skipped Y" toast remains truthful. `placed` reports how
       // many holdings actually physically moved, for callers that want to
       // confirm Set rack did more than relabel.
-      return { ok, skipped: skipped + (allowedIds.length - ok), placed };
+      return {
+        ok,
+        skipped: skipped + (allowedIds.length - ok),
+        placed,
+        ...(crateCleared > 0 ? { crateCleared } : {}),
+        ...(crateUnchanged > 0 ? { crateUnchanged } : {}),
+      };
     }
 
     // Tag ops bypass the inventory_items row update — they only touch
@@ -4298,13 +4409,8 @@ export class InventoryService {
    * here immediately before writing, which also closes the concurrent-change
    * window to a single round-trip.
    */
-  async readBookCrateSummaries(
-    itemIds: string[],
-  ): Promise<Map<string, { name: string; crateColor: string | null; crateNumber: string | null }>> {
-    const out = new Map<
-      string,
-      { name: string; crateColor: string | null; crateNumber: string | null }
-    >();
+  async readBookCrateSummaries(itemIds: string[]): Promise<Map<string, BookCrateSummary>> {
+    const out = new Map<string, BookCrateSummary>();
     if (itemIds.length === 0) return out;
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
@@ -4362,8 +4468,13 @@ export class InventoryService {
    * entry (or a holdings read that errors) is treated as "the sync will write",
    * i.e. it still asks.
    *
-   * Returns the summaries it read so the caller can reuse them for the audit
-   * before→after without a second query.
+   * RETURNS THE SUMMARIES IT READ, and the caller MUST pass them on to
+   * `syncBookCratePlacement` as `verified`. That is not a convenience: it is
+   * the other half of the freshness guarantee. This map says "these are the
+   * crates the gate cleared", and the reconciliation compares its own fresh
+   * read against it, so a crate someone edited while the stock was moving is
+   * left alone instead of being overwritten by an acknowledgement that was
+   * about a different crate.
    */
   async assertBookCratePlacementAllowed(
     itemIds: string[],
@@ -4374,7 +4485,7 @@ export class InventoryService {
       /** The resolved destination `locations.id`. Required for step 2. */
       toLocationId?: string;
     } = {},
-  ): Promise<Map<string, { name: string; crateColor: string | null; crateNumber: string | null }>> {
+  ): Promise<Map<string, BookCrateSummary>> {
     const summaries = await this.readBookCrateSummaries(itemIds);
     if (summaries.size === 0) return summaries;
 
@@ -4509,12 +4620,32 @@ export class InventoryService {
    *   • holdings SPLIT across locations → leave the summary alone, because
    *     stamping the newest crate would assert something false about the rest.
    *
-   * Returns the item ids whose summary it FAILED to write, and separately the
-   * ids it deliberately SKIPPED because their holdings are split. The caller
-   * must surface both: the placement itself is still true (the stock really
-   * moved, and rolling a real movement back by hand is never the answer), but
-   * in the first case the printed label may now be stale and in the second the
-   * label was intentionally left describing a different location. Skipping is
+   * ═══ THE SECOND READ IS THE FRESHNESS PROOF, NOT A FORMALITY ═══
+   *
+   * `opts.verified` is what `assertBookCratePlacementAllowed` returned at T0,
+   * before the stock moved. This method re-reads the same rows at T2 and writes
+   * ONLY where the two agree. It used to re-read and then use the fresh row for
+   * nothing but the item-type filter and the audit `before`, stamping the
+   * destination over whatever it found — so a crate edited during the placement
+   * (a colleague on the mobile item screen, another put-away in flight) was
+   * destroyed with no confirmation at all. That is the exact silent overwrite
+   * the gate in front of it exists to refuse, arriving through the back door.
+   *
+   * A row that changed is reported as STALE and left alone. Not written and not
+   * failed: the acknowledgement the operator gave named a different crate, and
+   * the honest response to "this is no longer the thing you agreed to" is to
+   * stop, keep both facts (the stock moved; the label still says what a human
+   * last put there) and say so.
+   *
+   * `verified` is a REQUIRED argument on purpose. An optional freshness proof
+   * that defaults to "trust me" is the same shape as the blanket
+   * acknowledgement boolean this module already had to delete once.
+   *
+   * Returns three buckets, and the caller must surface all three: the placement
+   * itself is still true (the stock really moved, and rolling a real movement
+   * back by hand is never the answer), but FAILED means the printed label may
+   * now be stale, SKIPPED means it was intentionally left describing a
+   * different location, and STALE means someone else's edit won. Skipping is
    * not an error, yet a silent skip is indistinguishable from a silent
    * success — and split holdings are the COMMON case for an org whose books
    * also sit directly on a Site (405 units on DC4 alone, per migration 0292),
@@ -4535,13 +4666,19 @@ export class InventoryService {
   async syncBookCratePlacement(
     itemIds: string[],
     opts: {
+      /**
+       * The summaries `assertBookCratePlacementAllowed` read BEFORE the stock
+       * moved — the crates the operator was actually shown and cleared.
+       * Required; see the header.
+       */
+      verified: ReadonlyMap<string, BookCrateSummary>;
       audit?: {
         toLocationId: string;
         /** Units placed per item; omitted keys simply record no quantity. */
         quantityByItemId?: Map<string, number>;
       };
-    } = {},
-  ): Promise<{ failedItemIds: string[]; skippedItemIds: string[] }> {
+    },
+  ): Promise<BookCrateSyncResult> {
     try {
       return await this.syncBookCratePlacementInner(itemIds, opts);
     } catch (e) {
@@ -4553,23 +4690,35 @@ export class InventoryService {
         error: e instanceof Error ? e.message : String(e),
         items: itemIds.length,
       });
-      return { failedItemIds: [...itemIds], skippedItemIds: [] };
+      return { syncedItemIds: [], failedItemIds: [...itemIds], skippedItemIds: [], staleItemIds: [] };
     }
   }
 
   private async syncBookCratePlacementInner(
     itemIds: string[],
     opts: {
+      verified: ReadonlyMap<string, BookCrateSummary>;
       audit?: {
         toLocationId: string;
         quantityByItemId?: Map<string, number>;
       };
     },
-  ): Promise<{ failedItemIds: string[]; skippedItemIds: string[] }> {
-    if (itemIds.length === 0) return { failedItemIds: [], skippedItemIds: [] };
+  ): Promise<BookCrateSyncResult> {
+    if (itemIds.length === 0)
+      return { syncedItemIds: [], failedItemIds: [], skippedItemIds: [], staleItemIds: [] };
+    // THE FRESH READ. Everything below compares against it; nothing trusts the
+    // caller's snapshot.
     const summaries = await this.readBookCrateSummaries(itemIds);
     const bookIds = [...summaries.keys()];
-    if (bookIds.length === 0) return { failedItemIds: [], skippedItemIds: [] };
+
+    // A book the gate cleared that is NO LONGER a readable book — soft-deleted,
+    // or its item_type flipped away from 'book' — between the two reads. This
+    // used to fall straight through the `bookIds.length === 0` early return and
+    // report a fully synchronized placement with neither a failure nor a skip:
+    // a silent no-op dressed as success.
+    const staleItemIds = itemIds.filter((id) => opts.verified.has(id) && !summaries.has(id));
+    if (bookIds.length === 0)
+      return { syncedItemIds: [], failedItemIds: [], skippedItemIds: [], staleItemIds };
 
     // ONE bounded read of every positive holding for these books. No kind
     // filter in the query: `.in('locations.kind', [...])` silently drops
@@ -4584,7 +4733,7 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', bookIds)
       .gt('quantity', 0);
-    if (error) return { failedItemIds: bookIds, skippedItemIds: [] };
+    if (error) return { syncedItemIds: [], failedItemIds: bookIds, skippedItemIds: [], staleItemIds };
 
     type HoldingRow = {
       item_id: string;
@@ -4632,6 +4781,35 @@ export class InventoryService {
       // spelling the write path no longer produces.
       const color = normalizeCrateColorForWrite(loc!.crate_color);
       const number = loc!.crate_number?.trim() || null;
+
+      // ═══ THE FRESHNESS CHECK — DEFECT 5 ═══
+      // The gate compared the row at T0 and the operator answered about THAT
+      // crate. If the row says something else now, the answer we hold is not an
+      // answer to this question. Only refuse when the fresh value would
+      // actually be OVERWRITTEN: a concurrent edit that happens to agree with
+      // the destination is not a conflict, and reporting it as stale would cry
+      // wolf on a write that changes nothing.
+      const fresh = summaries.get(itemId)!;
+      const cleared = opts.verified.get(itemId);
+      const rowMoved =
+        !cleared ||
+        bookCrateFingerprint(cleared.crateColor, cleared.crateNumber) !==
+          bookCrateFingerprint(fresh.crateColor, fresh.crateNumber);
+      if (
+        rowMoved &&
+        describeBookCrateConflict({
+          itemId,
+          itemName: fresh.name,
+          currentColor: fresh.crateColor,
+          currentNumber: fresh.crateNumber,
+          nextColor: color,
+          nextNumber: number,
+        }) !== null
+      ) {
+        staleItemIds.push(itemId);
+        continue;
+      }
+
       // JSON, not a space-joined string. `crate_number` is FREE TEXT and
       // production already stores values containing a space ("Blue Shelf"), so
       // ('Blue', 'Shelf 2') and ('Blue Shelf', '2') collide on a joined key —
@@ -4644,6 +4822,7 @@ export class InventoryService {
     }
 
     const failedItemIds: string[] = [];
+    const syncedItemIds: string[] = [];
     for (const batch of batches.values()) {
       const { data: updated, error: rpcError } = await this.ctx.supabase.rpc(
         'inventory_set_book_storage',
@@ -4668,6 +4847,7 @@ export class InventoryService {
         failedItemIds.push(...batch.ids);
         continue;
       }
+      syncedItemIds.push(...batch.ids);
       // Trail: one row per item, before→after, on the SAME event the other
       // custom_fields writers use. `summaries` was read before the RPC, so
       // `before` is genuinely the previous crate rather than an echo.
@@ -4698,7 +4878,7 @@ export class InventoryService {
         );
       }
     }
-    return { failedItemIds, skippedItemIds };
+    return { syncedItemIds, failedItemIds, skippedItemIds, staleItemIds };
   }
 
   /**

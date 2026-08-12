@@ -40,7 +40,12 @@ const {
   // default to "nothing to do" so the pre-existing rack cases below are
   // unaffected; the dedicated crate suite drives their real behaviour.
   mockAssertBookCrate: vi.fn(async () => new Map()),
-  mockSyncBookCrate: vi.fn(async () => ({ failedItemIds: [] as string[], skippedItemIds: [] as string[] })),
+  mockSyncBookCrate: vi.fn(async () => ({
+    syncedItemIds: [] as string[],
+    failedItemIds: [] as string[],
+    skippedItemIds: [] as string[],
+    staleItemIds: [] as string[],
+  })),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -116,7 +121,12 @@ beforeEach(() => {
   mockTransferStock.mockResolvedValue(undefined);
   mockStampPlacementBin.mockResolvedValue(undefined);
   mockAssertBookCrate.mockResolvedValue(new Map());
-  mockSyncBookCrate.mockResolvedValue({ failedItemIds: [], skippedItemIds: [] });
+  mockSyncBookCrate.mockResolvedValue({
+    syncedItemIds: [],
+    failedItemIds: [],
+    skippedItemIds: [],
+    staleItemIds: [],
+  });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });

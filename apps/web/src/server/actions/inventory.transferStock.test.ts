@@ -27,9 +27,26 @@ vi.mock('next/cache', () => ({
 //    calls stampPlacementBin — that's placeStock/bulkPlaceStock only.)
 // ---------------------------------------------------------------------------
 
-const { mockTransferStock, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
+const {
+  mockTransferStock,
+  mockFindOrCreateRackOrCrate,
+  mockAssertBookCrate,
+  mockSyncBookCrate,
+  ctxRef,
+} = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
+  // The Transfer path now runs the SAME book-crate gate + reconciliation the
+  // Staging put-away runs — see transferStockAction. Its own behaviour is
+  // covered in inventory.bookCratePlacement.test.ts; here they only need to
+  // exist so the destination-union assertions below still speak.
+  mockAssertBookCrate: vi.fn(async () => new Map()),
+  mockSyncBookCrate: vi.fn(async () => ({
+    syncedItemIds: [] as string[],
+    failedItemIds: [] as string[],
+    skippedItemIds: [] as string[],
+    staleItemIds: [] as string[],
+  })),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -44,6 +61,8 @@ vi.mock('@/server/services/context', async (importOriginal) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
+    assertBookCratePlacementAllowed = mockAssertBookCrate;
+    syncBookCratePlacement = mockSyncBookCrate;
   },
 }));
 
@@ -71,10 +90,32 @@ const ORG_ID = 'org-test';
  * warehouse verification lookup. `warehouseRow` defaults to a valid same-org
  * row; pass `null` to simulate a cross-tenant / missing warehouse.
  */
-function installContext(opts: { warehouseRow?: Record<string, unknown> | null } = {}): SupabaseStub {
+function installContext(
+  opts: {
+    warehouseRow?: Record<string, unknown> | null;
+    destinationRow?: Record<string, unknown> | null;
+  } = {},
+): SupabaseStub {
   const warehouseRow = 'warehouseRow' in opts ? opts.warehouseRow : { id: WAREHOUSE_ID };
+  // The existing-destination branch now re-reads the destination row for its
+  // CRATE columns (the gate has to know what the book's summary would become)
+  // and pins it to the caller's org while it is there.
+  const destinationRow =
+    'destinationRow' in opts
+      ? opts.destinationRow
+      : {
+          id: EXISTING_LOC,
+          warehouse_id: WAREHOUSE_ID,
+          kind: 'rack',
+          rack_number: '22',
+          rack_row: 'B',
+          crate_color: null,
+          crate_number: null,
+          name: '22-B',
+        };
   const stub = makeSupabaseStub({
     'warehouses.select': { data: warehouseRow ?? null, error: null },
+    'locations.select': { data: destinationRow ?? null, error: null },
   });
   ctxRef.ctx = {
     organizationId: ORG_ID,
@@ -92,6 +133,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
+  mockAssertBookCrate.mockResolvedValue(new Map());
+  mockSyncBookCrate.mockResolvedValue({
+    syncedItemIds: [],
+    failedItemIds: [],
+    skippedItemIds: [],
+    staleItemIds: [],
+  });
   installContext();
 });
 

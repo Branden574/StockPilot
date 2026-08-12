@@ -1,10 +1,9 @@
-import { isCrateDestination } from '@stockpilot/core';
+import { newLocationFieldsShape, planNewLocation, refineNewLocation } from '@stockpilot/core';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { toPlaceDest, type PlaceDest } from '@/lib/locations/destination-option';
-import { deriveLocationName } from '@/lib/locations/rack-name';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
@@ -28,12 +27,22 @@ export const dynamic = 'force-dynamic';
  * in InventoryService.transferStock — so mobile MUST go through the service, or
  * a member without stock:transfer could move stock by calling the RPC directly.
  *
- * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack) }
+ * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack),
+ *         acknowledgedCrateChanges? }
  *   - toLocationId: an existing rack/crate in your org.
- *   - newRack: { rackNumber, rackRow?, crateColor?, crateNumber? } — created via
+ *   - newRack: a RACK ({ rackNumber, rackRow? }) **or** a CRATE
+ *     ({ crateNumber, crateColor? }) — never both; see
+ *     packages/core/src/inventory/new-location.ts. Created via
  *     LocationsService.create (asserts 'locations:manage'; racks/crates don't
  *     count against the sites plan limit) in the SOURCE location's warehouse,
  *     which is derived server-side (never trusted from the client).
+ *   - acknowledgedCrateChanges: the answer to a
+ *     BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal — item id + the
+ *     fingerprint of the crate the client displayed, never a blanket flag.
+ *
+ * Answers { ok, toLocationId, crateSyncFailed?, crateSyncSkipped?,
+ * crateSyncStale? }. The stock moved in every one of those cases; the flags say
+ * whether the book's crate LABEL followed it.
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -48,22 +57,14 @@ export const dynamic = 'force-dynamic';
  */
 const newRackSchema = z
   .object({
-    // Optional, mirroring the web `newRackSchema`: a CRATE is identified by its
-    // color/number, so demanding a rack number for one was artificial — and it
-    // is what forced the crate-vs-rack decision to key off `crateColor` alone.
-    rackNumber: z.string().max(64).optional(),
-    rackRow: z.string().max(64).optional(),
-    crateColor: z.string().max(64).optional(),
-    // FREE TEXT — never range-validate (packages/core/.../book-storage.ts).
-    crateNumber: z.string().max(64).optional(),
+    // The four fields and the rule they obey are ONE declaration shared with
+    // the web actions (packages/core/src/inventory/new-location.ts). RACK XOR
+    // CRATE: "rack A1 + crate 9" is refused here rather than resolved by
+    // precedence, which is what used to mint a surprise "Crate #9" from a sheet
+    // whose confirmation had said "Create new rack A1?" (REPRO A/A').
+    ...newLocationFieldsShape,
   })
-  .refine(
-    (n) =>
-      isCrateDestination(n)
-        ? !!(n.crateNumber?.trim() || n.rackNumber?.trim())
-        : !!n.rackNumber?.trim(),
-    { message: 'Give the rack a number, or the crate a number.', path: ['rackNumber'] },
-  );
+  .superRefine(refineNewLocation);
 
 const bodySchema = z
   .object({
@@ -74,6 +75,20 @@ const bodySchema = z
     // Exactly one destination: an existing location OR an inline-created rack.
     toLocationId: z.string().uuid().optional(),
     newRack: newRackSchema.optional(),
+    /**
+     * The native sheet's answer to the book-crate confirmation — the SAME
+     * scoped shape the web actions take: one entry per book, item id plus a
+     * fingerprint of the crate the phone displayed. Never a blanket flag.
+     */
+    acknowledgedCrateChanges: z
+      .array(
+        z.object({
+          itemId: z.string().uuid(),
+          currentFingerprint: z.string().min(1).max(256),
+        }),
+      )
+      .max(200)
+      .optional(),
   })
   .refine((v) => (v.toLocationId ? 1 : 0) + (v.newRack ? 1 : 0) === 1, {
     message: 'Provide exactly one destination — an existing location or a new rack.',
@@ -154,7 +169,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      const n = body.newRack;
       // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate with
       // the same warehouse+name first — mirrors the web actions' dedup fix
       // (migration 0270); previously this always INSERTed, minting a
@@ -162,16 +176,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // rack name that already existed. Asserts 'locations:manage' and scopes
       // the insert to ctx.organizationId on the create-fallback path only
       // (racks/crates don't consume the sites plan limit).
-      const isCrate = isCrateDestination(n);
+      //
+      // Kind, name and columns all come out of ONE `planNewLocation` verdict,
+      // so the row created is provably the row the client's confirmation named.
+      const plan = planNewLocation(body.newRack);
+      if (plan.kind === 'invalid') {
+        // Unreachable through bodySchema, which refuses the same combination
+        // with the same message. Fail closed rather than guess a destination.
+        return NextResponse.json(
+          { error: 'validation_error', message: plan.message },
+          { status: 400 },
+        );
+      }
+      const isCrate = plan.kind === 'crate';
       const created = await new LocationsService(ctx).findOrCreateRackOrCrate({
-        name: deriveLocationName(n),
+        name: plan.name,
         type: isCrate ? 'bin' : 'shelf',
         kind: isCrate ? 'crate' : 'rack',
         warehouseId: srcLoc.warehouse_id,
-        rackNumber: n.rackNumber ?? null,
-        rackRow: n.rackRow ?? null,
-        crateColor: n.crateColor ?? null,
-        crateNumber: n.crateNumber ?? null,
+        rackNumber: plan.rackNumber,
+        rackRow: plan.rackRow,
+        crateColor: plan.crateColor,
+        crateNumber: plan.crateNumber,
       });
       toLocationId = created.id as string;
       // From the RESOLVED row, not the typed input: a case-insensitive reuse
@@ -211,6 +237,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
     const svc = new InventoryService(ctx);
+
+    // ═══ THE BOOK-CRATE GATE, ON MOBILE TOO — DEFECT 3(3) ═══
+    //
+    // This route used to run neither the gate nor the reconciliation, on the
+    // grounds that its client had no confirmation UI. The consequence was worse
+    // than the one it avoided: a book put away from the phone got NO
+    // book_crate_* written AT ALL — not even on a FIRST assignment, where there
+    // is provably nothing to confirm — because inventory_set_rack (migration
+    // 0068) writes only the rack keys. Web's comment about "the next put-away
+    // reconciles it" was therefore simply false for a mobile-first warehouse.
+    //
+    // The fix is not to skip the gate, it is to give the phone a way to answer:
+    // apps/mobile/src/components/move-stock-modal.tsx now renders the refusal
+    // and retries with `acknowledgedCrateChanges`, and the refusal's structured
+    // `details` are forwarded below so it can. A client that does NOT answer
+    // gets a clean 409 naming the crate — refusing loudly is safe; overwriting
+    // quietly is not.
+    const verified = await svc.assertBookCratePlacementAllowed([id], dest, {
+      acknowledged: body.acknowledgedCrateChanges,
+      toLocationId,
+      moves: new Map([[id, { fromLocationId: body.fromLocationId, quantity: body.quantity }]]),
+    });
+
     await svc.transferStock({
       itemId: id,
       fromLocationId: body.fromLocationId,
@@ -223,26 +272,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // so bin_location tracks the rack — matching web placeStockAction. A plain
     // rack→rack move leaves the label alone, matching web transferStockAction.
     // Best-effort: stock is already placed, so a stamp failure never fails here.
-    //
-    // DELIBERATELY NOT SYNCED HERE (yet): the book CRATE summary. Web's
-    // placeStockAction runs assertBookCratePlacementAllowed before the move and
-    // syncBookCratePlacement after it, but that gate can REFUSE with
-    // BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION — and this route's clients have no
-    // confirmation UI to answer with yet. Wiring it before mobile can prompt
-    // would either start rejecting ordinary put-aways or, worse, force a blanket
-    // acknowledgement that silently overwrites a crate a person recorded.
-    // `dest` already carries the crate columns, so adding both calls here is a
-    // two-line change once the native flow can ask. Until then this route's
-    // behaviour is exactly what it was.
     if (srcLoc?.kind === 'staging' || srcLoc?.kind === 'unplaced') {
       await svc.stampPlacementBin([id], dest);
     }
+
+    // …and the crate SUMMARY follows the holdings, on BOTH kinds of move — same
+    // as web. Never throws; a failure is reported, never rolled back.
+    const crate = await svc.syncBookCratePlacement([id], {
+      verified,
+      audit: { toLocationId, quantityByItemId: new Map([[id, body.quantity]]) },
+    });
 
     // A move re-slices this item's placement holdings shown in the cached
     // Items/Books views — refresh the org's list cache (on-hand total is
     // unchanged, but the per-rack breakdown is not).
     revalidateInventoryList(ctx.organizationId);
-    return NextResponse.json({ ok: true, toLocationId });
+    return NextResponse.json({
+      ok: true,
+      toLocationId,
+      // The stock moved in every one of these cases; the flags say whether the
+      // book's crate LABEL followed it, so the phone can warn instead of
+      // showing a bare success.
+      ...(crate.failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(crate.skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(crate.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+    });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as
     // ServiceError('internal_error', ...) with the raw text on internalDetail
@@ -262,7 +316,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     if (e instanceof ServiceError) {
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        {
+          error: e.code,
+          message: e.message,
+          // APP-AUTHORED structured metadata only — the book-crate confirmation
+          // payload the phone retries on. `internal_error` details are raw
+          // DB/PostgREST text and must stay server-side (S13), the same
+          // boundary the web action layer applies in toResult().
+          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
+        },
         { status: serviceErrorStatus(e.code) },
       );
     }
