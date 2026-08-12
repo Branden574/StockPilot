@@ -22,6 +22,8 @@ import {
   confirmLineMappingsSchema,
   err,
   ok,
+  optionalPoImportDisplayNameSchema,
+  renamePoImportSchema,
   type ActionResult,
   type AmbiguousColumnMeaning,
 } from '@stockpilot/core';
@@ -86,6 +88,9 @@ const recordSchema = z.object({
   fileSize: z.number().int().positive(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   sourceType: z.enum(['pdf', 'csv', 'xlsx', 'manual']),
+  /** Optional human name (mig 0333). Absent/blank → null; the service
+   *  re-validates, so this is the edge and not the gate. */
+  displayName: optionalPoImportDisplayNameSchema,
 });
 
 export async function recordPoUploadAction(input: {
@@ -95,6 +100,7 @@ export async function recordPoUploadAction(input: {
   fileSize: number;
   sha256: string;
   sourceType: 'pdf' | 'csv' | 'xlsx' | 'manual';
+  displayName?: string | null;
 }): Promise<
   ActionResult<{
     id: string;
@@ -110,7 +116,13 @@ export async function recordPoUploadAction(input: {
   }>
 > {
   const parsed = recordSchema.safeParse(input);
-  if (!parsed.success) return err('validation_error', 'Invalid upload metadata');
+  if (!parsed.success) {
+    // The name is the only field here a HUMAN types, so its message is the one
+    // worth surfacing; everything else is client-computed metadata for which
+    // the old generic string stays right.
+    const nameIssue = parsed.error.issues.find((i) => i.path[0] === 'displayName');
+    return err('validation_error', nameIssue?.message ?? 'Invalid upload metadata');
+  }
   try {
     const svc = await PoImportsService.forCurrentUser();
     const result = await svc.createFromUpload(parsed.data);
@@ -299,6 +311,35 @@ export async function resolvePoImportLineResultsAction(input: {
         categoryId: parsed.data.categoryId ?? null,
       }),
     );
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+/**
+ * Rename an import — set or change its human `display_name`.
+ *
+ * Shape follows renamePoNumberAction (actions/purchase-orders.ts:155): the
+ * action zod-validates and revalidates, and carries NO gate of its own — the
+ * SERVICE asserts the po_imports module and purchase_orders:manage, and reads
+ * the organization from its own context. A caller cannot name an org, and a
+ * caller without the permission gets the service's error, not a rename.
+ */
+export async function renamePoImportAction(input: {
+  poImportId: string;
+  displayName: string;
+}): Promise<ActionResult<{ id: string; displayName: string }>> {
+  const parsed = renamePoImportSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid import name.');
+  }
+  try {
+    const svc = await PoImportsService.forCurrentUser();
+    const result = await svc.rename(parsed.data.poImportId, parsed.data.displayName);
+    revalidatePath('/dashboard/purchase-orders/imports');
+    revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
+    return ok(result);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');

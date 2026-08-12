@@ -82,7 +82,9 @@ describe('PoImportsService.list', () => {
     const args = stub.chainArgs.get('po_imports.select') ?? [];
     const orIdx = chain.indexOf('or');
     expect(orIdx).toBeGreaterThan(-1);
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%100 \\_off%');
+    expect(args[orIdx]![0]).toBe(
+      'display_name.ilike.%100 \\_off%,file_name.ilike.%100 \\_off%',
+    );
   });
 
   it('strips .or()-structural metacharacters (,()) from the term — "Smith, Inc (test)" cannot malform the filter tree', async () => {
@@ -103,7 +105,9 @@ describe('PoImportsService.list', () => {
     // only structural chars left are the .or() clause's own. A raw comma here
     // would split the ilike into a bogus extra predicate → PostgREST 400 →
     // the whole imports list replaced by the retry banner.
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%Smith  Inc  test%');
+    expect(args[orIdx]![0]).toBe(
+      'display_name.ilike.%Smith  Inc  test%,file_name.ilike.%Smith  Inc  test%',
+    );
   });
 
   it('adds a supplier-name match (vendor_id IN (...)) when the search resolves suppliers — org-scoped lookup', async () => {
@@ -119,7 +123,9 @@ describe('PoImportsService.list', () => {
     const chain = stub.chains.get('po_imports.select') ?? [];
     const args = stub.chainArgs.get('po_imports.select') ?? [];
     const orIdx = chain.indexOf('or');
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%acme%,vendor_id.in.(sup-1,sup-2)');
+    expect(args[orIdx]![0]).toBe(
+      'display_name.ilike.%acme%,file_name.ilike.%acme%,vendor_id.in.(sup-1,sup-2)',
+    );
 
     const supplierArgs = (stub.chainArgs.get('suppliers.select') ?? []).flat();
     expect(supplierArgs).toContain('organization_id');
@@ -139,7 +145,9 @@ describe('PoImportsService.list', () => {
     const chain = stub.chains.get('po_imports.select') ?? [];
     const args = stub.chainArgs.get('po_imports.select') ?? [];
     const orIdx = chain.indexOf('or');
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%PO-1002%,approved_po_id.in.(po-9)');
+    expect(args[orIdx]![0]).toBe(
+      'display_name.ilike.%PO-1002%,file_name.ilike.%PO-1002%,approved_po_id.in.(po-9)',
+    );
   });
 
   it('combines supplier AND PO-number matches with the file-name match in one .or()', async () => {
@@ -156,7 +164,7 @@ describe('PoImportsService.list', () => {
     const args = stub.chainArgs.get('po_imports.select') ?? [];
     const orIdx = chain.indexOf('or');
     expect(args[orIdx]![0]).toBe(
-      'file_name.ilike.%acme%,vendor_id.in.(sup-1),approved_po_id.in.(po-9)',
+      'display_name.ilike.%acme%,file_name.ilike.%acme%,vendor_id.in.(sup-1),approved_po_id.in.(po-9)',
     );
   });
 
@@ -233,7 +241,7 @@ describe('PoImportsService.count', () => {
     const inIdx = chain.indexOf('in');
     expect(args[inIdx]).toEqual(['status', ['approved']]);
     const orIdx = chain.indexOf('or');
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%acme%');
+    expect(args[orIdx]![0]).toBe('display_name.ilike.%acme%,file_name.ilike.%acme%');
     // head-only — no rows requested.
     const selectIdx = chain.indexOf('select');
     expect(args[selectIdx]).toEqual(['id', { count: 'exact', head: true }]);

@@ -55,6 +55,8 @@ import {
   flaggedSportsMappings,
   lineNeedsMappingConfirmation,
   meaningKeepsFlaggedValues,
+  optionalPoImportDisplayNameSchema,
+  poImportDisplayNameSchema,
 } from '@stockpilot/core';
 
 import type {
@@ -76,6 +78,14 @@ export interface PoImportRow {
   vendor_id: string | null;
   warehouse_id: string | null;
   file_name: string;
+  /**
+   * Optional human name for this import (mig 0333). NULL on every historical
+   * row and on any import nobody named — every reader is
+   * `display_name ?? file_name`, so an unnamed import looks exactly like it
+   * always has. DISPLAY ONLY: it is never part of a storage path, an
+   * identifier, or the sha256 duplicate identity.
+   */
+  display_name: string | null;
   file_mime_type: string;
   file_size: number;
   storage_path: string;
@@ -98,6 +108,11 @@ export interface PoImportRow {
 export interface PoImportLineageRef {
   id: string;
   fileName: string;
+  /** The human name, when the predecessor/successor has one. Renders as
+   *  `displayName ?? fileName` everywhere, same rule as the list and detail
+   *  pages - otherwise the lineage notice is the one surface still printing
+   *  the raw `image.jpg` this feature exists to eliminate. */
+  displayName: string | null;
   createdAt: string;
   status: PoImportStatus;
   /** The purchase order this import produced (imports only gain one at approve). */
@@ -225,7 +240,7 @@ export class PoImportsService {
       .from('po_imports')
       .select(
         `id, organization_id, uploaded_by, source_type, vendor_id, warehouse_id,
-         file_name, file_mime_type, file_size, storage_path, sha256, status,
+         file_name, display_name, file_mime_type, file_size, storage_path, sha256, status,
          parse_error, approved_po_id, created_at, updated_at,
          extraction_confidence, extraction_model,
          reimported_from_id, superseded_at`,
@@ -268,8 +283,8 @@ export class PoImportsService {
   }
 
   /**
-   * Builds the `.or()` filter string for a search term: always the file name
-   * (ilike, escaped). Plus two CHEAP supplementary lookups for the "supplier/
+   * Builds the `.or()` filter string for a search term: always the human name
+   * AND the file name (ilike, escaped). Plus two CHEAP supplementary lookups for the "supplier/
    * PO-number metadata" the owner asked for — both are plain FK columns
    * already on po_imports (vendor_id, approved_po_id), each resolved via one
    * small id lookup on a normally-sized, indexed table. Deliberately does
@@ -306,7 +321,14 @@ export class PoImportsService {
     // .list (audit 2026-06-09). escapeIlike alone only covers LIKE wildcards.
     const esc = escapeIlike(trimmed.slice(0, 120).replace(/[,()%*]/g, ' ').trim());
     if (!esc) return null;
-    const orParts = [`file_name.ilike.%${esc}%`];
+    // display_name (mig 0333) sits ALONGSIDE file_name, never in place of it:
+    // the name is what a person searches for, the filename is what they
+    // remember when the import was never named. Both go through the SAME
+    // `esc` — the metacharacter strip + escapeIlike above — so adding this
+    // term introduces no new interpolation surface. `.or()` is OR, and a NULL
+    // display_name simply doesn't match its ilike, so unnamed rows keep being
+    // found by their filename exactly as before.
+    const orParts = [`display_name.ilike.%${esc}%`, `file_name.ilike.%${esc}%`];
 
     // Both id-lookups are independent — resolve them in parallel.
     const [{ data: suppliers }, { data: pos }] = await Promise.all([
@@ -391,7 +413,7 @@ export class PoImportsService {
 
     let query = this.ctx.supabase
       .from('po_imports')
-      .select('id, file_name, created_at, status, approved_po_id, reimported_from_id')
+      .select('id, file_name, display_name, created_at, status, approved_po_id, reimported_from_id')
       .eq('organization_id', this.ctx.organizationId);
 
     // Three shapes, one query. .or() is only reached when BOTH directions are
@@ -420,6 +442,7 @@ export class PoImportsService {
     const rows = (data ?? []) as Array<{
       id: string;
       file_name: string;
+      display_name: string | null;
       created_at: string;
       status: PoImportStatus;
       approved_po_id: string | null;
@@ -458,6 +481,7 @@ export class PoImportsService {
       return {
         id: r.id,
         fileName: r.file_name,
+        displayName: r.display_name ?? null,
         createdAt: r.created_at,
         status: r.status,
         poId: r.approved_po_id,
@@ -537,6 +561,12 @@ export class PoImportsService {
     fileMimeType: string;
     fileSize: number;
     sha256: string;
+    /**
+     * Optional human name (mig 0333). Persisted to display_name and NOTHING
+     * else: it never reaches storagePath, sha256, or the duplicate decision.
+     * Absent/blank → null, which is what an older client sends.
+     */
+    displayName?: string | null;
   }): Promise<{
     id: string;
     duplicateOf: string | null;
@@ -579,6 +609,9 @@ export class PoImportsService {
     if (!isAllowedPoImportUploadMime(input.fileMimeType)) {
       throw new ServiceError('validation_error', PO_IMPORT_UPLOAD_MIME_ERROR);
     }
+    // Validated BEFORE the duplicate lookup on purpose: a rejected name must
+    // not consume the "someone just imported this file" decision.
+    const displayName = this.parseDisplayName(input.displayName);
 
     // Duplicate decision — see resolveDuplicateBySha256 for the full rule.
     const decision = await this.resolveDuplicateBySha256(input.sha256);
@@ -603,6 +636,8 @@ export class PoImportsService {
         uploaded_by: this.ctx.userId,
         source_type: input.sourceType,
         file_name: input.fileName,
+        // Independent of file_name — the uploaded file keeps its real name.
+        display_name: displayName,
         file_mime_type: input.fileMimeType,
         file_size: input.fileSize,
         storage_path: input.storagePath,
@@ -631,6 +666,7 @@ export class PoImportsService {
         entityId: data.id as string,
         after: {
           fileName: input.fileName,
+          displayName,
           sha256: input.sha256,
           ...(decision.kind === 'reimport_after_cancelled'
             ? {
@@ -826,9 +862,19 @@ export class PoImportsService {
     files: Array<{ bytes: Uint8Array; mimeType: string; fileName: string }>;
     vendorId?: string | null;
     warehouseId?: string | null;
+    /**
+     * Optional human name (mig 0333) for the import this call creates. The
+     * scan path is the whole reason the column exists — phone captures arrive
+     * as `image.jpg` — but it stays OPTIONAL so an older mobile build that
+     * sends no name keeps working and simply falls back to the filename.
+     * Persisted to display_name only; the sha256 is still hashed from the file
+     * BYTES alone, so naming a scan can never change its duplicate identity.
+     */
+    displayName?: string | null;
   }): Promise<{ id: string; duplicateOf: string | null; lowConfidenceLines: number }> {
     assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    const displayName = this.parseDisplayName(input.displayName);
     if (input.files.length === 0) {
       throw new ServiceError('validation_error', 'No files provided.');
     }
@@ -932,6 +978,8 @@ export class PoImportsService {
         vendor_id: input.vendorId ?? null,
         warehouse_id: input.warehouseId ?? null,
         file_name: baseFileName,
+        // Independent of file_name — the stored object keeps the camera's name.
+        display_name: displayName,
         file_mime_type: baseFile.mimeType,
         file_size: totalSize,
         storage_path: storagePath,
@@ -2010,6 +2058,103 @@ export class PoImportsService {
       confirmed++;
     }
     return { confirmed };
+  }
+
+  /**
+   * THE one place an inbound display name is validated, for every write path
+   * (createFromUpload, createFromScan, rename). Server-side and unconditional —
+   * the scan route and the forms validate too, but those are edges, not gates.
+   *
+   * Absent / null / blank all normalize to null ("no name — fall back to
+   * file_name"), which is exactly what an older client that knows nothing about
+   * this column sends, so the create paths stay backward-compatible.
+   */
+  private parseDisplayName(raw: string | null | undefined): string | null {
+    const parsed = optionalPoImportDisplayNameSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new ServiceError(
+        'validation_error',
+        parsed.error.issues[0]?.message ?? 'That import name is not valid.',
+      );
+    }
+    return parsed.data;
+  }
+
+  /**
+   * Give an import a human name — or change the one it has. This is a pure
+   * LABEL edit: it writes display_name and nothing else.
+   *
+   * Allowed at ANY status, deliberately. Naming exists so a stack of
+   * `image.jpg` scans is findable, and the imports that most need a name are
+   * the finished ones sitting in the Approved tab. Mirrors
+   * PurchaseOrdersService.renamePoNumber (services/purchase-orders.ts:1006) —
+   * "the PO NUMBER is just a label" — except there is nothing here to reserve,
+   * so there is no uniqueness pre-check and no cancelled-state carve-out: two
+   * imports may share a name, because the name is not identity. Identity is
+   * sha256, and this method never touches it.
+   *
+   * Explicitly untouched: file_name (the real uploaded filename stays visible
+   * for troubleshooting), sha256/storage_path (duplicate identity + the stored
+   * document), reimported_from_id/superseded_at (lineage), status, and
+   * approved_po_id — so renaming an approved import cannot reach the purchase
+   * order it produced, let alone its po_number.
+   */
+  async rename(id: string, displayName: string): Promise<{ id: string; displayName: string }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const parsed = poImportDisplayNameSchema.safeParse(displayName);
+    if (!parsed.success) {
+      throw new ServiceError(
+        'validation_error',
+        parsed.error.issues[0]?.message ?? 'That import name is not valid.',
+      );
+    }
+    const next = parsed.data;
+
+    // Read the CURRENT label first so the audit row carries a real before→after
+    // pair (renamePoNumber does the same via get()). Org-scoped, so a foreign id
+    // is "not found" here rather than leaking that it exists.
+    const { data: current, error: readErr } = await this.ctx.supabase
+      .from('po_imports')
+      .select('id, display_name, file_name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
+    if (!current) throw new ServiceError('not_found', 'PO import not found.');
+    const before = (current as { display_name: string | null }).display_name;
+    if (before === next) return { id, displayName: next }; // no-op, nothing to audit
+
+    const { data: row, error } = await this.ctx.supabase
+      .from('po_imports')
+      .update({ display_name: next })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // Recurring pattern #2: a filtered .update().eq() that matches zero rows
+    // reports SUCCESS. Without this guard a rename aimed at another org's
+    // import id (or one deleted between the read and the write) would return ok
+    // and audit an edit that never happened. The org filter above is what makes
+    // the miss possible; this is what makes it visible.
+    if (!row) throw new ServiceError('not_found', 'PO import not found.');
+
+    await audit(
+      {
+        event: 'po_import.renamed',
+        entityType: 'po_import',
+        entityId: id,
+        before: { displayName: before },
+        after: { displayName: next },
+        // The filename never changes here; recording it makes the trail
+        // readable for the common case where `before` is null.
+        extra: { fileName: (current as { file_name: string }).file_name },
+      },
+      this.ctx,
+    );
+    return { id, displayName: next };
   }
 
   async cancel(id: string): Promise<void> {

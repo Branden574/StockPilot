@@ -8,11 +8,18 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { prettifyFileNameForDisplay } from '@/lib/po-imports/display-name';
 import {
   parsePoImportAction,
   presignPoUploadAction,
   recordPoUploadAction,
 } from '@/server/actions/po-imports';
+
+import {
+  PO_IMPORT_DISPLAY_NAME_MAX,
+  normalizePoImportDisplayName,
+  poImportDisplayNameError,
+} from '@stockpilot/core';
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const ACCEPT = ['application/pdf', 'text/csv'];
@@ -20,7 +27,16 @@ const ACCEPT = ['application/pdf', 'text/csv'];
 export function PoUploadForm() {
   const router = useRouter();
   const [file, setFile] = React.useState<File | null>(null);
+  // The human name for this import. PREFILLED from the picked file's name so
+  // the common case is one keystroke-free step, and fully editable — the
+  // uploaded file itself is never renamed (file_name keeps the real filename).
+  const [displayName, setDisplayName] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
+
+  function pickFile(next: File | null) {
+    setFile(next);
+    setDisplayName(next ? prettifyFileNameForDisplay(next.name) : '');
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,6 +51,26 @@ export function PoUploadForm() {
     if (!ACCEPT.includes(file.type)) {
       toast.error('Only PDF or CSV uploads are supported.');
       return;
+    }
+    // The name is checked HERE, before the presign and the PUT — with the same
+    // shared rules the action re-applies server-side, so this is a courtesy
+    // check and not a control.
+    //
+    // Order is the whole point. This flow is presign → PUT to Storage →
+    // recordPoUploadAction, so a name the action refuses would fail AFTER the
+    // object is already written, leaving it in the bucket with no po_imports
+    // row pointing at it. Every other field recordPoUploadAction validates is
+    // computed from the file itself; this is the one a human types, so it is
+    // the one that can realistically be wrong.
+    //
+    // Blank stays legal: null means "no name, fall back to file_name".
+    const normalizedName = normalizePoImportDisplayName(displayName);
+    if (normalizedName !== null) {
+      const nameError = poImportDisplayNameError(normalizedName);
+      if (nameError) {
+        toast.error(nameError);
+        return;
+      }
     }
     setSubmitting(true);
     try {
@@ -69,11 +105,15 @@ export function PoUploadForm() {
       const sourceType: 'pdf' | 'csv' = file.type === 'application/pdf' ? 'pdf' : 'csv';
       const recorded = await recordPoUploadAction({
         storagePath: presign.data.storagePath,
+        // The REAL uploaded filename, unchanged — this is what the detail page
+        // shows as "Source file" and what troubleshooting needs.
         fileName: file.name,
         fileMimeType: file.type,
         fileSize: file.size,
         sha256,
         sourceType,
+        // Separate field, separate column. Blank means "no name" (null).
+        displayName,
       });
       if (!recorded.ok) {
         toast.error(recorded.error.message);
@@ -117,11 +157,26 @@ export function PoUploadForm() {
           id="po-file"
           type="file"
           accept={ACCEPT.join(',')}
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
         />
         <p className="text-xs text-muted-foreground">
           Max 25 MB. Inventory will not be updated by this upload — receiving
           posts the actual stock change in a separate step.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="po-display-name">PO name</Label>
+        <Input
+          id="po-display-name"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
+          placeholder="Example: August DC4 Book Order"
+        />
+        <p className="text-xs text-muted-foreground">
+          Give this import a name so it is easy to find later. Prefilled from the
+          file name — edit it freely; the uploaded file keeps its own name.
         </p>
       </div>
       <Button type="submit" disabled={!file || submitting} variant="gradient">

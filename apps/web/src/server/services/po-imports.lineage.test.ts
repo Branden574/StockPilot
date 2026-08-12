@@ -91,6 +91,7 @@ describe('PoImportsService.get — re-import lineage', () => {
         {
           id: PRED,
           file_name: 'PO-CVW-002201.pdf',
+          display_name: 'July Curriculum Restock',
           created_at: '2026-07-01T00:00:00Z',
           status: 'approved',
           approved_po_id: 'po-1',
@@ -104,6 +105,9 @@ describe('PoImportsService.get — re-import lineage', () => {
     expect(res.lineage.predecessor).toEqual({
       id: PRED,
       fileName: 'PO-CVW-002201.pdf',
+      // mig 0333: the human name rides along so the lineage notice can label
+      // the predecessor by it instead of the raw camera filename.
+      displayName: 'July Curriculum Restock',
       createdAt: '2026-07-01T00:00:00Z',
       status: 'approved',
       poId: 'po-1',

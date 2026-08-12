@@ -87,6 +87,21 @@ export type AuditEvent =
   | 'po_import.failed'
   | 'po_import.approved'
   | 'po_import.canceled'
+  /**
+   * The import's human name (display_name, mig 0333) was set or changed.
+   *
+   * A NEW literal rather than a reused one, for the same reason
+   * 'stock_movement.note_edited' is its own event: the four po_import events
+   * above are all LIFECYCLE transitions, and folding a label edit into one of
+   * them would corrupt every read that treats them as a state machine. The
+   * closest reuse candidate would have been a generic 'po_import.updated' —
+   * which is exactly what PurchaseOrdersService.renamePoNumber reuses
+   * ('purchase_order.updated' with `renamed: true`) — but the po_import family
+   * has no such generic event to reuse, and inventing one just to qualify it
+   * with a flag is strictly less legible than naming the act. Carries
+   * before/after displayName. No migration: audit_logs.event is un-CHECKed text.
+   */
+  | 'po_import.renamed'
   | 'vendor_item_mapping.upserted'
   | 'stock.receipt.posted'
   | 'stock.receipt.reversed'

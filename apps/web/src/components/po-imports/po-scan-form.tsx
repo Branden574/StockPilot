@@ -6,7 +6,11 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+
+import { PO_IMPORT_DISPLAY_NAME_MAX } from '@stockpilot/core';
 
 // Mirrors the route's ACCEPT_TYPES / PO_IMPORT_SCAN_MIME_TYPES. `image/heif`
 // is here for the same reason it is there: it and `image/heic` are the same
@@ -25,6 +29,17 @@ export function PoScanForm() {
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [files, setFiles] = React.useState<File[]>([]);
+  /**
+   * The human name for each attached file, INDEX-ALIGNED with `files` — the
+   * same alignment the API's `displayNames` JSON array is defined by, so the
+   * form and the wire contract cannot drift.
+   *
+   * Deliberately NOT prefilled from the filename (unlike the CSV/PDF upload
+   * form): a phone capture is called `image.jpg` or `IMG_4471.HEIC`, and
+   * prefilling that would hand the user back the exact noise this field exists
+   * to replace.
+   */
+  const [names, setNames] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
   // When 2+ files are attached: true = each file is its OWN PO import (default);
@@ -60,10 +75,23 @@ export function PoScanForm() {
       next.push(f);
     }
     setFiles(next);
+    // Keep `names` exactly as long as `files`, preserving what was already
+    // typed. Any drift here becomes an off-by-one on the wire (file 2 named
+    // with file 1's name), which is the failure this alignment exists to avoid.
+    setNames((cur) => next.map((_, idx) => cur[idx] ?? ''));
   }
 
   function remove(i: number) {
     setFiles((cur) => cur.filter((_, idx) => idx !== i));
+    setNames((cur) => cur.filter((_, idx) => idx !== i));
+  }
+
+  function setName(i: number, value: string) {
+    setNames((cur) => {
+      const next = [...cur];
+      next[i] = value;
+      return next;
+    });
   }
 
   async function submit() {
@@ -102,7 +130,25 @@ export function PoScanForm() {
       const fd = new FormData();
       for (const f of files) fd.append('file', f);
       // Only meaningful for 2+ files; the server ignores it otherwise.
-      fd.append('mode', files.length > 1 && separate ? 'separate' : 'combined');
+      const mode = files.length > 1 && separate ? 'separate' : 'combined';
+      fd.append('mode', mode);
+      // `displayNames` — ONE JSON array entry per IMPORT, in file order. See
+      // the contract in app/api/po-imports/scan/route.ts for why this is a JSON
+      // array and not repeated form fields: "this file has no name" has to
+      // survive the wire as a real value, and an empty multipart part does not
+      // reliably do that. An unnamed slot is `null`, never a dropped entry.
+      const toEntry = (v: string | undefined) => {
+        const trimmed = (v ?? '').trim();
+        return trimmed === '' ? null : trimmed;
+      };
+      fd.append(
+        'displayNames',
+        JSON.stringify(
+          mode === 'separate'
+            ? files.map((_, i) => toEntry(names[i]))
+            : [toEntry(names[0])],
+        ),
+      );
       const res = await fetch('/api/po-imports/scan', {
         method: 'POST',
         body: fd,
@@ -145,8 +191,30 @@ export function PoScanForm() {
     }
   }
 
+  // 2+ files each becoming their OWN import means each needs its OWN name, so
+  // the single field above the dropzone gives way to one input per file row.
+  const perFileNames = files.length > 1 && separate;
+
   return (
     <div className="space-y-4">
+      {!perFileNames && (
+        <div className="space-y-1.5">
+          <Label htmlFor="scan-display-name">PO name</Label>
+          <Input
+            id="scan-display-name"
+            value={names[0] ?? ''}
+            onChange={(e) => setName(0, e.target.value)}
+            maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
+            placeholder="Example: August DC4 Book Order"
+            disabled={busy}
+          />
+          <p className="text-muted-foreground text-xs">
+            Give this import a name so it is easy to find later. Optional — without
+            one, the import is listed by its file name.
+          </p>
+        </div>
+      )}
+
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -158,7 +226,15 @@ export function PoScanForm() {
           setDragOver(false);
           if (e.dataTransfer.files.length > 0) add(e.dataTransfer.files);
         }}
-        onClick={() => inputRef.current?.click()}
+        onClick={(e) => {
+          // The file input lives INSIDE this div, so a click on it bubbles back
+          // here and re-clicks it — an infinite loop (RangeError: maximum call
+          // stack). Users never hit it in a browser because the input is
+          // hidden, but anything that clicks it directly does. Ignore clicks
+          // that came from the input itself.
+          if (e.target === inputRef.current) return;
+          inputRef.current?.click();
+        }}
         className={cn(
           'border-border bg-muted/30 hover:bg-muted/40 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors',
           dragOver && 'border-foreground/60 bg-muted/60',
@@ -173,6 +249,7 @@ export function PoScanForm() {
         </p>
         <input
           ref={inputRef}
+          data-testid="po-scan-file-input"
           type="file"
           accept={ACCEPT}
           multiple
@@ -189,21 +266,43 @@ export function PoScanForm() {
           {files.map((f, i) => (
             <li
               key={`${f.name}-${i}`}
-              className="border-border bg-card flex items-center gap-3 rounded-md border px-3 py-2 text-sm"
+              className="border-border bg-card space-y-2 rounded-md border px-3 py-2 text-sm"
             >
-              <Upload className="text-muted-foreground h-3.5 w-3.5" />
-              <span className="flex-1 truncate">{f.name}</span>
-              <span className="text-muted-foreground text-[11px] tabular-nums">
-                {(f.size / 1024).toFixed(0)} KB
-              </span>
-              <button
-                type="button"
-                onClick={() => remove(i)}
-                className="text-muted-foreground hover:text-destructive p-1"
-                aria-label={`Remove ${f.name}`}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <Upload className="text-muted-foreground h-3.5 w-3.5" />
+                <span className="flex-1 truncate">{f.name}</span>
+                <span className="text-muted-foreground text-[11px] tabular-nums">
+                  {(f.size / 1024).toFixed(0)} KB
+                </span>
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="text-muted-foreground hover:text-destructive p-1"
+                  aria-label={`Remove ${f.name}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {perFileNames && (
+                <div className="space-y-1">
+                  <Label htmlFor={`scan-display-name-${i}`} className="text-xs">
+                    PO name
+                  </Label>
+                  <Input
+                    id={`scan-display-name-${i}`}
+                    // The visible label reads "PO name" on every row; the
+                    // accessible name says WHICH file, so screen readers (and
+                    // the alignment tests) can tell row 2 from row 3.
+                    aria-label={`PO name for ${f.name}`}
+                    value={names[i] ?? ''}
+                    onChange={(e) => setName(i, e.target.value)}
+                    maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
+                    placeholder="Example: August DC4 Book Order"
+                    disabled={busy}
+                    className="h-8 text-sm"
+                  />
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -227,7 +326,8 @@ export function PoScanForm() {
             >
               <span className="block font-medium">Separate POs</span>
               <span className="text-muted-foreground">
-                Each file becomes its own import to review &amp; approve
+                Each file becomes its own import to review &amp; approve — name
+                them individually above
               </span>
             </button>
             <button
@@ -271,7 +371,13 @@ export function PoScanForm() {
             <Sparkles className="h-4 w-4" /> Extract with AI
           </Button>
           {files.length > 0 && (
-            <Button variant="outline" onClick={() => setFiles([])}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFiles([]);
+                setNames([]);
+              }}
+            >
               Clear
             </Button>
           )}
