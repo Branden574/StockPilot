@@ -105,7 +105,7 @@ function parseDisplayNames(
  * captures or multi-page scans). Optional `vendorId` and `warehouseId`
  * fields hint the vendor mapping lookup.
  *
- * NAMING (mig 0332) — the wire contract, ONE shape only:
+ * NAMING (mig 0333) — the wire contract, ONE shape only:
  *
  *   `displayNames` — a single field holding a JSON ARRAY of (string | null),
  *   index-aligned with the imports this request will create:

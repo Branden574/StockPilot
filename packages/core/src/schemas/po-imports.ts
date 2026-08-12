@@ -37,7 +37,7 @@ export type PoImportStatus = z.infer<typeof poImportStatusSchema>;
 
 /**
  * Ceiling for po_imports.display_name — the SAME number the column's CHECK
- * enforces (`length(display_name) between 1 and 160`, migration 0332). Kept as
+ * enforces (`length(display_name) between 1 and 160`, migration 0333). Kept as
  * a constant so the UI's counter, the zod bound and the DB guard can only ever
  * be changed together.
  */
@@ -59,6 +59,27 @@ export const PO_IMPORT_DISPLAY_NAME_MAX = 160;
  * and would alternate pass/fail on the same input.
  */
 export const UNSAFE_DISPLAY_NAME_CHARS = /[\u0000-\u001F\u007F\u202A-\u202E\u2066-\u2069]/;
+
+/**
+ * REMOVES that class instead of refusing it — for MACHINE-DERIVED suggestions
+ * only, never for what a human typed.
+ *
+ * The distinction matters: a filename is not a typed name. A file a user was
+ * sent can carry a bidi override in its name, and prefilling the name field
+ * from it would hand back a value `poImportDisplayNameError` then refuses over
+ * characters that are INVISIBLE — nothing to see, nothing to delete, no way
+ * forward. So the suggestion is cleaned. A name the user actually typed still
+ * goes through `poImportDisplayNameError` and is REFUSED, because silently
+ * laundering typed input is exactly what that refusal exists to prevent.
+ *
+ * Built from `UNSAFE_DISPLAY_NAME_CHARS.source` rather than re-typing the
+ * class, for the same reason the class itself is shared. A FRESH RegExp per
+ * call: the shared one is deliberately non-global (it would carry `lastIndex`
+ * otherwise) and `String.replace` needs /g to remove more than the first hit.
+ */
+export function stripUnsafeDisplayNameChars(value: string): string {
+  return value.replace(new RegExp(UNSAFE_DISPLAY_NAME_CHARS.source, 'g'), '');
+}
 
 /**
  * THE normalizer every writer runs before validating or persisting an import

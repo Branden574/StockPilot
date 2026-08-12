@@ -79,7 +79,7 @@ export interface PoImportRow {
   warehouse_id: string | null;
   file_name: string;
   /**
-   * Optional human name for this import (mig 0332). NULL on every historical
+   * Optional human name for this import (mig 0333). NULL on every historical
    * row and on any import nobody named — every reader is
    * `display_name ?? file_name`, so an unnamed import looks exactly like it
    * always has. DISPLAY ONLY: it is never part of a storage path, an
@@ -316,7 +316,7 @@ export class PoImportsService {
     // .list (audit 2026-06-09). escapeIlike alone only covers LIKE wildcards.
     const esc = escapeIlike(trimmed.slice(0, 120).replace(/[,()%*]/g, ' ').trim());
     if (!esc) return null;
-    // display_name (mig 0332) sits ALONGSIDE file_name, never in place of it:
+    // display_name (mig 0333) sits ALONGSIDE file_name, never in place of it:
     // the name is what a person searches for, the filename is what they
     // remember when the import was never named. Both go through the SAME
     // `esc` — the metacharacter strip + escapeIlike above — so adding this
@@ -555,7 +555,7 @@ export class PoImportsService {
     fileSize: number;
     sha256: string;
     /**
-     * Optional human name (mig 0332). Persisted to display_name and NOTHING
+     * Optional human name (mig 0333). Persisted to display_name and NOTHING
      * else: it never reaches storagePath, sha256, or the duplicate decision.
      * Absent/blank → null, which is what an older client sends.
      */
@@ -856,7 +856,7 @@ export class PoImportsService {
     vendorId?: string | null;
     warehouseId?: string | null;
     /**
-     * Optional human name (mig 0332) for the import this call creates. The
+     * Optional human name (mig 0333) for the import this call creates. The
      * scan path is the whole reason the column exists — phone captures arrive
      * as `image.jpg` — but it stays OPTIONAL so an older mobile build that
      * sends no name keeps working and simply falls back to the filename.

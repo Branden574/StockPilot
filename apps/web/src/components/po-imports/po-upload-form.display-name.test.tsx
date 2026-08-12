@@ -18,6 +18,8 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() },
 }));
 
+import { toast } from 'sonner';
+
 import {
   parsePoImportAction,
   presignPoUploadAction,
@@ -27,12 +29,15 @@ import {
 import { PoUploadForm } from './po-upload-form';
 
 /**
- * The CSV/PDF upload form's "PO name" field (mig 0332).
+ * The CSV/PDF upload form's "PO name" field (mig 0333).
  *
- * Two properties matter and both are easy to break: the field must be
- * PREFILLED from the picked file (so naming costs nothing in the common case),
- * and the REAL filename must still be what `fileName` carries to the server —
- * the point of a separate column is that the uploaded file is not renamed.
+ * Three properties matter and all are easy to break: the field must be
+ * PREFILLED from the picked file (so naming costs nothing in the common case);
+ * the REAL filename must still be what `fileName` carries to the server (the
+ * point of a separate column is that the uploaded file is not renamed); and an
+ * unacceptable name must be caught BEFORE the presign/PUT, because this flow
+ * writes the object to Storage first and records the row second — a late
+ * refusal orphans the object.
  */
 
 function csv(name: string): File {
@@ -105,6 +110,45 @@ describe('PoUploadForm — the PO name field', () => {
     await waitFor(() => expect(recordPoUploadAction).toHaveBeenCalledTimes(1));
     expect(recordArg().displayName).toBe('');
     expect(recordArg().fileName).toBe('image.csv');
+  });
+
+  it('a prefill from a bidi-override filename is CLEANED, so the upload is not refused after the PUT', async () => {
+    render(<PoUploadForm />);
+    const nameField = screen.getByLabelText('PO name') as HTMLInputElement;
+
+    // `a<U+202E>b.csv`, built by codepoint so this file does not render reversed.
+    await userEvent.upload(
+      screen.getByLabelText('PO file (PDF or CSV)'),
+      csv(`a${String.fromCodePoint(0x202e)}b.csv`),
+    );
+
+    await waitFor(() => expect(nameField.value).toBe('ab'));
+
+    await userEvent.click(screen.getByRole('button', { name: /Upload & parse/i }));
+    await waitFor(() => expect(recordPoUploadAction).toHaveBeenCalledTimes(1));
+    expect(recordArg().displayName).toBe('ab');
+    // The real filename is untouched — only the SUGGESTION was cleaned.
+    expect(recordArg().fileName).toBe(`a${String.fromCodePoint(0x202e)}b.csv`);
+  });
+
+  it('a TYPED unsafe name is refused BEFORE the presign, so no orphan object is written', async () => {
+    render(<PoUploadForm />);
+    await userEvent.upload(screen.getByLabelText('PO file (PDF or CSV)'), csv('order.csv'));
+
+    const nameField = screen.getByLabelText('PO name');
+    await userEvent.clear(nameField);
+    await userEvent.paste(`August${String.fromCodePoint(0x202e)}DC4`);
+    await userEvent.click(screen.getByRole('button', { name: /Upload & parse/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Remove control and text-direction characters from the name.',
+      ),
+    );
+    // Nothing was presigned, nothing was PUT, nothing was recorded.
+    expect(presignPoUploadAction).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(recordPoUploadAction).not.toHaveBeenCalled();
   });
 
   it('picking a DIFFERENT file replaces the suggestion (no stale name from the previous pick)', async () => {

@@ -6,10 +6,11 @@ import {
   poImportDisplayNameError,
   poImportDisplayNameSchema,
   PO_IMPORT_DISPLAY_NAME_MAX,
+  stripUnsafeDisplayNameChars,
 } from './po-imports';
 
 /**
- * po_imports.display_name (mig 0332) — the ONE authoritative name rule, shared
+ * po_imports.display_name (mig 0333) — the ONE authoritative name rule, shared
  * by the upload action, the scan route, the service and the rename flow. Every
  * bound is pinned to a literal, and to the same literal the column CHECK
  * enforces (`length(display_name) between 1 and 160`).
@@ -112,6 +113,50 @@ describe('optionalPoImportDisplayNameSchema — absent/null/blank all mean "no n
     expect(
       optionalPoImportDisplayNameSchema.safeParse(`August${ch(0x202e)}DC4`).success,
     ).toBe(false);
+  });
+});
+
+describe('stripUnsafeDisplayNameChars — the SUGGESTION-side counterpart', () => {
+  it('removes every control codepoint the rules refuse', () => {
+    for (const cp of CONTROL_CODEPOINTS) {
+      expect(stripUnsafeDisplayNameChars(`August${ch(cp)}DC4`)).toBe('AugustDC4');
+    }
+  });
+
+  it('removes every bidi override and isolate the rules refuse', () => {
+    for (const cp of BIDI_CODEPOINTS) {
+      expect(stripUnsafeDisplayNameChars(`August${ch(cp)}DC4`)).toBe('AugustDC4');
+    }
+  });
+
+  it('removes ALL occurrences, not just the first', () => {
+    expect(stripUnsafeDisplayNameChars(`a${ch(0x202e)}b${ch(0x202e)}c${ch(0x00)}d`)).toBe(
+      'abcd',
+    );
+  });
+
+  it('is stateless across calls — a /g regex reused would skip every other hit', () => {
+    const spoof = `August${ch(0x202e)}DC4`;
+    expect(stripUnsafeDisplayNameChars(spoof)).toBe('AugustDC4');
+    expect(stripUnsafeDisplayNameChars(spoof)).toBe('AugustDC4');
+    expect(stripUnsafeDisplayNameChars(spoof)).toBe('AugustDC4');
+  });
+
+  it('leaves ordinary text — punctuation, accents, spaces — completely alone', () => {
+    const name = "Follett & Sons - Andrew's re-order (DC4) #12_final v1.2, a/b";
+    expect(stripUnsafeDisplayNameChars(name)).toBe(name);
+    expect(stripUnsafeDisplayNameChars('Août — DC4 ✓')).toBe('Août — DC4 ✓');
+  });
+
+  it('produces something the rules ACCEPT (that is the entire contract)', () => {
+    expect(stripUnsafeDisplayNameChars(`August${ch(0x202e)}DC4`)).toBe('AugustDC4');
+    expect(poImportDisplayNameError('AugustDC4')).toBeNull();
+  });
+
+  it('is NOT wired into the typed-name path — typed input is still refused', () => {
+    // The strip is for machine-derived suggestions only. If it ever leaked into
+    // the schema, this spoof would start passing.
+    expect(poImportDisplayNameSchema.safeParse(`August${ch(0x202e)}DC4`).success).toBe(false);
   });
 });
 

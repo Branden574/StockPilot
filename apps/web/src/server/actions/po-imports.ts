@@ -88,7 +88,7 @@ const recordSchema = z.object({
   fileSize: z.number().int().positive(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   sourceType: z.enum(['pdf', 'csv', 'xlsx', 'manual']),
-  /** Optional human name (mig 0332). Absent/blank → null; the service
+  /** Optional human name (mig 0333). Absent/blank → null; the service
    *  re-validates, so this is the edge and not the gate. */
   displayName: optionalPoImportDisplayNameSchema,
 });

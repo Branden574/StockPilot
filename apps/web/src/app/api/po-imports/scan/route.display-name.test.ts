@@ -14,7 +14,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 vi.mock('@/server/services/po-imports', () => ({ PoImportsService: vi.fn() }));
 
 /**
- * The scan route's NAMING contract (mig 0332): a `displayNames` field holding a
+ * The scan route's NAMING contract (mig 0333): a `displayNames` field holding a
  * JSON array with ONE ENTRY PER IMPORT, index-aligned with the `file` parts.
  *
  * The failure this file exists to catch is the index mismatch — file 2 created

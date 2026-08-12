@@ -88,7 +88,7 @@ export type AuditEvent =
   | 'po_import.approved'
   | 'po_import.canceled'
   /**
-   * The import's human name (display_name, mig 0332) was set or changed.
+   * The import's human name (display_name, mig 0333) was set or changed.
    *
    * A NEW literal rather than a reused one, for the same reason
    * 'stock_movement.note_edited' is its own event: the four po_import events

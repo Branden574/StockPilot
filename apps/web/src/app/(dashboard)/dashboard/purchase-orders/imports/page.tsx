@@ -196,7 +196,7 @@ export default async function PoImportsPage({
                 {rows.map((i) => (
                   <TableRow key={i.id}>
                     <TableCell>
-                      {/* Primary label is the human name (mig 0332); the real
+                      {/* Primary label is the human name (mig 0333); the real
                           uploaded filename stays visible underneath, because
                           "which document was this?" is still a question people
                           answer from this list. An unnamed import (every

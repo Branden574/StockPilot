@@ -15,7 +15,11 @@ import {
   recordPoUploadAction,
 } from '@/server/actions/po-imports';
 
-import { PO_IMPORT_DISPLAY_NAME_MAX } from '@stockpilot/core';
+import {
+  PO_IMPORT_DISPLAY_NAME_MAX,
+  normalizePoImportDisplayName,
+  poImportDisplayNameError,
+} from '@stockpilot/core';
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const ACCEPT = ['application/pdf', 'text/csv'];
@@ -47,6 +51,26 @@ export function PoUploadForm() {
     if (!ACCEPT.includes(file.type)) {
       toast.error('Only PDF or CSV uploads are supported.');
       return;
+    }
+    // The name is checked HERE, before the presign and the PUT — with the same
+    // shared rules the action re-applies server-side, so this is a courtesy
+    // check and not a control.
+    //
+    // Order is the whole point. This flow is presign → PUT to Storage →
+    // recordPoUploadAction, so a name the action refuses would fail AFTER the
+    // object is already written, leaving it in the bucket with no po_imports
+    // row pointing at it. Every other field recordPoUploadAction validates is
+    // computed from the file itself; this is the one a human types, so it is
+    // the one that can realistically be wrong.
+    //
+    // Blank stays legal: null means "no name, fall back to file_name".
+    const normalizedName = normalizePoImportDisplayName(displayName);
+    if (normalizedName !== null) {
+      const nameError = poImportDisplayNameError(normalizedName);
+      if (nameError) {
+        toast.error(nameError);
+        return;
+      }
     }
     setSubmitting(true);
     try {

@@ -1,5 +1,5 @@
--- supabase/tests/0332_po_imports_display_name.test.sql
--- Proves migration 0332: po_imports gains a nullable, user-editable
+-- supabase/tests/0333_po_imports_display_name.test.sql
+-- Proves migration 0333: po_imports gains a nullable, user-editable
 -- `display_name` label, and duplicate identity is COMPLETELY untouched by it.
 --
 -- Two halves, and the second is the load-bearing one:
@@ -31,7 +31,7 @@
 --      status, a superseded predecessor) still let a re-import through.
 --
 -- Fixtures inserted as postgres (bypassing RLS — column CHECKs and unique
--- indexes are not RLS boundaries). Namespace: a0332000. begin/rollback.
+-- indexes are not RLS boundaries). Namespace: a0333000. begin/rollback.
 --
 -- PLAN: hand-counted 16 assertions — A: 8 (3 structural + 5 functional CHECK),
 -- B: 8 (5 structural + 3 functional duplicate-identity).
@@ -40,14 +40,14 @@ begin;
 
 select plan(16);
 
-\set org  '\'a0332000-0000-0000-0000-000000000001\''
-\set usr  '\'a0332000-0000-0000-0000-000000000002\''
+\set org  '\'a0333000-0000-0000-0000-000000000001\''
+\set usr  '\'a0333000-0000-0000-0000-000000000002\''
 
 insert into auth.users (id, email, raw_user_meta_data)
-  values (:usr, 'display-name-0332@test.local', '{}'::jsonb)
+  values (:usr, 'display-name-0333@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug)
-  values (:org, 'Display Name Org 0332', 'display-name-0332')
+  values (:org, 'Display Name Org 0333', 'display-name-0333')
   on conflict (id) do nothing;
 
 -- One helper so every insert below differs ONLY in the two columns under test
@@ -59,9 +59,9 @@ returns uuid language sql as $$
     organization_id, uploaded_by, source_type, file_name, file_mime_type,
     file_size, storage_path, sha256, status, display_name
   ) values (
-    'a0332000-0000-0000-0000-000000000001', 'a0332000-0000-0000-0000-000000000002',
+    'a0333000-0000-0000-0000-000000000001', 'a0333000-0000-0000-0000-000000000002',
     'csv', 'image.jpg', 'text/csv', 10,
-    'a0332000-0000-0000-0000-000000000001/po-imports/' || p_sha || '.csv',
+    'a0333000-0000-0000-0000-000000000001/po-imports/' || p_sha || '.csv',
     p_sha, 'uploaded', p_display
   ) returning id;
 $$;

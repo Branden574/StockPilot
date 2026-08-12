@@ -16,7 +16,7 @@ vi.mock('sonner', () => ({
 import { PoScanForm } from './po-scan-form';
 
 /**
- * The scan form's naming UI (mig 0332) — the CLIENT half of the index-aligned
+ * The scan form's naming UI (mig 0333) — the CLIENT half of the index-aligned
  * `displayName` contract that app/api/po-imports/scan/route.ts defines.
  *
  * Separate mode gives every attached file its own input, and the form must

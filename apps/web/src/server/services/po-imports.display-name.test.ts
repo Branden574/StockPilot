@@ -5,7 +5,7 @@ import type { ModuleId } from '@stockpilot/core';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
- * po_imports.display_name (mig 0332) — the human name for an import.
+ * po_imports.display_name (mig 0333) — the human name for an import.
  *
  * The whole feature is one nullable label, so most of what follows asserts what
  * it must NOT touch. `file_name` keeps meaning "the real uploaded filename";
