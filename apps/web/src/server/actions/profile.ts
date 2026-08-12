@@ -13,16 +13,22 @@ import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, ok, UNSAFE_DISPLAY_NAME_CHARS, type ActionResult } from '@stockpilot/core';
 
 /**
  * Strips ASCII control chars (0x00–0x1F, 0x7F) and Unicode bidi
  * overrides (U+202A-U+202E, U+2066-U+2069). Those are the classic
  * "Trojan Source" sneak-in payloads and also typically invisible
  * characters that pollute the name shown across the UI.
+ *
+ * The character class itself lives in core as UNSAFE_DISPLAY_NAME_CHARS and
+ * is SHARED with the PO-import display-name schema. Two slightly different
+ * definitions of "unsafe name character" in one codebase is how one of them
+ * ends up wrong; the class is non-global there (no lastIndex state), so the
+ * /g form for replace() is rebuilt from its source here.
  */
 const sanitizeName = (s: string) =>
-  s.replace(/[\u0000-\u001F\u007F\u202A-\u202E\u2066-\u2069]/g, '');
+  s.replace(new RegExp(UNSAFE_DISPLAY_NAME_CHARS.source, 'g'), '');
 
 const nameSchema = z.object({
   fullName: z

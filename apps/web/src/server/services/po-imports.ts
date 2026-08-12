@@ -108,6 +108,11 @@ export interface PoImportRow {
 export interface PoImportLineageRef {
   id: string;
   fileName: string;
+  /** The human name, when the predecessor/successor has one. Renders as
+   *  `displayName ?? fileName` everywhere, same rule as the list and detail
+   *  pages - otherwise the lineage notice is the one surface still printing
+   *  the raw `image.jpg` this feature exists to eliminate. */
+  displayName: string | null;
   createdAt: string;
   status: PoImportStatus;
   /** The purchase order this import produced (imports only gain one at approve). */
@@ -408,7 +413,7 @@ export class PoImportsService {
 
     let query = this.ctx.supabase
       .from('po_imports')
-      .select('id, file_name, created_at, status, approved_po_id, reimported_from_id')
+      .select('id, file_name, display_name, created_at, status, approved_po_id, reimported_from_id')
       .eq('organization_id', this.ctx.organizationId);
 
     // Three shapes, one query. .or() is only reached when BOTH directions are
@@ -437,6 +442,7 @@ export class PoImportsService {
     const rows = (data ?? []) as Array<{
       id: string;
       file_name: string;
+      display_name: string | null;
       created_at: string;
       status: PoImportStatus;
       approved_po_id: string | null;
@@ -475,6 +481,7 @@ export class PoImportsService {
       return {
         id: r.id,
         fileName: r.file_name,
+        displayName: r.display_name ?? null,
         createdAt: r.created_at,
         status: r.status,
         poId: r.approved_po_id,

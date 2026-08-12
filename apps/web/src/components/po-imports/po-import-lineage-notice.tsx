@@ -67,8 +67,8 @@ export function PoImportLineageNotice({
           </p>
           <p className="text-muted-foreground mt-0.5 text-xs">
             {pred.poStatus === 'cancelled' && pred.poNumber
-              ? `Re-import of ${pred.poNumber}, which was cancelled. The earlier import of ${pred.fileName} is kept for the record.`
-              : `This file was imported once before. The earlier import of ${pred.fileName} is kept for the record.`}
+              ? `Re-import of ${pred.poNumber}, which was cancelled. The earlier import of ${pred.displayName ?? pred.fileName} is kept for the record.`
+              : `This file was imported once before. The earlier import of ${pred.displayName ?? pred.fileName} is kept for the record.`}
           </p>
           <div className="mt-2 flex flex-wrap gap-4">
             <Link
