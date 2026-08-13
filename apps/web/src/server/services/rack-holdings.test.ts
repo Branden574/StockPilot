@@ -28,11 +28,14 @@ describe('fetchRackHoldingsByItem', () => {
       },
     });
     const result = await fetchRackHoldingsByItem(ctxFor(client), ['i1', 'i2']);
+    // `kind` is carried through, not discarded: a single-label consumer needs
+    // to know the stock is in a CRATE, because a put-away into a position-less
+    // crate deliberately leaves the item's rack keys naming its old rack.
     expect(result.get('i1')).toEqual([
-      { name: '2-C', quantity: 20 },
-      { name: '5-A', quantity: 5 },
+      { name: '2-C', quantity: 20, kind: 'rack' },
+      { name: '5-A', quantity: 5, kind: 'rack' },
     ]);
-    expect(result.get('i2')).toEqual([{ name: 'Crate 9', quantity: 3 }]);
+    expect(result.get('i2')).toEqual([{ name: 'Crate 9', quantity: 3, kind: 'crate' }]);
     // An item with no rack/crate holding at all is simply absent from the
     // map — callers treat a missing key the same as an empty array.
     expect(result.has('i3')).toBe(false);

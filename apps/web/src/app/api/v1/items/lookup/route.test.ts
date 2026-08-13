@@ -170,8 +170,8 @@ describe('GET /api/v1/items/lookup', () => {
     // unaffected — but rackHoldings tells a caller the whole truth.
     expect(body.matches[0].placementLabel).toBe('Rack 1-A');
     expect(body.matches[0].rackHoldings).toEqual([
-      { name: '2-C', quantity: 20 },
-      { name: '5-A', quantity: 5 },
+      { name: '2-C', quantity: 20, kind: 'rack' },
+      { name: '5-A', quantity: 5, kind: 'rack' },
     ]);
   });
 

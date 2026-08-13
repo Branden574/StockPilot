@@ -19,6 +19,21 @@ export interface RackHoldingLike {
   name: string;
   /** Quantity of this item's stock sitting at that location. */
   quantity: number;
+  /**
+   * `locations.kind` — 'rack' or 'crate' — when the caller carried it.
+   *
+   * A holding in a CRATE is the one case where an item's own rack keys can be
+   * confidently WRONG rather than merely imprecise: a crate that states no rack
+   * position leaves those keys untouched on purpose (a partial put-away leaves
+   * the rest of the stock on a rack the operator never mentioned), so an item
+   * whose stock has all moved into "Blue Shelf" can still carry rack 38-A.
+   * Consumers that print a single label — see `countSheetLocationLabel` — use
+   * this to stop showing a rack the stock has left.
+   *
+   * OPTIONAL because it is additive: a caller that does not carry it gets the
+   * pre-existing behaviour rather than a wrong guess.
+   */
+  kind?: string | null;
 }
 
 /**

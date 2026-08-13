@@ -4538,6 +4538,13 @@ export class InventoryService {
    * identical label — composing "num-row" exactly like the bulkUpdate set_rack
    * branch above (crate or number-less rack → the location's display name).
    *
+   * TWO WRITERS, one label. A destination that states a rack position goes
+   * through inventory_set_rack, which writes the pair and the label together. A
+   * crate that states none goes through inventory_set_bin_location (0335),
+   * which writes the label alone — because inventory_set_rack DELETES the pair
+   * when both rack arguments are null, and the pair may still be true. See the
+   * block comment on that branch.
+   *
    * Best-effort: the stock is already placed, so a label-stamp failure must NOT
    * fail the caller — it degrades to the pre-existing no-label state, which the
    * holdings-derived RACK column already covers. inventory_set_rack (mig
@@ -4571,24 +4578,59 @@ export class InventoryService {
     const row = num ? parsed.row?.toUpperCase() ?? null : null;
     const isRack = dest.kind === 'rack';
 
-    // ═══ A CRATE WITH NO POSITION LEAVES THE RACK KEYS ALONE ═══
+    // ═══ A CRATE WITH NO POSITION WRITES THE LABEL, AND ONLY THE LABEL ═══
     //
-    // It asserts NOTHING about a rack, so writing NULL over the pair would
-    // ERASE data the operator never mentioned — and not hypothetically: a
-    // PARTIAL put-away moves some copies into the crate while the rest stay on
-    // rack 40-B, so clearing publishes "this book is on no rack" about a book
-    // that demonstrably is. Production also holds the shape that must survive
-    // untouched: blue "Blue Shelf", 5 books, rack NULL.
+    // THE PAIR IS LEFT ALONE. Such a destination asserts NOTHING about a rack,
+    // so writing NULL over the pair would ERASE data the operator never
+    // mentioned — and not hypothetically: a PARTIAL put-away moves some copies
+    // into the crate while the rest stay on rack 40-B, so clearing publishes
+    // "this book is on no rack" about a book that demonstrably is. Production
+    // also holds the shape that must survive untouched: blue "Blue Shelf",
+    // 5 books, rack NULL.
     //
-    // inventory_set_rack cannot say "set the label, keep the pair" — passing
-    // the pair back would need a per-item read, and a bulk of 200 books can
-    // hold 200 distinct pairs, i.e. 200 RPCs. So this path writes NOTHING at
-    // all, including bin_location: the honest reading of "the destination says
-    // nothing about the rack" is to touch no rack-shaped field. The book is
-    // still recorded IN the crate — syncBookCratePlacement writes
-    // book_crate_color / book_crate_number from the same destination row — and
-    // the holdings stay authoritative either way.
-    if (!isRack && !num) return;
+    // THE LABEL IS STILL WRITTEN, and briefly was not — this path used to
+    // `return` here and write nothing at all, which is a worse bug than the one
+    // it avoided. EVERY crate location in production today is position-less, so
+    // that left every put-away into an existing crate with a `bin_location`
+    // describing the item's PREVIOUS location: a book moved into "Gray #BIN"
+    // still labelled '40-B'. bin_location is PICKER-FACING — the pick slip, the
+    // warehouse packing slip, the cycle-count sheet, the inventory-snapshot
+    // report, the orders catalog loader and the mobile lookup all read it — so
+    // "crate placed, rack column empty" became "crate placed, label WRONG".
+    // And for a NON-BOOK the label is the ONLY record of the crate anywhere:
+    // inventory_set_book_storage (0334) is `item_type = 'book'` only, so a
+    // Chromebook put away into "Blue Shelf" is otherwise recorded in that crate
+    // NOWHERE.
+    //
+    // inventory_set_rack cannot say "set the label, keep the pair" — it DELETES
+    // the pair when both rack arguments are null (0068), and passing each item's
+    // existing pair back would need a per-item read, i.e. 200 RPCs for a
+    // 200-book bulk. That objection is about PRESERVING THE PAIR; it never
+    // applied to writing the LABEL, which needs no read at all. Migration 0335
+    // exposes exactly that narrow writer: inventory_set_bin_location sets one
+    // column and never mentions custom_fields, so the rack pair AND the crate
+    // summary survive by construction rather than by careful argument passing.
+    if (!isRack && !num) {
+      // No name means no label. "This destination has nothing to say" is a
+      // different intent from "clear the label", and the RPC honours a NULL by
+      // erasing whatever the item already carries — so don't send one.
+      const label = dest.name?.trim() || null;
+      if (!label) return;
+      const { data, error } = await this.ctx.supabase.rpc('inventory_set_bin_location', {
+        p_item_ids: itemIds,
+        p_bin_location: label,
+      });
+      // Best-effort, exactly like the rack branch below: the stock is already
+      // placed. The row count is the cheap half of not failing open — RLS
+      // filtering every row returns 0, not an error, and a silent 0 is
+      // indistinguishable from a write that worked.
+      if (error) {
+        console.warn('[placement] crate label stamp failed (stock still placed):', error.message);
+      } else if (data === 0) {
+        console.warn('[placement] crate label stamp matched no rows (stock still placed)');
+      }
+      return;
+    }
 
     // A positioned crate stamps like a rack does, and its bin_location is the
     // crate's own name, which now READS "Blue #13 on rack 38-B" — so the label

@@ -84,7 +84,12 @@ export async function fetchRackHoldingsByItem(
     const name = row.locations?.name;
     if (!name) continue;
     const arr = byItem.get(row.item_id) ?? [];
-    arr.push({ name, quantity: Number(row.quantity) || 0 });
+    // `kind` was already being SELECTed and thrown away here. Carrying it is
+    // what lets a single-label consumer tell "the stock is in a crate" from
+    // "the stock is on a rack" — see countSheetLocationLabel, where an item
+    // whose stock has moved into a position-less crate would otherwise keep
+    // printing the rack its custom_fields still (deliberately) name.
+    arr.push({ name, quantity: Number(row.quantity) || 0, kind: row.locations?.kind ?? null });
     byItem.set(row.item_id, arr);
   }
   return byItem;
