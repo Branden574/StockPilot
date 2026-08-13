@@ -6,6 +6,7 @@ import {
   describeBookCrateConflict,
   describeNewRackPlacement,
   describeRackChange,
+  hasRackPosition,
   parseBookCrateChangeDetail,
   toBookCrateAcknowledgement,
   type BookCrateAcknowledgedChange,
@@ -373,20 +374,53 @@ export function PlaceFromStagingDialog({
             nextPosition,
           })
         : null;
-    const crateLines =
-      isBook && bookStorage && crateChange
-        ? describeBookCrateChange({
-            currentColor: bookStorage.crateColor,
-            currentNumber: bookStorage.crateNumber,
-            nextColor: next.color,
-            nextNumber: next.number,
-          })
-        : [];
-
+    // ═══ WHEN THIS DIALOG CANNOT STATE THE RACK OUTCOME, IT DEFERS ═══
+    //
+    // The destination states NO rack position and the book records one. What
+    // happens to that pair is then decided by the LIVE HOLDINGS after the move:
+    // `syncBookCratePlacementInner` derives both summaries from the single
+    // location the stock resolves to, so a FULL move CLEARS the rack and a
+    // SPLIT leaves it alone. This dialog holds an RSC snapshot of the item's
+    // summary and no holdings at all, so it can tell neither.
+    //
+    // The owner walked exactly this: rack 38-A, 18 units in staging, placed
+    // into position-less "Blue #Shelf". The dialog named both crate fields,
+    // said nothing about the rack — because the two-argument comparison
+    // genuinely could not — and pre-acknowledged the change, so the SERVER gate
+    // (which does read the holdings) was satisfied and never spoke. 38-A was
+    // gone at rest, silently.
+    //
+    // Guessing here is not the fix: a promise that is right half the time is
+    // the same class of lie as the silence. So the dialog does the one honest
+    // thing it can — it declines to answer a question it cannot state in full,
+    // withholds its acknowledgement, and lets the gate ask. The refusal handler
+    // in `place()` renders the server's payload, which names the rack plainly.
+    //
+    // This is the shipped pattern, not a new one: StockTransferDialog has
+    // always sent `acknowledged: []` and let the server ask. The local
+    // prediction is an optimisation that saves a round trip; when it would cost
+    // honesty, it is dropped. It also removes a false alarm — when the holdings
+    // say SPLIT the gate drops the conflict entirely, so the operator is now
+    // asked nothing at all for a change that provably cannot happen.
+    //
+    // ═══ EXCEPT WHEN A LOCATION IS BEING MINTED — ONE DIALOG STAYS ONE ═══
+    //
+    // "Create new crate Green #7?" has no server gate behind it; only this
+    // dialog can ask it, and it must ask BEFORE the write. Deferring the crate
+    // half as well would split one confirmation into two amber panels in a row,
+    // the second arriving after the operator already committed to the first —
+    // which is the exact anti-pattern PlacementConfirmDialog was built to end.
+    // A creation therefore keeps the local prediction, and the rack consequence
+    // of a brand-new POSITION-LESS crate stays undisclosed: a gap, deliberately,
+    // rather than a lie or a regression. The owner's walk is not this case (he
+    // placed into an EXISTING "Blue #Shelf"), and closing it properly needs a
+    // preview round-trip before the dialog renders, which is its own change.
+    //
     // 2. Does it MINT a location? describeNewRackPlacement checks the label
     //    against this warehouse's existing rack/crate names — an existing
     //    label is reused by the server, so it is not a creation and needs no
-    //    confirmation (zero friction on the common path).
+    //    confirmation (zero friction on the common path). Hoisted above the
+    //    deferral because the deferral now depends on its answer.
     const creation =
       dest.mode === 'existing'
         ? null
@@ -398,6 +432,21 @@ export function PlaceFromStagingDialog({
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           });
     const creating = creation !== null && !creation.exists;
+
+    const deferToServer =
+      crateChange !== null &&
+      !creating &&
+      !hasRackPosition(nextPosition) &&
+      hasRackPosition(currentPosition);
+    const crateLines =
+      isBook && bookStorage && crateChange && !deferToServer
+        ? describeBookCrateChange({
+            currentColor: bookStorage.crateColor,
+            currentNumber: bookStorage.crateNumber,
+            nextColor: next.color,
+            nextNumber: next.number,
+          })
+        : [];
 
     if (!creating && crateLines.length === 0) {
       void place(destination, { describe: dest });
@@ -415,16 +464,14 @@ export function PlaceFromStagingDialog({
     }
     // THE RACK LINE IS ITS OWN COMPARISON — and it now covers a CRATE that
     // sits on a rack, which the old `!isCrateChoice(dest)` guard skipped
-    // entirely. `describeRackChange` never promises a clear: whether the pair
-    // clears depends on the LIVE HOLDINGS after the move (full move clears it,
-    // partial keeps it), which this dialog cannot see. The server-side gate is
-    // what states the before-and-after, and it only speaks when the write will
-    // actually happen.
+    // entirely. The basis is `'unknown'` because it is: this dialog has a
+    // render-time snapshot of the item summary and no holdings, so it may state
+    // a MOVE (the destination names the rack it is moving to — true whichever
+    // way the holdings fall) and may never promise a CLEAR. The case where a
+    // clear is the outcome is the one routed to the server above; that payload
+    // carries the sentence, derived from the holdings the gate read.
     if (isBook && bookStorage) {
-      const rackLine = describeRackChange(
-        { rackNumber: bookStorage.rackNumber, rackRow: bookStorage.rackRow },
-        destinationPosition(dest),
-      );
+      const rackLine = describeRackChange(currentPosition, nextPosition, 'unknown');
       if (rackLine) notices.push(rackLine);
     }
 
@@ -446,7 +493,13 @@ export function PlaceFromStagingDialog({
       // array when the confirmation is purely about minting a rack: that
       // question has nothing to do with the book's crate, and answering it must
       // not also answer one the user was never asked.
-      acknowledged: crateChange ? toBookCrateAcknowledgement([crateChange]) : [],
+      //
+      // Empty for `deferToServer` too, and for the same reason: this dialog did
+      // not describe the rack the placement is about to erase, so it has not
+      // earned an acknowledgement. The gate refuses, and the operator answers
+      // the server's fuller question instead.
+      acknowledged:
+        crateChange && !deferToServer ? toBookCrateAcknowledgement([crateChange]) : [],
     });
   }
 

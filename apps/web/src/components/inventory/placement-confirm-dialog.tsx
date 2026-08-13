@@ -128,6 +128,23 @@ export function PlacementConfirmDialog({
                 </li>
               ))}
             </ul>
+            {/* THE RACK CONSEQUENCE, inside the same amber panel as the crate
+                change it rides with. It is not a separate question — the
+                operator answers the crate, and this is the rest of what
+                answering it does. Server-derived (only the gate has read the
+                holdings) and deduped by summarizeBookCrateChanges, so 200 books
+                off one rack read as one sentence.
+
+                Rendered at full contrast rather than muted: a rack a human
+                typed by hand is about to be erased, which is the loudest thing
+                on this panel, not a footnote to the group counts. */}
+            {summary.rackLines.length > 0 && (
+              <ul className="space-y-0.5 border-t border-amber-500/30 pt-1.5 font-medium">
+                {summary.rackLines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 

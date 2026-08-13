@@ -876,6 +876,52 @@ describe('bookCrateAlertMessage', () => {
       }),
     ).toBe('Persepolis is recorded in Blue 4 — this move records it in no crate.');
   });
+
+  it('speaks the RACK the move erases, when the server predicted one', () => {
+    // The phone must not derive this. Whether the pair clears depends on the
+    // live holdings after the move, which only the gate has read — so it ships
+    // the sentence on the payload and the sheet prints what it was told.
+    expect(
+      bookCrateAlertMessage({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'The Catcher in the Rye',
+            currentLabel: 'Orange 13',
+            nextLabel: 'Blue Shelf',
+            currentFingerprint: '["orange","13"]',
+            rackLine: 'Rack 38-A will be cleared.',
+          },
+        ],
+      }),
+    ).toBe(
+      'The Catcher in the Rye is recorded in Orange 13 — this move records it in Blue Shelf. Rack 38-A will be cleared.',
+    );
+  });
+
+  it('reads exactly as before when no rack sentence was supplied', () => {
+    // A split move, a rack the gate could not predict, or a server older than
+    // this field: all three arrive without one, and none may become a dangling
+    // fragment or the word "undefined" in a modal Alert.
+    const line = (rackLine: string | null | undefined) =>
+      bookCrateAlertMessage({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'Persepolis',
+            currentLabel: 'Blue 4',
+            nextLabel: 'Green 2',
+            currentFingerprint: '["blue","4"]',
+            ...(rackLine === undefined ? {} : { rackLine }),
+          },
+        ],
+      });
+    const expected = 'Persepolis is recorded in Blue 4 — this move records it in Green 2.';
+    expect(line(undefined)).toBe(expected);
+    expect(line(null)).toBe(expected);
+  });
 });
 
 describe('bookCrateRefusal', () => {

@@ -335,13 +335,24 @@ export function bookCrateRefusal(e: unknown): BookCrateChangeDetail | null {
  * The Alert body for a crate refusal: one line per book, naming where it is
  * recorded today and where this move would put it. Native Alerts take a single
  * string, so the lines are joined rather than rendered as a list.
+ *
+ * THE RACK SENTENCE RIDES ON THE SAME LINE when the payload carries one. It is
+ * not a second question — the operator is answering the crate change, and this
+ * is the rest of what answering it does: a full move into a position-less crate
+ * CLEARS `book_rack_number` / `book_rack_row`, which is a value a human typed by
+ * hand. Only the server can know that (it reads the live holdings), so the phone
+ * prints what it was told and never derives it.
+ *
+ * A payload with no rack sentence — an older server, a split move, a rack the
+ * gate could not predict — simply reads as it always did. `rackLine` is optional
+ * on the wire for exactly that reason.
  */
 export function bookCrateAlertMessage(detail: BookCrateChangeDetail): string {
   return detail.items
-    .map(
-      (i) =>
-        `${i.itemName} is recorded in ${i.currentLabel ?? 'no crate'} — this move records it in ${i.nextLabel ?? 'no crate'}.`,
-    )
+    .map((i) => {
+      const base = `${i.itemName} is recorded in ${i.currentLabel ?? 'no crate'} — this move records it in ${i.nextLabel ?? 'no crate'}.`;
+      return i.rackLine ? `${base} ${i.rackLine}` : base;
+    })
     .join('\n');
 }
 

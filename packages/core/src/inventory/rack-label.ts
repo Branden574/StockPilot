@@ -153,8 +153,46 @@ export function hasRackPosition(position: RackPosition | null | undefined): bool
 }
 
 /**
- * The ONE sentence a confirmation shows when a placement moves the RACK a book
- * is recorded on — or null when it does not.
+ * WHAT THE CALLER KNOWS about where this book's stock will end up — the one
+ * fact that decides whether a clear may be promised.
+ *
+ * It is a required argument rather than an option with a default because both
+ * mistakes are silent: a caller that forgets it would either promise a clear it
+ * cannot support, or lose one it could. Spelling it makes every call site state,
+ * in the diff, whether it read the holdings.
+ */
+export type RackOutcomeBasis =
+  /**
+   * The LIVE HOLDINGS have been read, and this placement leaves the destination
+   * as the book's ONLY placement — so `syncBookCratePlacement` will derive the
+   * pair from the destination, and a destination with no rack position CLEARS
+   * it. Only a caller that actually performed that read may pass this.
+   */
+  | 'resolves-to-destination'
+  /**
+   * Not knowable here — no holdings read, or the read did not answer. Never
+   * promises a clear. A missing sentence is a gap; a wrong one is a lie.
+   */
+  | 'unknown';
+
+/**
+ * Fail-closed translation of a holdings prediction into a basis.
+ *
+ * `undefined` is NOT knowledge. `bookCratePlacementWillSync` is only consulted
+ * for items the gate could describe (it needs a destination id and a per-item
+ * move), and an item it could not describe comes back absent — which the gate
+ * already treats as "assume the sync writes" so it still ASKS. That fail-closed
+ * default is right for asking and wrong for asserting: "we could not tell" must
+ * never become "the rack will be cleared". Only an explicit `true` earns the
+ * claim.
+ */
+export function rackOutcomeBasis(willSync: boolean | undefined): RackOutcomeBasis {
+  return willSync === true ? 'resolves-to-destination' : 'unknown';
+}
+
+/**
+ * The ONE sentence a confirmation shows when a placement moves — or erases —
+ * the RACK a book is recorded on. Null when it says nothing.
  *
  * ═══ THE RACK LINE IS A SEPARATE COMPARISON FROM THE CRATE LINE ═══
  *
@@ -164,33 +202,56 @@ export function hasRackPosition(position: RackPosition | null | undefined): bool
  * malformed input instead of two true statements. `compareBookCratePlacement`
  * answers the crate half; this answers the rack half, and callers render both.
  *
- * NEVER SAYS "CLEARED", because whether the pair clears is not knowable from the
- * two arguments this function has. A destination with no rack position (a crate
- * that is not on a rack) asserts nothing about the rack; what actually happens to
- * the pair is decided AFTER the stock moves, by `syncBookCratePlacement`, from
- * the live holdings — it clears on a FULL move (no stock left on any rack) and is
- * kept on a PARTIAL one (the copies that stayed are still on that rack). A
- * destination cannot tell those apart, so promising either here would be right
- * half the time, which is the same class of lie as a silent overwrite.
+ * ═══ IT USED TO NEVER SAY "CLEARED", AND THAT RESTRAINT WENT STALE ═══
  *
- * The operator is not left uninformed: the gate only refuses — and only shows its
- * sentence — when the reconciliation provably WILL write
- * (`bookCratePlacementWillSync`), and that sentence names the current position
- * inside `currentLabel` ("recorded in Blue 4 on rack 40-B") while `nextLabel`
- * names a crate with no rack. So the case where the pair really does clear is
- * exactly the case the operator is shown a before-and-after for.
+ * The original reason was that the writer left the rack keys alone, so a
+ * clear-promise would have been a lie about a write that never happened. That
+ * is no longer true. Since the holdings-derivation landed with migration 0336,
+ * `syncBookCratePlacementInner` derives BOTH pairs from the single location the
+ * book's live stock resolves to — so a full move into a POSITION-LESS crate
+ * really does clear `book_rack_number` / `book_rack_row`.
  *
- * Filling a BLANK rack is not announced either: nothing a human recorded is
- * being replaced, which is the same asymmetry `fieldOverwritten` applies to the
- * crate pair.
+ * The owner walked exactly that: a book on rack 38-A, all 18 units in staging,
+ * placed into "Blue #Shelf". The confirmation named both crate fields and said
+ * nothing about the rack; at rest, the rack pair was gone. Clearing it was
+ * CORRECT — no stock remained on any rack — but a human-entered value changed
+ * without telling the human, which is the class of failure this feature exists
+ * to close. The comment described behaviour that had been replaced, and its
+ * restraint had become the bug.
+ *
+ * So the restraint moved from NEVER to NOT WITHOUT A BASIS. Whether the move is
+ * full or split is still unknowable from two positions — that fact never
+ * changed — so the caller that read the holdings supplies the answer, and a
+ * caller that did not read them says `'unknown'` and stays silent. The four
+ * outcomes match `syncBookCratePlacementInner` exactly:
+ *
+ *   destination is a RACK              → "Rack will change from 38-A to 22-B."
+ *   destination is a POSITIONED crate  → the same sentence; the pair becomes the
+ *                                        crate's own position (a crate SITS ON a
+ *                                        rack: one place, two keys)
+ *   POSITION-LESS crate, move resolves → "Rack 38-A will be cleared."
+ *   SPLIT / not knowable               → null. The gate drops a conflict whose
+ *                                        sync provably will not write, so the
+ *                                        split case shows no sentence at all.
+ *
+ * Filling a BLANK rack is not announced in any of them: nothing a human
+ * recorded is being replaced, which is the same asymmetry `fieldOverwritten`
+ * applies to the crate pair.
  */
 export function describeRackChange(
   current: RackPosition | null | undefined,
   next: RackPosition | null | undefined,
+  basis: RackOutcomeBasis,
 ): string | null {
   const from = formatRackPosition(current);
+  // Nothing recorded, nothing to lose — and nothing to warn about.
+  if (!from) return null;
   const to = formatRackPosition(next);
-  if (!to || !from) return null;
+  if (!to) {
+    // The destination states no rack position. Whether the pair CLEARS depends
+    // on the live holdings, and only a caller that read them may say so.
+    return basis === 'resolves-to-destination' ? `Rack ${from} will be cleared.` : null;
+  }
   if (from.trim().toLowerCase() === to.trim().toLowerCase()) return null;
   return `Rack will change from ${from} to ${to}.`;
 }

@@ -313,6 +313,66 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
 
+  it('DEFERS the batch when the crate states no rack and a selected book records one', async () => {
+    const user = userEvent.setup();
+    // Same rule as the single put-away. What happens to each recorded rack is
+    // decided from the live holdings after the move, which this dialog cannot
+    // see — so it predicts nothing, sends no acknowledgement, and lets the gate
+    // ask with the rack sentences it derived. Deferring is WHOLE-BATCH because
+    // the gate is already all-or-nothing.
+    mockBulkPlace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: '2 books are recorded in a different crate. Placing them here will change that.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'i-1',
+              itemName: 'Persepolis',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+            {
+              itemId: 'i-2',
+              itemName: 'Maus I',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              // The SAME sentence as i-1: two books off one rack must read as
+              // one line, not two identical ones.
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+          ],
+        },
+      },
+    });
+    const onRack38A = ROWS.map((r) => ({
+      ...r,
+      bookStorage: { ...storage('blue', '4'), rackNumber: '38', rackRow: 'A', rackLabel: '38-A' },
+    }));
+    renderDialog(onRack38A);
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    // Nothing was predicted and nothing was waived.
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Rack 38-A will be cleared.');
+    // Deduped: the sentence appears once for the two books that share it.
+    expect(within(confirm).getAllByText('Rack 38-A will be cleared.')).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockBulkPlace).toHaveBeenCalledTimes(2);
+    expect(mockBulkPlace.mock.calls[1]![0].acknowledgedCrateChanges).toHaveLength(2);
+  });
+
   it("re-renders the SERVER's refusal and retries it acknowledged", async () => {
     const user = userEvent.setup();
     mockBulkPlace.mockResolvedValueOnce({

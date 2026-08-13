@@ -254,9 +254,23 @@ describe('assertBookCratePlacementAllowed', () => {
 
     const err = thrown as ServiceError;
     expect(err.code).toBe('conflict');
+    // REWRITTEN: the trailing rack sentence is new. This expectation used to end
+    // at "on rack 38-B.", which named the rack on both sides but never said what
+    // was HAPPENING to the pair — the operator had to infer it from two labels.
+    // The destination is a POSITIONED crate, so the writer sets the pair to that
+    // crate's own position, and the confirmation now says so outright.
+    //
+    // Note this sentence appears with NO holdings prediction available (this call
+    // passes no `moves`/`toLocationId`). That asymmetry is deliberate and is
+    // pinned below: a MOVE names the rack the destination itself states, which no
+    // holdings read is needed to know, while a CLEAR is a claim about the absence
+    // of stock elsewhere and may only be made on a prediction.
     expect(err.message).toBe(
-      'Persepolis is recorded in Gray BIN on rack 43-B. Placing it here will change that to Blue 13 on rack 38-B.',
+      'Persepolis is recorded in Gray BIN on rack 43-B. Placing it here will change that to Blue 13 on rack 38-B. Rack will change from 43-B to 38-B.',
     );
+    // UNCHANGED, and load-bearing: the rack rides on the payload as disclosure,
+    // so the fingerprint is still the crate pair alone and every already-shipped
+    // client's acknowledgement keeps matching.
     expect((err.details as { items: Array<{ currentFingerprint: string }> }).items[0]!
       .currentFingerprint).toBe(bookCrateFingerprint('gray', 'BIN'));
   });
@@ -1393,12 +1407,25 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
   });
 
   it('and the gate SAID SO before the stock moved — the refusal names the rack it loses', async () => {
-    // The other half of "not told something false", at the surface an operator
-    // actually reads. The gate only speaks when the reconciliation provably WILL
-    // write (bookCratePlacementWillSync), and the case above is exactly that — so
-    // this sentence describes a rack that really does disappear. Under 0335's
-    // unconditional preservation the identical sentence was a lie: it named 40-B
-    // as part of what "will change" while the writer kept 40-B forever.
+    // ═══ THE OWNER'S WALK, AT THE SURFACE HE READ ═══
+    //
+    // REWRITTEN: this expectation used to stop at "…will change that to Gray
+    // BIN." and the test claimed, in its own title, to name "the rack it loses"
+    // — but all it named was 40-B inside the CURRENT label. It never said the
+    // pair was being erased. That was the defect: the owner placed a book from
+    // staging into position-less "Blue #Shelf", approved a crate change, and
+    // lost the rack 38-A he had typed by hand, silently.
+    //
+    // The old silence had a reason and the reason went stale. It was true when
+    // the writer left the rack keys alone; since the holdings-derivation and
+    // migration 0336 the writer DOES clear the pair on a full move into a
+    // position-less crate — which is exactly the case fixtured here, and is
+    // asserted three tests above as `p_rack_number: null`.
+    //
+    // The claim is only safe because of what this call passes: `toLocationId`
+    // plus a per-item `moves` entry, and a holdings fixture whose only row is
+    // the source. That is what makes `bookCratePlacementWillSync` answer TRUE,
+    // and only an explicit true earns the sentence.
     const { svc } = svcWith({
       'inventory_items.select': {
         data: [
@@ -1437,8 +1464,121 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
 
     expect((thrown as ServiceError).code).toBe('conflict');
     expect((thrown as ServiceError).message).toBe(
+      'Persepolis is recorded in Blue 4 on rack 40-B. Placing it here will change that to Gray BIN. Rack 40-B will be cleared.',
+    );
+    // And on the structured payload, per book, for the surfaces that render
+    // lines rather than the message — while the fingerprint stays crate-only.
+    const detail = (thrown as ServiceError).details as {
+      items: Array<{ rackLine?: string | null; currentFingerprint: string }>;
+    };
+    expect(detail.items[0]!.rackLine).toBe('Rack 40-B will be cleared.');
+    expect(detail.items[0]!.currentFingerprint).toBe(bookCrateFingerprint('blue', '4'));
+  });
+
+  it('NEVER promises a clear it cannot support: no prediction, no rack sentence', async () => {
+    // The same book and the same position-less destination as above, but the
+    // caller supplies no `moves`/`toLocationId`, so `readBookCrateSyncPrediction`
+    // returns nothing for this item. The gate still ASKS — absent is fail-closed
+    // for asking — but it must not convert "we could not tell" into "38-A will
+    // be cleared". Whether the pair clears depends on stock this call never read.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+            book_rack_number: '40',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const thrown = await svc
+      .assertBookCratePlacementAllowed([BOOK_A], {
+        kind: 'crate',
+        name: 'Gray #BIN',
+        rackNumber: null,
+        rackRow: null,
+        crateColor: 'gray',
+        crateNumber: 'BIN',
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((thrown as ServiceError).code).toBe('conflict');
+    expect((thrown as ServiceError).message).toBe(
       'Persepolis is recorded in Blue 4 on rack 40-B. Placing it here will change that to Gray BIN.',
     );
+    const detail = (thrown as ServiceError).details as { items: Array<{ rackLine?: string | null }> };
+    expect(detail.items[0]!.rackLine ?? null).toBeNull();
+  });
+
+  it('a SPLIT that still conflicts says nothing about the rack', async () => {
+    // The book keeps a rival placement (rack 41-C survives this move), so the
+    // reconciliation will SKIP its summary entirely — neither pair is written.
+    // The conflict itself is dropped by step 2 in that case, so the way to
+    // observe the rule is a batch: BOOK_B resolves and speaks, BOOK_A splits and
+    // is not asked about at all.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+            book_rack_number: '40',
+            book_rack_row: 'B',
+          }),
+          itemRow(BOOK_B, 'Maus I', 'book', {
+            book_crate_color: 'red',
+            book_crate_number: '7',
+            book_rack_number: '38',
+            book_rack_row: 'A',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-40b', { kind: 'rack', rack_number: '40', rack_row: 'B' }),
+          // The rival placement that makes BOOK_A a split.
+          holding(BOOK_A, 'loc-41c', { kind: 'rack', rack_number: '41', rack_row: 'C' }),
+          holding(BOOK_B, 'loc-38a', { kind: 'rack', rack_number: '38', rack_row: 'A' }),
+        ],
+        error: null,
+      },
+    });
+
+    const thrown = await svc
+      .assertBookCratePlacementAllowed(
+        [BOOK_A, BOOK_B],
+        {
+          kind: 'crate',
+          name: 'Gray #BIN',
+          rackNumber: null,
+          rackRow: null,
+          crateColor: 'gray',
+          crateNumber: 'BIN',
+        },
+        {
+          toLocationId: 'loc-gray',
+          moves: new Map([
+            [BOOK_A, { fromLocationId: 'loc-40b', quantity: 5 }],
+            [BOOK_B, { fromLocationId: 'loc-38a', quantity: 5 }],
+          ]),
+        },
+      )
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    const detail = (thrown as ServiceError).details as {
+      items: Array<{ itemId: string; rackLine?: string | null }>;
+    };
+    // BOOK_A is not asked about at all — its summary provably will not be
+    // written, so neither its crate nor its rack is at risk.
+    expect(detail.items.map((i) => i.itemId)).toEqual([BOOK_B]);
+    expect(detail.items[0]!.rackLine).toBe('Rack 38-A will be cleared.');
   });
 
   // ── CASE 2 — all stock in a POSITIONED crate: the pair IS that position ───

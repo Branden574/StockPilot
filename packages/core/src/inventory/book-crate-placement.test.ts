@@ -286,7 +286,12 @@ describe('parseBookCrateChangeDetail', () => {
     ],
   };
   it('accepts the payload the gate throws', () => {
-    expect(parseBookCrateChangeDetail(valid)).toEqual(valid);
+    // rackLine is normalised in alongside the labels — see the next two cases
+    // for why its ABSENCE must stay valid.
+    expect(parseBookCrateChangeDetail(valid)).toEqual({
+      ...valid,
+      items: [{ ...valid.items[0], rackLine: null }],
+    });
   });
   it('normalises a missing label to null rather than undefined', () => {
     const d = parseBookCrateChangeDetail({
@@ -299,7 +304,32 @@ describe('parseBookCrateChangeDetail', () => {
       currentLabel: null,
       nextLabel: null,
       currentFingerprint: fp,
+      rackLine: null,
     });
+  });
+  it('carries the RACK sentence through when the gate supplied one', () => {
+    // The whole point of putting it on the payload: only the server has read
+    // the holdings, so the client must receive the sentence rather than derive
+    // one from a render-time snapshot.
+    const d = parseBookCrateChangeDetail({
+      ...valid,
+      items: [{ ...valid.items[0], rackLine: 'Rack 38-A will be cleared.' }],
+    });
+    expect(d!.items[0]!.rackLine).toBe('Rack 38-A will be cleared.');
+  });
+  it('a MISSING or empty rack sentence is valid — never a reason to reject', () => {
+    // Unlike the fingerprint, this line is disclosure and not a question. A
+    // payload without one is still a complete, answerable crate confirmation;
+    // rejecting it would strand the client on the plain error message for a
+    // split move, an older server, or any placement the gate could not predict.
+    expect(
+      parseBookCrateChangeDetail({ ...valid, items: [{ ...valid.items[0], rackLine: '' }] })!
+        .items[0]!.rackLine,
+    ).toBeNull();
+    expect(
+      parseBookCrateChangeDetail({ ...valid, items: [{ ...valid.items[0], rackLine: 42 }] })!
+        .items[0]!.rackLine,
+    ).toBeNull();
   });
   it('refuses anything else — an empty "are you sure?" is worse than none', () => {
     expect(parseBookCrateChangeDetail(undefined)).toBeNull();
@@ -359,6 +389,43 @@ describe('summarizeBookCrateChanges', () => {
   it('a rack destination summarises as no crate', () => {
     const s = summarizeBookCrateChanges([{ currentLabel: 'Blue 4', nextLabel: null }]);
     expect(s.nextLabel).toBeNull();
+  });
+
+  it('DEDUPES the rack sentences — 200 books off one rack read as one line', () => {
+    // Per-book on the wire, because each book has its own recorded rack and its
+    // own sync prediction; repeated 200 times on screen it would bury the one
+    // line that differs.
+    const s = summarizeBookCrateChanges([
+      { ...item('a', 'Blue 4'), rackLine: 'Rack 38-A will be cleared.' },
+      { ...item('b', 'Blue 4'), rackLine: 'Rack 38-A will be cleared.' },
+      { ...item('c', 'Green 2'), rackLine: 'Rack 22-B will be cleared.' },
+      // A book the gate could not predict carries no sentence, and contributes
+      // none — silence is the honest output, not a placeholder.
+      { ...item('d', 'Green 2'), rackLine: null },
+      item('e', null),
+    ]);
+    expect(s.rackLines).toEqual(['Rack 22-B will be cleared.', 'Rack 38-A will be cleared.']);
+  });
+
+  it('rack sentences are ORDERED, so one selection always reads the same way', () => {
+    // Same reason the groups sort: the server may enumerate a batch in any
+    // order, and a confirmation that reshuffles between attempts is unreadable.
+    const forward = summarizeBookCrateChanges([
+      { ...item('a', 'Blue 4'), rackLine: 'Rack will change from 40-B to 22-B.' },
+      { ...item('b', 'Blue 4'), rackLine: 'Rack 38-A will be cleared.' },
+    ]);
+    const reversed = summarizeBookCrateChanges([
+      { ...item('b', 'Blue 4'), rackLine: 'Rack 38-A will be cleared.' },
+      { ...item('a', 'Blue 4'), rackLine: 'Rack will change from 40-B to 22-B.' },
+    ]);
+    expect(forward.rackLines).toEqual(reversed.rackLines);
+    expect(forward.rackLines).toHaveLength(2);
+  });
+
+  it('no rack sentences at all is an EMPTY list, never undefined', () => {
+    // The dialog renders on `.length > 0`; an undefined here would throw inside
+    // a confirmation that is already interrupting someone.
+    expect(summarizeBookCrateChanges([item('a', 'Blue 4')]).rackLines).toEqual([]);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   isCompositeRackNumber,
   normalizeRackFields,
   parseRackLabel,
+  rackOutcomeBasis,
 } from './rack-label';
 
 describe('parseRackLabel', () => {
@@ -184,28 +185,98 @@ describe('formatRackPosition', () => {
 describe('describeRackChange', () => {
   it('names both ends when the rack a book is recorded on moves', () => {
     expect(
-      describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackNumber: '38', rackRow: 'B' }),
+      describeRackChange(
+        { rackNumber: '40', rackRow: 'B' },
+        { rackNumber: '38', rackRow: 'B' },
+        'unknown',
+      ),
     ).toBe('Rack will change from 40-B to 38-B.');
   });
 
   it('says nothing when the rack is unchanged (case-insensitively)', () => {
     expect(
-      describeRackChange({ rackNumber: '38', rackRow: 'B' }, { rackNumber: '38', rackRow: 'b' }),
+      describeRackChange(
+        { rackNumber: '38', rackRow: 'B' },
+        { rackNumber: '38', rackRow: 'b' },
+        'resolves-to-destination',
+      ),
     ).toBeNull();
   });
 
-  it('NEVER promises a clear: a destination with no position asserts nothing', () => {
-    // A crate that is not on a rack says nothing about the rack, and whether the
-    // pair actually clears is decided AFTER the stock moves, from the live
-    // holdings (syncBookCratePlacement): it clears on a FULL move and is kept on
-    // a PARTIAL one. These two arguments cannot tell those apart, so either
-    // sentence would be right only half the time.
+  // ═══ REWRITTEN, DELIBERATELY ═══
+  //
+  // This block used to assert "NEVER promises a clear", on the reasoning that
+  // the writer left the rack keys alone so any clear-promise would be a lie.
+  // That reason went STALE: since the holdings-derivation and migration 0336,
+  // syncBookCratePlacementInner derives BOTH pairs from the single location the
+  // book's live stock resolves to, so a full move into a position-less crate
+  // really does clear book_rack_number / book_rack_row. The owner walked it —
+  // rack 38-A, 18 units in staging, placed into "Blue #Shelf" — and the
+  // confirmation's silence cost him a rack he had typed by hand.
+  //
+  // The old assertion is therefore not weakened, it is re-aimed: silence is
+  // still mandatory when the outcome is UNKNOWABLE, and is now a defect when the
+  // caller has read the holdings and knows better.
+  it('says nothing about a clear when the outcome is not knowable', () => {
     // Production really holds this shape: blue "Blue Shelf", 5 books, rack NULL.
-    expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, null)).toBeNull();
-    expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackRow: 'B' })).toBeNull();
+    expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, null, 'unknown')).toBeNull();
+    expect(
+      describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackRow: 'B' }, 'unknown'),
+    ).toBeNull();
+  });
+
+  it('SAYS THE CLEAR, naming what is lost, once the holdings have been read', () => {
+    // The owner's exact case. A position-less destination plus "this move leaves
+    // the destination as the only placement" is precisely the branch in which
+    // the writer clears the pair, so the confirmation must state it.
+    expect(
+      describeRackChange({ rackNumber: '38', rackRow: 'A' }, null, 'resolves-to-destination'),
+    ).toBe('Rack 38-A will be cleared.');
+    expect(
+      describeRackChange(
+        { rackNumber: '38', rackRow: 'A' },
+        { rackNumber: '', rackRow: null },
+        'resolves-to-destination',
+      ),
+    ).toBe('Rack 38-A will be cleared.');
+    // A number-only rack is named the way it is stored and displayed.
+    expect(describeRackChange({ rackNumber: '22' }, null, 'resolves-to-destination')).toBe(
+      'Rack 22 will be cleared.',
+    );
+  });
+
+  it('a POSITIONED crate reads as a move, not a clear — a crate SITS ON a rack', () => {
+    // The destination is a crate, but it states a position, so the pair becomes
+    // that position rather than clearing. Same sentence as a plain rack, because
+    // it is the same fact about the rack pair.
+    expect(
+      describeRackChange(
+        { rackNumber: '38', rackRow: 'A' },
+        { rackNumber: '22', rackRow: 'B' },
+        'resolves-to-destination',
+      ),
+    ).toBe('Rack will change from 38-A to 22-B.');
   });
 
   it('filling a BLANK rack is not announced — nothing recorded is being replaced', () => {
-    expect(describeRackChange(null, { rackNumber: '38', rackRow: 'B' })).toBeNull();
+    expect(
+      describeRackChange(null, { rackNumber: '38', rackRow: 'B' }, 'resolves-to-destination'),
+    ).toBeNull();
+    // Nor is clearing a rack that was never recorded: there is nothing to lose.
+    expect(describeRackChange(null, null, 'resolves-to-destination')).toBeNull();
+  });
+});
+
+describe('rackOutcomeBasis — "we could not tell" never becomes "it will be cleared"', () => {
+  it('only an explicit true earns the claim', () => {
+    expect(rackOutcomeBasis(true)).toBe('resolves-to-destination');
+  });
+
+  it('false (a genuine split) and undefined (no prediction) both stay silent', () => {
+    // undefined is the fail-closed shape: the gate could not describe this
+    // item's move, so it still ASKS about the crate — but it must not assert
+    // anything about the rack on the back of a read that never answered.
+    expect(rackOutcomeBasis(false)).toBe('unknown');
+    expect(rackOutcomeBasis(undefined)).toBe('unknown');
   });
 });

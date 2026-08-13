@@ -45,6 +45,29 @@ const IN_BLUE_4: BookStorageInfo = {
   crateLabel: 'Blue 4',
 };
 
+/**
+ * The same book with NO rack recorded — equally real (a crate is not required to
+ * sit on a rack, and plenty of books carry book_crate_* with a null rack pair).
+ *
+ * It exists because the two summaries now decide different things. When the
+ * destination states no rack position, a book that HAS a recorded rack sends the
+ * dialog down the DEFER path — the rack outcome depends on live holdings this
+ * component cannot see, so it declines to predict and lets the gate ask (see
+ * "defers to the server" below). A book with no rack has nothing to lose, so the
+ * local prediction still fires.
+ *
+ * Every test whose subject is the PREDICTING path itself — what the first
+ * request carries, the in-flight button state, the success toast — uses this
+ * fixture, so it keeps testing the mechanism it names instead of silently
+ * becoming another copy of the deferral test.
+ */
+const IN_BLUE_4_NO_RACK: BookStorageInfo = {
+  ...IN_BLUE_4,
+  rackNumber: null,
+  rackRow: null,
+  rackLabel: null,
+};
+
 function renderDialog() {
   return render(
     <PlaceFromStagingDialog
@@ -244,7 +267,10 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
   it('a DIFFERENT crate warns naming the OLD and the NEW value, and Go back returns to the form', async () => {
     const user = userEvent.setup();
-    renderBookDialog();
+    // No recorded rack — nothing about this placement is unknowable, so the
+    // local prediction runs and the question is asked before the write, exactly
+    // as it always has been.
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
@@ -263,9 +289,112 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(screen.getByRole('button', { name: /place stock/i })).toBeInTheDocument();
   });
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE OWNER'S WALK — a recorded rack, a POSITION-LESS crate.
+  //
+  // Book on rack 38-A, all its stock in staging, placed into "Blue #Shelf".
+  // The dialog named both crate fields, said nothing about the rack, and
+  // pre-acknowledged — so the gate, the one component that reads the holdings,
+  // was satisfied and never spoke. At rest both rack keys were gone. Clearing
+  // them was CORRECT (no stock remained on any rack); the silence was not.
+  //
+  // This dialog still cannot know whether the move is full or split, and
+  // guessing would be a lie rather than a gap. So it declines to predict and
+  // lets the gate ask — which is what StockTransferDialog has always done.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it('defers to the server when the destination states no rack and the book records one', async () => {
+    const user = userEvent.setup();
+    mockPlaceStockAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'The Outsiders is recorded in Blue 4 on rack 38-A. Placing it here will change that to Blue 42. Rack 38-A will be cleared.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'book-1',
+              itemName: 'The Outsiders',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Blue 42',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+          ],
+        },
+      },
+    });
+    renderBookDialog(); // IN_BLUE_4 — rack 38-A recorded
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #42');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // No local dialog was interposed, and the first request carries NO
+    // acknowledgement — this dialog did not describe the rack, so it has not
+    // earned one.
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+
+    // The gate's answer is what the operator reads, and it names the rack.
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Rack 38-A will be cleared.');
+    expect(confirm).toHaveTextContent('1 title now in Blue 4 on rack 38-A');
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(2);
+    expect(mockPlaceStockAction.mock.calls[1]![0].acknowledgedCrateChanges).toEqual([
+      { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+    ]);
+  });
+
+  it('a SPLIT is now asked about at all — the gate drops it and the placement runs', async () => {
+    const user = userEvent.setup();
+    // The holdings say this book keeps another placement, so the reconciliation
+    // will leave its summary alone. The gate therefore raises no conflict, and
+    // deferring means the operator is asked NOTHING for a change that provably
+    // cannot happen — where the old local prediction always asked.
+    renderBookDialog();
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #42');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).toHaveBeenCalled();
+  });
+
+  it('MINTING a location still asks ONCE, locally — one dialog stays one', async () => {
+    const user = userEvent.setup();
+    // "Create new crate Green #7?" has no server gate behind it, so it must be
+    // asked here and before the write. Deferring the crate half as well would
+    // split one confirmation into two amber panels in a row — the anti-pattern
+    // PlacementConfirmDialog exists to end — so a creation keeps the local
+    // prediction even when the rack outcome is unknowable.
+    renderBookDialog(); // rack 38-A recorded, and Green #7 will be position-less
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '7');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new crate Crate #7?');
+    expect(confirm).toHaveTextContent('Crate number will change from 4 to 7.');
+    // AND IT STAYS SILENT ABOUT THE RACK. The pair may well be cleared here
+    // too, but this component cannot tell, and a gap is not a lie. Closing it
+    // needs a preview round-trip before the dialog renders.
+    expect(confirm).not.toHaveTextContent(/rack/i);
+  });
+
   it('Continue placement sends the acknowledgement', async () => {
     const user = userEvent.setup();
-    renderBookDialog();
+    // NO recorded rack, so the local prediction still runs — this test is about
+    // what the predicting path SENDS, and a book with a rack now defers to the
+    // server instead (see "defers to the server" below).
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
@@ -366,9 +495,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
   });
 
   it('a crate with NO position never promises to clear the rack', async () => {
-    // The writer leaves the rack keys alone for a position-less crate, so a
-    // "rack will be cleared" sentence would promise an erasure that does not
-    // happen — the same class of lie as a silent overwrite.
+    // THE REASON, CORRECTED. This used to read "the writer leaves the rack keys
+    // alone for a position-less crate", which went stale with the holdings
+    // derivation and migration 0336 — the writer DOES clear the pair on a full
+    // move. The sentence is still withheld here, but for the reason that has
+    // always actually applied: whether the move is full or split is decided from
+    // the LIVE HOLDINGS, which this component cannot see. A promise that is
+    // right half the time is the same class of lie as a silent overwrite.
     const user = userEvent.setup();
     renderBookDialog();
     await openNewRackForm(user);
@@ -440,7 +573,9 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
   it('a partial placement says what stays behind before it commits', async () => {
     const user = userEvent.setup();
-    renderBookDialog({ availableQuantity: 17 });
+    // No recorded rack: the subject here is the remainder notice, and it needs
+    // the local dialog to render at all.
+    renderBookDialog({ availableQuantity: 17, bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     const qty = screen.getByLabelText(/quantity/i);
@@ -507,7 +642,9 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
   it('the FIRST request from a PREDICTING dialog carries no blanket waiver', async () => {
     const user = userEvent.setup();
-    renderBookDialog(); // bookStorage = Blue 4, so the prediction DOES fire
+    // Blue 4 and NO rack, so the prediction DOES fire: with a rack recorded and
+    // a position-less destination the dialog defers and sends nothing to waive.
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
@@ -609,7 +746,9 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       },
     };
     mockPlaceStockAction.mockResolvedValue(refusal);
-    renderBookDialog();
+    // Predicting path: the acknowledgement it sends is the one the server then
+    // repeats back, which is the loop this pins.
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
@@ -625,7 +764,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
   it('disables both confirmation buttons while the placement is in flight', async () => {
     const user = userEvent.setup();
     mockPlaceStockAction.mockReturnValue(new Promise(() => {}));
-    renderBookDialog();
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
@@ -641,7 +780,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
   it('names the quantity and the crate on success', async () => {
     const user = userEvent.setup();
-    renderBookDialog({ availableQuantity: 10 });
+    renderBookDialog({ availableQuantity: 10, bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
     await chooseDestination(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));

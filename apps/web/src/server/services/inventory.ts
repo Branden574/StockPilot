@@ -40,6 +40,8 @@ import {
   buildVariantKey,
   normalizeCrateColorForWrite,
   describeBookCrateConflict,
+  describeRackChange,
+  rackOutcomeBasis,
   isBookCrateChangeAcknowledged,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
@@ -4806,8 +4808,15 @@ export class InventoryService {
    *   2. DROP the conflicts the reconciliation provably will not perform (see
    *      `bookCratePlacementWillSync`) — a prompt for a change that cannot
    *      happen is a false alarm, and this org gets it on the common path.
+   *   2b. ATTACH the RACK outcome to each surviving line. The same holdings
+   *      read that answers "will it write" also answers "and what does it do to
+   *      the rack pair", and this is the only place both are known. See the
+   *      block at the call site: a full move into a position-less crate really
+   *      does clear a rack a human typed, and saying nothing about it is how the
+   *      owner lost 38-A while approving a crate change.
    *   3. WAIVE only the conflicts the caller was actually SHOWN, matched by
-   *      item id AND crate fingerprint.
+   *      item id AND crate fingerprint. The rack sentence is DISCLOSURE and is
+   *      deliberately not part of that match — see `BookCrateChangeItem.rackLine`.
    *   4. REFUSE the rest with the fresh payload, so the client re-confirms
    *      against current truth. NO STOCK MOVES on that path.
    *
@@ -4879,8 +4888,44 @@ export class InventoryService {
       conflicts.map((c) => c.itemId),
       opts,
     );
-    const real = conflicts.filter((c) => willSync.get(c.itemId) !== false);
-    if (real.length === 0) return summaries;
+    const kept = conflicts.filter((c) => willSync.get(c.itemId) !== false);
+    if (kept.length === 0) return summaries;
+
+    // ═══ 2b. THE RACK OUTCOME — SAID HERE BECAUSE ONLY HERE IS IT KNOWN ═══
+    //
+    // The rack pair is the other projection of the fact the reconciliation
+    // establishes: which SINGLE location the book's live stock resolves to. So
+    // the sentence is derived from the same two inputs `syncBookCratePlacementInner`
+    // derives the pair from — the destination's own rack position, and whether
+    // this move leaves the destination as the only placement — and it is
+    // attached HERE because step 2 is the only point in the system that has
+    // both. A client re-deriving it from a render-time snapshot is the mistake
+    // that caused the original data-loss bug.
+    //
+    // THE DESTINATION MUST BE A PLACED LOCATION. A move into a staging/unplaced
+    // bucket leaves the book with no placed holding at all, and the sync then
+    // reports `unplacedItemIds` and writes NEITHER pair — so "the rack will be
+    // cleared" would be a promise about a write that never happens.
+    // `bookCratePlacementWillSync` answers "no rival placement survives", which
+    // is true of that move and is not the same question.
+    //
+    // Anything short of an explicit `true` from the prediction — a missing move,
+    // a failed holdings read, a genuine split — yields `'unknown'` and says
+    // nothing (see `rackOutcomeBasis`). Fail-closed for asking, silent for
+    // asserting.
+    const destPosition = { rackNumber: dest.rackNumber, rackRow: dest.rackRow };
+    const destIsPlaced = !isSystemLocation({ type: null, kind: dest.kind });
+    const real: BookCrateChangeItem[] = kept.map((c) => {
+      const current = summaries.get(c.itemId);
+      const rackLine = current
+        ? describeRackChange(
+            { rackNumber: current.rackNumber, rackRow: current.rackRow },
+            destPosition,
+            destIsPlaced ? rackOutcomeBasis(willSync.get(c.itemId)) : 'unknown',
+          )
+        : null;
+      return rackLine ? { ...c, rackLine } : c;
+    });
 
     // 3. Waive ONLY what was shown, item by item.
     const ackIndex = bookCrateAcknowledgementIndex(opts.acknowledged);
@@ -4895,10 +4940,18 @@ export class InventoryService {
       reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
       items: real,
     };
+    // THE MESSAGE CARRIES THE RACK SENTENCE TOO, for the single-item case. Not
+    // every surface renders the structured lines — the web confirmation shows
+    // this string as its lead paragraph, and a caller with no payload handling
+    // at all shows only this — so a consequence that lives exclusively in
+    // `details` is a consequence some operators never see. The bulk message
+    // stays counts-only: N books have N current racks, and the per-item lines
+    // are where those belong.
+    const singleRack = real.length === 1 && real[0]!.rackLine ? ` ${real[0]!.rackLine}` : '';
     throw new ServiceError(
       'conflict',
       real.length === 1
-        ? `${real[0]!.itemName} is recorded in ${real[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${real[0]!.nextLabel ?? 'no crate'}.`
+        ? `${real[0]!.itemName} is recorded in ${real[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${real[0]!.nextLabel ?? 'no crate'}.${singleRack}`
         : `${real.length} books are recorded in a different crate. Placing them here will change that.`,
       detail as unknown as Record<string, unknown>,
     );

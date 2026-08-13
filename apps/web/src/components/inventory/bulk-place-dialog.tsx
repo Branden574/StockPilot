@@ -4,6 +4,7 @@ import {
   bookCrateAcknowledgementsMatch,
   describeBookCrateConflict,
   describeNewRackPlacement,
+  hasRackPosition,
   parseBookCrateChangeDetail,
   toBookCrateAcknowledgement,
   type BookCrateAcknowledgedChange,
@@ -277,8 +278,27 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     }
 
     const destination = toActionDestination(dest);
-    const crateItems = predictCrateChanges(dest);
+    const predicted = predictCrateChanges(dest);
 
+    // ═══ THE SAME DEFERRAL AS THE SINGLE PUT-AWAY ═══
+    //
+    // The destination states no rack position, and at least one book whose
+    // crate is being overwritten records one. What happens to those pairs is
+    // decided from the LIVE HOLDINGS after the move — a full move CLEARS the
+    // rack, a split leaves it — and this dialog has render-time summaries and
+    // no holdings, so it can state neither. It therefore shows nothing it
+    // cannot support and sends no acknowledgement; the gate refuses and its
+    // payload names each rack, derived from the holdings it read.
+    //
+    // WHOLE-BATCH, not per-book, because the gate is already all-or-nothing: a
+    // batch that half-acknowledged would be refused anyway, and the refusal
+    // enumerates every conflict, so splitting the set here would only ask the
+    // operator two different questions about one action.
+    //
+    // AND NOT WHEN A LOCATION IS BEING MINTED, for the same reason as the single
+    // put-away: "Create new crate Green #7?" has no server gate, so it must be
+    // asked here and before the write, and deferring the crate half would turn
+    // one confirmation into two. See place-from-staging-dialog.tsx.
     const creation =
       dest.mode === 'existing'
         ? null
@@ -290,6 +310,21 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           });
     const creating = creation !== null && !creation.exists;
+
+    const conflicted = new Set(predicted.map((c) => c.itemId));
+    const deferToServer =
+      predicted.length > 0 &&
+      !creating &&
+      !hasRackPosition(destinationPosition(dest)) &&
+      rows.some(
+        (r) =>
+          conflicted.has(r.itemId) &&
+          hasRackPosition({
+            rackNumber: r.bookStorage?.rackNumber,
+            rackRow: r.bookStorage?.rackRow,
+          }),
+      );
+    const crateItems = deferToServer ? [] : predicted;
 
     if (!creating && crateItems.length === 0) {
       void place(destination, { describe: dest });
