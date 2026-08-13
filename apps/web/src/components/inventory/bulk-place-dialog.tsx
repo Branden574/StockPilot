@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import {
   CrateColorSelect,
   CrateNumberInput,
+  CrateRackPositionFields,
   DestinationCrateNote,
   DestinationKindToggle,
   NO_CRATE_COLOR,
@@ -53,6 +54,7 @@ import {
   destinationCrate,
   destinationLabel,
   destinationPhrase,
+  destinationPosition,
   isCrateChoice,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
@@ -172,10 +174,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     rows.length > 0 &&
     (isNew ? newFieldsFilled : destId.length > 0);
 
+  // The crate branch carries the SAME rack pair the rack branch does: the
+  // toggle picks the KIND of row, not which of two true facts survives. A crate
+  // sits on a rack.
   function chosenDestination(): ChosenDestination | null {
     if (isNew) {
       return allBooks && newKind === 'crate'
-        ? { mode: 'new-crate', crateColor, crateNumber }
+        ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
         : { mode: 'new-rack', rackNumber, rackRow };
     }
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
@@ -189,6 +194,11 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           warehouseId: warehouseId!,
           crateNumber: dest.crateNumber.trim(),
           ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+          // The crate's POSITION when one was typed — part of its identity, and
+          // of the name the server dedupes on. Omitted when blank so a crate on
+          // no rack still matches the existing position-less row.
+          ...(dest.rackNumber.trim() ? { rackNumber: dest.rackNumber.trim() } : {}),
+          ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
         },
       };
     }
@@ -208,6 +218,8 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
    */
   function predictCrateChanges(dest: ChosenDestination): BookCrateChangeItem[] {
     const next = destinationCrate(dest);
+    // Label context only, on both sides — the comparison stays crate-only.
+    const nextPosition = destinationPosition(dest);
     const changed: BookCrateChangeItem[] = [];
     for (const r of rows) {
       if (r.itemType !== 'book' || !r.bookStorage) continue;
@@ -221,8 +233,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
         itemName: r.name,
         currentColor: r.bookStorage.crateColor,
         currentNumber: r.bookStorage.crateNumber,
+        currentPosition: {
+          rackNumber: r.bookStorage.rackNumber,
+          rackRow: r.bookStorage.rackRow,
+        },
         nextColor: next.color,
         nextNumber: next.number,
+        nextPosition,
       });
       if (conflict) changed.push(conflict);
     }
@@ -487,26 +504,35 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
                 )}
 
                 {allBooks && newKind === 'crate' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
-                      <CrateColorSelect
-                        id="bulk-crate-color"
-                        value={crateColor}
-                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
-                      />
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
+                        <CrateColorSelect
+                          id="bulk-crate-color"
+                          value={crateColor}
+                          onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bulk-crate-number">
+                          Crate number <span className="text-destructive">*</span>
+                        </Label>
+                        <CrateNumberInput
+                          id="bulk-crate-number"
+                          value={crateNumber}
+                          onChange={setCrateNumber}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-crate-number">
-                        Crate number <span className="text-destructive">*</span>
-                      </Label>
-                      <CrateNumberInput
-                        id="bulk-crate-number"
-                        value={crateNumber}
-                        onChange={setCrateNumber}
-                      />
-                    </div>
-                  </div>
+                    <CrateRackPositionFields
+                      idPrefix="bulk"
+                      rackNumber={rackNumber}
+                      rackRow={rackRow}
+                      onRackNumberChange={setRackNumber}
+                      onRackRowChange={setRackRow}
+                    />
+                  </>
                 )}
               </div>
             )}

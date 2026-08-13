@@ -405,6 +405,91 @@ describe('formatCratePlacementLabel — the GATE spelling', () => {
     expect(formatCrateLabel('taupe', '4')).toBe('4');
     expect(formatCratePlacementLabel('taupe', '4')).toBe('taupe 4');
   });
+
+  // ── The crate's RACK, spoken in the same sentence ────────────────────────
+  //
+  // "gray BIN" names FIVE different bins in this warehouse (43-B, 43-C, 42-B,
+  // 42-C, 41-C). A confirmation that stops at the crate sends a picker to the
+  // wrong aisle, so the label carries the position when there is one.
+  it('names the rack a crate sits on', () => {
+    expect(formatCratePlacementLabel('blue', '13', { rackNumber: '38', rackRow: 'B' })).toBe(
+      'Blue 13 on rack 38-B',
+    );
+    expect(formatCratePlacementLabel('gray', 'BIN', { rackNumber: '43', rackRow: 'C' })).toBe(
+      'Gray BIN on rack 43-C',
+    );
+    expect(formatCratePlacementLabel(null, '1', { rackNumber: '39', rackRow: 'B' })).toBe(
+      '1 on rack 39-B',
+    );
+  });
+
+  it('says nothing extra when the crate is not on a rack (production: "Blue Shelf")', () => {
+    expect(formatCratePlacementLabel(null, 'Blue Shelf', null)).toBe('Blue Shelf');
+    expect(formatCratePlacementLabel('blue', '4', { rackRow: 'B' })).toBe('Blue 4');
+    expect(formatCratePlacementLabel('blue', '4')).toBe('Blue 4');
+  });
+
+  it('a position never invents a label out of nothing', () => {
+    // No crate = no sentence, however much position is passed alongside.
+    expect(formatCratePlacementLabel(null, null, { rackNumber: '38', rackRow: 'B' })).toBeNull();
+  });
+});
+
+describe('the crate comparison and the rack are SEPARATE — never one mushy predicate', () => {
+  it('a rack-only move is NOT a crate change, so the gate stays silent', () => {
+    // Same crate, different rack. `changed` decides whether a human is
+    // interrogated; folding the rack in would interrogate them on every move.
+    const c = compareBookCratePlacement({
+      currentColor: 'gray',
+      currentNumber: 'BIN',
+      currentPosition: { rackNumber: '43', rackRow: 'B' },
+      nextColor: 'gray',
+      nextNumber: 'BIN',
+      nextPosition: { rackNumber: '41', rackRow: 'C' },
+    });
+    expect(c.changed).toBe(false);
+    expect(describeBookCrateChange({
+      currentColor: 'gray',
+      currentNumber: 'BIN',
+      currentPosition: { rackNumber: '43', rackRow: 'B' },
+      nextColor: 'gray',
+      nextNumber: 'BIN',
+      nextPosition: { rackNumber: '41', rackRow: 'C' },
+    })).toEqual([]);
+  });
+
+  it('a real crate change SHOWS the rack on both sides', () => {
+    const c = compareBookCratePlacement({
+      currentColor: 'blue',
+      currentNumber: '4',
+      currentPosition: { rackNumber: '40', rackRow: 'B' },
+      nextColor: 'blue',
+      nextNumber: '13',
+      nextPosition: { rackNumber: '38', rackRow: 'B' },
+    });
+    expect(c.changed).toBe(true);
+    expect(c.currentLabel).toBe('Blue 4 on rack 40-B');
+    expect(c.nextLabel).toBe('Blue 13 on rack 38-B');
+  });
+
+  it('the FINGERPRINT ignores the position — a shipped client stays answerable', () => {
+    // An acknowledgement is (itemId, fingerprint). Folding the rack into the
+    // fingerprint would invalidate every one a shipped client computes, and
+    // would make a rack-only move refuse forever with nothing to acknowledge.
+    expect(bookCrateFingerprint('blue', '4')).toBe(bookCrateFingerprint('blue', '4'));
+    const withPos = describeBookCrateConflict({
+      itemId: 'i1',
+      itemName: 'Persepolis',
+      currentColor: 'blue',
+      currentNumber: '4',
+      currentPosition: { rackNumber: '40', rackRow: 'B' },
+      nextColor: 'green',
+      nextNumber: '2',
+      nextPosition: { rackNumber: '38', rackRow: 'B' },
+    });
+    expect(withPos!.currentFingerprint).toBe(bookCrateFingerprint('blue', '4'));
+    expect(withPos!.currentLabel).toBe('Blue 4 on rack 40-B');
+  });
 });
 
 describe('INVARIANT: changed ⇒ the two labels differ', () => {

@@ -1,3 +1,5 @@
+import { hasRackPosition } from '@stockpilot/core';
+
 /**
  * ONE shape for a put-away destination as it crosses the RSC → client
  * boundary. Pure types + a pure mapper, so a `server-only` page and a
@@ -105,4 +107,28 @@ export function toPlaceDest(loc: Record<string, unknown>): PlaceDest {
     crateColor: (loc.crate_color as string | null) ?? null,
     crateNumber: (loc.crate_number as string | null) ?? null,
   };
+}
+
+/**
+ * Is this destination a CRATE that sits on a rack?
+ *
+ * The TRANSFER paths (web `transferStockAction`, the mobile route's rack→rack
+ * branch) deliberately do not stamp a placement label — "a transfer is not a
+ * put-away", an asymmetry that predates all of this. They call
+ * `stampPlacementBin` only when this returns true, and the narrowing is exact:
+ * a positioned crate is the one destination whose crate summary and rack
+ * summary describe the SAME physical place, so writing one without the other
+ * publishes a row that contradicts itself — "recorded in Blue 13, on no rack" —
+ * which is the owner-reported defect. A RACK destination and a position-less
+ * crate keep the old asymmetry untouched.
+ *
+ * It lives beside `PlaceDest` rather than on InventoryService because it is a
+ * pure question about the destination SHAPE, and because a static on a service
+ * disappears the moment a caller's test mocks that service — which is not a
+ * property you want on the predicate guarding a write.
+ */
+export function isPositionedCrate(dest: PlaceDest): boolean {
+  return (
+    dest.kind === 'crate' && hasRackPosition({ rackNumber: dest.rackNumber, rackRow: dest.rackRow })
+  );
 }

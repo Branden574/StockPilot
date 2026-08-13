@@ -9,7 +9,8 @@ import {
 } from './new-location';
 
 // ---------------------------------------------------------------------------
-// THE RULE: a new destination is a RACK **or** a CRATE, never both.
+// THE RULE: a crate SITS ON a rack. Rack fields + crate fields = a POSITIONED
+// CRATE, named in full.
 //
 // Two live defects came out of guessing at the combination, on surfaces with no
 // confirmation:
@@ -20,31 +21,50 @@ import {
 //                     "Crate #9", kind 'crate', and DROPPED the row — where
 //                     before the branch the same input made rack "A1-Row 3".
 //
-// Refusing is the only outcome that keeps "the confirmation names exactly what
-// will be created" true, so that is what this module does.
+// THE FIRST FIX READ THOSE AS "this input is invalid, forbid it" and made rack
+// and crate mutually exclusive. That was the wrong reading: the input is
+// MEANINGFUL — crate 9 located at rack A1 — and the WRITER was mishandling it.
+// The tests that pinned the exclusivity were rewritten into the four below,
+// which pin the corrected model: both halves survive, the name says so, and
+// neither is silently dropped.
 // ---------------------------------------------------------------------------
 
-describe('planNewLocation — rack XOR crate', () => {
-  it('REPRO B: rack fields AND crate fields together are REFUSED, not resolved', () => {
-    const plan = planNewLocation({ rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' });
-    expect(plan.kind).toBe('invalid');
-    if (plan.kind !== 'invalid') throw new Error('unreachable');
-    expect(plan.problem).toBe('rack_and_crate');
-    // Nothing is named, so nothing can be silently created.
-    expect(deriveNewLocationName({ rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' })).toBe('');
+describe('planNewLocation — a crate sits on a rack', () => {
+  it('REPRO B: rack fields AND crate fields together are ONE positioned crate', () => {
+    const fields = { rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' };
+    const plan = planNewLocation(fields);
+    expect(plan).toMatchObject({
+      kind: 'crate',
+      noun: 'crate',
+      // Nothing is dropped and nothing is guessed: the name states both facts.
+      name: 'Crate #9 on rack A1-Row 3',
+      crateNumber: '9',
+      crateColor: null,
+      rackNumber: 'A1',
+      rackRow: 'Row 3',
+    });
+    // The confirmation renders this exact string, so it names what gets created.
+    expect(deriveNewLocationName(fields)).toBe('Crate #9 on rack A1-Row 3');
   });
 
-  it('REPRO A: rack number + crate number is the same refusal (no precedence)', () => {
-    expect(planNewLocation({ rackNumber: 'A1', crateNumber: '9' }).kind).toBe('invalid');
+  it('REPRO A: rack number + crate number keeps BOTH — no precedence, no drop', () => {
+    const plan = planNewLocation({ rackNumber: 'A1', crateNumber: '9' });
+    expect(plan).toMatchObject({
+      kind: 'crate',
+      name: 'Crate #9 on rack A1',
+      rackNumber: 'A1',
+      rackRow: null,
+      crateNumber: '9',
+    });
   });
 
-  it('a crate COLOUR alongside a rack number is refused too — that was "Blue #A1"', () => {
-    // The old fallback named a colour-only crate after the RACK number, which
-    // is the both-fields guess in its original form.
+  it('a crate COLOUR alongside a rack number still needs its own NUMBER', () => {
+    // "Blue #A1" — borrowing the RACK number as the crate's identity — is still
+    // refused. A position is not an identity; the crate needs its own number.
     const plan = planNewLocation({ rackNumber: 'A1', crateColor: 'blue' });
     expect(plan.kind).toBe('invalid');
     if (plan.kind !== 'invalid') throw new Error('unreachable');
-    expect(plan.problem).toBe('rack_and_crate');
+    expect(plan.problem).toBe('crate_needs_number');
   });
 
   it('a rack ROW with no number is refused (a row does not name a rack)', () => {
@@ -132,17 +152,130 @@ describe('planNewLocation — the CRATE branch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// CRATE IDENTITY — (colour, number, rack number, rack row), never colour+number.
+//
+// Production, L4L North Region, books carrying BOTH summaries:
+//   gray "BIN"  → 43-B, 43-C, 42-B, 42-C, 41-C   (FIVE distinct bins)
+//   yellow 5    → 40-B, 40-C                      blue 0 → 39-B, 38-B, 37-C
+//   blue "Blue Shelf" → NO RACK AT ALL (5 books)
+//
+// `findOrCreateRackOrCrate` dedupes on `lower(name)` and migration 0270's
+// partial unique index keys on it too, so if the name were position-blind those
+// five bins would COLLAPSE INTO ONE `locations` row and one bin's books would
+// be stamped with another bin's location. The name is therefore the identity,
+// and these tests are what stop it regressing.
+// ---------------------------------------------------------------------------
+
+describe('planNewLocation — crate identity includes the rack position', () => {
+  const GRAY_BIN_POSITIONS = [
+    ['43', 'B'],
+    ['43', 'C'],
+    ['42', 'B'],
+    ['42', 'C'],
+    ['41', 'C'],
+  ] as const;
+
+  it('the five real "gray BIN" bins get five DISTINCT dedupe keys', () => {
+    const names = GRAY_BIN_POSITIONS.map(([n, r]) =>
+      deriveNewLocationName({ crateColor: 'gray', crateNumber: 'BIN', rackNumber: n, rackRow: r }),
+    );
+    expect(names).toEqual([
+      'Gray #BIN on rack 43-B',
+      'Gray #BIN on rack 43-C',
+      'Gray #BIN on rack 42-B',
+      'Gray #BIN on rack 42-C',
+      'Gray #BIN on rack 41-C',
+    ]);
+    // The dedupe key is lower(name) — five rows, not one.
+    expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(5);
+  });
+
+  it('"yellow 5" on 40-B and on 40-C are two crates, not one', () => {
+    const a = deriveNewLocationName({
+      crateColor: 'yellow',
+      crateNumber: '5',
+      rackNumber: '40',
+      rackRow: 'B',
+    });
+    const b = deriveNewLocationName({
+      crateColor: 'yellow',
+      crateNumber: '5',
+      rackNumber: '40',
+      rackRow: 'C',
+    });
+    expect(a).toBe('Yellow #5 on rack 40-B');
+    expect(b).toBe('Yellow #5 on rack 40-C');
+    expect(a.toLowerCase()).not.toBe(b.toLowerCase());
+  });
+
+  it('BACKWARD COMPATIBLE: a position-less crate keeps its EXACT old name', () => {
+    // Every crate row in production today was created without a position, so
+    // put-away must still match and REUSE it. If any of these strings move, the
+    // existing rows stop being found and duplicates are minted (mig 0270).
+    expect(deriveNewLocationName({ crateColor: 'blue', crateNumber: 'Shelf' })).toBe('Blue #Shelf');
+    expect(deriveNewLocationName({ crateColor: 'gray', crateNumber: 'BIN' })).toBe('Gray #BIN');
+    expect(deriveNewLocationName({ crateNumber: '42' })).toBe('Crate #42');
+    expect(deriveNewLocationName({ crateColor: 'taupe', crateNumber: '42' })).toBe('taupe #42');
+  });
+
+  it('a position-less crate stays DISTINCT from the positioned one', () => {
+    // "Blue Shelf" holds 5 books with rack NULL. That is a legitimate permanent
+    // shape — it must never be backfilled onto, or merged with, a positioned row.
+    expect(deriveNewLocationName({ crateColor: 'blue', crateNumber: '13' })).toBe('Blue #13');
+    expect(
+      deriveNewLocationName({ crateColor: 'blue', crateNumber: '13', rackNumber: '38', rackRow: 'B' }),
+    ).toBe('Blue #13 on rack 38-B');
+  });
+
+  it('a whole label typed into the crate form’s rack box is DECOMPOSED', () => {
+    // The 2026-07-23 shape applies to a crate's position too: ("38-B", null)
+    // stored composite would go invisible to the ("38","B") rack filter.
+    const plan = planNewLocation({ crateNumber: '13', rackNumber: '38-B' });
+    expect(plan).toMatchObject({
+      kind: 'crate',
+      name: 'Crate #13 on rack 38-B',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+  });
+
+  it('a colour-only crate NUMBER of 0 still positions (0 is a real crate number)', () => {
+    expect(
+      deriveNewLocationName({ crateColor: 'blue', crateNumber: '0', rackNumber: '39', rackRow: 'B' }),
+    ).toBe('Blue #0 on rack 39-B');
+  });
+
+  it('a NUMBER with no colour positions too (production: rack 39-B, number 1)', () => {
+    expect(deriveNewLocationName({ crateNumber: '1', rackNumber: '39', rackRow: 'B' })).toBe(
+      'Crate #1 on rack 39-B',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The SERVER enforces the same rule, from the same verdict.
 // ---------------------------------------------------------------------------
 
 describe('refineNewLocation — one schema rule for every surface', () => {
   const schema = z.object({ ...newLocationFieldsShape }).superRefine(refineNewLocation);
 
-  it('refuses rack + crate with a message that says why', () => {
-    const res = schema.safeParse({ rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' });
+  it('ACCEPTS rack + crate — it is a crate on a rack, not a conflict', () => {
+    // This assertion used to be its exact opposite ("refuses rack + crate with
+    // a message that says why"). It pinned the misread, and a schema that
+    // refuses the combination makes a positioned crate unreachable from every
+    // surface at once.
+    expect(schema.safeParse({ rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses a rack ROW with no rack number, pointing at the rack field', () => {
+    // On the crate branch too: a row alone is not a position, and dropping it
+    // silently is the original bug wearing a different hat.
+    const res = schema.safeParse({ rackRow: 'B', crateNumber: '9' });
     expect(res.success).toBe(false);
     if (res.success) throw new Error('unreachable');
-    expect(res.error.issues[0]!.message).toMatch(/either a rack or a crate/i);
+    expect(res.error.issues[0]!.path).toEqual(['rackNumber']);
   });
 
   it('refuses a crate with no number, pointing at the crate field', () => {

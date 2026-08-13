@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  describeRackChange,
   formatRackLabel,
+  formatRackPosition,
+  hasRackPosition,
   isCompositeRackNumber,
   normalizeRackFields,
   parseRackLabel,
@@ -145,5 +148,62 @@ describe('normalizeRackFields', () => {
     ]) {
       expect(isCompositeRackNumber(normalizeRackFields(input).number)).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A rack POSITION — the pair as every app surface spells it, and the ONE
+// sentence a confirmation says when a placement moves it.
+//
+// This exists because a crate SITS ON a rack: a crate row carries the same pair
+// as its position, so the position had to become a value that can be passed
+// around whole instead of two fields one caller can drop.
+// ---------------------------------------------------------------------------
+
+describe('formatRackPosition', () => {
+  it('joins the pair the one way a rack is ever shown', () => {
+    expect(formatRackPosition({ rackNumber: '38', rackRow: 'B' })).toBe('38-B');
+    expect(formatRackPosition({ rackNumber: '38' })).toBe('38');
+  });
+
+  it('decomposes a whole label parked in the number field', () => {
+    // "38-B" typed into an "On rack" box, and the double-entry case.
+    expect(formatRackPosition({ rackNumber: '38-B' })).toBe('38-B');
+    expect(formatRackPosition({ rackNumber: '38-B', rackRow: 'B' })).toBe('38-B');
+  });
+
+  it('a row with no number names NOTHING — it never invents the rack "B"', () => {
+    expect(formatRackPosition({ rackRow: 'B' })).toBe('');
+    expect(formatRackPosition(null)).toBe('');
+    expect(formatRackPosition(undefined)).toBe('');
+    expect(hasRackPosition({ rackRow: 'B' })).toBe(false);
+    expect(hasRackPosition({ rackNumber: '38', rackRow: 'B' })).toBe(true);
+  });
+});
+
+describe('describeRackChange', () => {
+  it('names both ends when the rack a book is recorded on moves', () => {
+    expect(
+      describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackNumber: '38', rackRow: 'B' }),
+    ).toBe('Rack will change from 40-B to 38-B.');
+  });
+
+  it('says nothing when the rack is unchanged (case-insensitively)', () => {
+    expect(
+      describeRackChange({ rackNumber: '38', rackRow: 'B' }, { rackNumber: '38', rackRow: 'b' }),
+    ).toBeNull();
+  });
+
+  it('NEVER promises a clear: a destination with no position asserts nothing', () => {
+    // A crate that is not on a rack says nothing about the rack, and
+    // stampPlacementBin deliberately leaves the rack keys alone — so a
+    // "will be cleared" sentence would promise an erasure that never happens.
+    // Production really holds this shape: blue "Blue Shelf", 5 books, rack NULL.
+    expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, null)).toBeNull();
+    expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackRow: 'B' })).toBeNull();
+  });
+
+  it('filling a BLANK rack is not announced — nothing recorded is being replaced', () => {
+    expect(describeRackChange(null, { rackNumber: '38', rackRow: 'B' })).toBeNull();
   });
 });

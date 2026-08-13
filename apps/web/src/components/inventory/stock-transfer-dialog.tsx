@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import {
   CrateColorSelect,
   CrateNumberInput,
+  CrateRackPositionFields,
   CurrentStorageSummary,
   DestinationKindToggle,
   NO_CRATE_COLOR,
@@ -122,13 +123,14 @@ export function StockTransferDialog({
   const [quantity, setQuantity] = React.useState('1');
   const [notes, setNotes] = React.useState('');
 
-  // Inline new-rack/crate fields. `newKind` is an EXPLICIT choice, exactly as
-  // in the Staging put-away dialog — see the rule in
+  // Inline new-rack/crate fields. `newKind` is an EXPLICIT choice of the KIND
+  // of row, exactly as in the Staging put-away dialog — see the rule in
   // packages/core/src/inventory/new-location.ts. This form used to send a rack
   // number AND the optional crate pair together, which the server then resolved
   // by precedence: "A1" + "Row 3" + crate "9" created a CRATE called "Crate #9"
-  // and threw the row away (REPRO B). Rack and crate are now two branches of
-  // one radiogroup, so the combination has no expression here at all.
+  // and threw the row away (REPRO B). The row is no longer thrown away: that
+  // input is CRATE 9 ON RACK A1-Row 3, and the crate branch keeps the same rack
+  // fields so the operator can say so.
   const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
@@ -225,20 +227,23 @@ export function StockTransferDialog({
   function chosenNewDestination(): ChosenDestination | null {
     if (!isNew) return null;
     return isBook && newKind === 'crate'
-      ? { mode: 'new-crate', crateColor, crateNumber }
+      ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
       : { mode: 'new-rack', rackNumber, rackRow };
   }
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
     if (dest.mode === 'new-crate') {
-      // NO rackNumber. A crate is identified by its NUMBER, and sending a rack
-      // number alongside is the combination the server refuses.
+      // The rack pair is the crate's POSITION and travels with it when typed —
+      // the server names the row "Blue #13 on rack 38-B" from these very
+      // fields. Blank means a crate on no rack, which stays a legitimate shape.
       return {
         newRack: {
           warehouseId: sourceWarehouseId!,
           crateNumber: dest.crateNumber.trim(),
           ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+          ...(dest.rackNumber.trim() ? { rackNumber: dest.rackNumber.trim() } : {}),
+          ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
         },
       };
     }
@@ -522,30 +527,39 @@ export function StockTransferDialog({
                 )}
 
                 {isBook && newKind === 'crate' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="transfer-crate-color">Crate color (optional)</Label>
-                      {/* The CRATE_COLORS registry, not a free-text box. Typing
-                          "navy" here minted a color no swatch, filter or label
-                          sheet can render — and every mixed-case spelling that
-                          reached locations.crate_color came in this way. */}
-                      <CrateColorSelect
-                        id="transfer-crate-color"
-                        value={crateColor}
-                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
-                      />
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="transfer-crate-color">Crate color (optional)</Label>
+                        {/* The CRATE_COLORS registry, not a free-text box. Typing
+                            "navy" here minted a color no swatch, filter or label
+                            sheet can render — and every mixed-case spelling that
+                            reached locations.crate_color came in this way. */}
+                        <CrateColorSelect
+                          id="transfer-crate-color"
+                          value={crateColor}
+                          onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="transfer-crate-number">
+                          Crate number <span className="text-destructive">*</span>
+                        </Label>
+                        <CrateNumberInput
+                          id="transfer-crate-number"
+                          value={crateNumber}
+                          onChange={setCrateNumber}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="transfer-crate-number">
-                        Crate number <span className="text-destructive">*</span>
-                      </Label>
-                      <CrateNumberInput
-                        id="transfer-crate-number"
-                        value={crateNumber}
-                        onChange={setCrateNumber}
-                      />
-                    </div>
-                  </div>
+                    <CrateRackPositionFields
+                      idPrefix="transfer"
+                      rackNumber={rackNumber}
+                      rackRow={rackRow}
+                      onRackNumberChange={setRackNumber}
+                      onRackRowChange={setRackRow}
+                    />
+                  </>
                 )}
               </div>
             )}

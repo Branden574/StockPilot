@@ -415,9 +415,11 @@ export function MoveStockModal({
       return;
     }
 
-    // RACK XOR CRATE, built from the branch the user actually chose. The crate
-    // branch sends no rack pair and the rack branch sends no crate pair, so the
-    // combination the server refuses cannot leave this screen.
+    // Built from the branch the user actually chose. The rack branch sends no
+    // crate pair; the crate branch sends its number, its optional colour and —
+    // when typed — the rack it SITS ON, so the phone can express a positioned
+    // crate and the server names the row from the same object the sheet
+    // confirmed.
     const newRack = newLocationFields(newLocation) as NewRack;
 
     // The 2026-07-23 guard: a typed rack/crate that does NOT already exist in
@@ -638,13 +640,14 @@ export function MoveStockModal({
                         padding: 12,
                       }}
                     >
-                      {/* Rack OR crate, asked EXPLICITLY. The field that
-                          decides locations.kind — and therefore migration
-                          0270's kind-scoped dedupe bucket — used to be
+                      {/* Rack OR crate, asked EXPLICITLY — the KIND of row.
+                          The field that decides locations.kind (and therefore
+                          migration 0270's kind-scoped dedupe bucket) used to be
                           inferred from whether a colour happened to be typed.
-                          Each branch now asks for what its own kind needs and
-                          nothing else, so "rack A1 + crate 9" (REPRO A) has no
-                          expression on this screen. */}
+                          It is NOT a choice between two places: a crate SITS ON
+                          a rack, so the crate branch keeps the same optional
+                          rack fields and "rack A1 + crate 9" creates crate 9 AT
+                          rack A1 — one row, named for both. */}
                       {isBook ? (
                         <View style={{ gap: 6 }}>
                           <Mono size={10} tracking={0.12} upper color={c.ink4}>
@@ -699,6 +702,29 @@ export function MoveStockModal({
                             value={crateNumber}
                             onChangeText={setCrateNumber}
                             placeholder="e.g. 42"
+                            c={c}
+                          />
+                          {/* WHERE THE CRATE SITS. Optional — a crate on no
+                              rack is a real, permanent shape — but when it is
+                              given it is part of the crate's IDENTITY, not
+                              decoration: crate "BIN" names five different bins
+                              in this warehouse, and only the rack tells them
+                              apart. */}
+                          <Mono size={10.5} color={c.ink4} style={{ lineHeight: 15 }}>
+                            A crate sits on a rack. Say which one and the book is recorded in both.
+                          </Mono>
+                          <RackField
+                            label="ON RACK (OPTIONAL)"
+                            value={rackNumber}
+                            onChangeText={setRackNumber}
+                            placeholder="e.g. 38"
+                            c={c}
+                          />
+                          <RackField
+                            label="ROW (OPTIONAL)"
+                            value={rackRow}
+                            onChangeText={setRackRow}
+                            placeholder="e.g. B"
                             c={c}
                           />
                         </>

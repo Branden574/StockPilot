@@ -277,10 +277,26 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
   });
 });
 
-describe('POST /api/v1/items/[id]/transfer — a new destination is a rack OR a crate', () => {
-  it('REPRO A: rack "A1" + crate "9" is refused, and NOTHING is created or moved', async () => {
-    // The sheet asked "Create new rack A1?" and the server minted "Crate #9".
-    const stub = install({ locationRows: [STAGING_ROW, []], itemRows: [book({})] });
+describe('POST /api/v1/items/[id]/transfer — a new destination may be a crate ON a rack', () => {
+  it('REPRO A: rack "A1" + crate "9" creates ONE crate at that position, and says so', async () => {
+    // The sheet asked "Create new rack A1?" and the server minted "Crate #9" —
+    // two different strings for one action. The first fix refused the input;
+    // this pins the corrected model instead: the input is CRATE 9 ON RACK A1,
+    // the name states both facts, and the typed rack is kept, not dropped.
+    const stub = install({
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+      insertedLocation: {
+        id: CRATE,
+        kind: 'crate',
+        name: 'Crate #9 on rack A1',
+        rack_number: 'A1',
+        rack_row: null,
+        crate_color: null,
+        crate_number: '9',
+      },
+    });
 
     const res = await POST(
       request({
@@ -291,11 +307,75 @@ describe('POST /api/v1/items/[id]/transfer — a new destination is a rack OR a 
       { params },
     );
 
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { message: string };
-    expect(body.message).toMatch(/either a rack or a crate/i);
-    expect(stub.chainArgs.has('locations.insert')).toBe(false);
-    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.kind).toBe('crate');
+    expect(insert.name).toBe('Crate #9 on rack A1');
+    expect(insert.crate_number).toBe('9');
+    expect(insert.rack_number).toBe('A1');
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+  });
+
+  it('a rack→crate move stamps the RACK too when the crate sits on one', async () => {
+    // A transfer is not a put-away and normally writes no placement label. A
+    // POSITIONED crate is the one exception: its crate summary and its rack
+    // summary describe the same physical place, so writing one without the
+    // other publishes "recorded in Blue 13, on no rack" — the owner-reported
+    // half-empty row.
+    const RACK_SOURCE = { warehouse_id: WAREHOUSE, kind: 'rack' };
+    const POSITIONED = {
+      id: CRATE,
+      warehouse_id: WAREHOUSE,
+      kind: 'crate',
+      rack_number: '38',
+      rack_row: 'B',
+      crate_color: 'blue',
+      crate_number: '13',
+      name: 'Blue #13 on rack 38-B',
+    };
+    install({
+      locationRows: [RACK_SOURCE, POSITIONED],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 12, toLocationId: CRATE }),
+      { params },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockStamp).toHaveBeenCalledWith(
+      [ITEM],
+      expect.objectContaining({ kind: 'crate', rackNumber: '38', rackRow: 'B' }),
+    );
+  });
+
+  it('a rack→rack move still stamps NOTHING — the old asymmetry is untouched', async () => {
+    const RACK_SOURCE = { warehouse_id: WAREHOUSE, kind: 'rack' };
+    const RACK_DEST = {
+      id: CRATE,
+      warehouse_id: WAREHOUSE,
+      kind: 'rack',
+      rack_number: '40',
+      rack_row: 'B',
+      crate_color: null,
+      crate_number: null,
+      name: '40-B',
+    };
+    install({
+      locationRows: [RACK_SOURCE, RACK_DEST],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 12, toLocationId: CRATE }),
+      { params },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockStamp).not.toHaveBeenCalled();
   });
 
   it('a NUMBER-ONLY crate is reachable and created as a CRATE', async () => {

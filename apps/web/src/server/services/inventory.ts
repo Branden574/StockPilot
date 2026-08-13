@@ -541,6 +541,20 @@ export interface BookCrateSummary {
   name: string;
   crateColor: string | null;
   crateNumber: string | null;
+  /**
+   * The rack this book is recorded on today (book_rack_number / book_rack_row).
+   *
+   * LABELS ONLY. It is not compared, not fingerprinted and not synchronised
+   * here — it exists so the gate's refusal sentence can say "recorded in Blue 4
+   * on rack 40-B" instead of naming a crate that exists five times over. The
+   * crate comparison stays crate-only; the rack is its own sentence.
+   *
+   * OPTIONAL because it is label-only: a caller that hands
+   * `syncBookCratePlacement` a freshness proof it built by hand is attesting to
+   * the CRATE it showed, and the rack is no part of that attestation.
+   */
+  rackNumber?: string | null;
+  rackRow?: string | null;
 }
 
 /**
@@ -4534,17 +4548,51 @@ export class InventoryService {
    */
   async stampPlacementBin(itemIds: string[], dest: PlaceDest): Promise<void> {
     if (itemIds.length === 0) return;
-    const isRack = dest.kind === 'rack';
-    // DECOMPOSE the destination's rack pair before stamping it onto the item.
-    // `dest` is copied straight off the locations row (or the inline new-rack
-    // input), so a legacy composite location — ("22-B", null) — would otherwise
-    // be stamped verbatim onto every item put away there and go invisible to
-    // the "22-B" filter. That is exactly the 2026-07-23 incident.
-    const parsed = isRack
-      ? normalizeRackFields({ number: dest.rackNumber, row: dest.rackRow })
-      : { number: '', row: null };
+    // ═══ A CRATE SITS ON A RACK — BOTH FACTS, OR NEITHER ═══
+    //
+    // This used to branch on `dest.kind === 'rack'` and pass rack_number NULL
+    // for ANY crate. Because inventory_set_rack DELETES the rack keys when both
+    // are null (0068), a book put away into crate 13 came out recorded in
+    // "Blue 13" with NO rack — the half-empty row the owner reported, and the
+    // reason the Books list showed a crate with an empty RACK column.
+    //
+    // A crate destination now carries its own POSITION (locations.rack_number /
+    // rack_row on the crate row — the columns have been there since 0188), so
+    // the pair is read off the destination WHATEVER its kind. One accessor for
+    // both kinds is the point: reaching for the pair only when kind==='rack' is
+    // exactly how the crate's rack came to be dropped.
+    //
+    // DECOMPOSE first. `dest` is copied straight off the locations row (or the
+    // inline new-location input), so a legacy composite — ("22-B", null) —
+    // would otherwise be stamped verbatim onto every item put away there and go
+    // invisible to the "22-B" filter. That is the 2026-07-23 incident.
+    const parsed = normalizeRackFields({ number: dest.rackNumber, row: dest.rackRow });
     const num = parsed.number || null;
     const row = num ? parsed.row?.toUpperCase() ?? null : null;
+    const isRack = dest.kind === 'rack';
+
+    // ═══ A CRATE WITH NO POSITION LEAVES THE RACK KEYS ALONE ═══
+    //
+    // It asserts NOTHING about a rack, so writing NULL over the pair would
+    // ERASE data the operator never mentioned — and not hypothetically: a
+    // PARTIAL put-away moves some copies into the crate while the rest stay on
+    // rack 40-B, so clearing publishes "this book is on no rack" about a book
+    // that demonstrably is. Production also holds the shape that must survive
+    // untouched: blue "Blue Shelf", 5 books, rack NULL.
+    //
+    // inventory_set_rack cannot say "set the label, keep the pair" — passing
+    // the pair back would need a per-item read, and a bulk of 200 books can
+    // hold 200 distinct pairs, i.e. 200 RPCs. So this path writes NOTHING at
+    // all, including bin_location: the honest reading of "the destination says
+    // nothing about the rack" is to touch no rack-shaped field. The book is
+    // still recorded IN the crate — syncBookCratePlacement writes
+    // book_crate_color / book_crate_number from the same destination row — and
+    // the holdings stay authoritative either way.
+    if (!isRack && !num) return;
+
+    // A positioned crate stamps like a rack does, and its bin_location is the
+    // crate's own name, which now READS "Blue #13 on rack 38-B" — so the label
+    // names the position rather than contradicting it.
     const bin = isRack && num ? formatRackLabel({ number: num, row }) : dest.name?.trim() || null;
     const { error } = await this.ctx.supabase.rpc('inventory_set_rack', {
       p_item_ids: itemIds,
@@ -4608,6 +4656,8 @@ export class InventoryService {
         name: row.name ?? '',
         crateColor: storage.crateColor,
         crateNumber: storage.crateNumber,
+        rackNumber: storage.rackNumber,
+        rackRow: storage.rackRow,
       });
     }
     return out;
@@ -4674,8 +4724,16 @@ export class InventoryService {
         itemName: current.name,
         currentColor: current.crateColor,
         currentNumber: current.crateNumber,
+        // LABELS ONLY, on both sides — see BookCratePlacementInput. The
+        // destination's pair is its own for a rack and the crate's POSITION for
+        // a crate, so the refusal reads "recorded in Blue 4 on rack 40-B …
+        // will change that to Blue 13 on rack 38-B" rather than naming a crate
+        // that exists on five different racks. `changed` is still decided by
+        // the crate pair alone.
+        currentPosition: { rackNumber: current.rackNumber, rackRow: current.rackRow },
         nextColor: dest.crateColor ?? null,
         nextNumber: dest.crateNumber ?? null,
+        nextPosition: { rackNumber: dest.rackNumber, rackRow: dest.rackRow },
       });
       if (conflict) conflicts.push(conflict);
     }

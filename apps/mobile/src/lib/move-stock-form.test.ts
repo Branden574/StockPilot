@@ -390,29 +390,59 @@ describe('newRackLabel', () => {
     ).toEqual({ label: 'Blue #42', noun: 'crate' });
   });
 
-  it('the CRATE branch never borrows the rack number, however it was typed', () => {
+  it('the CRATE branch never borrows the rack number as its IDENTITY', () => {
     // The old fallback made "rack 7 + colour Blue" mint "Blue #7". A crate is
     // identified by its OWN number; without one there is nothing to name and
-    // the form is not ready to submit.
+    // the form is not ready to submit — a POSITION does not rescue it, because
+    // where a crate sits is not what it is called.
     expect(newRackLabel({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' }).label).toBe('');
     expect(newLocationReady({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' })).toBe(false);
   });
 
+  it('the CRATE branch DOES take the rack as its POSITION, and names both', () => {
+    // A crate sits on a rack. "gray BIN" names five different bins in this
+    // warehouse, so the position is what tells them apart — in the label the
+    // sheet confirms and in the name the server creates.
+    expect(
+      newRackLabel({ kind: 'crate', rackNumber: '38', rackRow: 'B', crateNumber: '13' }),
+    ).toEqual({ label: 'Crate #13 on rack 38-B', noun: 'crate' });
+    expect(
+      newRackLabel({ kind: 'crate', rackNumber: '43', rackRow: 'B', crateColor: 'gray', crateNumber: 'BIN' }),
+    ).toEqual({ label: 'Gray #BIN on rack 43-B', noun: 'crate' });
+  });
+
   it('the RACK branch never borrows the crate fields', () => {
-    // REPRO A: "RACK NUMBER A1" + "CRATE NUMBER 9" minted "Crate #9" and moved
-    // stock into it. The chosen branch is now the only thing that speaks.
+    // A rack is not a crate: the rack branch speaks only for itself.
     expect(
       newRackLabel({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
     ).toEqual({ label: 'A1-Row 3', noun: 'rack' });
   });
 
-  it('the payload carries ONE branch — the server refuses both together', () => {
+  it('the payload carries the crate AND its position — never a dropped rack', () => {
+    // REPRO A: "RACK NUMBER A1" + "CRATE NUMBER 9" minted "Crate #9" and moved
+    // stock into it, silently discarding A1. This assertion used to pin the
+    // fix-by-forbidding — `.toEqual({ crateColor, crateNumber })`, i.e. the
+    // rack dropped on purpose — which made a positioned crate unexpressible
+    // from the phone. Both halves now travel.
     expect(
       newLocationFields({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
     ).toEqual({ rackNumber: 'A1', rackRow: 'Row 3' });
     expect(
       newLocationFields({ kind: 'crate', rackNumber: 'A1', crateColor: 'blue', crateNumber: '9' }),
-    ).toEqual({ crateColor: 'blue', crateNumber: '9' });
+    ).toEqual({ crateColor: 'blue', crateNumber: '9', rackNumber: 'A1' });
+    expect(
+      newLocationFields({ kind: 'crate', rackNumber: '38', rackRow: 'B', crateNumber: '13' }),
+    ).toEqual({ crateNumber: '13', rackNumber: '38', rackRow: 'B' });
+  });
+
+  it('a crate with NO position sends no rack keys — the legacy row stays matched', () => {
+    // Production holds blue "Blue Shelf" with rack NULL, and every crate row in
+    // the database is position-less. Omitting the keys is what keeps
+    // findOrCreateRackOrCrate matching "Blue #Shelf" instead of minting a
+    // second row for the same bin.
+    expect(
+      newLocationFields({ kind: 'crate', rackNumber: '  ', crateColor: 'blue', crateNumber: 'Shelf' }),
+    ).toEqual({ crateColor: 'blue', crateNumber: 'Shelf' });
   });
 
   it('a rack needs a number; a crate needs a number', () => {
@@ -489,11 +519,15 @@ describe('the move-stock sheet expresses rack XOR crate', () => {
     expect(modal).toContain("setNewKind('crate')");
   });
 
-  it('the CRATE branch requires its own number and offers no rack fields', () => {
+  it('the CRATE branch requires its own number and ALSO offers where it sits', () => {
     expect(modal).toContain('CRATE NUMBER *');
-    // The rack fields sit in the other half of the same ternary, so only one
-    // branch can ever be on screen.
+    // The rack branch's REQUIRED number box sits in the other half of the same
+    // ternary, so only one KIND is ever on screen…
     expect(modal).toContain("!isBook || newKind === 'rack' ? (");
+    // …but the crate branch asks for the rack it sits on, because a crate sits
+    // on a rack. Without this the phone can only ever record half a location.
+    expect(modal).toContain('ON RACK (OPTIONAL)');
+    expect(modal).toContain('A crate sits on a rack.');
   });
 
   it('submit readiness and the payload both come from the shared helpers', () => {

@@ -100,6 +100,11 @@ describe('StockTransferDialog server-error surfacing', () => {
 //   • rack "A1" + row "Row 3" + crate "9" produced name "Crate #9", kind
 //     'crate', and DROPPED the row (REPRO B) — on a surface with no
 //     confirmation step of any kind.
+//
+// The toggle fixed the FIRST and misread the second: the row was not an
+// impossible input, it was a dropped one. A crate SITS ON a rack, so the crate
+// branch keeps its own optional rack fields and that input now creates "Crate
+// #9 on rack A1-Row 3" — one row, named for both facts.
 // ---------------------------------------------------------------------------
 
 const BOOK_LOCS = [
@@ -159,6 +164,32 @@ describe('StockTransferDialog — new rack / crate', () => {
     expect(screen.getByRole('radio', { name: 'Crate' })).toBeInTheDocument();
   });
 
+  it('a crate ON a rack sends BOTH, and the confirmation names both', async () => {
+    mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewLocation(user);
+
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+    expect(await screen.findByText('Create new crate Crate #13 on rack 38-B?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /create and transfer/i }));
+
+    const arg = mockTransferStockAction.mock.calls[0]![0] as {
+      destination: { newRack: Record<string, unknown> };
+    };
+    expect(arg.destination.newRack).toEqual({
+      warehouseId: 'wh-1',
+      crateNumber: '13',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+  });
+
   it('a NUMBER-ONLY crate is reachable, and sends NO rack number', async () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
@@ -166,9 +197,12 @@ describe('StockTransferDialog — new rack / crate', () => {
     await openNewLocation(user);
 
     await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    // The rack number box is GONE in this branch — there is nothing to fill in
-    // that could travel alongside the crate.
+    // The rack branch's REQUIRED "Rack number" box is gone — but the crate's
+    // OPTIONAL "On rack" is offered, because a crate sits on a rack. Leaving it
+    // blank is what makes this a position-less crate, and the payload below
+    // proves nothing is invented for it.
     expect(screen.queryByLabelText(/rack number/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/on rack/i)).toBeInTheDocument();
     await user.type(screen.getByLabelText(/crate number/i), '9');
 
     await user.click(screen.getByRole('button', { name: /transfer stock/i }));

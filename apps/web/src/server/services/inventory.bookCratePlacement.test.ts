@@ -170,6 +170,78 @@ describe('assertBookCratePlacementAllowed', () => {
     });
   });
 
+  it('the refusal NAMES THE RACK on both sides — "gray BIN" is five bins', async () => {
+    // A crate number does not locate a bin here: production has "gray BIN" on
+    // FIVE racks and "yellow 5" on two. A sentence that stops at the crate
+    // asks the operator to approve a move it has not fully described.
+    //
+    // The rack is LABEL context only: `changed` is still the crate comparison,
+    // and the fingerprint is still the crate pair, so a shipped client's
+    // acknowledgement keeps matching.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'gray',
+            book_crate_number: 'BIN',
+            book_rack_number: '43',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const thrown = await svc
+      .assertBookCratePlacementAllowed([BOOK_A], {
+        kind: 'crate',
+        name: 'Blue #13 on rack 38-B',
+        rackNumber: '38',
+        rackRow: 'B',
+        crateColor: 'blue',
+        crateNumber: '13',
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    const err = thrown as ServiceError;
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'Persepolis is recorded in Gray BIN on rack 43-B. Placing it here will change that to Blue 13 on rack 38-B.',
+    );
+    expect((err.details as { items: Array<{ currentFingerprint: string }> }).items[0]!
+      .currentFingerprint).toBe(bookCrateFingerprint('gray', 'BIN'));
+  });
+
+  it('a rack-only move is NOT a crate conflict — the gate stays silent', async () => {
+    // Same crate, different rack. Folding the rack into `changed` would
+    // interrogate an operator every time a bin is re-shelved.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'gray',
+            book_crate_number: 'BIN',
+            book_rack_number: '43',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    await expect(
+      svc.assertBookCratePlacementAllowed([BOOK_A], {
+        kind: 'crate',
+        name: 'Gray #BIN on rack 41-C',
+        rackNumber: '41',
+        rackRow: 'C',
+        crateColor: 'gray',
+        crateNumber: 'BIN',
+      }),
+    ).resolves.toBeInstanceOf(Map);
+  });
+
   it('PASSES once the caller acknowledges THAT SPECIFIC change', async () => {
     const { svc } = svcWith({
       'inventory_items.select': {

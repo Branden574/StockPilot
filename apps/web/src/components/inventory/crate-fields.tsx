@@ -99,14 +99,22 @@ export function CrateColorSelect({
 export type NewDestinationKind = 'rack' | 'crate';
 
 /**
- * Rack-or-crate as an EXPLICIT choice.
+ * Rack-or-crate as an EXPLICIT choice — of the KIND OF ROW being created, and
+ * nothing more.
  *
  * It used to be implicit: typing a crate color turned the new location into a
  * crate and leaving it blank made a rack, which meant the single most
  * consequential field on the form (it decides `locations.kind`, and 0270's
- * dedupe index is kind-scoped) was never actually asked about. Now it is a
- * two-option radiogroup, and each branch asks only for what its own kind
- * needs.
+ * dedupe index is kind-scoped) was never actually asked about.
+ *
+ * ═══ IT IS NOT "RACK OR CRATE, PICK ONE PLACE" ═══
+ *
+ * A CRATE SITS ON A RACK. The crate branch therefore also offers "On rack" +
+ * "Row": both facts are true at once, and a picker needs both to find a book
+ * (go to rack 38-B, find crate 13 on it). Reading this toggle as mutually
+ * exclusive PLACES — and hiding the rack fields on the crate branch — is what
+ * made a positioned crate unexpressible and produced books recorded in a crate
+ * with an empty RACK column.
  */
 export function DestinationKindToggle({
   value,
@@ -231,5 +239,64 @@ export function CrateNumberInput({
       maxLength={64}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+}
+
+/**
+ * WHERE THE CRATE SITS — the rack number and row of a crate destination.
+ *
+ * Optional, and it must stay optional: production holds a crate on no rack at
+ * all (blue "Blue Shelf", 5 books), and demanding a position would force
+ * operators to invent one.
+ *
+ * When it IS given it becomes part of the crate's IDENTITY, not decoration:
+ * "gray BIN" names five physically distinct bins in this warehouse (43-B, 43-C,
+ * 42-B, 42-C, 41-C), so the position is what tells them apart — in the created
+ * `locations.name`, in migration 0270's dedupe key, and on the book's own rack
+ * summary. One component for all three dialogs so no surface can offer half of
+ * it.
+ */
+export function CrateRackPositionFields({
+  idPrefix,
+  rackNumber,
+  rackRow,
+  onRackNumberChange,
+  onRackRowChange,
+}: {
+  idPrefix: string;
+  rackNumber: string;
+  rackRow: string;
+  onRackNumberChange: (next: string) => void;
+  onRackRowChange: (next: string) => void;
+}) {
+  return (
+    <>
+      <p className="text-muted-foreground text-xs">
+        A crate sits on a rack. Say which one and the book is recorded in both — crate 13 on rack
+        38-B. Leave it blank for a crate that is not on a rack.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-crate-rack-number`}>On rack (optional)</Label>
+          <Input
+            id={`${idPrefix}-crate-rack-number`}
+            placeholder="e.g. 38"
+            value={rackNumber}
+            maxLength={64}
+            onChange={(e) => onRackNumberChange(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-crate-rack-row`}>Row (optional)</Label>
+          <Input
+            id={`${idPrefix}-crate-rack-row`}
+            placeholder="e.g. B"
+            value={rackRow}
+            maxLength={64}
+            onChange={(e) => onRackRowChange(e.target.value)}
+          />
+        </div>
+      </div>
+    </>
   );
 }

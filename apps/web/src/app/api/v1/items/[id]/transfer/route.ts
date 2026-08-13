@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { toPlaceDest, type PlaceDest } from '@/lib/locations/destination-option';
+import { isPositionedCrate, toPlaceDest, type PlaceDest } from '@/lib/locations/destination-option';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
@@ -30,9 +30,10 @@ export const dynamic = 'force-dynamic';
  * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack),
  *         acknowledgedCrateChanges? }
  *   - toLocationId: an existing rack/crate in your org.
- *   - newRack: a RACK ({ rackNumber, rackRow? }) **or** a CRATE
- *     ({ crateNumber, crateColor? }) — never both; see
- *     packages/core/src/inventory/new-location.ts. Created via
+ *   - newRack: a RACK ({ rackNumber, rackRow? }) or a CRATE ({ crateNumber,
+ *     crateColor?, rackNumber?, rackRow? }) — a crate SITS ON a rack, so the
+ *     rack pair alongside crate fields is that crate's POSITION and both are
+ *     kept; see packages/core/src/inventory/new-location.ts. Created via
  *     LocationsService.create (asserts 'locations:manage'; racks/crates don't
  *     count against the sites plan limit) in the SOURCE location's warehouse,
  *     which is derived server-side (never trusted from the client).
@@ -58,10 +59,10 @@ export const dynamic = 'force-dynamic';
 const newRackSchema = z
   .object({
     // The four fields and the rule they obey are ONE declaration shared with
-    // the web actions (packages/core/src/inventory/new-location.ts). RACK XOR
-    // CRATE: "rack A1 + crate 9" is refused here rather than resolved by
-    // precedence, which is what used to mint a surprise "Crate #9" from a sheet
-    // whose confirmation had said "Create new rack A1?" (REPRO A/A').
+    // the web actions (packages/core/src/inventory/new-location.ts). "rack A1 +
+    // crate 9" is CRATE 9 ON RACK A1 — one row, named "Crate #9 on rack A1", so
+    // the sheet's confirmation and the created row are the same string
+    // (REPRO A/A' was the two disagreeing, not the input being invalid).
     ...newLocationFieldsShape,
   })
   .superRefine(refineNewLocation);
@@ -270,9 +271,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // Put-away (source was a staging/unplaced bucket) stamps the placement label
     // so bin_location tracks the rack — matching web placeStockAction. A plain
-    // rack→rack move leaves the label alone, matching web transferStockAction.
+    // rack→rack move leaves the label alone, matching web transferStockAction —
+    // EXCEPT into a positioned crate, where the crate summary and the rack
+    // summary describe the same physical place and writing one without the
+    // other publishes a self-contradicting row. Same narrowing, same helper, as
+    // transferStockAction.
     // Best-effort: stock is already placed, so a stamp failure never fails here.
-    if (srcLoc?.kind === 'staging' || srcLoc?.kind === 'unplaced') {
+    if (
+      srcLoc?.kind === 'staging' ||
+      srcLoc?.kind === 'unplaced' ||
+      isPositionedCrate(dest)
+    ) {
       await svc.stampPlacementBin([id], dest);
     }
 

@@ -205,10 +205,10 @@ export function moveDestinationChoices(
 /**
  * A "+ New" destination as the sheet collects it.
  *
- * `kind` is an EXPLICIT choice, not something inferred from which boxes happen
- * to be filled. The sheet used to render "RACK NUMBER *" plus two optional
- * crate boxes with no toggle at all, which had two consequences and both were
- * live defects:
+ * `kind` is an EXPLICIT choice of the KIND OF ROW, not something inferred from
+ * which boxes happen to be filled. The sheet used to render "RACK NUMBER *"
+ * plus two optional crate boxes with no toggle at all, which had two
+ * consequences and both were live defects:
  *
  *   • a number-only crate was UNREACHABLE — submit was gated on the rack
  *     number, and the label derivation keyed crate-ness off the COLOUR alone
@@ -218,14 +218,20 @@ export function moveDestinationChoices(
  *     "Create new rack A1?" — the string confirmed and the string created
  *     differed character for character (REPRO A / A').
  *
- * Rack XOR crate is now the rule on both sides of the boundary, and it is
- * stated once, in packages/core/src/inventory/new-location.ts.
+ * ═══ THE KIND IS EXCLUSIVE; THE PLACE IS NOT ═══
+ *
+ * A CRATE SITS ON A RACK. The crate branch therefore carries the SAME optional
+ * rack pair, and "rack A1 + crate 9" now creates ONE row called "Crate #9 on
+ * rack A1" — the string confirmed and the string created, identical. Reading
+ * the toggle as two rival PLACES is what made a positioned crate unreachable
+ * and left books recorded in a crate with no rack at all.
  */
 export type NewLocationKind = 'rack' | 'crate';
 
 export interface NewRackInput {
   /** Which branch the user chose. Books may choose 'crate'; nothing else may. */
   kind: NewLocationKind;
+  /** The rack — its own identity on the rack branch, the CRATE'S POSITION on the crate branch. */
   rackNumber: string;
   rackRow?: string | null;
   crateColor?: string | null;
@@ -233,9 +239,12 @@ export interface NewRackInput {
 }
 
 /**
- * The four fields as the SERVER will read them for the chosen branch — the
- * crate branch sends no rack pair and the rack branch sends no crate pair, so
- * the combination the server refuses cannot leave this screen.
+ * The four fields as the SERVER will read them for the chosen branch.
+ *
+ * The RACK branch sends no crate pair — a rack is not a crate. The CRATE branch
+ * sends its number, its optional colour AND its optional position, because all
+ * three are facts about the same bin; a crate with no position simply omits the
+ * pair, which is what keeps an existing position-less crate matched and reused.
  *
  * This is also what makes the confirmation honest: the same object produces the
  * label shown and the payload sent.
@@ -246,15 +255,18 @@ export function newLocationFields(n: NewRackInput): {
   crateColor?: string;
   crateNumber?: string;
 } {
+  const rackNumber = n.rackNumber.trim();
+  const row = n.rackRow?.trim();
   if (n.kind === 'crate') {
     const color = n.crateColor?.trim();
     return {
       crateNumber: n.crateNumber?.trim() ?? '',
       ...(color ? { crateColor: color } : {}),
+      ...(rackNumber ? { rackNumber } : {}),
+      ...(row ? { rackRow: row } : {}),
     };
   }
-  const row = n.rackRow?.trim();
-  return { rackNumber: n.rackNumber.trim(), ...(row ? { rackRow: row } : {}) };
+  return { rackNumber, ...(row ? { rackRow: row } : {}) };
 }
 
 /** Is the chosen branch complete enough to submit? A crate needs its NUMBER. */
@@ -267,8 +279,9 @@ export function newLocationReady(n: NewRackInput): boolean {
  *
  * Delegates to the ONE core planner — the same function the server names the
  * `locations` row with — so the phone can no longer confirm one string and
- * create another. A crate reads "Blue #42" / "Crate #42"; a rack reads "22-B"
- * or bare "22". An incomplete form yields '' and the caller must not confirm.
+ * create another. A crate reads "Blue #42" / "Crate #42", or "Blue #42 on rack
+ * 22-B" when it sits on one; a rack reads "22-B" or bare "22". An incomplete
+ * form yields '' and the caller must not confirm.
  */
 export function newRackLabel(n: NewRackInput): { label: string; noun: NewLocationKind } {
   const plan = planNewLocation(newLocationFields(n));

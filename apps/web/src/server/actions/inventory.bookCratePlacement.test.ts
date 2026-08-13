@@ -748,17 +748,34 @@ describe('transferStockAction — the crate summary follows the stock', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RACK **XOR** CRATE — the regression, refused at the schema
+// A CRATE SITS ON A RACK — rack fields + crate fields = ONE positioned crate
+//
+// These two cases used to assert the opposite ("REPRO B … is a validation
+// error" / "the SAME refusal on the put-away action"). They pinned the misread:
+// the writer was mishandling a meaningful input, and forbidding the input made
+// a positioned crate unreachable from every surface. Rewritten to pin the
+// corrected model — both halves survive, the created row says so, and the typed
+// rack is never silently dropped.
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('a new destination is a rack OR a crate, never both', () => {
+describe('a new destination may be a crate ON a rack', () => {
   const WAREHOUSE = GREEN_CRATE_ROW.warehouse_id;
 
-  it('REPRO B: rack "A1" + row "Row 3" + crate "9" is a validation error, and nothing moves', async () => {
-    // On this branch that input silently produced name "Crate #9", kind
-    // 'crate', and dropped the row — where before it created rack "A1-Row 3".
-    // On a surface with no confirmation at all.
-    installContext({ itemRows: [blueFourBook()] });
+  it('REPRO B: rack "A1" + row "Row 3" + crate "9" creates ONE crate at that position', async () => {
+    const stub = installContext({
+      locationRow: [],
+      itemRows: [blueFourBook()],
+      holdingRows: [greenCrateHolding()],
+      insertedLocation: {
+        id: GREEN_CRATE,
+        kind: 'crate',
+        name: 'Crate #9 on rack A1-Row 3',
+        rack_number: 'A1',
+        rack_row: 'Row 3',
+        crate_color: null,
+        crate_number: '9',
+      },
+    });
 
     const res = await transferStockAction({
       itemId: BOOK_ID,
@@ -767,17 +784,156 @@ describe('a new destination is a rack OR a crate, never both', () => {
       destination: {
         newRack: { warehouseId: WAREHOUSE, rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' },
       },
+      acknowledgedCrateChanges: ACK_BLUE_4,
     } as Parameters<typeof transferStockAction>[0]);
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error.code).toBe('validation_error');
-      expect(res.error.message).toMatch(/either a rack or a crate/i);
-    }
-    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(res.ok).toBe(true);
+    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.kind).toBe('crate');
+    expect(insert.type).toBe('bin');
+    // The name states BOTH facts — and it is migration 0270's dedupe key, so
+    // this is also what keeps two same-numbered crates on different racks two
+    // rows.
+    expect(insert.name).toBe('Crate #9 on rack A1-Row 3');
+    expect(insert.crate_number).toBe('9');
+    // …and the typed rack is NOT dropped: it is stored, decomposed, as the
+    // crate's position.
+    expect(insert.rack_number).toBe('A1');
+    expect(insert.rack_row).toBe('Row 3');
+    expect(mockTransferStock).toHaveBeenCalledOnce();
   });
 
-  it('the SAME refusal on the put-away action — one rule, every surface', async () => {
+  it('the put-away action writes BOTH summaries for a positioned crate', async () => {
+    // The owner-reported defect: the book came out recorded in a crate with an
+    // EMPTY rack column, because stampPlacementBin passed rack_number NULL for
+    // any crate and inventory_set_rack DELETES the pair when both are null.
+    const stub = installContext({
+      locationRow: [],
+      itemRows: [blueFourBook()],
+      // The holding the book has AFTER the move is the crate it landed in, so
+      // the crate summary is synchronised from THAT row (holdings are the
+      // truth); the rack summary comes from the destination the put-away
+      // resolved. Same physical place, two item keys.
+      holdingRows: [
+        {
+          item_id: BOOK_ID,
+          location_id: GREEN_CRATE,
+          quantity: 12,
+          locations: {
+            id: GREEN_CRATE,
+            kind: 'crate',
+            type: 'bin',
+            crate_color: 'blue',
+            crate_number: '13',
+          },
+        },
+      ],
+      insertedLocation: {
+        id: GREEN_CRATE,
+        kind: 'crate',
+        name: 'Blue #13 on rack 38-B',
+        rack_number: '38',
+        rack_row: 'B',
+        crate_color: 'blue',
+        crate_number: '13',
+      },
+    });
+
+    const res = await placeStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 12,
+      destination: {
+        newRack: {
+          warehouseId: WAREHOUSE,
+          rackNumber: '38',
+          rackRow: 'B',
+          crateColor: 'blue',
+          crateNumber: '13',
+        },
+      },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+
+    expect(res.ok).toBe(true);
+    // The CRATE summary…
+    const crateCall = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    expect(crateCall!.args).toMatchObject({ p_crate_color: 'blue', p_crate_number: '13' });
+    // …and the RACK summary, from the crate's own position. Both, or the Books
+    // list shows a crate with no rack and a picker cannot find the bin.
+    // stampPlacementBin is spied out in this suite (it is a pure RPC wrapper,
+    // pinned at the RPC level in inventory.stampPlacementBin.test.ts), so what
+    // is asserted here is the thing this layer owns: the destination handed to
+    // it carries the crate's position rather than a null pair.
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [BOOK_ID],
+      expect.objectContaining({ kind: 'crate', rackNumber: '38', rackRow: 'B' }),
+    );
+  });
+
+  it('a TRANSFER into a positioned crate stamps the rack; into a rack it still does not', async () => {
+    // The put-away/transfer asymmetry ("a transfer is not a put-away") is
+    // preserved everywhere except the one destination where writing half the
+    // truth is a contradiction: a crate that sits on a rack.
+    const positioned = {
+      id: GREEN_CRATE,
+      warehouse_id: GREEN_CRATE_ROW.warehouse_id,
+      kind: 'crate',
+      rack_number: '38',
+      rack_row: 'B',
+      crate_color: 'blue',
+      crate_number: '13',
+      name: 'Blue #13 on rack 38-B',
+    };
+    installContext({
+      locationRow: positioned,
+      itemRows: [blueFourBook()],
+      holdingRows: [greenCrateHolding()],
+    });
+
+    const crateRes = await transferStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: GREEN_CRATE },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+    expect(crateRes.ok).toBe(true);
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [BOOK_ID],
+      expect.objectContaining({ kind: 'crate', rackNumber: '38', rackRow: 'B' }),
+    );
+
+    mockStampPlacementBin.mockClear();
+
+    installContext({
+      locationRow: {
+        id: GREEN_CRATE,
+        warehouse_id: GREEN_CRATE_ROW.warehouse_id,
+        kind: 'rack',
+        rack_number: '40',
+        rack_row: 'B',
+        crate_color: null,
+        crate_number: null,
+        name: '40-B',
+      },
+      itemRows: [blueFourBook()],
+      holdingRows: [greenCrateHolding()],
+    });
+    const rackRes = await transferStockAction({
+      itemId: BOOK_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: GREEN_CRATE },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+    expect(rackRes.ok).toBe(true);
+    expect(mockStampPlacementBin).not.toHaveBeenCalled();
+  });
+
+  it('a crate COLOUR with a rack but no crate NUMBER is still refused', async () => {
+    // "Blue #A1" — borrowing the rack number as the crate's identity — was the
+    // both-fields GUESS, and is a different thing from the both-fields TRUTH.
     installContext({ itemRows: [blueFourBook()] });
 
     const res = await placeStockAction({
@@ -826,7 +982,9 @@ describe('a new destination is a rack OR a crate, never both', () => {
     expect(insert.type).toBe('bin');
     expect(insert.name).toBe('Crate #9');
     expect(insert.crate_number).toBe('9');
-    // The rack columns stay empty — a crate is not half a rack.
+    // No position was given, so none is invented — and the name is
+    // byte-identical to the one shipped crates already carry, which is what
+    // keeps an existing "Crate #9" row FOUND and REUSED rather than duplicated.
     expect(insert.rack_number).toBeNull();
     expect(insert.rack_row).toBeNull();
   });

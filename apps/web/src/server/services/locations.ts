@@ -146,6 +146,30 @@ export class LocationsService {
    * is now kind-scoped too, so a cross-kind reuse here would just be wrong,
    * not merely redundant.
    *
+   * ═══ A CRATE'S IDENTITY INCLUDES THE RACK IT SITS ON — VIA THE NAME ═══
+   *
+   * Matching on `lower(name)` is still correct BECAUSE the name now carries the
+   * position: `formatCrateLocationName` names a positioned crate "Gray #BIN on
+   * rack 43-B" (see packages/core/src/inventory/book-storage.ts). That is
+   * deliberate and it is what makes this function safe for crates.
+   *
+   * Production, L4L North Region: "gray BIN" is FIVE physically distinct bins
+   * (43-B, 43-C, 42-B, 42-C, 41-C), "yellow 5" is two, "blue 0" is three. If
+   * identity stayed colour+number, putting away into gray BIN on 43-B and gray
+   * BIN on 41-C would COLLAPSE FIVE BINS INTO ONE `locations` row and stamp one
+   * bin's books with another bin's location — a worse data-integrity failure
+   * than the one the positioned crate was added to fix. Folding the position
+   * into the name (rather than into this predicate) keeps 0270's index correct
+   * by construction, so this change ships with NO migration, and it leaves
+   * every picker showing five distinguishable labels instead of five identical
+   * "Gray #BIN" rows.
+   *
+   * BACKWARD COMPATIBLE BY THE SAME MECHANISM: every crate row in production
+   * today was created position-less and is still named "Gray #BIN" / "Blue
+   * #Shelf", so a put-away that names no position still matches and REUSES it.
+   * A position-less crate is a legitimate permanent shape — production holds
+   * one (blue "Blue Shelf", 5 books, no rack) — and is never backfilled.
+   *
    * Falls through to `create()` (and its permission/plan-limit asserts) when
    * no match is found, or when `input.warehouseId` is missing (matching is
    * scoped per-warehouse; without one there's nothing to dedupe against).

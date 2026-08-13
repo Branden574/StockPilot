@@ -21,29 +21,44 @@
  *   the put-away stamp then wrote rack_number NULL over the rack the operator
  *   had typed. Before this branch the same input created rack "A1-Row 3".
  *
- * THE RULE, and it is the only one that cannot silently do the wrong thing:
+ * ═══ WHAT THOSE TWO DEFECTS ACTUALLY WERE — AND THE FIX THAT WAS WRONG ═══
  *
- *   A NEW DESTINATION IS A RACK **OR** A CRATE. NEVER BOTH.
+ * They were a WRITER mishandling a meaningful input, and the first fix read them
+ * as an invalid input and forbade it: rack and crate became mutually exclusive,
+ * on every surface and in the schema. That models a rack and a crate as
+ * alternatives, and in this warehouse they are not.
  *
- * Rack fields and crate fields together are REFUSED, not resolved by
- * precedence. There is no honest way to name what "rack A1, crate 9" should
- * create: whichever half wins, the other half is discarded without saying so,
- * and the confirmation copy then names something the operator did not ask for.
- * Refusing is the only outcome that keeps "the confirmation names exactly what
- * will be created" true. Every client makes the combination UNEXPRESSIBLE with
- * an explicit Rack|Crate choice; the server refuses it anyway, because a client
- * is never the last line.
+ *   A CRATE SITS ON A RACK. Both facts are true at once, and a picker needs
+ *   both to find a book: go to rack 38-B, find crate 13 on it. The Books list
+ *   has carried separate RACK and CRATE columns all along, showing exactly that.
+ *
+ * So "rack A1 + crate 9" is not a malformed request. It means A CRATE 9 LOCATED
+ * AT RACK A1, and the honest response is to create exactly that and SAY so —
+ * not to refuse it, and certainly not to silently keep one half.
+ *
+ * THE RULE, restated:
  *
  *   • RACK  — needs a number. Row optional. Name: "22-B" / "22" (rack-label.ts,
  *             so a whole label typed into the number box still decomposes).
- *   • CRATE — needs a NUMBER; the color is an optional visual aid. Name:
- *             "Blue #42" / "Crate #42" — the DEDUPE KEY 0270's partial unique
- *             index is built on (book-storage.ts). A crate number is FREE TEXT:
+ *   • CRATE — needs a NUMBER; the colour is an optional visual aid, and the rack
+ *             position is an OPTIONAL part of its identity. Name:
+ *             "Blue #42" / "Crate #42" position-less, "Blue #42 on rack 22-B"
+ *             positioned — the DEDUPE KEY 0270's partial unique index is built
+ *             on (see formatCrateLocationName in book-storage.ts for why the
+ *             position belongs IN the name). A crate number is FREE TEXT:
  *             production holds 0, 1..16, "Bin", "BIN" and "Blue Shelf".
  *
+ * Any crate field present means CRATE (`isCrateDestination`); the rack pair then
+ * reads as that crate's POSITION rather than as a rival destination. A crate is
+ * still stored with `kind:'crate'` and carries `rack_number` / `rack_row` as its
+ * position — the `locations` table has had those columns on every row since
+ * migration 0188, so this needs no migration.
+ *
  * A colour with no number is NOT a crate identity. It used to fall back to the
- * rack number ("Blue #A1"), which is precisely the both-fields guess this rule
- * deletes, so it is now a validation error with its own message.
+ * rack number ("Blue #A1"), which is the both-fields GUESS — a different thing
+ * from the both-fields TRUTH above, and still refused with its own message.
+ * A rack ROW with no rack number does not name a position either, on a rack or
+ * a crate, so it is refused rather than dropped.
  *
  * PURE MODULE — used by the web server actions, the mobile transfer route, both
  * web put-away dialogs, the web Transfer dialog and the native move-stock sheet.
@@ -63,13 +78,17 @@ export interface NewLocationFields {
   crateNumber?: string | null;
 }
 
-/** Why a field combination cannot name a destination. */
+/**
+ * Why a field combination cannot name a destination.
+ *
+ * `rack_and_crate` USED TO LIVE HERE and is deliberately gone: rack fields
+ * alongside crate fields are a positioned crate, not a conflict. Do not
+ * reintroduce it — see the header.
+ */
 export type NewLocationProblem =
-  /** Rack fields AND crate fields together — see the header. */
-  | 'rack_and_crate'
   /** A crate with a colour (or nothing) but no number to identify it. */
   | 'crate_needs_number'
-  /** Nothing to name a rack with (empty, or a row with no number). */
+  /** Nothing to name a rack POSITION with (empty, or a row with no number). */
   | 'rack_needs_number';
 
 export type NewLocationPlan =
@@ -89,8 +108,13 @@ export type NewLocationPlan =
       kind: 'crate';
       noun: 'crate';
       name: string;
-      rackNumber: null;
-      rackRow: null;
+      /**
+       * The crate's POSITION — the rack it sits on — decomposed for the same
+       * two `locations` columns a rack uses. Null when the crate is not on a
+       * rack, which is a legitimate permanent shape (production holds one).
+       */
+      rackNumber: string | null;
+      rackRow: string | null;
       crateColor: string | null;
       crateNumber: string;
     }
@@ -102,8 +126,6 @@ function trimmed(value: string | null | undefined): string {
 
 /** The message a user sees for each refusal. One wording, every surface. */
 export const NEW_LOCATION_MESSAGES: Record<NewLocationProblem, string> = {
-  rack_and_crate:
-    'A new location is either a rack or a crate, not both. Clear the crate fields to create a rack, or the rack fields to create a crate.',
   crate_needs_number: 'Give the crate a number — a color on its own does not name a crate.',
   rack_needs_number: 'Give the rack a number.',
 };
@@ -127,17 +149,9 @@ export function planNewLocation(input: NewLocationFields): NewLocationPlan {
   // disagree about what a crate is in the first place.
   const hasCrate = isCrateDestination({ crateColor, crateNumber });
 
-  if (hasRack && hasCrate) {
-    return {
-      kind: 'invalid',
-      problem: 'rack_and_crate',
-      message: NEW_LOCATION_MESSAGES.rack_and_crate,
-      // Reported against the CRATE field: a form that already had a rack typed
-      // in is most often one where the crate boxes were filled by accident.
-      field: 'crateNumber',
-    };
-  }
-
+  // CRATE WINS THE KIND; the rack pair becomes its POSITION. Checked first so
+  // the two are never read as rivals — "rack A1 + crate 9" is crate 9 on rack
+  // A1, and the name below says exactly that.
   if (hasCrate) {
     if (!crateNumber) {
       return {
@@ -147,13 +161,30 @@ export function planNewLocation(input: NewLocationFields): NewLocationPlan {
         field: 'crateNumber',
       };
     }
+    // Decompose the POSITION through the same one parser a rack uses, so a
+    // whole label typed into the "On rack" box is stored ("38","B") and never
+    // composite (incident 2026-07-23 applies to a crate's position too).
+    const parts = normalizeRackFields({ number: rackNumber, row: rackRow });
+    if (hasRack && !parts.number) {
+      // A row with no number is not a position. Refusing beats silently
+      // dropping the row the operator typed — that drop is the original bug.
+      return {
+        kind: 'invalid',
+        problem: 'rack_needs_number',
+        message: NEW_LOCATION_MESSAGES.rack_needs_number,
+        field: 'rackNumber',
+      };
+    }
+    const position = parts.number ? { rackNumber: parts.number, rackRow: parts.row } : null;
     return {
       kind: 'crate',
       noun: 'crate',
-      // "Blue #42" / "Crate #42" — the 0270 dedupe key, never hand-composed.
-      name: formatCrateLocationName(crateColor || null, crateNumber),
-      rackNumber: null,
-      rackRow: null,
+      // "Blue #42" / "Blue #42 on rack 22-B" — the 0270 dedupe key, never
+      // hand-composed. The position is IN the name on purpose: that is what
+      // keeps five physically distinct "gray BIN" bins five locations rows.
+      name: formatCrateLocationName(crateColor || null, crateNumber, position),
+      rackNumber: position?.rackNumber ?? null,
+      rackRow: position?.rackRow ?? null,
       crateColor: crateColor || null,
       crateNumber,
     };
@@ -215,8 +246,12 @@ export const newLocationFieldsShape = {
 
 /**
  * The refinement that enforces the rule above. Pass to `.superRefine()` on any
- * schema carrying `newLocationFieldsShape`, so the server refuses "rack A1 +
- * crate 9" identically no matter which surface sent it.
+ * schema carrying `newLocationFieldsShape`, so every surface refuses the same
+ * incomplete inputs — a crate with no number, a rack row with no rack number —
+ * with the same words.
+ *
+ * It no longer refuses rack fields alongside crate fields: that combination is
+ * a crate ON a rack, which the planner names in full.
  */
 export function refineNewLocation(value: NewLocationFields, ctx: z.RefinementCtx): void {
   const plan = planNewLocation(value);
