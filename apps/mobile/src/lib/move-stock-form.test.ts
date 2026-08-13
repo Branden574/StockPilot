@@ -516,11 +516,18 @@ describe('the sheet answers the book-crate gate', () => {
     // WIRING PIN ONLY. The four cases are asserted for real in the
     // `crateSyncWarning` block below — this just proves the modal is plugged
     // into that decision and did not keep a second, untested copy of the rules.
-    expect(modal).toContain('const crateWarning = crateSyncWarning(res, itemName);');
-    expect(modal).toContain('Alert.alert(crateWarning.title, crateWarning.message);');
-    // No inline branch survives: every `res.crateSync*` read now lives in the
-    // helper, so there is nothing left in this component to test by reading it.
-    expect(modal).not.toContain('res.crateSync');
+    //
+    // Matched by SHAPE, not by the names of two locals: pinning the literal
+    // `res.crateSyncStale` is what made the old assertions fail on a correct
+    // rename while passing on an empty branch. Both locals may be called
+    // anything; what may not change is that the verdict comes from the helper
+    // and is what the Alert renders.
+    const flatModal = modal.replace(/\s+/g, ' ');
+    expect(flatModal).toMatch(/const (\w+) = crateSyncWarning\(\w+, itemName\); if \(\1\) \{/);
+    expect(flatModal).toMatch(/Alert\.alert\((\w+)\.title, \1\.message\)/);
+    // No inline branch survives: every crateSync* read now lives in the helper,
+    // so there is nothing left in this component to test by reading it.
+    expect(modal).not.toMatch(/\.crateSync/);
   });
 });
 
