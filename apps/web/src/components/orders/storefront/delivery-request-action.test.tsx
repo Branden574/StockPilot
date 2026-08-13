@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { DeliveryRequestInput } from './storefront-logic';
+import { prepareDeliveryRequest, type DeliveryRequestInput } from './storefront-logic';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -787,7 +787,15 @@ describe('DeliveryRequestAction — honesty', () => {
     expect(await screen.findByTestId('delivery-request-repeat')).toBeInTheDocument();
   });
 
-  it('DISCLOSES truncation on the surface when the order was too large for a link', () => {
+  it('DISCLOSES truncation on the surface when the order was too large for a link, with the REAL counts', () => {
+    // COPY CHANGED 2026-08-13 (SO-000080). This used to expect the fixed
+    // sentence "the draft carries a summary. Copy the details instead to
+    // include every line" — accurate only while condensing was
+    // all-or-nothing. It now fits as many rows as the measured url allows,
+    // so this 100-line fixture gets 13 of them and the surface has to say
+    // which 13. A fixed sentence here would be a false claim about a message
+    // the employee is about to send, so the assertion moved to the exact
+    // computed string rather than being loosened to a substring.
     const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
     const base = makeInput().itemMap.get('i-1')!;
     const itemMap = new Map(
@@ -796,8 +804,27 @@ describe('DeliveryRequestAction — honesty', () => {
 
     render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
     expect(screen.getByTestId('delivery-request-condensed')).toHaveTextContent(
-      'This order is too large to fit in a compose link, so the draft carries a summary. Copy the details instead to include every line.',
+      'This order is too large to fit in a compose link, so the draft lists the first 13 of 100 lines and says the rest are on the order in StockPilot. Copy the details to put every line in the message itself.',
     );
+  });
+
+  it('the drafted BODY really carries the rows the surface promises', () => {
+    // The surface says "the first 13 of 100 lines". If the builder ever went
+    // back to dropping every row, that sentence would be a lie the employee
+    // sends to DC4. This asserts the message itself, not just the notice:
+    // row 1 and row 13 present, row 14 absent.
+    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
+    const base = makeInput().itemMap.get('i-1')!;
+    const itemMap = new Map(
+      lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
+    );
+    const prepared = prepareDeliveryRequest(makeInput({ lines, itemMap }));
+
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.listedLineCount).toBe(13);
+    expect(prepared.draft.body).toContain('1. Bulk Item 0 x4');
+    expect(prepared.draft.body).toContain('13. Bulk Item 12 x4');
+    expect(prepared.draft.body).not.toContain('14. Bulk Item 13 x4');
   });
 
   it('shows no truncation disclosure for a normal order', () => {
