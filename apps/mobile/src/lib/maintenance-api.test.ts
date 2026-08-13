@@ -732,7 +732,13 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
   });
 
   it('(Task 9) the PHOTOS card maps ONLY requesterPhotos — never the raw `photos` array or resolutionPhotos', () => {
-    const eyebrowIdx = src.indexOf('`PHOTOS · ${requesterPhotos.length}`');
+    // Anchor re-pinned when the card gained its add-photo affordance: the
+    // eyebrow now runs the tested `requestPhotosHeading` helper (which adds
+    // web's `n/MAINTENANCE_MAX_PHOTOS` counter) instead of interpolating the
+    // count inline. Every assertion below is unchanged — this still requires
+    // that the array feeding the eyebrow AND the very next `.map((p) =>`
+    // after it are both `requesterPhotos`.
+    const eyebrowIdx = src.indexOf('requestPhotosHeading(requesterPhotos.length)');
     expect(eyebrowIdx).toBeGreaterThan(-1);
     const mapIdx = src.indexOf('requesterPhotos.map((p) =>', eyebrowIdx);
     expect(mapIdx).toBeGreaterThan(eyebrowIdx);
@@ -796,8 +802,30 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(src).toContain('{actions.notes ? (');
   });
 
-  it('(Task 10) proof photos upload with the LITERAL kind:\'resolution\' — never the requester default, never a variable that could drift', () => {
-    expect(src).toContain("{ kind: 'resolution' }");
+  /**
+   * REWRITTEN (reason): this asserted `toContain("{ kind: 'resolution' }")`,
+   * which was FALSE ASSURANCE — proven, not suspected. A verifier flipped the
+   * REQUEST queue's kind from 'requester' to 'resolution'; the screen then held
+   * TWO 'resolution' literals and ZERO 'requester' ones, and this pin still
+   * passed while all 1345 mobile tests stayed green. A source-text grep cannot
+   * tell which queue a literal belongs to, and cannot fail when one queue
+   * silently becomes the other.
+   *
+   * The value now lives behind a seam the harness can execute
+   * (requestPhotoUploadOptions / resolutionPhotoUploadOptions), and
+   * maintenance-request-photos.test.ts asserts what each RETURNS — mutation-
+   * proven: flipping the request kind fails two tests there. What remains for
+   * THIS source-level test is the half a value assertion cannot reach: that the
+   * screen delegates to that seam at all, rather than re-typing a literal that
+   * could drift away from the tested value.
+   */
+  it('(Task 10) both photo queues delegate to the tested upload-options seam — neither re-types a kind literal that could drift', () => {
+    expect(src).toContain('requestPhotoUploadOptions()');
+    expect(src).toContain('resolutionPhotoUploadOptions()');
+    // No inline kind literal may survive in the screen: one would be
+    // unreachable by the module tests and free to diverge from them.
+    expect(src).not.toContain("{ kind: 'resolution' }");
+    expect(src).not.toContain("{ kind: 'requester' }");
   });
 
   it('(Task 10) MOBILE_RESOLVE_DISCLOSURE (not a re-typed inline literal) is rendered inside the Resolve section', () => {
