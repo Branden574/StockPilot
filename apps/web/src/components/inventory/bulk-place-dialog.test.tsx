@@ -313,6 +313,176 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
 
+  it('DEFERS the batch when the crate states no rack and a selected book records one', async () => {
+    const user = userEvent.setup();
+    // Same rule as the single put-away. What happens to each recorded rack is
+    // decided from the live holdings after the move, which this dialog cannot
+    // see — so it predicts nothing, sends no acknowledgement, and lets the gate
+    // ask with the rack sentences it derived. Deferring is WHOLE-BATCH because
+    // the gate is already all-or-nothing.
+    mockBulkPlace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: '2 books are recorded in a different crate. Placing them here will change that.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'i-1',
+              itemName: 'Persepolis',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+            {
+              itemId: 'i-2',
+              itemName: 'Maus I',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              // The SAME sentence as i-1: two books off one rack must read as
+              // one line, not two identical ones.
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+          ],
+        },
+      },
+    });
+    const onRack38A = ROWS.map((r) => ({
+      ...r,
+      bookStorage: { ...storage('blue', '4'), rackNumber: '38', rackRow: 'A', rackLabel: '38-A' },
+    }));
+    renderDialog(onRack38A);
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    // Nothing was predicted and nothing was waived.
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Rack 38-A will be cleared.');
+    // Deduped: the sentence appears once for the two books that share it.
+    expect(within(confirm).getAllByText('Rack 38-A will be cleared.')).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockBulkPlace).toHaveBeenCalledTimes(2);
+    expect(mockBulkPlace.mock.calls[1]![0].acknowledgedCrateChanges).toHaveLength(2);
+  });
+
+  it('MINTING a position-less crate defers too, so the gate names the racks it clears', async () => {
+    // The single put-away's defect, in bulk. `!creating` in the deferral
+    // condition kept the pre-acknowledgement alive on the branch that types a
+    // brand-new crate, so a batch off rack 38-A into a new position-less crate
+    // waived the gate and erased 38-A on every title with no sentence naming it.
+    // Creating the location does not teach this dialog the holdings.
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: '2 books are recorded in a different crate. Placing them here will change that.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'i-1',
+              itemName: 'Persepolis',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: '9',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+            {
+              itemId: 'i-2',
+              itemName: 'Maus I',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: '9',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog(
+      ROWS.map((r) => ({
+        ...r,
+        bookStorage: { ...storage('blue', '4'), rackNumber: '38', rackRow: 'A', rackLabel: '38-A' },
+      })),
+    );
+    await open(user);
+    await chooseDestination(user, /new rack \/ crate/i);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '9');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    // Only the creation question, and it claims nothing it cannot support.
+    const creation = screen.getByRole('alertdialog');
+    expect(creation).toHaveTextContent('Create new crate Crate #9?');
+    expect(creation).not.toHaveTextContent(/now in Blue 4/i);
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /create and place 2/i }));
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+
+    // The gate's answer replaces it, and it names 38-A once for both books.
+    const gate = screen.getByRole('alertdialog');
+    expect(within(gate).getAllByText('Rack 38-A will be cleared.')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockBulkPlace).toHaveBeenCalledTimes(2);
+    expect(mockBulkPlace.mock.calls[1]![0].acknowledgedCrateChanges).toHaveLength(2);
+  });
+
+  it('the non-book notice survives the deferral — the gate panel is the only panel', async () => {
+    // Which rows get no crate label is a fact about the SELECTION, not about any
+    // book's crate, so it must not disappear when the crate question is handed
+    // to the server. It was built only inside the local-prediction branch.
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'Persepolis is recorded in Blue 4 on rack 38-A. Placing it here will change that to Red 7. Rack 38-A will be cleared.',
+        details: {
+          reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+          items: [
+            {
+              itemId: 'i-1',
+              itemName: 'Persepolis',
+              currentLabel: 'Blue 4 on rack 38-A',
+              nextLabel: 'Red 7',
+              currentFingerprint: bookCrateFingerprint('blue', '4'),
+              rackLine: 'Rack 38-A will be cleared.',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog([
+      {
+        ...ROWS[0]!,
+        bookStorage: { ...storage('blue', '4'), rackNumber: '38', rackRow: 'A', rackLabel: '38-A' },
+      },
+      MIXED[1]!,
+    ]);
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(mockBulkPlace.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Rack 38-A will be cleared.');
+    expect(confirm).toHaveTextContent(
+      '1 of the 2 selected rows is not a book, so no crate is recorded for it.',
+    );
+  });
+
   it("re-renders the SERVER's refusal and retries it acknowledged", async () => {
     const user = userEvent.setup();
     mockBulkPlace.mockResolvedValueOnce({

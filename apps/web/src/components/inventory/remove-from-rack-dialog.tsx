@@ -125,6 +125,22 @@ export function RemoveFromRackDialog({
       toast.warning(
         `${itemName} still has stock in more than one location, so its crate label was left unchanged.`,
       );
+    } else if (res.data.crateSyncRackPreserved) {
+      // The OTHER label. A write-off has no destination and so no confirmation
+      // gate, which means a rack erasure can never be agreed to here — the
+      // reconciliation always keeps the pair, and this is the only place the
+      // operator can learn it may now be stale.
+      //
+      // ABOVE `crateSyncUpdated`, and the two really do co-occur on this path:
+      // draining Blue 4 into a position-less Green 2 rewrites the crate AND
+      // withholds the rack clear. One toast fires, and a label that is now WRONG
+      // beats a label that was correctly rewritten — the stale rack sends a
+      // picker to the wrong bay, while the new crate value is right and is
+      // mentioned only for consent. Same order the phone uses
+      // (removeStockCrateWarning in apps/mobile/src/lib/move-stock-form.ts).
+      toast.warning(
+        `The rack label on ${itemName} was left as it was and may now be wrong — nobody was asked about clearing it.`,
+      );
     } else if (res.data.crateSyncUpdated) {
       toast.warning(
         `The crate label on ${itemName} was changed to follow the stock it has left.`,

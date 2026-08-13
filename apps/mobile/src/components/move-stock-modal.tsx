@@ -14,11 +14,14 @@ import {
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
+import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
-  bookCrateAlertMessage,
   bookCrateRefusal,
+  bookRackRefusal,
   crateSyncWarning,
   decideNewRackPlacement,
+  placementRefusalAlert,
+  transferRequestBody,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
@@ -34,8 +37,11 @@ import {
 import { transferStock, type NewRack } from '@/lib/stock-api';
 import {
   bookCrateAcknowledgementsMatch,
+  bookRackAcknowledgementsMatch,
   toBookCrateAcknowledgement,
+  toBookRackAcknowledgement,
   type BookCrateAcknowledgedChange,
+  type BookRackAcknowledgedChange,
 } from '@stockpilot/core';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
@@ -351,20 +357,31 @@ export function MoveStockModal({
   // its "Use 10-A instead" alternatives share ONE permission-checked path.
   async function performMove(
     destination: { newRack: NewRack } | { toLocationId: string },
-    opts: { acknowledged?: BookCrateAcknowledgedChange[] } = {},
+    opts: {
+      acknowledged?: BookCrateAcknowledgedChange[];
+      acknowledgedRacks?: BookRackAcknowledgedChange[];
+    } = {},
   ) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await transferStock(itemId, {
-        fromLocationId: fromId,
-        quantity: qtyNum,
-        notes: notes.trim() || undefined,
-        ...destination,
-        ...(opts.acknowledged && opts.acknowledged.length > 0
-          ? { acknowledgedCrateChanges: opts.acknowledged }
-          : {}),
-      });
+      const res = await transferStock(
+        itemId,
+        // The body is built by transferRequestBody() in src/lib, where a test
+        // can reach it. Its two keys are deliberately asymmetric -- the rack
+        // key always present (its presence is how this client declares it can
+        // answer a rack question), the crate key only when non-empty (the
+        // shape already shipped in the live OTA). Inlining that here is what
+        // let the shipped bug survive every test once already.
+        transferRequestBody({
+          fromLocationId: fromId,
+          quantity: qtyNum,
+          notes: notes.trim() || undefined,
+          destination,
+          acknowledged: opts.acknowledged,
+          acknowledgedRacks: opts.acknowledgedRacks,
+        }),
+      );
       // The stock moved. This says whether the book's CRATE LABEL followed it —
       // silence would make a move that relabelled nothing look identical to one
       // that did, which is the whole reason the summary drifted in the first
@@ -383,16 +400,36 @@ export function MoveStockModal({
       // never from anything this screen remembered. Asked at most once more: a
       // refusal that survives an acknowledgement matching the server's own
       // labels is a real error, not a staleness loop.
+      //
+      // TWO QUESTIONS, ONE PAYLOAD, ONE ALERT. The crate half and the rack half
+      // are separately fingerprinted and can arrive together or alone — a
+      // rack-ONLY refusal is the reported defect's own case, where the crate is
+      // identical and a hand-typed rack would be erased anyway. A refusal saying
+      // ANYTHING the last answer did not cover is re-asked; one that only
+      // repeats what was already answered falls through to the plain error
+      // rather than looping.
       const detail = bookCrateRefusal(e);
-      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
-      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+      const rackDetail = bookRackRefusal(e);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : [];
+      const freshRacks = rackDetail ? toBookRackAcknowledgement(rackDetail.items) : [];
+      const unanswered =
+        !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh) ||
+        !bookRackAcknowledgementsMatch(opts.acknowledgedRacks, freshRacks);
+      const ask = placementRefusalAlert({ crate: detail, rack: rackDetail });
+      if (ask && unanswered) {
         // No inline error: this is a QUESTION, not a failure. `finally` clears
         // the in-flight flag, so the sheet is interactive behind the Alert.
-        Alert.alert("Change this book's crate?", bookCrateAlertMessage(detail), [
+        Alert.alert(ask.title, ask.message, [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Continue',
-            onPress: () => void performMove(destination, { acknowledged: fresh }),
+            // BOTH answers go back, and both are built from the SERVER's payload
+            // — never from anything this screen remembered.
+            onPress: () =>
+              void performMove(destination, {
+                acknowledged: fresh,
+                acknowledgedRacks: freshRacks,
+              }),
           },
         ]);
         return;
@@ -687,13 +724,38 @@ export function MoveStockModal({
                         </>
                       ) : (
                         <>
-                          <RackField
-                            label="CRATE COLOR (OPTIONAL)"
-                            value={crateColor}
-                            onChangeText={setCrateColor}
-                            placeholder="e.g. Blue"
-                            c={c}
-                          />
+                          {/* CRATE COLOUR — a FIXED choice over the shared
+                              registry, not free text.
+                              This was a text box ("e.g. Blue") long after the
+                              web put-away dialogs had been narrowed to the same
+                              ten colours, so the phone was the one surface that
+                              could still mint a colour the registry has never
+                              heard of — stored verbatim, then rendered with no
+                              swatch and filtered as a colour of its own.
+                              "No color" leads the row because a crate is
+                              identified by its NUMBER: production holds crates
+                              numbered with no colour at all, and that has to
+                              stay expressible from here. */}
+                          <View style={{ gap: 6 }}>
+                            <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                              CRATE COLOR (OPTIONAL)
+                            </Mono>
+                            <View
+                              style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}
+                              accessibilityRole="radiogroup"
+                              accessibilityLabel="Crate color"
+                            >
+                              {CRATE_COLOR_OPTIONS.map((opt) => (
+                                <Chip
+                                  key={opt.label}
+                                  label={opt.label}
+                                  swatch={opt.hex}
+                                  active={selectedCrateColor(crateColor) === opt.value}
+                                  onPress={() => setCrateColor(opt.value)}
+                                />
+                              ))}
+                            </View>
+                          </View>
                           {/* The NUMBER is the crate's identity — staff
                               routinely number a crate before they know which
                               coloured bin it lands in. */}

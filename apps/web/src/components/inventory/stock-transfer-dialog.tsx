@@ -2,10 +2,14 @@
 
 import {
   bookCrateAcknowledgementsMatch,
+  bookRackAcknowledgementsMatch,
   describeNewRackPlacement,
   parseBookCrateChangeDetail,
+  parseBookRackChangeDetail,
   toBookCrateAcknowledgement,
+  toBookRackAcknowledgement,
   type BookCrateAcknowledgedChange,
+  type BookRackAcknowledgedChange,
   type BookStorageInfo,
 } from '@stockpilot/core';
 import { ArrowRightLeft, Loader2 } from 'lucide-react';
@@ -155,6 +159,13 @@ export function StockTransferDialog({
      *  create-this-location question — answering that must not also answer a
      *  crate question nobody asked. */
     acknowledged: BookCrateAcknowledgedChange[];
+    /**
+     * The RACK erasures shown, fingerprinted over the rack pair. Always the
+     * SERVER's lines: this dialog holds a render-time snapshot and no live
+     * holdings, so it can never tell a full move (which clears the pair) from a
+     * split (which does not) and must never predict one.
+     */
+    acknowledgedRacks: BookRackAcknowledgedChange[];
   } | null>(null);
 
   React.useEffect(() => {
@@ -264,7 +275,10 @@ export function StockTransferDialog({
 
   async function move(
     destination: ActionDestination,
-    opts: { acknowledged?: BookCrateAcknowledgedChange[] } = {},
+    opts: {
+      acknowledged?: BookCrateAcknowledgedChange[];
+      acknowledgedRacks?: BookRackAcknowledgedChange[];
+    } = {},
   ) {
     setSubmitting(true);
     setServerError(null);
@@ -277,6 +291,16 @@ export function StockTransferDialog({
       ...(opts.acknowledged && opts.acknowledged.length > 0
         ? { acknowledgedCrateChanges: opts.acknowledged }
         : {}),
+      // ALWAYS SENT, EVEN EMPTY, and deliberately not spread conditionally like
+      // the crate list above. Its presence is how this dialog declares it can
+      // answer a rack question at all; omitting it tells the action "cannot
+      // answer", and the reconciliation then PRESERVES the rack rather than
+      // asking — correct for a client with no rack channel, wrong for this one,
+      // which would silently stop being asked and warn on every rack-clearing
+      // transfer instead of offering the choice. An empty array on the first
+      // request is exactly right: this dialog cannot predict a rack erasure, so
+      // it asks to be told.
+      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
     });
     setSubmitting(false);
 
@@ -286,18 +310,33 @@ export function StockTransferDialog({
       // row, taken moments ago — and retry with an acknowledgement built from
       // it. Asked at most once more: a refusal that survives an acknowledgement
       // matching the server's own labels is a real error, not a staleness loop.
+      // TWO QUESTIONS, ONE PAYLOAD, ONE DIALOG. The crate half and the rack half
+      // are separately fingerprinted and can arrive together or alone; a refusal
+      // that says ANYTHING our last answer did not cover is re-asked, and one
+      // that repeats what we already answered falls through to the plain error
+      // rather than looping.
       const detail = parseBookCrateChangeDetail(res.error.details);
-      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
-      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+      const rackDetail = parseBookRackChangeDetail(res.error.details);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : [];
+      const freshRacks = rackDetail ? toBookRackAcknowledgement(rackDetail.items) : [];
+      const unanswered =
+        !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh) ||
+        !bookRackAcknowledgementsMatch(opts.acknowledgedRacks, freshRacks);
+      if ((detail || rackDetail) && unanswered) {
         setPendingConfirm({
           content: {
-            title: 'Change this book’s crate?',
+            // A rack-ONLY refusal is the case this channel exists for: the crate
+            // is IDENTICAL, so a title about changing the crate would name a
+            // change that is not happening.
+            title: detail ? 'Change this book’s crate?' : 'Clear this book’s rack?',
             message: res.error.message,
-            crateItems: detail.items,
+            ...(detail ? { crateItems: detail.items } : {}),
+            ...(rackDetail ? { rackItems: rackDetail.items } : {}),
             confirmLabel: 'Continue transfer',
           },
           destination,
           acknowledged: fresh,
+          acknowledgedRacks: freshRacks,
         });
         return;
       }
@@ -329,6 +368,16 @@ export function StockTransferDialog({
     } else if (res.data?.crateSyncSkipped) {
       toast.warning(
         `${itemName} now has stock in more than one location, so its crate label was left unchanged.`,
+      );
+    } else if (res.data?.crateSyncRackPreserved) {
+      // The RACK label was KEPT rather than erased, because nobody was shown the
+      // erasure. `transferStockAction` has emitted this since the rack channel
+      // shipped and this dialog rendered nothing for it — a flag no client
+      // surfaces is a silent failure by construction, and this is the one flag
+      // whose entire justification is that somebody hears about it: a stale rack
+      // label is recoverable only because it gets reported, a wiped one is gone.
+      toast.warning(
+        `${itemName} was moved, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
     }
     setPendingConfirm(null);
@@ -406,8 +455,10 @@ export function StockTransferDialog({
       destination,
       // Nothing about the book's crate was asked here, so nothing about it is
       // answered. If the move then overwrites a recorded crate, the server
-      // refuses and THAT question gets asked on its own.
+      // refuses and THAT question gets asked on its own. Same for the rack: an
+      // answer to "create this location?" is not an answer to "erase this rack?".
       acknowledged: [],
+      acknowledgedRacks: [],
     });
   }
 
@@ -628,7 +679,10 @@ export function StockTransferDialog({
         onCancel={() => setPendingConfirm(null)}
         onConfirm={() => {
           if (!pendingConfirm) return;
-          void move(pendingConfirm.destination, { acknowledged: pendingConfirm.acknowledged });
+          void move(pendingConfirm.destination, {
+            acknowledged: pendingConfirm.acknowledged,
+            acknowledgedRacks: pendingConfirm.acknowledgedRacks,
+          });
         }}
         onUseSuggestion={moveIntoSuggestion}
       />

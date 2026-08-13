@@ -451,6 +451,28 @@ export interface BookCrateChangeItem {
    * echoes it back to acknowledge THIS change and nothing else.
    */
   currentFingerprint: string;
+  /**
+   * ═══ THE RACK SENTENCE — CARRIED, NEVER FINGERPRINTED ═══
+   *
+   * "Rack 38-A will be cleared." / "Rack will change from 38-A to 22-B." —
+   * `describeRackChange` for THIS book, or null/absent when there is nothing
+   * honest to say. Only a producer that read the live holdings can fill it,
+   * which is why it arrives on the payload instead of being re-derived by the
+   * client from a render-time snapshot.
+   *
+   * IT IS DELIBERATELY OUT OF `bookCrateFingerprint` AND OUT OF
+   * `toBookCrateAcknowledgement`. The acknowledgement is fingerprint-matched on
+   * the CRATE pair, and every already-shipped client computes that fingerprint
+   * from the crate pair alone — the mobile OTA is out. Widening the fingerprint
+   * to cover the rack would make every one of those acknowledgements fail to
+   * match, refusing placements forever on a key nobody was asked about. It is
+   * DISCLOSURE, not a question: the operator answers the crate change, and this
+   * tells them the whole truth about what answering it does.
+   *
+   * OPTIONAL on the wire. A payload without it is valid and parses — a client
+   * newer than its server must not dead-end on a missing sentence.
+   */
+  rackLine?: string | null;
 }
 
 /** One line of a scoped acknowledgement: "I was shown item X in crate F." */
@@ -589,10 +611,18 @@ export function describeBookCrateConflict(
  * put away is not a location the book is in) — same filter the sync applies.
  * Returns true when the destination would be the only placement left, which is
  * exactly when the sync writes.
+ *
+ * `destinationLocationId` is NULL when the destination does not exist yet — the
+ * "+ New rack / crate" branch, which now consults the gate BEFORE minting the
+ * row so that backing out of the confirmation cannot leave an orphaned empty
+ * location behind. A row that does not exist can hold nothing, so no holding can
+ * match it, and every holding is a rival placement. That is the correct answer
+ * rather than a degraded one, and it is spelled as `null` instead of a
+ * placeholder id so no real location can ever be excluded by accident.
  */
 export function bookCratePlacementWillSync(input: {
   placedHoldings: ReadonlyArray<{ locationId: string; quantity: number }>;
-  destinationLocationId: string;
+  destinationLocationId: string | null;
   fromLocationId: string;
   quantity: number;
 }): boolean {
@@ -698,6 +728,10 @@ export function parseBookCrateChangeDetail(details: unknown): BookCrateChangeDet
       currentLabel: typeof it.currentLabel === 'string' ? it.currentLabel : null,
       nextLabel: typeof it.nextLabel === 'string' ? it.nextLabel : null,
       currentFingerprint: it.currentFingerprint,
+      // OPTIONAL, unlike the fingerprint above: a line with no rack sentence is
+      // a complete, answerable question about the crate, so its absence must
+      // never reject the payload and strand the client on the plain message.
+      rackLine: typeof it.rackLine === 'string' && it.rackLine.length > 0 ? it.rackLine : null,
     });
   }
   return { reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION, items };
@@ -749,16 +783,25 @@ export function describeBookCrateChange(input: BookCratePlacementInput): string[
  * Groups are ordered largest-first, then alphabetically, so the same selection
  * always reads the same way; books with no recorded crate sort last because
  * they are the uninteresting case (nothing is being destroyed for them).
+ *
+ * THE RACK SENTENCES ARE DEDUPED, NOT GROUPED. They are per-book but rarely
+ * distinct — 200 books coming off one rack into one position-less crate share a
+ * single "Rack 38-A will be cleared." — so repeating it 200 times would bury the
+ * one line that differs. Sorted rather than first-seen for the same reason the
+ * groups are: the same selection must read the same way however the server
+ * enumerated it.
  */
 export function summarizeBookCrateChanges(
-  // Structurally typed to the two fields it reads, not to the full change
-  // line: this is presentation, and it has no business requiring the
-  // acknowledgement fingerprint just to count groups.
-  items: ReadonlyArray<Pick<BookCrateChangeItem, 'currentLabel' | 'nextLabel'>>,
+  // Structurally typed to the fields it reads, not to the full change line:
+  // this is presentation, and it has no business requiring the acknowledgement
+  // fingerprint just to count groups.
+  items: ReadonlyArray<Pick<BookCrateChangeItem, 'currentLabel' | 'nextLabel' | 'rackLine'>>,
 ): {
   total: number;
   nextLabel: string | null;
   groups: Array<{ currentLabel: string | null; count: number }>;
+  /** Every distinct rack sentence in this set, deduped and ordered. */
+  rackLines: string[];
 } {
   const counts = new Map<string, { currentLabel: string | null; count: number }>();
   for (const it of items) {
@@ -776,11 +819,15 @@ export function summarizeBookCrateChanges(
     if (b.count !== a.count) return b.count - a.count;
     return a.currentLabel.localeCompare(b.currentLabel);
   });
+  const rackLines = [
+    ...new Set(items.map((it) => it.rackLine).filter((l): l is string => !!l && l.length > 0)),
+  ].sort((a, b) => a.localeCompare(b));
   return {
     total: items.length,
     // Every item shares one destination, so the first item's next label speaks
     // for all of them.
     nextLabel: items[0]?.nextLabel ?? null,
     groups,
+    rackLines,
   };
 }

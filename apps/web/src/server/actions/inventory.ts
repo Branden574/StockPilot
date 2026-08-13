@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   isPositionedCrate,
   PLACE_DEST_COLUMNS,
+  plannedPlaceDest,
   toPlaceDest,
   type PlaceDest,
 } from '@/lib/locations/destination-option';
@@ -144,6 +145,21 @@ export async function removeStockFromLocationAction(
      *  is left in (or no crate at all). Reported because the operator asked to
      *  remove stock, not to relabel anything. */
     crateSyncUpdated?: boolean;
+    /**
+     * The crate half followed the stock, but the RACK label was deliberately
+     * LEFT AS IT WAS rather than erased.
+     *
+     * REACHABLE HERE, and it always takes this branch. A write-off draining one
+     * of two holdings can leave the book in a single POSITION-LESS crate, whose
+     * pair is `(null, null)` — an erasure of a rack a human typed. There is no
+     * confirmation gate on a write-off (there is no destination to prompt
+     * about), so `rackClearAcknowledged` is never set on this path and the
+     * reconciliation ALWAYS preserves. That is the correct outcome; being silent
+     * about it was not. The service has reported it in `rackPreservedItemIds`
+     * since the rack channel shipped and this boundary discarded it, so the
+     * operator was told nothing while the rack label went stale.
+     */
+    crateSyncRackPreserved?: boolean;
   }>
 > {
   const parsed = removeStockFromLocationSchema.safeParse(input);
@@ -167,6 +183,9 @@ export async function removeStockFromLocationAction(
       ...(crateSync && crateSync.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(crateSync && crateSync.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
+      ...(crateSync && crateSync.rackPreservedItemIds.length > 0
+        ? { crateSyncRackPreserved: true }
+        : {}),
     });
   } catch (e) {
     return toResult(e);
@@ -434,6 +453,36 @@ const acknowledgedCrateChangesSchema = z
   .optional();
 
 /**
+ * `acknowledgedRackChanges` — the answer to the OTHER half of the same
+ * confirmation: a rack this placement would ERASE.
+ *
+ * ═══ ITS PRESENCE IS THE CAPABILITY DECLARATION ═══
+ *
+ * A client cannot predict a rack erasure locally — only a reader of the live
+ * holdings can tell a full move from a split — so a capable client's FIRST
+ * request carries an EMPTY array and answers the refusal on the retry. That is
+ * why `[]` and `undefined` must stay distinguishable here: `[]` means "ask me",
+ * `undefined` means "I cannot be asked", and the server never refuses the
+ * second kind. It preserves the rack instead and says so (see
+ * `assertBookCratePlacementAllowed`).
+ *
+ * Additive and separate from `acknowledgedCrateChanges`, which keeps its exact
+ * shape and meaning. Widening THAT fingerprint to cover the rack would break
+ * every already-shipped client, whose acknowledgement is computed over the crate
+ * pair alone — see packages/core/src/inventory/book-rack-placement.ts.
+ */
+const acknowledgedRackChangesSchema = z
+  .array(
+    z.object({
+      itemId: z.string().uuid(),
+      // Opaque here too: produced and compared by bookRackFingerprint.
+      currentFingerprint: z.string().min(1).max(256),
+    }),
+  )
+  .max(200)
+  .optional();
+
+/**
  * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
  * ONE builder, driven by the ONE core planner, so every write path agrees on
  * what a set of fields creates AND on what it is called.
@@ -444,6 +493,72 @@ const acknowledgedCrateChangesSchema = z
  * from `deriveNewLocationName` is character-for-character the name inserted
  * here (and therefore the one migration 0270's dedupe index matches).
  */
+/**
+ * ═══ RESOLVE THE DESTINATION WITHOUT MINTING IT ═══
+ *
+ * The gate must run BEFORE a "+ New rack / crate" row is created, or an operator
+ * who taps "Go back" at the confirmation leaves an empty location behind that
+ * nothing ever cleans up. (L4L runs 50 racks and zero crates, so the first
+ * orphan would be visible clutter in their locations list.)
+ *
+ * So each placement action now resolves in TWO steps:
+ *
+ *   1. this — find the existing row this input would REUSE, or describe the row
+ *      it would create. Reads only; creates nothing, asserts nothing;
+ *   2. `commitNewLocation` below, AFTER the gate has been satisfied — the actual
+ *      find-or-create, which re-runs the lookup and so also closes the race with
+ *      anyone who created the same name in between.
+ *
+ * `toLocationId` is null for a row that does not exist yet, which is exactly the
+ * truth the sync prediction needs: nothing can be holding stock at a row that
+ * does not exist, so every surviving holding really is a rival placement.
+ */
+async function resolveNewLocation(
+  svc: LocationsService,
+  n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
+): Promise<{ toLocationId: string | null; dest: PlaceDest }> {
+  const input = newLocationInput(n);
+  const existing = await svc.findRackOrCrate(input);
+  if (existing) {
+    // From the RESOLVED row, NOT from what the user typed. A case-insensitive
+    // reuse ("blue #4" matching the existing "Blue #4") returns the location
+    // that already exists, and ITS columns are the truth about that crate.
+    return {
+      toLocationId: (existing as { id: string }).id,
+      dest: toPlaceDest(existing as unknown as Record<string, unknown>),
+    };
+  }
+  // Nothing to reuse: describe the row the insert will hold, from the same ONE
+  // planner verdict that will name it. See `plannedPlaceDest`.
+  return {
+    toLocationId: null,
+    dest: plannedPlaceDest({
+      kind: input.kind,
+      name: input.name,
+      rackNumber: input.rackNumber,
+      rackRow: input.rackRow,
+      crateColor: input.crateColor,
+      crateNumber: input.crateNumber,
+    }),
+  };
+}
+
+/**
+ * Mint the destination the gate has now approved — or reuse whatever appeared in
+ * the window since `resolveNewLocation` looked. Returns the REAL row's id and
+ * columns, which is what every write below uses.
+ */
+async function commitNewLocation(
+  svc: LocationsService,
+  n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
+): Promise<{ toLocationId: string; dest: PlaceDest }> {
+  const created = await svc.findOrCreateRackOrCrate(newLocationInput(n));
+  return {
+    toLocationId: (created as { id: string }).id,
+    dest: toPlaceDest(created as unknown as Record<string, unknown>),
+  };
+}
+
 function newLocationInput(
   n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
 ) {
@@ -508,6 +623,7 @@ const transferStockActionSchema = z
     destination: destinationSchema,
     // The Transfer modal answers the book-crate gate too — see the action body.
     acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
+    acknowledgedRackChanges: acknowledgedRackChangesSchema,
   })
   .refine(
     (v) =>
@@ -535,6 +651,19 @@ export async function transferStockAction(
      *  crate, so there was nothing to synchronize the summary to and it was left
      *  alone. It may now name a crate that holds none of it. */
     crateSyncUnplaced?: boolean;
+    /**
+     * The stock moved and the crate label followed it, but the RACK label was
+     * deliberately LEFT AS IT WAS: the reconciliation would have ERASED a rack
+     * a human recorded, and nobody was shown that erasure — an older client, a
+     * request that did not carry the rack acknowledgement, or a placement whose
+     * rack outcome the gate could not predict in time to ask about.
+     *
+     * Reported rather than swallowed, and that reporting is the whole trade: a
+     * stale rack label is visibly wrong and recoverable (the audit row says what
+     * it was), a wiped one is gone. The label may now name a rack this stock has
+     * left.
+     */
+    crateSyncRackPreserved?: boolean;
   }>
 > {
   const parsed = transferStockActionSchema.safeParse(input);
@@ -546,8 +675,11 @@ export async function transferStockAction(
     // Resolve the org context ONCE and reuse it for the warehouse
     // org-verification + both services (withContext is request-cached).
     const ctx = await withContext();
-    let toLocationId: string;
+    let toLocationId: string | null;
     let dest: PlaceDest;
+    // Set only on the "+ New" branch, and only while the row is still
+    // hypothetical — it is what the gate-approved mint below is built from.
+    let pendingNewRack: NewLocationFields & { warehouseId: string } | null = null;
 
     if ('existingLocationId' in data.destination) {
       // The destination's own crate columns are now needed here — the gate
@@ -603,17 +735,11 @@ export async function transferStockAction(
       if (!(await warehouseInOrg(ctx, n.warehouseId))) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
-      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
-      // with the same warehouse+name first (the interactive new-rack path
-      // used to always INSERT, minting duplicate locations — see migration
-      // 0270). Asserts 'locations:manage' + assertPlanLimit('locations')
-      // internally on the create-fallback path only.
-      const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
-      toLocationId = created.id;
-      // From the RESOLVED row, not the typed input — a case-insensitive reuse
-      // returns the crate that already exists and ITS columns are the truth.
-      dest = toPlaceDest(created as Record<string, unknown>);
+      // RESOLVED, NOT MINTED — see resolveNewLocation. Creating the row here and
+      // gating afterwards is what left an empty crate behind whenever the
+      // operator answered "Go back" to the confirmation.
+      ({ toLocationId, dest } = await resolveNewLocation(new LocationsService(ctx), n));
+      pendingNewRack = n;
     }
 
     const svc = new InventoryService(ctx);
@@ -645,11 +771,26 @@ export async function transferStockAction(
     // crate; see the call below.
     const verified = await svc.assertBookCratePlacementAllowed([data.itemId], dest, {
       acknowledged: data.acknowledgedCrateChanges,
+      acknowledgedRacks: data.acknowledgedRackChanges,
       toLocationId,
       moves: new Map([
         [data.itemId, { fromLocationId: data.fromLocationId, quantity: data.quantity }],
       ]),
     });
+    // THE GATE IS SATISFIED — now the row may be minted. Nothing above this line
+    // creates a location, so every refusal path leaves the warehouse exactly as
+    // it found it.
+    if (toLocationId === null) {
+      // Unreachable with no pending row: `null` is set on the "+ New" branch and
+      // nowhere else. Refuse rather than guess a destination — guessing one is
+      // the whole defect this family of changes keeps closing.
+      if (!pendingNewRack) {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
+      }
+      const minted = await commitNewLocation(new LocationsService(ctx), pendingNewRack);
+      toLocationId = minted.toLocationId;
+      dest = minted.dest;
+    }
     await svc.transferStock({
       itemId: data.itemId,
       fromLocationId: data.fromLocationId,
@@ -668,7 +809,7 @@ export async function transferStockAction(
     if (isPositionedCrate(dest)) {
       await svc.stampPlacementBin([data.itemId], dest);
     }
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
       await svc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -685,6 +826,7 @@ export async function transferStockAction(
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
     });
   } catch (e) {
     // Same insufficient_stock → friendly-message mapping as placeStockAction
@@ -711,6 +853,7 @@ const placeStockSchema = z.object({
   notes: z.string().max(2000).optional(),
   destination: destinationSchema,
   acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
+  acknowledgedRackChanges: acknowledgedRackChangesSchema,
 });
 
 export type PlaceStockInput = z.input<typeof placeStockSchema>;
@@ -746,6 +889,19 @@ export async function placeStockAction(
      * be a bare `continue` inside the reconciliation.
      */
     crateSyncUnplaced?: boolean;
+    /**
+     * The stock moved and the crate label followed it, but the RACK label was
+     * deliberately LEFT AS IT WAS: the reconciliation would have ERASED a rack
+     * a human recorded, and nobody was shown that erasure — an older client, a
+     * request that did not carry the rack acknowledgement, or a placement whose
+     * rack outcome the gate could not predict in time to ask about.
+     *
+     * Reported rather than swallowed, and that reporting is the whole trade: a
+     * stale rack label is visibly wrong and recoverable (the audit row says what
+     * it was), a wiped one is gone. The label may now name a rack this stock has
+     * left.
+     */
+    crateSyncRackPreserved?: boolean;
   }>
 > {
   const parsed = placeStockSchema.safeParse(input);
@@ -759,8 +915,11 @@ export async function placeStockAction(
     // destination org-verification below. `withContext` is request-cached, so
     // the services constructed from it below share the same context.
     const ctx = await withContext();
-    let toLocationId: string;
+    let toLocationId: string | null;
     let dest: PlaceDest;
+    // Set only on the "+ New" branch, and only while the row is still
+    // hypothetical — see resolveNewLocation.
+    let pendingNewRack: (NewLocationFields & { warehouseId: string }) | null = null;
 
     if ('existingLocationId' in data.destination) {
       // TENANT-ISOLATION GUARD: transfer_stock only verifies the ITEM's org, and
@@ -796,19 +955,15 @@ export async function placeStockAction(
       if (!(await warehouseInOrg(ctx, n.warehouseId))) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
-      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
-      // with the same warehouse+name first — see migration 0270 (dup-rack
-      // fix) and the shared helper's doc comment for why matching stays
-      // case-insensitive.
-      const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
-      toLocationId = created.id;
-      // From the RESOLVED row, NOT from what the user typed. A
-      // case-insensitive reuse ("blue #4" matching the existing "Blue #4")
-      // returns the location that already exists, and its columns are the
-      // truth about that crate — stamping the typed spelling instead would
-      // make the item summary and the location row disagree.
-      dest = toPlaceDest(created as Record<string, unknown>);
+      // RESOLVED, NOT MINTED. The row is only created once the gate below is
+      // satisfied, so "Go back" at the confirmation cannot leave an empty
+      // rack/crate behind. An EXISTING match still wins and still supplies its
+      // own columns — a case-insensitive reuse ("blue #4" matching the existing
+      // "Blue #4") is the row that already exists, and stamping the typed
+      // spelling instead would make the item summary and the location row
+      // disagree. See resolveNewLocation.
+      ({ toLocationId, dest } = await resolveNewLocation(new LocationsService(ctx), n));
+      pendingNewRack = n;
     }
 
     const invSvc = new InventoryService(ctx);
@@ -821,11 +976,24 @@ export async function placeStockAction(
     // change that cannot happen.
     const verified = await invSvc.assertBookCratePlacementAllowed([data.itemId], dest, {
       acknowledged: data.acknowledgedCrateChanges,
+      acknowledgedRacks: data.acknowledgedRackChanges,
       toLocationId,
       moves: new Map([
         [data.itemId, { fromLocationId: data.fromLocationId, quantity: data.quantity }],
       ]),
     });
+
+    // THE GATE IS SATISFIED — only now may the row be minted. Nothing above this
+    // line creates a location, so every refusal path leaves the warehouse
+    // exactly as it found it.
+    if (toLocationId === null) {
+      if (!pendingNewRack) {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
+      }
+      const minted = await commitNewLocation(new LocationsService(ctx), pendingNewRack);
+      toLocationId = minted.toLocationId;
+      dest = minted.dest;
+    }
 
     await invSvc.transferStock({
       itemId: data.itemId,
@@ -842,7 +1010,7 @@ export async function placeStockAction(
     // gate's own pre-move read: the sync re-reads and writes only where the two
     // agree, so a crate edited while the stock was moving is left alone rather
     // than overwritten by an acknowledgement that named a different crate.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
       await invSvc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -860,6 +1028,7 @@ export async function placeStockAction(
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -906,6 +1075,7 @@ const bulkPlaceStockSchema = z.object({
   // dropped by bulk. There is now exactly one destination shape.
   destination: destinationSchema,
   acknowledgedCrateChanges: acknowledgedCrateChangesSchema,
+  acknowledgedRackChanges: acknowledgedRackChangesSchema,
 });
 
 export type BulkPlaceStockInput = z.input<typeof bulkPlaceStockSchema>;
@@ -928,6 +1098,19 @@ export async function bulkPlaceStockAction(
      *  there was nothing to synchronize its summary to and it was left alone —
      *  possibly naming a crate that holds none of it. */
     crateSyncUnplaced?: boolean;
+    /**
+     * The stock moved and the crate label followed it, but the RACK label was
+     * deliberately LEFT AS IT WAS: the reconciliation would have ERASED a rack
+     * a human recorded, and nobody was shown that erasure — an older client, a
+     * request that did not carry the rack acknowledgement, or a placement whose
+     * rack outcome the gate could not predict in time to ask about.
+     *
+     * Reported rather than swallowed, and that reporting is the whole trade: a
+     * stale rack label is visibly wrong and recoverable (the audit row says what
+     * it was), a wiped one is gone. The label may now name a rack this stock has
+     * left.
+     */
+    crateSyncRackPreserved?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -942,8 +1125,9 @@ export async function bulkPlaceStockAction(
     // Resolve + org-verify the destination ONCE — same tenant-isolation guards
     // as placeStockAction (destination location/warehouse must be in the
     // caller's org; can't place INTO a staging/unplaced bucket).
-    let toLocationId: string;
+    let toLocationId: string | null;
     let dest: PlaceDest;
+    let pendingNewRack: (NewLocationFields & { warehouseId: string }) | null = null;
     if ('existingLocationId' in data.destination) {
       const { data: loc } = await ctx.supabase
         .from('locations')
@@ -971,15 +1155,11 @@ export async function bulkPlaceStockAction(
       if (!wh) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
-      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
-      // with the same warehouse+name first — see migration 0270 (dup-rack
-      // fix) and the shared helper's doc comment for why matching stays
-      // case-insensitive.
-      const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.findOrCreateRackOrCrate(newLocationInput(n));
-      toLocationId = created.id;
-      // From the RESOLVED row, not the typed input — see placeStockAction.
-      dest = toPlaceDest(created as Record<string, unknown>);
+      // RESOLVED, NOT MINTED — the batch gate runs first, so a "Go back" over
+      // 200 rows cannot leave an orphaned crate behind either. See
+      // resolveNewLocation.
+      ({ toLocationId, dest } = await resolveNewLocation(new LocationsService(ctx), n));
+      pendingNewRack = n;
     }
 
     // Place each item. A single failure (e.g. insufficient_stock if the row's
@@ -997,6 +1177,7 @@ export async function bulkPlaceStockAction(
       dest,
       {
         acknowledged: data.acknowledgedCrateChanges,
+        acknowledgedRacks: data.acknowledgedRackChanges,
         toLocationId,
         // NOT `new Map(...)`: that keeps the LAST entry per item, so a book
         // listed in two placements is described to the gate by only one of its
@@ -1009,6 +1190,15 @@ export async function bulkPlaceStockAction(
         moves: toBookCratePlacementMoves(data.placements),
       },
     );
+    // THE GATE IS SATISFIED — only now may the row be minted.
+    if (toLocationId === null) {
+      if (!pendingNewRack) {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
+      }
+      const minted = await commitNewLocation(new LocationsService(ctx), pendingNewRack);
+      toLocationId = minted.toLocationId;
+      dest = minted.dest;
+    }
     let placed = 0;
     const placedItemIds: string[] = [];
     const failed: Array<{ itemId: string; message: string }> = [];
@@ -1039,7 +1229,7 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
       await invSvc.syncBookCratePlacement(placedItemIds, {
         verified,
         audit: {
@@ -1063,6 +1253,7 @@ export async function bulkPlaceStockAction(
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
     });
   } catch (e) {
     return toResult(e);

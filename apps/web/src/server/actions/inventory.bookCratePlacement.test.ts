@@ -44,7 +44,12 @@ vi.mock('@/server/services/audit', async (importOriginal) => {
 import { audit } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
 
-import { bulkPlaceStockAction, placeStockAction, transferStockAction } from './inventory';
+import {
+  bulkPlaceStockAction,
+  placeStockAction,
+  removeStockFromLocationAction,
+  transferStockAction,
+} from './inventory';
 
 // Prototype spies rather than a module mock: the REAL InventoryService runs,
 // with only the physical move and the rack-label stamp replaced. The crate gate
@@ -1312,5 +1317,100 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
     // 8 + 7. Last-wins recorded 7 — a trail that under-reports the placement
     // by more than half is a trail nobody can reconcile a count against.
     expect(crateAudits[0]!.extra?.quantity).toBe(15);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE WRITE-OFF BOUNDARY — where a reported outcome went to die.
+//
+// `removeStockFromLocation` returns the full BookCrateSyncResult, and this
+// action re-projects it onto the flags a client can read. `rackPreservedItemIds`
+// was simply not in that projection, so the service dutifully reported a rack
+// label it had withheld an erasure on, and the action dropped it on the floor —
+// no client on either platform could have rendered it, because it never arrived.
+//
+// A boundary test, deliberately: the dialog specs mock this action, so deleting
+// the spread below leaves every one of them green. The flag is optional, so the
+// compiler is happy too. This is the only place the mapping can be pinned.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('removeStockFromLocationAction — every reported outcome reaches the client', () => {
+  /** Every bucket the reconciliation can fill, all empty. Typed explicitly:
+   *  bare `[]` infers `never[]`, which makes each case below unassignable. */
+  const EMPTY_SYNC: {
+    syncedItemIds: string[];
+    failedItemIds: string[];
+    skippedItemIds: string[];
+    staleItemIds: string[];
+    unplacedItemIds: string[];
+    rackPreservedItemIds: string[];
+  } = {
+    syncedItemIds: [],
+    failedItemIds: [],
+    skippedItemIds: [],
+    staleItemIds: [],
+    unplacedItemIds: [],
+    rackPreservedItemIds: [],
+  };
+
+  type SyncBuckets = typeof EMPTY_SYNC;
+
+  function withSync(sync: Partial<SyncBuckets>, crateSyncUpdated = false) {
+    ctxRef.ctx = { organizationId: ORG_ID, supabase: makeSupabaseStub({}).client };
+    return vi
+      .spyOn(InventoryService.prototype, 'removeStockFromLocation')
+      .mockResolvedValue({
+        item: { id: BOOK_ID },
+        crateSync: { ...EMPTY_SYNC, ...sync },
+        crateSyncUpdated,
+      } as unknown as Awaited<
+        ReturnType<InventoryService['removeStockFromLocation']>
+      >);
+  }
+
+  const INPUT = {
+    itemId: BOOK_ID,
+    locationId: FROM_LOC,
+    quantity: 5,
+    reason: 'Water damage on the bottom row',
+  };
+
+  it('forwards a PRESERVED RACK, which it used to discard', async () => {
+    withSync({ syncedItemIds: [BOOK_ID], rackPreservedItemIds: [BOOK_ID] });
+    const res = await removeStockFromLocationAction(INPUT);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncRackPreserved).toBe(true);
+  });
+
+  it('does NOT claim a preserved rack when none was withheld', async () => {
+    withSync({ syncedItemIds: [BOOK_ID] });
+    const res = await removeStockFromLocationAction(INPUT);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncRackPreserved).toBeUndefined();
+  });
+
+  it('forwards every OTHER bucket too, so no outcome is projected away', async () => {
+    // The regression class, stated once: a bucket the service fills and this
+    // projection omits is invisible to every client by construction.
+    const cases = [
+      ['failedItemIds', 'crateSyncFailed'],
+      ['skippedItemIds', 'crateSyncSkipped'],
+      ['staleItemIds', 'crateSyncStale'],
+      ['unplacedItemIds', 'crateSyncUnplaced'],
+      ['rackPreservedItemIds', 'crateSyncRackPreserved'],
+    ] as const;
+    for (const [bucket, flag] of cases) {
+      const only: Partial<SyncBuckets> = {};
+      only[bucket] = [BOOK_ID];
+      withSync(only);
+      const res = await removeStockFromLocationAction(INPUT);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(
+          (res.data as Record<string, unknown>)[flag],
+          `${bucket} never reaches the client as ${flag}`,
+        ).toBe(true);
+      }
+    }
   });
 });

@@ -30,12 +30,14 @@ vi.mock('next/cache', () => ({
 const {
   mockTransferStock,
   mockFindOrCreateRackOrCrate,
+  mockFindRackOrCrate,
   mockAssertBookCrate,
   mockSyncBookCrate,
   ctxRef,
 } = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
+  mockFindRackOrCrate: vi.fn(async () => null as { id: string } | null),
   // The Transfer path now runs the SAME book-crate gate + reconciliation the
   // Staging put-away runs — see transferStockAction. Its own behaviour is
   // covered in inventory.bookCratePlacement.test.ts; here they only need to
@@ -47,6 +49,7 @@ const {
     skippedItemIds: [] as string[],
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
+    rackPreservedItemIds: [] as string[],
   })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -70,6 +73,10 @@ vi.mock('@/server/services/inventory', () => ({
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
     findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
+    // The READ half, now that the gate runs BEFORE the row is minted. Defaults
+    // to "nothing to reuse", so these suites still exercise the create path and
+    // `findOrCreateRackOrCrate` is still what actually mints.
+    findRackOrCrate = mockFindRackOrCrate;
   },
 }));
 
@@ -143,6 +150,7 @@ beforeEach(() => {
     skippedItemIds: [],
     staleItemIds: [],
     unplacedItemIds: [],
+    rackPreservedItemIds: [],
   });
   installContext();
 });
@@ -393,6 +401,7 @@ describe('transferStockAction (destination union)', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [ITEM_ID],
+      rackPreservedItemIds: [],
     });
 
     const result = await transferStockAction({
