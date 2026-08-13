@@ -8,6 +8,7 @@ import {
   bookCrateRefusal,
   bookRackRefusal,
   rackAcknowledgementField,
+  transferRequestBody,
   crateSyncWarning,
   decideNewRackPlacement,
   placementRefusalAlert,
@@ -342,7 +343,16 @@ describe('the item screen\'s free-form Move stock is untouched', () => {
 
 describe('the write still goes through the transfer route', () => {
   it('uses transferStock(), never the RPC', () => {
-    expect(modal).toContain('await transferStock(itemId, {');
+    // REWRITTEN (reason): this asserted the inline object literal
+    // `await transferStock(itemId, {`. The body moved into
+    // transferRequestBody() in src/lib precisely so the harness could reach
+    // it -- a verifier flipped the rack key's spread to conditional (the
+    // shipped bug) and the whole suite stayed green while the body was
+    // inline. The INTENT here is unchanged and still worth pinning: the write
+    // goes through the HTTP route, never a direct RPC.
+    expect(modal).toContain('await transferStock(');
+    expect(modal).toContain('transferRequestBody({');
+    expect(modal).not.toContain('.rpc(');
     expect(modal).not.toContain('transfer_stock');
     expect(modal).not.toContain('.rpc(');
   });
@@ -555,7 +565,11 @@ describe('the sheet answers the book-crate gate', () => {
     // phone must be able to answer or every crated book dead-ends on a toast.
     expect(modal).toContain('bookCrateRefusal(e)');
     expect(modal).toContain('toBookCrateAcknowledgement(detail.items)');
-    expect(modal).toContain('acknowledgedCrateChanges');
+    // The key names now live in transferRequestBody() (src/lib), where
+    // move-stock-form.test.ts asserts the two keys' asymmetry by VALUE. What
+    // stays here is the half a value assertion cannot reach: that the sheet
+    // hands its answer to that seam rather than re-typing a payload.
+    expect(modal).toContain('acknowledged: opts.acknowledged');
     // Asked at most once more — a refusal that survives an acknowledgement
     // matching the server's own labels is a real error, not a loop.
     expect(modal).toContain('bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)');
@@ -1341,5 +1355,70 @@ describe('rackAcknowledgementField — presence IS the capability declaration', 
     // an acknowledgement already in flight.
     const ack = [{ itemId: 'i1', currentFingerprint: '["38","a"]' }];
     expect(rackAcknowledgementField(ack).acknowledgedRackChanges).not.toBe(ack);
+  });
+});
+
+/**
+ * THE WIRING PIN THAT DID NOT EXIST.
+ *
+ * A verifier changed the sheet's spread of the rack key from unconditional to
+ * conditional -- the shipped bug, restored -- and the ENTIRE mobile suite
+ * stayed green, typecheck included, because the field is optional. The rule
+ * lived in rackAcknowledgementField (pinned) but the WIRING that calls it was
+ * pinned by nothing, so "the phone asks at all" rested on one unprotected line.
+ *
+ * These assert the BODY that actually goes on the wire. The asymmetry between
+ * the two keys is the property under test, not an accident:
+ *   - the RACK key is always present, because its presence IS the capability
+ *     declaration; absent, the server fail-safes forever and nobody is asked.
+ *   - the CRATE key appears only when non-empty, because that is the shape
+ *     already shipped to devices in the field.
+ */
+describe('transferRequestBody — the two keys are asymmetric, and that is load-bearing', () => {
+  const base = {
+    fromLocationId: 'loc-1',
+    quantity: 3,
+    destination: { toLocationId: 'loc-2' },
+  };
+
+  it('ALWAYS sends the rack key, even with nothing acknowledged — presence is the capability signal', () => {
+    const body = transferRequestBody(base);
+    expect(body).toHaveProperty('acknowledgedRackChanges');
+    expect(body.acknowledgedRackChanges).toEqual([]);
+  });
+
+  it('still sends the rack key when the list is explicitly null or undefined', () => {
+    expect(transferRequestBody({ ...base, acknowledgedRacks: null })).toHaveProperty(
+      'acknowledgedRackChanges',
+    );
+    expect(transferRequestBody({ ...base, acknowledgedRacks: undefined })).toHaveProperty(
+      'acknowledgedRackChanges',
+    );
+  });
+
+  it('echoes back the rack acknowledgement it was given', () => {
+    const ack = [{ itemId: 'i-1', currentFingerprint: '["38","a"]' }];
+    expect(transferRequestBody({ ...base, acknowledgedRacks: ack }).acknowledgedRackChanges).toEqual(
+      ack,
+    );
+  });
+
+  it('OMITS the crate key when empty — the shape the live OTA already sends', () => {
+    expect(transferRequestBody(base)).not.toHaveProperty('acknowledgedCrateChanges');
+    expect(transferRequestBody({ ...base, acknowledged: [] })).not.toHaveProperty(
+      'acknowledgedCrateChanges',
+    );
+  });
+
+  it('sends the crate key when there is something to acknowledge', () => {
+    const ack = [{ itemId: 'i-1', currentFingerprint: '["blue","4"]' }];
+    expect(transferRequestBody({ ...base, acknowledged: ack }).acknowledgedCrateChanges).toEqual(ack);
+  });
+
+  it('carries the destination and omits blank notes', () => {
+    const body = transferRequestBody({ ...base, notes: '' });
+    expect(body.toLocationId).toBe('loc-2');
+    expect(body).not.toHaveProperty('notes');
+    expect(transferRequestBody({ ...base, notes: 'why' }).notes).toBe('why');
   });
 });

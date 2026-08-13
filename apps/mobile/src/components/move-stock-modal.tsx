@@ -21,7 +21,7 @@ import {
   crateSyncWarning,
   decideNewRackPlacement,
   placementRefusalAlert,
-  rackAcknowledgementField,
+  transferRequestBody,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
@@ -365,28 +365,23 @@ export function MoveStockModal({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await transferStock(itemId, {
-        fromLocationId: fromId,
-        quantity: qtyNum,
-        notes: notes.trim() || undefined,
-        ...destination,
-        ...(opts.acknowledged && opts.acknowledged.length > 0
-          ? { acknowledgedCrateChanges: opts.acknowledged }
-          : {}),
-        // NOT spread conditionally like the crate list above — the asymmetry is
-        // deliberate and the rule lives in `rackAcknowledgementField`, where a
-        // test can see it. The key is sent on EVERY request, even empty, because
-        // its presence is how this sheet declares it can be asked a rack
-        // question at all; an absent key makes the route take the fail-safe path
-        // (keep the rack, report crateSyncRackPreserved) on every single move.
-        //
-        // The empty first request is not a weak acknowledgement: this sheet
-        // holds a render-time snapshot and no live holdings, so it can never
-        // tell a full move (which clears the rack pair) from a split (which does
-        // not). It must be TOLD of an erasure by the only reader that knows and
-        // then echo that reading back — never predict one and pre-acknowledge it.
-        ...rackAcknowledgementField(opts.acknowledgedRacks),
-      });
+      const res = await transferStock(
+        itemId,
+        // The body is built by transferRequestBody() in src/lib, where a test
+        // can reach it. Its two keys are deliberately asymmetric -- the rack
+        // key always present (its presence is how this client declares it can
+        // answer a rack question), the crate key only when non-empty (the
+        // shape already shipped in the live OTA). Inlining that here is what
+        // let the shipped bug survive every test once already.
+        transferRequestBody({
+          fromLocationId: fromId,
+          quantity: qtyNum,
+          notes: notes.trim() || undefined,
+          destination,
+          acknowledged: opts.acknowledged,
+          acknowledgedRacks: opts.acknowledgedRacks,
+        }),
+      );
       // The stock moved. This says whether the book's CRATE LABEL followed it —
       // silence would make a move that relabelled nothing look identical to one
       // that did, which is the whole reason the summary drifted in the first

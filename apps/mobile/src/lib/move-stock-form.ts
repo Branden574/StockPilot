@@ -54,7 +54,7 @@ import {
 // flag on either route surfaces here as a type change rather than a silent gap.
 // A value import would pull './api' — and with it the Supabase client — into
 // this pure module and out of reach of the node test environment.
-import type { RemoveStockResult, TransferStockResult } from './stock-api';
+import type { RemoveStockResult, TransferStockBody, TransferStockResult } from './stock-api';
 
 export interface MoveDestination {
   id: string;
@@ -407,6 +407,57 @@ export function bookRackRefusal(e: unknown): BookRackChangeDetail | null {
  * present and empty, and this harness cannot render the modal. So the rule lives
  * here, where deleting it fails a test.
  */
+/**
+ * THE WHOLE REQUEST BODY, built where a test can reach it.
+ *
+ * WHY THIS IS A FUNCTION and not an object literal inside the sheet: a
+ * verifier changed the sheet's one wiring line from an unconditional spread to
+ * a conditional one -- literally the shipped bug this feature exists to fix --
+ * and the ENTIRE mobile suite stayed green, typecheck included, because the
+ * field is optional. The rule was pinned inside `rackAcknowledgementField`,
+ * where deleting it fails a test; the WIRING that calls it was pinned by
+ * nothing. So "the phone asks at all" rested on a single unprotected line, in
+ * a feature whose documented history is exactly this regression shipping once
+ * before and surviving every test.
+ *
+ * The two keys are deliberately asymmetric, and that asymmetry is the point:
+ *
+ *   `acknowledgedRackChanges` is sent ALWAYS, even empty. Its PRESENCE is how
+ *   this client declares it can be asked a rack question. An absent key makes
+ *   the server take the fail-safe path forever -- keep the rack, report
+ *   crateSyncRackPreserved -- so the phone would never be asked and the
+ *   operator would never learn a label went stale.
+ *
+ *   `acknowledgedCrateChanges` is sent ONLY when non-empty, because that is
+ *   the shape already shipped in the live OTA. Sending it empty would be a
+ *   payload change against devices in the field for no gain.
+ *
+ * An empty rack list is not a weak acknowledgement: this sheet holds a
+ * render-time snapshot and no live holdings, so it cannot tell a full move
+ * (which clears the rack pair) from a split (which does not). It must be TOLD
+ * of an erasure by the only reader that knows, then echo that reading back --
+ * never predict one and pre-acknowledge it.
+ */
+export function transferRequestBody(input: {
+  fromLocationId: string;
+  quantity: number;
+  notes?: string;
+  destination: Record<string, unknown>;
+  acknowledged?: readonly { itemId: string; currentFingerprint: string }[] | null;
+  acknowledgedRacks?: readonly BookRackAcknowledgedChange[] | null;
+}): TransferStockBody {
+  return {
+    fromLocationId: input.fromLocationId,
+    quantity: input.quantity,
+    ...(input.notes ? { notes: input.notes } : {}),
+    ...input.destination,
+    ...(input.acknowledged && input.acknowledged.length > 0
+      ? { acknowledgedCrateChanges: [...input.acknowledged] }
+      : {}),
+    ...rackAcknowledgementField(input.acknowledgedRacks),
+  } as TransferStockBody;
+}
+
 export function rackAcknowledgementField(
   acknowledgedRacks?: readonly BookRackAcknowledgedChange[] | null,
 ): { acknowledgedRackChanges: BookRackAcknowledgedChange[] } {
