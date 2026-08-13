@@ -396,7 +396,7 @@ function simulateMetricsRpc(
     if (t < since) continue;
     if (!scope.has(r.item_id)) continue;
     const day = Math.min(29, Math.max(0, Math.floor((t - since) / DAY_MS)));
-    const key = `${day} ${r.movement_type}`;
+    const key = `${day}\u0000${r.movement_type}`;
     const cur = grouped.get(key);
     if (cur) cur.count += 1;
     else grouped.set(key, { day, type: r.movement_type, count: 1 });
