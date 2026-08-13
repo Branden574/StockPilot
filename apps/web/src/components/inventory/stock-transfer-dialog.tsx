@@ -311,6 +311,10 @@ export function StockTransferDialog({
       toast.warning(
         `${itemName} was moved, but someone else changed its crate while it was moving — its label was left as they set it.`,
       );
+    } else if (res.data?.crateSyncUnplaced) {
+      toast.warning(
+        `${itemName} was moved, but none of its stock is in a rack or crate now — its crate label was left unchanged and may be wrong.`,
+      );
     } else if (res.data?.crateSyncSkipped) {
       toast.warning(
         `${itemName} now has stock in more than one location, so its crate label was left unchanged.`,

@@ -515,6 +515,11 @@ describe('the sheet answers the book-crate gate', () => {
     expect(modal).toContain('res.crateSyncFailed');
     expect(modal).toContain('res.crateSyncStale');
     expect(modal).toContain('res.crateSyncSkipped');
+    // The fourth bucket: the reconciliation found NO placed holding to follow
+    // (everything still in a bucket, or the stock picked away), so the label
+    // was left naming a crate that may hold none of it. It used to be a bare
+    // `continue` server-side — no flag, no alert, plain success on the phone.
+    expect(modal).toContain('res.crateSyncUnplaced');
   });
 });
 

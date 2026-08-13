@@ -544,9 +544,9 @@ export interface BookCrateSummary {
 }
 
 /**
- * What a reconciliation did, per bucket. Every caller must surface all three:
- * the stock moved in every case, so a silent bucket is a placement the operator
- * believes relabelled something it did not.
+ * What a reconciliation did, per bucket. Every caller must surface every one of
+ * them: the stock moved in every case, so a silent bucket is a placement the
+ * operator believes relabelled something it did not.
  */
 export interface BookCrateSyncResult {
   /** The summary was rewritten to match the holdings (a rack CLEARS the crate). */
@@ -562,6 +562,23 @@ export interface BookCrateSyncResult {
    * gave was about a different crate.
    */
   staleItemIds: string[];
+  /**
+   * NO PLACED HOLDING LEFT — every unit this book still has sits in a
+   * staging/unplaced system bucket, or it has no positive holding at all.
+   *
+   * There is nothing authoritative to synchronize to (the honest value would be
+   * "no crate", but a book with zero stock anywhere is a book whose recorded
+   * crate is a human's restocking intent, and wiping that on a read that came
+   * back empty is a data-loss bug wearing a tidy-up costume). So the summary is
+   * left alone — and REPORTED, because the label may now name a crate that
+   * holds none of it.
+   *
+   * This bucket used to be a bare `continue`: the operator was shown a plain
+   * success, the crate still read "Blue 4", and a picker walked to an empty
+   * crate. That is the one outcome this module exists to prevent, so it is
+   * never silent again — for any entry point.
+   */
+  unplacedItemIds: string[];
 }
 
 export class InventoryService {
@@ -3916,10 +3933,15 @@ export class InventoryService {
             return !!s && (s.crateColor !== null || s.crateNumber !== null);
           };
           crateCleared = sync.syncedItemIds.filter(hadCrate).length;
+          // EVERY not-written bucket, including `unplacedItemIds` — a book
+          // whose stock never reached the rack (its per-holding transfer
+          // failed) keeps the crate it had, and the count must say so rather
+          // than quietly treating "changed nothing" as "nothing to change".
           crateUnchanged = [
             ...sync.failedItemIds,
             ...sync.skippedItemIds,
             ...sync.staleItemIds,
+            ...sync.unplacedItemIds,
           ].filter(hadCrate).length;
         } else {
           // No freshness proof, so nothing may be written — see
@@ -4690,7 +4712,13 @@ export class InventoryService {
         error: e instanceof Error ? e.message : String(e),
         items: itemIds.length,
       });
-      return { syncedItemIds: [], failedItemIds: [...itemIds], skippedItemIds: [], staleItemIds: [] };
+      return {
+        syncedItemIds: [],
+        failedItemIds: [...itemIds],
+        skippedItemIds: [],
+        staleItemIds: [],
+        unplacedItemIds: [],
+      };
     }
   }
 
@@ -4705,7 +4733,13 @@ export class InventoryService {
     },
   ): Promise<BookCrateSyncResult> {
     if (itemIds.length === 0)
-      return { syncedItemIds: [], failedItemIds: [], skippedItemIds: [], staleItemIds: [] };
+      return {
+        syncedItemIds: [],
+        failedItemIds: [],
+        skippedItemIds: [],
+        staleItemIds: [],
+        unplacedItemIds: [],
+      };
     // THE FRESH READ. Everything below compares against it; nothing trusts the
     // caller's snapshot.
     const summaries = await this.readBookCrateSummaries(itemIds);
@@ -4718,7 +4752,13 @@ export class InventoryService {
     // a silent no-op dressed as success.
     const staleItemIds = itemIds.filter((id) => opts.verified.has(id) && !summaries.has(id));
     if (bookIds.length === 0)
-      return { syncedItemIds: [], failedItemIds: [], skippedItemIds: [], staleItemIds };
+      return {
+        syncedItemIds: [],
+        failedItemIds: [],
+        skippedItemIds: [],
+        staleItemIds,
+        unplacedItemIds: [],
+      };
 
     // ONE bounded read of every positive holding for these books. No kind
     // filter in the query: `.in('locations.kind', [...])` silently drops
@@ -4733,7 +4773,14 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', bookIds)
       .gt('quantity', 0);
-    if (error) return { syncedItemIds: [], failedItemIds: bookIds, skippedItemIds: [], staleItemIds };
+    if (error)
+      return {
+        syncedItemIds: [],
+        failedItemIds: bookIds,
+        skippedItemIds: [],
+        staleItemIds,
+        unplacedItemIds: [],
+      };
 
     type HoldingRow = {
       item_id: string;
@@ -4762,11 +4809,28 @@ export class InventoryService {
     // cost ONE RPC call instead of N.
     const batches = new Map<string, { color: string | null; number: string | null; ids: string[] }>();
     const skippedItemIds: string[] = [];
+    const unplacedItemIds: string[] = [];
     for (const itemId of bookIds) {
       const placed = placedByItem.get(itemId);
-      // No placed holding at all (everything still staged, or the stock left)
-      // — nothing authoritative to synchronize to. Leave the summary alone.
-      if (!placed || placed.size === 0) continue;
+      // ═══ NO PLACED HOLDING — LEFT ALONE, BUT NEVER SILENTLY ═══
+      // Everything this book still has is in a staging/unplaced bucket, or it
+      // has no positive holding at all. There is nothing authoritative to
+      // synchronize to, so the summary is not written (see the bucket's doc on
+      // BookCrateSyncResult for why "clear it" is the wrong repair).
+      //
+      // This used to be a BARE `continue` — neither a skip nor a failure. A
+      // move that emptied crate Blue 4 came back `{ ok: true }` with no flag at
+      // all, the item went on reading "Blue 4", and the operator was shown a
+      // plain success toast. The reviewer reproduced exactly that by
+      // transferring all 40 units of The Outsiders into Staging: zero
+      // inventory_set_book_storage calls, zero flags, and a picker walking to
+      // an empty crate. Reporting costs one array push and is the difference
+      // between a warning and a lie — for every entry point, including the
+      // acknowledged put-away paths that share this loop.
+      if (!placed || placed.size === 0) {
+        unplacedItemIds.push(itemId);
+        continue;
+      }
       // SPLIT: holdings authoritative, summary untouched — and REPORTED, so
       // the caller can say so instead of showing a plain success toast for a
       // sync that deliberately changed nothing.
@@ -4878,7 +4942,7 @@ export class InventoryService {
         );
       }
     }
-    return { syncedItemIds, failedItemIds, skippedItemIds, staleItemIds };
+    return { syncedItemIds, failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds };
   }
 
   /**

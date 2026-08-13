@@ -46,6 +46,7 @@ const {
     failedItemIds: [] as string[],
     skippedItemIds: [] as string[],
     staleItemIds: [] as string[],
+    unplacedItemIds: [] as string[],
   })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -71,6 +72,8 @@ vi.mock('@/server/services/locations', () => ({
     findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
   },
 }));
+
+import { bookCrateFingerprint } from '@stockpilot/core';
 
 import { ServiceError } from '@/server/services/context';
 import { transferStockAction } from './inventory';
@@ -139,6 +142,7 @@ beforeEach(() => {
     failedItemIds: [],
     skippedItemIds: [],
     staleItemIds: [],
+    unplacedItemIds: [],
   });
   installContext();
 });
@@ -288,5 +292,137 @@ describe('transferStockAction (destination union)', () => {
       expect(result.error.code).toBe('validation_error');
       expect(result.error.message).toBe("Can't transfer more than is available.");
     }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // A STAGING/UNPLACED BUCKET IS NOT A DESTINATION — the fourth surface
+  //
+  // placeStockAction, bulkPlaceStockAction and POST /api/v1/items/[id]/transfer
+  // all refused this already; Transfer did not, and the gap was not merely
+  // untidy. All 40 units of a book recorded "Blue 4" could be transferred into
+  // Staging: the gate refused first and PROMISED "Placing it here will change
+  // that to no crate", the operator acknowledged exactly that, the stock left
+  // Blue 4 — and the reconciliation, which classifies staging out of the
+  // placement set, found nothing to synchronize to and wrote nothing. Plain
+  // success, item still reads "Blue 4", picker walks to an empty crate.
+  //
+  // Neither shipped client can produce this: the web dialog filters
+  // `kind !== 'staging' && kind !== 'unplaced'` out of its destination list and
+  // the phone's Move stock sheet queries `.in('kind', ['rack','crate'])`. So
+  // nothing legitimate is being blocked here — only a forged or future caller.
+  // ─────────────────────────────────────────────────────────────────────────
+  for (const kind of ['staging', 'unplaced'] as const) {
+    it(`7. rejects transferring INTO a ${kind} bucket — no gate, no move`, async () => {
+      installContext({
+        destinationRow: {
+          id: EXISTING_LOC,
+          warehouse_id: WAREHOUSE_ID,
+          kind,
+          rack_number: null,
+          rack_row: null,
+          crate_color: null,
+          crate_number: null,
+          name: kind === 'staging' ? 'Staging' : 'Unplaced',
+        },
+      });
+
+      const result = await transferStockAction({
+        itemId: ITEM_ID,
+        fromLocationId: FROM_LOC,
+        quantity: 40,
+        destination: { existingLocationId: EXISTING_LOC },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('validation_error');
+        // The SAME sentence the three siblings answer with — one rule, one
+        // wording, every surface.
+        expect(result.error.message).toBe('Pick a rack or crate as the destination.');
+      }
+      // Refused BEFORE the book-crate gate can promise a clearing it cannot
+      // deliver, and before anything physical happens.
+      expect(mockAssertBookCrate).not.toHaveBeenCalled();
+      expect(mockTransferStock).not.toHaveBeenCalled();
+      expect(mockSyncBookCrate).not.toHaveBeenCalled();
+    });
+  }
+
+  it('8. an ACKNOWLEDGED transfer into staging is refused too — the acknowledgement is not a bypass', async () => {
+    // The exact request the reviewer ran: the client answered the gate's
+    // "Blue 4 will be cleared" prompt and retried. Answering a prompt does not
+    // turn a system bucket into a destination.
+    installContext({
+      destinationRow: {
+        id: EXISTING_LOC,
+        warehouse_id: WAREHOUSE_ID,
+        kind: 'staging',
+        rack_number: null,
+        rack_row: null,
+        crate_color: null,
+        crate_number: null,
+        name: 'Staging',
+      },
+    });
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+      acknowledgedCrateChanges: [
+        { itemId: ITEM_ID, currentFingerprint: bookCrateFingerprint('blue', '4') },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toBe('Pick a rack or crate as the destination.');
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it('9. surfaces crateSyncUnplaced — a reconciliation that found nothing to follow is never silent', async () => {
+    // The reconciliation's `placed.size === 0` branch used to be a bare
+    // `continue`: no sync, no skip, no failure, no flag. The action must now
+    // carry it, or a move that left the crate label describing an empty crate
+    // still looks identical to one that relabelled correctly.
+    mockSyncBookCrate.mockResolvedValueOnce({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [],
+      unplacedItemIds: [ITEM_ID],
+    });
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.crateSyncUnplaced).toBe(true);
+      // ...and it is not misreported as one of the other three.
+      expect(result.data.crateSyncFailed).toBeUndefined();
+      expect(result.data.crateSyncSkipped).toBeUndefined();
+      expect(result.data.crateSyncStale).toBeUndefined();
+    }
+    // The stock really moved — the flag is about the LABEL, never a rollback.
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+  });
+
+  it('10. a clean transfer does NOT set crateSyncUnplaced', async () => {
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.crateSyncUnplaced).toBeUndefined();
   });
 });

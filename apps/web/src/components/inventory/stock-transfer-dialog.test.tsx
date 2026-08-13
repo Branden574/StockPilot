@@ -315,3 +315,60 @@ describe('StockTransferDialog — the crate confirmation', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE DESTINATION LIST NEVER OFFERS A SYSTEM BUCKET
+//
+// transferStockAction now refuses a staging/unplaced destination server-side,
+// matching its three siblings. That refusal is only safe because no shipped
+// surface offers one: this dialog filters them out of the destination select
+// (the phone's Move stock sheet queries `.in('kind', ['rack','crate'])`), and
+// stock that is IN staging is placed through the staging workflow instead —
+// which this dialog says in as many words when every source is a bucket.
+//
+// Pinned here so a future "show every location" tidy-up cannot quietly hand
+// operators a destination the server will reject.
+// ---------------------------------------------------------------------------
+describe('StockTransferDialog — system buckets are not destinations', () => {
+  const WITH_BUCKETS = [
+    { id: 'loc-a', name: 'Receiving Dock', kind: null, warehouse_id: 'wh-1' },
+    { id: 'loc-b', name: 'Aisle A', kind: null, warehouse_id: 'wh-1' },
+    { id: 'loc-stg', name: 'Staging', kind: 'staging', warehouse_id: 'wh-1' },
+    { id: 'loc-unp', name: 'Unplaced', kind: 'unplaced', warehouse_id: 'wh-1' },
+  ];
+
+  it('omits Staging and Unplaced from the destination options', async () => {
+    const user = userEvent.setup();
+    render(
+      <StockTransferDialog
+        itemId="item-1"
+        itemName="Countertop Blender"
+        currentQuantity={40}
+        currentLocationId={null}
+        locations={WITH_BUCKETS as never}
+        holdings={
+          [
+            {
+              locationId: 'loc-a',
+              locationName: 'Receiving Dock',
+              quantity: 40,
+              kind: null,
+              warehouseId: 'wh-1',
+            },
+          ] as never
+        }
+        itemType="asset"
+        canManageLocations
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.click(screen.getAllByRole('combobox')[1]!);
+
+    // A real destination is offered...
+    expect(await screen.findByRole('option', { name: /aisle a/i })).toBeInTheDocument();
+    // ...and the two system buckets are not, in either spelling.
+    expect(screen.queryByRole('option', { name: /^staging$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^unplaced$/i })).not.toBeInTheDocument();
+  });
+});

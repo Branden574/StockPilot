@@ -55,6 +55,9 @@ export interface TransferStockResult {
   crateSyncFailed?: boolean;
   crateSyncSkipped?: boolean;
   crateSyncStale?: boolean;
+  /** No placed holding left after the move, so the summary had nothing to
+   *  follow and was left alone — it may now name a crate holding none of it. */
+  crateSyncUnplaced?: boolean;
 }
 
 /**

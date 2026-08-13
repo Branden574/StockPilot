@@ -41,8 +41,8 @@ export const dynamic = 'force-dynamic';
  *     fingerprint of the crate the client displayed, never a blanket flag.
  *
  * Answers { ok, toLocationId, crateSyncFailed?, crateSyncSkipped?,
- * crateSyncStale? }. The stock moved in every one of those cases; the flags say
- * whether the book's crate LABEL followed it.
+ * crateSyncStale?, crateSyncUnplaced? }. The stock moved in every one of those
+ * cases; the flags say whether the book's crate LABEL followed it.
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -296,6 +296,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       ...(crate.failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(crate.skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(crate.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      // No placed holding left after the move, so nothing to synchronize to and
+      // the summary was left alone — it may now name a crate holding none of
+      // it. Silence here was the web bug this route would otherwise inherit.
+      ...(crate.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as

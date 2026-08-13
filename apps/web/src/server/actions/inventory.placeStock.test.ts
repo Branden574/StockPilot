@@ -45,6 +45,7 @@ const {
     failedItemIds: [] as string[],
     skippedItemIds: [] as string[],
     staleItemIds: [] as string[],
+    unplacedItemIds: [] as string[],
   })),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
@@ -126,6 +127,7 @@ beforeEach(() => {
     failedItemIds: [],
     skippedItemIds: [],
     staleItemIds: [],
+    unplacedItemIds: [],
   });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();

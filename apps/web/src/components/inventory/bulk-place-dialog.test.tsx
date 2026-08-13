@@ -419,6 +419,29 @@ describe('BulkPlaceDialog — book crates', () => {
     );
   });
 
+  // ═══ THE OTHER SILENT SUCCESS — crateSyncUnplaced ═══
+  // A batch item whose stock ends up in NO rack or crate (a partial move that
+  // left the rest staged, or a concurrent pick) gives the reconciliation
+  // nothing authoritative to write. That branch used to be a bare `continue`:
+  // no flag, plain green toast, labels still naming crates that hold none of
+  // those titles.
+  it('warns when a title has nothing left in a rack or crate for its label to follow', async () => {
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValue({
+      ok: true,
+      data: { placed: 2, failed: [], crateSyncUnplaced: true },
+    });
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 7.');
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Some titles have no stock in a rack or crate now, so their crate labels were left unchanged and may be wrong.',
+    );
+  });
+
   it('warns when a summary was left alone because the title is now split', async () => {
     const user = userEvent.setup();
     mockBulkPlace.mockResolvedValue({

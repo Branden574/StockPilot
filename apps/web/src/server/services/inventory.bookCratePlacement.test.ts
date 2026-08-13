@@ -620,6 +620,126 @@ describe('syncBookCratePlacement', () => {
     expect(call.args).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // NO PLACED HOLDING AT ALL — reported, never a bare `continue`
+  //
+  // The same classification that makes the test above correct (staging is not
+  // a placement) means a book whose stock is ONLY in those buckets has no
+  // placement to synchronize to. The loop used to `continue` with no bucket at
+  // all: not synced, not skipped, not failed, not stale. The caller got
+  // `{ ok: true }` with every flag absent and showed a plain success — while
+  // the item went on naming a crate that now holds none of it.
+  //
+  // The reviewer reproduced exactly this by transferring all 40 units of a
+  // book recorded "Blue 4" into Staging, after acknowledging the gate's
+  // promise that Blue 4 would be CLEARED. It was not cleared and nothing said
+  // so. The transfer destination guard closes that particular door; this
+  // bucket closes the class, for every entry point that shares this loop.
+  // ═════════════════════════════════════════════════════════════════════════
+  it('ONLY staging/unplaced stock left → REPORTED as unplaced, and nothing is written', async () => {
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'The Outsiders', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-stg', { kind: 'staging' }),
+          holding(BOOK_A, 'loc-unp', { kind: 'unplaced' }),
+        ],
+        error: null,
+      },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(res).toEqual({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [],
+      unplacedItemIds: [BOOK_A],
+    });
+    // The summary is LEFT ALONE, not cleared: a book with no placed stock is a
+    // book whose recorded crate is a human's restocking intent, and wiping it
+    // on a read that came back empty would be data loss dressed as tidy-up.
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('NO positive holding anywhere → unplaced, not a silent all-clear', async () => {
+    // Everything picked/removed between the gate and the write. Same honest
+    // answer: nothing to synchronize to, and the caller is told.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'The Outsiders', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': { data: [], error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(res.unplacedItemIds).toEqual([BOOK_A]);
+    expect(res.syncedItemIds).toEqual([]);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('an unplaced book does not stop its BATCH-MATE from synchronizing', async () => {
+    // Per-item buckets, not an all-or-nothing verdict: BOOK_B really did land
+    // in Green #2 and its summary must follow, while BOOK_A is reported.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'The Outsiders', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+          }),
+          itemRow(BOOK_B, 'Maus I', 'book', null),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-stg', { kind: 'staging' }),
+          holding(BOOK_B, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_storage': { data: 1, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, BLUE_4],
+        [BOOK_B, NO_CRATE],
+      ]),
+    });
+
+    expect(res.unplacedItemIds).toEqual([BOOK_A]);
+    expect(res.syncedItemIds).toEqual([BOOK_B]);
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    // ...and only BOOK_B is in the write.
+    expect(call.args).toEqual({
+      p_item_ids: [BOOK_B],
+      p_crate_color: 'green',
+      p_crate_number: '2',
+    });
+  });
+
   it('a RACK-only destination CLEARS the crate summary (both args null)', async () => {
     const { svc, stub } = svcWith({
       'inventory_items.select': {
@@ -686,6 +806,7 @@ describe('syncBookCratePlacement', () => {
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
       staleItemIds: [],
+      unplacedItemIds: [],
     });
   });
 
@@ -782,6 +903,7 @@ describe('syncBookCratePlacement', () => {
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
       staleItemIds: [],
+      unplacedItemIds: [],
     });
   });
 
@@ -807,6 +929,7 @@ describe('syncBookCratePlacement', () => {
       failedItemIds: [BOOK_A],
       skippedItemIds: [],
       staleItemIds: [],
+      unplacedItemIds: [],
     });
   });
 
@@ -854,6 +977,7 @@ describe('syncBookCratePlacement', () => {
       failedItemIds: [],
       skippedItemIds: [],
       staleItemIds: [],
+      unplacedItemIds: [],
     });
     expect(stub.fromCalls).toEqual([]);
   });
@@ -1034,6 +1158,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       failedItemIds: [],
       skippedItemIds: [],
       staleItemIds: [BOOK_A],
+      unplacedItemIds: [],
     });
     // No holdings read either — there was nothing left to reconcile.
     expect(stub.fromCalls).not.toContain('item_stock_levels');
@@ -1048,6 +1173,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       failedItemIds: [],
       skippedItemIds: [],
       staleItemIds: [],
+      unplacedItemIds: [],
     });
   });
 });

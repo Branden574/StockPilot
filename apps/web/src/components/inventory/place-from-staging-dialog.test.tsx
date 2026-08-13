@@ -589,6 +589,33 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     );
   });
 
+  // ═══ THE OTHER SILENT SUCCESS — crateSyncUnplaced ═══
+  // The reconciliation writes only when a book's stock resolves to ONE
+  // rack/crate. When it resolves to NONE — every unit still in a staging bucket
+  // after a partial move, or the stock picked away underneath it — there is
+  // nothing authoritative to write, and the service used to `continue` with no
+  // bucket at all: no flag, plain green toast, item still naming a crate that
+  // holds none of it.
+  it('warns when nothing is left in a rack or crate for the label to follow', async () => {
+    const user = userEvent.setup();
+    mockPlaceStockAction.mockResolvedValue({
+      ok: true,
+      data: { toLocationId: 'c-blue4', crateSyncUnplaced: true },
+    });
+    renderBookDialog();
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // Green first — the stock really did move — then the caveat.
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Placed 10 copies of The Outsiders into Blue crate 4.',
+    );
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The Outsiders was placed, but none of its stock is in a rack or crate now — its crate label was left unchanged and may be wrong.',
+    );
+  });
+
   it('warns when the crate summary could not be written at all', async () => {
     const user = userEvent.setup();
     mockPlaceStockAction.mockResolvedValue({

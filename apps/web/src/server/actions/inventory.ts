@@ -452,6 +452,10 @@ export async function transferStockAction(
     /** The stock moved; someone else changed the book's crate while it was
      *  moving, so the summary was left alone. */
     crateSyncStale?: boolean;
+    /** The stock moved, and afterwards this title holds NO stock in any rack or
+     *  crate, so there was nothing to synchronize the summary to and it was left
+     *  alone. It may now name a crate that holds none of it. */
+    crateSyncUnplaced?: boolean;
   }>
 > {
   const parsed = transferStockActionSchema.safeParse(input);
@@ -483,6 +487,34 @@ export async function transferStockAction(
         .maybeSingle();
       if (!loc) {
         return err('validation_error', 'Destination location not found in your organization.');
+      }
+      // ═══ A STAGING/UNPLACED BUCKET IS NOT A DESTINATION — HERE TOO ═══
+      //
+      // The three siblings on this path already refuse it (placeStockAction,
+      // bulkPlaceStockAction, and the mobile /api/v1/items/[id]/transfer
+      // route); this one did not, and the omission was silently lossy rather
+      // than merely inconsistent. The reviewer transferred all 40 units of
+      // The Outsiders (recorded Blue 4) into Staging: the gate correctly
+      // refused first, PROMISING "Placing it here will change that to no
+      // crate" — and once the operator acknowledged exactly that, the stock
+      // left Blue 4, the reconciliation found no placed holding to
+      // synchronize to, and the item went on reading "Blue 4" with no flag on
+      // the response at all. The promise the operator answered was not kept,
+      // and nothing said so.
+      //
+      // NO SHIPPED SURFACE LOSES A WORKFLOW TO THIS. Both transfer clients
+      // already exclude the buckets from the destination list they render:
+      // the web Transfer dialog filters `kind !== 'staging' && kind !==
+      // 'unplaced'` (stock-transfer-dialog.tsx), and the phone's Move stock
+      // sheet queries `.in('kind', ['rack','crate'])` (move-stock-modal.tsx).
+      // "Return to staging" is not a transfer on either surface — the dialog
+      // says so in as many words when a source is staged ("placement is
+      // handled in the staging workflow"). So this closes a forged-request /
+      // future-client hole with zero user-visible regression, and the
+      // honest-reporting half below covers the races that can still land here
+      // legitimately.
+      if (loc.kind === 'staging' || loc.kind === 'unplaced') {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
       }
       toLocationId = loc.id;
       // Crate metadata from THIS row, read moments ago.
@@ -544,16 +576,14 @@ export async function transferStockAction(
       quantity: data.quantity,
       notes: data.notes,
     });
-    const { failedItemIds, skippedItemIds, staleItemIds } = await svc.syncBookCratePlacement(
-      [data.itemId],
-      {
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+      await svc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
           toLocationId,
           quantityByItemId: new Map([[data.itemId, data.quantity]]),
         },
-      },
-    );
+      });
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath(`/dashboard/inventory/${data.itemId}`);
@@ -562,6 +592,7 @@ export async function transferStockAction(
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
     });
   } catch (e) {
     // Same insufficient_stock → friendly-message mapping as placeStockAction
@@ -614,6 +645,15 @@ export async function placeStockAction(
      * exists to refuse.
      */
     crateSyncStale?: boolean;
+    /**
+     * The stock moved, and afterwards this title holds NO stock in any rack or
+     * crate — everything it still has sits in a staging/unplaced bucket, or it
+     * has no positive holding left. There was nothing authoritative to
+     * synchronize the summary to, so it was left alone and may now name a crate
+     * that holds none of it. Reported rather than swallowed: this bucket used to
+     * be a bare `continue` inside the reconciliation.
+     */
+    crateSyncUnplaced?: boolean;
   }>
 > {
   const parsed = placeStockSchema.safeParse(input);
@@ -710,16 +750,14 @@ export async function placeStockAction(
     // gate's own pre-move read: the sync re-reads and writes only where the two
     // agree, so a crate edited while the stock was moving is left alone rather
     // than overwritten by an acknowledgement that named a different crate.
-    const { failedItemIds, skippedItemIds, staleItemIds } = await invSvc.syncBookCratePlacement(
-      [data.itemId],
-      {
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+      await invSvc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
           toLocationId,
           quantityByItemId: new Map([[data.itemId, data.quantity]]),
         },
-      },
-    );
+      });
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
@@ -729,6 +767,7 @@ export async function placeStockAction(
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -793,6 +832,10 @@ export async function bulkPlaceStockAction(
     /** The stock moved; some title's crate was edited by someone else while the
      *  batch was placing, so its summary was left alone. */
     crateSyncStale?: boolean;
+    /** The stock moved; some title now holds NO stock in any rack or crate, so
+     *  there was nothing to synchronize its summary to and it was left alone —
+     *  possibly naming a crate that holds none of it. */
+    crateSyncUnplaced?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -904,9 +947,8 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds, skippedItemIds, staleItemIds } = await invSvc.syncBookCratePlacement(
-      placedItemIds,
-      {
+    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
+      await invSvc.syncBookCratePlacement(placedItemIds, {
         verified,
         audit: {
           toLocationId,
@@ -917,8 +959,7 @@ export async function bulkPlaceStockAction(
           // (7 instead of 8 + 7) in the audit trail.
           quantityByItemId: sumPlacementQuantities(data.placements),
         },
-      },
-    );
+      });
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
@@ -929,6 +970,7 @@ export async function bulkPlaceStockAction(
       ...(failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
       ...(skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
     });
   } catch (e) {
     return toResult(e);

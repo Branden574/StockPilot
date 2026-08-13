@@ -373,6 +373,11 @@ export function MoveStockModal({
           'Moved, but the crate label did not update',
           `${itemName} was moved. Its crate label could not be written — check the book's details.`,
         );
+      } else if (res.crateSyncUnplaced) {
+        Alert.alert(
+          'Moved — crate label may now be wrong',
+          `${itemName} has no stock in a rack or crate now, so its crate label was left unchanged.`,
+        );
       } else if (res.crateSyncStale) {
         Alert.alert(
           'Moved — someone else changed the crate',

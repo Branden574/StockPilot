@@ -41,6 +41,7 @@ vi.mock('@/server/services/audit', async (importOriginal) => {
   return { ...actual, audit: vi.fn(async () => undefined) };
 });
 
+import { audit } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
 
 import { bulkPlaceStockAction, placeStockAction, transferStockAction } from './inventory';
@@ -861,5 +862,265 @@ describe('a new destination is a rack OR a crate, never both', () => {
     expect(insert.rack_row).toBe('Row 3');
     expect(insert.crate_color).toBeNull();
     expect(insert.crate_number).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ONE ITEM, TWO PLACEMENTS — the duplicate-item gate bypass (R1)
+//
+// `bulkPlaceStockAction` used to describe its batch to the gate as
+// `new Map(placements.map(p => [p.itemId, …]))`. `new Map` keeps the LAST
+// entry per key, so a book listed TWICE was described by HALF its move — and
+// the gate reasons about exactly that description:
+//
+//   The Outsiders is recorded "Blue 4" and holds 10 units in rack A and 5 in
+//   staging. A batch places BOTH rows into crate Green #2. The map keeps only
+//   the staging line, so the gate looks at rack A, sees 10 units that survive
+//   "this" move, concludes the book stays SPLIT, concludes the reconciliation
+//   will therefore write nothing — and asks nothing. Both transfers then run,
+//   rack A is emptied, Green #2 becomes the only placement, and the
+//   reconciliation writes it. "Blue 4" — a crate a human recorded — is gone
+//   with no confirmation and no flag. The freshness proof cannot catch it
+//   either: the item row never changed, so nothing is stale.
+//
+// Two placements for one item is NOT a forged-request-only shape: the staging
+// worklist emits one row per holding (`itemId::sourceLocationId`), so a book
+// sitting in BOTH the staging and the unplaced bucket is two selectable rows
+// and Select-all takes both.
+//
+// `toBookCratePlacementMoves` fails CLOSED instead — an item whose full move
+// set cannot be expressed as one entry is left OUT of the map, and the gate's
+// own fail-closed rule (no entry → "assume the sync writes") makes it ASK.
+// `sumPlacementQuantities` fixes the same duplicate's other victim: the audit
+// trail recorded the LAST placement's quantity instead of the total.
+//
+// The stub serves the item_stock_levels reads IN SEQUENCE — T0 (what the gate
+// predicts from, before anything moves) then T2 (what the reconciliation reads
+// after both transfers) — because the bug is precisely that the two disagree.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RACK_A = 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1';
+const STAGING_LOC = 'a2a2a2a2-a2a2-a2a2-a2a2-a2a2a2a2a2a2';
+const UNPLACED_LOC = 'a3a3a3a3-a3a3-a3a3-a3a3-a3a3a3a3a3a3';
+
+/** A holding of `quantity` units at `locationId`, of the given kind. */
+function holdingAt(
+  locationId: string,
+  kind: string,
+  quantity: number,
+  crate: { color?: string | null; number?: string | null } = {},
+) {
+  return {
+    item_id: BOOK_ID,
+    location_id: locationId,
+    quantity,
+    locations: {
+      id: locationId,
+      kind,
+      type: kind === 'rack' ? 'shelf' : kind === 'crate' ? 'bin' : null,
+      crate_color: crate.color ?? null,
+      crate_number: crate.number ?? null,
+    },
+  };
+}
+
+/**
+ * A context that answers the two `item_stock_levels` reads with DIFFERENT
+ * worlds: T0 (`preMove`) for the gate's prediction, T2 (`postMove`) for the
+ * reconciliation. The whole defect lives in the gap between them, so a fixture
+ * that served one snapshot to both could not express it.
+ *
+ * The two reads are told apart by the COLUMNS they ask for, not by call order:
+ * the gate's prediction selects `locations!inner(id, kind, type)` and the
+ * reconciliation additionally selects the crate pair. Order would be the wrong
+ * discriminator — with the fix in place the gate makes NO prediction read at
+ * all for a duplicated item (an empty move map short-circuits before the
+ * query), so an index counter would hand the reconciliation the pre-move
+ * world and quietly test the wrong thing.
+ */
+function installSequencedContext(opts: {
+  itemRows: Array<Record<string, unknown>>;
+  /** Holdings as they stand BEFORE either placement runs. */
+  preMove: Array<Record<string, unknown>>;
+  /** Holdings as they stand AFTER both placements have run. */
+  postMove: Array<Record<string, unknown>>;
+}): SupabaseStub {
+  let stubRef: SupabaseStub | null = null;
+  const stub = makeSupabaseStub({
+    'locations.select': { data: GREEN_CRATE_ROW, error: null },
+    'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
+    'inventory_items.select': { data: opts.itemRows, error: null },
+    'item_stock_levels.select': () => {
+      const chains = stubRef?.chainArgsAll.get('item_stock_levels.select') ?? [];
+      const columns = String(chains[chains.length - 1]?.[0]?.[0] ?? '');
+      return { data: columns.includes('crate_color') ? opts.postMove : opts.preMove, error: null };
+    },
+    'rpc:inventory_set_book_storage': { data: 1, error: null },
+  });
+  stubRef = stub;
+  ctxRef.ctx = {
+    organizationId: ORG_ID,
+    userId: 'user-test',
+    role: 'admin',
+    mfaRequired: false,
+    mfaSatisfied: true,
+    enabledModules: new Set(),
+    supabase: stub.client,
+  };
+  return stub;
+}
+
+/** Every unit of the book, now inside Green #2 — the state after both moves. */
+const AFTER_BOTH_MOVES = [holdingAt(GREEN_CRATE, 'crate', 15, { color: 'green', number: '2' })];
+
+describe('bulkPlaceStockAction — a book listed TWICE is described to the gate in FULL', () => {
+  it('CONTROL: one placement, no rival holding → the gate is live and REFUSES', async () => {
+    // Proves the harness reaches a real gate: same book, same crate, same
+    // absence of acknowledgement — only the duplicate is missing. If this ever
+    // stops refusing, the two forms below are proving nothing.
+    const stub = installSequencedContext({
+      itemRows: [blueFourBook(BOOK_ID, 'The Outsiders')],
+      preMove: [holdingAt(STAGING_LOC, 'staging', 15)],
+      postMove: AFTER_BOTH_MOVES,
+    });
+
+    const res = await bulkPlaceStockAction({
+      placements: [{ itemId: BOOK_ID, fromLocationId: STAGING_LOC, quantity: 15 }],
+      destination: { existingLocationId: GREEN_CRATE },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      expect(res.error.details).toMatchObject({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: BOOK_ID, currentLabel: 'Blue 4', nextLabel: 'Green 2' }],
+      });
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('FORM A: rack A (10) + staging (5) into Green #2 → REFUSED, nothing moves', async () => {
+    // The reviewer's first repro. Last-wins kept only the staging line, the
+    // gate saw rack A's 10 surviving units, called the book permanently split,
+    // and waived the prompt for a write that then happened.
+    const stub = installSequencedContext({
+      itemRows: [blueFourBook(BOOK_ID, 'The Outsiders')],
+      preMove: [holdingAt(RACK_A, 'rack', 10), holdingAt(STAGING_LOC, 'staging', 5)],
+      postMove: AFTER_BOTH_MOVES,
+    });
+
+    const res = await bulkPlaceStockAction({
+      placements: [
+        { itemId: BOOK_ID, fromLocationId: RACK_A, quantity: 10 },
+        { itemId: BOOK_ID, fromLocationId: STAGING_LOC, quantity: 5 },
+      ],
+      destination: { existingLocationId: GREEN_CRATE },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      expect(res.error.details).toMatchObject({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: BOOK_ID, itemName: 'The Outsiders', currentLabel: 'Blue 4' }],
+      });
+    }
+    // All-or-nothing, BEFORE anything physical: neither placement runs...
+    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(mockStampPlacementBin).not.toHaveBeenCalled();
+    // ...and the recorded crate is untouched.
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('FORM B: the SAME rack listed twice (8 then 7) → REFUSED, nothing moves', async () => {
+    // The duplicate does not need two different sources. Last-wins kept the
+    // 7, leaving 8 of rack A's 15 units "surviving" — split again, and again
+    // no prompt. Summed, the two lines drain the rack completely.
+    const stub = installSequencedContext({
+      itemRows: [blueFourBook(BOOK_ID, 'The Outsiders')],
+      preMove: [holdingAt(RACK_A, 'rack', 15)],
+      postMove: AFTER_BOTH_MOVES,
+    });
+
+    const res = await bulkPlaceStockAction({
+      placements: [
+        { itemId: BOOK_ID, fromLocationId: RACK_A, quantity: 8 },
+        { itemId: BOOK_ID, fromLocationId: RACK_A, quantity: 7 },
+      ],
+      destination: { existingLocationId: GREEN_CRATE },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      expect(res.error.details).toMatchObject({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: BOOK_ID, currentLabel: 'Blue 4', nextLabel: 'Green 2' }],
+      });
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+  });
+
+  it('the ACKNOWLEDGED retry still places both rows — asking is not refusing', async () => {
+    // The fix must cost one confirmation, not the workflow. Once the operator
+    // answers the prompt the duplicate now raises, both placements run and the
+    // summary follows the stock into Green #2.
+    const stub = installSequencedContext({
+      itemRows: [blueFourBook(BOOK_ID, 'The Outsiders')],
+      preMove: [holdingAt(RACK_A, 'rack', 10), holdingAt(STAGING_LOC, 'staging', 5)],
+      postMove: AFTER_BOTH_MOVES,
+    });
+
+    const res = await bulkPlaceStockAction({
+      placements: [
+        { itemId: BOOK_ID, fromLocationId: RACK_A, quantity: 10 },
+        { itemId: BOOK_ID, fromLocationId: STAGING_LOC, quantity: 5 },
+      ],
+      destination: { existingLocationId: GREEN_CRATE },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.placed).toBe(2);
+    expect(mockTransferStock).toHaveBeenCalledTimes(2);
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+      p_item_ids: [BOOK_ID],
+      p_crate_color: 'green',
+      p_crate_number: '2',
+    });
+  });
+
+  it('the AUDIT records the SUMMED quantity — staging 8 + unplaced 7 is 15, not 7', async () => {
+    // The duplicate's other victim. `new Map(placements.map(p => [p.itemId,
+    // p.quantity]))` recorded only the last line, so the trail for a book
+    // pulled out of BOTH buckets under-reported by more than half.
+    installSequencedContext({
+      itemRows: [blueFourBook(BOOK_ID, 'The Outsiders')],
+      preMove: [holdingAt(STAGING_LOC, 'staging', 8), holdingAt(UNPLACED_LOC, 'unplaced', 7)],
+      postMove: AFTER_BOTH_MOVES,
+    });
+
+    const res = await bulkPlaceStockAction({
+      placements: [
+        { itemId: BOOK_ID, fromLocationId: STAGING_LOC, quantity: 8 },
+        { itemId: BOOK_ID, fromLocationId: UNPLACED_LOC, quantity: 7 },
+      ],
+      destination: { existingLocationId: GREEN_CRATE },
+      acknowledgedCrateChanges: ACK_BLUE_4,
+    });
+
+    expect(res.ok).toBe(true);
+    const crateAudits = vi
+      .mocked(audit)
+      .mock.calls.map(([payload]) => payload)
+      .filter((p) => p.extra?.placement === 'book_crate');
+    expect(crateAudits).toHaveLength(1);
+    expect(crateAudits[0]!.entityId).toBe(BOOK_ID);
+    // 8 + 7. Last-wins recorded 7 — a trail that under-reports the placement
+    // by more than half is a trail nobody can reconcile a count against.
+    expect(crateAudits[0]!.extra?.quantity).toBe(15);
   });
 });
