@@ -80,6 +80,27 @@ export function PlacementConfirmDialog({
       ? summarizeBookCrateChanges(content.crateItems)
       : null;
 
+  // ═══ THE RACK SENTENCE IS SAID ONCE, AND THE PANEL IS WHERE IT IS SAID ═══
+  //
+  // For a SINGLE-title refusal the server puts the rack sentence in two places
+  // on purpose: appended to `message` (some callers render nothing but that
+  // string, so a consequence living only in `details` is one some operators
+  // never see) and structurally on the change line, which this dialog renders
+  // in the amber panel. Both are right; together they printed it twice, once
+  // muted and once bold.
+  //
+  // The duplicate comes out of the LEAD PARAGRAPH, never out of the panel — a
+  // rack a human typed by hand being erased is the loudest thing here, not a
+  // footnote. And only a sentence that this render is provably about to show
+  // below is removed, so this can shorten the message and can never delete the
+  // sentence: no match, no change; nothing but the sentence, no change.
+  let message = content.message;
+  for (const line of summary?.rackLines ?? []) {
+    if (!message.includes(line)) continue;
+    const without = message.replace(line, '').replace(/ {2,}/g, ' ').trim();
+    if (without.length > 0) message = without;
+  }
+
   return (
     <Dialog
       open={open}
@@ -97,7 +118,7 @@ export function PlacementConfirmDialog({
             <AlertTriangle className="text-amber-600 dark:text-amber-500 size-4 shrink-0" />
             {content.title}
           </DialogTitle>
-          <DialogDescription>{content.message}</DialogDescription>
+          <DialogDescription>{message}</DialogDescription>
         </DialogHeader>
 
         {content.crateLines && content.crateLines.length > 0 && (

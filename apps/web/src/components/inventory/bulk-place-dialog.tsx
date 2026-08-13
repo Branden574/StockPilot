@@ -256,6 +256,22 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     return changed;
   }
 
+  /**
+   * The notices that are true whatever the crate question turns out to be, and
+   * therefore built OUTSIDE the branch that answers it.
+   *
+   * Which rows get no crate label is a fact about the SELECTION, not about any
+   * book's recorded crate — it was assembled only inside the local-prediction
+   * branch, so a deferred batch (where the gate's panel is the only panel)
+   * silently dropped it. Same defect as the single put-away's remainder line.
+   */
+  function selectionNotices(dest: ChosenDestination | null): string[] {
+    if (!dest || nonBookCount === 0 || !isCrateChoice(dest)) return [];
+    return [
+      `${nonBookCount} of the ${rows.length} selected rows ${nonBookCount === 1 ? 'is not a book' : 'are not books'}, so no crate is recorded for ${nonBookCount === 1 ? 'it' : 'them'}.`,
+    ];
+  }
+
   function submit() {
     if (!warehouseId) {
       toast.error('Select items from a single warehouse to place them together.');
@@ -295,10 +311,29 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     // enumerates every conflict, so splitting the set here would only ask the
     // operator two different questions about one action.
     //
-    // AND NOT WHEN A LOCATION IS BEING MINTED, for the same reason as the single
-    // put-away: "Create new crate Green #7?" has no server gate, so it must be
-    // asked here and before the write, and deferring the crate half would turn
-    // one confirmation into two. See place-from-staging-dialog.tsx.
+    // AND A MINT IS NOT AN EXCEPTION, for the same reason as the single
+    // put-away: this condition used to carry `!creating`, which kept the
+    // pre-acknowledgement — and therefore the silent rack erasure — alive on the
+    // branch that types a brand-new crate. Creating the location does not teach
+    // this dialog the holdings, so it still cannot state the rack outcome. The
+    // creation question is asked here (only this dialog can ask it), the request
+    // goes out unacknowledged, and the gate's refusal replaces the content of
+    // the same confirmation with the rack sentences it derived. See
+    // place-from-staging-dialog.tsx for the full reasoning and its stated cost.
+    const conflicted = new Set(predicted.map((c) => c.itemId));
+    const deferToServer =
+      predicted.length > 0 &&
+      !hasRackPosition(destinationPosition(dest)) &&
+      rows.some(
+        (r) =>
+          conflicted.has(r.itemId) &&
+          hasRackPosition({
+            rackNumber: r.bookStorage?.rackNumber,
+            rackRow: r.bookStorage?.rackRow,
+          }),
+      );
+    const crateItems = deferToServer ? [] : predicted;
+
     const creation =
       dest.mode === 'existing'
         ? null
@@ -311,32 +346,12 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           });
     const creating = creation !== null && !creation.exists;
 
-    const conflicted = new Set(predicted.map((c) => c.itemId));
-    const deferToServer =
-      predicted.length > 0 &&
-      !creating &&
-      !hasRackPosition(destinationPosition(dest)) &&
-      rows.some(
-        (r) =>
-          conflicted.has(r.itemId) &&
-          hasRackPosition({
-            rackNumber: r.bookStorage?.rackNumber,
-            rackRow: r.bookStorage?.rackRow,
-          }),
-      );
-    const crateItems = deferToServer ? [] : predicted;
-
     if (!creating && crateItems.length === 0) {
       void place(destination, { describe: dest });
       return;
     }
 
-    const notices: string[] = [];
-    if (nonBookCount > 0 && isCrateChoice(dest)) {
-      notices.push(
-        `${nonBookCount} of the ${rows.length} selected rows ${nonBookCount === 1 ? 'is not a book' : 'are not books'}, so no crate is recorded for ${nonBookCount === 1 ? 'it' : 'them'}.`,
-      );
-    }
+    const notices = selectionNotices(dest);
 
     setPendingConfirm({
       content: {
@@ -406,11 +421,16 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       const detail = parseBookCrateChangeDetail(res.error.details);
       const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
       if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+        // ON THE DEFERRED PATH THIS IS THE ONLY PANEL, so the notices that are
+        // not part of the crate question ride here too — otherwise deferring
+        // drops them.
+        const notices = selectionNotices(opts.describe ?? null);
         setPendingConfirm({
           content: {
             title: 'Change the recorded crate?',
             message: res.error.message,
             crateItems: detail.items,
+            ...(notices.length > 0 ? { notices } : {}),
             confirmLabel: 'Continue placement',
           },
           destination,

@@ -233,6 +233,23 @@ export function PlaceFromStagingDialog({
     };
   }
 
+  /**
+   * THE REMAINDER SENTENCE — true whatever the crate question turns out to be,
+   * and therefore built OUTSIDE the branch that answers it.
+   *
+   * A partial placement leaves stock behind. That is a fact about the QUANTITY
+   * alone: it does not depend on the book's crate, on the destination's rack,
+   * or on which side of the wire ends up asking. It used to be assembled only
+   * inside the local-prediction branch, so the moment the deferral started
+   * returning before that branch the sentence vanished from every deferred
+   * placement — a 10-of-18 put-away rendered the gate's crate panel and never
+   * said the other 8 stay in staging. Derived here, rendered on BOTH paths.
+   */
+  function remainderNotice(): string | null {
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum >= availableQuantity) return null;
+    return `${availableQuantity - qtyNum} of ${availableQuantity} will stay in ${sourceLabel.toLowerCase()}, so this title will sit in more than one place.`;
+  }
+
   // Run the placement. Split out from the gate below so the confirmation step
   // and the "Did you mean…" one-tap alternatives share ONE write path.
   async function place(
@@ -265,11 +282,17 @@ export function PlaceFromStagingDialog({
       const detail = parseBookCrateChangeDetail(res.error.details);
       const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
       if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+        // ON THE DEFERRED PATH THIS IS THE ONLY PANEL THE OPERATOR SEES, so the
+        // notices that are not part of the crate question have to ride here too
+        // — otherwise deferring silently drops them. The remainder is the one
+        // that applies: the quantity is unchanged by the refusal.
+        const remainder = remainderNotice();
         setPendingConfirm({
           content: {
             title: 'Change this book’s crate?',
             message: res.error.message,
             crateItems: detail.items,
+            ...(remainder ? { notices: [remainder] } : {}),
             confirmLabel: 'Continue placement',
           },
           destination,
@@ -403,24 +426,55 @@ export function PlaceFromStagingDialog({
     // say SPLIT the gate drops the conflict entirely, so the operator is now
     // asked nothing at all for a change that provably cannot happen.
     //
-    // ═══ EXCEPT WHEN A LOCATION IS BEING MINTED — ONE DIALOG STAYS ONE ═══
+    // ═══ AND A MINT IS NOT AN EXCEPTION — IT WAS THE SAME BUG, ONE BRANCH OVER ═══
     //
-    // "Create new crate Green #7?" has no server gate behind it; only this
-    // dialog can ask it, and it must ask BEFORE the write. Deferring the crate
-    // half as well would split one confirmation into two amber panels in a row,
-    // the second arriving after the operator already committed to the first —
-    // which is the exact anti-pattern PlacementConfirmDialog was built to end.
-    // A creation therefore keeps the local prediction, and the rack consequence
-    // of a brand-new POSITION-LESS crate stays undisclosed: a gap, deliberately,
-    // rather than a lie or a regression. The owner's walk is not this case (he
-    // placed into an EXISTING "Blue #Shelf"), and closing it properly needs a
-    // preview round-trip before the dialog renders, which is its own change.
+    // This condition used to carry `!creating`, on the reasoning that "Create
+    // new crate Green #7?" has no server gate behind it, so a creation had to
+    // keep the local prediction or one confirmation would become two. That
+    // traded the operator's disclosure for the dialog's tidiness — and it kept
+    // the original data-loss bug alive on the sibling branch. Reproduced: a book
+    // recorded in crate Orange 13 ON RACK 38-A, all 18 units in staging, placed
+    // into a brand-new position-less "Crate #7". The confirmation read "Crate
+    // color Orange will be cleared. Crate number will change from 13 to 7." and
+    // never said 38-A; it pre-acknowledged, so the gate — which reads the
+    // holdings and WOULD have said "Rack 38-A will be cleared." — was waived,
+    // and the rack pair was gone at rest.
     //
+    // Minting changes nothing about WHY this component cannot answer. The
+    // destination's crate values do come from this form, but the rack outcome is
+    // decided by the ITEM's live holdings (`syncBookCratePlacementInner` derives
+    // both pairs from the single location the stock resolves to), and creating
+    // the location does not teach this dialog those holdings.
+    //
+    // So the mint branch defers too, and the two questions are asked in the only
+    // honest order available:
+    //
+    //   1. THIS dialog asks the one question only it can — "Crate #7 does not
+    //      exist in Main Warehouse yet, create it?" — with its near-match
+    //      alternatives. It claims nothing about the crate or the rack, because
+    //      it can support neither.
+    //   2. The request goes out UNACKNOWLEDGED. The gate reads the holdings,
+    //      refuses, and the handler in `place()` re-renders THE SAME dialog with
+    //      the server's sentences — the rack one included.
+    //
+    // That is one dialog ADVANCING, not two stacking: `setPendingConfirm`
+    // replaces the content of the confirmation already on screen. It is also
+    // exactly what the phone has always done (move-stock-modal.tsx asks the
+    // creation Alert, never pre-acknowledges, and re-asks from the gate's
+    // payload), so the two clients finally agree.
+    //
+    // THE COST, stated plainly: a location minted at step 1 outlives a Cancel at
+    // step 2 as an empty rack/crate row. Litter, and recoverable by hand; the
+    // alternative was an erasure the operator was never shown.
+    const deferToServer =
+      crateChange !== null &&
+      !hasRackPosition(nextPosition) &&
+      hasRackPosition(currentPosition);
+
     // 2. Does it MINT a location? describeNewRackPlacement checks the label
     //    against this warehouse's existing rack/crate names — an existing
     //    label is reused by the server, so it is not a creation and needs no
-    //    confirmation (zero friction on the common path). Hoisted above the
-    //    deferral because the deferral now depends on its answer.
+    //    confirmation (zero friction on the common path).
     const creation =
       dest.mode === 'existing'
         ? null
@@ -432,12 +486,6 @@ export function PlaceFromStagingDialog({
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           });
     const creating = creation !== null && !creation.exists;
-
-    const deferToServer =
-      crateChange !== null &&
-      !creating &&
-      !hasRackPosition(nextPosition) &&
-      hasRackPosition(currentPosition);
     const crateLines =
       isBook && bookStorage && crateChange && !deferToServer
         ? describeBookCrateChange({
@@ -457,11 +505,8 @@ export function PlaceFromStagingDialog({
     // but not questions: the remainder left behind by a partial placement, and
     // the rack label this also changes.
     const notices: string[] = [];
-    if (qtyNum < availableQuantity) {
-      notices.push(
-        `${availableQuantity - qtyNum} of ${availableQuantity} will stay in ${sourceLabel.toLowerCase()}, so this title will sit in more than one place.`,
-      );
-    }
+    const remainder = remainderNotice();
+    if (remainder) notices.push(remainder);
     // THE RACK LINE IS ITS OWN COMPARISON — and it now covers a CRATE that
     // sits on a rack, which the old `!isCrateChoice(dest)` guard skipped
     // entirely. The basis is `'unknown'` because it is: this dialog has a
