@@ -415,8 +415,11 @@ export function PlaceFromStagingDialog({
     }
     // THE RACK LINE IS ITS OWN COMPARISON — and it now covers a CRATE that
     // sits on a rack, which the old `!isCrateChoice(dest)` guard skipped
-    // entirely. `describeRackChange` never promises a clear, because a
-    // destination with no position leaves the rack keys alone.
+    // entirely. `describeRackChange` never promises a clear: whether the pair
+    // clears depends on the LIVE HOLDINGS after the move (full move clears it,
+    // partial keeps it), which this dialog cannot see. The server-side gate is
+    // what states the before-and-after, and it only speaks when the write will
+    // actually happen.
     if (isBook && bookStorage) {
       const rackLine = describeRackChange(
         { rackNumber: bookStorage.rackNumber, rackRow: bookStorage.rackRow },

@@ -195,9 +195,11 @@ describe('describeRackChange', () => {
   });
 
   it('NEVER promises a clear: a destination with no position asserts nothing', () => {
-    // A crate that is not on a rack says nothing about the rack, and
-    // stampPlacementBin deliberately leaves the rack keys alone — so a
-    // "will be cleared" sentence would promise an erasure that never happens.
+    // A crate that is not on a rack says nothing about the rack, and whether the
+    // pair actually clears is decided AFTER the stock moves, from the live
+    // holdings (syncBookCratePlacement): it clears on a FULL move and is kept on
+    // a PARTIAL one. These two arguments cannot tell those apart, so either
+    // sentence would be right only half the time.
     // Production really holds this shape: blue "Blue Shelf", 5 books, rack NULL.
     expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, null)).toBeNull();
     expect(describeRackChange({ rackNumber: '40', rackRow: 'B' }, { rackRow: 'B' })).toBeNull();

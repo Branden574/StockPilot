@@ -164,12 +164,21 @@ export function hasRackPosition(position: RackPosition | null | undefined): bool
  * malformed input instead of two true statements. `compareBookCratePlacement`
  * answers the crate half; this answers the rack half, and callers render both.
  *
- * NEVER SAYS "CLEARED". A destination with no rack position (a crate that is not
- * on a rack) asserts NOTHING about the rack, and the writer leaves the rack keys
- * exactly as they are — `stampPlacementBin` deliberately does not clear them,
- * because a partial put-away leaves stock on the rack the operator never
- * mentioned. A sentence promising an erasure that will not happen is the same
- * class of lie as a silent overwrite.
+ * NEVER SAYS "CLEARED", because whether the pair clears is not knowable from the
+ * two arguments this function has. A destination with no rack position (a crate
+ * that is not on a rack) asserts nothing about the rack; what actually happens to
+ * the pair is decided AFTER the stock moves, by `syncBookCratePlacement`, from
+ * the live holdings — it clears on a FULL move (no stock left on any rack) and is
+ * kept on a PARTIAL one (the copies that stayed are still on that rack). A
+ * destination cannot tell those apart, so promising either here would be right
+ * half the time, which is the same class of lie as a silent overwrite.
+ *
+ * The operator is not left uninformed: the gate only refuses — and only shows its
+ * sentence — when the reconciliation provably WILL write
+ * (`bookCratePlacementWillSync`), and that sentence names the current position
+ * inside `currentLabel` ("recorded in Blue 4 on rack 40-B") while `nextLabel`
+ * names a crate with no rack. So the case where the pair really does clear is
+ * exactly the case the operator is shown a before-and-after for.
  *
  * Filling a BLANK rack is not announced either: nothing a human recorded is
  * being replaced, which is the same asymmetry `fieldOverwritten` applies to the

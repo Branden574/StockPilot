@@ -102,7 +102,7 @@ function installContext(opts: {
     'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
-    'rpc:inventory_set_book_storage': opts.setBookStorage ?? { data: 1, error: null },
+    'rpc:inventory_set_book_placement': opts.setBookStorage ?? { data: 1, error: null },
   });
   ctxRef.ctx = {
     organizationId: ORG_ID,
@@ -138,6 +138,11 @@ function greenCrateHolding(id = BOOK_ID) {
       type: 'bin',
       crate_color: 'green',
       crate_number: '2',
+      // Green #2 sits on no rack — the shape of every crate in production. The
+      // reconciliation derives the item's rack pair from these columns, so null
+      // here means the pair CLEARS: the book is in a crate, on no rack.
+      rack_number: null,
+      rack_row: null,
     },
   };
 }
@@ -200,11 +205,15 @@ describe('placeStockAction — destination crate metadata', () => {
 
     await placeInGreenCrate({ acknowledgedCrateChanges: ACK_BLUE_4 });
 
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // Both halves of the summary, in one statement. Green #2 states no rack
+    // position and the book's every copy is now in it, so the rack pair clears.
     expect(call.args).toEqual({
       p_item_ids: [BOOK_ID],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 });
@@ -387,7 +396,7 @@ describe('placeStockAction — the crate confirmation gate', () => {
 
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
     expect(call.args).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
@@ -421,7 +430,7 @@ describe('placeStockAction — the crate confirmation gate', () => {
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     // ...and the summary really was left alone, exactly as promised.
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     if (res.ok) expect(res.data.crateSyncSkipped).toBe(true);
   });
 
@@ -470,7 +479,7 @@ describe('placeStockAction — summary reconciliation', () => {
 
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     // ...and the client is TOLD, so a placement that deliberately changed no
     // label cannot be mistaken for one that did.
     if (res.ok) expect(res.data.crateSyncSkipped).toBe(true);
@@ -567,12 +576,16 @@ describe('bulkPlaceStockAction — the crate gate applies to the whole batch', (
     if (res.ok) expect(res.data.placed).toBe(2);
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
 
-    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
+    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_placement');
     expect(calls).toHaveLength(1);
+    // Two books share the batch because their WHOLE summary agrees — same crate,
+    // and the same (absent) rack position. The batching key carries all four.
     expect(calls[0]!.args).toEqual({
       p_item_ids: [BOOK_ID, BOOK_B_ID],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 });
@@ -614,6 +627,11 @@ function rackHolding(id = BOOK_ID) {
       type: 'shelf',
       crate_color: null,
       crate_number: null,
+      // The rack's OWN position, the same pair the locations row above carries.
+      // The reconciliation reads it from here, so omitting it would pin the sync
+      // CLEARING a pair it should be setting to 28-A.
+      rack_number: RACK_ROW_28A.rack_number,
+      rack_row: RACK_ROW_28A.rack_row,
     },
   };
 }
@@ -649,9 +667,11 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 
-  it('once acknowledged, the move happens AND the crate summary is CLEARED', async () => {
+  it('once acknowledged, the move happens AND the summary follows to the rack', async () => {
     // The whole defect in one assertion: 40 units leave crate Blue 4 for rack
-    // 28-A, so "Blue 4" must stop being what the item says.
+    // 28-A, so "Blue 4" must stop being what the item says — and the rack it
+    // moved ONTO is recorded in the same statement, derived from the holding
+    // rather than from the destination the caller happened to name.
     const stub = installContext({
       locationRow: RACK_ROW_28A,
       itemRows: [blueFourBook()],
@@ -662,11 +682,13 @@ describe('transferStockAction — the crate summary follows the stock', () => {
 
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
     expect(call.args).toEqual({
       p_item_ids: [BOOK_ID],
       p_crate_color: null,
       p_crate_number: null,
+      p_rack_number: '28',
+      p_rack_row: 'A',
     });
   });
 
@@ -685,10 +707,12 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     } as Parameters<typeof transferStockAction>[0]);
 
     expect(res.ok).toBe(true);
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual({
       p_item_ids: [BOOK_ID],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 
@@ -702,7 +726,7 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     const res = await transferToRack();
     expect(res.ok).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('reports crateSyncStale when the crate is edited while the stock moves', async () => {
@@ -743,7 +767,7 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.crateSyncStale).toBe(true);
     expect(mockTransferStock).toHaveBeenCalledOnce();
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 });
 
@@ -857,7 +881,7 @@ describe('a new destination may be a crate ON a rack', () => {
 
     expect(res.ok).toBe(true);
     // The CRATE summary…
-    const crateCall = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    const crateCall = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(crateCall!.args).toMatchObject({ p_crate_color: 'blue', p_crate_number: '13' });
     // …and the RACK summary, from the crate's own position. Both, or the Books
     // list shows a crate with no rack and a picker cannot find the bin.
@@ -1067,6 +1091,7 @@ function holdingAt(
   kind: string,
   quantity: number,
   crate: { color?: string | null; number?: string | null } = {},
+  position: { rackNumber?: string | null; rackRow?: string | null } = {},
 ) {
   return {
     item_id: BOOK_ID,
@@ -1078,6 +1103,11 @@ function holdingAt(
       type: kind === 'rack' ? 'shelf' : kind === 'crate' ? 'bin' : null,
       crate_color: crate.color ?? null,
       crate_number: crate.number ?? null,
+      // The location's own rack position: a rack's own, or the rack a crate sits
+      // on. Defaulted to none, which is the production shape for a crate and the
+      // reason the item's rack pair clears on a full move into one.
+      rack_number: position.rackNumber ?? null,
+      rack_row: position.rackRow ?? null,
     },
   };
 }
@@ -1113,7 +1143,7 @@ function installSequencedContext(opts: {
       const columns = String(chains[chains.length - 1]?.[0]?.[0] ?? '');
       return { data: columns.includes('crate_color') ? opts.postMove : opts.preMove, error: null };
     },
-    'rpc:inventory_set_book_storage': { data: 1, error: null },
+    'rpc:inventory_set_book_placement': { data: 1, error: null },
   });
   stubRef = stub;
   ctxRef.ctx = {
@@ -1156,7 +1186,7 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
       });
     }
     expect(mockTransferStock).not.toHaveBeenCalled();
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('FORM A: rack A (10) + staging (5) into Green #2 → REFUSED, nothing moves', async () => {
@@ -1189,7 +1219,7 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
     expect(mockTransferStock).not.toHaveBeenCalled();
     expect(mockStampPlacementBin).not.toHaveBeenCalled();
     // ...and the recorded crate is untouched.
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('FORM B: the SAME rack listed twice (8 then 7) → REFUSED, nothing moves', async () => {
@@ -1219,7 +1249,7 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
       });
     }
     expect(mockTransferStock).not.toHaveBeenCalled();
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('the ACKNOWLEDGED retry still places both rows — asking is not refusing', async () => {
@@ -1244,10 +1274,12 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.placed).toBe(2);
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual({
       p_item_ids: [BOOK_ID],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 

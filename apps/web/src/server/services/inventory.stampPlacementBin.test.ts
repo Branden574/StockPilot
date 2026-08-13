@@ -174,8 +174,14 @@ describe('InventoryService.stampPlacementBin', () => {
       p_item_ids: ['chromebook-1'],
       p_bin_location: 'Blue Shelf',
     });
-    // Never the books-only crate-summary writer, and never a scoped rack call.
+    // Never a books-only SUMMARY writer, and never a scoped rack call. Both
+    // names are pinned because the summary's writer changed: 0334 wrote the
+    // crate pair, 0336 writes the crate pair AND the rack pair, and either one
+    // reached from here would make a put-away's LABEL and the holdings-derived
+    // SUMMARY the same call — which is exactly the coupling that forced one
+    // unconditional answer about the rack pair for every destination.
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(stub.rpcCalls[0]!.args).not.toHaveProperty('p_scope');
   });
 

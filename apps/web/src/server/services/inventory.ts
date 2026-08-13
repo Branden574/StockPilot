@@ -545,14 +545,22 @@ export interface BookCrateSummary {
   /**
    * The rack this book is recorded on today (book_rack_number / book_rack_row).
    *
-   * LABELS ONLY. It is not compared, not fingerprinted and not synchronised
-   * here — it exists so the gate's refusal sentence can say "recorded in Blue 4
-   * on rack 40-B" instead of naming a crate that exists five times over. The
-   * crate comparison stays crate-only; the rack is its own sentence.
+   * NOT COMPARED AND NOT FINGERPRINTED — but it IS synchronised. The pair is a
+   * projection of the same fact as the crate pair (which single location the
+   * book's stock resolves to), so `syncBookCratePlacement` rewrites it from the
+   * live holdings alongside the crate. What it is not is part of the
+   * ACKNOWLEDGEMENT: the operator is asked about a crate, `changed` is decided
+   * on the crate pair alone, and the rack is its own non-blocking sentence
+   * (`describeRackChange`). Fingerprinting it here would refuse a placement
+   * because someone edited a key nobody was asked about.
    *
-   * OPTIONAL because it is label-only: a caller that hands
-   * `syncBookCratePlacement` a freshness proof it built by hand is attesting to
-   * the CRATE it showed, and the rack is no part of that attestation.
+   * Its job on THIS type is still label-only: it lets the gate's refusal say
+   * "recorded in Blue 4 on rack 40-B" instead of naming a crate that exists five
+   * times over, and it gives the audit trail a real `before` for the pair.
+   *
+   * OPTIONAL for that reason: a caller that hands `syncBookCratePlacement` a
+   * freshness proof it built by hand is attesting to the CRATE it showed, and
+   * the rack is no part of that attestation.
    */
   rackNumber?: string | null;
   rackRow?: string | null;
@@ -564,11 +572,20 @@ export interface BookCrateSummary {
  * operator believes relabelled something it did not.
  */
 export interface BookCrateSyncResult {
-  /** The summary was rewritten to match the holdings (a rack CLEARS the crate). */
+  /**
+   * The summary was rewritten to match the holdings — BOTH pairs, in one
+   * statement. A plain rack CLEARS the crate; a crate that states no position
+   * CLEARS the rack pair; a positioned crate writes both.
+   */
   syncedItemIds: string[];
   /** The write was attempted and FAILED — the printed label may now be stale. */
   failedItemIds: string[];
-  /** Deliberately left alone: this title now holds stock in more than one place. */
+  /**
+   * Deliberately left alone: this title now holds stock in more than one place.
+   * NEITHER pair is written — the rack pair a partial put-away leaves behind is
+   * still TRUE of the copies that stayed put, and the crate cannot be stamped
+   * over a split for the same reason.
+   */
   skippedItemIds: string[];
   /**
    * The row CHANGED between the gate and the write — someone re-crated the book
@@ -4607,13 +4624,23 @@ export class InventoryService {
 
     // ═══ A CRATE WITH NO POSITION WRITES THE LABEL, AND ONLY THE LABEL ═══
     //
-    // THE PAIR IS LEFT ALONE. Such a destination asserts NOTHING about a rack,
-    // so writing NULL over the pair would ERASE data the operator never
-    // mentioned — and not hypothetically: a PARTIAL put-away moves some copies
-    // into the crate while the rest stay on rack 40-B, so clearing publishes
-    // "this book is on no rack" about a book that demonstrably is. Production
-    // also holds the shape that must survive untouched: blue "Blue Shelf",
-    // 5 books, rack NULL.
+    // THE PAIR IS LEFT ALONE HERE — because THIS function cannot tell whether
+    // clearing it would be true. All it knows is the DESTINATION, and a
+    // position-less crate asserts NOTHING about a rack, so writing NULL over the
+    // pair from here would ERASE data the operator never mentioned: a PARTIAL
+    // put-away moves some copies into the crate while the rest stay on rack
+    // 40-B, and clearing would publish "this book is on no rack" about a book
+    // that demonstrably is. Production also holds the shape that must survive
+    // untouched: blue "Blue Shelf", 5 books, rack NULL.
+    //
+    // THE FULL-MOVE CASE IS NOT LEFT STALE, it is answered one layer up.
+    // `syncBookCratePlacement` runs after the stock has moved, reads the LIVE
+    // holdings, and derives BOTH pairs from the single location they resolve to
+    // — so a full move into a position-less crate really does clear the rack
+    // pair, and a partial one really does keep it. Deciding it here, from the
+    // destination alone, is what forced the choice between two unconditional
+    // answers (main cleared always; 0335 preserved always) and made one of them
+    // wrong every time. Do not "complete" this branch by clearing the pair.
     //
     // THE LABEL IS STILL WRITTEN, and briefly was not — this path used to
     // `return` here and write nothing at all, which is a worse bug than the one
@@ -4920,9 +4947,28 @@ export class InventoryService {
    * Applies the summary rule (book-crate-placement.ts): one bounded read of
    * every positive holding for these items, then per item —
    *   • all PLACED holdings in exactly one rack/crate → synchronize the
-   *     summary to that location's crate columns (a rack clears it),
+   *     summary to that location's columns (a rack clears the crate),
    *   • holdings SPLIT across locations → leave the summary alone, because
    *     stamping the newest crate would assert something false about the rest.
+   *
+   * ═══ THE SUMMARY IS BOTH PAIRS, FROM ONE LOCATION ═══
+   *
+   * "The summary" means all four keys: book_crate_color / book_crate_number AND
+   * book_rack_number / book_rack_row. They are not independent facts, they are
+   * two projections of the one fact this method establishes — WHICH SINGLE
+   * LOCATION the book's live stock resolves to — so they are derived from the
+   * same row, in the same branch, and written by one statement (migration 0336).
+   *
+   * That closes a bug that existed in both directions. main CLEARED the rack
+   * pair on every put-away into a position-less crate: right for a FULL move,
+   * wrong for a PARTIAL one, which erases a rack the remaining copies really
+   * are on. Migration 0335 then PRESERVED it unconditionally: right for the
+   * partial move, wrong for the full one — the pair names a rack the stock has
+   * entirely left, and the pick slip, the warehouse packing slip and the mobile
+   * scan sheet all reprint it. Deriving gives the right half of each: a full
+   * move into a position-less crate CLEARS the pair, a positioned crate sets it
+   * to the crate's position, a plain rack sets it to that rack, and a split
+   * writes neither pair and says so.
    *
    * ═══ THE SECOND READ IS THE FRESHNESS PROOF, NOT A FORMALITY ═══
    *
@@ -5050,7 +5096,7 @@ export class InventoryService {
     const { data, error } = await this.ctx.supabase
       .from('item_stock_levels')
       .select(
-        'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number)',
+        'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number, rack_number, rack_row)',
       )
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', bookIds)
@@ -5073,6 +5119,13 @@ export class InventoryService {
         type: string | null;
         crate_color: string | null;
         crate_number: string | null;
+        // The location's OWN rack position. A rack row carries its number/row
+        // here; a CRATE row carries the position it sits on (the columns have
+        // been on `locations` since 0188, for both kinds); a Site carries
+        // neither. One read, both halves of the summary — see the derivation
+        // below for why they cannot come from two places.
+        rack_number: string | null;
+        rack_row: string | null;
       };
     };
     const placedByItem = new Map<string, Map<string, HoldingRow['locations']>>();
@@ -5087,9 +5140,18 @@ export class InventoryService {
       placedByItem.set(row.item_id, perItem);
     }
 
-    // Group by the crate the sync would write, so N books landing in one crate
-    // cost ONE RPC call instead of N.
-    const batches = new Map<string, { color: string | null; number: string | null; ids: string[] }>();
+    // Group by the SUMMARY the sync would write, so N books landing in one
+    // place cost ONE RPC call instead of N.
+    const batches = new Map<
+      string,
+      {
+        color: string | null;
+        number: string | null;
+        rackNumber: string | null;
+        rackRow: string | null;
+        ids: string[];
+      }
+    >();
     const skippedItemIds: string[] = [];
     const unplacedItemIds: string[] = [];
     for (const itemId of bookIds) {
@@ -5128,6 +5190,57 @@ export class InventoryService {
       const color = normalizeCrateColorForWrite(loc!.crate_color);
       const number = loc!.crate_number?.trim() || null;
 
+      // ═══ THE RACK PAIR IS DERIVED FROM THE SAME HOLDING — DEFECT: TWO
+      //     UNCONDITIONAL ANSWERS TO A CONDITIONAL QUESTION ═══
+      //
+      // The rack pair is not an independent fact about the item; it is the
+      // OTHER PROJECTION of the fact this loop has already established — the
+      // single location the book's live stock resolves to. So it is read off
+      // `loc`, the same row the crate pair comes from, inside the same
+      // single-placement branch, after the same split and unplaced tests.
+      // There is deliberately no second notion of "placed" here: adding one is
+      // how the two summaries came to disagree in the first place.
+      //
+      // TWO PREVIOUS RULES, each right about one case and wrong about the other:
+      //
+      //   main CLEARED the pair on every put-away into a position-less crate
+      //   (inventory_set_rack deletes it when both rack arguments are null,
+      //   0068). Correct for a FULL move — no stock is left on any rack —
+      //   and WRONG for a PARTIAL one, which erases a true fact: the rest of
+      //   the copies really are still on rack 40-B.
+      //
+      //   Migration 0335 then PRESERVED it unconditionally. Correct for the
+      //   partial move and WRONG for the full one: the pair goes on naming a
+      //   rack the stock has entirely left, and NINE surfaces reprint it —
+      //   including the pick slip and the warehouse packing slip a picker
+      //   physically carries, and the mobile scan sheet, which printed
+      //   "Bin/shelf: Blue Shelf" directly above "Rack: 38-A".
+      //
+      // Deriving answers all four cases with one rule, and the answers are the
+      // right halves of both previous ones:
+      //   • all stock in a POSITION-LESS crate -> no stock on any rack -> the
+      //     pair CLEARS (main's behaviour, for the case where it was right);
+      //   • all stock in a POSITIONED crate    -> the pair becomes the crate's
+      //     own position (a crate SITS ON a rack: one place, two keys);
+      //   • all stock on a plain RACK          -> the pair is that rack;
+      //   • all stock on a NULL-kind SITE      -> in no crate and on no rack,
+      //     so both pairs clear. That holding is REAL (405 units on DC4 per
+      //     migration 0292) and is never filtered out of the read above —
+      //     recurring pattern #23, which has bitten this exact area.
+      //   • SPLIT or UNPLACED                  -> handled above; neither pair
+      //     is written and the caller is told which.
+      //
+      // DECOMPOSE, like every other writer of these keys. `locations.rack_number`
+      // can hold a legacy COMPOSITE ("22-B" with a null row — the 2026-07-23
+      // incident), and stamping that verbatim onto the item makes it invisible
+      // to its own rack filter. The row is upper-cased for the same reason
+      // `stampPlacementBin` upper-cases it: both writers must produce the SAME
+      // item-side value for the same location, or the books rack filter sees two
+      // spellings of one rack.
+      const position = normalizeRackFields({ number: loc!.rack_number, row: loc!.rack_row });
+      const rackNumber = position.number || null;
+      const rackRow = rackNumber ? position.row?.toUpperCase() ?? null : null;
+
       // ═══ THE FRESHNESS CHECK — DEFECT 5 ═══
       // The gate compared the row at T0 and the operator answered about THAT
       // crate. If the row says something else now, the answer we hold is not an
@@ -5135,6 +5248,16 @@ export class InventoryService {
       // actually be OVERWRITTEN: a concurrent edit that happens to agree with
       // the destination is not a conflict, and reporting it as stale would cry
       // wolf on a write that changes nothing.
+      //
+      // STILL CRATE-ONLY, now that the rack pair is written here too, and that
+      // is deliberate rather than an oversight. The staleness test asks "is the
+      // thing the operator was SHOWN still true", and the operator is shown a
+      // crate: `describeBookCrateConflict` decides `changed` on the crate pair
+      // alone and the rack is a separate, non-blocking sentence
+      // (`describeRackChange`). Fingerprinting the rack pair as well would newly
+      // REFUSE a placement because someone edited a key nobody was asked about.
+      // The pair still cannot be written behind a stale crate: it rides in the
+      // same statement, so a stale row skips both halves together.
       const fresh = summaries.get(itemId)!;
       const cleared = opts.verified.get(itemId);
       const rowMoved =
@@ -5161,8 +5284,15 @@ export class InventoryService {
       // ('Blue', 'Shelf 2') and ('Blue Shelf', '2') collide on a joined key —
       // and the first pair to claim it would be stamped onto the other's books.
       // That is precisely the silent wrong-label this module exists to prevent.
-      const key = JSON.stringify([color, number]);
-      const batch = batches.get(key) ?? { color, number, ids: [] };
+      //
+      // ALL FOUR VALUES ARE IN THE KEY. They are written by one statement, so
+      // two books may only share a batch when their WHOLE summary agrees — two
+      // books in crate Gray BIN on different racks are two different summaries,
+      // and keying on the crate alone would stamp the first book's rack onto the
+      // second. The rack pair is decomposed, so neither half can contain the
+      // JSON delimiters either.
+      const key = JSON.stringify([color, number, rackNumber, rackRow]);
+      const batch = batches.get(key) ?? { color, number, rackNumber, rackRow, ids: [] };
       batch.ids.push(itemId);
       batches.set(key, batch);
     }
@@ -5170,12 +5300,26 @@ export class InventoryService {
     const failedItemIds: string[] = [];
     const syncedItemIds: string[] = [];
     for (const batch of batches.values()) {
+      // ONE STATEMENT FOR ONE FACT (migration 0336). Both pairs are projections
+      // of the single location above, so they are written together: two calls
+      // admit a half-updated row — crate written, rack write lost to RLS or a
+      // dropped connection — that says "recorded in Blue 13, on no rack". That
+      // self-contradicting row is the exact shape this whole line of work has
+      // been fixing, so it is made unreachable rather than merely unlikely.
+      //
+      // This REPLACES the call to inventory_set_book_storage (0334), which can
+      // only write the crate half. 0334 is left in the database, untouched and
+      // still correct; it simply has no caller now. 0335 is NOT superseded —
+      // `bin_location` is a separate fact, written by `stampPlacementBin` on a
+      // put-away, and this statement cannot reach it.
       const { data: updated, error: rpcError } = await this.ctx.supabase.rpc(
-        'inventory_set_book_storage',
+        'inventory_set_book_placement',
         {
           p_item_ids: batch.ids,
           p_crate_color: batch.color,
           p_crate_number: batch.number,
+          p_rack_number: batch.rackNumber,
+          p_rack_row: batch.rackRow,
         },
       );
       // FAIL-CLOSED ON THE REPORT, not on the stock (recurring pattern #2: a
@@ -5204,14 +5348,32 @@ export class InventoryService {
             event: 'inventory.item.updated',
             entityType: 'inventory_item',
             entityId: id,
+            // ALL FOUR KEYS, because all four were written. An audit row that
+            // shows the crate moving and stays silent about a rack pair the same
+            // statement CLEARED is how a reviewer reconstructs the wrong history
+            // — and clearing the pair is precisely the outcome that needs to be
+            // findable later. `previous` was read before the RPC, so `before` is
+            // genuinely the old summary rather than an echo of the new one.
             before: {
               book_crate_color: previous?.crateColor ?? null,
               book_crate_number: previous?.crateNumber ?? null,
+              book_rack_number: previous?.rackNumber ?? null,
+              book_rack_row: previous?.rackRow ?? null,
             },
-            after: { book_crate_color: batch.color, book_crate_number: batch.number },
+            after: {
+              book_crate_color: batch.color,
+              book_crate_number: batch.number,
+              book_rack_number: batch.rackNumber,
+              book_rack_row: batch.rackRow,
+            },
             extra: {
               placement: 'book_crate',
-              changed_keys: ['book_crate_color', 'book_crate_number'],
+              changed_keys: [
+                'book_crate_color',
+                'book_crate_number',
+                'book_rack_number',
+                'book_rack_row',
+              ],
               ...(opts.audit
                 ? {
                     to_location_id: opts.audit.toLocationId,

@@ -56,12 +56,25 @@ const GREEN_CRATE_ROW = {
   name: 'Green #2',
 };
 
-/** The book's only holding, now inside Green #2. */
+/**
+ * The book's only holding, now inside Green #2 — which, like every crate in
+ * production, states no rack position. `rack_number` / `rack_row` are on the
+ * embed because the reconciliation derives the item's rack pair from them too;
+ * null here means "this crate sits on no rack", and the pair therefore CLEARS.
+ */
 const GREEN_HOLDING = {
   item_id: ITEM,
   location_id: CRATE,
   quantity: 12,
-  locations: { id: CRATE, kind: 'crate', type: 'bin', crate_color: 'green', crate_number: '2' },
+  locations: {
+    id: CRATE,
+    kind: 'crate',
+    type: 'bin',
+    crate_color: 'green',
+    crate_number: '2',
+    rack_number: null,
+    rack_row: null,
+  },
 };
 
 function installSpies() {
@@ -96,7 +109,7 @@ function install(opts: {
     'locations.insert': { data: opts.insertedLocation ?? null, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
-    'rpc:inventory_set_book_storage': { data: 1, error: null },
+    'rpc:inventory_set_book_placement': { data: 1, error: null },
     'rpc:inventory_set_rack': { data: 1, error: null },
   });
   vi.mocked(withApiContext).mockResolvedValue({
@@ -151,12 +164,18 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     expect(res.status).toBe(200);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(mockStamp).toHaveBeenCalledOnce();
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'mobile put-away wrote no crate summary at all').toBeDefined();
+    // The WHOLE summary, in one statement: Green #2 states no rack position and
+    // the book's every copy is now inside it, so the rack pair is cleared rather
+    // than left naming a rack the stock has left. The mobile scan sheet reads
+    // these keys, and it printed "Bin/shelf: Blue Shelf" above "Rack: 38-A".
     expect(call!.args).toEqual({
       p_item_ids: [ITEM],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 
@@ -212,7 +231,7 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     expect(res.status).toBe(200);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(
-      stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args,
+      stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args,
     ).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
@@ -254,7 +273,7 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('an internal_error NEVER leaks its details to the client (S13)', async () => {
