@@ -49,6 +49,9 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   destinationLabel,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
+  planNewDestination,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
 import { transferStockAction } from '@/server/actions/inventory';
@@ -207,14 +210,6 @@ export function StockTransferDialog({
 
   const hasNoSources = sourceHoldings.length === 0;
 
-  // A crate is identified by its NUMBER; a rack by its number. Neither branch
-  // demands the other's field any more, which is what made a number-only crate
-  // unreachable from this dialog.
-  const newFieldsFilled =
-    !isBook || newKind === 'rack'
-      ? rackNumber.trim().length > 0
-      : crateNumber.trim().length > 0;
-
   /**
    * The destination as chosen in this form.
    *
@@ -230,6 +225,17 @@ export function StockTransferDialog({
       ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
       : { mode: 'new-rack', rackNumber, rackRow };
   }
+
+  // THE READINESS GATE IS THE PLANNER — see newDestinationReady. The
+  // hand-rolled version here checked `crateNumber` alone on the crate branch,
+  // so crate 13 plus a "Row" with no "On rack" number passed it while
+  // planNewLocation refused the pair, and this dialog rendered "Create new crate
+  // ? does not exist yet." A crate is still identified by its NUMBER and a rack
+  // by its number; neither branch demands the other's field. That rule now lives
+  // in exactly one place.
+  const chosenNew = chosenNewDestination();
+  const newReady = chosenNew !== null && newDestinationReady(chosenNew);
+  const newProblem = chosenNew !== null ? newDestinationProblem(chosenNew) : null;
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -353,14 +359,18 @@ export function StockTransferDialog({
       toast.error('Pick a source location inside a warehouse first.');
       return;
     }
-    if (isNew && !newFieldsFilled) {
-      toast.error(
-        isBook && newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.',
-      );
+
+    const dest = chosenNewDestination();
+    // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT: `destinationLabel` is ''
+    // for an invalid plan, and describeNewRackPlacement would dress that up as
+    // "Create new crate ?". The words are the planner's, so this toast, the
+    // inline message and the server's zod issue are one sentence.
+    const plan = dest ? planNewDestination(dest) : null;
+    if (plan?.kind === 'invalid') {
+      toast.error(plan.message);
       return;
     }
 
-    const dest = chosenNewDestination();
     const destination: ActionDestination = dest
       ? toActionDestination(dest)
       : { existingLocationId: toLocation };
@@ -561,6 +571,10 @@ export function StockTransferDialog({
                     />
                   </>
                 )}
+
+                {/* The planner's refusal, said where the fields are — so a
+                    disabled Transfer button always has a stated reason. */}
+                {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
               </div>
             )}
 
@@ -600,7 +614,7 @@ export function StockTransferDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={submitting || hasNoSources || (isNew && !newFieldsFilled)}
+            disabled={submitting || hasNoSources || (isNew && !newReady)}
           >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer stock'}
           </Button>

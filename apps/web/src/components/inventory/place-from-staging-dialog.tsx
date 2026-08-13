@@ -57,6 +57,9 @@ import {
   destinationPhrase,
   destinationPosition,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
+  planNewDestination,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
 import { placeStockAction } from '@/server/actions/inventory';
@@ -174,10 +177,6 @@ export function PlaceFromStagingDialog({
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
 
-  const newFieldsFilled =
-    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
-  const canSubmit = !submitting && qtyValid && (isNew ? newFieldsFilled : destId.length > 0);
-
   /** The destination as chosen in this form — the input to every derivation.
    *
    *  The crate branch carries the SAME rack fields the rack branch does: a
@@ -192,6 +191,19 @@ export function PlaceFromStagingDialog({
     }
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
+
+  // THE READINESS GATE IS THE PLANNER. It used to be a hand-rolled field check
+  // (`crateNumber` non-empty on the crate branch) and it drifted from
+  // planNewLocation inside the very commit that added the crate's rack pair:
+  // crate 13 plus a "Row" with no "On rack" number satisfied it, the planner
+  // refused the pair, and this dialog offered "Create new crate ?". Delegating
+  // is what the phone has always done (newLocationReady in
+  // apps/mobile/src/lib/move-stock-form.ts).
+  const chosen = chosenDestination();
+  const newReady = chosen !== null && newDestinationReady(chosen);
+  // The planner's OWN sentence, rendered inline beside the fields it is about.
+  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
+  const canSubmit = !submitting && qtyValid && (isNew ? newReady : destId.length > 0);
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -317,8 +329,15 @@ export function PlaceFromStagingDialog({
       toast.error('Select a destination location.');
       return;
     }
-    if (isNew && !newFieldsFilled) {
-      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
+    // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT. `destinationLabel` is ''
+    // for an invalid plan, and describeNewRackPlacement would happily dress
+    // that up as "Create new crate ? does not exist in Main Warehouse yet."
+    // Refusing here means no creation prompt can ever name nothing — and the
+    // words are the planner's, so the toast, the inline message and the
+    // server's zod issue are one sentence.
+    const plan = planNewDestination(dest);
+    if (plan?.kind === 'invalid') {
+      toast.error(plan.message);
       return;
     }
 
@@ -564,6 +583,12 @@ export function PlaceFromStagingDialog({
                   />
                 </>
               )}
+
+              {/* The planner's refusal, said where the fields are. Without it a
+                  half-filled form would just have a dead Place button and no
+                  explanation — and the version of this dialog that had neither
+                  offered to create a crate it could not name. */}
+              {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
             </div>
           )}
 

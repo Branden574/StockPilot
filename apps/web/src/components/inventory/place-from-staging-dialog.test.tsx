@@ -381,6 +381,44 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(confirm).not.toHaveTextContent(/rack/i);
   });
 
+  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+    // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT.
+    //
+    // The gate used to be a hand-rolled field check — `crateNumber` non-empty
+    // on the crate branch — and this input walked straight through it: crate 13
+    // plus a Row with no "On rack" number. `planNewLocation` refuses that pair
+    // (`rack_needs_number`: a row alone names no position), so the name derived
+    // to '' and the confirmation rendered, verbatim:
+    //
+    //   "Create new crate ? does not exist in Main Warehouse yet. Continuing
+    //    creates it and moves 10 units into it."
+    //
+    // A confirmation that NAMES NOTHING, in front of a server whose schema
+    // refuses the same input — the 2026-07-23 rule (the string confirmed must be
+    // the string created) failing in its emptiest possible form.
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    // The planner's OWN words, inline — not a fourth hand-written string.
+    expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+
+    // Filling in the missing half clears the refusal and re-arms the button —
+    // the message is a statement about the fields, not a dead end.
+    await user.type(screen.getByLabelText(/on rack/i), '38');
+    expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
+  });
+
   it('a crate identified by its NUMBER ALONE is created as a crate, with no rack number', async () => {
     const user = userEvent.setup();
     renderBookDialog({ bookStorage: null });

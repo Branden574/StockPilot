@@ -56,6 +56,9 @@ import {
   destinationPhrase,
   destinationPosition,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
+  planNewDestination,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
@@ -166,14 +169,6 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     setPendingConfirm(null);
   }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber]);
 
-  const newFieldsFilled =
-    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
-  const canSubmit =
-    !submitting &&
-    singleWarehouse &&
-    rows.length > 0 &&
-    (isNew ? newFieldsFilled : destId.length > 0);
-
   // The crate branch carries the SAME rack pair the rack branch does: the
   // toggle picks the KIND of row, not which of two true facts survives. A crate
   // sits on a rack.
@@ -185,6 +180,20 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     }
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
+
+  // THE READINESS GATE IS THE PLANNER, not a hand-rolled field check that
+  // drifts from it — see newDestinationReady. On BULK the drift was worst: a
+  // crate number plus a "Row" with no "On rack" number armed one Continue that
+  // would have taken EVERY selected row into a location the dialog could not
+  // name ("Create new crate ?").
+  const chosen = chosenDestination();
+  const newReady = chosen !== null && newDestinationReady(chosen);
+  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
+  const canSubmit =
+    !submitting &&
+    singleWarehouse &&
+    rows.length > 0 &&
+    (isNew ? newReady : destId.length > 0);
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -257,8 +266,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       toast.error('Select a destination location.');
       return;
     }
-    if (isNew && !newFieldsFilled) {
-      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
+    // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT: `destinationLabel` is ''
+    // for an invalid plan, and describeNewRackPlacement would dress that up as
+    // "Create new crate ?" over the whole batch. The words are the planner's, so
+    // this toast, the inline message and the server's zod issue agree.
+    const plan = planNewDestination(dest);
+    if (plan?.kind === 'invalid') {
+      toast.error(plan.message);
       return;
     }
 
@@ -534,6 +548,10 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
                     />
                   </>
                 )}
+
+                {/* The planner's refusal, said where the fields are — so a
+                    disabled Place button always has a stated reason. */}
+                {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
               </div>
             )}
 

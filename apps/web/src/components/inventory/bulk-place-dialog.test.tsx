@@ -201,6 +201,36 @@ describe('BulkPlaceDialog — book crates', () => {
     });
   });
 
+  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+    // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT. The hand-rolled
+    // gate checked `crateNumber` alone, so crate BIN + a Row with no "On rack"
+    // number passed it — `planNewLocation` refuses that pair
+    // (`rack_needs_number`), the name derived to '', and this dialog offered to
+    // create "Create new crate ?" for the whole batch.
+    //
+    // Bulk is the worst place for it: one Continue would have taken every
+    // selected row into a location nobody could name.
+    const user = userEvent.setup();
+    renderDialog();
+    await open(user);
+    await chooseDestination(user, /new rack \/ crate/i);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), 'BIN');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/on rack/i), '43');
+    expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
+  });
+
   it('a MIXED selection is rack-only — no crate can be minted over non-books', async () => {
     const user = userEvent.setup();
     renderDialog(MIXED);

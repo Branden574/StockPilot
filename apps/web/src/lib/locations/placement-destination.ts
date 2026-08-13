@@ -16,10 +16,12 @@ import {
   formatRackLabel,
   formatRackPosition,
   normalizeRackFields,
+  planNewLocation,
+  type NewLocationFields,
+  type NewLocationPlan,
   type RackPosition,
 } from '@stockpilot/core';
 
-import { deriveLocationName } from './rack-name';
 import type { DestinationOption } from './destination-option';
 
 export type ChosenDestination =
@@ -37,6 +39,95 @@ export type ChosenDestination =
       rackNumber: string;
       rackRow: string;
     };
+
+/**
+ * The four planner fields a "+ New" choice carries — `null` for a destination
+ * that already exists and therefore plans nothing.
+ *
+ * The CRATE branch hands over its rack pair too: that pair is the crate's
+ * POSITION, part of its identity and part of the name migration 0270 dedupes
+ * on. Withholding it here is how a positioned crate would come to be planned as
+ * a position-less one.
+ */
+function newDestinationFields(dest: ChosenDestination): NewLocationFields | null {
+  switch (dest.mode) {
+    case 'existing':
+      return null;
+    case 'new-rack':
+      return { rackNumber: dest.rackNumber, rackRow: dest.rackRow };
+    case 'new-crate':
+      return {
+        crateColor: dest.crateColor,
+        crateNumber: dest.crateNumber,
+        rackNumber: dest.rackNumber,
+        rackRow: dest.rackRow,
+      };
+  }
+}
+
+/**
+ * WHAT THESE FIELDS DESCRIBE, decided by the ONE core planner — or `null` for a
+ * destination that already exists.
+ *
+ * Every other question this file answers about a "+ New" choice (its name, and
+ * the two below) runs through this, so a dialog cannot end up holding two
+ * different opinions of the same four boxes.
+ */
+export function planNewDestination(dest: ChosenDestination): NewLocationPlan | null {
+  const fields = newDestinationFields(dest);
+  return fields ? planNewLocation(fields) : null;
+}
+
+/**
+ * IS THIS DESTINATION COMPLETE ENOUGH TO SUBMIT?
+ *
+ * ═══ THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT ═══
+ *
+ * All three web dialogs used to answer this with a hand-rolled field check —
+ * `newKind === 'rack' ? rackNumber : crateNumber` non-empty — and within one
+ * commit it disagreed with `planNewLocation` about the very fields that commit
+ * added. A crate number plus a "Row" with no "On rack" number satisfied the
+ * hand-rolled check and was REFUSED by the planner (`rack_needs_number`: a row
+ * alone names no position), so the derived name was '' and the confirmation
+ * rendered "Create new crate ? does not exist in Main Warehouse yet." — a
+ * sentence naming nothing, in front of a server schema that refuses the same
+ * input. The 2026-07-23 rule (the string confirmed IS the string created)
+ * failing in its emptiest form.
+ *
+ * The phone never had that bug, because `newLocationReady` in
+ * apps/mobile/src/lib/move-stock-form.ts has always delegated here. This is the
+ * web twin, shared by all three dialogs — a fourth hand-rolled copy is how the
+ * next divergence ships.
+ *
+ * An EXISTING destination is complete by definition: it plans nothing, so there
+ * is nothing to be incomplete about.
+ */
+export function newDestinationReady(dest: ChosenDestination): boolean {
+  const plan = planNewDestination(dest);
+  return plan === null || plan.kind !== 'invalid';
+}
+
+/**
+ * The planner's own refusal, to show INLINE under a "+ New" form — or `null`
+ * when there is nothing to say.
+ *
+ * Silent on an UNTOUCHED form: with all four boxes empty the planner answers
+ * `rack_needs_number`, and shouting "Give the rack a number." at a crate form
+ * the operator has not started typing into is noise, not help. The moment any
+ * box carries text the refusal is about something real and is shown. Submit is
+ * gated by `newDestinationReady` either way, so the quiet period is never a
+ * window in which an unnameable destination can be submitted.
+ *
+ * The WORDS are the planner's (NEW_LOCATION_MESSAGES), never re-typed here, so
+ * the inline message, the toast and the server's zod issue are one sentence.
+ */
+export function newDestinationProblem(dest: ChosenDestination): string | null {
+  const plan = planNewDestination(dest);
+  if (plan === null || plan.kind !== 'invalid') return null;
+  const fields = newDestinationFields(dest) ?? {};
+  const typed = Object.values(fields).some((v) => (v ?? '').trim().length > 0);
+  return typed ? plan.message : null;
+}
 
 /**
  * The crate pair this destination will record on a book — the `next` side of
@@ -98,29 +189,21 @@ export function destinationRackLabel(dest: ChosenDestination): string {
  * The destination's LABEL — `locations.name` for one that exists, and the name
  * it would be given for one that does not.
  *
- * The new-location branch goes through `deriveLocationName`, the same helper
- * the server actions use, so the label the confirmation shows is character-for-
- * character the name that will be created (and therefore the one migration
- * 0270's dedupe index will match against).
+ * The new-location branch goes through `planNewDestination` — the SAME planner
+ * call `newDestinationReady` gates submit with, and the same one the server
+ * actions name the row with — so the label the confirmation shows is
+ * character-for-character the name that will be created (and therefore the one
+ * migration 0270's dedupe index will match against). The position is part of
+ * that name, which is why `newDestinationFields` hands it over.
+ *
+ * '' WHEN THE FIELDS NAME NOTHING. That is not a label a caller may render: a
+ * confirmation built on it reads "Create new crate ?". `newDestinationReady`
+ * is the gate that keeps it from ever reaching one.
  */
 export function destinationLabel(dest: ChosenDestination): string {
-  switch (dest.mode) {
-    case 'existing':
-      return dest.option.name;
-    case 'new-rack':
-      return deriveLocationName({ rackNumber: dest.rackNumber, rackRow: dest.rackRow });
-    case 'new-crate':
-      return deriveLocationName({
-        crateColor: dest.crateColor,
-        crateNumber: dest.crateNumber,
-        // The position is part of the NAME, and therefore part of migration
-        // 0270's dedupe key — see formatCrateLocationName. Dropping it here
-        // would make the confirmation name one crate and the server create
-        // another, which is the 2026-07-23 divergence all over again.
-        rackNumber: dest.rackNumber,
-        rackRow: dest.rackRow,
-      });
-  }
+  if (dest.mode === 'existing') return dest.option.name;
+  const plan = planNewDestination(dest);
+  return plan === null || plan.kind === 'invalid' ? '' : plan.name;
 }
 
 /**

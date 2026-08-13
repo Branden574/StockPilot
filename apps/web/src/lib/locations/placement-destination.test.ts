@@ -8,6 +8,8 @@ import {
   destinationPosition,
   destinationRackLabel,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
   type ChosenDestination,
 } from './placement-destination';
 
@@ -117,6 +119,81 @@ describe('destinationLabel — the string the confirmation shows IS the name cre
     expect(destinationLabel(newCrate({ crateNumber: '13', rackNumber: '38-B' }))).toBe(
       'Crate #13 on rack 38-B',
     );
+  });
+});
+
+/**
+ * THE READINESS GATE — pinned against `destinationLabel`, by construction.
+ *
+ * The three web dialogs each carried their own hand-rolled version of this
+ * predicate ("is `crateNumber` non-empty?") and it drifted from the planner
+ * inside the commit that gave a crate its rack pair: crate 13 plus a "Row" with
+ * no "On rack" number satisfied every one of them, `planNewLocation` refused the
+ * pair, `destinationLabel` returned '' and the confirmation rendered
+ *
+ *   "Create new crate ? does not exist in Main Warehouse yet. Continuing
+ *    creates it and moves 10 units into it."
+ *
+ * So the invariant worth pinning is not "these fields are non-empty" — it is
+ * READY IFF THERE IS A NAME. That is the one property whose violation produces
+ * an unnameable confirmation, and it is checked against `destinationLabel` for
+ * every row rather than asserted separately, because two independent lists are
+ * exactly how a gate and a namer come apart.
+ */
+describe('newDestinationReady — ready IFF the planner can name it', () => {
+  const cases: Array<[string, ChosenDestination, boolean]> = [
+    ['an untouched rack form', { mode: 'new-rack', rackNumber: '', rackRow: '' }, false],
+    ['a rack with a number', { mode: 'new-rack', rackNumber: 'A1', rackRow: '' }, true],
+    // A row alone names no position, on a rack or on a crate.
+    ['a rack ROW with no number', { mode: 'new-rack', rackNumber: '', rackRow: 'Row 3' }, false],
+    ['an untouched crate form', newCrate(), false],
+    ['a colour with no number', newCrate({ crateColor: 'blue' }), false],
+    ['a number-only crate', newCrate({ crateNumber: '9' }), true],
+    // THE DEFECT. Both halves of the position, or neither.
+    ['a crate whose Row has no "On rack" number', newCrate({ crateNumber: '13', rackRow: 'B' }), false],
+    ['that same crate once the rack number arrives', newCrate({ crateNumber: '13', rackNumber: '38', rackRow: 'B' }), true],
+    ['a crate on a rack, no row', newCrate({ crateNumber: '13', rackNumber: '38' }), true],
+    // Whitespace is the operator's, not a field value.
+    ['a crate number of only spaces', newCrate({ crateNumber: '   ' }), false],
+    ['an EXISTING destination — it plans nothing to be incomplete about', { mode: 'existing', option: option() }, true],
+  ];
+
+  it.each(cases)('%s → %s', (_name, dest, expected) => {
+    expect(newDestinationReady(dest)).toBe(expected);
+    // The gate and the namer, checked against each other on the same input:
+    // ready must mean "there is a label to confirm", and an existing row always
+    // has one.
+    if (dest.mode !== 'existing') {
+      expect(destinationLabel(dest).length > 0).toBe(expected);
+    }
+  });
+});
+
+describe('newDestinationProblem — the planner’s own words, and silence before they apply', () => {
+  it('says nothing about a form nobody has typed into yet', () => {
+    // All four boxes empty plans as `rack_needs_number`; shouting that at an
+    // untouched crate form is noise. Submit is gated regardless.
+    expect(newDestinationProblem({ mode: 'new-rack', rackNumber: '', rackRow: '' })).toBeNull();
+    expect(newDestinationProblem(newCrate())).toBeNull();
+    expect(newDestinationReady(newCrate())).toBe(false);
+  });
+
+  it('names the MISSING half of a crate position — the defect, in words', () => {
+    expect(newDestinationProblem(newCrate({ crateNumber: '13', rackRow: 'B' }))).toBe(
+      'Give the rack a number.',
+    );
+  });
+
+  it('says a colour is not a crate identity', () => {
+    expect(newDestinationProblem(newCrate({ crateColor: 'blue' }))).toBe(
+      'Give the crate a number — a color on its own does not name a crate.',
+    );
+  });
+
+  it('says nothing once the fields name something', () => {
+    expect(newDestinationProblem(newCrate({ crateNumber: '13', rackNumber: '38', rackRow: 'B' }))).toBeNull();
+    expect(newDestinationProblem({ mode: 'new-rack', rackNumber: '22-B', rackRow: '' })).toBeNull();
+    expect(newDestinationProblem({ mode: 'existing', option: option() })).toBeNull();
   });
 });
 

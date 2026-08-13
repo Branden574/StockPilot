@@ -190,6 +190,34 @@ describe('StockTransferDialog — new rack / crate', () => {
     });
   });
 
+  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+    // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT. This dialog's
+    // gate checked `crateNumber` alone, so crate 13 + a Row with no "On rack"
+    // number passed it; `planNewLocation` refuses that pair
+    // (`rack_needs_number`), the derived name was '', and the confirmation read
+    // "Create new crate ? does not exist yet." — the string confirmed naming
+    // nothing at all, ahead of a server schema that refuses the same input.
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewLocation(user);
+
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
+    expect(mockTransferStockAction).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/on rack/i), '38');
+    expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
+  });
+
   it('a NUMBER-ONLY crate is reachable, and sends NO rack number', async () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
