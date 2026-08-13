@@ -319,11 +319,24 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         see prepareDeliveryRequest), nothing can be prefilled safely, so
         this must say the same thing the oversized fallback panel says,
         before AND after any click.
+
+        COPY (2026-08-12): the condensed sentence used to end "Copy the
+        details instead to include every line", which told the requester to
+        do the assembly by hand — the feature failing at its job while
+        technically succeeding. The draft now carries an "Order link:" line
+        in BOTH modes (see `orderDetailUrl` in storefront-logic.ts), and both
+        recipients are internal staff with StockPilot accounts, so the
+        recipient can reach every line themselves. Copying stays offered as
+        an option for whoever wants the list inline in the message; it is no
+        longer presented as the required remedy. The !linkFits variant below
+        keeps its imperative deliberately — there, NOTHING is prefilled, so
+        copying really is the only way to send.
       */}
       {prepared.draft.condensed && prepared.linkFits && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
-          This order is too large to fit in a compose link, so the draft carries a summary. Copy
-          the details instead to include every line.
+          This order is too large to fit in a compose link, so the draft carries a summary and a
+          link to the full order. Use Copy the details if you want every line written into the
+          message itself.
         </p>
       )}
 

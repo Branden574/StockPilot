@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { DELIVERY_REQUEST_EMAIL, SITE_URL } from '@/lib/site';
 
 import type { CatalogItem } from '../v2/types';
 
@@ -686,10 +686,56 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).not.toContain('ORDER NOTES');
   });
 
-  it('never contains an order link — owner decision 2026-08-01: DC4 recipients are org members who can already see every order in StockPilot', () => {
+  /*
+   * REVERSAL, owner-reported 2026-08-12 (order SO-000080).
+   *
+   * The previous test here asserted the body NEVER contains an order link
+   * ("owner decision 2026-08-01: DC4 recipients are org members who can
+   * already see every order in StockPilot"). That premise was right about the
+   * recipients and wrong about the consequence: SO-000080 (11 lines) overflowed
+   * DRAFT_URL_LIMIT, condensed, and DC4 received a delivery request that named
+   * no items at all — with nothing in it to reach them by. The owner reversed
+   * the decision: being able to see the order in StockPilot is only useful if
+   * the mail says WHICH order and how to open it.
+   *
+   * These tests are the inverse pin. The old assertion is not deleted-and-
+   * forgotten: it is inverted, so the file still fails loudly if the link
+   * silently disappears again.
+   */
+  it('contains a link to the order, built from the UUID — the reversal of the 2026-08-01 no-link decision', () => {
     const { body } = buildDeliveryRequestDraft(makeDraftInput());
-    expect(body).not.toContain('Order link:');
-    expect(body).not.toContain('/dashboard/orders/');
+    expect(body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+  });
+
+  it('keys the link by UUID, never by the SO number — no route resolves an order number', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ orderNumber: 80 }));
+    expect(body).toContain('/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666');
+    expect(body).not.toContain('/dashboard/orders/SO-000080');
+    expect(body).not.toContain('/dashboard/orders/80');
+  });
+
+  it('builds the link from SITE_URL rather than a hardcoded host', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body).toContain(`Order link: ${SITE_URL}/dashboard/orders/`);
+  });
+
+  it('still emits the link when the order number never reached the client', () => {
+    // orderNumber is null on a fresh submit often enough to matter; the handle
+    // degrades to a non-SO string but the UUID — and therefore the link — is
+    // always present, so the mail stays actionable.
+    const { body } = buildDeliveryRequestDraft(makeDraftInput({ orderNumber: null }));
+    expect(body).toContain('/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666');
+  });
+
+  it('percent-encodes a newline-poisoned order id so the link cannot forge a header line', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ orderId: 'ab\ncd\nBcc: evil@evil.test', orderNumber: 49 }),
+    );
+    expect(body).toContain('/dashboard/orders/ab%0Acd%0ABcc%3A%20evil%40evil.test');
+    expect(body).not.toContain('\nBcc:');
+    expect(body).not.toContain('\n\n\n');
   });
 
   it('no longer states an order status line — owner decision 2026-08-02 removed it as redundant noise', () => {
@@ -710,6 +756,58 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     const { body } = buildDeliveryRequestDraft(makeDraftInput());
     expect(body).not.toContain('Drafted in StockPilot');
     expect(body).not.toContain('has not created a ticket');
+  });
+});
+
+describe('buildDeliveryRequestDraft — block order is a truncation contract', () => {
+  /*
+   * `DRAFT_URL_LIMIT` is a conservative GUESS at where a transport starts
+   * silently truncating, not a guarantee — a tenant redirect wrapper appends
+   * to the URL after we measure. So the body is ordered defensively: if a
+   * transport cuts it anyway, whatever survives must still let DC4 act.
+   * Identity and routing first, the long item list last.
+   */
+  const indexOfEach = (body: string) => ({
+    handle: body.indexOf('Order: SO-000049'),
+    link: body.indexOf('Order link: '),
+    destination: body.indexOf('DELIVERY DESTINATION'),
+    neededBy: body.indexOf('NEEDED BY'),
+    items: body.indexOf('ITEMS ('),
+    firstRow: body.indexOf("1. L4L Polo (Women's)"),
+  });
+
+  it('puts the order handle, the link, the destination and the needed-by BEFORE the item rows', () => {
+    const at = indexOfEach(buildDeliveryRequestDraft(makeDraftInput()).body);
+    // Every marker must be PRESENT, or the ordering assertions below compare
+    // -1 against a real index and pass for the wrong reason.
+    expect(Object.entries(at).filter(([, i]) => i < 0)).toEqual([]);
+    expect(at.handle).toBeLessThan(at.link);
+    expect(at.link).toBeLessThan(at.destination);
+    expect(at.destination).toBeLessThan(at.neededBy);
+    expect(at.neededBy).toBeLessThan(at.items);
+    expect(at.items).toBeLessThan(at.firstRow);
+  });
+
+  it('a body cut at the first item row still identifies the order and where it goes', () => {
+    // The concrete truncation scenario, spelled out rather than implied by
+    // index arithmetic: chop the body at the first item row and check what a
+    // recipient would actually still have.
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    const survives = body.slice(0, body.indexOf("1. L4L Polo (Women's)"));
+    expect(survives).toContain('Order: SO-000049');
+    expect(survives).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+    expect(survives).toContain('CVW Clovis');
+    expect(survives).toContain('NEEDED BY');
+  });
+
+  it('holds the same order on a pickup draft, where the destination block is a handoff', () => {
+    const { body } = buildDeliveryRequestDraft(
+      makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
+    );
+    expect(body.indexOf('Order link: ')).toBeLessThan(body.indexOf('PICKUP FROM'));
+    expect(body.indexOf('PICKUP FROM')).toBeLessThan(body.indexOf('ITEMS ('));
   });
 });
 
@@ -912,7 +1010,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
   it('DISCLOSES the truncation in the body rather than silently dropping lines', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
     expect(draft.body).toContain(
-      'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.',
+      'This message was shortened because the full item list did not fit in a compose link. Every line is on the order in StockPilot — open the order link above.',
     );
   });
 
@@ -947,6 +1045,26 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
     expect(draft.body).toContain('CVW Clovis');
   });
 
+  it('KEEPS the order link — the one thing that gives back what condensing removed', () => {
+    // SO-000080 (2026-08-12): a condensed draft named no items and offered no
+    // way to reach them. The item ROWS are still dropped here — that is what
+    // condensing is — but the link is not, so the message stays actionable.
+    const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
+    expect(draft.body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+    expect(draft.body).not.toContain('APP-POLO-W');
+  });
+
+  it('emits the SAME link in both modes — the link is not a condensed-only consolation', () => {
+    const input = makeDraftInput();
+    const linkOf = (body: string) => /^Order link: .*$/m.exec(body)?.[0] ?? null;
+    const full = linkOf(buildDeliveryRequestDraft(input).body);
+    const cond = linkOf(buildDeliveryRequestDraft(input, { condensed: true }).body);
+    expect(full).not.toBeNull();
+    expect(cond).toBe(full);
+  });
+
   it('still adapts to pickup', () => {
     const draft = buildDeliveryRequestDraft(
       makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
@@ -962,7 +1080,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
     // "dock closes at 3pm") vanished with no signal at all.
     const draft = buildDeliveryRequestDraft(makeDraftInput(), { condensed: true });
     expect(draft.body).toContain(
-      'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above. Order notes were also omitted and are available in StockPilot.',
+      'This message was shortened because the full item list did not fit in a compose link. Every line is on the order in StockPilot — open the order link above. Order notes were also omitted and are available in StockPilot.',
     );
     expect(draft.body).not.toContain('Please stage these by Friday.');
   });
@@ -970,7 +1088,7 @@ describe('buildDeliveryRequestDraft — condensed mode', () => {
   it('does not claim notes were dropped when there were none to begin with', () => {
     const draft = buildDeliveryRequestDraft(makeDraftInput({ notes: '' }), { condensed: true });
     expect(draft.body).toContain(
-      'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.',
+      'This message was shortened because the full item list did not fit in a compose link. Every line is on the order in StockPilot — open the order link above.',
     );
     expect(draft.body).not.toContain('Order notes were also omitted');
   });
@@ -1122,12 +1240,35 @@ describe('buildOutlookComposeUrl', () => {
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
-  it('the mailtouri inner body round-trips WITHOUT an order link or the drafted-in-StockPilot footer', () => {
+  it('round-trips the order link through BOTH encoding layers intact — and still carries no drafted-in-StockPilot footer', () => {
+    // The link is the one body value made almost entirely of characters the
+    // two encoding layers mangle: ':' becomes %3A then %253A, '/' becomes %2F
+    // then %252F. A single missing or extra layer produces a URL that looks
+    // fine in the source and lands in Outlook as literal percent-escapes the
+    // recipient cannot click. Decoding it back to the exact plain URL is the
+    // only way to know it survives.
+    //
+    // The drafted-in-StockPilot footer assertion is unchanged: THAT owner
+    // decision (2026-08-01, provenance footer was noise) still stands. Only
+    // the no-link half was reversed on 2026-08-12.
     const draft = buildDeliveryRequestDraft(makeDraftInput());
     const decoded = decodeCompose(buildOutlookComposeUrl(draft));
-    expect(decoded.body).not.toContain('Order link:');
-    expect(decoded.body).not.toContain('/dashboard/orders/');
+    expect(decoded.body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
+    expect(decoded.body).not.toContain('%2F');
     expect(decoded.body).not.toContain('Drafted in StockPilot');
+  });
+
+  it('round-trips the order link out of the mailto: fallback too', () => {
+    // `new URL()` never populates .searchParams for the opaque-path mailto:
+    // scheme — split on '?' by hand, the same way the buildMailtoUrl tests do.
+    const draft = buildDeliveryRequestDraft(makeDraftInput());
+    const url = buildMailtoUrl(draft);
+    const body = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('body') ?? '';
+    expect(body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
   });
 
   it('keeps the CC when every optional field is missing', () => {
@@ -1285,12 +1426,17 @@ describe('prepareDeliveryRequest', () => {
       'This message was shortened because the full item list did not fit in a compose link.',
     );
     // The condensed 100-line order is well within DRAFT_URL_LIMIT once
-    // condensed, so the CHOSEN (condensed) urls honestly fit — measured at
-    // 1263 chars against the 1800 limit (2026-08-01, after the owner dropped
-    // the order link and the drafted-in-StockPilot footer from the body:
-    // 271 chars shorter than the prior 1534-char measurement, 537 chars of
-    // headroom after both encoding layers).
+    // condensed, so the CHOSEN (condensed) urls honestly fit — re-measured
+    // 2026-08-12 at 1298 chars against the 1800 limit, 502 chars of headroom
+    // after both encoding layers. 132 of those chars are the reinstated
+    // `Order link:` line: ':' and '/' cost five characters each once the
+    // mailtouri wrapper double-encodes them, which is why a 91-character
+    // plain line is not a 91-character URL cost. It fits with room to spare,
+    // and it is the only thing in a condensed draft that can reach the items.
     expect(prepared.linkFits).toBe(true);
+    expect(prepared.draft.body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/b3f1c2d4-1111-2222-3333-444455556666',
+    );
   });
 
   it('linkFits is FALSE when even the condensed URL exceeds the limit — a pathological warehouse name, not the line count, is the cause', () => {
@@ -1303,13 +1449,17 @@ describe('prepareDeliveryRequest', () => {
       makeDraftInput({ warehouseName: 'W'.repeat(3000), destination: null }),
     );
     expect(prepared.draft.condensed).toBe(true);
-    // Measured at 7362 chars against the 1800 limit (2026-08-01, after the
-    // owner dropped the order link and the drafted-in-StockPilot footer from
-    // the body: 271 chars shorter than the prior 7633-char measurement) —
-    // the mailtouri wrapping (and the name-addr layer) inflates length, but
-    // this fixture was already pathologically oversized before either
-    // rewrite and stays so after both.
+    // Re-measured 2026-08-12 at 7396 chars against the 1800 limit (7264 of
+    // them without the reinstated `Order link:` line) — the mailtouri
+    // wrapping and the name-addr layer inflate length, but this fixture was
+    // pathologically oversized before the link went back in and stays so
+    // after it. `linkFits: false` remains REACHABLE: adding a link must
+    // never quietly turn the refuse-to-prefill path into a truncating one.
     expect(prepared.linkFits).toBe(false);
+    // ...and the link is still in the body it refuses to put in a URL, so
+    // the clipboard path a false linkFits forces the user onto is the fully
+    // actionable one.
+    expect(prepared.draft.body).toContain('Order link: ');
     // The clipboard path has no URL-length limit and must still carry the
     // complete body — recipients plus content that condensing would have
     // dropped (the order notes).
@@ -1341,6 +1491,103 @@ describe('prepareDeliveryRequest', () => {
     const decoded = decodeCompose(prepared.outlookUrl);
     expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+  });
+
+  /*
+   * THE REPORTED REGRESSION, as a fixture: SO-000080, L4L North Region,
+   * 2026-08-12. 11 lines, ~30-character item names, SP-XXXXX-XXX SKUs,
+   * warehouse DC4, destination CVW Clovis, and NO requester on the row
+   * (`requested_for` and the email are both NULL, so the body renders its
+   * "(requester not recorded)" fallback).
+   *
+   * Marissa was not blocked — the draft opened. It just named no items, and
+   * the UI told her to paste them in by hand. Measured on this branch:
+   *
+   *   full outlook url   2364  (limit 1800)  -> still condenses
+   *   full mailto url    1692  (limit 1800)  -> would have fit on its own
+   *   condensed outlook  1172                -> 628 chars of headroom
+   *
+   * So the link does NOT buy this order an uncondensed draft, and no
+   * plausible copy edit would: the 11 item rows alone cost 1444 characters
+   * once both encoding layers have run, against a total budget of 1800. What
+   * the link buys is a condensed draft DC4 can act on. This test pins that
+   * outcome — condensed, but complete-by-reference — rather than pretending
+   * the size problem went away.
+   */
+  const order80 = (): DeliveryRequestInput => {
+    const names = [
+      'Composition Notebook Wide Rule',
+      'Dry Erase Marker Chisel Black',
+      'Copy Paper Letter 20lb White',
+      'Student Chromebook Charger 45W',
+      'Hand Sanitizer Gallon Refill',
+      'Disinfecting Wipes Canister XL',
+      'Classroom Chair Stack Blue 18in',
+      'Whiteboard Eraser Felt Standard',
+      'Pencil Number Two Presharpened',
+      'Manila File Folder Letter Tab',
+      'Trash Liner 40 Gallon Clear',
+    ];
+    const skus = [
+      'SP-ZE7TG-XK6', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
+      'SP-KD6MF-ZQ4', 'SP-VB9LN-WC7', 'SP-TR2PG-HD5', 'SP-XC5YB-NM8',
+      'SP-GF1WK-JV3', 'SP-LP7DH-QS6', 'SP-BN4ZT-KR0',
+    ];
+    const qtys = [12, 6, 30, 4, 2, 8, 24, 10, 144, 50, 5];
+    return makeDraftInput({
+      orderId: 'd4e2a1b7-9c33-4f18-8a25-6b0e77f31c94',
+      orderNumber: 80,
+      requestedFor: '',
+      requesterEmail: null,
+      notes: '',
+      neededByLocal: '2026-08-18T09:00',
+      lines: names.map((_, i) => ({ itemId: `i-${i}`, quantity: qtys[i]! })),
+      itemMap: new Map(
+        names.map((name, i) => [`i-${i}`, makeItem({ id: `i-${i}`, name, sku: skus[i]! })]),
+      ),
+    });
+  };
+
+  it('SO-000080 still condenses — 11 lines really do not fit, and the fix was never to make them', () => {
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.lineCount).toBe(11);
+    // The row that overflows is the OUTLOOK one; the mailto fallback fits.
+    // Both are measured, and the pair decides — so this stays condensed.
+    expect(buildOutlookComposeUrl(buildDeliveryRequestDraft(order80())).length).toBeGreaterThan(
+      DRAFT_URL_LIMIT,
+    );
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(prepared.linkFits).toBe(true);
+  });
+
+  it("SO-000080's condensed draft names the order, links to it, and says where it goes", () => {
+    // Everything DC4 actually needs in order to act, on the message that
+    // previously arrived naming nothing.
+    const { draft } = prepareDeliveryRequest(order80());
+    expect(draft.body).toContain('Order: SO-000080');
+    expect(draft.body).toContain(
+      'Order link: https://stockpilotusa.com/dashboard/orders/d4e2a1b7-9c33-4f18-8a25-6b0e77f31c94',
+    );
+    expect(draft.body).toContain('CVW Clovis');
+    expect(draft.body).toContain('ITEMS (11 lines, 295 units)');
+    // Still condensed: the rows themselves are genuinely absent. This test
+    // would pass on a build that simply stopped condensing, so the assertion
+    // above about exceeding DRAFT_URL_LIMIT is what keeps it honest.
+    expect(draft.body).not.toContain('SP-ZE7TG-XK6');
+  });
+
+  it("SO-000080's requester is unrecorded, and the draft says so instead of inventing one", () => {
+    const { draft } = prepareDeliveryRequest(order80());
+    expect(draft.body).toContain('Requested by: (requester not recorded)');
+  });
+
+  it("SO-000080's clipboard escape hatch still carries every line, uncondensed", () => {
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.clipboardText).toContain('SP-ZE7TG-XK6');
+    expect(prepared.clipboardText).toContain('11. Trash Liner 40 Gallon Clear — SP-BN4ZT-KR0 — qty 5');
+    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
   });
 
   it('no user-controlled field can move the recipients OR the display names, at any size or mode', () => {
