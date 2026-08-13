@@ -15,7 +15,11 @@ import { capture } from '@/lib/analytics';
 import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL } from '@/lib/site';
 import { recordDeliveryRequestDraftedAction } from '@/server/actions/delivery-request';
 
-import { prepareDeliveryRequest, type DeliveryRequestInput } from './storefront-logic';
+import {
+  condensedNoticeText,
+  prepareDeliveryRequest,
+  type DeliveryRequestInput,
+} from './storefront-logic';
 
 /**
  * The delivery-request assistant's entry point, rendered in the success
@@ -152,6 +156,11 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       is_condensed: prepared.draft.condensed,
       included_cc_recipient: true,
       line_count: prepared.draft.lineCount,
+      // How many of those lines the RECIPIENT will actually see. `is_condensed`
+      // alone hid the SO-000080 failure: it was true both for a draft naming
+      // six of eleven items and for one naming none, so no dashboard could
+      // tell them apart. This is the number that would have surfaced it.
+      listed_line_count: prepared.draft.listedLineCount,
     });
   }
 
@@ -319,11 +328,18 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
         see prepareDeliveryRequest), nothing can be prefilled safely, so
         this must say the same thing the oversized fallback panel says,
         before AND after any click.
+
+        The condensed sentence is COMPUTED (`condensedNoticeText`), not
+        literal, because condensing is no longer all-or-nothing: the draft
+        now carries as many item rows as the measured url allows, so a fixed
+        "the draft carries a summary" would be a false claim on any order
+        where rows did fit. The three shapes — no rows, some rows, every row
+        in shortened form — are unit-tested against the counts in
+        storefront-logic.test.ts.
       */}
       {prepared.draft.condensed && prepared.linkFits && (
         <p className="sf-note sf-note-warn" data-testid="delivery-request-condensed">
-          This order is too large to fit in a compose link, so the draft carries a summary. Copy
-          the details instead to include every line.
+          {condensedNoticeText(prepared.draft)}
         </p>
       )}
 

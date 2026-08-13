@@ -14,6 +14,7 @@ import {
   buildQtyMap,
   cartTotals,
   clampQty,
+  condensedNoticeText,
   DRAFT_URL_LIMIT,
   filterCatalog,
   formatSiteAddressLines,
@@ -1047,6 +1048,474 @@ describe('buildDeliveryRequestDraft — a 100-line order (the zod maximum)', () 
     const draft = buildDeliveryRequestDraft(bigInput(), { condensed: true });
     expect(draft.to).toBe('dc4@learn4life.org');
     expect(draft.cc).toBe('arosas@cvwest.org');
+  });
+});
+
+/*
+ * THE DEGRADATION LADDER (2026-08-13, order SO-000080).
+ *
+ * Marissa's order — 11 lines, 295 units — produced an email whose entire item
+ * section was the heading `ITEMS (11 lines, 295 units)`. DC4 received a
+ * delivery request naming no items. The cause was not the URL limit: it was
+ * that condensing was ALL-OR-NOTHING. `{ condensed: true }` dropped every row
+ * and the code never asked how many would have fitted. Measured, six of the
+ * eleven fitted in the ORIGINAL row format and all eleven fit in a shortened
+ * one.
+ *
+ * `maxRows` makes the drop incremental. These suites pin the rungs.
+ */
+describe('buildDeliveryRequestDraft — shortened rows (maxRows)', () => {
+  const eleven = () => {
+    const names = [
+      'Composition Notebook Wide Rule',
+      'Dry Erase Marker Chisel Black',
+      'Copy Paper Letter 20lb White',
+      'Student Chromebook Charger 45W',
+      'Hand Sanitizer Gallon Refill',
+      'Disinfecting Wipes Canister XL',
+      'Classroom Chair Stack Blue 18in',
+      'Whiteboard Eraser Felt Standard',
+      'Pencil Number Two Presharpened',
+      'Manila File Folder Letter Tab',
+      'Trash Liner 40 Gallon Clear',
+    ];
+    const skus = [
+      'SP-ZE7TG-XK6', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
+      'SP-KD6MF-ZQ4', 'SP-VB9LN-WC7', 'SP-TR2PG-HD5', 'SP-XC5YB-NM8',
+      'SP-GF1WK-JV3', 'SP-LP7DH-QS6', 'SP-BN4ZT-KR0',
+    ];
+    const qtys = [12, 6, 30, 4, 2, 8, 24, 10, 144, 50, 5];
+    return makeDraftInput({
+      orderId: 'd4e2a1b7-9c33-4f18-8a25-6b0e77f31c94',
+      orderNumber: 80,
+      requestedFor: '',
+      requesterEmail: null,
+      notes: '',
+      neededByLocal: '2026-08-18T09:00',
+      lines: names.map((_, i) => ({ itemId: `i-${i}`, quantity: qtys[i]! })),
+      itemMap: new Map(
+        names.map((name, i) => [`i-${i}`, makeItem({ id: `i-${i}`, name, sku: skus[i]! })]),
+      ),
+    });
+  };
+
+  it('lists exactly maxRows rows and reports the count on the draft', () => {
+    const draft = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 4 });
+    expect(draft.listedLineCount).toBe(4);
+    expect(draft.lineCount).toBe(11);
+    expect(draft.body).toContain('1. Composition Notebook Wide Rule x12');
+    expect(draft.body).toContain('4. Student Chromebook Charger 45W x4');
+    expect(draft.body).not.toContain('5. Hand Sanitizer Gallon Refill');
+  });
+
+  it('takes the rows from the START of the order and numbers them from 1', () => {
+    // Cutting from the end is what lets the disclosure say "Lines 1-N of M"
+    // truthfully. A recipient can then reconcile against StockPilot by
+    // position rather than guessing which subset arrived.
+    const draft = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 2 });
+    const rows = draft.body.split('\n').filter((l) => /^\d+\. /.test(l));
+    expect(rows).toEqual([
+      '1. Composition Notebook Wide Rule x12',
+      '2. Dry Erase Marker Chisel Black x6',
+    ]);
+  });
+
+  it('the shortened row drops the SKU; the FULL row still carries it', () => {
+    // The whole SKU argument, pinned in one place. Measured on this fixture:
+    // a full row costs 126 characters of Outlook URL, `Name — SKU x12` costs
+    // 99, and `Name x12` costs 62 — the difference between 7 of 11 lines
+    // named and all 11. DC4 picks by name off a shelf, and a SKU cannot
+    // disambiguate a line that is not in the message at all.
+    //
+    // Dropping it in the FULL body instead would be a straight loss, so this
+    // asserts BOTH halves: if someone ever "simplifies" by using one row
+    // format everywhere, one of these two fails.
+    const short = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 1 }).body;
+    expect(short).toContain('1. Composition Notebook Wide Rule x12');
+    expect(short).not.toContain('SP-ZE7TG-XK6');
+
+    const full = buildDeliveryRequestDraft(eleven()).body;
+    expect(full).toContain('1. Composition Notebook Wide Rule — SP-ZE7TG-XK6 — qty 12');
+  });
+
+  it('maxRows defaults to 0, so a bare { condensed: true } is the old heading-only body', () => {
+    // Rung 3 is the FLOOR of the ladder, not a thing that disappeared. Every
+    // pre-existing caller and pinning test passes `{ condensed: true }` with
+    // no maxRows and must keep getting byte-identical output.
+    const bare = buildDeliveryRequestDraft(eleven(), { condensed: true });
+    const zero = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 0 });
+    expect(bare.body).toBe(zero.body);
+    expect(bare.listedLineCount).toBe(0);
+    expect(bare.body).toContain('ITEMS (11 lines, 295 units)');
+    expect(bare.body).not.toMatch(/^\d+\. /m);
+    expect(bare.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.',
+    );
+  });
+
+  it('clamps maxRows to [0, lineCount] and treats nonsense as 0', () => {
+    const over = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 999 });
+    expect(over.listedLineCount).toBe(11);
+    expect(over.body).toContain('11. Trash Liner 40 Gallon Clear x5');
+
+    for (const bad of [-5, Number.NaN, Number.POSITIVE_INFINITY * 0]) {
+      expect(
+        buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: bad }).listedLineCount,
+      ).toBe(0);
+    }
+    expect(buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 3.9 }).listedLineCount)
+      .toBe(3);
+  });
+
+  it('IGNORES maxRows on a full draft — the full list is never truncated', () => {
+    // maxRows is a condensed-mode lever only. If it ever leaked into the full
+    // path, `prepareDeliveryRequest`'s rung 1 would start silently dropping
+    // rows from a draft that fits, which is the exact failure mode this whole
+    // change exists to remove.
+    const draft = buildDeliveryRequestDraft(eleven(), { maxRows: 2 });
+    expect(draft.condensed).toBe(false);
+    expect(draft.listedLineCount).toBe(11);
+    expect(draft.body).toContain('11. Trash Liner 40 Gallon Clear — SP-BN4ZT-KR0 — qty 5');
+  });
+
+  it('DISCLOSES how many lines are listed, how many are not, and where the rest are', () => {
+    const draft = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 6 });
+    expect(draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. Lines 1-6 of 11 are listed above by name and quantity; the remaining 5 lines and all item SKUs are in StockPilot under the order number above.',
+    );
+  });
+
+  it('singularizes a lone listed line and a lone omitted line', () => {
+    expect(buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 1 }).body).toContain(
+      'Line 1 of 11 is listed above by name and quantity; the remaining 10 lines and all item SKUs are in StockPilot',
+    );
+    expect(buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 10 }).body).toContain(
+      'Lines 1-10 of 11 are listed above by name and quantity; the remaining 1 line and all item SKUs are in StockPilot',
+    );
+  });
+
+  it('says so plainly when every line DID fit, rather than claiming nothing was dropped', () => {
+    // Shortened-with-every-row is still shortened: the SKUs, the street
+    // address and the notes are gone. Saying "all 11 lines are listed" and
+    // stopping there would imply the message is complete.
+    const draft = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 11 });
+    expect(draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. All 11 lines are listed above by name and quantity; item SKUs and the rest of the order detail are in StockPilot under the order number above.',
+    );
+  });
+
+  it('never tells the requester that copy-pasting the list is the only option', () => {
+    // The complaint behind SO-000080 was not only the missing rows: the body
+    // and the surface both handed the assembly work back to the requester.
+    // The body states the omission and where the rest live; it does not issue
+    // instructions to a human at all.
+    //
+    // Scoped to the DISCLOSURE BLOCK, not the whole body, and deliberately so:
+    // this fixture's third item is literally named "Copy Paper Letter 20lb
+    // White". A body-wide /copy/i match passed for the wrong reason at
+    // maxRows 1 and failed for the wrong reason at 6 — the item list is user
+    // data and can contain any word at all.
+    for (const k of [1, 6, 11]) {
+      const { body } = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: k });
+      const disclosure = body
+        .split('\n\n')
+        .find((b) => b.startsWith('This message was shortened'));
+      expect(disclosure).toBeDefined();
+      expect(disclosure).not.toMatch(/copy/i);
+      expect(disclosure).not.toMatch(/paste/i);
+      expect(disclosure).not.toMatch(/by hand/i);
+      expect(disclosure).toContain('in StockPilot under the order number above');
+    }
+  });
+
+  it('still keeps the identifying block AHEAD of the shortened rows', () => {
+    // The truncation contract has to survive the ladder: a shortened body cut
+    // short again by an unmeasured transport must still name the order and
+    // the destination.
+    const { body } = buildDeliveryRequestDraft(eleven(), { condensed: true, maxRows: 6 });
+    const firstRow = body.indexOf('1. Composition Notebook Wide Rule');
+    expect(firstRow).toBeGreaterThan(0);
+    expect(body.indexOf('Order: SO-000080')).toBeLessThan(firstRow);
+    expect(body.indexOf('DELIVERY DESTINATION')).toBeLessThan(firstRow);
+    expect(body.indexOf('NEEDED BY')).toBeLessThan(firstRow);
+  });
+
+  it('MONOTONICITY CONTRACT: both encoded URLs grow strictly with maxRows', () => {
+    /*
+     * `prepareDeliveryRequest` binary-searches for the largest fitting row
+     * count, which is only correct if url length never DIPS as rows are
+     * added. The disclosure sentence works against that: its omitted-count
+     * digits and its "line"/"lines" plural both shrink as `listed` grows, and
+     * at listed === lineCount it swaps to a different sentence entirely.
+     * Those terms move by a couple of characters; a row is worth twenty-plus.
+     *
+     * This walks the ENTIRE range, including the listed === lineCount
+     * boundary where the sentence swaps, for both transports. If a future
+     * copy edit makes the final disclosure long enough to invert a step, the
+     * search could step over the true maximum and silently list fewer rows —
+     * this fails first.
+     */
+    const input = eleven();
+    let prevOutlook = -1;
+    let prevMailto = -1;
+    for (let k = 0; k <= input.lines.length; k += 1) {
+      const draft = buildDeliveryRequestDraft(input, { condensed: true, maxRows: k });
+      const outlook = buildOutlookComposeUrl(draft).length;
+      const mailto = buildMailtoUrl(draft).length;
+      expect(outlook).toBeGreaterThan(prevOutlook);
+      expect(mailto).toBeGreaterThan(prevMailto);
+      prevOutlook = outlook;
+      prevMailto = mailto;
+    }
+  });
+
+  it('the OUTLOOK url is the binding constraint — roughly 40% longer than the mailto', () => {
+    // Both transports are measured and the longer one decides. Measured
+    // 2026-08-13 on this fixture: full body 946 plain characters, Outlook url
+    // 2232, mailto 1580 — a ratio of 1.41. The Outlook url wraps an inner
+    // mailto in `?mailtouri=` and encodeURIComponent's the whole thing, so
+    // the body is url-encoded TWICE and a space costs `%2520`, six
+    // characters. Fitting rows against a plain-character estimate would be
+    // wrong by a factor of two and a half.
+    const full = buildDeliveryRequestDraft(eleven());
+    const outlook = buildOutlookComposeUrl(full).length;
+    const mailto = buildMailtoUrl(full).length;
+    expect(full.body.length).toBeLessThan(1000);
+    expect(outlook).toBeGreaterThan(mailto * 1.3);
+    // The mailto alone WOULD have fitted. Measuring only the cheaper
+    // transport would have shipped a silently truncated Outlook draft.
+    expect(mailto).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(outlook).toBeGreaterThan(DRAFT_URL_LIMIT);
+  });
+
+  it('pins the real double-encoded cost of a space and an em-dash', () => {
+    /*
+     * The double-encoding claim, isolated and MEASURED rather than reasoned
+     * about. A space becomes '%20' in the inner mailto and '%2520' once the
+     * `mailtouri` wrapper re-encodes it — five characters, not six: '%2520'
+     * is % 2 5 2 0. An em-dash becomes '%E2%80%94' and then
+     * '%25E2%2580%2594' — fifteen.
+     *
+     * These exact numbers are what the row-format decision rests on (a " — "
+     * separator costs 25, twice per row), so they are pinned rather than
+     * left in a comment. The first draft of this test asserted 6 for a space,
+     * off by one from arithmetic done in my head, and failed — which is the
+     * argument for pinning it.
+     */
+    const base = buildDeliveryRequestDraft(eleven(), { condensed: true });
+    const cost = (extra: string) => ({
+      outlook:
+        buildOutlookComposeUrl({ ...base, body: base.body + extra }).length -
+        buildOutlookComposeUrl(base).length,
+      mailto:
+        buildMailtoUrl({ ...base, body: base.body + extra }).length - buildMailtoUrl(base).length,
+    });
+    expect(cost(' ')).toEqual({ outlook: 5, mailto: 3 });
+    expect(cost('—')).toEqual({ outlook: 15, mailto: 9 });
+    expect(cost(' — ')).toEqual({ outlook: 25, mailto: 15 });
+    expect(cost('a')).toEqual({ outlook: 1, mailto: 1 });
+  });
+});
+
+describe('prepareDeliveryRequest — the ladder, measured end to end', () => {
+  /*
+   * SO-000080 as its own fixture: 11 lines, 295 units, ~30-character item
+   * names, SP-XXXXX-XXX SKUs, warehouse DC4, destination CVW Clovis, and no
+   * requester on the row (`requested_for` and the email are both NULL, so the
+   * body renders its "(requester not recorded)" fallback).
+   */
+  const order80 = (): DeliveryRequestInput => {
+    const names = [
+      'Composition Notebook Wide Rule',
+      'Dry Erase Marker Chisel Black',
+      'Copy Paper Letter 20lb White',
+      'Student Chromebook Charger 45W',
+      'Hand Sanitizer Gallon Refill',
+      'Disinfecting Wipes Canister XL',
+      'Classroom Chair Stack Blue 18in',
+      'Whiteboard Eraser Felt Standard',
+      'Pencil Number Two Presharpened',
+      'Manila File Folder Letter Tab',
+      'Trash Liner 40 Gallon Clear',
+    ];
+    const skus = [
+      'SP-ZE7TG-XK6', 'SP-QM4RD-PL2', 'SP-WN8CV-BT9', 'SP-JH3XS-RY1',
+      'SP-KD6MF-ZQ4', 'SP-VB9LN-WC7', 'SP-TR2PG-HD5', 'SP-XC5YB-NM8',
+      'SP-GF1WK-JV3', 'SP-LP7DH-QS6', 'SP-BN4ZT-KR0',
+    ];
+    const qtys = [12, 6, 30, 4, 2, 8, 24, 10, 144, 50, 5];
+    return makeDraftInput({
+      orderId: 'd4e2a1b7-9c33-4f18-8a25-6b0e77f31c94',
+      orderNumber: 80,
+      requestedFor: '',
+      requesterEmail: null,
+      notes: '',
+      neededByLocal: '2026-08-18T09:00',
+      lines: names.map((_, i) => ({ itemId: `i-${i}`, quantity: qtys[i]! })),
+      itemMap: new Map(
+        names.map((name, i) => [`i-${i}`, makeItem({ id: `i-${i}`, name, sku: skus[i]! })]),
+      ),
+    });
+  };
+
+  it('SO-000080 NAMES ITS ITEMS — 10 of 11 lines, where it used to name none', () => {
+    // THE REPORTED BUG, as an assertion. Before: `listedLineCount` 0, the item
+    // section was the heading and nothing else. After (measured 2026-08-13):
+    // 10 rows, Outlook url 1785 of 1800.
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.lineCount).toBe(11);
+    expect(prepared.draft.listedLineCount).toBe(10);
+    expect(prepared.draft.body).toContain('ITEMS (11 lines, 295 units)');
+    expect(prepared.draft.body).toContain('1. Composition Notebook Wide Rule x12');
+    expect(prepared.draft.body).toContain('10. Manila File Folder Letter Tab x50');
+    // The eleventh genuinely does not fit, and the body says so rather than
+    // letting it vanish.
+    expect(prepared.draft.body).not.toContain('11. Trash Liner 40 Gallon Clear');
+    expect(prepared.draft.body).toContain(
+      'the remaining 1 line and all item SKUs are in StockPilot under the order number above',
+    );
+    expect(prepared.linkFits).toBe(true);
+  });
+
+  it('that row count is MAXIMAL — one more row would overflow the limit', () => {
+    /*
+     * The teeth of the whole change. A build that ignores `maxRows` and drops
+     * every row still satisfies "condensed and under the limit"; it fails
+     * HERE, because 0 is not the largest fitting count.
+     *
+     * Asserted as a property rather than a magic number: whatever the chosen
+     * count is, it fits, and one more does not. That survives a copy edit
+     * that shifts the number without weakening what is being checked.
+     */
+    const input = order80();
+    const prepared = prepareDeliveryRequest(input);
+    const k = prepared.draft.listedLineCount;
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThan(input.lines.length);
+
+    const at = (rows: number) => {
+      const draft = buildDeliveryRequestDraft(input, { condensed: true, maxRows: rows });
+      return Math.max(buildOutlookComposeUrl(draft).length, buildMailtoUrl(draft).length);
+    };
+    expect(at(k)).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(at(k + 1)).toBeGreaterThan(DRAFT_URL_LIMIT);
+    expect(prepared.outlookUrl.length).toBe(1785);
+  });
+
+  it('both transports of the CHOSEN draft measure under the limit', () => {
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(prepared.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+  });
+
+  it('DRAFT_URL_LIMIT was not raised to buy rows', () => {
+    // Both transports truncate SILENTLY past roughly 2,000 characters, so
+    // buying rows by raising the ceiling would trade an honestly shortened
+    // request for an invisibly mangled one. The ladder is the alternative to
+    // that trade, not an excuse for it.
+    expect(DRAFT_URL_LIMIT).toBe(1800);
+  });
+
+  it('rung 3 survives: when not even ONE row fits, the heading-only body is still produced', () => {
+    // Item names are unbounded database strings. A single 1,200-character name
+    // costs more than the entire remaining budget, so no row can be listed —
+    // and the result must be the old heading-only draft, honestly disclosed,
+    // rather than a crash or a truncated row.
+    const lines = [
+      { itemId: 'huge', quantity: 1 },
+      { itemId: 'a', quantity: 2 },
+      { itemId: 'b', quantity: 3 },
+    ];
+    const prepared = prepareDeliveryRequest(
+      makeDraftInput({
+        notes: '',
+        lines,
+        itemMap: new Map([
+          ['huge', makeItem({ id: 'huge', sku: 'HUGE', name: 'H'.repeat(1200) })],
+          ['a', makeItem({ id: 'a', sku: 'A', name: 'Alpha' })],
+          ['b', makeItem({ id: 'b', sku: 'B', name: 'Bravo' })],
+        ]),
+      }),
+    );
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.listedLineCount).toBe(0);
+    expect(prepared.draft.body).not.toMatch(/^\d+\. /m);
+    expect(prepared.draft.body).toContain(
+      'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.',
+    );
+    expect(prepared.linkFits).toBe(true);
+  });
+
+  it('rung 4 survives: linkFits stays FALSE and lists nothing when even rung 3 overflows', () => {
+    // A pathological warehouse name is not shortened by anything the ladder
+    // does, so the refuse-to-prefill path must remain reachable. Adding rows
+    // must never quietly turn it into a truncating one.
+    const prepared = prepareDeliveryRequest(
+      makeDraftInput({ warehouseName: 'W'.repeat(3000), destination: null }),
+    );
+    expect(prepared.linkFits).toBe(false);
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.listedLineCount).toBe(0);
+    expect(prepared.outlookUrl.length).toBeGreaterThan(DRAFT_URL_LIMIT);
+  });
+
+  it("SO-000080's clipboard escape hatch still carries every line, uncondensed, with SKUs", () => {
+    // The clipboard has no URL limit and is deliberately built from the FULL
+    // draft, never from the shortened one the links use.
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.clipboardText).toContain(
+      '11. Trash Liner 40 Gallon Clear — SP-BN4ZT-KR0 — qty 5',
+    );
+    expect(prepared.clipboardText).toContain('SP-ZE7TG-XK6');
+    expect(prepared.clipboardText).toContain('CC: arosas@cvwest.org');
+  });
+
+  it("SO-000080's requester is unrecorded, and the draft says so instead of inventing one", () => {
+    expect(prepareDeliveryRequest(order80()).draft.body).toContain(
+      'Requested by: (requester not recorded)',
+    );
+  });
+
+  it('a full draft that fits is untouched — rung 1 still lists everything with SKUs', () => {
+    const prepared = prepareDeliveryRequest(makeDraftInput());
+    expect(prepared.draft.condensed).toBe(false);
+    expect(prepared.draft.listedLineCount).toBe(2);
+    expect(prepared.draft.body).toContain("1. L4L Polo (Women's) — APP-POLO-W — qty 5");
+    expect(prepared.draft.body).toContain('ORDER NOTES');
+  });
+});
+
+describe('condensedNoticeText', () => {
+  const draftWith = (listed: number, total: number) =>
+    ({ listedLineCount: listed, lineCount: total }) as ReturnType<
+      typeof buildDeliveryRequestDraft
+    >;
+
+  it('names the real counts when only some lines are listed', () => {
+    expect(draftWith(10, 11)).toBeDefined();
+    expect(condensedNoticeText(draftWith(10, 11))).toBe(
+      'This order is too large to fit in a compose link, so the draft lists the first 10 of 11 lines and says the rest are on the order in StockPilot. Copy the details to put every line in the message itself.',
+    );
+  });
+
+  it('says every line made it, and that the SKUs did not', () => {
+    expect(condensedNoticeText(draftWith(11, 11))).toBe(
+      'This order is too large to fit in a compose link, so the draft lists all 11 lines by name and quantity, without SKUs. Copy the details to put the full list in the message itself.',
+    );
+  });
+
+  it('keeps the original imperative ONLY at the bottom rung, where copying really is the remedy', () => {
+    // With zero rows in the message, "Copy the details instead" is honest
+    // rather than a shrug. The other two shapes must NOT say "instead" —
+    // that was the wording the owner objected to, and with real rows in the
+    // draft it would misstate what the employee is about to send.
+    expect(condensedNoticeText(draftWith(0, 11))).toBe(
+      'This order is too large to fit in a compose link, so the draft carries a summary. Copy the details instead to include every line.',
+    );
+    expect(condensedNoticeText(draftWith(10, 11))).not.toContain('instead');
+    expect(condensedNoticeText(draftWith(11, 11))).not.toContain('instead');
   });
 });
 

@@ -371,14 +371,115 @@ export interface DeliveryRequestDraft {
   cc: string;
   subject: string;
   body: string;
-  /** True when the item list and address were dropped to fit a compose link. */
+  /** True when the address, the notes and the per-line SKUs were dropped to fit a compose link. */
   condensed: boolean;
   lineCount: number;
   unitCount: number;
+  /**
+   * How many item rows are actually WRITTEN INTO the body — `lineCount` on a
+   * full draft, and anywhere from 0 to `lineCount` on a condensed one.
+   *
+   * This exists because "condensed" used to mean "zero rows", and the UI copy
+   * and the analytics both encoded that assumption. Now that condensing fits
+   * as many rows as the measured URL allows (see `prepareDeliveryRequest`),
+   * the two facts are separate: a draft can be condensed AND still name every
+   * line. Anything that tells the employee what the recipient will see has to
+   * read this, not `condensed`.
+   */
+  listedLineCount: number;
 }
 
-const CONDENSED_DISCLOSURE =
-  'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.';
+/**
+ * The opening sentence of every shortened-draft disclosure. Split out because
+ * all three disclosure shapes below begin with it, and callers (and tests)
+ * match on it to detect "this draft was shortened" without caring how far.
+ */
+const SHORTENED_LEAD =
+  'This message was shortened because the full item list did not fit in a compose link.';
+
+/**
+ * The disclosure for a draft with ZERO rows listed — the bottom of the ladder,
+ * reached only when not even one row fits. Owner-pinned wording, unchanged
+ * since 2026-08-01.
+ */
+const CONDENSED_DISCLOSURE = `${SHORTENED_LEAD} The complete order is in StockPilot under the order number above.`;
+
+/**
+ * What the body says about what it left out.
+ *
+ * ACCURACY IS THE WHOLE POINT (SO-000080, 2026-08-12): DC4 received a delivery
+ * request whose item section was the heading `ITEMS (11 lines, 295 units)` and
+ * nothing else. The disclosure must name the shortfall precisely — how many
+ * lines are here, how many are not, and where the rest live — because the
+ * recipient has no other way to tell a complete list from a truncated one.
+ *
+ * It must NOT instruct the requester to go and paste the list in by hand. That
+ * is an available choice (the clipboard path always carries everything) but it
+ * is not the only one: the body names the order, and DC4 are org members who
+ * can open it in StockPilot — the owner's own position, 2026-08-01.
+ *
+ * LENGTH IS A REAL COST. Measured 2026-08-13 through both encoding layers, one
+ * plain character of body costs, in the Outlook URL: a letter 1, a space 5
+ * (`%2520`), a newline 5, an em-dash 15 (`%25E2%2580%2594`). This sentence's
+ * partial-list form runs 143 plain characters and costs 255 — 145 more than
+ * the zero-row form, which is about two and a half item rows. That is why
+ * SO-000080 lands at 10 of 11 rows rather than 11: the honest disclosure is
+ * itself worth two rows. `prepareDeliveryRequest` measures the FINISHED body,
+ * so the trade is made honestly rather than guessed — but keep this tight.
+ *
+ * MONOTONICITY CONTRACT: this string must never shrink by more than one item
+ * row's worth as `listed` grows, or the binary search in
+ * `prepareDeliveryRequest` could step over the true maximum. The only shrinking
+ * terms are the omitted-count digits and the "line"/"lines" plural — at most a
+ * couple of characters against a row that is never shorter than about twenty.
+ * Pinned by the 'encoded URL length grows monotonically' test.
+ */
+function shortenedDisclosure(listed: number, total: number): string {
+  if (listed <= 0) return CONDENSED_DISCLOSURE;
+  if (listed >= total) {
+    return `${SHORTENED_LEAD} All ${total} ${
+      total === 1 ? 'line is' : 'lines are'
+    } listed above by name and quantity; item SKUs and the rest of the order detail are in StockPilot under the order number above.`;
+  }
+  const omitted = total - listed;
+  const listedPhrase =
+    listed === 1
+      ? `Line 1 of ${total} is listed above`
+      : `Lines 1-${listed} of ${total} are listed above`;
+  return `${SHORTENED_LEAD} ${listedPhrase} by name and quantity; the remaining ${omitted} ${
+    omitted === 1 ? 'line' : 'lines'
+  } and all item SKUs are in StockPilot under the order number above.`;
+}
+
+/**
+ * The warning shown above the button when the draft had to be shortened.
+ *
+ * Lives here rather than in the component so it is a pure function of the
+ * draft and can be unit-tested against the exact counts, and so the on-screen
+ * claim and the in-body disclosure are written next to each other and cannot
+ * drift apart.
+ *
+ * The zero-row variant keeps its imperative ("Copy the details instead"): with
+ * no rows in the message, copying really is the only way to send a list. The
+ * other two offer copying as a choice, because the draft already carries real
+ * item rows.
+ */
+export function condensedNoticeText(draft: DeliveryRequestDraft): string {
+  const { listedLineCount: listed, lineCount: total } = draft;
+  if (listed <= 0) {
+    return 'This order is too large to fit in a compose link, so the draft carries a summary. Copy the details instead to include every line.';
+  }
+  if (listed >= total) {
+    return `This order is too large to fit in a compose link, so the draft lists all ${total} lines by name and quantity, without SKUs. Copy the details to put the full list in the message itself.`;
+  }
+  return `This order is too large to fit in a compose link, so the draft lists the first ${listed} of ${total} lines and says the rest are on the order in StockPilot. Copy the details to put every line in the message itself.`;
+}
+
+/** Clamp a requested row cap to [0, lineCount], treating anything non-finite as 0. */
+function clampMaxRows(value: number | undefined, lineCount: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(Math.floor(value), lineCount));
+}
 
 /** "SO-000049" when the number is real, else a visibly non-SO handle. */
 function orderHandle(orderNumber: number | null, orderId: string): string {
@@ -429,12 +530,23 @@ function neededByLine(neededByLocal: string, tz: string): string | null {
  * `condensed` exists for RISK R4: Outlook Web compose links and mailto: both
  * carry the body in the query string, practical limits land around 2,000
  * characters, and truncation is SILENT — the client opens with half a body and
- * the employee sends it. Condensed mode drops the per-line list and the street
- * address, keeps the counts and the site, and SAYS SO in the body.
+ * the employee sends it. Condensed mode drops the street address, the order
+ * notes and the per-line SKUs, keeps the counts and the site, and SAYS SO in
+ * the body.
+ *
+ * `maxRows` (condensed only) is the degradation LADDER, added 2026-08-13 after
+ * SO-000080. Condensing used to be all-or-nothing: the caller asked for it and
+ * every item row vanished, so an 11-line order reached DC4 as the bare heading
+ * `ITEMS (11 lines, 295 units)`. Most of those rows would have fit; nothing
+ * ever tried. `maxRows` lets `prepareDeliveryRequest` fit as many as the
+ * MEASURED url allows and say honestly how many did not — a partial list beats
+ * no list. It defaults to 0, so a bare `{ condensed: true }` still produces the
+ * old heading-only body byte for byte, which is the bottom rung of the ladder
+ * rather than its only rung.
  */
 export function buildDeliveryRequestDraft(
   input: DeliveryRequestInput,
-  opts: { condensed?: boolean } = {},
+  opts: { condensed?: boolean; maxRows?: number } = {},
 ): DeliveryRequestDraft {
   const condensed = opts.condensed === true;
   const isPickup = input.fulfillmentType === 'pickup';
@@ -510,23 +622,59 @@ export function buildDeliveryRequestDraft(
   const needed = neededByLine(input.neededByLocal, input.orgTimezone);
   if (needed) blocks.push(`NEEDED BY\n${needed}`);
 
+  // How many rows this body will actually carry. A full draft carries every
+  // line; a condensed one carries what `maxRows` allows, which the caller has
+  // MEASURED rather than guessed.
+  const listedLineCount = condensed ? clampMaxRows(opts.maxRows, lineCount) : lineCount;
+
   if (lineCount === 0) {
     blocks.push('No line items were recorded on this order.');
   } else {
     const heading = `ITEMS (${lineCount} ${lineCount === 1 ? 'line' : 'lines'}, ${unitCount} ${
       unitCount === 1 ? 'unit' : 'units'
     })`;
+    // `?? line.itemId` only catches null/undefined — an empty-string name
+    // would sail through and render "1.  — qty 5". `||` catches both a
+    // missing item AND a present-but-blank name.
+    const nameOf = (line: CartLineState) =>
+      toPlainTextLine(input.itemMap.get(line.itemId)?.name || line.itemId);
+
     if (condensed) {
-      blocks.push(heading);
+      // THE SHORTENED ROW FORMAT, and why the SKU is not in it.
+      //
+      // The full row is `1. Composition Notebook Wide Rule — SP-ZE7TG-XK6 —
+      // qty 12`. Those " — " separators are em-dashes: three UTF-8 bytes that
+      // become %E2%80%94 and then, once the Outlook `mailtouri` wrapper
+      // re-encodes the whole inner mailto, %25E2%2580%2594 — fifteen
+      // characters for the dash, plus five for each flanking space: 25 for
+      // the separator alone, twice per row. Measured on the SO-000080 shape,
+      // one full row costs 126 characters of Outlook URL;
+      // `1. Composition Notebook Wide Rule x12` costs 62.
+      //
+      // Measured end to end through `prepareDeliveryRequest` on SO-000080,
+      // disclosure included, 2026-08-13:
+      //
+      //   `1. Name — SKU — qty 12`  (the full format)   ->  5 of 11 lines
+      //   `1. Name — SKU x12`                           ->  6 of 11 lines
+      //   `1. Name x12`             (this one)          -> 10 of 11 lines
+      //
+      // That is the whole argument for dropping the SKU here. DC4 picks by
+      // NAME off a shelf, and a SKU cannot disambiguate a line that is not in
+      // the message at all — carrying SKUs would cost five of the ten names
+      // that now arrive. Two similar titles are a real risk, so it is paid for
+      // three ways: the disclosure below states that the SKUs were dropped and
+      // where to get them, the FULL row format keeps the SKU untouched, and
+      // the clipboard path — which has no URL limit — always carries the full
+      // rows. The SKU is dropped ONLY here, in the shortened body.
+      const rows = input.lines
+        .slice(0, listedLineCount)
+        .map((line, i) => `${i + 1}. ${nameOf(line)} x${line.quantity}`);
+      blocks.push(rows.length > 0 ? [heading, ...rows].join('\n') : heading);
     } else {
       const rows = input.lines.map((line, i) => {
         const item = input.itemMap.get(line.itemId);
-        // `?? line.itemId` only catches null/undefined — an empty-string
-        // name would sail through and render "1.  — qty 5". `||` catches
-        // both a missing item AND a present-but-blank name.
-        const name = toPlainTextLine(item?.name || line.itemId);
         const sku = item?.sku ? toPlainTextLine(item.sku) : '';
-        const label = sku ? `${name} — ${sku}` : name;
+        const label = sku ? `${nameOf(line)} — ${sku}` : nameOf(line);
         return `${i + 1}. ${label} — qty ${line.quantity}`;
       });
       blocks.push([heading, ...rows].join('\n'));
@@ -539,12 +687,13 @@ export function buildDeliveryRequestDraft(
   if (condensed) {
     // Condensed mode drops ORDER NOTES silently (see above); say so in the
     // same disclosure block rather than letting a real requester note
-    // vanish with no signal. The original sentence stays intact and
+    // vanish with no signal. The disclosure sentence stays intact and
     // contiguous — callers still assert on it with toContain.
+    const disclosure = shortenedDisclosure(listedLineCount, lineCount);
     blocks.push(
       notes
-        ? `${CONDENSED_DISCLOSURE} Order notes were also omitted and are available in StockPilot.`
-        : CONDENSED_DISCLOSURE,
+        ? `${disclosure} Order notes were also omitted and are available in StockPilot.`
+        : disclosure,
     );
   }
 
@@ -556,6 +705,7 @@ export function buildDeliveryRequestDraft(
     condensed,
     lineCount,
     unitCount,
+    listedLineCount,
   };
 }
 
@@ -769,15 +919,41 @@ export interface PreparedDeliveryRequest {
 }
 
 /**
- * Build everything the UI needs, choosing full or condensed by MEASURING the
- * encoded URL rather than guessing from the line count. The chosen pair is
- * measured again as `linkFits`, because condensing is not a guarantee — see
- * that field's doc comment.
+ * Build everything the UI needs, choosing how much of the item list to carry by
+ * MEASURING the encoded URL rather than guessing from the line count. The
+ * chosen pair is measured again as `linkFits`, because shortening is not a
+ * guarantee — see that field's doc comment.
  *
- * Degrading deliberately is the whole point: silent truncation by the mail
- * client is invisible to us and to the employee, so we shorten the LINK, say so
- * in the body, and keep the complete detail on the clipboard path — the one
- * path with no URL-length limit.
+ * A DEGRADATION LADDER, NOT A CLIFF (2026-08-13, SO-000080). This used to be
+ * two rungs: the full body, else a body with the heading and no rows at all.
+ * Marissa's 11-line order took the second and DC4 received a delivery request
+ * naming no items — while, measured, six of those rows would have fitted and
+ * the shortened row format fits all eleven. Nothing ever tried. The rungs now:
+ *
+ *   1. the full list, SKUs and address and notes included, when it fits;
+ *   2. else as many shortened rows as the measured url allows, with the body
+ *      saying how many are listed and where the rest are;
+ *   3. else the heading-only body, which is rung 2 with zero rows;
+ *   4. else `linkFits: false` — nothing is prefilled, unchanged.
+ *
+ * BOTH TRANSPORTS ARE MEASURED and the longer one binds. The Outlook url wraps
+ * an inner mailto in `?mailtouri=` and encodeURIComponent's the whole thing, so
+ * the body is url-encoded TWICE: a space costs `%2520` — five characters, not
+ * one — and an em-dash `%25E2%2580%2594`, fifteen. On the SO-000080 shape the
+ * Outlook url runs 41% longer than the mailto (2232 vs 1580 for the full
+ * body), and the mailto alone WOULD have fitted. Never fit rows against a
+ * plain-character estimate, and never measure only the cheaper transport.
+ *
+ * BINARY SEARCH is sound because body length — and therefore url length — is
+ * non-decreasing in `maxRows`: each extra row adds its own text, and the only
+ * terms of the disclosure that shrink as more rows are listed are the
+ * omitted-count digits and a plural 's'. See the monotonicity contract on
+ * `shortenedDisclosure`, which a test pins. It costs ceil(log2(n)) + 1 builds
+ * instead of n, which matters: this runs inside a render memo.
+ *
+ * `DRAFT_URL_LIMIT` is deliberately NOT raised to buy rows. Both transports
+ * truncate silently past roughly 2,000 characters, and a silently truncated
+ * delivery request is worse than an honestly shortened one.
  */
 export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
   const full = buildDeliveryRequestDraft(input);
@@ -795,17 +971,46 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
     };
   }
 
-  const condensed = buildDeliveryRequestDraft(input, { condensed: true });
-  const condensedUrl = buildOutlookComposeUrl(condensed);
-  const condensedMailto = buildMailtoUrl(condensed);
-  const condensedFits =
-    condensedUrl.length <= DRAFT_URL_LIMIT && condensedMailto.length <= DRAFT_URL_LIMIT;
+  const attempt = (maxRows: number) => {
+    const draft = buildDeliveryRequestDraft(input, { condensed: true, maxRows });
+    const outlookUrl = buildOutlookComposeUrl(draft);
+    const mailtoUrl = buildMailtoUrl(draft);
+    return {
+      draft,
+      outlookUrl,
+      mailtoUrl,
+      fits: outlookUrl.length <= DRAFT_URL_LIMIT && mailtoUrl.length <= DRAFT_URL_LIMIT,
+    };
+  };
+
+  // Rung 3 first: it is both the floor of the search and the answer when even
+  // it does not fit (rung 4). Searching upward from a known-good floor is what
+  // keeps `linkFits: false` reachable and honest.
+  let best = attempt(0);
+
+  if (best.fits) {
+    let lo = 1;
+    let hi = full.lineCount;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = attempt(mid);
+      if (candidate.fits) {
+        best = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+  }
 
   return {
-    draft: condensed,
-    outlookUrl: condensedUrl,
-    mailtoUrl: condensedMailto,
+    draft: best.draft,
+    outlookUrl: best.outlookUrl,
+    mailtoUrl: best.mailtoUrl,
+    // ALWAYS the full, uncondensed body. The clipboard has no URL-length limit
+    // and is the escape hatch — degrading it too would lose detail for no
+    // reason. Note this is `full`, never `best.draft`.
     clipboardText: buildClipboardText(full),
-    linkFits: condensedFits,
+    linkFits: best.fits,
   };
 }
