@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { getCrateColor } from './crate-colors';
+
 import {
+  formatCrateLabel,
+  formatCrateLocationName,
   formatGrade,
-  getCrateColor,
   readBookStorage,
 } from './book-storage';
 
@@ -101,5 +104,78 @@ describe('readBookStorage', () => {
     expect(info.grade).toBe('3');
     expect(info.crateLabel).toBe('Blue 7');
     expect(info.rackLabel).toBe('A');
+  });
+});
+
+describe('formatCrateLabel (the ONE book-facing crate label)', () => {
+  it('is the "Blue 42" DISPLAY form, deliberately NOT the "Blue #42" location name', () => {
+    // deriveLocationName() owns "#"-style because locations.name is the crate
+    // dedupe key (migration 0270). This one never reaches the database.
+    expect(formatCrateLabel('blue', '42')).toBe('Blue 42');
+    expect(formatCrateLabel('blue', '42')).not.toBe('Blue #42');
+  });
+
+  it('falls back to the bare number when the color is unset or unknown', () => {
+    expect(formatCrateLabel(null, '5')).toBe('5');
+    expect(formatCrateLabel('taupe', '5')).toBe('5');
+  });
+
+  it('returns null with no number — the number is the crate identity', () => {
+    expect(formatCrateLabel('red', null)).toBeNull();
+    expect(formatCrateLabel(null, null)).toBeNull();
+    expect(formatCrateLabel('red', '   ')).toBeNull();
+  });
+
+  it('labels the real free-text production crate numbers verbatim', () => {
+    // Live data carries "Bin", "BIN" and "Blue Shelf" as crate NUMBERS.
+    expect(formatCrateLabel('blue', 'Bin')).toBe('Blue Bin');
+    expect(formatCrateLabel(null, 'Blue Shelf')).toBe('Blue Shelf');
+  });
+
+  it('readBookStorage().crateLabel is exactly formatCrateLabel (one rule, one implementation)', () => {
+    for (const [color, number] of [
+      ['red', '5'],
+      ['taupe', '5'],
+      ['red', null],
+      [null, 'Bin'],
+    ] as Array<[string | null, string | null]>) {
+      expect(
+        readBookStorage({ book_crate_color: color, book_crate_number: number }).crateLabel,
+      ).toBe(formatCrateLabel(color, number));
+    }
+  });
+});
+
+describe('formatCrateLocationName (the "#"-style locations.name / DEDUPE KEY)', () => {
+  it('is the "Blue #42" form, deliberately NOT the "Blue 42" display label', () => {
+    // Migration 0270 keys crate identity on lower(name) — this shape IS the
+    // dedupe key and must not drift toward formatCrateLabel's spelling.
+    expect(formatCrateLocationName('blue', '42')).toBe('Blue #42');
+    expect(formatCrateLocationName('blue', '42')).not.toBe(formatCrateLabel('blue', '42'));
+  });
+
+  it('renders a known slug through its registry LABEL, whatever case it arrives in', () => {
+    expect(formatCrateLocationName('blue', '42')).toBe('Blue #42');
+    expect(formatCrateLocationName('Blue', '42')).toBe('Blue #42');
+  });
+
+  it('keeps an UNKNOWN color verbatim — a location name stays reconstructible', () => {
+    expect(formatCrateLocationName('taupe', '42')).toBe('taupe #42');
+  });
+
+  it('a NUMBER with no color is still a crate: "Crate #42"', () => {
+    expect(formatCrateLocationName(null, '42')).toBe('Crate #42');
+    expect(formatCrateLocationName('  ', '42')).toBe('Crate #42');
+  });
+
+  it('names the real free-text production crate numbers', () => {
+    expect(formatCrateLocationName('blue', 'Bin')).toBe('Blue #Bin');
+    expect(formatCrateLocationName(null, 'Blue Shelf')).toBe('Crate #Blue Shelf');
+  });
+
+  it('returns "" with no number so the caller can fall back to the rack number', () => {
+    expect(formatCrateLocationName('blue', null)).toBe('');
+    expect(formatCrateLocationName(null, null)).toBe('');
+    expect(formatCrateLocationName('blue', '   ')).toBe('');
   });
 });

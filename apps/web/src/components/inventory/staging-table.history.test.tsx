@@ -60,6 +60,7 @@ function makeRow(
     receiptNumber: null,
     receivedAt: null,
     ageDays: 30,
+    bookStorage: null,
     ...over,
   };
 }
@@ -71,7 +72,7 @@ function renderTable(props: Partial<StagingTableProps> = {}) {
         makeRow('item-a', 'Science Dimensions Earth & Space Science'),
         makeRow('item-b', 'Other Book', { sourceLocationId: 'stg-2' }),
       ]}
-      destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack' }] }}
+      destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack', rackNumber: '1', rackRow: null, crateColor: null, crateNumber: null }] }}
       warehouseNames={{ wh1: 'WH One' }}
       canPlace
       activeItemType="all"

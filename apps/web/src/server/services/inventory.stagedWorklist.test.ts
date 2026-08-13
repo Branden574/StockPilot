@@ -323,3 +323,137 @@ describe('InventoryService.stagedWorklist — which receipt staged this stock', 
     expect(row!.ageDays).toBeGreaterThan(14);
   });
 });
+
+// ---------------------------------------------------------------------------
+// bookStorage — a BOOK's current rack/crate summary on the worklist row, so the
+// put-away dialog can say "currently in Blue 4" without a second round trip.
+//
+// The constraint that matters: it must ride on the query that ALREADY runs.
+// `custom_fields` was added to the existing inventory_items embed; if anyone
+// "fixes" this by fetching items separately, the no-extra-query test below
+// fails — a per-row item lookup on a staging screen is an N+1.
+// ---------------------------------------------------------------------------
+
+const BOOK_ID = '44444444-4444-4444-4444-444444444444';
+const WIDGET_ID = '55555555-5555-5555-5555-555555555555';
+
+function crateWorklistStub(bookCustomFields: Record<string, unknown> | null) {
+  return makeSupabaseStub({
+    'item_stock_levels.select': {
+      data: [
+        {
+          item_id: BOOK_ID,
+          location_id: 'stg-loc',
+          quantity: 12,
+          locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+          inventory_items: {
+            id: BOOK_ID,
+            name: 'Persepolis',
+            sku: 'SP-BOOK-1',
+            item_type: 'book',
+            deleted_at: null,
+            custom_fields: bookCustomFields,
+          },
+        },
+        {
+          item_id: WIDGET_ID,
+          location_id: 'stg-loc',
+          quantity: 3,
+          locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+          inventory_items: {
+            id: WIDGET_ID,
+            name: 'Acer Chromebook',
+            sku: 'SP-WIDGET-1',
+            item_type: 'product',
+            deleted_at: null,
+            // A non-book carrying the NEUTRAL rack keys. Reading book_* off it
+            // would be wrong, and folding rack_* into bookStorage would be
+            // worse — the two key families mean different things (mig 0068).
+            custom_fields: { rack_number: '12', rack_row: 'C' },
+          },
+        },
+      ],
+      error: null,
+    },
+    'stock_movements.select': { data: [], error: null },
+  });
+}
+
+describe('InventoryService.stagedWorklist — bookStorage', () => {
+  it("exposes a BOOK row's crate + rack summary, and null for a non-book", async () => {
+    const stub = crateWorklistStub({
+      book_rack_number: '38',
+      book_rack_row: 'A',
+      book_crate_color: 'blue',
+      book_crate_number: '4',
+      author: 'Marjane Satrapi',
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const rows = await svc.stagedWorklist();
+
+    const book = rows.find((r) => r.itemId === BOOK_ID)!;
+    expect(book.bookStorage).toEqual({
+      rackNumber: '38',
+      rackRow: 'A',
+      crateColor: 'blue',
+      crateNumber: '4',
+      grade: null,
+      rackLabel: '38-A',
+      // The DISPLAY spelling ("Blue 4"), never the "Blue #4" location name.
+      crateLabel: 'Blue 4',
+    });
+
+    const widget = rows.find((r) => r.itemId === WIDGET_ID)!;
+    expect(widget.bookStorage).toBeNull();
+  });
+
+  it('gives a book with no crate recorded an all-null summary, not a missing field', async () => {
+    const stub = crateWorklistStub({ author: 'Marjane Satrapi' });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const book = (await svc.stagedWorklist()).find((r) => r.itemId === BOOK_ID)!;
+
+    expect(book.bookStorage).not.toBeNull();
+    expect(book.bookStorage!.crateColor).toBeNull();
+    expect(book.bookStorage!.crateNumber).toBeNull();
+    expect(book.bookStorage!.crateLabel).toBeNull();
+  });
+
+  it('carries the real free-text production crate numbers ("Bin", "Blue Shelf")', async () => {
+    const stub = crateWorklistStub({ book_crate_color: 'blue', book_crate_number: 'Bin' });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const book = (await svc.stagedWorklist()).find((r) => r.itemId === BOOK_ID)!;
+
+    expect(book.bookStorage!.crateNumber).toBe('Bin');
+    expect(book.bookStorage!.crateLabel).toBe('Blue Bin');
+  });
+
+  it('never ships the raw custom_fields blob to the client', async () => {
+    // custom_fields also carries the org's own 0159 custom-field VALUES. It is
+    // read to derive bookStorage and then dropped.
+    const stub = crateWorklistStub({
+      book_crate_color: 'blue',
+      book_crate_number: '4',
+      org_custom_donor_name: 'PTA 2024',
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const book = (await svc.stagedWorklist()).find((r) => r.itemId === BOOK_ID)!;
+
+    expect(book).not.toHaveProperty('custom_fields');
+    expect(JSON.stringify(book)).not.toContain('PTA 2024');
+  });
+
+  it('adds NO query: custom_fields rides the EXISTING inventory_items embed', async () => {
+    const stub = crateWorklistStub({ book_crate_color: 'blue', book_crate_number: '4' });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.stagedWorklist();
+
+    // Not one inventory_items read of its own — that would be an N+1 on a
+    // screen that routinely lists hundreds of staged rows.
+    expect(stub.fromCalls).not.toContain('inventory_items');
+    // ...because the ONE levels query already asks for it.
+    const levelsChains = stub.chainArgsAll.get('item_stock_levels.select')!;
+    const projection = levelsChains[0]![0]![0] as string;
+    expect(projection).toContain('inventory_items!inner(');
+    expect(projection).toContain('custom_fields');
+  });
+});

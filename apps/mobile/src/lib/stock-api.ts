@@ -20,12 +20,16 @@ import { api } from './api';
  * created inline (`newRack`) — exactly one. The new rack is created server-side
  * in the source location's warehouse (asserts 'locations:manage').
  */
-export interface NewRack {
-  rackNumber: string;
-  rackRow?: string;
-  crateColor?: string;
-  crateNumber?: string;
-}
+/**
+ * The inline-created destination. RACK **XOR** CRATE — the server refuses a
+ * body carrying both (packages/core/src/inventory/new-location.ts), because
+ * "rack A1 + crate 9" has no honest name and guessing one is what minted a
+ * surprise "Crate #9" from a sheet that had confirmed "Create new rack A1?".
+ * A crate is identified by its NUMBER; the colour is optional.
+ */
+export type NewRack =
+  | { rackNumber: string; rackRow?: string; crateColor?: never; crateNumber?: never }
+  | { crateNumber: string; crateColor?: string; rackNumber?: never; rackRow?: never };
 
 export interface TransferStockBody {
   fromLocationId: string;
@@ -35,16 +39,45 @@ export interface TransferStockBody {
   toLocationId?: string;
   /** Create-and-move destination. Provide this OR `toLocationId`, not both. */
   newRack?: NewRack;
+  /**
+   * The answer to a BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal: one entry
+   * per book, its id plus the fingerprint of the crate the sheet DISPLAYED.
+   * Never a blanket flag — a fingerprint that no longer matches the row is not
+   * an acknowledgement of the change the server found.
+   */
+  acknowledgedCrateChanges?: Array<{ itemId: string; currentFingerprint: string }>;
 }
 
-/** Move stock. Throws a clean Error (the server's friendly message) on a
- *  non-2xx so the caller can Alert it directly. */
-export async function transferStock(itemId: string, body: TransferStockBody): Promise<void> {
-  try {
-    await api(`/api/v1/items/${itemId}/transfer`, { method: 'POST', body });
-  } catch (e) {
-    throw new Error(extractApiMessage(e));
-  }
+/** What the transfer route reports back about the book's crate LABEL. The stock
+ *  moved in every case; these say whether the summary followed it. */
+export interface TransferStockResult {
+  toLocationId?: string;
+  crateSyncFailed?: boolean;
+  crateSyncSkipped?: boolean;
+  crateSyncStale?: boolean;
+  /** No placed holding left after the move, so the summary had nothing to
+   *  follow and was left alone — it may now name a crate holding none of it. */
+  crateSyncUnplaced?: boolean;
+}
+
+/**
+ * Move stock.
+ *
+ * Rethrown as-is on a non-2xx: `api()` already raises an `ApiError` carrying
+ * the server's friendly `message` AND its APP-AUTHORED `details` blob, and that
+ * blob is what lets a caller RE-ASK a refusal instead of only reporting it —
+ * specifically the book-crate confirmation the transfer route now gates on.
+ * Wrapping it in a plain Error (which is what this used to do) flattened the
+ * payload to a sentence and made the confirmation unofferable.
+ */
+export async function transferStock(
+  itemId: string,
+  body: TransferStockBody,
+): Promise<TransferStockResult> {
+  return ((await api(`/api/v1/items/${itemId}/transfer`, {
+    method: 'POST',
+    body,
+  })) ?? {}) as TransferStockResult;
 }
 
 export interface RemoveStockBody {
@@ -58,6 +91,26 @@ export interface RemoveStockBody {
 }
 
 /**
+ * What the write-off route reports back about the book's crate LABEL. The stock
+ * left in every case; these say whether the summary followed it.
+ *
+ * The first four are the SAME four the transfer route answers with, for the
+ * same reasons (see TransferStockResult). The fifth has no transfer twin: a
+ * write-off can leave the book with exactly one placed holding that is a
+ * DIFFERENT crate, and the reconciliation then rewrites a label a human typed.
+ * That is a write the operator did not ask for, so it is reported too.
+ */
+export interface RemoveStockResult {
+  crateSyncFailed?: boolean;
+  crateSyncSkipped?: boolean;
+  crateSyncStale?: boolean;
+  crateSyncUnplaced?: boolean;
+  /** The summary was rewritten AND its value actually changed — proved by the
+   *  service with a before/after fingerprint, never inferred from "it wrote". */
+  crateSyncUpdated?: boolean;
+}
+
+/**
  * Remove (write off) stock from ONE rack — native parity for the web
  * RemoveFromRackDialog. POSTs to /api/v1/items/<id>/remove-stock, which routes
  * through InventoryService.removeStockFromLocation → adjustStock so the
@@ -65,35 +118,35 @@ export interface RemoveStockBody {
  * only checks the staff-role floor). Leaves stock in every OTHER location
  * untouched — unlike archive, which would hide the whole item and orphan it.
  *
- * Throws a clean Error (the server's friendly message) on a non-2xx.
+ * RETURNS THE BODY. This used to declare `Promise<void>` and drop it on the
+ * floor, which type-erased the crate-sync flags the route answers with — so a
+ * write-off from the phone could rewrite a book's crate label, or leave one
+ * naming an empty crate, and say nothing at all. Web says so on every one of
+ * these outcomes; the phone must too.
+ *
+ * Throws a clean Error (the server's friendly message) on a non-2xx. Unlike
+ * transferStock there is nothing to RE-ASK here — the write-off has no
+ * confirmation gate — so flattening the ApiError to its message loses nothing.
  */
 export async function removeStockFromLocation(
   itemId: string,
   body: RemoveStockBody,
-): Promise<void> {
+): Promise<RemoveStockResult> {
   try {
-    await api(`/api/v1/items/${itemId}/remove-stock`, { method: 'POST', body });
+    return ((await api(`/api/v1/items/${itemId}/remove-stock`, {
+      method: 'POST',
+      body,
+    })) ?? {}) as RemoveStockResult;
   } catch (e) {
     throw new Error(extractApiMessage(e));
   }
 }
 
 /**
- * The api() client throws `Error("API 400: {\"error\":...,\"message\":\"...\"}")`.
- * Pull the server's friendly `message` out of that text so an Alert shows
- * "Can't move more than is available" instead of the raw status+JSON blob.
+ * The message to show a person. `api()` already reduces a non-2xx to the
+ * server's friendly `message` (and never echoes a raw HTML error page), so this
+ * is just the Error → string step.
  */
 function extractApiMessage(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
-  const brace = raw.indexOf('{');
-  if (brace >= 0) {
-    try {
-      const parsed = JSON.parse(raw.slice(brace)) as { message?: string; error?: string };
-      if (parsed.message) return parsed.message;
-      if (parsed.error) return parsed.error;
-    } catch {
-      /* fall through to the raw text */
-    }
-  }
-  return raw;
+  return e instanceof Error ? e.message : String(e);
 }

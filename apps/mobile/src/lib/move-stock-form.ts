@@ -37,7 +37,20 @@
  * itself cannot be rendered under vitest.
  */
 
-import { describeNewRackPlacement, type NewRackPlacementDecision } from '@stockpilot/core';
+import {
+  describeNewRackPlacement,
+  parseBookCrateChangeDetail,
+  planNewLocation,
+  type BookCrateChangeDetail,
+  type NewRackPlacementDecision,
+} from '@stockpilot/core';
+
+// Type-only (erased at build): the two routes' own success bodies, so the
+// crate-sync verdicts below read the SAME shape the caller hands them and a new
+// flag on either route surfaces here as a type change rather than a silent gap.
+// A value import would pull './api' — and with it the Supabase client — into
+// this pure module and out of reach of the node test environment.
+import type { RemoveStockResult, TransferStockResult } from './stock-api';
 
 export interface MoveDestination {
   id: string;
@@ -189,29 +202,78 @@ export function moveDestinationChoices(
 // be unit-tested; the modal only renders an Alert around the result.
 // ---------------------------------------------------------------------------
 
+/**
+ * A "+ New" destination as the sheet collects it.
+ *
+ * `kind` is an EXPLICIT choice, not something inferred from which boxes happen
+ * to be filled. The sheet used to render "RACK NUMBER *" plus two optional
+ * crate boxes with no toggle at all, which had two consequences and both were
+ * live defects:
+ *
+ *   • a number-only crate was UNREACHABLE — submit was gated on the rack
+ *     number, and the label derivation keyed crate-ness off the COLOUR alone
+ *     (`crateColor ? 'crate' : 'rack'`), the exact heuristic the server removed
+ *     in afcc5d82. The two halves of one boundary disagreed;
+ *   • rack A1 + crate 9 minted "Crate #9" with no confirmation, after asking
+ *     "Create new rack A1?" — the string confirmed and the string created
+ *     differed character for character (REPRO A / A').
+ *
+ * Rack XOR crate is now the rule on both sides of the boundary, and it is
+ * stated once, in packages/core/src/inventory/new-location.ts.
+ */
+export type NewLocationKind = 'rack' | 'crate';
+
 export interface NewRackInput {
+  /** Which branch the user chose. Books may choose 'crate'; nothing else may. */
+  kind: NewLocationKind;
   rackNumber: string;
   rackRow?: string | null;
   crateColor?: string | null;
   crateNumber?: string | null;
-  /** Books can create crates; everything else is a rack. Gates the crate fields. */
-  isBook: boolean;
 }
 
 /**
- * The display label a "+ New rack" form will create — the SAME derivation the
- * web dialog uses, so both platforms feed the identical string to the shared
- * copy builder. A crate reads "Blue #42"; a rack reads "22-B" or bare "22".
+ * The four fields as the SERVER will read them for the chosen branch — the
+ * crate branch sends no rack pair and the rack branch sends no crate pair, so
+ * the combination the server refuses cannot leave this screen.
+ *
+ * This is also what makes the confirmation honest: the same object produces the
+ * label shown and the payload sent.
  */
-export function newRackLabel(n: NewRackInput): { label: string; noun: 'rack' | 'crate' } {
-  const color = n.crateColor?.trim();
-  if (n.isBook && color) {
-    const num = n.crateNumber?.trim() || n.rackNumber.trim();
-    return { label: `${color} #${num}`, noun: 'crate' };
+export function newLocationFields(n: NewRackInput): {
+  rackNumber?: string;
+  rackRow?: string;
+  crateColor?: string;
+  crateNumber?: string;
+} {
+  if (n.kind === 'crate') {
+    const color = n.crateColor?.trim();
+    return {
+      crateNumber: n.crateNumber?.trim() ?? '',
+      ...(color ? { crateColor: color } : {}),
+    };
   }
   const row = n.rackRow?.trim();
-  const number = n.rackNumber.trim();
-  return { label: row ? `${number}-${row}` : number, noun: 'rack' };
+  return { rackNumber: n.rackNumber.trim(), ...(row ? { rackRow: row } : {}) };
+}
+
+/** Is the chosen branch complete enough to submit? A crate needs its NUMBER. */
+export function newLocationReady(n: NewRackInput): boolean {
+  return planNewLocation(newLocationFields(n)).kind !== 'invalid';
+}
+
+/**
+ * The display label a "+ New" form will create, and the noun to call it.
+ *
+ * Delegates to the ONE core planner — the same function the server names the
+ * `locations` row with — so the phone can no longer confirm one string and
+ * create another. A crate reads "Blue #42" / "Crate #42"; a rack reads "22-B"
+ * or bare "22". An incomplete form yields '' and the caller must not confirm.
+ */
+export function newRackLabel(n: NewRackInput): { label: string; noun: NewLocationKind } {
+  const plan = planNewLocation(newLocationFields(n));
+  if (plan.kind === 'invalid') return { label: '', noun: n.kind };
+  return { label: plan.name, noun: plan.noun };
 }
 
 /**
@@ -233,4 +295,207 @@ export function decideNewRackPlacement(input: {
     existingLabels: input.existingLabels,
     noun,
   });
+}
+
+// ---------------------------------------------------------------------------
+// The book-crate confirmation, on the phone.
+//
+// POST /api/v1/items/<id>/transfer now runs the same gate the web put-away
+// runs, and refuses a move that would overwrite a crate a human recorded with a
+// 409 carrying the structured payload. The sheet has to be able to ANSWER that,
+// or every crated book dead-ends on an error toast — which is precisely why the
+// route used to skip the gate and write nothing at all.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the book-crate confirmation payload out of an API error, if that is what
+ * it is. `transferStock()` attaches the parsed body to the thrown Error as
+ * `details`; anything else (a plain message, another conflict) yields null and
+ * the caller shows the message as-is.
+ */
+export function bookCrateRefusal(e: unknown): BookCrateChangeDetail | null {
+  if (!e || typeof e !== 'object') return null;
+  return parseBookCrateChangeDetail((e as { details?: unknown }).details);
+}
+
+/**
+ * The Alert body for a crate refusal: one line per book, naming where it is
+ * recorded today and where this move would put it. Native Alerts take a single
+ * string, so the lines are joined rather than rendered as a list.
+ */
+export function bookCrateAlertMessage(detail: BookCrateChangeDetail): string {
+  return detail.items
+    .map(
+      (i) =>
+        `${i.itemName} is recorded in ${i.currentLabel ?? 'no crate'} — this move records it in ${i.nextLabel ?? 'no crate'}.`,
+    )
+    .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// The SILENT SUCCESSES, on the phone.
+//
+// A transfer can succeed — the stock really did move — while the book's crate
+// LABEL did not follow it. The route reports that as a flag on a 2xx body, and
+// a sheet that only branches on failure shows a plain "Moved" for a move that
+// left the item naming a crate holding none of it. Web says so in every one of
+// the four cases (place-from-staging-dialog.tsx, bulk-place-dialog.tsx,
+// stock-transfer-dialog.tsx); the phone must too.
+//
+// The WRITE-OFF sheet has the same duty and one more case, so its verdict lives
+// here too — same precedence, different verbs. Two files would be two
+// vocabularies, and a vocabulary that only exists on one screen is how the
+// phone ended up silent about a label it had just rewritten.
+//
+// The words live HERE rather than inline in the modal for the same reason every
+// other rule in this file does: apps/mobile has no component-test harness (node
+// vitest, `include: ['src/**/*.test.ts']`, no react-test-renderer and no
+// @testing-library/react-native), so a branch left inside the component can only
+// ever be "tested" by reading the component's source text — which passes just as
+// happily against a branch that renders nothing.
+// ---------------------------------------------------------------------------
+
+/** A native Alert's two strings: what the sheet SAYS after a successful write. */
+export interface CrateSyncWarning {
+  title: string;
+  message: string;
+}
+
+/** The flags a 2xx body can carry about a book's crate label. Structural, so
+ *  both route bodies (TransferStockResult, RemoveStockResult) satisfy it and a
+ *  new flag on either one shows up here as a type change, not a silent gap. */
+interface CrateSyncFlags {
+  crateSyncFailed?: boolean;
+  crateSyncUnplaced?: boolean;
+  crateSyncStale?: boolean;
+  crateSyncSkipped?: boolean;
+  crateSyncUpdated?: boolean;
+}
+
+/** Which single outcome is worth speaking about. */
+type CrateSyncBucket = 'failed' | 'unplaced' | 'stale' | 'skipped' | 'updated';
+
+/**
+ * THE PRECEDENCE — one chain, shared by every surface that reports a crate
+ * label, so the two flavours below can differ in WORDS and never in which
+ * outcome wins. A native Alert is modal and stacks badly, and a route can
+ * legitimately set more than one flag, so exactly one thing is said.
+ *
+ * The order runs from "the label is wrong and we know why we could not fix it"
+ * down to "the label is merely unchanged, on purpose", with the write we DID
+ * perform last:
+ *
+ *   1. failed   — the write itself errored. The most actionable, so it wins.
+ *   2. unplaced — nothing is left in a rack or crate for the label to follow.
+ *   3. stale    — someone else re-recorded the crate mid-write; theirs stands.
+ *   4. skipped  — stock now sits in several places, so there is no one crate.
+ *   5. updated  — the label was rewritten, and its value really did change.
+ *
+ * The first four are mutually exclusive with the fifth by construction (a book
+ * lands in exactly one server-side bucket), so the tail position costs nothing
+ * and keeps "we changed something" from ever hiding "we could not".
+ */
+function crateSyncBucket(res: CrateSyncFlags): CrateSyncBucket | null {
+  if (res.crateSyncFailed) return 'failed';
+  if (res.crateSyncUnplaced) return 'unplaced';
+  if (res.crateSyncStale) return 'stale';
+  if (res.crateSyncSkipped) return 'skipped';
+  if (res.crateSyncUpdated) return 'updated';
+  return null;
+}
+
+/**
+ * What the MOVE sheet must say about a move that SUCCEEDED, given what the
+ * route reported about the crate label. `null` = nothing to say; the move was
+ * clean and the summary followed the stock.
+ *
+ * The item name is interpolated rather than left generic because the phone
+ * fires this Alert after the sheet has already closed, when "the item" no longer
+ * has an on-screen referent.
+ *
+ * A transfer never reports `crateSyncUpdated` — the route has no such flag, and
+ * a put-away that relabels a book already answered the confirmation gate first.
+ */
+export function crateSyncWarning(
+  res: TransferStockResult,
+  itemName: string,
+): CrateSyncWarning | null {
+  switch (crateSyncBucket(res)) {
+    case 'failed':
+      return {
+        title: 'Moved, but the crate label did not update',
+        message: `${itemName} was moved. Its crate label could not be written — check the book's details.`,
+      };
+    case 'unplaced':
+      return {
+        title: 'Moved — crate label may now be wrong',
+        message: `${itemName} has no stock in a rack or crate now, so its crate label was left unchanged.`,
+      };
+    case 'stale':
+      return {
+        title: 'Moved — someone else changed the crate',
+        message: `${itemName} was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.`,
+      };
+    case 'skipped':
+      return {
+        title: 'Moved — crate label left unchanged',
+        message: `${itemName} now has stock in more than one location, so its crate label was left as it was.`,
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The same verdict for a WRITE-OFF (remove from rack), whose route answers with
+ * the same four flags plus one more.
+ *
+ * It lives beside `crateSyncWarning`, sharing its precedence chain, because the
+ * alternative is two vocabularies drifting apart on two screens: the write-off
+ * sheet used to discard the flags entirely and say nothing at all, which is the
+ * defect this closes. Only the VERBS differ — the stock did not move anywhere,
+ * it left — and saying "Moved" about a write-off would be its own small lie.
+ *
+ * The wording tracks the web dialog for this same operation
+ * (apps/web/src/components/inventory/remove-from-rack-dialog.tsx), which is the
+ * established voice for a write-off.
+ */
+export function removeStockCrateWarning(
+  res: RemoveStockResult,
+  itemName: string,
+): CrateSyncWarning | null {
+  switch (crateSyncBucket(res)) {
+    case 'failed':
+      return {
+        title: 'Removed, but the crate label did not update',
+        message: `The crate label on ${itemName} could not be updated — check the book's details.`,
+      };
+    case 'unplaced':
+      return {
+        title: 'Removed — crate label may now be wrong',
+        message: `${itemName} has no stock in a rack or crate now, so its crate label was left unchanged.`,
+      };
+    case 'stale':
+      return {
+        title: 'Removed — someone else changed the crate',
+        message: `Someone else changed the crate on ${itemName} while the stock was being removed. The label was left as they set it.`,
+      };
+    case 'skipped':
+      return {
+        title: 'Removed — crate label left unchanged',
+        message: `${itemName} still has stock in more than one location, so its crate label was left as it was.`,
+      };
+    // A label the app changed on the operator's behalf. They asked to remove
+    // stock and typed a reason; they did not ask for "Blue 4" to become
+    // "Red 7". The reconciliation is right — the summary is derived from the
+    // holdings — but a rewrite of a value a human recorded is a caution, not
+    // good news, exactly as it is on web.
+    case 'updated':
+      return {
+        title: 'Removed — the crate label changed',
+        message: `The crate label on ${itemName} was changed to follow the stock it has left.`,
+      };
+    default:
+      return null;
+  }
 }

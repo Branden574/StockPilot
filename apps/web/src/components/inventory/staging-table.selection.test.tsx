@@ -24,6 +24,7 @@ function makeRow(itemId: string, name: string, sourceLocationId: string): Stagin
     receiptNumber: null,
     receivedAt: null,
     ageDays: null,
+    bookStorage: null,
   };
 }
 
@@ -36,7 +37,7 @@ describe('StagingTable selection', () => {
       <StagingTable
         // Two DIFFERENT items in the SAME staging location.
         rows={[makeRow('item-a', 'Book A', 'stg-1'), makeRow('item-b', 'Book B', 'stg-1')]}
-        destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack' }] }}
+        destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack', rackNumber: '1', rackRow: null, crateColor: null, crateNumber: null }] }}
         warehouseNames={{ wh1: 'WH One' }}
         canPlace
         activeItemType="all"
@@ -61,7 +62,7 @@ describe('StagingTable selection', () => {
     render(
       <StagingTable
         rows={[makeRow('item-a', 'Book A', 'stg-1'), makeRow('item-b', 'Book B', 'stg-1')]}
-        destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack' }] }}
+        destinationsMap={{ wh1: [{ id: 'r1', name: 'Rack 1', kind: 'rack', rackNumber: '1', rackRow: null, crateColor: null, crateNumber: null }] }}
         warehouseNames={{ wh1: 'WH One' }}
         canPlace
         activeItemType="all"

@@ -26,9 +26,27 @@ vi.mock('next/cache', () => ({
 //    lookup + the post-transfer bin_location label stamp).
 // ---------------------------------------------------------------------------
 
-const { mockTransferStock, mockStampPlacementBin, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
+const {
+  mockTransferStock,
+  mockStampPlacementBin,
+  mockAssertBookCrate,
+  mockSyncBookCrate,
+  mockFindOrCreateRackOrCrate,
+  ctxRef,
+} = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
   mockStampPlacementBin: vi.fn(async () => undefined),
+  // The book-crate confirmation gate + post-move summary reconciliation. Both
+  // default to "nothing to do" so the pre-existing rack cases below are
+  // unaffected; the dedicated crate suite drives their real behaviour.
+  mockAssertBookCrate: vi.fn(async () => new Map()),
+  mockSyncBookCrate: vi.fn(async () => ({
+    syncedItemIds: [] as string[],
+    failedItemIds: [] as string[],
+    skippedItemIds: [] as string[],
+    staleItemIds: [] as string[],
+    unplacedItemIds: [] as string[],
+  })),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -45,6 +63,8 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
     stampPlacementBin = mockStampPlacementBin;
+    assertBookCratePlacementAllowed = mockAssertBookCrate;
+    syncBookCratePlacement = mockSyncBookCrate;
   },
 }));
 
@@ -101,6 +121,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
   mockStampPlacementBin.mockResolvedValue(undefined);
+  mockAssertBookCrate.mockResolvedValue(new Map());
+  mockSyncBookCrate.mockResolvedValue({
+    syncedItemIds: [],
+    failedItemIds: [],
+    skippedItemIds: [],
+    staleItemIds: [],
+    unplacedItemIds: [],
+  });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });
@@ -139,19 +167,34 @@ describe('placeStockAction', () => {
     // The placement label is re-stamped after the physical move, using the
     // destination's kind/rack fields (none of which the stub location row
     // sets here, so it's a bare rack with no number/row/name).
-    expect(mockStampPlacementBin).toHaveBeenCalledWith(
-      [ITEM_ID],
-      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
-    );
+    expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_ID], {
+      kind: 'rack',
+      rackNumber: null,
+      rackRow: null,
+      name: null,
+      crateColor: null,
+      crateNumber: null,
+    });
   });
 
   it('2. creates a rack (via the dedup-safe findOrCreateRackOrCrate lookup) then transfers to the new location id', async () => {
     const newLocId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 
     const callOrder: string[] = [];
+    // Returns a full `locations` ROW, because that is what the real
+    // findOrCreateRackOrCrate returns (select('*')) and what the action now
+    // derives the placement label from.
     mockFindOrCreateRackOrCrate.mockImplementation(async () => {
       callOrder.push('create');
-      return { id: newLocId };
+      return {
+        id: newLocId,
+        kind: 'rack',
+        name: 'R-42-B',
+        rack_number: 'R-42',
+        rack_row: 'B',
+        crate_color: null,
+        crate_number: null,
+      };
     });
     mockTransferStock.mockImplementation(async () => {
       callOrder.push('transfer');
@@ -195,12 +238,18 @@ describe('placeStockAction', () => {
     // create happened before transfer
     expect(callOrder).toEqual(['create', 'transfer']);
 
-    // The label stamp uses the newRack's own kind/rack fields (not a
-    // round-trip through the created location row).
-    expect(mockStampPlacementBin).toHaveBeenCalledWith(
-      [ITEM_ID],
-      { kind: 'rack', rackNumber: 'R-42', rackRow: 'B', name: 'R-42-B' },
-    );
+    // The label stamp comes from the RESOLVED location row, not from what the
+    // user typed. findOrCreateRackOrCrate may return a PRE-EXISTING row (a
+    // case-insensitive name match), and that row's columns are the truth about
+    // that rack/crate — see test 8 for the divergent case.
+    expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_ID], {
+      kind: 'rack',
+      rackNumber: 'R-42',
+      rackRow: 'B',
+      name: 'R-42-B',
+      crateColor: null,
+      crateNumber: null,
+    });
 
     // Action returns ok with the new location id
     expect(result.ok).toBe(true);

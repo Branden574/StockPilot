@@ -4,16 +4,28 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookCrateAlertMessage,
+  bookCrateRefusal,
+  crateSyncWarning,
   decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
   moveDestinationScope,
+  newLocationFields,
+  newLocationReady,
   newRackLabel,
+  removeStockCrateWarning,
   resolveMoveSource,
   type MoveDestination,
   type MoveHolding,
 } from './move-stock-form';
+// Type-only, so this pure test never pulls './api' (and the Supabase client)
+// into the node environment. `typeof` on a type-only import is the whole point:
+// the write-off sheet can only branch on what this function RETURNS.
+import type { removeStockFromLocation } from './stock-api';
+
+type WriteOffBody = Awaited<ReturnType<typeof removeStockFromLocation>>;
 
 /**
  * Native put-away — the hazards that used to be expressible, and the reason
@@ -35,6 +47,10 @@ import {
 
 const modal = readFileSync(
   path.resolve(__dirname, '../components/move-stock-modal.tsx'),
+  'utf8',
+);
+const removeModal = readFileSync(
+  path.resolve(__dirname, '../components/remove-from-rack-modal.tsx'),
   'utf8',
 );
 const itemScreen = readFileSync(path.resolve(__dirname, '../../app/item/[id].tsx'), 'utf8');
@@ -331,32 +347,79 @@ describe('the write still goes through the transfer route', () => {
 // ── New-rack confirmation — the 2026-07-23 guard, mirrored on the phone ──────
 
 describe('newRackLabel', () => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // WHAT THESE USED TO PIN, AND WHY IT WAS THE BUG.
+  //
+  // `newRackLabel` decided crate-vs-rack from the COLOUR alone
+  // (`crateColor ? 'crate' : 'rack'`) — the exact heuristic the server removed
+  // in afcc5d82 — and fell back to the RACK number when no crate number was
+  // typed. The old cases here asserted both behaviours, so the defect was
+  // pinned rather than caught: a crate identified only by its number rendered
+  // as a rack, and "rack 7 + colour Blue" rendered "Blue #7", a crate the user
+  // never asked for.
+  //
+  // The branch is now an EXPLICIT `kind`, and the label comes from the ONE core
+  // planner the SERVER names the row with — so the sheet cannot confirm one
+  // string and create another (REPRO A').
+  // ─────────────────────────────────────────────────────────────────────────
+
   it('renders a rack with a row', () => {
-    expect(newRackLabel({ rackNumber: '22', rackRow: 'B', isBook: false })).toEqual({
+    expect(newRackLabel({ kind: 'rack', rackNumber: '22', rackRow: 'B' })).toEqual({
       label: '22-B',
       noun: 'rack',
     });
   });
 
   it('renders a bare rack number when there is no row', () => {
-    expect(newRackLabel({ rackNumber: '100-A', isBook: false })).toEqual({
+    expect(newRackLabel({ kind: 'rack', rackNumber: '100-A' })).toEqual({
       label: '100-A',
       noun: 'rack',
     });
   });
 
-  it('renders a crate for a book, falling back to the rack number for the crate number', () => {
-    expect(newRackLabel({ rackNumber: '7', crateColor: 'Blue', isBook: true })).toEqual({
-      label: 'Blue #7',
+  it('a NUMBER-ONLY crate is a crate — the colour is optional', () => {
+    // Unreachable before: the label keyed off the colour, so this rendered a
+    // rack, and submit was gated on a rack number that this branch never asks
+    // for.
+    expect(newRackLabel({ kind: 'crate', rackNumber: '', crateNumber: '42' })).toEqual({
+      label: 'Crate #42',
       noun: 'crate',
     });
     expect(
-      newRackLabel({ rackNumber: '7', crateColor: 'Blue', crateNumber: '42', isBook: true }),
+      newRackLabel({ kind: 'crate', rackNumber: '', crateColor: 'Blue', crateNumber: '42' }),
     ).toEqual({ label: 'Blue #42', noun: 'crate' });
   });
 
-  it('a crate colour on a non-book is ignored — non-books make racks', () => {
-    expect(newRackLabel({ rackNumber: '3', crateColor: 'Blue', isBook: false }).noun).toBe('rack');
+  it('the CRATE branch never borrows the rack number, however it was typed', () => {
+    // The old fallback made "rack 7 + colour Blue" mint "Blue #7". A crate is
+    // identified by its OWN number; without one there is nothing to name and
+    // the form is not ready to submit.
+    expect(newRackLabel({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' }).label).toBe('');
+    expect(newLocationReady({ kind: 'crate', rackNumber: '7', crateColor: 'Blue' })).toBe(false);
+  });
+
+  it('the RACK branch never borrows the crate fields', () => {
+    // REPRO A: "RACK NUMBER A1" + "CRATE NUMBER 9" minted "Crate #9" and moved
+    // stock into it. The chosen branch is now the only thing that speaks.
+    expect(
+      newRackLabel({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
+    ).toEqual({ label: 'A1-Row 3', noun: 'rack' });
+  });
+
+  it('the payload carries ONE branch — the server refuses both together', () => {
+    expect(
+      newLocationFields({ kind: 'rack', rackNumber: 'A1', rackRow: 'Row 3', crateNumber: '9' }),
+    ).toEqual({ rackNumber: 'A1', rackRow: 'Row 3' });
+    expect(
+      newLocationFields({ kind: 'crate', rackNumber: 'A1', crateColor: 'blue', crateNumber: '9' }),
+    ).toEqual({ crateColor: 'blue', crateNumber: '9' });
+  });
+
+  it('a rack needs a number; a crate needs a number', () => {
+    expect(newLocationReady({ kind: 'rack', rackNumber: '   ' })).toBe(false);
+    expect(newLocationReady({ kind: 'rack', rackNumber: '22' })).toBe(true);
+    expect(newLocationReady({ kind: 'crate', rackNumber: '', crateNumber: '' })).toBe(false);
+    expect(newLocationReady({ kind: 'crate', rackNumber: '', crateNumber: 'Bin' })).toBe(true);
   });
 });
 
@@ -366,7 +429,7 @@ describe('decideNewRackPlacement', () => {
 
   it('a typed label that already exists is NOT a creation — no confirmation', () => {
     const d = decideNewRackPlacement({
-      rack: { rackNumber: '22', rackRow: 'b', isBook: false },
+      rack: { kind: 'rack', rackNumber: '22', rackRow: 'b' },
       warehouseName: 'Main',
       quantity: 5,
       existingLabels: EXISTING,
@@ -376,7 +439,7 @@ describe('decideNewRackPlacement', () => {
 
   it('a slipped "100-A" asks, names the warehouse and count, and offers 1-A', () => {
     const d = decideNewRackPlacement({
-      rack: { rackNumber: '100', rackRow: 'A', isBook: false },
+      rack: { kind: 'rack', rackNumber: '100', rackRow: 'A' },
       warehouseName: 'Main Warehouse',
       quantity: 242,
       existingLabels: EXISTING,
@@ -410,5 +473,410 @@ describe('the put-away modal wires the confirmation', () => {
   it('the near-match alternative places into an existing rack, creating nothing', () => {
     expect(modal).toContain('Use ${label} instead');
     expect(modal).toContain('performMove({ toLocationId: match.id })');
+  });
+});
+
+// ── The sheet asks rack-or-crate, and can answer the book-crate gate ─────────
+
+describe('the move-stock sheet expresses rack XOR crate', () => {
+  it('asks for the new location TYPE explicitly, for books', () => {
+    // It used to render "RACK NUMBER *" plus two optional crate boxes and no
+    // toggle at all, so the single field deciding locations.kind — and
+    // migration 0270's kind-scoped dedupe bucket — was never actually asked
+    // about, and rack+crate together was expressible with one tap.
+    expect(modal).toContain('NEW LOCATION TYPE');
+    expect(modal).toContain("setNewKind('rack')");
+    expect(modal).toContain("setNewKind('crate')");
+  });
+
+  it('the CRATE branch requires its own number and offers no rack fields', () => {
+    expect(modal).toContain('CRATE NUMBER *');
+    // The rack fields sit in the other half of the same ternary, so only one
+    // branch can ever be on screen.
+    expect(modal).toContain("!isBook || newKind === 'rack' ? (");
+  });
+
+  it('submit readiness and the payload both come from the shared helpers', () => {
+    // Not `rackNumber.trim().length > 0` — that gate is what made a
+    // number-only crate unreachable however the form was filled in.
+    expect(modal).toContain('newLocationReady(newLocation)');
+    expect(modal).toContain('newLocationFields(newLocation)');
+    expect(modal).not.toContain('rackNumber.trim().length > 0');
+  });
+
+  it('the confirmation and the payload are derived from the SAME object', () => {
+    // REPRO A': the sheet confirmed "Create new rack A1?" and created
+    // "Crate #9". One object now feeds decideNewRackPlacement and the body.
+    expect(modal).toContain('rack: newLocation,');
+  });
+});
+
+describe('the sheet answers the book-crate gate', () => {
+  it('re-asks from the SERVER payload and retries with a scoped acknowledgement', () => {
+    // POST /api/v1/items/<id>/transfer now runs the same gate web runs, so the
+    // phone must be able to answer or every crated book dead-ends on a toast.
+    expect(modal).toContain('bookCrateRefusal(e)');
+    expect(modal).toContain('toBookCrateAcknowledgement(detail.items)');
+    expect(modal).toContain('acknowledgedCrateChanges');
+    // Asked at most once more — a refusal that survives an acknowledgement
+    // matching the server's own labels is a real error, not a loop.
+    expect(modal).toContain('bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)');
+  });
+
+  it('renders the crate-sync verdict as an Alert, and owns no copy of its own', () => {
+    // WIRING PIN ONLY. The four cases are asserted for real in the
+    // `crateSyncWarning` block below — this just proves the modal is plugged
+    // into that decision and did not keep a second, untested copy of the rules.
+    //
+    // Matched by SHAPE, not by the names of two locals: pinning the literal
+    // `res.crateSyncStale` is what made the old assertions fail on a correct
+    // rename while passing on an empty branch. Both locals may be called
+    // anything; what may not change is that the verdict comes from the helper
+    // and is what the Alert renders.
+    const flatModal = modal.replace(/\s+/g, ' ');
+    expect(flatModal).toMatch(/const (\w+) = crateSyncWarning\(\w+, itemName\); if \(\1\) \{/);
+    expect(flatModal).toMatch(/Alert\.alert\((\w+)\.title, \1\.message\)/);
+    // No inline branch survives: every crateSync* read now lives in the helper,
+    // so there is nothing left in this component to test by reading it.
+    expect(modal).not.toMatch(/\.crateSync/);
+  });
+});
+
+// ── The four SILENT SUCCESSES — what the phone actually SAYS ─────────────────
+//
+// These four used to be "tested" by asserting that move-stock-modal.tsx's source
+// text CONTAINS the strings 'res.crateSyncStale' & co. That is not coverage: it
+// passes against a branch whose body is empty, passes against a branch that
+// alerts the wrong words, passes against an else-if chain in an order that makes
+// one case unreachable — and FAILS on a correct rename. It was also the only
+// coverage the mobile client's crate-warning path had.
+//
+// Rendering the modal is genuinely impossible in this harness: apps/mobile runs
+// vitest with `environment: 'node'` and `include: ['src/**/*.test.ts']`, has no
+// react-test-renderer, no @testing-library/react-native, and no `@/` alias for
+// vitest to resolve the component's imports with. So the branches were moved to
+// the pure decision function the modal now delegates to, and the assertions
+// below pin its user-visible output the way the web dialog specs pin theirs
+// (apps/web/src/components/inventory/place-from-staging-dialog.test.tsx,
+// bulk-place-dialog.test.tsx): literal, whole strings, no substring matching.
+
+describe('crateSyncWarning — a move that succeeded is never silent about the label', () => {
+  const BOOK = 'The Outsiders';
+
+  it('a clean move says nothing at all', () => {
+    // The common path: no Alert. If this ever returns an object, every ordinary
+    // put-away grows a modal the picker has to dismiss.
+    expect(crateSyncWarning({ toLocationId: 'rack-a1' }, BOOK)).toBeNull();
+    expect(crateSyncWarning({}, BOOK)).toBeNull();
+  });
+
+  // ═══ crateSyncFailed — the write itself errored ═══
+  it('says the label could not be written, and names the book', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncFailed: true }, BOOK)).toEqual({
+      title: 'Moved, but the crate label did not update',
+      message:
+        "The Outsiders was moved. Its crate label could not be written — check the book's details.",
+    });
+  });
+
+  // ═══ crateSyncUnplaced — nothing left for the label to follow ═══
+  // The reconciliation writes only when the book's stock resolves to ONE
+  // rack/crate. When it resolves to NONE — every unit still in a bucket after a
+  // partial move, or the stock picked away underneath it — there is nothing
+  // authoritative to write. Server-side this used to be a bare `continue`: no
+  // flag, no alert, plain success on the phone, item still naming a crate that
+  // holds none of it.
+  it('says the label may now be wrong when no stock is in a rack or crate', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncUnplaced: true }, BOOK)).toEqual({
+      title: 'Moved — crate label may now be wrong',
+      message:
+        'The Outsiders has no stock in a rack or crate now, so its crate label was left unchanged.',
+    });
+  });
+
+  // ═══ crateSyncStale — someone else re-recorded the crate mid-move ═══
+  it('says someone else changed the crate, and that their label stands', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncStale: true }, BOOK)).toEqual({
+      title: 'Moved — someone else changed the crate',
+      message:
+        'The Outsiders was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.',
+    });
+  });
+
+  // ═══ crateSyncSkipped — the title is now split across locations ═══
+  it('says the label was left alone when the stock sits in more than one place', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncSkipped: true }, BOOK)).toEqual({
+      title: 'Moved — crate label left unchanged',
+      message:
+        'The Outsiders now has stock in more than one location, so its crate label was left as it was.',
+    });
+  });
+
+  it('interpolates the item it was actually given, not a generic noun', () => {
+    // The Alert fires AFTER onClose(), so "this item" has no on-screen referent
+    // by the time it is read. A hard-coded noun would be indistinguishable from
+    // a correct message in a source-text assertion — and useless on the phone.
+    expect(crateSyncWarning({ crateSyncStale: true }, 'Persepolis')?.message).toBe(
+      'Persepolis was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.',
+    );
+    expect(crateSyncWarning({ crateSyncSkipped: true }, 'Persepolis')?.message).toBe(
+      'Persepolis now has stock in more than one location, so its crate label was left as it was.',
+    );
+  });
+
+  it('says ONE thing when the route reports several, worst first', () => {
+    // A native Alert is modal and stacks badly; the route can legitimately set
+    // more than one flag for a multi-book move. The order is the point: an
+    // else-if chain in the wrong order makes a case unreachable, and a source
+    // pin cannot see the difference because all four names are still present.
+    const all = {
+      crateSyncFailed: true,
+      crateSyncUnplaced: true,
+      crateSyncStale: true,
+      crateSyncSkipped: true,
+    };
+    expect(crateSyncWarning(all, BOOK)?.title).toBe('Moved, but the crate label did not update');
+    expect(crateSyncWarning({ ...all, crateSyncFailed: false }, BOOK)?.title).toBe(
+      'Moved — crate label may now be wrong',
+    );
+    expect(
+      crateSyncWarning({ crateSyncStale: true, crateSyncSkipped: true }, BOOK)?.title,
+    ).toBe('Moved — someone else changed the crate');
+  });
+
+  it('treats an absent flag as absent, not as a warning', () => {
+    // The route omits the key entirely on the clean path; an explicit false is
+    // what a caller building the body by hand produces. Neither may speak.
+    expect(
+      crateSyncWarning(
+        {
+          crateSyncFailed: false,
+          crateSyncUnplaced: false,
+          crateSyncStale: false,
+          crateSyncSkipped: false,
+        },
+        BOOK,
+      ),
+    ).toBeNull();
+  });
+});
+
+// ── THE WRITE-OFF SAID NOTHING AT ALL ───────────────────────────────────────
+//
+// POST /api/v1/items/<id>/remove-stock answers with the same four crate flags
+// the transfer route does, plus one the transfer route has no use for: the
+// label was rewritten AND its value really changed. `removeStockFromLocation`
+// declared `Promise<void>` and threw the whole body away, so a write-off from
+// the phone could drain crate Blue 4 — or rewrite Blue 4 to Red 7 — and show a
+// sheet that simply closed. Web reports every one of those five
+// (apps/web/src/components/inventory/remove-from-rack-dialog.tsx); a web
+// feature ships native unless it is web-only, and this one is not.
+//
+// Same harness limits as the block above: the sheet cannot be rendered under
+// vitest, so the words live in a pure function and are asserted here in full.
+
+describe('removeStockCrateWarning — a write-off is never silent about the label', () => {
+  const BOOK = 'The Outsiders';
+
+  it('a clean write-off says nothing at all', () => {
+    expect(removeStockCrateWarning({}, BOOK)).toBeNull();
+    expect(
+      removeStockCrateWarning(
+        {
+          crateSyncFailed: false,
+          crateSyncUnplaced: false,
+          crateSyncStale: false,
+          crateSyncSkipped: false,
+          crateSyncUpdated: false,
+        },
+        BOOK,
+      ),
+    ).toBeNull();
+  });
+
+  it('says the label could not be written, and names the book', () => {
+    expect(removeStockCrateWarning({ crateSyncFailed: true }, BOOK)).toEqual({
+      title: 'Removed, but the crate label did not update',
+      message: "The crate label on The Outsiders could not be updated — check the book's details.",
+    });
+  });
+
+  it('says the label may now be wrong when no stock is in a rack or crate', () => {
+    // The drained-crate case: every copy has left, so there is nothing
+    // authoritative to write and the summary still names Blue 4.
+    expect(removeStockCrateWarning({ crateSyncUnplaced: true }, BOOK)).toEqual({
+      title: 'Removed — crate label may now be wrong',
+      message:
+        'The Outsiders has no stock in a rack or crate now, so its crate label was left unchanged.',
+    });
+  });
+
+  it('says someone else changed the crate, and that their label stands', () => {
+    expect(removeStockCrateWarning({ crateSyncStale: true }, BOOK)).toEqual({
+      title: 'Removed — someone else changed the crate',
+      message:
+        'Someone else changed the crate on The Outsiders while the stock was being removed. The label was left as they set it.',
+    });
+  });
+
+  it('says the label was left alone when the stock sits in more than one place', () => {
+    expect(removeStockCrateWarning({ crateSyncSkipped: true }, BOOK)).toEqual({
+      title: 'Removed — crate label left unchanged',
+      message:
+        'The Outsiders still has stock in more than one location, so its crate label was left as it was.',
+    });
+  });
+
+  it('reports a label the app CHANGED as a caution, not as good news', () => {
+    // Draining one of two placed holdings re-points the summary at the crate
+    // the rest of the stock is in — "Blue 4" becomes "Red 7" with no prompt.
+    // The reconciliation is right; announcing it as a success while its four
+    // neighbours warn is what makes the one outcome that changed the
+    // operator's own data look like the one where nothing happened.
+    expect(removeStockCrateWarning({ crateSyncUpdated: true }, BOOK)).toEqual({
+      title: 'Removed — the crate label changed',
+      message: 'The crate label on The Outsiders was changed to follow the stock it has left.',
+    });
+  });
+
+  it('never says a write-off MOVED anything', () => {
+    // The move sheet's words are the wrong words here: the stock did not go
+    // anywhere, it left. Reusing them verbatim would be its own small lie, and
+    // it is the reason this twin exists rather than a second call to
+    // crateSyncWarning.
+    for (const flag of [
+      'crateSyncFailed',
+      'crateSyncUnplaced',
+      'crateSyncStale',
+      'crateSyncSkipped',
+      'crateSyncUpdated',
+    ] as const) {
+      const said = removeStockCrateWarning({ [flag]: true }, BOOK)!;
+      expect(said.title.startsWith('Removed')).toBe(true);
+      expect(`${said.title} ${said.message}`).not.toMatch(/\bmoved\b/i);
+    }
+  });
+
+  it('interpolates the item it was actually given, not a generic noun', () => {
+    expect(removeStockCrateWarning({ crateSyncUpdated: true }, 'Persepolis')?.message).toBe(
+      'The crate label on Persepolis was changed to follow the stock it has left.',
+    );
+    expect(removeStockCrateWarning({ crateSyncSkipped: true }, 'Persepolis')?.message).toBe(
+      'Persepolis still has stock in more than one location, so its crate label was left as it was.',
+    );
+  });
+
+  it('says ONE thing when the route reports several, in the SAME order the move sheet uses', () => {
+    // One precedence chain serves both sheets, so the two can differ in words
+    // and never in which outcome wins. A native Alert is modal and stacks
+    // badly; an else-if in the wrong order makes a case unreachable.
+    const all = {
+      crateSyncFailed: true,
+      crateSyncUnplaced: true,
+      crateSyncStale: true,
+      crateSyncSkipped: true,
+      crateSyncUpdated: true,
+    };
+    expect(removeStockCrateWarning(all, BOOK)?.title).toBe(
+      'Removed, but the crate label did not update',
+    );
+    expect(removeStockCrateWarning({ ...all, crateSyncFailed: false }, BOOK)?.title).toBe(
+      'Removed — crate label may now be wrong',
+    );
+    expect(
+      removeStockCrateWarning({ ...all, crateSyncFailed: false, crateSyncUnplaced: false }, BOOK)
+        ?.title,
+    ).toBe('Removed — someone else changed the crate');
+    expect(
+      removeStockCrateWarning({ crateSyncSkipped: true, crateSyncUpdated: true }, BOOK)?.title,
+    ).toBe('Removed — crate label left unchanged');
+  });
+
+  it('reads the route body the API client actually returns', () => {
+    // TYPE-LEVEL, and the point of the annotation: `removeStockFromLocation`
+    // used to declare `Promise<void>`, which type-ERASED these flags before any
+    // screen could branch on them. Restoring that signature makes this
+    // assignment a compile error, which `pnpm typecheck` gates on — the same
+    // way the move sheet's verdict is pinned to TransferStockResult.
+    const body: WriteOffBody = { crateSyncUpdated: true };
+    expect(removeStockCrateWarning(body, BOOK)).toEqual({
+      title: 'Removed — the crate label changed',
+      message: 'The crate label on The Outsiders was changed to follow the stock it has left.',
+    });
+  });
+});
+
+describe('the write-off sheet renders that verdict', () => {
+  it('alerts the helper’s words, and owns no copy of its own', () => {
+    // WIRING PIN ONLY — the five cases are asserted for real above. Matched by
+    // SHAPE, never by a local's name: pinning names is what made the old
+    // assertions fail on a correct rename while passing on an empty branch.
+    const flat = removeModal.replace(/\s+/g, ' ');
+    const captured = /const (\w+) = await removeStockFromLocation\(/.exec(flat);
+    expect(captured, 'the write-off sheet discards the route body again').not.toBeNull();
+    expect(flat).toMatch(
+      new RegExp(
+        `const (\\w+) = removeStockCrateWarning\\(${captured![1]}, itemName\\); if \\(\\1\\) \\{ Alert\\.alert\\(\\1\\.title, \\1\\.message\\)`,
+      ),
+    );
+    // No inline branch survives: every crateSync* read lives in the helper, so
+    // there is nothing left in this component to test by reading it.
+    expect(removeModal).not.toMatch(/\.crateSync/);
+  });
+});
+
+describe('bookCrateAlertMessage', () => {
+  it('names every book, where it is recorded and where this move puts it', () => {
+    expect(
+      bookCrateAlertMessage({
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'Persepolis',
+            currentLabel: 'Blue 4',
+            nextLabel: null,
+            currentFingerprint: '["blue","4"]',
+          },
+        ],
+      }),
+    ).toBe('Persepolis is recorded in Blue 4 — this move records it in no crate.');
+  });
+});
+
+describe('bookCrateRefusal', () => {
+  it('recognises the structured payload on an ApiError', () => {
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'Persepolis',
+            currentLabel: 'Blue 4',
+            nextLabel: 'Green 2',
+            currentFingerprint: '["blue","4"]',
+          },
+        ],
+      },
+    });
+    expect(bookCrateRefusal(err)?.items).toHaveLength(1);
+  });
+
+  it('returns null for an ordinary error, so the message shows as-is', () => {
+    expect(bookCrateRefusal(new Error('Insufficient stock'))).toBeNull();
+    expect(bookCrateRefusal(null)).toBeNull();
+  });
+
+  it('rejects a payload whose line cannot be acknowledged', () => {
+    // A change line with no fingerprint would render a Continue button whose
+    // acknowledgement matches nothing and be refused forever.
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [{ itemId: 'i1', itemName: 'Persepolis', currentLabel: 'Blue 4', nextLabel: null }],
+      },
+    });
+    expect(bookCrateRefusal(err)).toBeNull();
   });
 });

@@ -27,9 +27,27 @@ vi.mock('next/cache', () => ({
 //    calls stampPlacementBin — that's placeStock/bulkPlaceStock only.)
 // ---------------------------------------------------------------------------
 
-const { mockTransferStock, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
+const {
+  mockTransferStock,
+  mockFindOrCreateRackOrCrate,
+  mockAssertBookCrate,
+  mockSyncBookCrate,
+  ctxRef,
+} = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
+  // The Transfer path now runs the SAME book-crate gate + reconciliation the
+  // Staging put-away runs — see transferStockAction. Its own behaviour is
+  // covered in inventory.bookCratePlacement.test.ts; here they only need to
+  // exist so the destination-union assertions below still speak.
+  mockAssertBookCrate: vi.fn(async () => new Map()),
+  mockSyncBookCrate: vi.fn(async () => ({
+    syncedItemIds: [] as string[],
+    failedItemIds: [] as string[],
+    skippedItemIds: [] as string[],
+    staleItemIds: [] as string[],
+    unplacedItemIds: [] as string[],
+  })),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -44,6 +62,8 @@ vi.mock('@/server/services/context', async (importOriginal) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
+    assertBookCratePlacementAllowed = mockAssertBookCrate;
+    syncBookCratePlacement = mockSyncBookCrate;
   },
 }));
 
@@ -52,6 +72,8 @@ vi.mock('@/server/services/locations', () => ({
     findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
   },
 }));
+
+import { bookCrateFingerprint } from '@stockpilot/core';
 
 import { ServiceError } from '@/server/services/context';
 import { transferStockAction } from './inventory';
@@ -71,10 +93,32 @@ const ORG_ID = 'org-test';
  * warehouse verification lookup. `warehouseRow` defaults to a valid same-org
  * row; pass `null` to simulate a cross-tenant / missing warehouse.
  */
-function installContext(opts: { warehouseRow?: Record<string, unknown> | null } = {}): SupabaseStub {
+function installContext(
+  opts: {
+    warehouseRow?: Record<string, unknown> | null;
+    destinationRow?: Record<string, unknown> | null;
+  } = {},
+): SupabaseStub {
   const warehouseRow = 'warehouseRow' in opts ? opts.warehouseRow : { id: WAREHOUSE_ID };
+  // The existing-destination branch now re-reads the destination row for its
+  // CRATE columns (the gate has to know what the book's summary would become)
+  // and pins it to the caller's org while it is there.
+  const destinationRow =
+    'destinationRow' in opts
+      ? opts.destinationRow
+      : {
+          id: EXISTING_LOC,
+          warehouse_id: WAREHOUSE_ID,
+          kind: 'rack',
+          rack_number: '22',
+          rack_row: 'B',
+          crate_color: null,
+          crate_number: null,
+          name: '22-B',
+        };
   const stub = makeSupabaseStub({
     'warehouses.select': { data: warehouseRow ?? null, error: null },
+    'locations.select': { data: destinationRow ?? null, error: null },
   });
   ctxRef.ctx = {
     organizationId: ORG_ID,
@@ -92,6 +136,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
+  mockAssertBookCrate.mockResolvedValue(new Map());
+  mockSyncBookCrate.mockResolvedValue({
+    syncedItemIds: [],
+    failedItemIds: [],
+    skippedItemIds: [],
+    staleItemIds: [],
+    unplacedItemIds: [],
+  });
   installContext();
 });
 
@@ -240,5 +292,137 @@ describe('transferStockAction (destination union)', () => {
       expect(result.error.code).toBe('validation_error');
       expect(result.error.message).toBe("Can't transfer more than is available.");
     }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // A STAGING/UNPLACED BUCKET IS NOT A DESTINATION — the fourth surface
+  //
+  // placeStockAction, bulkPlaceStockAction and POST /api/v1/items/[id]/transfer
+  // all refused this already; Transfer did not, and the gap was not merely
+  // untidy. All 40 units of a book recorded "Blue 4" could be transferred into
+  // Staging: the gate refused first and PROMISED "Placing it here will change
+  // that to no crate", the operator acknowledged exactly that, the stock left
+  // Blue 4 — and the reconciliation, which classifies staging out of the
+  // placement set, found nothing to synchronize to and wrote nothing. Plain
+  // success, item still reads "Blue 4", picker walks to an empty crate.
+  //
+  // Neither shipped client can produce this: the web dialog filters
+  // `kind !== 'staging' && kind !== 'unplaced'` out of its destination list and
+  // the phone's Move stock sheet queries `.in('kind', ['rack','crate'])`. So
+  // nothing legitimate is being blocked here — only a forged or future caller.
+  // ─────────────────────────────────────────────────────────────────────────
+  for (const kind of ['staging', 'unplaced'] as const) {
+    it(`7. rejects transferring INTO a ${kind} bucket — no gate, no move`, async () => {
+      installContext({
+        destinationRow: {
+          id: EXISTING_LOC,
+          warehouse_id: WAREHOUSE_ID,
+          kind,
+          rack_number: null,
+          rack_row: null,
+          crate_color: null,
+          crate_number: null,
+          name: kind === 'staging' ? 'Staging' : 'Unplaced',
+        },
+      });
+
+      const result = await transferStockAction({
+        itemId: ITEM_ID,
+        fromLocationId: FROM_LOC,
+        quantity: 40,
+        destination: { existingLocationId: EXISTING_LOC },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('validation_error');
+        // The SAME sentence the three siblings answer with — one rule, one
+        // wording, every surface.
+        expect(result.error.message).toBe('Pick a rack or crate as the destination.');
+      }
+      // Refused BEFORE the book-crate gate can promise a clearing it cannot
+      // deliver, and before anything physical happens.
+      expect(mockAssertBookCrate).not.toHaveBeenCalled();
+      expect(mockTransferStock).not.toHaveBeenCalled();
+      expect(mockSyncBookCrate).not.toHaveBeenCalled();
+    });
+  }
+
+  it('8. an ACKNOWLEDGED transfer into staging is refused too — the acknowledgement is not a bypass', async () => {
+    // The exact request the reviewer ran: the client answered the gate's
+    // "Blue 4 will be cleared" prompt and retried. Answering a prompt does not
+    // turn a system bucket into a destination.
+    installContext({
+      destinationRow: {
+        id: EXISTING_LOC,
+        warehouse_id: WAREHOUSE_ID,
+        kind: 'staging',
+        rack_number: null,
+        rack_row: null,
+        crate_color: null,
+        crate_number: null,
+        name: 'Staging',
+      },
+    });
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+      acknowledgedCrateChanges: [
+        { itemId: ITEM_ID, currentFingerprint: bookCrateFingerprint('blue', '4') },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toBe('Pick a rack or crate as the destination.');
+    }
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it('9. surfaces crateSyncUnplaced — a reconciliation that found nothing to follow is never silent', async () => {
+    // The reconciliation's `placed.size === 0` branch used to be a bare
+    // `continue`: no sync, no skip, no failure, no flag. The action must now
+    // carry it, or a move that left the crate label describing an empty crate
+    // still looks identical to one that relabelled correctly.
+    mockSyncBookCrate.mockResolvedValueOnce({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [],
+      unplacedItemIds: [ITEM_ID],
+    });
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.crateSyncUnplaced).toBe(true);
+      // ...and it is not misreported as one of the other three.
+      expect(result.data.crateSyncFailed).toBeUndefined();
+      expect(result.data.crateSyncSkipped).toBeUndefined();
+      expect(result.data.crateSyncStale).toBeUndefined();
+    }
+    // The stock really moved — the flag is about the LABEL, never a rollback.
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+  });
+
+  it('10. a clean transfer does NOT set crateSyncUnplaced', async () => {
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.crateSyncUnplaced).toBeUndefined();
   });
 });

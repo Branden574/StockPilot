@@ -9,6 +9,11 @@ import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { WarehousesService } from '@/server/services/warehouses';
 import { requireOrgContext } from '@/lib/auth/session';
+import {
+  toDestinationOption,
+  type DestinationLocationRow,
+  type DestinationOption,
+} from '@/lib/locations/destination-option';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { STAGING_TOUR } from '@/lib/onboarding/tours';
@@ -106,23 +111,26 @@ async function StagingTableSection({
 
   // Build a map of warehouseId → rack/crate destinations for that warehouse.
   // The PlaceFromStagingDialog only needs rack and crate kinds.
-  const destinationsByWarehouse = new Map<string, Array<{ id: string; name: string; kind: string }>>();
+  //
+  // Each destination carries its rack/crate COLUMNS (migration 0188), not just
+  // {id, name, kind}: dropping them is why the put-away dialog could never show
+  // which crate an existing destination already is, and why a user had to
+  // re-type crate metadata that the location row already held. `name` alone is
+  // not a substitute — "Blue #42" is a dedupe key, and parsing a crate back out
+  // of it would break the moment someone renames a crate.
+  const destinationsByWarehouse = new Map<string, DestinationOption[]>();
   for (const loc of allLocations) {
     if (loc.kind !== 'rack' && loc.kind !== 'crate') continue;
     const wid = (loc.warehouse_id as string | null) ?? '__none__';
     if (!destinationsByWarehouse.has(wid)) {
       destinationsByWarehouse.set(wid, []);
     }
-    destinationsByWarehouse.get(wid)!.push({
-      id: loc.id as string,
-      name: loc.name as string,
-      kind: loc.kind as string,
-    });
+    destinationsByWarehouse.get(wid)!.push(toDestinationOption(loc as DestinationLocationRow));
   }
 
   // Flatten the Map to a plain object so it crosses the RSC → client boundary
   // as serializable JSON. Keys are warehouse IDs (or '__none__').
-  const destinationsMap: Record<string, Array<{ id: string; name: string; kind: string }>> = {};
+  const destinationsMap: Record<string, DestinationOption[]> = {};
   for (const [wid, dests] of destinationsByWarehouse) {
     destinationsMap[wid] = dests;
   }

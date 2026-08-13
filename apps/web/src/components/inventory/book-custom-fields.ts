@@ -13,7 +13,7 @@
  *
  * Keys the form does NOT own (e.g. size, isbn) are preserved untouched.
  */
-import { normalizeRackFields } from '@stockpilot/core';
+import { normalizeCrateColorForWrite, normalizeRackFields } from '@stockpilot/core';
 
 export const BOOK_FORM_RESERVED_KEYS = [
   'author',
@@ -55,6 +55,13 @@ export function composeBookCustomFields(
   const row = num ? (rack.row ?? '').toUpperCase() : '';
   const author = params.author.trim();
   const crateNumber = params.crateNumber.trim();
+  // NORMALISE the crate colour on write, like every other writer of a crate
+  // colour (locations.crate_color and the duplicate/placement paths). The form
+  // feeds this a CRATE_COLORS slug today, so it is a no-op in practice — but
+  // "the control happens to be a Select" is not an invariant, and the summary
+  // is compared and rendered through the registry, so mixed case must not be
+  // able to enter it from here either.
+  const crateColor = normalizeCrateColorForWrite(params.crateColor);
 
   return {
     ...base,
@@ -62,7 +69,7 @@ export function composeBookCustomFields(
     ...(author ? { author } : {}),
     ...(num ? { book_rack_number: num } : {}),
     ...(row ? { book_rack_row: row } : {}),
-    ...(params.crateColor ? { book_crate_color: params.crateColor } : {}),
+    ...(crateColor ? { book_crate_color: crateColor } : {}),
     ...(crateNumber ? { book_crate_number: crateNumber } : {}),
     ...(params.grade ? { book_grade: params.grade } : {}),
   };

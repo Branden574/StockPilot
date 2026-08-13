@@ -9,7 +9,10 @@ import { ItemHistoryDialog } from '@/components/inventory/item-history-dialog';
 import { PlaceFromStagingDialog } from '@/components/inventory/place-from-staging-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import type { BookStorageInfo } from '@stockpilot/core';
+
 import { cn, formatRelative } from '@/lib/utils';
+import type { DestinationOption } from '@/lib/locations/destination-option';
 import { HelpTip } from '@/components/onboarding/help-tip';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -28,12 +31,14 @@ interface StagedRow {
   receiptNumber: string | null;
   receivedAt: string | null;
   ageDays: number | null;
-}
-
-interface DestinationOption {
-  id: string;
-  name: string;
-  kind: string;
+  /**
+   * A BOOK's current rack/crate SUMMARY, or null for a non-book. Comes from
+   * stagedWorklist (derived from the custom_fields it already fetched — no
+   * extra query). DISPLAY ONLY: the server re-reads the item's real crate from
+   * the DB before it writes anything, so nothing sent back from here is
+   * treated as proof of state.
+   */
+  bookStorage: BookStorageInfo | null;
 }
 
 export interface StagingTableProps {
@@ -223,12 +228,18 @@ export function StagingTable({
             {selectedRows.length} selected
           </span>
           <BulkPlaceDialog
+            // itemType and bookStorage travel WITH the row. Dropping them was
+            // why the bulk dialog could not tell a book from a Chromebook —
+            // and therefore could neither offer a crate nor warn that it was
+            // about to overwrite one.
             rows={selectedRows.map((r) => ({
               itemId: r.itemId,
               name: r.name,
+              itemType: r.itemType,
               sourceLocationId: r.sourceLocationId,
               quantity: r.quantity,
               warehouseId: r.warehouseId,
+              bookStorage: r.bookStorage,
             }))}
             destinationsMap={destinationsMap}
             warehouseNames={warehouseNames}
@@ -426,6 +437,7 @@ export function StagingTable({
                             warehouseName={warehouseNames[row.warehouseId!]}
                             availableQuantity={row.quantity}
                             destinations={destinations}
+                            bookStorage={row.bookStorage}
                             trigger={
                               <Button size="sm" variant="outline">
                                 Place
