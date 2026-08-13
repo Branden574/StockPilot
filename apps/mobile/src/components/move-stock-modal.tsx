@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
+import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
   bookCrateAlertMessage,
   bookCrateRefusal,
@@ -687,13 +688,38 @@ export function MoveStockModal({
                         </>
                       ) : (
                         <>
-                          <RackField
-                            label="CRATE COLOR (OPTIONAL)"
-                            value={crateColor}
-                            onChangeText={setCrateColor}
-                            placeholder="e.g. Blue"
-                            c={c}
-                          />
+                          {/* CRATE COLOUR — a FIXED choice over the shared
+                              registry, not free text.
+                              This was a text box ("e.g. Blue") long after the
+                              web put-away dialogs had been narrowed to the same
+                              ten colours, so the phone was the one surface that
+                              could still mint a colour the registry has never
+                              heard of — stored verbatim, then rendered with no
+                              swatch and filtered as a colour of its own.
+                              "No color" leads the row because a crate is
+                              identified by its NUMBER: production holds crates
+                              numbered with no colour at all, and that has to
+                              stay expressible from here. */}
+                          <View style={{ gap: 6 }}>
+                            <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                              CRATE COLOR (OPTIONAL)
+                            </Mono>
+                            <View
+                              style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}
+                              accessibilityRole="radiogroup"
+                              accessibilityLabel="Crate color"
+                            >
+                              {CRATE_COLOR_OPTIONS.map((opt) => (
+                                <Chip
+                                  key={opt.label}
+                                  label={opt.label}
+                                  swatch={opt.hex}
+                                  active={selectedCrateColor(crateColor) === opt.value}
+                                  onPress={() => setCrateColor(opt.value)}
+                                />
+                              ))}
+                            </View>
+                          </View>
                           {/* The NUMBER is the crate's identity — staff
                               routinely number a crate before they know which
                               coloured bin it lands in. */}
