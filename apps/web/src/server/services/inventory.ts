@@ -3755,11 +3755,23 @@ export class InventoryService {
      * now sits on the rack and nowhere else. Reported so the toast can say it —
      * a crate label silently surviving a physical move is what sent pickers to
      * empty crates.
+     *
+     * PROVED by re-reading the row and comparing fingerprints, never inferred
+     * from "the sync wrote it": a rewrite to the same crate is not a clear.
      */
     crateCleared?: number;
     /** Set rack only: books whose crate label could NOT be reconciled (split
-     *  holdings, a concurrent edit, or a failed write). Also reported. */
+     *  holdings, a concurrent edit, a failed write, or stock that never reached
+     *  the rack), plus those rewritten to the value they already held. Their
+     *  label is provably the same one it was. */
     crateUnchanged?: number;
+    /**
+     * Set rack only: books whose crate label was rewritten to a DIFFERENT crate.
+     * Only reachable when the stock never reached the rack, so the summary
+     * followed it to the crate that still holds it — a change the operator did
+     * not ask for, which is neither a clear nor a no-op.
+     */
+    crateChanged?: number;
   }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
@@ -3885,6 +3897,7 @@ export class InventoryService {
       let placed = 0;
       let crateCleared = 0;
       let crateUnchanged = 0;
+      let crateChanged = 0;
       if (composedBin) {
         // The crate summary as it stands BEFORE the stock moves. Read here for
         // two reasons: it is the `verified` freshness proof syncBookCratePlacement
@@ -3932,7 +3945,6 @@ export class InventoryService {
             const s = before.get(id);
             return !!s && (s.crateColor !== null || s.crateNumber !== null);
           };
-          crateCleared = sync.syncedItemIds.filter(hadCrate).length;
           // EVERY not-written bucket, including `unplacedItemIds` — a book
           // whose stock never reached the rack (its per-holding transfer
           // failed) keeps the crate it had, and the count must say so rather
@@ -3943,6 +3955,59 @@ export class InventoryService {
             ...sync.staleItemIds,
             ...sync.unplacedItemIds,
           ].filter(hadCrate).length;
+
+          // ═══ THE COUNTS ARE PROVED, NOT INFERRED ═══
+          // `syncedItemIds` says a write RAN, never that the value moved — and
+          // these counts drive sentences an operator reads. The gap is real:
+          // `placeItemsOntoRackByName` is per-holding best-effort, so when a
+          // book's transfer fails and its one remaining holding is a CRATE, the
+          // reconciliation rewrites that crate. The book is on no rack and its
+          // label was not cleared, yet it lands in `syncedItemIds` all the same
+          // — and "Cleared the crate label on 1 book now on the rack" was then
+          // printed for a label that still exists, on a book that never moved.
+          //
+          // So re-read the rows the sync wrote and compare fingerprints, the
+          // same proof `removeStockFromLocation` uses for `crateSyncUpdated`.
+          // One read for the whole batch, only when something was written.
+          const written = sync.syncedItemIds;
+          const after =
+            written.length > 0
+              ? await this.readBookCrateSummaries(written).catch((e: unknown) => {
+                  console.error(
+                    '[bulkUpdate set_rack] crate labels written but unreadable — not counted',
+                    { error: e instanceof Error ? e.message : String(e) },
+                  );
+                  return null;
+                })
+              : new Map<string, BookCrateSummary>();
+          for (const id of after ? written : []) {
+            const was = before.get(id);
+            const now = after!.get(id);
+            // A row that vanished (deleted, or no longer item_type='book')
+            // between the write and this read proves nothing either way.
+            if (!was || !now) continue;
+            const moved =
+              bookCrateFingerprint(was.crateColor, was.crateNumber) !==
+              bookCrateFingerprint(now.crateColor, now.crateNumber);
+            if (!moved) {
+              // Rewritten to the value it already held. Invisible to anyone —
+              // and if it HAD a crate, that crate is still on the label, which
+              // is exactly what the "left unchanged" warning is for.
+              if (hadCrate(id)) crateUnchanged += 1;
+            } else if (now.crateColor === null && now.crateNumber === null) {
+              // Cleared: the label named a crate and now names none, which on
+              // this path means the stock reached the rack.
+              crateCleared += 1;
+            } else {
+              // Rewritten to a DIFFERENT crate. Only reachable when the stock
+              // never got to the rack, so the summary followed it to whatever
+              // crate still holds it. A change the operator did not ask for and
+              // would otherwise never hear about — it is neither "cleared" nor
+              // "unchanged", and folding it into either one is the same lie in
+              // a different sentence.
+              crateChanged += 1;
+            }
+          }
         } else {
           // No freshness proof, so nothing may be written — see
           // syncBookCratePlacement's contract. The stock still moved and the
@@ -3962,6 +4027,7 @@ export class InventoryService {
         placed,
         ...(crateCleared > 0 ? { crateCleared } : {}),
         ...(crateUnchanged > 0 ? { crateUnchanged } : {}),
+        ...(crateChanged > 0 ? { crateChanged } : {}),
       };
     }
 

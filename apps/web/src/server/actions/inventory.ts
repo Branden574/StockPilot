@@ -282,16 +282,28 @@ export async function bulkUpdateInventoryAction(input: {
      * ever say "Updated N items." for an operation that also wiped a crate label
      * the operator never mentioned. A write nobody asked for and nobody is told
      * about is exactly what the crate gate exists to stop.
+     *
+     * Every book here is PROVED cleared by a before/after fingerprint on the
+     * row. The count drives a sentence, so it may not be inferred from the fact
+     * that a write ran.
      */
     crateCleared?: number;
     /**
      * Set rack only: books whose crate label could NOT be reconciled — split
      * holdings, a concurrent re-crate, a failed write, or stock that never
-     * reached the rack. Their label still names the old crate while their stock
-     * may have moved, so this is a WARNING, not a footnote: it is the picker
-     * walking to an empty crate.
+     * reached the rack — plus those the sync rewrote to the crate they already
+     * named. Their label still names the old crate while their stock may have
+     * moved, so this is a WARNING, not a footnote: it is the picker walking to
+     * an empty crate.
      */
     crateUnchanged?: number;
+    /**
+     * Set rack only: books whose crate label the app REWROTE to a different
+     * crate, because their stock never reached the rack and the summary
+     * followed it to whatever crate still holds it. Also a warning: the
+     * operator typed a rack number, and a value a human recorded changed.
+     */
+    crateChanged?: number;
   }>
 > {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {

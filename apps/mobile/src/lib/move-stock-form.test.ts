@@ -15,10 +15,17 @@ import {
   newLocationFields,
   newLocationReady,
   newRackLabel,
+  removeStockCrateWarning,
   resolveMoveSource,
   type MoveDestination,
   type MoveHolding,
 } from './move-stock-form';
+// Type-only, so this pure test never pulls './api' (and the Supabase client)
+// into the node environment. `typeof` on a type-only import is the whole point:
+// the write-off sheet can only branch on what this function RETURNS.
+import type { removeStockFromLocation } from './stock-api';
+
+type WriteOffBody = Awaited<ReturnType<typeof removeStockFromLocation>>;
 
 /**
  * Native put-away — the hazards that used to be expressible, and the reason
@@ -40,6 +47,10 @@ import {
 
 const modal = readFileSync(
   path.resolve(__dirname, '../components/move-stock-modal.tsx'),
+  'utf8',
+);
+const removeModal = readFileSync(
+  path.resolve(__dirname, '../components/remove-from-rack-modal.tsx'),
   'utf8',
 );
 const itemScreen = readFileSync(path.resolve(__dirname, '../../app/item/[id].tsx'), 'utf8');
@@ -647,6 +658,170 @@ describe('crateSyncWarning — a move that succeeded is never silent about the l
         BOOK,
       ),
     ).toBeNull();
+  });
+});
+
+// ── THE WRITE-OFF SAID NOTHING AT ALL ───────────────────────────────────────
+//
+// POST /api/v1/items/<id>/remove-stock answers with the same four crate flags
+// the transfer route does, plus one the transfer route has no use for: the
+// label was rewritten AND its value really changed. `removeStockFromLocation`
+// declared `Promise<void>` and threw the whole body away, so a write-off from
+// the phone could drain crate Blue 4 — or rewrite Blue 4 to Red 7 — and show a
+// sheet that simply closed. Web reports every one of those five
+// (apps/web/src/components/inventory/remove-from-rack-dialog.tsx); a web
+// feature ships native unless it is web-only, and this one is not.
+//
+// Same harness limits as the block above: the sheet cannot be rendered under
+// vitest, so the words live in a pure function and are asserted here in full.
+
+describe('removeStockCrateWarning — a write-off is never silent about the label', () => {
+  const BOOK = 'The Outsiders';
+
+  it('a clean write-off says nothing at all', () => {
+    expect(removeStockCrateWarning({}, BOOK)).toBeNull();
+    expect(
+      removeStockCrateWarning(
+        {
+          crateSyncFailed: false,
+          crateSyncUnplaced: false,
+          crateSyncStale: false,
+          crateSyncSkipped: false,
+          crateSyncUpdated: false,
+        },
+        BOOK,
+      ),
+    ).toBeNull();
+  });
+
+  it('says the label could not be written, and names the book', () => {
+    expect(removeStockCrateWarning({ crateSyncFailed: true }, BOOK)).toEqual({
+      title: 'Removed, but the crate label did not update',
+      message: "The crate label on The Outsiders could not be updated — check the book's details.",
+    });
+  });
+
+  it('says the label may now be wrong when no stock is in a rack or crate', () => {
+    // The drained-crate case: every copy has left, so there is nothing
+    // authoritative to write and the summary still names Blue 4.
+    expect(removeStockCrateWarning({ crateSyncUnplaced: true }, BOOK)).toEqual({
+      title: 'Removed — crate label may now be wrong',
+      message:
+        'The Outsiders has no stock in a rack or crate now, so its crate label was left unchanged.',
+    });
+  });
+
+  it('says someone else changed the crate, and that their label stands', () => {
+    expect(removeStockCrateWarning({ crateSyncStale: true }, BOOK)).toEqual({
+      title: 'Removed — someone else changed the crate',
+      message:
+        'Someone else changed the crate on The Outsiders while the stock was being removed. The label was left as they set it.',
+    });
+  });
+
+  it('says the label was left alone when the stock sits in more than one place', () => {
+    expect(removeStockCrateWarning({ crateSyncSkipped: true }, BOOK)).toEqual({
+      title: 'Removed — crate label left unchanged',
+      message:
+        'The Outsiders still has stock in more than one location, so its crate label was left as it was.',
+    });
+  });
+
+  it('reports a label the app CHANGED as a caution, not as good news', () => {
+    // Draining one of two placed holdings re-points the summary at the crate
+    // the rest of the stock is in — "Blue 4" becomes "Red 7" with no prompt.
+    // The reconciliation is right; announcing it as a success while its four
+    // neighbours warn is what makes the one outcome that changed the
+    // operator's own data look like the one where nothing happened.
+    expect(removeStockCrateWarning({ crateSyncUpdated: true }, BOOK)).toEqual({
+      title: 'Removed — the crate label changed',
+      message: 'The crate label on The Outsiders was changed to follow the stock it has left.',
+    });
+  });
+
+  it('never says a write-off MOVED anything', () => {
+    // The move sheet's words are the wrong words here: the stock did not go
+    // anywhere, it left. Reusing them verbatim would be its own small lie, and
+    // it is the reason this twin exists rather than a second call to
+    // crateSyncWarning.
+    for (const flag of [
+      'crateSyncFailed',
+      'crateSyncUnplaced',
+      'crateSyncStale',
+      'crateSyncSkipped',
+      'crateSyncUpdated',
+    ] as const) {
+      const said = removeStockCrateWarning({ [flag]: true }, BOOK)!;
+      expect(said.title.startsWith('Removed')).toBe(true);
+      expect(`${said.title} ${said.message}`).not.toMatch(/\bmoved\b/i);
+    }
+  });
+
+  it('interpolates the item it was actually given, not a generic noun', () => {
+    expect(removeStockCrateWarning({ crateSyncUpdated: true }, 'Persepolis')?.message).toBe(
+      'The crate label on Persepolis was changed to follow the stock it has left.',
+    );
+    expect(removeStockCrateWarning({ crateSyncSkipped: true }, 'Persepolis')?.message).toBe(
+      'Persepolis still has stock in more than one location, so its crate label was left as it was.',
+    );
+  });
+
+  it('says ONE thing when the route reports several, in the SAME order the move sheet uses', () => {
+    // One precedence chain serves both sheets, so the two can differ in words
+    // and never in which outcome wins. A native Alert is modal and stacks
+    // badly; an else-if in the wrong order makes a case unreachable.
+    const all = {
+      crateSyncFailed: true,
+      crateSyncUnplaced: true,
+      crateSyncStale: true,
+      crateSyncSkipped: true,
+      crateSyncUpdated: true,
+    };
+    expect(removeStockCrateWarning(all, BOOK)?.title).toBe(
+      'Removed, but the crate label did not update',
+    );
+    expect(removeStockCrateWarning({ ...all, crateSyncFailed: false }, BOOK)?.title).toBe(
+      'Removed — crate label may now be wrong',
+    );
+    expect(
+      removeStockCrateWarning({ ...all, crateSyncFailed: false, crateSyncUnplaced: false }, BOOK)
+        ?.title,
+    ).toBe('Removed — someone else changed the crate');
+    expect(
+      removeStockCrateWarning({ crateSyncSkipped: true, crateSyncUpdated: true }, BOOK)?.title,
+    ).toBe('Removed — crate label left unchanged');
+  });
+
+  it('reads the route body the API client actually returns', () => {
+    // TYPE-LEVEL, and the point of the annotation: `removeStockFromLocation`
+    // used to declare `Promise<void>`, which type-ERASED these flags before any
+    // screen could branch on them. Restoring that signature makes this
+    // assignment a compile error, which `pnpm typecheck` gates on — the same
+    // way the move sheet's verdict is pinned to TransferStockResult.
+    const body: WriteOffBody = { crateSyncUpdated: true };
+    expect(removeStockCrateWarning(body, BOOK)).toEqual({
+      title: 'Removed — the crate label changed',
+      message: 'The crate label on The Outsiders was changed to follow the stock it has left.',
+    });
+  });
+});
+
+describe('the write-off sheet renders that verdict', () => {
+  it('alerts the helper’s words, and owns no copy of its own', () => {
+    // WIRING PIN ONLY — the five cases are asserted for real above. Matched by
+    // SHAPE, never by a local's name: pinning names is what made the old
+    // assertions fail on a correct rename while passing on an empty branch.
+    const flat = removeModal.replace(/\s+/g, ' ');
+    const captured = /const (\w+) = await removeStockFromLocation\(/.exec(flat);
+    expect(captured, 'the write-off sheet discards the route body again').not.toBeNull();
+    expect(flat).toMatch(
+      new RegExp(
+        `const (\\w+) = removeStockCrateWarning\\(${captured![1]}, itemName\\); if \\(\\1\\) \\{ Alert\\.alert\\(\\1\\.title, \\1\\.message\\)`,
+      ),
+    );
+    // No inline branch survives: every crateSync* read lives in the helper, so
+    // there is nothing left in this component to test by reading it.
+    expect(removeModal).not.toMatch(/\.crateSync/);
   });
 });
 

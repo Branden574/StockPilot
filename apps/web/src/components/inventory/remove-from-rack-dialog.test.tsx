@@ -78,7 +78,12 @@ describe('RemoveFromRackDialog — the crate label is never left silent', () => 
     );
   });
 
-  it('says so when the label FOLLOWED the stock — a relabel nobody asked for is still a write', async () => {
+  it('WARNS when the label followed the stock — a relabel nobody asked for is still a write', async () => {
+    // The operator typed "Blue 4" on a crate by hand. Draining one of two placed
+    // holdings re-points that label at the crate the rest of the stock is in,
+    // with no confirmation — the reconciliation is right, but it is a change to
+    // a human-recorded value, and it must not be the ONE crate outcome that
+    // reads as good news while its four neighbours all warn.
     const user = userEvent.setup();
     mockRemoveStockFromLocationAction.mockResolvedValue({
       ok: true,
@@ -87,10 +92,14 @@ describe('RemoveFromRackDialog — the crate label is never left silent', () => 
     renderDialog();
     await removeWholeHolding(user);
 
-    expect(mockToast.success).toHaveBeenCalledWith(
-      'The crate label on The Outsiders now follows the stock it has left.',
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The crate label on The Outsiders was changed to follow the stock it has left.',
     );
-    expect(mockToast.warning).not.toHaveBeenCalled();
+    // The write-off itself still succeeded, and says so — but that is the ONLY
+    // success on this path. A second green toast about the label would put the
+    // change back where it started.
+    expect(mockToast.success).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).toHaveBeenCalledWith('Removed 40 from Blue #4.');
   });
 
   it('reports a concurrent re-crate, whose edit was left standing', async () => {

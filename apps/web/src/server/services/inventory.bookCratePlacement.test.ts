@@ -1196,9 +1196,38 @@ describe('syncBookCratePlacement — the freshness check', () => {
 describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
   const RACK_28A = 'loc-rack-28a';
 
-  function setRackStub(itemRows: Array<Record<string, unknown>>, holdings: unknown[]) {
-    return svcWith({
-      'inventory_items.select': { data: itemRows, error: null },
+  /**
+   * A small stateful world, for the same reason `removeWorld` below is one: the
+   * crate COUNTS are proved by re-reading the row after the sync wrote it, so a
+   * fixture that returns its opening value forever cannot tell a real clear
+   * from a rewrite of the crate the book already named. The set-storage fake
+   * takes its values from the call the stub just recorded (rpcCalls is pushed
+   * before the result resolves), so reads after the write see what was actually
+   * written rather than anything this fixture decided in advance.
+   */
+  function setRackStub(
+    itemRows: Array<Record<string, unknown>>,
+    holdings: unknown[],
+    extra: Record<string, { data: unknown; error: { message: string } | null }> = {},
+  ) {
+    const written = new Map<string, { color: string | null; number: string | null }>();
+    let stub!: SupabaseStub;
+    stub = makeSupabaseStub({
+      'inventory_items.select': () => ({
+        data: itemRows.map((r) => {
+          const w = written.get(r.id as string);
+          if (!w) return r;
+          return {
+            ...r,
+            custom_fields: {
+              ...((r.custom_fields as Record<string, unknown> | null) ?? {}),
+              book_crate_color: w.color,
+              book_crate_number: w.number,
+            },
+          };
+        }),
+        error: null,
+      }),
       'item_stock_levels.select': { data: holdings, error: null },
       // findOrCreateRackOrCrate resolves the existing rack 28-A.
       'locations.select': {
@@ -1206,8 +1235,34 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
         error: null,
       },
       'rpc:inventory_set_rack': { data: 1, error: null },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_storage': () => {
+        const last = stub.rpcCalls[stub.rpcCalls.length - 1]!.args as {
+          p_item_ids: string[];
+          p_crate_color: string | null;
+          p_crate_number: string | null;
+        };
+        for (const id of last.p_item_ids) {
+          written.set(id, { color: last.p_crate_color, number: last.p_crate_number });
+        }
+        // The real RPC returns its row count, and the sync FAILS the batch on
+        // anything short of it.
+        return { data: last.p_item_ids.length, error: null };
+      },
+      ...extra,
     });
+    return { svc: new InventoryService(makeServiceContext(stub.client)), stub };
+  }
+
+  /** A book row as bulkUpdate's several reads see it. */
+  function bookRow(crate: { color: string | null; number: string | null }) {
+    return {
+      id: BOOK_A,
+      name: 'Persepolis',
+      item_type: 'book',
+      warehouse_id: 'wh-1',
+      bin_location: null,
+      custom_fields: { book_crate_color: crate.color, book_crate_number: crate.number },
+    };
   }
 
   it('CLEARS a crated book’s summary once its stock sits on the rack', async () => {
@@ -1239,6 +1294,73 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     });
     // …and it is REPORTED, so the toast can say a label changed.
     expect(res.crateCleared).toBe(1);
+  });
+
+  // ── The counts are PROVED, not inferred from "a write ran" ────────────────
+  //
+  // `placeItemsOntoRackByName` is per-holding best-effort: one failed transfer
+  // is logged and the rest still place. When the failure is a book whose only
+  // remaining holding is a CRATE, the reconciliation still runs and rewrites
+  // that crate — so the book lands in `syncedItemIds` while its label was never
+  // cleared and its stock never reached the rack. `crateCleared` counted every
+  // synced book that had a crate, so the operator was shown
+  // "Cleared the crate label on 1 book now on the rack" about a label that
+  // still exists, on a book that did not move. Both halves of that sentence
+  // were false.
+
+  it('does NOT count a clear when the sync rewrote the crate the book already named', async () => {
+    const { svc, stub } = setRackStub(
+      [bookRow({ color: 'blue', number: '4' })],
+      [holding(BOOK_A, 'loc-crate-blue4', { kind: 'crate', type: 'bin', crate_color: 'blue', crate_number: '4' })],
+      // The one thing that has to go wrong for this to be reachable: the
+      // physical move onto rack 28-A fails, so Blue 4 is still the only
+      // holding when the reconciliation reads it back.
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    // It DID write — the summary is derived, and writing the value it already
+    // holds is harmless…
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+      p_item_ids: [BOOK_A],
+      p_crate_color: 'blue',
+      p_crate_number: '4',
+    });
+    // …but nothing was cleared, and the book is on no rack. The truthful line
+    // is the warning one: the label is exactly what it was.
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateChanged).toBeUndefined();
+    expect(res.crateUnchanged).toBe(1);
+  });
+
+  it('reports a label rewritten to a DIFFERENT crate as changed — not cleared, not unchanged', async () => {
+    const { svc, stub } = setRackStub(
+      // Recorded Blue 4 (a human typed it), physically in Red 7.
+      [bookRow({ color: 'blue', number: '4' })],
+      [holding(BOOK_A, 'loc-crate-red7', { kind: 'crate', type: 'bin', crate_color: 'red', crate_number: '7' })],
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+      p_item_ids: [BOOK_A],
+      p_crate_color: 'red',
+      p_crate_number: '7',
+    });
+    // "Cleared" would be false (the label names a crate), "unchanged" would be
+    // false (Blue 4 is gone), and silence would be the worst of the three — the
+    // operator typed a rack number and a value a human recorded was replaced.
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBeUndefined();
+    expect(res.crateChanged).toBe(1);
   });
 
   it('leaves a SPLIT book alone and says so', async () => {

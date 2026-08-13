@@ -475,6 +475,37 @@ describe('BulkActions — Set rack reports the crate labels', () => {
     );
   });
 
+  it('WARNS about a label it rewrote to a different crate', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 3, skipped: 0, placed: 2, crateChanged: 1 },
+    });
+    await applySetRack(user);
+
+    // Neither cleared nor left alone: the stock never reached the rack, so the
+    // summary followed it to the crate that still holds it. A human typed the
+    // crate it used to name, and the operator only asked for a rack number.
+    expect(toast.warning).toHaveBeenCalledWith(
+      'One book’s stock did not reach the rack, so its crate label now names the crate that holds it — check that book’s details.',
+    );
+    // Still a success overall, and the success line never claims a clear.
+    expect(toast.success).toHaveBeenCalledWith('Updated 3 items.');
+  });
+
+  it('says the rewrite in the plural for several books', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 4, skipped: 0, placed: 2, crateChanged: 2 },
+    });
+    await applySetRack(user);
+
+    expect(toast.warning).toHaveBeenCalledWith(
+      '2 books’ stock did not reach the rack, so their crate labels now name the crates that hold them — check those books’ details.',
+    );
+  });
+
   it('keeps the skipped clause, and adds nothing when no crate was involved', async () => {
     const user = userEvent.setup();
     vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({

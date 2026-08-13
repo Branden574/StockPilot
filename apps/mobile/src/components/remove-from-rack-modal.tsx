@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,9 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+// The write-off's crate verdict shares the move sheet's module deliberately:
+// one precedence chain, one vocabulary, both flavours side by side.
+import { removeStockCrateWarning } from '@/lib/move-stock-form';
 import { removeStockFromLocation } from '@/lib/stock-api';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
@@ -167,11 +171,21 @@ function RemoveFromRackContent({
     setSubmitting(true);
     setError(null);
     try {
-      await removeStockFromLocation(itemId, {
+      const res = await removeStockFromLocation(itemId, {
         locationId: selected.locationId,
         quantity: qtyNum,
         reason: reason.trim(),
       });
+      // The stock left. This says what happened to the book's crate LABEL —
+      // silence would make a write-off that rewrote a label a human typed look
+      // identical to one that touched nothing, and a drained crate still named
+      // in the summary is the picker walking to an empty crate. The cases and
+      // their words live in removeStockCrateWarning(), where they can actually
+      // be tested; this only renders the Alert.
+      const crateWarning = removeStockCrateWarning(res, itemName);
+      if (crateWarning) {
+        Alert.alert(crateWarning.title, crateWarning.message);
+      }
       onRemoved();
       onClose();
     } catch (e) {

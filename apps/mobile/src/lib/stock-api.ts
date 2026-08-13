@@ -91,6 +91,26 @@ export interface RemoveStockBody {
 }
 
 /**
+ * What the write-off route reports back about the book's crate LABEL. The stock
+ * left in every case; these say whether the summary followed it.
+ *
+ * The first four are the SAME four the transfer route answers with, for the
+ * same reasons (see TransferStockResult). The fifth has no transfer twin: a
+ * write-off can leave the book with exactly one placed holding that is a
+ * DIFFERENT crate, and the reconciliation then rewrites a label a human typed.
+ * That is a write the operator did not ask for, so it is reported too.
+ */
+export interface RemoveStockResult {
+  crateSyncFailed?: boolean;
+  crateSyncSkipped?: boolean;
+  crateSyncStale?: boolean;
+  crateSyncUnplaced?: boolean;
+  /** The summary was rewritten AND its value actually changed — proved by the
+   *  service with a before/after fingerprint, never inferred from "it wrote". */
+  crateSyncUpdated?: boolean;
+}
+
+/**
  * Remove (write off) stock from ONE rack — native parity for the web
  * RemoveFromRackDialog. POSTs to /api/v1/items/<id>/remove-stock, which routes
  * through InventoryService.removeStockFromLocation → adjustStock so the
@@ -98,14 +118,25 @@ export interface RemoveStockBody {
  * only checks the staff-role floor). Leaves stock in every OTHER location
  * untouched — unlike archive, which would hide the whole item and orphan it.
  *
- * Throws a clean Error (the server's friendly message) on a non-2xx.
+ * RETURNS THE BODY. This used to declare `Promise<void>` and drop it on the
+ * floor, which type-erased the crate-sync flags the route answers with — so a
+ * write-off from the phone could rewrite a book's crate label, or leave one
+ * naming an empty crate, and say nothing at all. Web says so on every one of
+ * these outcomes; the phone must too.
+ *
+ * Throws a clean Error (the server's friendly message) on a non-2xx. Unlike
+ * transferStock there is nothing to RE-ASK here — the write-off has no
+ * confirmation gate — so flattening the ApiError to its message loses nothing.
  */
 export async function removeStockFromLocation(
   itemId: string,
   body: RemoveStockBody,
-): Promise<void> {
+): Promise<RemoveStockResult> {
   try {
-    await api(`/api/v1/items/${itemId}/remove-stock`, { method: 'POST', body });
+    return ((await api(`/api/v1/items/${itemId}/remove-stock`, {
+      method: 'POST',
+      body,
+    })) ?? {}) as RemoveStockResult;
   } catch (e) {
     throw new Error(extractApiMessage(e));
   }
