@@ -2,9 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SITE_URL } from '@/lib/site';
-
-import { prepareDeliveryRequest, type DeliveryRequestInput } from './storefront-logic';
+import type { DeliveryRequestInput } from './storefront-logic';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -798,47 +796,8 @@ describe('DeliveryRequestAction — honesty', () => {
 
     render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
     expect(screen.getByTestId('delivery-request-condensed')).toHaveTextContent(
-      'This order is too large to fit in a compose link, so the draft carries a summary and a link to the full order. Use Copy the details if you want every line written into the message itself.',
+      'This order is too large to fit in a compose link, so the draft carries a summary. Copy the details instead to include every line.',
     );
-  });
-
-  it('the condensed notice does not tell the requester to assemble the list by hand', () => {
-    // The regression this whole change exists for (SO-000080, 2026-08-12):
-    // the notice used to end "Copy the details instead to include every
-    // line" — the app conceding the feature had not done its job and
-    // handing the work back. With an order link in the draft that is no
-    // longer true, so the imperative must be gone while the copy OPTION
-    // stays offered.
-    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
-    const base = makeInput().itemMap.get('i-1')!;
-    const itemMap = new Map(
-      lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
-    );
-
-    render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
-    const notice = screen.getByTestId('delivery-request-condensed');
-    expect(notice).not.toHaveTextContent('Copy the details instead');
-    expect(notice).toHaveTextContent('a link to the full order');
-    // The escape hatch is still NAMED, as a choice rather than an
-    // instruction. (The control itself lives in the preview dialog and the
-    // fallback panel; the tests above cover that it is reachable.)
-    expect(notice).toHaveTextContent('Copy the details');
-  });
-
-  it('the drafted body carries the order link, so the condensed notice is telling the truth', () => {
-    // The notice promises "a link to the full order". If the builder ever
-    // stopped emitting one, this test fails rather than leaving the UI
-    // making a claim the message does not honour.
-    const lines = Array.from({ length: 100 }, (_, i) => ({ itemId: `b-${i}`, quantity: 4 }));
-    const base = makeInput().itemMap.get('i-1')!;
-    const itemMap = new Map(
-      lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
-    );
-    const input = makeInput({ lines, itemMap });
-    const prepared = prepareDeliveryRequest(input);
-
-    expect(prepared.draft.condensed).toBe(true);
-    expect(prepared.draft.body).toContain(`Order link: ${SITE_URL}/dashboard/orders/${input.orderId}`);
   });
 
   it('shows no truncation disclosure for a normal order', () => {

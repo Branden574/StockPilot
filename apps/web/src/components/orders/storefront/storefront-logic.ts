@@ -5,7 +5,7 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES, SITE_URL } from '@/lib/site';
+import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } from '@/lib/site';
 import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '@/lib/timezone';
 
 import type { CartLineState, CatalogItem, CharterAddress, StorefrontCharter } from '../v2/types';
@@ -378,46 +378,11 @@ export interface DeliveryRequestDraft {
 }
 
 const CONDENSED_DISCLOSURE =
-  'This message was shortened because the full item list did not fit in a compose link. Every line is on the order in StockPilot — open the order link above.';
+  'This message was shortened because the full item list did not fit in a compose link. The complete order is in StockPilot under the order number above.';
 
 /** "SO-000049" when the number is real, else a visibly non-SO handle. */
 function orderHandle(orderNumber: number | null, orderId: string): string {
   return formatOrderNumber(orderNumber) ?? orderId.replace(/-/g, '').slice(0, 8);
-}
-
-/**
- * Absolute link to the order detail page — the thing that makes a condensed
- * draft usable instead of merely honest.
- *
- * WHY A LINK AT ALL (2026-08-12, order SO-000080): an 11-line order overflowed
- * `DRAFT_URL_LIMIT` and condensed, so DC4 received a delivery request naming
- * no items and the requester was told to copy-paste the list by hand. The
- * email does not need to CONTAIN the items; it needs to point at them. Costs
- * ~100 characters and buys back everything condensing removes, so it is
- * emitted in BOTH modes — a full draft that gets truncated by a transport we
- * did not measure is exactly as stranded as a condensed one.
- *
- * KEYED BY UUID, deliberately: `/dashboard/orders/[id]` is the only order
- * detail route and its segment is the `order_requests.id` UUID. There is no
- * route that resolves an SO number, so `orderNumber` — the human handle
- * printed on the line above — cannot build a working URL.
- *
- * NOT AN ENV VAR: `SITE_URL` is a compile-time literal for the same reason
- * `DELIVERY_REQUEST_EMAIL` is (see `@/lib/site`) — `env.client.ts` yields ''
- * and console.errors on a missing NEXT_PUBLIC value rather than failing the
- * build, which here would mail DC4 a link reading `/dashboard/orders/<id>`
- * with no host. A literal cannot fail that way. `SITE_URL` is already the
- * dashboard-link source for outbound support mail (`support-tickets.ts`).
- *
- * SAFETY: `encodeURIComponent`, not `toPlainTextLine`. The id is a UUID in
- * every real row, but this is a string that ends up on its own line in a mail
- * body — percent-encoding is the only treatment that cannot emit a newline
- * (and therefore cannot forge a header line) whatever it is handed, and it
- * leaves a real UUID byte-for-byte unchanged because hyphens and hex digits
- * are RFC 3986 unreserved.
- */
-function orderDetailUrl(orderId: string): string {
-  return `${SITE_URL}/dashboard/orders/${encodeURIComponent(orderId)}`;
 }
 
 /** "CVW Clovis (CVW-CLO)" / "Mendota" — never "Mendota ()". */
@@ -466,11 +431,6 @@ function neededByLine(neededByLocal: string, tz: string): string | null {
  * characters, and truncation is SILENT — the client opens with half a body and
  * the employee sends it. Condensed mode drops the per-line list and the street
  * address, keeps the counts and the site, and SAYS SO in the body.
- *
- * The `Order link:` line is NOT part of that trade: it is emitted in both
- * modes, because it is what turns a condensed draft from an apology into a
- * usable request — DC4 clicks through to every line instead of being handed a
- * bare count. See `orderDetailUrl`.
  */
 export function buildDeliveryRequestDraft(
   input: DeliveryRequestInput,
@@ -508,12 +468,13 @@ export function buildDeliveryRequestDraft(
   // transports truncate SILENTLY past ~2,000 characters and `DRAFT_URL_LIMIT`
   // is only a conservative guess at where — a tenant redirect wrapper can
   // still push a "fitting" URL over the real ceiling. So everything that makes
-  // the message ACTIONABLE — the order handle, the link to the order, who
-  // asked, where it goes, when it is needed — is emitted BEFORE the item rows,
-  // which are both the longest block and the one the link already substitutes
-  // for. A body cut off mid-item-list still identifies the order and points at
-  // the complete one; a body cut off before the destination does not. Do not
-  // move the ITEMS block above any of these.
+  // the message ACTIONABLE — the order handle, who asked, where it goes, when
+  // it is needed — is emitted BEFORE the item rows, which are the longest
+  // block by far and the only one that degrades gracefully (the shortened
+  // ladder in `prepareDeliveryRequest` cuts rows from the END, and the
+  // disclosure says how many). A body cut off mid-item-list still identifies
+  // the order and where it goes; a body cut off before the destination does
+  // not. Do not move the ITEMS block above any of these.
   const blocks: string[] = [];
 
   blocks.push(
@@ -521,7 +482,6 @@ export function buildDeliveryRequestDraft(
       'DELIVERY REQUEST — StockPilot',
       '',
       `Order: ${toPlainTextLine(handle)}`,
-      `Order link: ${orderDetailUrl(input.orderId)}`,
       `Requested by: ${requesterLabel}`,
       `Fulfillment method: ${isPickup ? 'Pickup / will-call' : 'Delivery'}`,
     ].join('\n'),
