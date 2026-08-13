@@ -1054,6 +1054,77 @@ describe('bookCrateRefusal', () => {
 // These pin the two halves the sheet needs to ask: recognising the rack payload
 // on the error, and turning it into ONE Alert.
 
+describe('removeStockCrateWarning — the RACK label a write-off keeps', () => {
+  const BOOK = 'The Outsiders';
+
+  // A write-off has no destination, so it has no confirmation gate, so a rack
+  // erasure can never be agreed to on this path — draining one of two holdings
+  // can leave the book in a single position-less crate, which would clear a rack
+  // a human typed, and the reconciliation always withholds that clear. The
+  // service reported it; the action and the route dropped it before any client
+  // saw it, so the phone showed a bare "Removed".
+  it('says the rack label was kept and may now be wrong', () => {
+    expect(removeStockCrateWarning({ crateSyncRackPreserved: true }, BOOK)).toEqual({
+      title: 'Removed — rack label may now be wrong',
+      message:
+        'The rack label on The Outsiders was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.',
+    });
+  });
+
+  it('keeps the write-off VERBS — nothing here was moved', () => {
+    // Saying "Moved" about a write-off is its own small lie: the stock did not
+    // go anywhere, it left. The move sheet's sentence for the same flag must not
+    // leak onto this screen.
+    const writeOff = removeStockCrateWarning({ crateSyncRackPreserved: true }, BOOK)!;
+    const move = crateSyncWarning({ crateSyncRackPreserved: true }, BOOK)!;
+    expect(writeOff.title.startsWith('Removed')).toBe(true);
+    expect(writeOff.message).not.toContain('was moved');
+    expect(writeOff.message).not.toBe(move.message);
+  });
+
+  it('outranks the crate label CHANGING, and is outranked by a crate label we could not fix', () => {
+    // These two genuinely co-occur on this path, and often: draining Blue 4 into
+    // a position-less Green 2 rewrites the crate (updated) AND withholds the
+    // rack clear (rackPreserved). One message fires, so the order decides what
+    // the operator hears.
+    //
+    // A label that is now WRONG beats a label that was correctly rewritten. The
+    // stale rack sends a picker to the wrong bay; the new crate value is right,
+    // and the only reason it is mentioned at all is consent.
+    expect(
+      removeStockCrateWarning({ crateSyncUpdated: true, crateSyncRackPreserved: true }, BOOK)?.title,
+    ).toBe('Removed — rack label may now be wrong');
+    // …but the four crate outcomes above it still win: those say the CRATE label
+    // could not be made right at all, which is more actionable still.
+    expect(
+      removeStockCrateWarning({ crateSyncUnplaced: true, crateSyncRackPreserved: true }, BOOK)
+        ?.title,
+    ).toBe('Removed — crate label may now be wrong');
+    expect(removeStockCrateWarning({ crateSyncRackPreserved: true }, BOOK)).not.toBeNull();
+  });
+
+  it('leaves NO flag the write-off route can emit without a sentence', () => {
+    // THE MATRIX PIN for this route. The list is exactly what
+    // apps/web/src/app/api/v1/items/[id]/remove-stock/route.ts spreads onto its
+    // 2xx body.
+    const emitted = [
+      'crateSyncFailed',
+      'crateSyncSkipped',
+      'crateSyncStale',
+      'crateSyncUnplaced',
+      'crateSyncUpdated',
+      'crateSyncRackPreserved',
+    ] as const;
+    for (const flag of emitted) {
+      const said = removeStockCrateWarning({ [flag]: true }, BOOK);
+      expect(said, `${flag} is emitted by the write-off route but says nothing`).not.toBeNull();
+      expect(said!.message, `${flag} does not name the book`).toContain(BOOK);
+    }
+    const titles = emitted.map((f) => removeStockCrateWarning({ [f]: true }, BOOK)!.title);
+    expect(new Set(titles).size).toBe(emitted.length);
+  });
+});
+
 describe('bookRackRefusal', () => {
   const rackItem = {
     itemId: 'i1',

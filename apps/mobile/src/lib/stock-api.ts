@@ -144,6 +144,15 @@ export interface RemoveStockResult {
   /** The summary was rewritten AND its value actually changed — proved by the
    *  service with a before/after fingerprint, never inferred from "it wrote". */
   crateSyncUpdated?: boolean;
+  /**
+   * The crate half followed the stock, but the RACK label was kept rather than
+   * erased. A write-off has no destination and therefore no confirmation gate,
+   * so a rack erasure can never be agreed to on this path — draining one of two
+   * holdings can leave the book in a single POSITION-LESS crate, which would
+   * clear a rack a human typed, and the reconciliation always withholds that.
+   * Correct, and worth saying: the label may now name a rack this stock has left.
+   */
+  crateSyncRackPreserved?: boolean;
 }
 
 /**

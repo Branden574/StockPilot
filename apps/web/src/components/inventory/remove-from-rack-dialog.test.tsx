@@ -102,6 +102,46 @@ describe('RemoveFromRackDialog — the crate label is never left silent', () => 
     expect(mockToast.success).toHaveBeenCalledWith('Removed 40 from Blue #4.');
   });
 
+  // ═══ THE RACK LABEL A WRITE-OFF KEEPS ═══
+  //
+  // A write-off has no destination and so no confirmation gate, which means a
+  // rack erasure can never be agreed to on this path — the reconciliation always
+  // withholds it. The service reported that in `rackPreservedItemIds` from the
+  // day the rack channel shipped, and both the action and the v1 route dropped
+  // it before any client could see it, so the operator watched a hand-typed rack
+  // label go stale behind a plain green toast.
+  it('WARNS when the rack label was kept rather than erased', async () => {
+    const user = userEvent.setup();
+    mockRemoveStockFromLocationAction.mockResolvedValue({
+      ok: true,
+      data: { crateSyncRackPreserved: true },
+    });
+    renderDialog();
+    await removeWholeHolding(user);
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The rack label on The Outsiders was left as it was and may now be wrong — nobody was asked about clearing it.',
+    );
+  });
+
+  it('says the rack is stale rather than that the crate changed, when both are true', async () => {
+    // These co-occur routinely here: draining Blue 4 into a position-less Green 2
+    // rewrites the crate AND withholds the rack clear. One toast fires, and a
+    // label that is now WRONG beats one that was correctly rewritten.
+    const user = userEvent.setup();
+    mockRemoveStockFromLocationAction.mockResolvedValue({
+      ok: true,
+      data: { crateSyncUpdated: true, crateSyncRackPreserved: true },
+    });
+    renderDialog();
+    await removeWholeHolding(user);
+
+    expect(mockToast.warning).toHaveBeenCalledTimes(1);
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The rack label on The Outsiders was left as it was and may now be wrong — nobody was asked about clearing it.',
+    );
+  });
+
   it('reports a concurrent re-crate, whose edit was left standing', async () => {
     const user = userEvent.setup();
     mockRemoveStockFromLocationAction.mockResolvedValue({

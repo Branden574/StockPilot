@@ -2201,6 +2201,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
   function removeWorld(opts: {
     itemType?: string;
     crate?: { color: string | null; number: string | null };
+    rack?: { number: string | null; row: string | null };
     before: unknown[];
     after: unknown[];
   }) {
@@ -2223,6 +2224,9 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
             custom_fields: {
               book_crate_color: storage.color,
               book_crate_number: storage.number,
+              ...(opts.rack
+                ? { book_rack_number: opts.rack.number, book_rack_row: opts.rack.row }
+                : {}),
             },
           },
         ],
@@ -2246,6 +2250,53 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
     });
     return { svc: new InventoryService(makeServiceContext(stub.client)), stub };
   }
+
+  // ═══ THE RACK LABEL A WRITE-OFF WOULD ERASE ═══
+  //
+  // A write-off has no destination, so it has no confirmation gate, so
+  // `rackClearAcknowledged` is never set on this path — meaning a rack erasure
+  // here can never be agreed to and is ALWAYS withheld. That is the right
+  // outcome. Being silent about it was not: the service has reported this in
+  // `rackPreservedItemIds` since the rack channel shipped, and both the action
+  // and /api/v1/items/[id]/remove-stock dropped it before it reached a client,
+  // so the operator watched a rack label go stale and was told nothing.
+  it('KEEPS the rack a human typed when the stock lands in a position-less crate, and reports it', async () => {
+    const CRATE_NO_POSITION = 'loc-crate-green2';
+    const poslessCrate = { kind: 'crate', type: 'bin', crate_color: 'green', crate_number: '2' };
+    const { svc, stub } = removeWorld({
+      // Recorded in Blue 4 ON RACK 38-A — a pair a human typed by hand.
+      rack: { number: '38', row: 'A' },
+      before: [
+        holding(BOOK_A, CRATE_BLUE_4, crateLoc),
+        holding(BOOK_A, CRATE_NO_POSITION, poslessCrate),
+      ],
+      // Blue 4 drained; the only stock left sits in a crate with NO position, so
+      // the derived rack pair is (null, null) — an erasure.
+      after: [holding(BOOK_A, CRATE_NO_POSITION, poslessCrate)],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: CRATE_BLUE_4,
+      quantity: 5,
+      reason: 'Water damage on the bottom row',
+    });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
+    expect(call, 'the write-off never reconciled the summary').toBeDefined();
+    // The CRATE half follows the stock; the RACK half is kept VERBATIM rather
+    // than cleared. A wiped rack label is gone — nothing remembers what it said.
+    expect(call!.args).toEqual(
+      placementArgs([BOOK_A], {
+        color: 'green',
+        number: '2',
+        rackNumber: '38',
+        rackRow: 'A',
+      }),
+    );
+    // …and the operator is TOLD, which is the whole point of preserving.
+    expect(res.crateSync!.rackPreservedItemIds).toEqual([BOOK_A]);
+  });
 
   it('REPORTS the drained crate: nothing placed left, so the label is untouched and never silent', async () => {
     const { svc, stub } = removeWorld({
@@ -2384,3 +2435,4 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
     expect(res.crateSync).toBeNull();
   });
 });
+

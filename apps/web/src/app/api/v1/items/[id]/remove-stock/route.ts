@@ -120,9 +120,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     revalidateInventoryList(ctx.organizationId);
     // The crate reconciliation runs inside the service, so the phone already
     // gets the FIX. These optional keys — the same four the transfer route
-    // answers with, plus the one that says the label moved — are what let it
-    // report the outcome instead of showing a bare success; an older build that
-    // ignores them is unaffected.
+    // answers with, plus the one that says the label moved and the one that says
+    // the RACK label was kept — are what let it report the outcome instead of
+    // showing a bare success; an older build that ignores them is unaffected.
+    //
+    // `crateSyncRackPreserved` is reachable here and always takes the preserve
+    // branch: a write-off has no destination and therefore no confirmation gate,
+    // so a rack erasure can never be acknowledged on this path. Draining one of
+    // two holdings can leave the book in a single POSITION-LESS crate, which
+    // would clear a rack a human typed. The service withholds that clear and
+    // reports it; this used to drop the report on the floor.
     return NextResponse.json({
       ok: true,
       ...(crateSync && crateSync.failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
@@ -130,6 +137,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       ...(crateSync && crateSync.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(crateSync && crateSync.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
+      ...(crateSync && crateSync.rackPreservedItemIds.length > 0
+        ? { crateSyncRackPreserved: true }
+        : {}),
     });
   } catch (e) {
     // adjust_stock raises `insufficient_stock` (P0001) if the delta would push

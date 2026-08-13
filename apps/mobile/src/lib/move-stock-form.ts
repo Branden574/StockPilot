@@ -665,6 +665,17 @@ export function removeStockCrateWarning(
         title: 'Removed — the crate label changed',
         message: `The crate label on ${itemName} was changed to follow the stock it has left.`,
       };
+    // The OTHER label, and on this path it is never anything BUT preserved: a
+    // write-off has no destination, so it has no confirmation gate, so a rack
+    // erasure can never be agreed to here. Draining one of two holdings can
+    // leave the book in a single position-less crate, which would clear a rack a
+    // human typed; the reconciliation withholds that clear and reports it. The
+    // report is the only thing that makes keeping a stale label recoverable.
+    case 'rackPreserved':
+      return {
+        title: 'Removed — rack label may now be wrong',
+        message: `The rack label on ${itemName} was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
+      };
     default:
       return null;
   }

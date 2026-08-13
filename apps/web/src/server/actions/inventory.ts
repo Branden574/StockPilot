@@ -145,6 +145,21 @@ export async function removeStockFromLocationAction(
      *  is left in (or no crate at all). Reported because the operator asked to
      *  remove stock, not to relabel anything. */
     crateSyncUpdated?: boolean;
+    /**
+     * The crate half followed the stock, but the RACK label was deliberately
+     * LEFT AS IT WAS rather than erased.
+     *
+     * REACHABLE HERE, and it always takes this branch. A write-off draining one
+     * of two holdings can leave the book in a single POSITION-LESS crate, whose
+     * pair is `(null, null)` — an erasure of a rack a human typed. There is no
+     * confirmation gate on a write-off (there is no destination to prompt
+     * about), so `rackClearAcknowledged` is never set on this path and the
+     * reconciliation ALWAYS preserves. That is the correct outcome; being silent
+     * about it was not. The service has reported it in `rackPreservedItemIds`
+     * since the rack channel shipped and this boundary discarded it, so the
+     * operator was told nothing while the rack label went stale.
+     */
+    crateSyncRackPreserved?: boolean;
   }>
 > {
   const parsed = removeStockFromLocationSchema.safeParse(input);
@@ -168,6 +183,9 @@ export async function removeStockFromLocationAction(
       ...(crateSync && crateSync.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(crateSync && crateSync.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
+      ...(crateSync && crateSync.rackPreservedItemIds.length > 0
+        ? { crateSyncRackPreserved: true }
+        : {}),
     });
   } catch (e) {
     return toResult(e);
