@@ -74,7 +74,16 @@ export async function POST(req: NextRequest) {
     // the next dashboard view sees it (mirrors remove-stock/transfer/restore).
     revalidateInventoryList(ctx.organizationId);
 
-    return NextResponse.json({ id: item.id }, { status: 201 });
+    // `placementFailed` is ADDITIVE and omitted when the stock reached the
+    // rack, so a phone on the shipped build keeps reading `{ id }` unchanged.
+    // Still 201: the item was created; only its auto-place fell short.
+    return NextResponse.json(
+      {
+        id: item.id,
+        ...(item.placementFailed ? { placementFailed: item.placementFailed } : {}),
+      },
+      { status: 201 },
+    );
   } catch (e) {
     if (e instanceof ServiceError) {
       return NextResponse.json(

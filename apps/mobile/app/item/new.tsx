@@ -35,6 +35,7 @@ import {
   EMPTY_SPORTS_GROUP_FIELDS,
   type SportsGroupFieldValues,
   sizeOptionsFromScale,
+  placementAlertFor,
   submitCreateItem,
   submitSizedVariants,
   type ItemFormState,
@@ -640,13 +641,24 @@ export default function NewItem() {
           Alert.alert('Check the form', describeFailure(built));
           return;
         }
-        const { created, ids } = await submitSizedVariants(built.input);
+        const { created, ids, placementFailed } = await submitSizedVariants(built.input);
         // Photos apply to every variant the same way (shared design).
         for (const id of ids) await uploadPhotosFor(id);
-        Alert.alert(
-          'Variants created',
-          `${created} size${created === 1 ? '' : 's'} added.`,
+        // The phone is the surface where this matters most: the operator is
+        // standing in the warehouse and is about to walk away believing the
+        // stock is on the rack they just typed.
+        const placeAlert = placementAlertFor(
+          `${created} size${created === 1 ? '' : 's'} added`,
+          placementFailed,
         );
+        if (placeAlert) {
+          Alert.alert(placeAlert.title, placeAlert.body);
+        } else {
+          Alert.alert(
+            'Variants created',
+            `${created} size${created === 1 ? '' : 's'} added.`,
+          );
+        }
         router.replace('/');
         return;
       }
@@ -660,8 +672,21 @@ export default function NewItem() {
         Alert.alert('Check the form', describeFailure(built));
         return;
       }
-      const { id } = await submitCreateItem(built.input);
+      const { id, placementFailed } = await submitCreateItem(built.input);
       await uploadPhotosFor(id);
+      const singleAlert = placementAlertFor('Item created', placementFailed);
+      if (singleAlert) {
+        // Navigation is deferred into the button handler on purpose. This path
+        // otherwise shows NO confirmation at all — it goes straight to the new
+        // item — so firing an Alert and replacing the route in the same tick
+        // would tear the alert down with the screen and the operator would
+        // never see it. The one case where the warning exists is the one case
+        // where the screen has to wait.
+        Alert.alert(singleAlert.title, singleAlert.body, [
+          { text: 'OK', onPress: () => router.replace({ pathname: '/item/[id]', params: { id } }) },
+        ]);
+        return;
+      }
       router.replace({ pathname: '/item/[id]', params: { id } });
     } catch (e) {
       Alert.alert('Could not add', e instanceof Error ? e.message : 'Unknown error');

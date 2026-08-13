@@ -31,6 +31,7 @@ import {
   isApparelAlphaSize,
   normalizeRackFields,
   groupKeyUsesColor,
+  placementWarningMessage,
   DEFAULT_SUBCATEGORY_PROFILES,
   type BulkCreateSizedVariantsInput,
   type CountingUnit,
@@ -513,19 +514,66 @@ export function buildQuickAddInput(
   });
 }
 
+/**
+ * Present when the operator typed a rack and the created stock did not reach
+ * it. OPTIONAL on both create responses: the server omits it entirely when
+ * everything placed, so a build that predates this field is unaffected and a
+ * build that carries it degrades to "no warning" against an older server
+ * rather than crashing on a missing key.
+ */
+export interface PlacementFailedPayload {
+  rackName: string;
+  count: number;
+}
+
+/**
+ * Whether the create screen must interrupt, and with what.
+ *
+ * THIS LIVES HERE AND NOT IN THE SCREEN ON PURPOSE. The mobile vitest config
+ * scopes `include` to `src/**` + `.test.ts`, so nothing under `app/` and no
+ * `.tsx` is reachable by a test. A `placementFailed ? Alert.alert(...)` written
+ * inline in `app/item/new.tsx` could therefore be deleted, inverted, or handed
+ * the wrong string and the whole suite would stay green — which is precisely
+ * how a shipped rack regression survived every test earlier this week. The
+ * decision and the wording are values here; the screen only renders them.
+ *
+ * Returns null when there is nothing to warn about, so the caller's check is
+ * the presence of a result rather than a re-implementation of the condition.
+ */
+export function placementAlertFor(
+  lead: string,
+  placementFailed: PlacementFailedPayload | undefined,
+): { title: string; body: string } | null {
+  if (!placementFailed) return null;
+  return {
+    // "created" leads the title too: an operator who reads only the bold line
+    // must not conclude the item failed to save and enter it a second time.
+    title: `${lead.startsWith('Item') ? 'Item' : 'Variants'} created — check the rack`,
+    body: placementWarningMessage(lead, placementFailed),
+  };
+}
+
 /** POST one validated item. The server owns every remaining guard. */
-export async function submitCreateItem(input: CreateItemInput): Promise<{ id: string }> {
-  return api<{ id: string }>('/api/v1/items', { method: 'POST', body: input });
+export async function submitCreateItem(
+  input: CreateItemInput,
+): Promise<{ id: string; placementFailed?: PlacementFailedPayload }> {
+  return api<{ id: string; placementFailed?: PlacementFailedPayload }>('/api/v1/items', {
+    method: 'POST',
+    body: input,
+  });
 }
 
 /** POST a validated size run. One request, one server-side fan-out. */
 export async function submitSizedVariants(
   input: BulkCreateSizedVariantsInput,
-): Promise<{ created: number; ids: string[] }> {
-  return api<{ created: number; ids: string[] }>('/api/v1/items/sized-variants', {
-    method: 'POST',
-    body: input,
-  });
+): Promise<{ created: number; ids: string[]; placementFailed?: PlacementFailedPayload }> {
+  return api<{ created: number; ids: string[]; placementFailed?: PlacementFailedPayload }>(
+    '/api/v1/items/sized-variants',
+    {
+      method: 'POST',
+      body: input,
+    },
+  );
 }
 
 /**

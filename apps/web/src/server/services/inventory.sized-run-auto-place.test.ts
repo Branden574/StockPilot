@@ -190,7 +190,7 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
 
     const created = await svc.bulkCreateSizedVariants({ ...RUN });
 
-    expect(created.map((r) => r.id)).toEqual(['v-9', 'v-95', 'v-10']);
+    expect(created.rows.map((r) => r.id)).toEqual(['v-9', 'v-95', 'v-10']);
     // One transfer per variant, each moving THAT variant's own holding onto the
     // one resolved rack. Asserted per variant, not "transferStock was called".
     expect(transfers(stub)).toEqual([
@@ -368,7 +368,7 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
 
     // Must NOT throw: the variants and their ledger committed before placement.
     const created = await svc.bulkCreateSizedVariants({ ...RUN });
-    expect(created.map((r) => r.id)).toEqual(['v-9', 'v-95', 'v-10']);
+    expect(created.rows.map((r) => r.id)).toEqual(['v-9', 'v-95', 'v-10']);
 
     // All three were attempted, and the two healthy ones still went to the rack.
     expect(transfers(stub).map((t) => [t.p_item_id, t.p_to_location_id])).toEqual([
@@ -389,6 +389,12 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     expect(
       errorSpy.mock.calls.some((c) => String(c[0]) === '[sized variants] auto-place failed'),
     ).toBe(false);
+
+    // AND THE CALLER IS TOLD. A console line is not a report — nobody standing
+    // at the rack reads the server log. Exactly ONE variant failed, so the
+    // count is 1 and not "the run failed", and the rack is the NORMALISED
+    // label so the sentence names the same rack the label writes.
+    expect(created.placementFailed).toEqual({ rackName: '28-A', count: 1 });
   });
 
   it('a failure in the FIRST concurrency wave still leaves later waves placed', async () => {
@@ -447,11 +453,17 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     const created = await svc.bulkCreateSizedVariants({ ...RUN });
 
     // The create is never a casualty of placement.
-    expect(created).toHaveLength(3);
+    expect(created.rows).toHaveLength(3);
     expect(insertedRows(stub).every((r) => r.primary_location_id === SITE)).toBe(true);
     // Returns before the holdings read when there is nowhere to put anything.
     expect(stub.chainArgs.get('item_stock_levels.select')).toBeUndefined();
     expect(transfers(stub)).toHaveLength(0);
+
+    // "Unplaced" IS the warning case, and it is the one most likely to be read
+    // as success: no transfer failed, because none was ever attempted. All
+    // three stocked variants are reported, because all three now carry a label
+    // naming a rack that does not exist.
+    expect(created.placementFailed).toEqual({ rackName: '28-A', count: 3 });
   });
 
   it('a variant whose seeded holding is ALREADY on the resolved rack is left alone (idempotent)', async () => {
@@ -473,5 +485,61 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     // Only the variant that needed moving was moved — no same-location
     // transfer (transfer_stock raises 'same_location' on one).
     expect(transfers(stub).map((t) => t.p_item_id)).toEqual(['v-95']);
+  });
+
+  // ═══ THE WARNING HAS TO STAY RARE TO STAY MEANINGFUL ═══
+  // A warning that fires on healthy runs is worse than none: it trains the
+  // operator to dismiss the one that matters. These pin the three ways a
+  // perfectly good create could be mislabelled a failure — a variant already
+  // on the rack, a variant deliberately left at zero, and no rack typed at
+  // all. Each is a real path through the helper's "was this item placed?"
+  // bookkeeping, which is where an over-eager report would come from.
+
+  it('an already-on-the-rack variant is NOT reported as failed — no transfer needed is not a failure', async () => {
+    const stub = buildStub({
+      'inventory_items.insert': { data: [INSERTED[0], INSERTED[1]], error: null },
+    });
+    SEEDED['v-9'] = { location_id: 'rack-28a', quantity: 3 };
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const created = await svc.bulkCreateSizedVariants({
+      ...RUN,
+      variants: [
+        { size: '9', quantity: 3 },
+        { size: '9.5', quantity: 5 },
+      ],
+    });
+
+    SEEDED['v-9'] = { location_id: 'seed-v-9', quantity: 3 };
+    expect(created.placementFailed).toBeNull();
+  });
+
+  it('a variant left at quantity 0 is NOT reported as failed — it was never up for placement', async () => {
+    const stub = buildStub({
+      'inventory_items.insert': { data: [INSERTED[0], { ...INSERTED[1], quantity_on_hand: 0 }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const created = await svc.bulkCreateSizedVariants({
+      ...RUN,
+      variants: [
+        { size: '9', quantity: 3 },
+        { size: '9.5', quantity: 0 },
+      ],
+    });
+
+    // The zero-quantity variant never enters the placement set, so it cannot
+    // be missing from the holdings read in a way that counts against it.
+    expect(created.placementFailed).toBeNull();
+  });
+
+  it('NO rack typed reports nothing at all — there is no placement to have failed', async () => {
+    const stub = buildStub();
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const created = await svc.bulkCreateSizedVariants({ ...RUN, binLocation: null });
+
+    expect(created.rows).toHaveLength(3);
+    expect(created.placementFailed).toBeNull();
   });
 });

@@ -638,6 +638,27 @@ export interface BookPlacementVerdict extends BookCrateSummary {
 }
 
 /**
+ * What the create-time auto-place actually managed to do.
+ *
+ * The whole point of returning this is that the create SUCCEEDS regardless —
+ * placement is deliberately fail-soft, because a placement hiccup must never
+ * undo an item the operator already made. That fail-soft design is correct and
+ * is NOT what changed; what changed is that it used to be fail-soft AND
+ * silent, so the item was created carrying a rack label whose stock sat
+ * somewhere else and nobody was told. A picker then walks to the rack the
+ * label names and finds nothing.
+ *
+ * `rackName` is the NORMALISED label (what `formatRackLabel` produced), so the
+ * sentence an operator reads names the same rack the label writes rather than
+ * whatever casing they typed.
+ */
+export interface ManualPlacementOutcome {
+  rackName: string;
+  /** Items whose stock demonstrably did NOT reach the rack. */
+  failedItemIds: string[];
+}
+
+/**
  * What a reconciliation did, per bucket. Every caller must surface every one of
  * them: the stock moved in every case, so a silent bucket is a placement the
  * operator believes relabelled something it did not.
@@ -2157,8 +2178,9 @@ export class InventoryService {
     // its stock exactly where the trigger put it (today's behavior). A
     // placement hiccup must never undo or block a create that already
     // succeeded.
+    let placement: ManualPlacementOutcome | null = null;
     if (isManualCreatePath && input.quantityOnHand > 0 && typedBinLabel) {
-      await this.placeManualCreateOnRack(
+      placement = await this.placeManualCreateOnRack(
         [data.id as string],
         resolvedWarehouseId,
         typedBinLabel,
@@ -2167,6 +2189,14 @@ export class InventoryService {
           itemId: data.id,
           error: e instanceof Error ? e.message : String(e),
         });
+        // The helper absorbs its own per-item failures, so reaching here means
+        // the whole pass died and nothing about it can be claimed. Report the
+        // item as not placed — erring toward the warning, since the silent
+        // version of this is the defect.
+        return {
+          rackName: typedBinLabel,
+          failedItemIds: [data.id as string],
+        } satisfies ManualPlacementOutcome;
       });
     }
 
@@ -2213,7 +2243,18 @@ export class InventoryService {
       await embedInventoryItem(data.id as string, this.ctx as any);
     })();
 
-    return data;
+    // The row, PLUS what the auto-place managed — on one object rather than a
+    // wrapper, because every consumer reads `.id` off this and a reshape would
+    // ripple for no gain. `placementFailed` is a synthetic field and not a
+    // column: it is named distinctly from anything `inventory_items` carries
+    // so it cannot be mistaken for one if this object is ever spread.
+    return {
+      ...data,
+      placementFailed:
+        placement && placement.failedItemIds.length > 0
+          ? { rackName: placement.rackName, count: placement.failedItemIds.length }
+          : null,
+    };
   }
 
   /**
@@ -2509,7 +2550,16 @@ export class InventoryService {
      * the category's size scale (migration 0294), validated below.
      */
     variants: Array<{ size: string; quantity: number }>;
-  }): Promise<Array<{ id: string; name: string; sku: string }>> {
+  }): Promise<{
+    rows: Array<{ id: string; name: string; sku: string }>;
+    /**
+     * Non-null ONLY when a typed rack was asked for and some of the run's
+     * stock did not reach it. `null` covers both "everything placed" and "no
+     * rack was typed", which are the same thing to a caller: nothing to warn
+     * about.
+     */
+    placementFailed: { rackName: string; count: number } | null;
+  }> {
     assertPermission(this.ctx, 'items:create');
     if (input.variants.length === 0) {
       throw new ServiceError(
@@ -2994,8 +3044,9 @@ export class InventoryService {
     // them, and one variant's failed transfer must not cost the others theirs.
     const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
     const stockedForPlacement = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
+    let placement: ManualPlacementOutcome | null = null;
     if (typedBinLabel && stockedForPlacement.length > 0) {
-      await this.placeManualCreateOnRack(
+      placement = await this.placeManualCreateOnRack(
         stockedForPlacement,
         resolvedWarehouseId,
         typedBinLabel,
@@ -3004,10 +3055,25 @@ export class InventoryService {
           itemIds: stockedForPlacement,
           error: e instanceof Error ? e.message : String(e),
         });
+        // Whole pass died — nothing can be claimed for any variant, so every
+        // one that was meant to be placed is reported as not placed.
+        return {
+          rackName: typedBinLabel,
+          failedItemIds: [...stockedForPlacement],
+        } satisfies ManualPlacementOutcome;
       });
     }
 
-    return inserted.map((r) => ({ id: r.id, name: r.name, sku: r.sku }));
+    return {
+      rows: inserted.map((r) => ({ id: r.id, name: r.name, sku: r.sku })),
+      // Per-RUN, not per-variant: a size run is one operator action against one
+      // typed rack, so "3 of 8 sizes did not reach 28-A" is the sentence that
+      // helps. Naming eight variants would bury it.
+      placementFailed:
+        placement && placement.failedItemIds.length > 0
+          ? { rackName: placement.rackName, count: placement.failedItemIds.length }
+          : null,
+    };
   }
 
   async bulkCreate(input: {
@@ -6194,8 +6260,8 @@ export class InventoryService {
     itemIds: string[],
     warehouseId: string,
     rawLabel: string,
-  ): Promise<void> {
-    if (itemIds.length === 0) return;
+  ): Promise<ManualPlacementOutcome> {
+    if (itemIds.length === 0) return { rackName: rawLabel, failedItemIds: [] };
     const parts = parseRackLabel(rawLabel);
     const rackName = formatRackLabel(parts) || rawLabel;
     const rackId = await this.findOrCreateRackLocation(
@@ -6204,7 +6270,12 @@ export class InventoryService {
       parts.row,
       rackName,
     );
-    if (!rackId) return;
+    // The rack could not be resolved OR created, so nothing can have reached
+    // it. EVERY requested item is reported as not placed rather than none:
+    // the item exists, its label says this rack, and its stock is somewhere
+    // else — which is precisely the state the caller has to be able to tell
+    // the operator about.
+    if (!rackId) return { rackName, failedItemIds: [...itemIds] };
 
     // ONE holdings read for the whole batch, not one per item: a 60-size run
     // (the schema's ceiling) would otherwise pay 60 round trips to read what a
@@ -6243,6 +6314,24 @@ export class InventoryService {
     // `for update` row lock on inventory_items keyed by item, so two items
     // never contend, while two holdings of the SAME item both draw down that
     // one row and stay ordered.
+    // EVERY caller filters to items it believes hold stock, so an item the
+    // holdings read did not return is NOT "nothing to do" — it is stock that
+    // is not where the caller thinks it is (or a read that failed and
+    // returned no rows at all, which lands every item here). Reported as not
+    // placed. Silence is the bug being fixed, and over-warning is the safe
+    // direction: a warning about stock that turned out fine costs a glance,
+    // while a missed one costs a label pointing at a rack the books never
+    // reached.
+    const failedItemIds: string[] = itemIds.filter((id) => !byItem.has(id));
+
+    // Transfers run CONCURRENTLY across items in capped waves — 60 sequential
+    // RPC round trips is the "took forever" the bulk Set rack path already
+    // measured and fixed (see the CONCURRENCY note in
+    // placeItemsOntoRackByName, same cap for the same reason). Safe to
+    // parallelise ACROSS items and never within one: transfer_stock takes a
+    // `for update` row lock on inventory_items keyed by item, so two items
+    // never contend, while two holdings of the SAME item both draw down that
+    // one row and stay ordered.
     const groups = [...byItem.entries()];
     for (let i = 0; i < groups.length; i += RACK_PLACE_CONCURRENCY) {
       await Promise.all(
@@ -6266,10 +6355,17 @@ export class InventoryService {
               rack: rackName,
               error: e instanceof Error ? e.message : String(e),
             });
+            // The loop above is per-HOLDING, so a throw part-way leaves this
+            // item's stock split across the old location and the rack. It is
+            // reported as failed either way: "some of it moved" is still not
+            // the placement the operator asked for, and the honest report is
+            // the one that sends them to look.
+            failedItemIds.push(itemId);
           }
         }),
       );
     }
+    return { rackName, failedItemIds };
   }
 
   /**
