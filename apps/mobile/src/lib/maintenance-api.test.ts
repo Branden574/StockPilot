@@ -802,8 +802,30 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     expect(src).toContain('{actions.notes ? (');
   });
 
-  it('(Task 10) proof photos upload with the LITERAL kind:\'resolution\' — never the requester default, never a variable that could drift', () => {
-    expect(src).toContain("{ kind: 'resolution' }");
+  /**
+   * REWRITTEN (reason): this asserted `toContain("{ kind: 'resolution' }")`,
+   * which was FALSE ASSURANCE — proven, not suspected. A verifier flipped the
+   * REQUEST queue's kind from 'requester' to 'resolution'; the screen then held
+   * TWO 'resolution' literals and ZERO 'requester' ones, and this pin still
+   * passed while all 1345 mobile tests stayed green. A source-text grep cannot
+   * tell which queue a literal belongs to, and cannot fail when one queue
+   * silently becomes the other.
+   *
+   * The value now lives behind a seam the harness can execute
+   * (requestPhotoUploadOptions / resolutionPhotoUploadOptions), and
+   * maintenance-request-photos.test.ts asserts what each RETURNS — mutation-
+   * proven: flipping the request kind fails two tests there. What remains for
+   * THIS source-level test is the half a value assertion cannot reach: that the
+   * screen delegates to that seam at all, rather than re-typing a literal that
+   * could drift away from the tested value.
+   */
+  it('(Task 10) both photo queues delegate to the tested upload-options seam — neither re-types a kind literal that could drift', () => {
+    expect(src).toContain('requestPhotoUploadOptions()');
+    expect(src).toContain('resolutionPhotoUploadOptions()');
+    // No inline kind literal may survive in the screen: one would be
+    // unreachable by the module tests and free to diverge from them.
+    expect(src).not.toContain("{ kind: 'resolution' }");
+    expect(src).not.toContain("{ kind: 'requester' }");
   });
 
   it('(Task 10) MOBILE_RESOLVE_DISCLOSURE (not a re-typed inline literal) is rendered inside the Resolve section', () => {

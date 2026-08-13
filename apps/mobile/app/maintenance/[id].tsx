@@ -114,9 +114,11 @@ import {
   photoUploadErrorMessage,
   reconcileRequestPhotoQueue,
   requestPhotoCapCheck,
+  requestPhotoUploadOptions,
   requestPhotosEditability,
   requestPhotosEmptyCopy,
   requestPhotosHeading,
+  resolutionPhotoUploadOptions,
   type MaintenancePhotoQueueEntry,
 } from '@/lib/maintenance-request-photos';
 import {
@@ -552,7 +554,7 @@ export default function MaintenanceRequestDetailScreen() {
           // re-failing a row a retry already saved.
           if (guard.isCurrent(entry.key, token)) patchRequestPhoto(entry.key, { progress: fraction });
         },
-        { kind: 'requester' },
+        requestPhotoUploadOptions(),
       );
       if (!guard.isCurrent(entry.key, token)) return;
       // attachmentId comes from finalize's own return value — it is what
@@ -638,7 +640,7 @@ export default function MaintenanceRequestDetailScreen() {
         (fraction) => {
           if (guard.isCurrent(entry.key, token)) patchResolvePhoto(entry.key, { progress: fraction });
         },
-        { kind: 'resolution' },
+        resolutionPhotoUploadOptions(),
       );
       if (guard.isCurrent(entry.key, token)) {
         patchResolvePhoto(entry.key, { status: 'done', progress: 1, message: undefined });

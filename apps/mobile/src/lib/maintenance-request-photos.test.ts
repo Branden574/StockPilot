@@ -11,6 +11,8 @@ import {
   photoUploadErrorMessage,
   reconcileRequestPhotoQueue,
   requestPhotoCapCheck,
+  requestPhotoUploadOptions,
+  resolutionPhotoUploadOptions,
   requestPhotosEditability,
   requestPhotosEmptyCopy,
   requestPhotosHeading,
@@ -255,5 +257,39 @@ describe('photoUploadErrorMessage', () => {
     expect(photoUploadErrorMessage(new Error('   '))).toBe(PHOTO_UPLOAD_GENERIC_ERROR);
     expect(photoUploadErrorMessage('a bare string rejection')).toBe(PHOTO_UPLOAD_GENERIC_ERROR);
     expect(photoUploadErrorMessage(undefined)).toBe(PHOTO_UPLOAD_GENERIC_ERROR);
+  });
+});
+
+/**
+ * THE PIN THAT DID NOT EXIST.
+ *
+ * A verifier flipped the detail screen's request-photo upload from
+ * `kind: 'requester'` to `'resolution'` and ran the whole mobile suite:
+ * 65 files / 1345 tests, all green. It then deleted the entire camera +
+ * library affordance and got the same all-green result. The two properties
+ * the feature exists for were protected by nothing, because the kind lived as
+ * a bare literal inside JSX this harness cannot render (vitest is environment
+ * 'node', include ['src/**\/*.test.ts']).
+ *
+ * These assertions are deliberately about VALUES returned by a module the
+ * harness can import, not about the screen's source text. A `toContain` grep
+ * over the screen would not have caught the flip either: the repo already had
+ * `expect(src).toContain("{ kind: 'resolution' }")`, and the mutant satisfied
+ * it — after the flip the screen held two 'resolution' literals and zero
+ * 'requester' ones, and that pin still passed.
+ */
+describe('photo upload options — the two queues cannot silently swap', () => {
+  it('the request queue uploads as a requester photo, not close-out proof', () => {
+    expect(requestPhotoUploadOptions()).toEqual({ kind: 'requester' });
+  });
+
+  it('the close-out queue uploads as resolution proof', () => {
+    expect(resolutionPhotoUploadOptions()).toEqual({ kind: 'resolution' });
+  });
+
+  it('the two queues never resolve to the same kind', () => {
+    // The whole point of the seam: if a refactor collapses them, this fails
+    // rather than silently filing problem photos as proof.
+    expect(requestPhotoUploadOptions().kind).not.toBe(resolutionPhotoUploadOptions().kind);
   });
 });

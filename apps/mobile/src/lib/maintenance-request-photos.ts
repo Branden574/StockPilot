@@ -266,3 +266,39 @@ export function photoPermissionDenial(
       : 'Photo library permission is denied. Enable it in Settings, under StockPilot.',
   };
 }
+
+/**
+ * The upload options for each of the detail screen's TWO photo queues.
+ *
+ * WHY THIS EXISTS AS A FUNCTION rather than a literal at the call site: the
+ * kind is the whole semantic difference between the two queues. A request
+ * photo documents the PROBLEM and is added by the requester; a resolution
+ * photo is close-out PROOF, is manage-gated at mint, lands in a different
+ * grid (`splitPhotosByKind`) and consumes a different per-kind cap budget
+ * (the server scopes its count `.eq('kind', kind)` at both mint and finalize).
+ *
+ * Flipping one to the other is therefore a silent semantic regression that
+ * changes where a photo files itself and who may add it — and while the kind
+ * lived as a bare literal inside the screen's JSX, NOTHING caught that flip:
+ * a verifier changed 'requester' to 'resolution' and all 1345 mobile tests
+ * stayed green. The screen cannot be rendered by this harness (vitest is
+ * environment 'node', include ['src/**\/*.test.ts']), so the only honest way
+ * to pin the value is to move it somewhere the harness CAN reach and have the
+ * screen call it. That is all this is: a seam, so a flip fails a test.
+ *
+ * Deliberately NOT pinned by grepping the screen's own source — a source-text
+ * assertion passes against a screen that renders nothing, and one such pin
+ * (`toContain("{ kind: 'resolution' }")`) was already satisfied by the mutant.
+ */
+export const REQUEST_PHOTO_UPLOAD_OPTIONS = { kind: 'requester' } as const;
+export const RESOLUTION_PHOTO_UPLOAD_OPTIONS = { kind: 'resolution' } as const;
+
+/** Options for the queue that documents the PROBLEM (added by the requester). */
+export function requestPhotoUploadOptions(): { kind: 'requester' } {
+  return REQUEST_PHOTO_UPLOAD_OPTIONS;
+}
+
+/** Options for the close-out PROOF queue (manage-gated, separate cap). */
+export function resolutionPhotoUploadOptions(): { kind: 'resolution' } {
+  return RESOLUTION_PHOTO_UPLOAD_OPTIONS;
+}
