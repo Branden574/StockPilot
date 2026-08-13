@@ -36,6 +36,23 @@
 
 export const OUTLOOK_COMPOSE_BASE = 'https://outlook.cloud.microsoft/mail/deeplink/compose';
 
+/**
+ * Microsoft's NATIVE Outlook app URL scheme (iOS + Android), used by mobile
+ * clients where handing an https URL to the OS opens a BROWSER on Outlook Web
+ * instead of the installed app. Deliberately NOT a variant of
+ * OUTLOOK_COMPOSE_BASE: it is a different transport with a different parser,
+ * not a different host for the same one.
+ *
+ * The `?mailtouri=` wrapper does NOT apply here — that is an OWA Web deep-link
+ * mechanic. This scheme takes plain to/cc/subject/body parameters.
+ *
+ * Whether a given device actually has Outlook installed is a runtime question
+ * (Linking.canOpenURL on the client, which on iOS additionally requires
+ * `ms-outlook` in LSApplicationQueriesSchemes and on Android a matching
+ * <queries> entry). This module only composes the string.
+ */
+export const OUTLOOK_MOBILE_COMPOSE_BASE = 'ms-outlook://compose';
+
 /** Conservative compose-link ceiling; both transports truncate SILENTLY past
  *  ~2,000 chars. 1,800 leaves headroom for tenant redirect wrappers. */
 export const DRAFT_URL_LIMIT = 1800;
@@ -107,6 +124,42 @@ export function composeOutlookWebUrl(input: ComposeInput): string {
   query.body = input.body;
   const innerMailto = `mailto:${encodeURIComponent(toValue)}?${encodeDraftQuery(query)}`;
   return `${OUTLOOK_COMPOSE_BASE}?mailtouri=${encodeURIComponent(innerMailto)}`;
+}
+
+/**
+ * Native Outlook app deep link: `ms-outlook://compose?to=&cc=&subject=&body=`.
+ * ONE encoding layer (there is no inner URI to wrap), through the SAME
+ * `encodeDraftQuery` the web transport uses — so `%20`, never `+`.
+ *
+ * THE CC IS THE POINT. The maintenance workflow depends on a fixed cc address
+ * receiving a copy of a ticket the requester creates; a compose screen that
+ * opens with the cc missing is a worse failure than not opening at all,
+ * because nobody notices. Two consequences, both deliberate:
+ *
+ *  1. `assertSafeDisplayName` runs here exactly as it does on the web path.
+ *     RFC 5322 specials in an unquoted name-addr split it into TWO recipients
+ *     and the mandatory cc is what silently disappears — so an unsafe name is
+ *     a hard throw on BOTH transports, never a quiet difference between them.
+ *  2. Addresses ride BARE, the same boundary `composeMailtoUrl` holds. The
+ *     name-addr chip is a VERIFIED OWA-Web parser extension (see module doc);
+ *     the native app is a different, unverified parser, and guessing wrong
+ *     there costs exactly the silent cc drop above. A missing display-name
+ *     chip is cosmetic; a missing cc breaks the business process. Names are
+ *     therefore validated and then left out of the wire format.
+ *
+ * Shorter than `composeOutlookWebUrl` for identical input by construction (a
+ * 20-char scheme and one encoding layer, versus a 52-char https base and a
+ * double-encoded inner mailto), so callers that already measure the web URL
+ * against DRAFT_URL_LIMIT are transitively measuring this one. Pinned by test.
+ */
+export function composeOutlookMobileUrl(input: ComposeInput): string {
+  if (input.toName) assertSafeDisplayName(input.toName);
+  if (input.ccName) assertSafeDisplayName(input.ccName);
+  const query: Record<string, string> = { to: input.to };
+  if (input.cc) query.cc = input.cc;
+  query.subject = input.subject;
+  query.body = input.body;
+  return `${OUTLOOK_MOBILE_COMPOSE_BASE}?${encodeDraftQuery(query)}`;
 }
 
 /** RFC 6068 mailto fallback. BARE addresses only — the name-addr path trick

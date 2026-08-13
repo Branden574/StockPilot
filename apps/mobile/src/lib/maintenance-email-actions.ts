@@ -1,6 +1,6 @@
 import * as Linking from 'expo-linking';
 
-import type { PreparedMaintenanceEmail } from '@stockpilot/core';
+import { OUTLOOK_MOBILE_COMPOSE_BASE, type PreparedMaintenanceEmail } from '@stockpilot/core';
 
 /**
  * Mobile twin of web's `MaintenanceEmailAction` (maintenance-email-
@@ -24,30 +24,132 @@ import type { PreparedMaintenanceEmail } from '@stockpilot/core';
  * introduces zero new native modules (binding constraint 1).
  */
 
-/** Both refuse to open ANYTHING when linkFits is false — silent mail-client
- *  truncation is the failure these guards exist for. The selectable-text
- *  copy panel (screen-side) is the honest transport in that case. */
-export async function openOutlookDraft(prepared: PreparedMaintenanceEmail): Promise<'opened' | 'blocked'> {
-  if (!prepared.linkFits) return 'blocked';
+/** Which BUTTON the employee pressed. Not the same thing as the transport
+ *  that ends up carrying the draft — see `OpenedTransport`. */
+export type EmailTransport = 'outlook' | 'mailto';
+
+/** Only what this decision actually depends on. Passed in (never read from
+ *  react-native here) so the whole decision stays a pure, node-testable
+ *  function — `Platform.OS` is read once, at the screen. */
+export type OutlookPlatform = 'ios' | 'android';
+
+/** What ACTUALLY opened. The screen's success copy is chosen from this, so it
+ *  can never say "Outlook opened" about a mail app that isn't Outlook. */
+export type OpenedTransport = 'outlook-native' | 'outlook-web' | 'default-mail';
+
+export interface OutlookOpenPlan {
+  transport: OpenedTransport;
+  url: string;
+}
+
+/**
+ * Per-platform verdict on whether the NATIVE Outlook deep link is trusted to
+ * carry `cc=`.
+ *
+ * The maintenance workflow's whole point is that a fixed CC address receives
+ * a copy; if a platform's Outlook build were ever found to drop the cc
+ * parameter, the correct response is to stop using the Outlook brand on that
+ * platform and send the employee to `mailto:` instead — the business
+ * invariant beats the brand. Flipping an entry here is that entire
+ * remediation: `planOutlookOpen` reroutes, the copy follows, no redesign.
+ *
+ * Both currently true. Neither has been confirmed on a physical device by
+ * this codebase — the simulator has no Outlook to install, and warm/cold
+ * start behaviour is a property of Microsoft's shipping app, not of our code.
+ * Owner-owned device verification is what can retire that caveat.
+ */
+export const NATIVE_OUTLOOK_CC_TRUSTED: Record<OutlookPlatform, boolean> = {
+  ios: true,
+  android: true,
+};
+
+/**
+ * Pure transport decision for a tap on "Open in Outlook".
+ *
+ *  - native app present, platform trusted -> `ms-outlook://compose` (THE FIX:
+ *    an https URL here is handed to the browser, which is why the employee
+ *    kept landing in Safari on Outlook Web).
+ *  - native app absent -> the EXISTING, tenant-verified web compose URL. Not
+ *    `mailto:` — falling through to a different mailbox would quietly change
+ *    which account the ticket comes from. This is exactly today's behaviour.
+ *  - native app present but its cc handling is not trusted on this platform
+ *    -> `mailto:`, which carries the cc as a plain RFC 6068 parameter.
+ *
+ * Every branch returns a URL that carries the CC. That is the invariant, and
+ * it is asserted per-branch in the tests.
+ */
+export function planOutlookOpen(
+  prepared: PreparedMaintenanceEmail,
+  ctx: { nativeOutlookAvailable: boolean; platform: OutlookPlatform },
+  ccTrusted: Record<OutlookPlatform, boolean> = NATIVE_OUTLOOK_CC_TRUSTED,
+): OutlookOpenPlan {
+  if (!ctx.nativeOutlookAvailable) return { transport: 'outlook-web', url: prepared.outlookUrl };
+  if (!ccTrusted[ctx.platform]) return { transport: 'default-mail', url: prepared.mailtoUrl };
+  return { transport: 'outlook-native', url: prepared.outlookMobileUrl };
+}
+
+/**
+ * Is the native Outlook app installed and reachable?
+ *
+ * `canOpenURL` only answers truthfully when the scheme is declared natively —
+ * iOS `LSApplicationQueriesSchemes`, Android `<queries>` (both added in
+ * app.config.ts / plugins/with-android-outlook-queries.js). It is a PROBE: it
+ * opens nothing, so asking it costs no compose screen. Any throw (undeclared
+ * scheme, OS refusal) is read as "not installed" and the caller falls back to
+ * the web URL — a probe failure must never be an error the employee sees.
+ */
+async function nativeOutlookAvailable(): Promise<boolean> {
   try {
-    await Linking.openURL(prepared.outlookUrl);
+    return await Linking.canOpenURL(OUTLOOK_MOBILE_COMPOSE_BASE);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The ONLY place this module calls openURL. Exactly one invocation per tap:
+ * a rejected open is reported as blocked and nothing else is attempted, ever.
+ * Auto-retrying (or cascading to a second transport on failure) is what
+ * produced duplicate compose screens — and a duplicate compose screen is a
+ * duplicate Zendesk ticket. Re-opening is a decision only the employee makes,
+ * by pressing the button again.
+ *
+ * NEVER log `plan.url`: it carries requester name, email, phone, site, the
+ * full description and any share URL. Request id + platform + `transport` are
+ * the only safe things to report anywhere, including Sentry.
+ */
+async function runPlan(plan: OutlookOpenPlan): Promise<'opened' | 'blocked'> {
+  try {
+    await Linking.openURL(plan.url);
     return 'opened';
   } catch {
     return 'blocked';
   }
+}
+
+function mailtoPlan(prepared: PreparedMaintenanceEmail): OutlookOpenPlan {
+  return { transport: 'default-mail', url: prepared.mailtoUrl };
+}
+
+/** Both refuse to open ANYTHING when linkFits is false — silent mail-client
+ *  truncation is the failure these guards exist for. The selectable-text
+ *  copy panel (screen-side) is the honest transport in that case. */
+export async function openOutlookDraft(
+  prepared: PreparedMaintenanceEmail,
+  platform: OutlookPlatform,
+): Promise<'opened' | 'blocked'> {
+  if (!prepared.linkFits) return 'blocked';
+  const plan = planOutlookOpen(prepared, {
+    nativeOutlookAvailable: await nativeOutlookAvailable(),
+    platform,
+  });
+  return runPlan(plan);
 }
 
 export async function openMailtoDraft(prepared: PreparedMaintenanceEmail): Promise<'opened' | 'blocked'> {
   if (!prepared.linkFits) return 'blocked';
-  try {
-    await Linking.openURL(prepared.mailtoUrl);
-    return 'opened';
-  } catch {
-    return 'blocked';
-  }
+  return runPlan(mailtoPlan(prepared));
 }
-
-export type EmailTransport = 'outlook' | 'mailto';
 
 /**
  * Orchestration seam the detail screen calls into: picks the transport,
@@ -65,11 +167,28 @@ export type EmailTransport = 'outlook' | 'mailto';
 export async function openMaintenanceDraft(
   transport: EmailTransport,
   prepared: PreparedMaintenanceEmail,
+  platform: OutlookPlatform,
   onOpened: () => void,
-): Promise<'opened' | 'blocked'> {
-  const result = transport === 'outlook' ? await openOutlookDraft(prepared) : await openMailtoDraft(prepared);
-  if (result === 'opened') onOpened();
-  return result;
+): Promise<MaintenanceOpenResult> {
+  if (!prepared.linkFits) return { outcome: 'blocked', used: null };
+  const plan =
+    transport === 'outlook'
+      ? planOutlookOpen(prepared, {
+          nativeOutlookAvailable: await nativeOutlookAvailable(),
+          platform,
+        })
+      : mailtoPlan(prepared);
+  const outcome = await runPlan(plan);
+  if (outcome === 'opened') onOpened();
+  return { outcome, used: outcome === 'opened' ? plan.transport : null };
+}
+
+/** `used` is the transport that actually carried the draft, and is null for
+ *  anything that did not open — so no caller can report a blocked attempt as
+ *  a particular app having opened. */
+export interface MaintenanceOpenResult {
+  outcome: 'opened' | 'blocked';
+  used: OpenedTransport | null;
 }
 
 /** Brief section 21: never permanently block reopening, only warn. The
@@ -99,6 +218,23 @@ export function shouldShowCondensedNotice(prepared: PreparedMaintenanceEmail): b
  *  open — never speculatively, never on a blocked/failed attempt. */
 export const SUCCESS_MESSAGE =
   'Outlook opened with your maintenance request. Review the information, attach any downloaded photos you want included directly, and click Send.';
+
+/**
+ * The same promise as SUCCESS_MESSAGE for the case where the draft opened in
+ * the device's default mail app rather than Outlook — the `mailto:` button,
+ * and the cc-safety fallback in `planOutlookOpen`. Naming Outlook there would
+ * be a plain untruth, and this screen's honesty rule (open a draft, never
+ * claim it sent, never claim a ticket exists) covers WHICH app opened too.
+ */
+export const MAIL_APP_SUCCESS_MESSAGE =
+  'Your email app opened with your maintenance request. Review the information, attach any downloaded photos you want included directly, and click Send.';
+
+/** Picks the honest confirmation for the transport that actually ran. A null
+ *  transport (nothing opened) never reaches the success card; it falls back
+ *  to the Outlook wording only so the type is total. */
+export function successMessageFor(used: OpenedTransport | null): string {
+  return used === 'default-mail' ? MAIL_APP_SUCCESS_MESSAGE : SUCCESS_MESSAGE;
+}
 
 /** Brief section 21, verbatim. */
 export const DUPLICATE_WARNING =

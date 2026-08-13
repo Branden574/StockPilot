@@ -18,7 +18,7 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -98,12 +98,14 @@ import {
   OVERSIZED_MESSAGE,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
-  SUCCESS_MESSAGE,
   openMaintenanceDraft,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  successMessageFor,
   withShareUrl,
   type EmailTransport,
+  type OpenedTransport,
+  type OutlookPlatform,
 } from '@/lib/maintenance-email-actions';
 import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
 import {
@@ -307,7 +309,7 @@ export default function MaintenanceRequestDetailScreen() {
   const [openCount, setOpenCount] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<{
-    transport: EmailTransport;
+    used: OpenedTransport | null;
     outcome: 'opened' | 'blocked';
   } | null>(null);
   const [copyOpen, setCopyOpen] = React.useState(false);
@@ -405,7 +407,11 @@ export default function MaintenanceRequestDetailScreen() {
   async function runOpen(transport: EmailTransport) {
     if (!prepared || !id) return;
     setBusy(true);
-    const outcome = await openMaintenanceDraft(transport, prepared, () => {
+    // Platform.OS is read HERE and nowhere in src/lib — the transport
+    // decision stays a pure, node-testable function that takes the platform
+    // as data (react-native cannot be imported under this repo's vitest).
+    const platform: OutlookPlatform = Platform.OS === 'android' ? 'android' : 'ios';
+    const result = await openMaintenanceDraft(transport, prepared, platform, () => {
       // Optimistic local bump so a rapid second tap is gated even before the
       // network round trip below settles; recordDraftOpened's own count
       // (server truth) then reconciles it. Best-effort only — mirrors web's
@@ -418,7 +424,10 @@ export default function MaintenanceRequestDetailScreen() {
         .catch(() => {});
     });
     setBusy(false);
-    setLastResult({ transport, outcome });
+    // `result.used` is the transport that ACTUALLY carried the draft (native
+    // Outlook, Outlook Web, or the default mail app), which is what the
+    // success copy below is chosen from — never the button that was pressed.
+    setLastResult(result);
   }
 
   function handleOpenPress(transport: EmailTransport) {
@@ -1179,7 +1188,7 @@ export default function MaintenanceRequestDetailScreen() {
           {lastResult?.outcome === 'opened' ? (
             <Card padding={10} style={{ marginTop: 12 }}>
               <Body size={12.5} color={c.ink}>
-                {SUCCESS_MESSAGE}
+                {successMessageFor(lastResult.used)}
               </Body>
             </Card>
           ) : null}

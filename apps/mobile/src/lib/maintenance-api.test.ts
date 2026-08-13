@@ -631,12 +631,28 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
     const fnMatch = src.match(/async function runOpen\(transport: EmailTransport\) \{([\s\S]*?)\n {2}\}/);
     expect(fnMatch).not.toBeNull();
     const body = fnMatch![1];
-    const openCallIdx = body.indexOf('const outcome = await openMaintenanceDraft(transport, prepared, () => {');
+    // The call gained a `platform` argument when the native ms-outlook
+    // transport landed — pinned here too, because a screen that stopped
+    // passing it would silently lose the per-platform cc-trust decision.
+    const openCallIdx = body.indexOf(
+      'const result = await openMaintenanceDraft(transport, prepared, platform, () => {',
+    );
     const recordIdx = body.indexOf('void recordDraftOpened(id)');
     const setBusyFalseIdx = body.indexOf('setBusy(false);');
     expect(openCallIdx).toBeGreaterThan(-1);
     expect(recordIdx).toBeGreaterThan(openCallIdx);
     expect(setBusyFalseIdx).toBeGreaterThan(recordIdx);
+  });
+
+  it('the screen reports the transport that ACTUALLY opened — the success card renders successMessageFor(lastResult.used), never a hardcoded Outlook claim', () => {
+    // A fallback to the default mail app must not print "Outlook opened".
+    expect(src).toContain('{successMessageFor(lastResult.used)}');
+    expect(src).not.toMatch(/\{SUCCESS_MESSAGE\}/);
+    // Platform.OS is read at the screen (react-native cannot be imported in
+    // this repo's node-environment vitest) and handed to the pure decision:
+    expect(src).toMatch(
+      /const platform: OutlookPlatform = Platform\.OS === 'android' \? 'android' : 'ios';/,
+    );
   });
 
   it('neither email button renders when `prepared.linkFits` is false — the oversized state is copy-only', () => {

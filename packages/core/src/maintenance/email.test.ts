@@ -836,3 +836,92 @@ describe('golden — one complete, fully-populated email, literal-pinned', () =>
     );
   });
 });
+
+/** Opaque-scheme decode for the native deep link (the exact string the mobile
+ *  app hands to Linking.openURL). Slice at the first '?', never new URL(). */
+function decodeMobileCompose(url: string): Record<string, string> {
+  const q = url.indexOf('?');
+  const params: Record<string, string> = {};
+  if (q === -1) return params;
+  for (const pair of url.slice(q + 1).split('&')) {
+    const eq = pair.indexOf('=');
+    params[pair.slice(0, eq)] = decodeURIComponent(pair.slice(eq + 1));
+  }
+  return params;
+}
+
+/**
+ * THE ACCEPTANCE GATE, at the builder level: the native mobile compose URL
+ * must carry the mandatory CC for EVERY fixture the web transport is tested
+ * with — the minimal case, the moderate (uncondensed) case, the maximal case
+ * that condenses, the oversized case, and the pathological case that fits
+ * nothing at all. The requester creates the ticket; the fixed cc address gets
+ * the copy. A compose screen that opens without it is a SILENT workflow
+ * break, so it is pinned per fixture rather than once on a happy path.
+ */
+describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GATE, all fixtures)', () => {
+  const LONG = { ...FULL_INPUT, description: 'Detail line. '.repeat(400) };
+  const PATHOLOGICAL = { ...LONG, requesterName: 'X'.repeat(2000) };
+
+  const FIXTURES: { name: string; input: MaintenanceEmailInput }[] = [
+    { name: 'MINIMAL (nothing optional set)', input: MINIMAL_INPUT },
+    { name: 'MODERATE (fits without condensing)', input: MODERATE_INPUT },
+    { name: 'FULL (maximal — legitimately condenses)', input: FULL_INPUT },
+    { name: 'LONG (oversized — condenses and still fits)', input: LONG },
+    { name: 'PATHOLOGICAL (linkFits false — nothing may be opened)', input: PATHOLOGICAL },
+  ];
+
+  for (const { name, input } of FIXTURES) {
+    it(`${name}: outlookMobileUrl carries the mandatory CC, bare and byte-exact`, () => {
+      const prepared = prepareMaintenanceEmail(input);
+      expect(prepared.outlookMobileUrl.startsWith('ms-outlook://compose?')).toBe(true);
+      const params = decodeMobileCompose(prepared.outlookMobileUrl);
+      expect(params.cc).toBe('arosas@cvwest.org');
+      expect(params.to).toBe('dc4@learn4life.org');
+      // Identical recipients to the draft the web path sends — one builder,
+      // one source of truth, two transports:
+      expect(params.cc).toBe(prepared.draft.cc);
+      expect(params.to).toBe(prepared.draft.to);
+    });
+
+    it(`${name}: subject and body are the SAME draft the web path sends (never rebuilt for mobile)`, () => {
+      const prepared = prepareMaintenanceEmail(input);
+      const params = decodeMobileCompose(prepared.outlookMobileUrl);
+      expect(params.subject).toBe(prepared.draft.subject);
+      expect(params.body).toBe(prepared.draft.body);
+      expect(prepared.outlookMobileUrl).not.toContain('+');
+    });
+
+    it(`${name}: the native URL never exceeds the web URL, so the existing DRAFT_URL_LIMIT guard covers it`, () => {
+      const prepared = prepareMaintenanceEmail(input);
+      expect(prepared.outlookMobileUrl.length).toBeLessThan(prepared.outlookUrl.length);
+      if (prepared.linkFits) {
+        expect(prepared.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+      }
+    });
+  }
+
+  it('WEB IS UNCHANGED: outlookUrl is still the https OWA deep link with its name-addr chips', () => {
+    const prepared = prepareMaintenanceEmail(FULL_INPUT);
+    expect(prepared.outlookUrl.startsWith(`${OUTLOOK_COMPOSE_BASE}?mailtouri=`)).toBe(true);
+    const { to, params } = decodeCompose(prepared.outlookUrl);
+    expect(to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
+    expect(params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    // The native URL is an ADDITION, never a rename of the web one:
+    expect(prepared.outlookMobileUrl).not.toBe(prepared.outlookUrl);
+  });
+
+  it('an unsafe requester/site name cannot reach the native URL either — recipients stay the frozen constants', () => {
+    const unsafe = 'Evil <injected@attacker.test>, "quoted"; @nope';
+    const prepared = prepareMaintenanceEmail({ ...FULL_INPUT, requesterName: unsafe, siteName: unsafe });
+    const params = decodeMobileCompose(prepared.outlookMobileUrl);
+    expect(params.to).toBe('dc4@learn4life.org');
+    expect(params.cc).toBe('arosas@cvwest.org');
+    // The unsafe text is BODY content (exactly as on the web path) and must
+    // never appear in the RECIPIENT segment — everything before `&subject=`:
+    const recipients = prepared.outlookMobileUrl.slice(0, prepared.outlookMobileUrl.indexOf('&subject='));
+    expect(recipients).toBe('ms-outlook://compose?to=dc4%40learn4life.org&cc=arosas%40cvwest.org');
+    expect(recipients).not.toContain('injected');
+    expect(prepared.draft.body).toContain(`Name: ${unsafe}`);
+  });
+});
