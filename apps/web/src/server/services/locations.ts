@@ -2,6 +2,8 @@ import 'server-only';
 
 import {
   formatRackLabel,
+  formatRackPosition,
+  locationNameSitsOnRack,
   normalizeCrateColorForWrite,
   normalizeRackFields,
   parseRackLabel,
@@ -212,8 +214,54 @@ export class LocationsService {
     return this.create(input);
   }
 
+  /**
+   * ═══ A RENAME MUST NOT STRIP A CRATE'S POSITION ═══
+   *
+   * A crate's rack is carried by its NAME — "Gray #BIN on rack 43-B" — because
+   * that is what makes migration 0270's `lower(name)` index keep five real
+   * "gray BIN" bins as five rows (see `findOrCreateRackOrCrate`). The
+   * `rack_number`/`rack_row` columns hold the same pair, but nothing that
+   * renders a placement reads them: a holding travels to every formatter as
+   * `{ name, quantity, kind }` and nothing else.
+   *
+   * So a crate whose columns say 43-B but whose NAME has lost the suffix is a
+   * row that has quietly stopped sitting on a rack, everywhere at once — every
+   * pick slip, count sheet and detail card. No write path produces that shape:
+   * `create` composes the name through `formatCrateLocationName`, and this
+   * `update` cannot touch the columns at all (it patches name/type/parent/notes
+   * only). A RENAME is the one way in, and this is the gate on it.
+   *
+   * REFUSE rather than regenerate. Regenerating would silently discard what the
+   * operator typed, and it cannot be right in the case they most plausibly
+   * meant — retyping the position to MOVE the crate — because the columns would
+   * still say 43-B afterwards. Refusing states the constraint and leaves the
+   * name theirs. (Moving a crate is a put-away, not a rename.)
+   *
+   * Racks are not covered: a rack's name IS its label, so a rename changes what
+   * it is called and nothing silently disagrees.
+   */
+  private async assertRenameKeepsCratePosition(id: string, nextName: string) {
+    const { data: row } = await this.ctx.supabase
+      .from('locations')
+      .select('kind, rack_number, rack_row')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (!row) return;
+    const loc = row as { kind: string | null; rack_number: string | null; rack_row: string | null };
+    if (loc.kind !== 'crate') return;
+    const position = formatRackPosition({ rackNumber: loc.rack_number, rackRow: loc.rack_row });
+    if (!position) return;
+    if (locationNameSitsOnRack(nextName, position)) return;
+    throw new ServiceError(
+      'validation_error',
+      `This crate sits on rack ${position}, and the position is part of its name — every pick slip, count sheet and item card reads the rack out of the name. Keep "on rack ${position}" at the end, or move the crate with a put-away instead of renaming it.`,
+    );
+  }
+
   async update(id: string, patch: UpdateLocationInput) {
     assertPermission(this.ctx, 'locations:manage');
+    if (patch.name !== undefined) await this.assertRenameKeepsCratePosition(id, patch.name);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.type !== undefined) updates.type = patch.type ?? null;

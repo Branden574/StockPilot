@@ -30,7 +30,12 @@
  */
 
 import { getCrateColor } from './crate-colors';
-import { formatRackPosition, type RackPosition } from './rack-label';
+import {
+  formatRackLabel,
+  formatRackPosition,
+  parseRackLabel,
+  type RackPosition,
+} from './rack-label';
 
 /**
  * K-12 + post-secondary grade levels for educational books. Order
@@ -196,7 +201,60 @@ export function formatCrateLocationName(
   const word = known ? known.label : raw;
   const base = word ? `${word} #${number}` : `Crate #${number}`;
   const rack = formatRackPosition(position);
-  return rack ? `${base} on rack ${rack}` : base;
+  return rack ? `${base}${CRATE_ON_RACK} ${rack}` : base;
+}
+
+/**
+ * The separator `formatCrateLocationName` folds a crate's POSITION into its
+ * name with. Exported so the one reader of that suffix (`locationNameSitsOnRack`
+ * below) cannot spell it differently from the writer — the two halves of a
+ * name-carried fact are exactly the pair that drifts.
+ */
+export const CRATE_ON_RACK = ' on rack';
+
+/**
+ * Does a `locations.name` place stock ON the rack labelled `rackLabel`?
+ *
+ * TRUE in exactly two shapes, and this is the whole reason the function exists:
+ *
+ *   • the location IS that rack           — "43-B"                  vs "43-B"
+ *   • the location is a CRATE SITTING ON IT — "Gray #BIN on rack 43-B" vs "43-B"
+ *
+ * The second shape is why a caller cannot just compare strings. Since crate
+ * identity started carrying the position (see `formatCrateLocationName`), a
+ * positioned crate's rack is INSIDE ITS NAME and nowhere else on a holding —
+ * `RackHoldingLike` carries a name, a quantity and a kind, never a rack pair.
+ * A reader that missed this would call a book in "Gray #BIN on rack 43-B" a
+ * contradiction of its own "43-B" summary and blank a row that is TRUE.
+ *
+ * Both sides are canonicalised through `parseRackLabel`/`formatRackLabel`
+ * before comparing, so a legacy rack stored "22 - B" still matches the summary
+ * "22-B" — the same tolerance `findOrCreateRackOrCrate` applies at the write
+ * boundary, for the same reason (the 2026-07-23 shape incident).
+ *
+ * NOTE — the crate arm depends on the suffix surviving in the name. It is a
+ * rename away from being lost, which is why `LocationsService.update` refuses a
+ * rename that strips it rather than leaving this function to guess.
+ */
+export function locationNameSitsOnRack(
+  locationName: string | null | undefined,
+  rackLabel: string | null | undefined,
+): boolean {
+  const canonRack = canonicalRack(rackLabel);
+  if (!canonRack) return false;
+  const name = (locationName ?? '').trim();
+  if (!name) return false;
+  if (canonicalRack(name) === canonRack) return true;
+  // lastIndexOf, not endsWith: the tail is canonicalised too, so a crate named
+  // "…on rack 43 - B" still resolves onto 43-B.
+  const idx = name.toLowerCase().lastIndexOf(`${CRATE_ON_RACK} `);
+  if (idx < 0) return false;
+  return canonicalRack(name.slice(idx + CRATE_ON_RACK.length + 1)) === canonRack;
+}
+
+/** A rack label reduced to the one spelling every comparison uses. */
+function canonicalRack(label: string | null | undefined): string {
+  return formatRackLabel(parseRackLabel(label)).trim().toLowerCase();
 }
 
 /**

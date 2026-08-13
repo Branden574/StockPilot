@@ -39,6 +39,7 @@ import {
   formatOrderNumber,
   formatPlacementLabel,
   getCrateColor,
+  holdingsContradictRack,
   legacyOrderRefId,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
@@ -1554,24 +1555,31 @@ export default function ItemDetail() {
               // WHERE THE STOCK IS vs what the item REMEMBERS. `rack_label`
               // above is the custom_fields summary; a put-away into a
               // position-less crate preserves it on purpose (mig 0335), so it
-              // can name a rack the stock has entirely left. When the holdings
-              // say so, they are printed INSTEAD — and the rack/crate summary
-              // rows are suppressed rather than shown contradicting them.
+              // can name a rack the stock has entirely left. This screen has no
+              // PlacementsBreakdown, so the live holdings get their OWN row —
+              // added information, never a replacement for the summary.
               const placement = resolvePlacement({
                 itemType: item.item_type,
                 customFields: null,
                 holdings: item.rackHoldings,
               });
-              const holdingsContradictLabel = placement.source === 'holdings';
-              if (holdingsContradictLabel) {
+              const holdingsRowShown = placement.source === 'holdings';
+              if (holdingsRowShown) {
                 rows.push({
                   label: placement.reason === 'split' ? 'SPLIT STOCK' : 'IN CRATE',
                   value: formatPlacementLabel(placement) ?? '',
                 });
               }
-              if (!holdingsContradictLabel && item.rack_label)
-                rows.push({ label: 'RACK', value: item.rack_label });
-              if (!holdingsContradictLabel && isBookView && (item.crate_color || item.crate_number)) {
+              // The RACK row stands down only when the holdings REFUTE it. The
+              // first cut suppressed it (and CRATE, and BIN) whenever the
+              // holdings were authoritative at all, which swept in every split:
+              // a book split across two racks lost every summary row it had on
+              // main. A crate summary is refuted by nothing here, so it always
+              // renders — same rule as the web card.
+              const rackStands =
+                !!item.rack_label && !holdingsContradictRack(item.rack_label, item.rackHoldings);
+              if (rackStands) rows.push({ label: 'RACK', value: item.rack_label as string });
+              if (isBookView && (item.crate_color || item.crate_number)) {
                 // Same presentation as web: "Red 5" + a color swatch (the
                 // number identifies the crate; the color is the visual aid).
                 const cc = getCrateColor(item.crate_color);
@@ -1586,12 +1594,12 @@ export default function ItemDetail() {
               if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
               // bin_location is a separate free-text field — only render it
               // when there's NO structured rack info, to avoid double labelling
-              // for the same physical spot. A rack label that the HOLDINGS have
-              // contradicted no longer counts as structured info: suppressing
-              // the fresh crate label behind a stale rack was this screen's own
-              // half of the 0335 defect.
-              const rackLabelStillStands = !holdingsContradictLabel && item.rack_label;
-              if (!rackLabelStillStands && !holdingsContradictLabel && item.bin_location) {
+              // for the same physical spot. A rack label the HOLDINGS refute no
+              // longer counts as structured info (hiding the fresh crate label
+              // behind a stale rack was this screen's own half of the 0335
+              // defect), and a holdings row already names the physical place,
+              // so bin would only repeat it.
+              if (!rackStands && !holdingsRowShown && item.bin_location) {
                 rows.push({ label: isBookView ? 'BIN' : 'RACK', value: item.bin_location });
               }
               if (rows.length === 0) return null;

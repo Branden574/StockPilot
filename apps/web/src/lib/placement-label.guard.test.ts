@@ -591,7 +591,7 @@ const SCAN_ROOTS = ['apps/web/src', 'apps/mobile/app', 'apps/mobile/src', 'packa
 
 /** Anything that reads the rack pair for display, or renders a placement. */
 const PLACEMENT_SYMBOLS =
-  'readBookStorage|readItemRack|rackLabel|resolvePlacement|formatPlacementLabel|countSheetLocationLabel';
+  'readBookStorage|readItemRack|rackLabel|resolvePlacement|holdingsContradictRack|formatPlacementLabel|countSheetLocationLabel';
 
 function scanPlacementFiles(): string[] {
   const out = execFileSync('grep', ['-rlE', String.raw`\b(${PLACEMENT_SYMBOLS})\b`, ...SCAN_ROOTS], {
@@ -608,8 +608,18 @@ function scanPlacementFiles(): string[] {
 }
 
 /**
- * COMPOSES a walk-to label. Must call `resolvePlacement` — enforced below, not
- * merely requested.
+ * COMPOSES a walk-to label, or decides whether a stored one still holds. Must
+ * reach placement-resolution.ts IN CODE — enforced below, not merely requested.
+ *
+ * REWRITTEN (reason): the module now has TWO entry points, because the two
+ * questions are genuinely different and conflating them caused a regression.
+ * `resolvePlacement` answers "where do I send a picker" for a surface with one
+ * cell; `holdingsContradictRack` answers "is this stored rack still true" for a
+ * card with room for the summary AND the live holdings. The item cards used the
+ * first as a stand-in for the second and so blanked the Rack and Crate rows of
+ * every SPLIT item — rows main always showed. The check below therefore accepts
+ * either call. What it still refuses is a file deciding for itself: the
+ * hand-rolled-crate-rule check underneath is unchanged and applies to both.
  */
 const DELEGATES_TO_RESOLVER = [
   'apps/mobile/app/(drawer)/(tabs)/books.tsx',
@@ -706,12 +716,12 @@ describe('placement-label inventory guard', () => {
     expect(scanPlacementFiles()).toEqual(known);
   });
 
-  it('every delegate really CALLS the resolver, not just mentions it', () => {
+  it('every delegate really CALLS the shared rule, not just mentions it', () => {
     for (const file of DELEGATES_TO_RESOLVER) {
       const code = stripComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
       expect(
-        /resolvePlacement\s*\(/.test(code),
-        `${file} is listed as a delegate but never calls resolvePlacement() in code. A hand-rolled precedence here is how the 0335 stale-rack bug reached eleven surfaces.`,
+        /\b(?:resolvePlacement|holdingsContradictRack)\s*\(/.test(code),
+        `${file} is listed as a delegate but never calls resolvePlacement() or holdingsContradictRack() in code. A hand-rolled precedence here is how the 0335 stale-rack bug reached eleven surfaces.`,
       ).toBe(true);
     }
   });
@@ -748,5 +758,34 @@ describe('placement-label inventory guard', () => {
 
   it('the bin-first exception is the ONLY file outside core deciding precedence', () => {
     expect(BIN_FIRST_EXCEPTION).toHaveLength(1);
+  });
+
+  it('placementPhysicalNames has a PRODUCTION caller, and it is not this guard', () => {
+    // It shipped with a doc claiming "this is what the cross-formatter guard
+    // compares" and no caller but its own unit test — a dead export whose
+    // comment described a relationship that did not exist. The guard reduces
+    // labels with its OWN dumb string reducer (`namesIn`) on purpose: every
+    // formatter under test delegates to the resolver, so comparing them against
+    // a second reader of the resolution would be the tautology this file's
+    // header warns about. The honest fix was a real caller — the books
+    // SKU-group header, which needs the names UN-JOINED to count distinct
+    // racks. Pin that, so the export cannot quietly become dead again.
+    const callers = execFileSync(
+      'grep',
+      ['-rlE', String.raw`\bplacementPhysicalNames\s*\(`, ...SCAN_ROOTS],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    )
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.includes('.test.'))
+      .filter((l) => !l.endsWith('placement-resolution.ts'))
+      .sort();
+    expect(callers).toEqual(['apps/web/src/components/inventory/inventory-table.tsx']);
+    // ...and the guard still compares with its own reducer, not with that one.
+    const self = readFileSync(
+      path.join(REPO_ROOT, 'apps/web/src/lib/placement-label.guard.test.ts'),
+      'utf8',
+    );
+    expect(/placementPhysicalNames\s*\(/.test(stripComments(self))).toBe(false);
   });
 });

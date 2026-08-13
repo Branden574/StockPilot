@@ -26,6 +26,7 @@ import {
   countingUnitLabel,
   groupBySizeRun,
   groupRollupLabel,
+  placementPhysicalNames,
   resolvePlacement,
   type CountingUnit,
   type RackHoldingLike,
@@ -2647,18 +2648,31 @@ export function bookRackLabelFor(item: {
   custom_fields?: Record<string, unknown> | null;
   placed_holdings?: RackHoldingLike[];
 }): string | null {
-  const res = resolvePlacement({
-    itemType: 'book',
-    customFields: item.custom_fields ?? null,
-    holdings: item.placed_holdings,
-  });
-  if (res.source === 'holdings') {
-    return res.holdings
-      .map((h) => h.name)
-      .sort((a, b) => a.localeCompare(b))
-      .join(', ');
-  }
-  return res.source === 'structured' ? res.rackLabel : null;
+  const names = bookRackNamesFor(item);
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+/**
+ * The same answer as `bookRackLabelFor`, UN-JOINED — one entry per physical
+ * place, sorted.
+ *
+ * The SKU-group header counts DISTINCT RACKS across the rows it collapses, and
+ * that is not the same number as distinct LABELS the moment one row is split:
+ * "39-B, 5-A" is ONE label and TWO racks. Rolling up the composed strings made
+ * the header announce "1 rack" directly above its own tooltip naming two. So
+ * the header counts these, and only joins for display.
+ */
+export function bookRackNamesFor(item: {
+  custom_fields?: Record<string, unknown> | null;
+  placed_holdings?: RackHoldingLike[];
+}): string[] {
+  return placementPhysicalNames(
+    resolvePlacement({
+      itemType: 'book',
+      customFields: item.custom_fields ?? null,
+      holdings: item.placed_holdings,
+    }),
+  );
 }
 
 function rollupText(
@@ -3039,8 +3053,13 @@ function SkuGroupHeaderRow({
           const grade = rollupText(storages.map((s) => s.grade));
           // Rolled up from the RESOLVED label, not the raw custom_fields one —
           // otherwise the collapsed header names a rack that its own expanded
-          // rows (which resolve) no longer show.
-          const rackLabels_ = items.map(bookRackLabelFor);
+          // rows (which resolve) no longer show. Kept as NAMES per row, because
+          // the count below is a count of racks and a split row carries two of
+          // them inside one label.
+          const rackNames_ = items.map(bookRackNamesFor);
+          const rackLabels_ = rackNames_.map((names) =>
+            names.length > 0 ? names.join(', ') : null,
+          );
           const rack = rollupText(rackLabels_);
           // Colour is only a visual aid attached to a crate NUMBER, so
           // both must agree before a swatch is drawn — a coloured dot for
@@ -3056,17 +3075,18 @@ function SkuGroupHeaderRow({
           // placement carries this exact colour + number.
           const crateColor = crate.kind === 'same' ? getCrateColor(storages[0]?.crateColor) : null;
           const crateNumber = crate.kind === 'same' ? (storages[0]?.crateNumber ?? '') : '';
-          // Every DISTINCT rack label present. The count below is a count
-          // of RACKS, not of placements: three placements sharing two
-          // racks is "2 racks", and printing items.length there said "3
-          // racks" while this very tooltip listed only two.
-          const rackLabels = Array.from(
-            new Set(rackLabels_.filter((l): l is string => !!l)),
-          );
+          // Every DISTINCT rack present. The count below is a count of
+          // RACKS, not of placements and not of LABELS: three placements
+          // sharing two racks is "2 racks", and printing items.length
+          // there said "3 racks" while this very tooltip listed only two.
+          // Counting the composed labels had the mirror-image fault — a
+          // single split placement's "39-B, 5-A" counted once, so the
+          // header said "1 rack" above a tooltip naming two.
+          const rackLabels = Array.from(new Set(rackNames_.flat()));
           // Placements with no rack set at all are not a rack — counting
           // them into "N racks" would send staff looking for a shelf that
           // doesn't exist, so they get their own explicit "unset" tail.
-          const rackUnset = rackLabels_.filter((l) => !l).length;
+          const rackUnset = rackNames_.filter((names) => names.length === 0).length;
           const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
             rackUnset > 0 ? ` +${rackUnset} unset` : ''
           }`;

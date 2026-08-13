@@ -25,6 +25,16 @@
  * warehouse with. So the precedence lives HERE, once, and the render sites
  * carry no precedence at all — they switch on the RESULT.
  *
+ * ONE MODULE, TWO QUESTIONS — do not use either as the other:
+ *
+ *   `resolvePlacement`       WHERE DO I SEND A PICKER, for a surface with ONE
+ *                            cell to spend. A split is authoritative here: a
+ *                            single rack name would leave stock behind.
+ *   `holdingsContradictRack` IS THIS STORED RACK STILL TRUE, for a card with
+ *                            room to show the summary AND the holdings. A
+ *                            split is NOT a contradiction; using the first as
+ *                            the second blanked true rows (see its own doc).
+ *
  * ───────────────────────────────────────────────────────────────────────────
  * THE PRECEDENCE
  * ───────────────────────────────────────────────────────────────────────────
@@ -43,6 +53,16 @@
  *           names the crate — and, when the crate has a position, its rack too
  *           ("Gray #BIN on rack 43-B", `formatCrateLocationName`) — so
  *           preferring it LOSES NOTHING and gains the truth.
+ *
+ *           STILL LOAD-BEARING AFTER 0336, but for a narrower population than
+ *           when it was written. Migration 0336 made the reconciliation DERIVE
+ *           a book's rack pair from the live holdings, so a freshly synced BOOK
+ *           row now agrees with its holdings and this rule only confirms it.
+ *           It still carries: (i) every pre-existing production row that no
+ *           future write touches, and (ii) NON-BOOKS, whose `rack_number` pair
+ *           no reconciliation reads at all — a Chromebook moved wholly into a
+ *           position-less crate keeps its old rack forever, and this rule is
+ *           the only thing standing between that value and a picker.
  *
  *      A single RACK holding falls through: the label and the holding name the
  *      same shelf, and the label is the richer render (it carries the book's
@@ -70,7 +90,7 @@
  * instead of its own. The fix for such a site is DATA, and the guard test
  * (apps/web/src/lib/placement-label.guard.test.ts) pins which sites carry it.
  */
-import { readBookStorage, readItemRack } from './book-storage';
+import { locationNameSitsOnRack, readBookStorage, readItemRack } from './book-storage';
 import { formatRackHoldings, type RackHoldingLike } from './rack-holdings';
 
 /** What an item's placement is known FROM — see the precedence above. */
@@ -161,6 +181,55 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
 }
 
 /**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * DOES THE STOCK REFUTE THIS RACK LABEL? — the SUMMARY-CARD question
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `resolvePlacement` answers "where do I send a picker", for a surface with ONE
+ * cell to spend. A DETAIL CARD is a different question: it has room for the
+ * item's stored Rack and Crate summaries AND the live holdings side by side, so
+ * it should hide a summary only when that summary is FALSE — never merely
+ * because the holdings are more precise.
+ *
+ * The distinction is not academic. The first cut of the item cards reused
+ * `resolution.source === 'holdings'` as the hide-it flag, which folded in the
+ * SPLIT arm and so blanked the Rack AND Crate rows of every book split across
+ * two racks — rows main had always shown, for stock whose label was perfectly
+ * true. It also blanked "Gray #BIN on rack 43-B", where the rack summary is
+ * exactly right.
+ *
+ * So: the rack summary is contradicted when the holdings are KNOWN and NONE of
+ * them puts stock on the labelled rack. Everything else stands.
+ *
+ *   holdings                                    label   → contradicted?
+ *   ────────────────────────────────────────────────────────────────────
+ *   []                          (unknown)       38-A    no  — absence of evidence
+ *   [Gray #BIN (crate)]         the 0335 defect 40-B    YES — stock left that rack
+ *   [Gray #BIN on rack 43-B]    positioned      43-B    no  — the crate IS on it
+ *   [39-B, 5-A]                 split, on it    39-B    no  — main showed this
+ *   [5-A, 2-C]                  split, elsewhere 39-B   YES — no stock on 39-B
+ *   [5-A]                       single, moved   39-B    YES — see below
+ *
+ * That last row is sharper than `resolvePlacement`, deliberately. The resolver
+ * lets a SINGLE rack holding fall through on the assumption that it and the
+ * label name the same shelf; here we can check instead of assume, and a card
+ * that has the holdings in hand should not print a shelf they refute.
+ *
+ * Never fires on an empty list: a caller that did not fetch holdings keeps the
+ * label, which is the same additive promise `resolvePlacement` makes.
+ */
+export function holdingsContradictRack(
+  rackLabel: string | null | undefined,
+  holdings: readonly RackHoldingLike[] | null | undefined,
+): boolean {
+  const label = (rackLabel ?? '').trim();
+  if (!label) return false;
+  const known = holdings ?? [];
+  if (known.length === 0) return false;
+  return !known.some((h) => locationNameSitsOnRack(h.name, label));
+}
+
+/**
  * The resolution as ONE line — "38-A ×8 · Blue Shelf ×4", "Rack 39-B · Crate
  * Red 5", "Blue Shelf", "DC4". The render for any surface with a single cell
  * to spend (the cycle-count sheet, the rental catalog card, a list row's
@@ -194,14 +263,26 @@ export function formatPlacementLabel(res: PlacementResolution): string | null {
 }
 
 /**
- * The WALK-TO location the resolution names, stripped of quantities and of
- * every surface's own prose ("Rack ", "Crate ", " ×12").
+ * The WALK-TO locations the resolution names, as a LIST — stripped of
+ * quantities and of every surface's own prose ("Rack ", "Crate ", " ×12").
+ * Sorted, so a caller's own ordering never reads as a difference.
  *
- * This is what the cross-formatter guard compares: two surfaces may legitimately
- * render "Rack 38-A" and "38-A" and "38-A ×12", but if one of them names 38-A
- * while another names "Blue Shelf" for the same item, one of them is walking a
- * picker to the wrong aisle. Returns the names sorted, so a formatter's own
- * ordering is not mistaken for a disagreement.
+ * WHO CALLS THIS, AND WHY A LIST RATHER THAN A LABEL
+ *
+ * The books SKU-group header (`bookRackNamesFor` in inventory-table.tsx) counts
+ * DISTINCT RACKS across the rows it collapses. It used to count distinct
+ * LABELS, which is not the same number the moment one row is split: the single
+ * string "39-B, 5-A" is one label and two racks, so the header announced
+ * "1 rack" directly above a tooltip naming two. Counting needs the names
+ * un-joined, which is what this returns and what a formatted label cannot give
+ * back without being parsed apart.
+ *
+ * NOT USED BY THE CROSS-FORMATTER GUARD, and its doc used to claim otherwise.
+ * `placement-label.guard.test.ts` reduces each rendered label with its own
+ * deliberately dumb string reducer (`namesIn`), because every formatter under
+ * test now delegates to `resolvePlacement` — comparing them against a second
+ * function that also reads the resolution would be a tautology, which is the
+ * exact failure mode that file's header warns about.
  */
 export function placementPhysicalNames(res: PlacementResolution): string[] {
   switch (res.source) {

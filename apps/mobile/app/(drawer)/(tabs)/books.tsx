@@ -90,10 +90,6 @@ interface BookRow {
    *  placement can never hide behind a healthy badge. */
   status: string;
   custom_fields: Record<string, unknown> | null;
-  /** The free-text placement label. FRESH since mig 0335 — a put-away stamps
-   *  it and nothing else, so it names the crate a book actually sits in while
-   *  `custom_fields.book_rack_*` may still name the rack it left. */
-  bin_location: string | null;
   category_id: string | null;
   primary_location_id: string | null;
   charter_id: string | null;
@@ -140,7 +136,6 @@ function toBookRow(row: unknown): BookRow {
     reorder_point: Number(r.reorder_point) || 0,
     status: (r.status as string | null) ?? 'active',
     custom_fields: cf,
-    bin_location: (r.bin_location as string | null) ?? null,
     category_id: (r.category_id as string | null) ?? null,
     primary_location_id: (r.primary_location_id as string | null) ?? null,
     charter_id: (r.charter_id as string | null) ?? null,
@@ -156,8 +151,8 @@ function toBookRow(row: unknown): BookRow {
  *  renders (plus the fields the collapsed header rolls up), because this read
  *  now returns the whole filtered set rather than a 50-row window. */
 const BOOK_COLUMNS = `id, name, sku, barcode, quantity_on_hand, reorder_point, status, custom_fields,
-           bin_location, category_id, primary_location_id, charter_id, warehouse_id, updated_at,
-           auto_archived, awaiting_first_receipt`;
+           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           awaiting_first_receipt`;
 
 export default function BooksScreen() {
   const router = useRouter();
@@ -525,17 +520,23 @@ export default function BooksScreen() {
   // physically walk to; charter and site are the fallbacks.
   //
   // The rack pair used to be read inline here — a fourth hand-rolled copy of
-  // readBookStorage, and one that consulted neither the holdings nor
-  // bin_location. It therefore printed rack 38-A for a book whose stock had
-  // moved entirely into "Blue Shelf". The decision is now resolvePlacement's;
-  // this callback only picks the compact rendering the narrow card has room
-  // for (bare "38-A", not "Rack 38-A · Crate Red 5").
+  // readBookStorage, and one that did not consult the holdings. It therefore
+  // printed rack 38-A for a book whose stock had moved entirely into "Blue
+  // Shelf". The decision is now resolvePlacement's; this callback only picks
+  // the compact rendering the narrow card has room for (bare "38-A", not
+  // "Rack 38-A · Crate Red 5").
+  //
+  // `bin_location` is deliberately NOT fed in. It would rank ahead of charter
+  // and site for a row with no holdings and no rack pair, which is a different
+  // set of books from the ones this fix is about — and a pre-0335 free-text bin
+  // is exactly as capable of being stale as the rack pair was, so promoting it
+  // there trades one stale label for another. The card's fallback order stays
+  // rack, then charter, then site.
   const placementLabelFor = React.useCallback(
     (b: BookRow): string | null => {
       const res = resolvePlacement({
         itemType: 'book',
         customFields: b.custom_fields,
-        binLocation: b.bin_location,
         holdings: holdings.get(b.id),
       });
       const charter = b.charter_id ? charterMap.get(b.charter_id) ?? null : null;
@@ -545,8 +546,6 @@ export default function BooksScreen() {
           return formatPlacementLabel(res);
         case 'structured':
           return res.rackLabel ?? charter ?? loc;
-        case 'bin':
-          return res.binLocation;
         default:
           return charter ?? loc;
       }
