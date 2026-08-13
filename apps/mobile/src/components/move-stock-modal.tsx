@@ -16,10 +16,12 @@ import { Display, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
 import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
-  bookCrateAlertMessage,
   bookCrateRefusal,
+  bookRackRefusal,
   crateSyncWarning,
   decideNewRackPlacement,
+  placementRefusalAlert,
+  rackAcknowledgementField,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
@@ -35,8 +37,11 @@ import {
 import { transferStock, type NewRack } from '@/lib/stock-api';
 import {
   bookCrateAcknowledgementsMatch,
+  bookRackAcknowledgementsMatch,
   toBookCrateAcknowledgement,
+  toBookRackAcknowledgement,
   type BookCrateAcknowledgedChange,
+  type BookRackAcknowledgedChange,
 } from '@stockpilot/core';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
@@ -352,7 +357,10 @@ export function MoveStockModal({
   // its "Use 10-A instead" alternatives share ONE permission-checked path.
   async function performMove(
     destination: { newRack: NewRack } | { toLocationId: string },
-    opts: { acknowledged?: BookCrateAcknowledgedChange[] } = {},
+    opts: {
+      acknowledged?: BookCrateAcknowledgedChange[];
+      acknowledgedRacks?: BookRackAcknowledgedChange[];
+    } = {},
   ) {
     setSubmitting(true);
     setError(null);
@@ -365,6 +373,19 @@ export function MoveStockModal({
         ...(opts.acknowledged && opts.acknowledged.length > 0
           ? { acknowledgedCrateChanges: opts.acknowledged }
           : {}),
+        // NOT spread conditionally like the crate list above — the asymmetry is
+        // deliberate and the rule lives in `rackAcknowledgementField`, where a
+        // test can see it. The key is sent on EVERY request, even empty, because
+        // its presence is how this sheet declares it can be asked a rack
+        // question at all; an absent key makes the route take the fail-safe path
+        // (keep the rack, report crateSyncRackPreserved) on every single move.
+        //
+        // The empty first request is not a weak acknowledgement: this sheet
+        // holds a render-time snapshot and no live holdings, so it can never
+        // tell a full move (which clears the rack pair) from a split (which does
+        // not). It must be TOLD of an erasure by the only reader that knows and
+        // then echo that reading back — never predict one and pre-acknowledge it.
+        ...rackAcknowledgementField(opts.acknowledgedRacks),
       });
       // The stock moved. This says whether the book's CRATE LABEL followed it —
       // silence would make a move that relabelled nothing look identical to one
@@ -384,16 +405,36 @@ export function MoveStockModal({
       // never from anything this screen remembered. Asked at most once more: a
       // refusal that survives an acknowledgement matching the server's own
       // labels is a real error, not a staleness loop.
+      //
+      // TWO QUESTIONS, ONE PAYLOAD, ONE ALERT. The crate half and the rack half
+      // are separately fingerprinted and can arrive together or alone — a
+      // rack-ONLY refusal is the reported defect's own case, where the crate is
+      // identical and a hand-typed rack would be erased anyway. A refusal saying
+      // ANYTHING the last answer did not cover is re-asked; one that only
+      // repeats what was already answered falls through to the plain error
+      // rather than looping.
       const detail = bookCrateRefusal(e);
-      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
-      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+      const rackDetail = bookRackRefusal(e);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : [];
+      const freshRacks = rackDetail ? toBookRackAcknowledgement(rackDetail.items) : [];
+      const unanswered =
+        !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh) ||
+        !bookRackAcknowledgementsMatch(opts.acknowledgedRacks, freshRacks);
+      const ask = placementRefusalAlert({ crate: detail, rack: rackDetail });
+      if (ask && unanswered) {
         // No inline error: this is a QUESTION, not a failure. `finally` clears
         // the in-flight flag, so the sheet is interactive behind the Alert.
-        Alert.alert("Change this book's crate?", bookCrateAlertMessage(detail), [
+        Alert.alert(ask.title, ask.message, [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Continue',
-            onPress: () => void performMove(destination, { acknowledged: fresh }),
+            // BOTH answers go back, and both are built from the SERVER's payload
+            // — never from anything this screen remembered.
+            onPress: () =>
+              void performMove(destination, {
+                acknowledged: fresh,
+                acknowledgedRacks: freshRacks,
+              }),
           },
         ]);
         return;

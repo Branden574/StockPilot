@@ -6,8 +6,11 @@ import { describe, expect, it } from 'vitest';
 import {
   bookCrateAlertMessage,
   bookCrateRefusal,
+  bookRackRefusal,
+  rackAcknowledgementField,
   crateSyncWarning,
   decideNewRackPlacement,
+  placementRefusalAlert,
   initialMoveQuantity,
   initialMoveQuantityForSource,
   moveDestinationChoices,
@@ -24,6 +27,7 @@ import {
 // into the node environment. `typeof` on a type-only import is the whole point:
 // the write-off sheet can only branch on what this function RETURNS.
 import type { removeStockFromLocation } from './stock-api';
+import type { BookCrateChangeDetail, BookRackChangeDetail } from '@stockpilot/core';
 
 type WriteOffBody = Awaited<ReturnType<typeof removeStockFromLocation>>;
 
@@ -688,10 +692,87 @@ describe('crateSyncWarning — a move that succeeded is never silent about the l
           crateSyncUnplaced: false,
           crateSyncStale: false,
           crateSyncSkipped: false,
+          crateSyncRackPreserved: false,
         },
         BOOK,
       ),
     ).toBeNull();
+  });
+
+  // ═══ crateSyncRackPreserved — the OTHER label, kept because nobody was asked ═══
+  //
+  // THE GAP THIS CLOSES: the route has emitted this flag on all four write paths
+  // since the rack channel shipped, and both web dialogs render it. The phone
+  // had no branch for it at all, so a move that left a hand-typed rack label
+  // pointing at a rack the stock has left reported a bare "Moved" — the exact
+  // failure class the whole feature exists to eliminate, arriving on the one
+  // surface that could not answer the question either.
+  it('says the RACK label was kept and may now be wrong', () => {
+    expect(
+      crateSyncWarning({ toLocationId: 'c-blue-shelf', crateSyncRackPreserved: true }, BOOK),
+    ).toEqual({
+      title: 'Moved — rack label may now be wrong',
+      message:
+        'The Outsiders was moved, but its rack label was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.',
+    });
+  });
+
+  it('distinguishes the RACK label being kept from the CRATE label being kept', () => {
+    // Two different labels, two different causes, two different repairs. If
+    // these ever collapse to one sentence the operator is sent to check the
+    // wrong field: `skipped` means the stock is split, `rackPreserved` means an
+    // erasure was withheld for want of an answer.
+    const preserved = crateSyncWarning({ crateSyncRackPreserved: true }, BOOK)!;
+    const skipped = crateSyncWarning({ crateSyncSkipped: true }, BOOK)!;
+    expect(preserved.title).not.toBe(skipped.title);
+    expect(preserved.message).not.toBe(skipped.message);
+    expect(preserved.message).toContain('rack label');
+    expect(skipped.message).toContain('crate label');
+  });
+
+  it('interpolates the book into the rack sentence too', () => {
+    expect(crateSyncWarning({ crateSyncRackPreserved: true }, 'Persepolis')?.message).toBe(
+      'Persepolis was moved, but its rack label was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.',
+    );
+  });
+
+  it('lets a crate outcome outrank the preserved rack, and never the reverse', () => {
+    // `rackPreservedItemIds ⊆ syncedItemIds` server-side, so for the single-item
+    // body this sheet always sends the case is disjoint outright. In a batch it
+    // is not, and the crate outcome is the more specific thing to say.
+    expect(
+      crateSyncWarning({ crateSyncSkipped: true, crateSyncRackPreserved: true }, BOOK)?.title,
+    ).toBe('Moved — crate label left unchanged');
+    expect(
+      crateSyncWarning({ crateSyncFailed: true, crateSyncRackPreserved: true }, BOOK)?.title,
+    ).toBe('Moved, but the crate label did not update');
+    // …but alone it must still speak. An else-if chain that swallowed it here
+    // would be indistinguishable from the gap this closes.
+    expect(crateSyncWarning({ crateSyncRackPreserved: true }, BOOK)).not.toBeNull();
+  });
+
+  it('leaves NO flag the transfer route can emit without a sentence', () => {
+    // THE MATRIX PIN. A flag no client surfaces is a silent failure by
+    // construction, and this feature has shipped that shape more than once. The
+    // list is exactly what apps/web/src/app/api/v1/items/[id]/transfer/route.ts
+    // spreads onto its 2xx body; every one of them must produce something the
+    // operator can read.
+    const emitted = [
+      'crateSyncFailed',
+      'crateSyncSkipped',
+      'crateSyncStale',
+      'crateSyncUnplaced',
+      'crateSyncRackPreserved',
+    ] as const;
+    for (const flag of emitted) {
+      const said = crateSyncWarning({ [flag]: true }, BOOK);
+      expect(said, `${flag} is emitted by the transfer route but says nothing`).not.toBeNull();
+      expect(said!.title.length, `${flag} has an empty title`).toBeGreaterThan(0);
+      expect(said!.message, `${flag} does not name the book`).toContain(BOOK);
+    }
+    // …and every sentence is distinct, so no two outcomes read the same.
+    const titles = emitted.map((f) => crateSyncWarning({ [f]: true }, BOOK)!.title);
+    expect(new Set(titles).size).toBe(emitted.length);
   });
 });
 
@@ -958,5 +1039,236 @@ describe('bookCrateRefusal', () => {
       },
     });
     expect(bookCrateRefusal(err)).toBeNull();
+  });
+});
+
+// ── THE PHONE COULD NOT ASK THE RACK QUESTION AT ALL ─────────────────────────
+//
+// `grep -rn acknowledgedRackChanges apps/mobile/src` returned ZERO hits: the
+// native sheet never sent the rack acknowledgement, so the route read every
+// request as "this caller cannot answer" and took the fail-safe path — keep the
+// rack, report crateSyncRackPreserved — on EVERY move. No data was lost (the
+// server preserves rather than erases), but the operator was never once offered
+// the choice, and until the branch above existed was never even told.
+//
+// These pin the two halves the sheet needs to ask: recognising the rack payload
+// on the error, and turning it into ONE Alert.
+
+describe('bookRackRefusal', () => {
+  const rackItem = {
+    itemId: 'i1',
+    itemName: 'The Catcher in the Rye',
+    currentLabel: '38-A',
+    line: 'Rack 38-A will be cleared.',
+    currentFingerprint: '["38","a"]',
+  };
+
+  it('recognises a RACK-ONLY refusal — the reported defect\'s own case', () => {
+    // Crate "Blue Shelf" into the position-less crate ('blue','Shelf') is the
+    // SAME crate, so the crate half is silent and `parseBookCrateChangeDetail`
+    // yields nothing. A client that only parses the crate half reads this as
+    // "no question here" while a hand-typed rack dies underneath it.
+    const err = Object.assign(new Error('nope'), {
+      details: { reason: 'BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION', rackItems: [rackItem] },
+    });
+    expect(bookCrateRefusal(err)).toBeNull();
+    expect(bookRackRefusal(err)?.items).toEqual([rackItem]);
+  });
+
+  it('reads rackItems out of a payload that names the CRATE reason', () => {
+    // One placement can raise both halves, and the server then sends ONE payload
+    // keeping the crate reason so every already-shipped client parses it exactly
+    // as it always did. Keying off `reason` alone would drop the rack half of
+    // every combined refusal.
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'The Catcher in the Rye',
+            currentLabel: 'Orange 13',
+            nextLabel: 'Blue Shelf',
+            currentFingerprint: '["orange","13"]',
+          },
+        ],
+        rackItems: [rackItem],
+      },
+    });
+    expect(bookRackRefusal(err)?.items).toEqual([rackItem]);
+  });
+
+  it('returns null for an ordinary error and for a crate-only payload', () => {
+    expect(bookRackRefusal(new Error('Insufficient stock'))).toBeNull();
+    expect(bookRackRefusal(null)).toBeNull();
+    expect(
+      bookRackRefusal(
+        Object.assign(new Error('nope'), {
+          details: {
+            reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+            items: [
+              {
+                itemId: 'i1',
+                itemName: 'Persepolis',
+                currentLabel: 'Blue 4',
+                nextLabel: 'Green 2',
+                currentFingerprint: '["blue","4"]',
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects a rack line that cannot be acknowledged', () => {
+    // No fingerprint means Continue would send an acknowledgement matching
+    // nothing and be refused forever. Falling back to the plain error is honest.
+    const err = Object.assign(new Error('nope'), {
+      details: {
+        reason: 'BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION',
+        rackItems: [{ ...rackItem, currentFingerprint: undefined }],
+      },
+    });
+    expect(bookRackRefusal(err)).toBeNull();
+  });
+});
+
+describe('placementRefusalAlert — one Alert, however many questions', () => {
+  const crateOnly: BookCrateChangeDetail = {
+    reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+    items: [
+      {
+        itemId: 'i1',
+        itemName: 'Persepolis',
+        currentLabel: 'Blue 4',
+        nextLabel: 'Green 2',
+        currentFingerprint: '["blue","4"]',
+      },
+    ],
+  };
+
+  const rackOnly: BookRackChangeDetail = {
+    reason: 'BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION',
+    items: [
+      {
+        itemId: 'i1',
+        itemName: 'The Catcher in the Rye',
+        currentLabel: '38-A',
+        line: 'Rack 38-A will be cleared.',
+        currentFingerprint: '["38","a"]',
+      },
+    ],
+  };
+
+  it('has nothing to say when neither half is present', () => {
+    expect(placementRefusalAlert({ crate: null, rack: null })).toBeNull();
+  });
+
+  it('asks about the CRATE when the crate is what changes', () => {
+    expect(placementRefusalAlert({ crate: crateOnly, rack: null })).toEqual({
+      title: "Change this book's crate?",
+      message: 'Persepolis is recorded in Blue 4 — this move records it in Green 2.',
+    });
+  });
+
+  it('asks about the RACK, and does not claim the crate is changing', () => {
+    // The title is the whole point of the rack-only case: the crate is
+    // IDENTICAL, so "Change this book's crate?" names a change that is not
+    // happening and an operator who understood it would still tap Continue.
+    const ask = placementRefusalAlert({ crate: null, rack: rackOnly })!;
+    expect(ask).toEqual({
+      title: "Clear this book's rack?",
+      message: 'Rack 38-A will be cleared.',
+    });
+    expect(ask.title).not.toContain('crate');
+  });
+
+  it('says the rack sentence ONCE when it arrives by both routes', () => {
+    // `describeRackChange` composes both, so the disclosure riding on the crate
+    // line and the answerable rack line are the SAME string. Printed twice in
+    // one Alert, an operator learns to skim the loudest sentence in it.
+    const both = placementRefusalAlert({
+      crate: {
+        reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
+        items: [
+          {
+            itemId: 'i1',
+            itemName: 'The Catcher in the Rye',
+            currentLabel: 'Orange 13',
+            nextLabel: 'Blue Shelf',
+            currentFingerprint: '["orange","13"]',
+            rackLine: 'Rack 38-A will be cleared.',
+          },
+        ],
+      },
+      rack: rackOnly,
+    })!;
+    expect(both.title).toBe("Change this book's crate?");
+    expect(both.message).toBe(
+      'The Catcher in the Rye is recorded in Orange 13 — this move records it in Blue Shelf. Rack 38-A will be cleared.',
+    );
+    expect(both.message.split('Rack 38-A will be cleared.').length - 1).toBe(1);
+  });
+
+  it('still says a rack sentence the crate half did NOT disclose', () => {
+    // Dedupe may only remove a sentence this Alert is provably already showing.
+    // A filter that dropped the rack lines whenever a crate half existed would
+    // pass the test above and silently delete the question here.
+    const both = placementRefusalAlert({ crate: crateOnly, rack: rackOnly })!;
+    expect(both.message).toBe(
+      'Persepolis is recorded in Blue 4 — this move records it in Green 2.\nRack 38-A will be cleared.',
+    );
+  });
+
+  it('collapses one rack losing many books into a single sentence', () => {
+    // 200 books off rack 38-A into one position-less crate share one sentence.
+    // Repeated 200 times in a native Alert it buries every line that differs.
+    const many: BookRackChangeDetail = {
+      reason: 'BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION',
+      items: [
+        { itemId: 'a', itemName: 'A', currentLabel: '38-A', line: 'Rack 38-A will be cleared.', currentFingerprint: '["38","a"]' },
+        { itemId: 'b', itemName: 'B', currentLabel: '38-A', line: 'Rack 38-A will be cleared.', currentFingerprint: '["38","a"]' },
+        { itemId: 'c', itemName: 'C', currentLabel: '22-B', line: 'Rack 22-B will be cleared.', currentFingerprint: '["22","b"]' },
+      ],
+    };
+    const ask = placementRefusalAlert({ crate: null, rack: many })!;
+    expect(ask.message).toBe('Rack 38-A will be cleared.\nRack 22-B will be cleared.');
+  });
+});
+
+describe('rackAcknowledgementField — presence IS the capability declaration', () => {
+  it('sends the key on a first request that acknowledges nothing', () => {
+    // THE BUG THIS CLOSES. `grep -rn acknowledgedRackChanges apps/mobile/src`
+    // returned nothing, so every request the phone made looked to the route like
+    // a caller that could not answer — and the route then preserved the rack and
+    // never asked. `[]` and absent are DIFFERENT MESSAGES on this wire.
+    const body = rackAcknowledgementField();
+    expect(Object.hasOwn(body, 'acknowledgedRackChanges')).toBe(true);
+    expect(body.acknowledgedRackChanges).toEqual([]);
+  });
+
+  it('sends the key for every falsy input a caller can produce', () => {
+    // `undefined` is the first attempt, `null` a caller clearing it, `[]` an
+    // explicit nothing. None of the three may drop the key: an object spread of
+    // `{}` is exactly the shape that made the phone unaskable.
+    for (const input of [undefined, null, []] as const) {
+      expect(Object.hasOwn(rackAcknowledgementField(input), 'acknowledgedRackChanges')).toBe(true);
+    }
+  });
+
+  it('carries the acknowledgement through on the retry', () => {
+    // The Continue tap must send back exactly what the SERVER named, or the
+    // second attempt is refused for the same reason as the first and the
+    // operator sits in a loop they answered correctly.
+    const ack = [{ itemId: 'i1', currentFingerprint: '["38","a"]' }];
+    expect(rackAcknowledgementField(ack).acknowledgedRackChanges).toEqual(ack);
+  });
+
+  it('copies rather than aliasing the caller\'s array', () => {
+    // The body outlives the call; a shared reference lets a later render mutate
+    // an acknowledgement already in flight.
+    const ack = [{ itemId: 'i1', currentFingerprint: '["38","a"]' }];
+    expect(rackAcknowledgementField(ack).acknowledgedRackChanges).not.toBe(ack);
   });
 });

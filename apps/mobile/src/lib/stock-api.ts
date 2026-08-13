@@ -45,7 +45,30 @@ export interface TransferStockBody {
    * Never a blanket flag — a fingerprint that no longer matches the row is not
    * an acknowledgement of the change the server found.
    */
-  acknowledgedCrateChanges?: Array<{ itemId: string; currentFingerprint: string }>;
+  acknowledgedCrateChanges?: { itemId: string; currentFingerprint: string }[];
+  /**
+   * The answer to the RACK half of that same confirmation — the same scoped
+   * shape, fingerprinted over the RACK pair rather than the crate pair — and,
+   * by its PRESENCE ALONE, this client's declaration that it can be asked a
+   * rack question at all.
+   *
+   * ═══ SEND IT ON EVERY REQUEST, EVEN EMPTY ═══
+   *
+   * The route reads an ABSENT list as "this caller cannot answer", and then
+   * succeeds while PRESERVING the recorded rack instead of refusing — reported
+   * as `crateSyncRackPreserved`. That fail-safe is exactly right for the shipped
+   * OTA, which has no rack channel and could not answer a refusal it has no way
+   * to render. It is exactly WRONG for a sheet that can ask: omitting the key
+   * would take the fail-safe path on every single move, so the operator would
+   * never be offered the choice and every rack-clearing put-away would leave a
+   * label nobody agreed to keep.
+   *
+   * `[]` and absent are therefore DIFFERENT MESSAGES, not two spellings of
+   * "nothing acknowledged". Empty on the first request is the correct and only
+   * honest opening: this sheet holds no live holdings, so it can never predict
+   * an erasure — it can only be told of one and then echo it back.
+   */
+  acknowledgedRackChanges?: { itemId: string; currentFingerprint: string }[];
 }
 
 /** What the transfer route reports back about the book's crate LABEL. The stock
@@ -58,6 +81,19 @@ export interface TransferStockResult {
   /** No placed holding left after the move, so the summary had nothing to
    *  follow and was left alone — it may now name a crate holding none of it. */
   crateSyncUnplaced?: boolean;
+  /**
+   * The stock moved and the crate label followed it, but the RACK label was
+   * deliberately LEFT AS IT WAS rather than erased, because nobody was shown
+   * the erasure — an acknowledgement that did not cover it, or a rack outcome
+   * the gate could not predict in time to ask about.
+   *
+   * The label may now name a rack this stock has left, so the sheet MUST say
+   * so. Keeping a stale label is only the safer choice because it is
+   * recoverable, and it is recoverable only if somebody hears about it; a
+   * preserved rack reported as a bare success is the same silence as an erased
+   * one, minus the audit row.
+   */
+  crateSyncRackPreserved?: boolean;
 }
 
 /**

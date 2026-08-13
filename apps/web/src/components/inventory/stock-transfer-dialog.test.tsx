@@ -6,13 +6,19 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
-const { mockTransferStockAction } = vi.hoisted(() => ({
+const { mockTransferStockAction, mockToast } = vi.hoisted(() => ({
   mockTransferStockAction: vi.fn(),
+  // Mocked so the crate/rack SUCCESS warnings can be asserted. Without this the
+  // real sonner swallows them and a dialog that says nothing looks identical to
+  // one that says the right thing — which is exactly how crateSyncRackPreserved
+  // went unrendered here.
+  mockToast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
 vi.mock('@/server/actions/inventory', () => ({
   transferStockAction: mockTransferStockAction,
 }));
+vi.mock('sonner', () => ({ toast: mockToast }));
 
 import { StockTransferDialog } from './stock-transfer-dialog';
 
@@ -361,6 +367,96 @@ describe('StockTransferDialog — the crate confirmation', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('recorded in Blue 4');
     expect(screen.queryByRole('button', { name: /continue transfer/i })).not.toBeInTheDocument();
+  });
+
+  // ═══ THE RACK HALF — its own question, its own acknowledgement ═══
+  //
+  // THE ORPHAN THIS CLOSES: `transferStockAction` has emitted
+  // `crateSyncRackPreserved` since the rack channel shipped, and this dialog was
+  // the one client of that action which neither sent `acknowledgedRackChanges`
+  // nor rendered the flag. So every rack-clearing transfer here took the
+  // fail-safe path — rack kept, nobody asked — and reported a bare success. No
+  // data was lost; the operator was simply never told the label had gone stale,
+  // which is the failure class this whole feature exists to eliminate.
+
+  const RACK_REFUSAL = {
+    ok: false,
+    error: {
+      code: 'conflict',
+      message: 'Persepolis records rack 38-A. Rack 38-A will be cleared.',
+      details: {
+        reason: 'BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION',
+        rackItems: [
+          {
+            itemId: 'item-1',
+            itemName: 'Persepolis',
+            currentLabel: '38-A',
+            line: 'Rack 38-A will be cleared.',
+            currentFingerprint: '["38","a"]',
+          },
+        ],
+      },
+    },
+  };
+
+  it('declares it can answer a rack question on the FIRST request, even with nothing to say', async () => {
+    // `[]` and absent are DIFFERENT MESSAGES: the action reads an absent key as
+    // "this caller cannot answer" and then preserves the rack instead of asking.
+    // Spread conditionally the way the crate list is, this dialog would opt
+    // itself out of the question on the one request that decides the erasure.
+    mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'loc-b' } });
+    const user = userEvent.setup();
+    renderBookDialog();
+    await submitToExistingRack(user);
+
+    const body = mockTransferStockAction.mock.calls[0]![0];
+    expect(Object.hasOwn(body, 'acknowledgedRackChanges')).toBe(true);
+    expect(body.acknowledgedRackChanges).toEqual([]);
+    // …and the crate list keeps the opposite rule: an empty answer is no answer.
+    expect(body).not.toHaveProperty('acknowledgedCrateChanges');
+  });
+
+  it('asks about the RACK without claiming the crate is changing', async () => {
+    // The reported defect: crate "Blue Shelf" into ('blue','Shelf') is the SAME
+    // crate, so the crate gate is silent and only the rack question is live.
+    // "Change this book's crate?" would name a change that is not happening.
+    mockTransferStockAction
+      .mockResolvedValueOnce(RACK_REFUSAL)
+      .mockResolvedValueOnce({ ok: true, data: { toLocationId: 'loc-b' } });
+    const user = userEvent.setup();
+    renderBookDialog();
+    await submitToExistingRack(user);
+
+    expect(await screen.findByText('Clear this book’s rack?')).toBeInTheDocument();
+    expect(screen.queryByText('Change this book’s crate?')).not.toBeInTheDocument();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Rack 38-A will be cleared.');
+
+    await user.click(screen.getByRole('button', { name: /continue transfer/i }));
+
+    expect(mockTransferStockAction).toHaveBeenCalledTimes(2);
+    // The retry acknowledges EXACTLY the erasure that was displayed, over the
+    // RACK pair — never the crate fingerprint, and never a blanket yes.
+    expect(mockTransferStockAction.mock.calls[1]![0]).toMatchObject({
+      acknowledgedRackChanges: [{ itemId: 'item-1', currentFingerprint: '["38","a"]' }],
+    });
+  });
+
+  it('says so when the rack label was PRESERVED rather than erased', async () => {
+    // The flag with no client. The stock moved and the crate label followed it;
+    // the rack label was kept because nobody was shown the erasure, so it may
+    // now name a rack this stock has left. Keeping it is only the safe choice
+    // because it is recoverable — and it is recoverable only if this fires.
+    mockTransferStockAction.mockResolvedValueOnce({
+      ok: true,
+      data: { toLocationId: 'loc-b', crateSyncRackPreserved: true },
+    });
+    const user = userEvent.setup();
+    renderBookDialog();
+    await submitToExistingRack(user);
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Persepolis was moved, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.',
+    );
   });
 
   it('a CREATION confirmation never answers a crate question nobody asked', async () => {

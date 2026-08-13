@@ -40,8 +40,12 @@
 import {
   describeNewRackPlacement,
   parseBookCrateChangeDetail,
+  parseBookRackChangeDetail,
   planNewLocation,
+  summarizeBookRackClears,
   type BookCrateChangeDetail,
+  type BookRackAcknowledgedChange,
+  type BookRackChangeDetail,
   type NewRackPlacementDecision,
 } from '@stockpilot/core';
 
@@ -356,6 +360,117 @@ export function bookCrateAlertMessage(detail: BookCrateChangeDetail): string {
     .join('\n');
 }
 
+/**
+ * Pull the RACK half of a confirmation payload out of the same API error.
+ *
+ * A SECOND, INDEPENDENTLY-FINGERPRINTED QUESTION, not a field on the crate one.
+ * The defect that created this channel is precisely the case where the crate
+ * does NOT change — crate "Blue Shelf" placed into the position-less crate
+ * ('blue','Shelf') normalises to the identical pair — so the crate gate is right
+ * to stay silent while a hand-typed rack 38-A is erased underneath it. A client
+ * that only ever parses the crate half reads that payload as "no question here"
+ * and cannot answer the one thing being asked.
+ *
+ * Reads `rackItems` whatever the `reason` says, because one placement can raise
+ * both halves and the server sends ONE payload naming the CRATE reason whenever
+ * there is at least one crate line. `parseBookRackChangeDetail` owns that rule.
+ */
+export function bookRackRefusal(e: unknown): BookRackChangeDetail | null {
+  if (!e || typeof e !== 'object') return null;
+  return parseBookRackChangeDetail((e as { details?: unknown }).details);
+}
+
+/**
+ * The `acknowledgedRackChanges` field of a transfer body — ALWAYS PRESENT, even
+ * when there is nothing to acknowledge. That absence/emptiness distinction is
+ * the entire mechanism, not a formatting detail, which is why it is a function
+ * with a test rather than a spread inside a component.
+ *
+ * ═══ WHY THIS ONE IS NOT SPREAD CONDITIONALLY LIKE THE CRATE LIST ═══
+ *
+ * `acknowledgedCrateChanges` carries an ANSWER and nothing else, so an empty
+ * answer is the same as no answer and is correctly left out.
+ *
+ * This field carries an answer AND, by its mere PRESENCE, the client's
+ * declaration that it can be asked a rack question at all. The route reads an
+ * ABSENT key as "this caller cannot answer" and then succeeds while PRESERVING
+ * the recorded rack instead of refusing, reporting `crateSyncRackPreserved`.
+ * That fail-safe is right for the shipped OTA, which has no rack channel and
+ * could not render a refusal it has no way to answer.
+ *
+ * Spread conditionally, the sheet would therefore opt ITSELF OUT of the question
+ * on the FIRST request of every move — the one request that matters, because it
+ * is the one the erasure is decided on. The operator would never be offered the
+ * choice and nothing would look broken. That was the shipped behaviour.
+ *
+ * A source grep of the modal cannot tell a key that is absent from one that is
+ * present and empty, and this harness cannot render the modal. So the rule lives
+ * here, where deleting it fails a test.
+ */
+export function rackAcknowledgementField(
+  acknowledgedRacks?: readonly BookRackAcknowledgedChange[] | null,
+): { acknowledgedRackChanges: BookRackAcknowledgedChange[] } {
+  return { acknowledgedRackChanges: [...(acknowledgedRacks ?? [])] };
+}
+
+/** A native Alert's two strings for a refusal the operator can answer. */
+export interface PlacementRefusalAlert {
+  title: string;
+  message: string;
+}
+
+/**
+ * ONE Alert for a refusal, however many halves it has.
+ *
+ * A native Alert is a single title and a single body, and two Alerts in a row
+ * are two near-identical modals where the second arrives after the operator has
+ * already committed to the first — which trains people to tap through the one
+ * that matters. Web solves this with one dialog rendering both panels
+ * (placement-confirm-dialog.tsx); the phone joins the sentences instead.
+ *
+ * ═══ THE TITLE NAMES THE CHANGE THAT IS ACTUALLY HAPPENING ═══
+ *
+ * A rack-ONLY refusal is the reported defect's own case: the crate is IDENTICAL,
+ * so "Change this book's crate?" would name a change that is not happening and
+ * the operator would reasonably tap Continue believing they had understood it.
+ * Same rule web applies, same two titles.
+ *
+ * ═══ THE RACK SENTENCE IS SAID EXACTLY ONCE ═══
+ *
+ * One rack sentence can arrive by two routes here and they are DELIBERATELY the
+ * same string — `describeRackChange` composes both: as DISCLOSURE riding on a
+ * crate line (`items[].rackLine`, already inside `bookCrateAlertMessage`), and
+ * as the answerable QUESTION on a rack line (`rackItems[].line`). A placement
+ * that changes the crate AND erases the rack produces both at once, so the
+ * rack lines already present in the crate body are dropped rather than repeated:
+ * an operator who reads "Rack 38-A will be cleared." twice in one Alert learns
+ * to skim it. Deduped by `summarizeBookRackClears` first, so 200 books coming
+ * off one rack contribute one sentence and never 200.
+ *
+ * Returns null when there is nothing answerable — the caller then falls through
+ * to the plain error, which is the honest outcome for a payload this client
+ * cannot turn into a question.
+ */
+export function placementRefusalAlert(input: {
+  crate: BookCrateChangeDetail | null;
+  rack: BookRackChangeDetail | null;
+}): PlacementRefusalAlert | null {
+  const { crate, rack } = input;
+  if (!crate && !rack) return null;
+  const crateBody = crate ? bookCrateAlertMessage(crate) : '';
+  const rackLines = rack ? summarizeBookRackClears(rack.items).lines : [];
+  // Only a sentence this Alert is provably already showing is dropped. No
+  // match, no change — this can shorten the body and can never delete the
+  // question.
+  const unsaid = rackLines.filter((line) => !crateBody.includes(line));
+  const message = [crateBody, ...unsaid].filter((s) => s.length > 0).join('\n');
+  if (!message) return null;
+  return {
+    title: crate ? "Change this book's crate?" : "Clear this book's rack?",
+    message,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The SILENT SUCCESSES, on the phone.
 //
@@ -393,11 +508,20 @@ interface CrateSyncFlags {
   crateSyncUnplaced?: boolean;
   crateSyncStale?: boolean;
   crateSyncSkipped?: boolean;
+  /** The RACK label was kept rather than erased, because nobody was shown the
+   *  erasure. The crate half is unaffected — this is the other label. */
+  crateSyncRackPreserved?: boolean;
   crateSyncUpdated?: boolean;
 }
 
 /** Which single outcome is worth speaking about. */
-type CrateSyncBucket = 'failed' | 'unplaced' | 'stale' | 'skipped' | 'updated';
+type CrateSyncBucket =
+  | 'failed'
+  | 'unplaced'
+  | 'stale'
+  | 'skipped'
+  | 'rackPreserved'
+  | 'updated';
 
 /**
  * THE PRECEDENCE — one chain, shared by every surface that reports a crate
@@ -409,21 +533,31 @@ type CrateSyncBucket = 'failed' | 'unplaced' | 'stale' | 'skipped' | 'updated';
  * down to "the label is merely unchanged, on purpose", with the write we DID
  * perform last:
  *
- *   1. failed   — the write itself errored. The most actionable, so it wins.
- *   2. unplaced — nothing is left in a rack or crate for the label to follow.
- *   3. stale    — someone else re-recorded the crate mid-write; theirs stands.
- *   4. skipped  — stock now sits in several places, so there is no one crate.
- *   5. updated  — the label was rewritten, and its value really did change.
+ *   1. failed        — the write itself errored. The most actionable, so it wins.
+ *   2. unplaced      — nothing is left in a rack or crate for the label to follow.
+ *   3. stale         — someone else re-recorded the crate mid-write; theirs stands.
+ *   4. skipped       — stock now sits in several places, so there is no one crate.
+ *   5. rackPreserved — the CRATE half is fine; the RACK label was kept, unasked.
+ *   6. updated       — the label was rewritten, and its value really did change.
  *
- * The first four are mutually exclusive with the fifth by construction (a book
- * lands in exactly one server-side bucket), so the tail position costs nothing
- * and keeps "we changed something" from ever hiding "we could not".
+ * The first four are mutually exclusive with the last two by construction (a
+ * book lands in exactly one server-side bucket), so the tail positions cost
+ * nothing and keep "we changed something" from ever hiding "we could not".
+ *
+ * `rackPreserved` sits BELOW the four crate outcomes and above `updated` for the
+ * same reason web puts it last in its chain: it is the only one of the six that
+ * reports on the OTHER label, so when a crate outcome is also present that crate
+ * outcome is the more specific thing to say. The service guarantees they rarely
+ * collide at all — `rackPreservedItemIds ⊆ syncedItemIds`, and a synced item is
+ * in none of failed/skipped/stale/unplaced — so for a single-item transfer, the
+ * shape this sheet always sends, the case is disjoint outright.
  */
 function crateSyncBucket(res: CrateSyncFlags): CrateSyncBucket | null {
   if (res.crateSyncFailed) return 'failed';
   if (res.crateSyncUnplaced) return 'unplaced';
   if (res.crateSyncStale) return 'stale';
   if (res.crateSyncSkipped) return 'skipped';
+  if (res.crateSyncRackPreserved) return 'rackPreserved';
   if (res.crateSyncUpdated) return 'updated';
   return null;
 }
@@ -464,6 +598,18 @@ export function crateSyncWarning(
       return {
         title: 'Moved — crate label left unchanged',
         message: `${itemName} now has stock in more than one location, so its crate label was left as it was.`,
+      };
+    // The OTHER label. The crate half followed the stock; the RACK pair would
+    // have been ERASED by the reconciliation and was kept instead, because
+    // nobody was shown that erasure. Saying so is the entire reason keeping it
+    // is the safe choice: a stale rack label is visibly wrong and the audit row
+    // still says what it was, but only if someone is told to go and look. A
+    // preserved rack reported as a bare success is the same silence as a wiped
+    // one, and this sheet did exactly that until now.
+    case 'rackPreserved':
+      return {
+        title: 'Moved — rack label may now be wrong',
+        message: `${itemName} was moved, but its rack label was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
       };
     default:
       return null;
