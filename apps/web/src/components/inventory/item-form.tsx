@@ -75,6 +75,7 @@ import {
   type ApparelAlphaSize,
   type CountingUnit,
   type CreateItemInput,
+  placementWarningMessage,
   type CustomFieldDefinition,
   type SportsSubcategoryKey,
   type TrackingMode,
@@ -1033,7 +1034,6 @@ export function ItemForm({
       const num = sizedRack.number;
       const row = num ? (sizedRack.row ?? '').toUpperCase() : '';
       const composedBin = formatRackLabel({ number: num, row }) || null;
-      // TODO: bulkCreateSizedVariantsAction schema needs `rackNumber` and `rackRow` fields added by the inventory-service agent. The service writes them into per-row custom_fields.rack_number/rack_row.
       const res = await bulkCreateSizedVariantsAction({
         baseName: values.name,
         baseSku: values.sku?.trim() || null,
@@ -1076,7 +1076,7 @@ export function ItemForm({
               variantColor: values.variantColor || undefined,
             }
           : {}),
-      } as Parameters<typeof bulkCreateSizedVariantsAction>[0]);
+      });
       if (!res.ok) {
         toast.error(res.error.message);
         return;
@@ -1112,6 +1112,20 @@ export function ItemForm({
       } else {
         toast.warning(
           `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed.`,
+        );
+      }
+      // A SEPARATE toast rather than another branch of the tree above: photos
+      // and put-away are independent failures that can happen together, and
+      // folding them into one sentence would make the four-way combination
+      // unreadable. This one also outlives the others deliberately — it is the
+      // only one that sends someone to a physical shelf.
+      if (res.data.placementFailed) {
+        toast.warning(
+          placementWarningMessage(
+            `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}`,
+            res.data.placementFailed,
+          ),
+          { duration: 10000 },
         );
       }
       onDone?.();
@@ -1288,6 +1302,22 @@ export function ItemForm({
       }
     } else {
       toast.success(isEdit ? 'Item updated.' : 'Item created.');
+    }
+    // Independent of the photo outcome, and only ever set on a create — the
+    // edit path never auto-places, which is why `res.data` is a union that
+    // carries the field on one side only. Read through an explicit optional
+    // rather than widening updateItemAction's return type to include something
+    // it can never produce.
+    const placementFailed = isEdit
+      ? undefined
+      : (res.data as { placementFailed?: { rackName: string; count: number } })
+          .placementFailed;
+    // See the size-run twin above for why this is its own toast rather than
+    // another branch of the photo tree.
+    if (placementFailed) {
+      toast.warning(placementWarningMessage('Item created', placementFailed), {
+        duration: 10000,
+      });
     }
 
     onDone?.();

@@ -38,6 +38,7 @@ import {
   collectLegacyRefIdsByKind,
   formatOrderNumber,
   legacyOrderRefId,
+  readDisplayStorage,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
   type RackHoldingLike,
@@ -541,25 +542,19 @@ export default function ItemDetail() {
       return typeof v === 'string' && v.trim() !== '' ? v : null;
     };
     const itemTypeStr = (r.item_type as string | null) ?? 'product';
-    const isBook = itemTypeStr === 'book';
-    const rackNum = isBook
-      ? (cfStr('book_rack_number') ?? cfStr('rack_number'))
-      : (cfStr('rack_number') ?? cfStr('book_rack_number'));
-    const rackRow = isBook
-      ? (cfStr('book_rack_row') ?? cfStr('rack_row'))
-      : (cfStr('rack_row') ?? cfStr('book_rack_row'));
-    // Legacy free-text rack label support (older imports stamped this
-    // single value before the structured number/row split).
-    const legacyRack = cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
-    // Canonical keys (what the web book form writes, see lib/book-storage.ts):
-    // book_crate_color / book_crate_number / book_grade. The bare variants are
-    // legacy fallbacks only — reading ONLY those was why book details showed no
-    // crate color/number on mobile (owner caught 2026-07-10).
-    const crateColor =
-      cfStr('book_crate_color') ?? cfStr('crateColor') ?? cfStr('crate_color');
-    const crateNumber =
-      cfStr('book_crate_number') ?? cfStr('crateNumber') ?? cfStr('crate_number');
-    const grade = cfStr('book_grade') ?? cfStr('grade');
+    // ONE reader, shared with the scan sheet and owned by @stockpilot/core.
+    // This screen used to hand-roll the canonical/legacy/cross-family fallback
+    // chain itself, which meant the rules for "which key names this book's
+    // rack" lived in three places and could disagree.
+    //
+    // `readDisplayStorage` and NOT `readBookStorage`: only the display reader
+    // knows the legacy spellings older imports still carry, and the canonical
+    // one must never learn them — it feeds the acknowledgement fingerprints.
+    // See its header for the full reason.
+    const display = readDisplayStorage(cf, itemTypeStr);
+    const crateColor = display.crateColor;
+    const crateNumber = display.crateNumber;
+    const grade = display.grade;
 
     // Warehouse is resolved in a second pass to avoid a multi-FK embed
     // (`warehouses` has two relations into other tables that confuse
@@ -656,9 +651,9 @@ export default function ItemDetail() {
       bin_location: (r.bin_location as string | null) ?? null,
       charter_name: charterName,
       item_type: (r.item_type as string | null) ?? null,
-      rack_number: rackNum,
-      rack_row: rackRow,
-      legacy_rack_label: legacyRack,
+      rack_number: display.rackNumber,
+      rack_row: display.rackRow,
+      legacy_rack_label: display.legacyRackLabel,
       crate_color: crateColor,
       crate_number: crateNumber,
       grade,

@@ -68,7 +68,18 @@ function isUuidOrNull(v: unknown): boolean {
 
 export async function createItemAction(
   input: CreateItemInput,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<
+  ActionResult<{
+    id: string;
+    /**
+     * Present ONLY when a typed rack was asked for and the item's stock did
+     * not reach it. The create still succeeded — this says the label and the
+     * stock disagree, which is the thing a picker needs to know before they
+     * walk to that rack.
+     */
+    placementFailed?: { rackName: string; count: number };
+  }>
+> {
   const parsed = createItemSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -80,7 +91,10 @@ export async function createItemAction(
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
-    return ok({ id: item.id as string });
+    return ok({
+      id: item.id as string,
+      ...(item.placementFailed ? { placementFailed: item.placementFailed } : {}),
+    });
   } catch (e) {
     return toResult(e);
   }
@@ -212,19 +226,34 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
  */
 export async function bulkCreateSizedVariantsAction(
   input: z.input<typeof bulkCreateSizedVariantsSchema>,
-): Promise<ActionResult<{ created: number; ids: string[] }>> {
+): Promise<
+  ActionResult<{
+    created: number;
+    ids: string[];
+    /**
+     * Present ONLY when a typed rack was asked for and some of the run's stock
+     * did not reach it. Optional and additive so an older client that ignores
+     * it still reads `created`/`ids` exactly as before.
+     */
+    placementFailed?: { rackName: string; count: number };
+  }>
+> {
   const parsed = bulkCreateSizedVariantsSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
     const svc = await InventoryService.forCurrentUser();
-    const rows = await svc.bulkCreateSizedVariants(parsed.data);
+    const { rows, placementFailed } = await svc.bulkCreateSizedVariants(parsed.data);
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard');
-    return ok({ created: rows.length, ids: rows.map((r) => r.id) });
+    return ok({
+      created: rows.length,
+      ids: rows.map((r) => r.id),
+      ...(placementFailed ? { placementFailed } : {}),
+    });
   } catch (e) {
     return toResult(e);
   }

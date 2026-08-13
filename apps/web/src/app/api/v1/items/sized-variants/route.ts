@@ -82,14 +82,22 @@ export async function POST(req: NextRequest) {
 
   try {
     const svc = new InventoryService(ctx);
-    const rows = await svc.bulkCreateSizedVariants(parsed.data);
+    const { rows, placementFailed } = await svc.bulkCreateSizedVariants(parsed.data);
 
     // New items change the org's cached Items/Books list — invalidate so the
     // next dashboard view sees them (mirrors POST /api/v1/items).
     revalidateInventoryList(ctx.organizationId);
 
     return NextResponse.json(
-      { created: rows.length, ids: rows.map((r) => r.id) },
+      {
+        created: rows.length,
+        ids: rows.map((r) => r.id),
+        // ADDITIVE and omitted when everything placed, so a phone running the
+        // shipped build reads `created`/`ids` exactly as it does today and a
+        // newer one can warn. The 201 stands either way — the variants were
+        // created; only their put-away fell short.
+        ...(placementFailed ? { placementFailed } : {}),
+      },
       { status: 201 },
     );
   } catch (e) {

@@ -258,7 +258,11 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect((stub.insertedItems[0]?.custom_fields as Record<string, unknown>).size).toBe('S');
     expect(stub.insertedItems[1]?.name).toBe('L4L Black T-Shirt - M');
     expect(stub.insertedItems[1]?.sku).toBe('SP-OKX68-UAA-M');
-    expect(res).toHaveLength(2);
+    expect(res.rows).toHaveLength(2);
+    // No rack was typed in BASE_INPUT, so there is nothing to warn about — the
+    // warning must stay absent on the ordinary path or it stops meaning
+    // anything when it does fire.
+    expect(res.placementFailed).toBeNull();
   });
 
   it('writes stock_movements for non-zero variants only', async () => {

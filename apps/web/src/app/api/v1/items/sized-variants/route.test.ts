@@ -127,10 +127,13 @@ describe('POST /api/v1/items/sized-variants', () => {
 
   it('returns 201 with { created, ids } and delegates to bulkCreateSizedVariants', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
-    const bulkCreateSizedVariants = vi.fn(async () => [
-      { id: 'v-1', name: 'Nike Pegasus 41 - 9', sku: 'SP-A-9' },
-      { id: 'v-2', name: 'Nike Pegasus 41 - 10', sku: 'SP-A-10' },
-    ]);
+    const bulkCreateSizedVariants = vi.fn(async () => ({
+      rows: [
+        { id: 'v-1', name: 'Nike Pegasus 41 - 9', sku: 'SP-A-9' },
+        { id: 'v-2', name: 'Nike Pegasus 41 - 10', sku: 'SP-A-10' },
+      ],
+      placementFailed: null,
+    }));
     vi.mocked(InventoryService).mockImplementationOnce(
       () =>
         ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
@@ -139,6 +142,9 @@ describe('POST /api/v1/items/sized-variants', () => {
     const res = await POST(buildRequest(VALID_BODY));
 
     expect(res.status).toBe(201);
+    // `placementFailed` is ABSENT, not null, when everything placed — the key
+    // is omitted so a phone on the shipped build sees the identical body it
+    // sees today.
     expect(await res.json()).toEqual({ created: 2, ids: ['v-1', 'v-2'] });
     expect(bulkCreateSizedVariants).toHaveBeenCalledTimes(1);
     expect(bulkCreateSizedVariants).toHaveBeenCalledWith(
@@ -152,12 +158,39 @@ describe('POST /api/v1/items/sized-variants', () => {
     );
   });
 
+  it('forwards placementFailed to the phone — still 201, because the variants WERE created', async () => {
+    // The phone is where this warning matters most (the operator is standing
+    // at the rack), and it can only render what the route hands back. A route
+    // that quietly dropped the field would leave the service reporting into a
+    // void — the same shape of defect as the service swallowing it.
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const bulkCreateSizedVariants = vi.fn(async () => ({
+      rows: [{ id: 'v-1', name: 'n', sku: 's' }],
+      placementFailed: { rackName: '28-A', count: 1 },
+    }));
+    vi.mocked(InventoryService).mockImplementationOnce(
+      () =>
+        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
+    );
+
+    const res = await POST(buildRequest(VALID_BODY));
+
+    // NOT an error status: a create that succeeded must never look like one,
+    // or the client's error path fires and the operator re-enters the run.
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({
+      created: 1,
+      ids: ['v-1'],
+      placementFailed: { rackName: '28-A', count: 1 },
+    });
+  });
+
   it('never lets a client choose variant identity — no variantKey reaches the service', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const seen: unknown[] = [];
     const bulkCreateSizedVariants = vi.fn(async (input: unknown) => {
       seen.push(input);
-      return [{ id: 'v-1', name: 'n', sku: 's' }];
+      return { rows: [{ id: 'v-1', name: 'n', sku: 's' }], placementFailed: null };
     });
     vi.mocked(InventoryService).mockImplementationOnce(
       () =>

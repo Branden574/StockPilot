@@ -105,7 +105,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     const item = await svc.create({ ...BASE });
 
-    expect(item).toEqual({ id: 'item-new' });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     // The item row and its ledger entry are BYTE-IDENTICAL to pre-feature
     // behavior — no primaryLocationId was supplied, so both stay null.
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
@@ -133,7 +133,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     const item = await svc.create({ ...BASE });
 
-    expect(item).toEqual({ id: 'item-new' });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     const createdLoc = stub.chainArgs.get('locations.insert')?.[0]?.[0] as Record<
       string,
       unknown
@@ -167,8 +167,14 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     const item = await svc.create({ ...BASE });
 
-    // Create still succeeds — placement is never a precondition for it.
-    expect(item).toEqual({ id: 'item-new' });
+    // Create still succeeds — placement is never a precondition for it — but
+    // it no longer succeeds SILENTLY. The item now carries a bin_location
+    // naming a rack that does not exist, with its stock still at the site, so
+    // the caller is handed the sentence that sends someone to look.
+    expect(item).toEqual({
+      id: 'item-new',
+      placementFailed: { rackName: '28-A', count: 1 },
+    });
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
     expect(insertedMovementRow(stub).to_location_id).toBeNull();
     // placeManualCreateOnRack returns BEFORE reading holdings when the rack
@@ -189,11 +195,15 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     // placement ran.
     const item = await svc.create({ ...BASE });
 
-    expect(item).toEqual({ id: 'item-new' });
+    expect(item).toEqual({
+      id: 'item-new',
+      placementFailed: { rackName: '28-A', count: 1 },
+    });
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
     // The attempt was made (proving we didn't just skip it)...
     expect(transferCall(stub)).toBeDefined();
-    // ...but its failure never escaped create().
+    // ...its failure never escaped create() — and it is no longer swallowed
+    // either. Fail-soft was always right; fail-soft AND silent was the defect.
   });
 
   it('(d1) quantityOnHand = 0: no location lookup at all, even with a typed bin_location', async () => {
@@ -316,7 +326,15 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     // uses the SAME canned empty-array select, so it also finds nothing and
     // this degrades to fail-soft rather than looping forever).
     const item = await svc.create({ ...BASE });
-    expect(item).toEqual({ id: 'item-new' });
+    // Degrading to fail-soft is still a placement that did not happen, and the
+    // retry succeeding at NOT looping is not the same as the stock arriving.
+    // This is the subtlest of the three unplaced paths — the code did
+    // everything right and the outcome is still a label pointing nowhere —
+    // which is exactly why it has to report like the other two.
+    expect(item).toEqual({
+      id: 'item-new',
+      placementFailed: { rackName: '28-A', count: 1 },
+    });
     expect(insertCalls).toBe(2); // exactly one retry, not an infinite loop
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
     expect(transferCall(stub)).toBeUndefined();

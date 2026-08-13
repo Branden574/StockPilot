@@ -222,25 +222,11 @@ const RACK_READ_ONLY = [
   // custom_fields and join the display label. It writes nothing durable — it is
   // the helper every other reader below should be delegating to.
   'packages/core/src/inventory/book-storage.ts',
-  // The native scan screen. Its LOCAL `readBookStorage` is a hand-rolled copy of
-  // the core reader above: four `cf.book_rack_number ? String(…) : null` reads
-  // and its own `[number, row].join('-')` label. Reads only, so it is not a
-  // writer — but it is the file this arm was widened to see, and a second copy
-  // of a reader is how a reader and a writer come to disagree in the first
-  // place. If it grows a write, it moves up to RACK_WRITERS.
-  'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
-  // The native ITEM screen, and the SECOND hand-rolled copy of the core reader
-  // (the block dates to the 2026-07-10 crate-fields fix, long before this
-  // branch — it is not new, it is newly VISIBLE, because widening this arm to
-  // see guarded reads is what finally surfaced it). It lifts the pair with its
-  // own book-first / product-first fallback plus three legacy spellings
-  // (`rackLabel` / `rack_label` / `rack`) that `readItemRack` does not know
-  // about, which is exactly why deleting it is a real change and not a tidy-up:
-  // dropping those spellings would blank the rack for legacy-imported items.
-  // Reads only — it stores nothing. OWED: fold the legacy spellings into the
-  // core reader, then delete this copy and remove this entry. Until then it is
-  // listed rather than hidden, because an unclassified reader is how a reader
-  // and a writer come to disagree.
+  // The native ITEM screen. Its hand-rolled reader is GONE — it now calls
+  // `readDisplayStorage` (packages/core) like the scan sheet does. It stays
+  // classified because it still NAMES the pair: it maps the reader's output
+  // onto its own `rack_number:` / `rack_row:` payload keys for the placement
+  // formatter. Reads only; it stores nothing.
   'apps/mobile/app/item/[id].tsx',
   // THE mapper: the one place a `locations` row becomes a placement
   // destination. It copies the pair into camelCase and hands it to
@@ -268,6 +254,21 @@ const RACK_READ_ONLY = [
  * back to `resolvePlacement` rather than re-adding it to READ_ONLY. The
  * cross-formatter guard (apps/web/src/lib/placement-label.guard.test.ts) is the
  * arm that polices the DECISION; this one polices the KEY.
+ *
+ * `apps/mobile/app/(drawer)/(tabs)/scan.tsx` joined them. It carried its own
+ * `readBookStorage` — four `cf.book_rack_number ? String(…) : null` reads and
+ * its own `[number, row].join('-')` — which was canonical-only, so a book
+ * recorded under a legacy key showed a blank rack on the scan sheet while the
+ * item screen showed it. It now calls `readDisplayStorage` (packages/core) and
+ * names no rack or crate key at all.
+ *
+ * That reader is DELIBERATELY not `readBookStorage`. The legacy spellings live
+ * in a display-only reader because the canonical one feeds the acknowledgement
+ * FINGERPRINTS: teaching it `rackLabel` / `rack_label` / `rack` would make the
+ * server fingerprint a pair no shipped client can compute, and every live
+ * device's acknowledgement would dead-end. If a future cleanup proposes
+ * merging the two readers, that is the reason not to — and
+ * packages/core/src/inventory/display-storage.test.ts fails if it happens.
  *
  * DELIBERATELY ABSENT (2), and the reason matters.
  *
@@ -362,12 +363,6 @@ const CRATE_READ_ONLY = [
   // custom_fields and renders it through formatCrateLabel, which resolves the
   // colour against the CRATE_COLORS registry. Reads only.
   'packages/core/src/inventory/book-storage.ts',
-  // The native scan screen's hand-rolled copy of that reader — see the rack
-  // list. Note what its copy DROPS: it keeps the raw stored colour and renders
-  // it through a lower-case-keyed hex map of its own, so a row already holding
-  // "Blue" loses its swatch. That is a rendering consequence of an unnormalised
-  // WRITE somewhere else, which is precisely what CRATE_WRITERS below prevents.
-  'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
   // The item edit form. It names book_crate_color / book_crate_number ONLY to
   // seed its two input states from the item's existing custom_fields; the
   // durable write is composeBookCustomFields in book-custom-fields.ts, which

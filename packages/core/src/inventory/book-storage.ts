@@ -275,9 +275,137 @@ export function readItemRack(
 }
 
 /**
+ * DISPLAY ONLY. Reads an item's rack/crate/grade for SHOWING to a human,
+ * accepting the legacy and cross-family spellings that older imported rows
+ * still carry alongside today's canonical keys.
+ *
+ * ═══ WHY THIS IS SEPARATE FROM `readBookStorage`, AND MUST STAY SEPARATE ═══
+ *
+ * The obvious tidy-up is to teach `readBookStorage` these fallbacks and delete
+ * this function. That would be a data-integrity bug wearing a cleanup's
+ * clothes.
+ *
+ * `readBookStorage` feeds `InventoryService`'s before-map, which is what the
+ * crate and rack acknowledgement gates FINGERPRINT. A fingerprint is a promise
+ * to a client: the phone computes the same pair and sends it back to prove it
+ * answered the question it was actually shown. Widening what the server reads
+ * would make the server fingerprint a pair the shipped client cannot compute
+ * — so every live device's acknowledgement stops matching and dead-ends,
+ * which is the exact Critical the rack channel was designed around. It would
+ * also start ASKING about racks that only exist under a legacy key, for books
+ * whose canonical pair is empty.
+ *
+ * So the split is deliberate:
+ *   - `readBookStorage` / `readItemRack` — CANONICAL keys only. Anything that
+ *     compares, gates, fingerprints, or writes uses these.
+ *   - `readDisplayStorage` — canonical PLUS legacy. Anything that only renders
+ *     a label to a human uses this.
+ *
+ * Never use this to decide something. Only to show it.
+ *
+ * The legacy keys are load-bearing rather than dead weight: older imports
+ * stamped a single free-text rack label (`rackLabel` / `rack_label` / `rack`)
+ * before the structured number/row split existed, and the bare `crateColor` /
+ * `crate_color` variants predate the `book_` prefix. Reading only the
+ * canonical keys is what made book crate colour and number render blank on the
+ * phone (owner caught 2026-07-10).
+ */
+export interface DisplayStorageInfo {
+  /** Structured "38-A" when present, else whatever legacy free-text label exists. */
+  rackLabel: string | null;
+  /**
+   * The structured pieces, kept SEPARATE from the combined label because
+   * downstream formatters need them apart: a display label ("38 · A") and a
+   * `locations.name` ("38-A") are different strings, and comparing the wrong
+   * one against a holding hid the rack row for essentially every item with a
+   * holding once already.
+   */
+  rackNumber: string | null;
+  rackRow: string | null;
+  /**
+   * The legacy free-text value ALONE — null when the structured pair supplied
+   * `rackLabel`. Exposed separately so a caller can tell "this rack is
+   * recorded the old way" from "this rack is recorded properly", which is a
+   * different sentence to a human and a different confidence to a formatter.
+   */
+  legacyRackLabel: string | null;
+  crateColor: string | null;
+  crateNumber: string | null;
+  grade: string | null;
+}
+
+/**
+ * `strOrNull` with objects and arrays rejected instead of stringified.
+ *
+ * NOT a fix applied to `strOrNull` itself, deliberately. That helper coerces
+ * with `String(v)`, which is CORRECT for the scalars that actually occur —
+ * `book_rack_number: 38` written as a JSON number must read "38" — and the
+ * canonical readers' output feeds gate fingerprints, so narrowing what they
+ * accept would silently change what a book fingerprints to. An object,
+ * though, has no sensible rendering: `String({})` is "[object Object]", and
+ * custom_fields is operator- and import-writable JSONB, so that string is
+ * reachable on a real item screen. Display refuses it; the canonical readers
+ * keep their existing coercion.
+ */
+function displayStr(v: unknown): string | null {
+  if (typeof v === 'object' && v !== null) return null;
+  return strOrNull(v);
+}
+
+export function readDisplayStorage(
+  customFields: Record<string, unknown> | null | undefined,
+  itemType: string | null | undefined,
+): DisplayStorageInfo {
+  const cf = customFields ?? {};
+  const isBook = itemType === 'book';
+
+  // Each family's OWN key first, then the other family's. The cross-family
+  // fallback is display-safe (a rack is a rack whichever key recorded it) but
+  // is deliberately second, so a row carrying both is described by the key
+  // that belongs to its type. `book_rack_*` and `rack_*` are separate columns
+  // by design (0068) and are matched per item-type everywhere that decides.
+  const rackNumber = isBook
+    ? (displayStr(cf.book_rack_number) ?? displayStr(cf.rack_number))
+    : (displayStr(cf.rack_number) ?? displayStr(cf.book_rack_number));
+  const rackRow = isBook
+    ? (displayStr(cf.book_rack_row) ?? displayStr(cf.rack_row))
+    : (displayStr(cf.rack_row) ?? displayStr(cf.book_rack_row));
+
+  const structured =
+    rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
+  // The legacy single-value label is the LAST resort, never a merge: a row with
+  // a structured pair AND a stale free-text label is described by the pair,
+  // because the pair is what every writer maintains.
+  const legacy =
+    displayStr(cf.rackLabel) ?? displayStr(cf.rack_label) ?? displayStr(cf.rack);
+
+  return {
+    rackLabel: structured ?? legacy,
+    rackNumber,
+    rackRow,
+    // Only when it is actually the value being shown. A stale free-text label
+    // sitting behind a live structured pair is not "the legacy rack" — it is
+    // dead data, and reporting it would let a formatter render both.
+    legacyRackLabel: structured ? null : legacy,
+    crateColor:
+      displayStr(cf.book_crate_color) ??
+      displayStr(cf.crateColor) ??
+      displayStr(cf.crate_color),
+    crateNumber:
+      displayStr(cf.book_crate_number) ??
+      displayStr(cf.crateNumber) ??
+      displayStr(cf.crate_number),
+    grade: displayStr(cf.book_grade) ?? displayStr(cf.grade),
+  };
+}
+
+/**
  * Reads the book-storage fields out of an inventory item's custom_fields
  * JSONB. Returns nulls for any missing piece so callers can render
  * conditionally without checking each field individually.
+ *
+ * CANONICAL KEYS ONLY — see `readDisplayStorage` above for why this must never
+ * learn the legacy spellings.
  */
 export function readBookStorage(
   customFields: Record<string, unknown> | null | undefined,

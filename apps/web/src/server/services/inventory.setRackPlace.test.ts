@@ -509,5 +509,113 @@ describe('bulkUpdate set_rack — NULL-kind (site) holdings are "not yet placed"
     // The label RPC still ran and succeeded.
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_rack')).toBe(true);
     expect(stub.rpcCalls.some((c) => c.name === 'transfer_stock')).toBe(false);
+    // AND THE OPERATOR IS TOLD. `placed: 0` alone reads identically to "there
+    // was nothing to place", which is the benign case. The item now carries a
+    // label naming a rack that does not exist, with its stock still at the
+    // site — the count is what separates those two.
+    expect(res.placeFailed).toBe(1);
+  });
+
+  // ═══ THE `!toLoc` SPLIT: UNRESOLVABLE IS NOT THE SAME AS ALREADY-THERE ═══
+  //
+  // Both branches of the placement loops start `if (!toLoc)`, and the line
+  // right after is `if (toLoc === <current>) return`. Those two look adjacent
+  // and mean opposite things: the first is a failure the operator must hear
+  // about, the second is a success with no work to do. Collapsing them in
+  // either direction is silent and plausible — blame every idempotent item, or
+  // stay quiet about every unresolvable one.
+  //
+  // The resolution is keyed PER WAREHOUSE (`rackByWh.get(warehouseId)`), so a
+  // mixed batch is where the distinction is load-bearing: one item's warehouse
+  // can resolve while another's does not, in the same operation.
+
+  it('a mixed batch splits per item: one warehouse resolves and places, the other is reported', async () => {
+    let selects = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'item-1', warehouse_id: 'wh-1' },
+          { id: 'item-2', warehouse_id: 'wh-2' },
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_rack': { data: 2, error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-1',
+            location_id: 'site-1',
+            quantity: 4,
+            locations: { kind: null, type: null, warehouse_id: 'wh-1' },
+          },
+          {
+            item_id: 'item-2',
+            location_id: 'site-2',
+            quantity: 7,
+            locations: { kind: null, type: null, warehouse_id: 'wh-2' },
+          },
+        ],
+        error: null,
+      },
+      // One warehouse's rack resolves; the other's does not and cannot be
+      // created. Which warehouse wins is not asserted below — only that the
+      // batch SPLIT rather than going all-or-nothing.
+      'locations.select': () => {
+        selects += 1;
+        return selects === 1
+          ? { data: [{ id: 'rack-28a', name: '28-A' }], error: null }
+          : { data: [], error: null };
+      },
+      'locations.insert': { data: null, error: { message: 'plan limit exceeded' } },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1', 'item-2'],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    // Both labels were written; the placements diverged.
+    expect(res.ok).toBe(2);
+    expect(res.placed).toBe(1);
+    expect(res.placeFailed).toBe(1);
+    // Exactly ONE physical move — the resolvable warehouse's. A batch that
+    // gave up entirely on the first unresolvable item would show 0 here, and
+    // one that ignored the failure would show 2.
+    expect(stub.rpcCalls.filter((c) => c.name === 'transfer_stock')).toHaveLength(1);
+  });
+
+  it('already on the target rack is NOT reported as a failure — no move needed is not a miss', async () => {
+    // The other side of the split. An operator who re-runs "Set rack 28-A" on
+    // items already on 28-A must see a clean result; warning here would train
+    // them to dismiss the warning that matters.
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-1' }], error: null },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-1',
+            location_id: 'rack-28a',
+            quantity: 5,
+            locations: { kind: 'rack', type: 'shelf', warehouse_id: 'wh-1' },
+          },
+        ],
+        error: null,
+      },
+      'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.ok).toBe(1);
+    expect(res.placed).toBe(0);
+    // The distinction the whole split exists for: 0 placed, 0 FAILED.
+    expect(res.placeFailed ?? 0).toBe(0);
+    expect(stub.rpcCalls.some((c) => c.name === 'transfer_stock')).toBe(false);
   });
 });

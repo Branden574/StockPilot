@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import {
   APPAREL_ALPHA_SIZES,
+  placementWarningMessage,
   stripSizeSuffix,
   stripSkuSuffix,
   type ApparelAlphaSize,
@@ -118,7 +119,18 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         toast.error(res.error.message);
         return;
       }
-      toast.success(`Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`);
+      const lead = `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}`;
+      if (res.data.placementFailed) {
+        // This entry point inherits `binLocation` from the SOURCE item rather
+        // than a freshly typed rack, which makes a silent miss even easier to
+        // overlook: the operator never typed the rack, so they have no reason
+        // to go and check it.
+        toast.warning(placementWarningMessage(lead, res.data.placementFailed), {
+          duration: 10000,
+        });
+      } else {
+        toast.success(`${lead}.`);
+      }
       setOpen(false);
       // Route back to the tab the source item lives on, preserving
       // the page / search / filter state the user was on (read from

@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { APPAREL_ALPHA_SIZES, buildGroupKey } from '@stockpilot/core';
+import { APPAREL_ALPHA_SIZES, buildGroupKey, placementWarningMessage } from '@stockpilot/core';
 
 import {
   apparelFallbackSizeOptions,
@@ -14,6 +14,7 @@ import {
   collectSizedVariants,
   deriveRackFields,
   describeFailure,
+  placementAlertFor,
   sizeOptionsFromScale,
   sportsGroupFieldsFor,
   sportsProfileLabelFor,
@@ -1030,5 +1031,36 @@ describe('the Scan tab quick-add cards are wired to the shared create path', () 
     expect(src).toMatch(/customFields\.author/);
     expect(src).toMatch(/customFields\.publisher/);
     expect(src).toMatch(/customFields\.book_grade/);
+  });
+});
+
+describe('placementAlertFor — the create screens must interrupt when stock missed the rack', () => {
+  it('returns null when the server reported no placement failure', () => {
+    expect(placementAlertFor('Item created', undefined)).toBeNull();
+  });
+
+  it('returns a title AND body when stock did not reach the rack', () => {
+    const alert = placementAlertFor('Item created', { rackName: '28-A', count: 1 });
+    expect(alert).not.toBeNull();
+    expect(alert?.title).toContain('check the rack');
+    expect(alert?.body).toContain('28-A');
+  });
+
+  it('the title says CREATED, so nobody re-enters an item that already exists', () => {
+    // The failure mode this guards is duplicate stock: an operator who reads
+    // the bold line as "save failed" adds the item again.
+    const single = placementAlertFor('Item created', { rackName: '28-A', count: 1 });
+    const run = placementAlertFor('3 sizes added', { rackName: '28-A', count: 2 });
+    expect(single?.title).toBe('Item created — check the rack');
+    expect(run?.title).toBe('Variants created — check the rack');
+  });
+
+  it('the body carries the SHARED core wording, not a mobile-only rephrase', () => {
+    // Parity is the point: the phone and the web must describe one physical
+    // condition with one sentence, or the floor ends up with two vocabularies.
+    const alert = placementAlertFor('Item created', { rackName: '9-C', count: 4 });
+    expect(alert?.body).toBe(
+      placementWarningMessage('Item created', { rackName: '9-C', count: 4 }),
+    );
   });
 });
