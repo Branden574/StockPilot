@@ -693,6 +693,31 @@ describe('buildDeliveryRequestDraft — delivery body', () => {
     expect(body).not.toContain('/dashboard/orders/');
   });
 
+  it('the SHORTENED bodies carry no link either — every rung of the ladder', () => {
+    // The assertion above only reaches the full body. The condensed rungs were
+    // protected indirectly, by the exact-string disclosure pins, so a future
+    // refactor that loosened those would leave the shortened path unguarded —
+    // and the shortened path is the one an 11-line order actually gets.
+    // `maxRows` is an OPTS argument, not an input field — passing it on the
+    // input object silently builds the full body every time, which is a test
+    // that cannot fail.
+    const input = makeDraftInput();
+    const rungs = input.lines.length;
+    expect(rungs).toBeGreaterThan(0);
+    const bodies: string[] = [];
+    for (let maxRows = 0; maxRows <= rungs; maxRows += 1) {
+      const { body } = buildDeliveryRequestDraft(input, { condensed: true, maxRows });
+      bodies.push(body);
+      expect(body).not.toContain('Order link:');
+      expect(body).not.toContain('/dashboard/orders/');
+      expect(body).not.toMatch(/https?:\/\//);
+    }
+    // Proof the rungs are actually DIFFERENT bodies: if they were not, the loop
+    // above would be one assertion repeated and would pass with the ladder
+    // deleted.
+    expect(new Set(bodies).size).toBe(rungs + 1);
+  });
+
   it('no longer states an order status line — owner decision 2026-08-02 removed it as redundant noise', () => {
     // The status line was a mount-time snapshot ("Pending approval") that
     // could go stale between when the draft opened and when DC4 read the
