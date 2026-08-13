@@ -37,10 +37,13 @@ import {
   can,
   collectLegacyRefIdsByKind,
   formatOrderNumber,
+  formatPlacementLabel,
   getCrateColor,
   legacyOrderRefId,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
+  resolvePlacement,
+  type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
 
@@ -147,6 +150,14 @@ interface Item {
   crate_number: string | null;
   grade: string | null;
   imageUrl: string | null;
+  /** Rack/crate HOLDINGS (item_stock_levels, qty > 0) — WHERE THE STOCK IS,
+   *  as opposed to `rack_label` above, which is what the item's custom_fields
+   *  REMEMBER. The two diverge after a put-away into a position-less crate
+   *  (mig 0335 preserves the rack keys on purpose), and this screen used to
+   *  show only the remembered one — and to SUPPRESS `bin_location` behind it,
+   *  so it hid the correct label to print the stale one. Carries
+   *  `locations.kind`, without which the crate rule cannot fire. */
+  rackHoldings: RackHoldingLike[];
 }
 
 interface MovementRow {
@@ -560,7 +571,7 @@ export default function ItemDetail() {
     // Serial count rides the same round trip — a cheap head-only count so
     // the Serials card can show for items that hold registry rows even
     // when tracking_type isn't 'serial' (e.g. tracking switched off later).
-    const [whResp, chResp, serialResp] = await Promise.all([
+    const [whResp, chResp, serialResp, holdingResp] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
@@ -572,7 +583,28 @@ export default function ItemDetail() {
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', r.organization_id as string)
         .eq('item_id', r.id as string),
+      // Rack/crate holdings ride the same round trip. No warehouse scope: this
+      // screen has no single-warehouse context, same as the scan sheet and the
+      // web lookup API.
+      supabase
+        .from('item_stock_levels')
+        .select('quantity, locations!inner(name, kind)')
+        .eq('organization_id', r.organization_id as string)
+        .eq('item_id', r.id as string)
+        .in('locations.kind', ['rack', 'crate'])
+        .gt('quantity', 0),
     ]);
+    const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
+      quantity: number;
+      locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
+    }[])
+      .map((h): RackHoldingLike | null => {
+        const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
+        return l?.name
+          ? { name: l.name, quantity: Number(h.quantity) || 0, kind: l.kind ?? null }
+          : null;
+      })
+      .filter((h): h is RackHoldingLike => h !== null);
     setSerialCount(serialResp.count ?? 0);
     warehouseName = (whResp?.data?.name as string | undefined) ?? null;
     charterName = charterId ? ((chResp?.data?.name as string | undefined) ?? null) : 'Generic';
@@ -622,6 +654,7 @@ export default function ItemDetail() {
       crate_number: crateNumber,
       grade,
       imageUrl,
+      rackHoldings,
     });
   }, [id, router]);
 
@@ -1518,8 +1551,27 @@ export default function ItemDetail() {
                 rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
               if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
               if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
-              if (item.rack_label) rows.push({ label: 'RACK', value: item.rack_label });
-              if (isBookView && (item.crate_color || item.crate_number)) {
+              // WHERE THE STOCK IS vs what the item REMEMBERS. `rack_label`
+              // above is the custom_fields summary; a put-away into a
+              // position-less crate preserves it on purpose (mig 0335), so it
+              // can name a rack the stock has entirely left. When the holdings
+              // say so, they are printed INSTEAD — and the rack/crate summary
+              // rows are suppressed rather than shown contradicting them.
+              const placement = resolvePlacement({
+                itemType: item.item_type,
+                customFields: null,
+                holdings: item.rackHoldings,
+              });
+              const holdingsContradictLabel = placement.source === 'holdings';
+              if (holdingsContradictLabel) {
+                rows.push({
+                  label: placement.reason === 'split' ? 'SPLIT STOCK' : 'IN CRATE',
+                  value: formatPlacementLabel(placement) ?? '',
+                });
+              }
+              if (!holdingsContradictLabel && item.rack_label)
+                rows.push({ label: 'RACK', value: item.rack_label });
+              if (!holdingsContradictLabel && isBookView && (item.crate_color || item.crate_number)) {
                 // Same presentation as web: "Red 5" + a color swatch (the
                 // number identifies the crate; the color is the visual aid).
                 const cc = getCrateColor(item.crate_color);
@@ -1532,10 +1584,14 @@ export default function ItemDetail() {
                 });
               }
               if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
-              // bin_location is a separate free-text field — only render
-              // it when there's NO structured rack info, to avoid double
-              // labelling for the same physical spot.
-              if (!item.rack_label && item.bin_location) {
+              // bin_location is a separate free-text field — only render it
+              // when there's NO structured rack info, to avoid double labelling
+              // for the same physical spot. A rack label that the HOLDINGS have
+              // contradicted no longer counts as structured info: suppressing
+              // the fresh crate label behind a stale rack was this screen's own
+              // half of the 0335 defect.
+              const rackLabelStillStands = !holdingsContradictLabel && item.rack_label;
+              if (!rackLabelStillStands && !holdingsContradictLabel && item.bin_location) {
                 rows.push({ label: isBookView ? 'BIN' : 'RACK', value: item.bin_location });
               }
               if (rows.length === 0) return null;

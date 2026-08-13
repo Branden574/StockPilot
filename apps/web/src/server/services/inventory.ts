@@ -25,6 +25,7 @@ import type {
 import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
+import type { RackHoldingLike } from '@stockpilot/core';
 import type {
   BookCrateAcknowledgedChange,
   BookCrateChangeDetail,
@@ -994,6 +995,14 @@ export class InventoryService {
     // entry there but must still count as 2 holdings here — the client's
     // split warning reads THIS field, not placed_racks.length.
     const rackHoldingsByItem = new Map<string, Set<string>>();
+    // The SAME rows, carrying `locations.kind`. This scan already had the kind
+    // in hand and dropped it; without it no list-fed surface can tell "the
+    // stock is in a crate" from "the stock is on a rack", and every one of them
+    // keeps printing the rack an item's custom_fields still (deliberately) name
+    // after a position-less put-away. See placement-resolution.ts. Keyed by
+    // location_id so two same-named racks in different warehouses stay two
+    // holdings, matching rackHoldingsCount rather than placed_racks.
+    const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
     if (ids.length > 0) {
       const { data: levels } = await this.ctx.supabase
         .from('item_stock_levels')
@@ -1025,6 +1034,15 @@ export class InventoryService {
           const set = rackHoldingsByItem.get(lvl.item_id) ?? new Set<string>();
           set.add(lvl.location_id);
           rackHoldingsByItem.set(lvl.item_id, set);
+
+          const byLoc = placedHoldingsByItem.get(lvl.item_id) ?? new Map<string, RackHoldingLike>();
+          const prior = byLoc.get(lvl.location_id);
+          byLoc.set(lvl.location_id, {
+            name: lvl.locations.name,
+            quantity: (prior?.quantity ?? 0) + Number(lvl.quantity),
+            kind,
+          });
+          placedHoldingsByItem.set(lvl.item_id, byLoc);
         }
       }
     }
@@ -1040,6 +1058,9 @@ export class InventoryService {
         // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
         placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
         rackHoldingsCount: rackHoldingsByItem.get(id)?.size ?? 0,
+        placed_holdings: [...(placedHoldingsByItem.get(id)?.values() ?? [])].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
       };
     });
 
@@ -1100,6 +1121,12 @@ export class InventoryService {
          *  rackHoldingsByItem comment above. Drives the bulk Set-rack split
          *  warning; must agree with the server's move/no-move gate. */
         rackHoldingsCount: number;
+        /** The same holdings as `placed_racks`, but carrying QUANTITY and
+         *  `locations.kind` and deduped by location_id like rackHoldingsCount.
+         *  This is the input `resolvePlacement` needs: without `kind` no
+         *  consumer can apply the crate rule, and `placed_racks` (names only,
+         *  name-deduped) cannot supply it. */
+        placed_holdings: RackHoldingLike[];
       }>,
       total: totalCount,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered

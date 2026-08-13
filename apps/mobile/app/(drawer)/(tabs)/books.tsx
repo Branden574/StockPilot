@@ -28,6 +28,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
 import {
+  formatPlacementLabel,
+  resolvePlacement,
+  type RackHoldingLike,
+} from '@stockpilot/core';
+
+import {
   ActiveFilterPill,
   FILTER_GENERIC_CHARTER_ID,
   FilterButton,
@@ -84,6 +90,10 @@ interface BookRow {
    *  placement can never hide behind a healthy badge. */
   status: string;
   custom_fields: Record<string, unknown> | null;
+  /** The free-text placement label. FRESH since mig 0335 — a put-away stamps
+   *  it and nothing else, so it names the crate a book actually sits in while
+   *  `custom_fields.book_rack_*` may still name the rack it left. */
+  bin_location: string | null;
   category_id: string | null;
   primary_location_id: string | null;
   charter_id: string | null;
@@ -130,6 +140,7 @@ function toBookRow(row: unknown): BookRow {
     reorder_point: Number(r.reorder_point) || 0,
     status: (r.status as string | null) ?? 'active',
     custom_fields: cf,
+    bin_location: (r.bin_location as string | null) ?? null,
     category_id: (r.category_id as string | null) ?? null,
     primary_location_id: (r.primary_location_id as string | null) ?? null,
     charter_id: (r.charter_id as string | null) ?? null,
@@ -145,8 +156,8 @@ function toBookRow(row: unknown): BookRow {
  *  renders (plus the fields the collapsed header rolls up), because this read
  *  now returns the whole filtered set rather than a 50-row window. */
 const BOOK_COLUMNS = `id, name, sku, barcode, quantity_on_hand, reorder_point, status, custom_fields,
-           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
-           awaiting_first_receipt`;
+           bin_location, category_id, primary_location_id, charter_id, warehouse_id, updated_at,
+           auto_archived, awaiting_first_receipt`;
 
 export default function BooksScreen() {
   const router = useRouter();
@@ -201,6 +212,15 @@ export default function BooksScreen() {
   // NOT clear it: that is the cross-page saving it exists for. Identical to
   // inventory.tsx.
   const [images, setImages] = React.useState<ReadonlyMap<string, string | null>>(new Map());
+  // Rack/crate HOLDINGS for the loaded set, keyed by item id — WHERE THE STOCK
+  // IS, as against what each row's custom_fields remember. Fetched in ONE
+  // batched request per load (the list already holds the whole filtered set,
+  // capped at POSTGREST_MAX_ROWS), because without `locations.kind` the card
+  // cannot tell a book that has moved into a crate from one still on its rack,
+  // and prints the departed rack. See placement-resolution.ts.
+  const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(
+    new Map(),
+  );
   const listRef = React.useRef<FlatList<BookGroupedRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
@@ -395,6 +415,36 @@ export default function BooksScreen() {
       setRows(bookRows);
       setServerRowCount(count ?? null);
       setLoadedRowCount(returned);
+
+      // Holdings for exactly the rows just loaded. Failure is non-fatal: an
+      // empty map degrades every card to the custom_fields label, which is the
+      // behaviour before this fetch existed — never a broken list.
+      const ids = bookRows.map((b) => b.id);
+      if (ids.length > 0) {
+        const { data: levels, error: lvlErr } = await supabase
+          .from('item_stock_levels')
+          .select('item_id, quantity, locations!inner(name, kind)')
+          .eq('organization_id', orgId)
+          .in('item_id', ids)
+          .in('locations.kind', ['rack', 'crate'])
+          .gt('quantity', 0);
+        if (lvlErr) console.warn('books holdings', lvlErr);
+        const byItem = new Map<string, RackHoldingLike[]>();
+        for (const lvl of (levels ?? []) as unknown as {
+          item_id: string;
+          quantity: number;
+          locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
+        }[]) {
+          const l = Array.isArray(lvl.locations) ? lvl.locations[0] : lvl.locations;
+          if (!l?.name) continue;
+          const arr = byItem.get(lvl.item_id) ?? [];
+          arr.push({ name: l.name, quantity: Number(lvl.quantity) || 0, kind: l.kind ?? null });
+          byItem.set(lvl.item_id, arr);
+        }
+        setHoldings(byItem);
+      } else {
+        setHoldings(new Map());
+      }
       // A load is the one moment the underlying data may have changed, so the
       // thumbnail cache is invalidated HERE and only here — pull-to-refresh and
       // every query/filter/warehouse change run through this function, while a
@@ -471,22 +521,37 @@ export default function BooksScreen() {
   }, []);
 
   // Secondary line for an expanded placement. Books split by charter/rack
-  // (mig 0234), so the rack label is the most concrete differentiator staff
-  // physically walk to; charter and site are the fallbacks. The two flat
-  // custom_fields keys are the same ones web's readBookStorage() reads
-  // (see apps/web/src/lib/book-storage.ts) — mobile reads them directly
-  // rather than importing a web-only module.
+  // (mig 0234), so the PLACEMENT is the most concrete differentiator staff
+  // physically walk to; charter and site are the fallbacks.
+  //
+  // The rack pair used to be read inline here — a fourth hand-rolled copy of
+  // readBookStorage, and one that consulted neither the holdings nor
+  // bin_location. It therefore printed rack 38-A for a book whose stock had
+  // moved entirely into "Blue Shelf". The decision is now resolvePlacement's;
+  // this callback only picks the compact rendering the narrow card has room
+  // for (bare "38-A", not "Rack 38-A · Crate Red 5").
   const placementLabelFor = React.useCallback(
     (b: BookRow): string | null => {
-      const cf = b.custom_fields ?? {};
-      const n = typeof cf.book_rack_number === 'string' ? cf.book_rack_number.trim() : '';
-      const row = typeof cf.book_rack_row === 'string' ? cf.book_rack_row.trim() : '';
-      const rack = n || row ? [n, row].filter(Boolean).join('-') : null;
+      const res = resolvePlacement({
+        itemType: 'book',
+        customFields: b.custom_fields,
+        binLocation: b.bin_location,
+        holdings: holdings.get(b.id),
+      });
       const charter = b.charter_id ? charterMap.get(b.charter_id) ?? null : null;
       const loc = b.primary_location_id ? locationMap.get(b.primary_location_id) ?? null : null;
-      return rack ?? charter ?? loc;
+      switch (res.source) {
+        case 'holdings':
+          return formatPlacementLabel(res);
+        case 'structured':
+          return res.rackLabel ?? charter ?? loc;
+        case 'bin':
+          return res.binLocation;
+        default:
+          return charter ?? loc;
+      }
     },
-    [charterMap, locationMap],
+    [charterMap, locationMap, holdings],
   );
 
   // ── GROUP FIRST, THEN PAGE ────────────────────────────────────────────────

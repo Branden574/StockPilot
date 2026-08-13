@@ -62,7 +62,7 @@ describe('locationFor', () => {
     expect(locationFor(noItem)).toEqual({ primary: null, secondary: null });
   });
 
-  it('book items still ignore holdings and use rack+crate custom_fields when not split', () => {
+  it('a book with NO holdings data keeps its rack+crate custom_fields', () => {
     const bookLine = {
       ...productLine,
       item: {
@@ -77,5 +77,70 @@ describe('locationFor', () => {
       },
     };
     expect(locationFor(bookLine)).toEqual({ primary: 'Rack 39-B', secondary: 'Crate Red 5' });
+  });
+
+  // ═══ THE 0335 REGRESSION — a crate outranks the item's rack keys ═══
+  //
+  // A put-away into a POSITION-LESS crate preserves book_rack_*/rack_* on
+  // purpose (a partial put-away leaves the rest of the stock on a rack nobody
+  // mentioned), so those keys outlive the stock. This slip used to prefer them
+  // and walk a picker to an aisle the stock had left — worse than blank on a
+  // document someone carries through the warehouse.
+
+  it('prints the CRATE, not the departed rack, for a non-book in a position-less crate', () => {
+    const holdings = new Map([['i1', [{ name: 'Blue Shelf', quantity: 12, kind: 'crate' }]]]);
+    expect(locationFor(productLine, holdings)).toEqual({
+      primary: 'Blue Shelf ×12',
+      secondary: null,
+    });
+  });
+
+  it('prints the CRATE for a book whose rack keys still name its previous rack', () => {
+    const bookLine = {
+      ...productLine,
+      item: {
+        ...productLine.item,
+        item_type: 'book',
+        custom_fields: {
+          book_rack_number: '40',
+          book_rack_row: 'B',
+          book_crate_color: 'gray',
+          book_crate_number: 'BIN',
+        },
+      },
+    };
+    const holdings = new Map([['i1', [{ name: 'Gray #BIN', quantity: 5, kind: 'crate' }]]]);
+    // The verbatim string the regression printed.
+    expect(locationFor(bookLine, holdings)).not.toEqual({
+      primary: 'Rack 40-B',
+      secondary: 'Crate Gray BIN',
+    });
+    expect(locationFor(bookLine, holdings)).toEqual({
+      primary: 'Gray #BIN ×5',
+      secondary: null,
+    });
+  });
+
+  it('a POSITIONED crate keeps its position — the holding name carries the rack', () => {
+    const bookLine = {
+      ...productLine,
+      item: {
+        ...productLine.item,
+        item_type: 'book',
+        custom_fields: { book_rack_number: '43', book_rack_row: 'B' },
+      },
+    };
+    const holdings = new Map([
+      ['i1', [{ name: 'Gray #BIN on rack 43-B', quantity: 5, kind: 'crate' }]],
+    ]);
+    expect(locationFor(bookLine, holdings)).toEqual({
+      primary: 'Gray #BIN on rack 43-B ×5',
+      secondary: null,
+    });
+  });
+
+  it('a single RACK holding still keeps the structured label — the narrowing is crates only', () => {
+    const holdings = new Map([['i1', [{ name: '9-Z', quantity: 3, kind: 'rack' }]]]);
+    expect(locationFor(productLine, holdings)).toEqual({ primary: 'Rack 2-C', secondary: null });
   });
 });

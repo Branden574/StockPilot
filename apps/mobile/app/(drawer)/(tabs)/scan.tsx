@@ -23,7 +23,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
+import {
+  formatPlacementLabel,
+  resolvePlacement,
+  type RackHoldingLike,
+} from '@stockpilot/core';
 
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
@@ -52,6 +56,11 @@ interface FoundItem {
   unit_cost: number;
   primary_location_name: string | null;
   bin_location: string | null;
+  /** Decides which custom_fields key family names the rack — the `book_rack_*`
+   *  twins for a book, the neutral `rack_*` pair for everything else. This
+   *  screen used to read the book keys for EVERY item, so a non-book's rack was
+   *  invisible here while every other surface showed it. */
+  item_type: string | null;
   custom_fields: Record<string, unknown> | null;
   image_url: string | null;
   /** Rack/crate HOLDINGS (item_stock_levels, qty > 0) this item's stock
@@ -193,7 +202,7 @@ export default function Scan() {
       .from('inventory_items')
       .select(
         `id, name, sku, barcode, quantity_on_hand, reorder_point,
-         retail_price, unit_cost, bin_location, custom_fields,
+         retail_price, unit_cost, bin_location, item_type, custom_fields,
          primary_location:locations!primary_location_id (name)`,
       )
       .eq('organization_id', orgId)
@@ -235,9 +244,17 @@ export default function Scan() {
       quantity: number;
       locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
     }[])
-      .map((h) => {
+      .map((h): RackHoldingLike | null => {
         const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
-        return l?.name ? { name: l.name, quantity: Number(h.quantity) || 0 } : null;
+        // `kind` was already being SELECTed above and thrown away right here.
+        // Carrying it is what lets resolvePlacement tell "the stock is in a
+        // crate" from "the stock is on a rack" — without it the crate rule
+        // cannot fire and this screen keeps printing the rack the item's
+        // custom_fields still (deliberately) name after a position-less
+        // put-away. See packages/core/src/inventory/placement-resolution.ts.
+        return l?.name
+          ? { name: l.name, quantity: Number(h.quantity) || 0, kind: l.kind ?? null }
+          : null;
       })
       .filter((h): h is RackHoldingLike => h !== null);
 
@@ -255,6 +272,7 @@ export default function Scan() {
       unit_cost: Number(r.unit_cost) || 0,
       primary_location_name: locName ?? null,
       bin_location: (r.bin_location as string | null) ?? null,
+      item_type: (r.item_type as string | null) ?? null,
       custom_fields: (r.custom_fields as Record<string, unknown> | null) ?? null,
       image_url: imageUrl,
       rackHoldings,
@@ -710,6 +728,27 @@ export default function Scan() {
   }
 
   const storage = item ? readBookStorage(item.custom_fields) : null;
+  // WHERE THE STOCK IS, decided once by the shared resolver rather than by
+  // this screen. The sheet used to draw its "Rack" row UNCONDITIONALLY, beside
+  // both the split breakdown and the Bin/shelf row — so a Chromebook moved
+  // into "Blue Shelf" rendered "Bin/shelf: Blue Shelf" directly above
+  // "Rack: 38-A" and contradicted itself on one screen.
+  const placement = item
+    ? resolvePlacement({
+        itemType: item.item_type ?? null,
+        customFields: item.custom_fields,
+        binLocation: item.bin_location,
+        holdings: item.rackHoldings,
+      })
+    : null;
+  // The item's own rack/crate keys are shown ONLY when they are still what the
+  // stock is known by. Any other resolution means the holdings contradict them.
+  const showStructured = placement?.source === 'structured';
+  // Taken from the RESOLUTION, not from the local readBookStorage above: the
+  // resolver picks the right key family per item_type, so a non-book's
+  // `rack_number`/`rack_row` finally renders here instead of nothing.
+  const structuredRack =
+    placement?.source === 'structured' ? placement.rackLabel : null;
   const crateHex =
     storage?.crateColor && CRATE_HEX[storage.crateColor]
       ? CRATE_HEX[storage.crateColor]
@@ -837,32 +876,31 @@ export default function Scan() {
 
             {(item.primary_location_name ||
               item.bin_location ||
-              item.rackHoldings.length > 1 ||
-              storage?.rackLabel ||
-              storage?.crateNumber ||
+              placement?.source === 'holdings' ||
+              structuredRack ||
+              (showStructured && storage?.crateNumber) ||
               storage?.grade) && (
               <View style={styles.locationBox}>
                 {item.primary_location_name && (
                   <LocRow label="Location" value={item.primary_location_name} />
                 )}
-                {item.rackHoldings.length > 1 ? (
-                  // Stock is SPLIT across more than one rack/crate — the
-                  // single bin_location label would only point at one of
-                  // them, so show the full breakdown instead (mirrors the
-                  // web pick-slip / count-sheet PDFs' locationFor).
+                {placement?.source === 'holdings' ? (
+                  // The HOLDINGS contradict any single label, and the resolver
+                  // says which way: 'split' = stock on more than one rack/crate
+                  // (one label names only one of them); 'crate' = every holding
+                  // is a crate, so the item's rack keys survive naming a rack
+                  // the stock has left (mig 0335 preserves them on purpose).
                   <LocRow
-                    label="Split stock"
-                    value={formatRackHoldings(item.rackHoldings) ?? ''}
+                    label={placement.reason === 'split' ? 'Split stock' : 'In crate'}
+                    value={formatPlacementLabel(placement) ?? ''}
                   />
                 ) : (
                   item.bin_location && (
                     <LocRow label="Bin/shelf" value={item.bin_location} />
                   )
                 )}
-                {storage?.rackLabel && (
-                  <LocRow label="Rack" value={storage.rackLabel} mono />
-                )}
-                {storage?.crateNumber && (
+                {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
+                {showStructured && storage?.crateNumber && (
                   <View style={styles.locRow}>
                     <Text style={styles.locLabel}>Crate</Text>
                     <View

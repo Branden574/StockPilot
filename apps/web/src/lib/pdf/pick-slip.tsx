@@ -1,4 +1,4 @@
-import { formatOrderNumber, formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
+import { formatOrderNumber, type RackHoldingLike } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -12,8 +12,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer';
 
-import { readBookStorage, readItemRack } from '@/lib/book-storage';
-import type { OrderRequestDetail, OrderRequestLineWithItem } from '@/server/services/order-requests';
+import type { OrderRequestDetail } from '@/server/services/order-requests';
 
 /**
  * Editorial palette mirrored from apps/web/src/app/globals.css. The
@@ -488,46 +487,15 @@ const styles = StyleSheet.create({
 
 const PADLEFT_2 = (n: number) => String(n).padStart(2, '0');
 
-/** Exported for direct unit testing — @react-pdf's rendered output isn't
- *  text-extractable in this test suite (existing tests only assert on
- *  buffer size / the %PDF magic header), so the split-vs-single-vs-label
- *  decision is covered by calling this function directly instead. */
-export function locationFor(
-  line: OrderRequestLineWithItem,
-  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>,
-): {
-  primary: string | null;
-  secondary: string | null;
-} {
-  const item = line.item;
-  if (!item) return { primary: null, secondary: null };
+/**
+ * The LOCATION column decision now lives in ONE module shared with the
+ * warehouse packing slip — see lib/pdf/slip-location.ts for why the copy that
+ * used to sit here is gone. Re-exported so this file stays the import site the
+ * PDF and its tests already reference.
+ */
+import { locationFor } from './slip-location';
 
-  // Stock split across >1 rack/crate HOLDING makes the single free-text
-  // label misleading — it points at one rack while stock actually sits on
-  // several, and it can also go stale. When holdings say the item is
-  // split, print the full breakdown ("2-C ×20 · 5-A ×5") so the picker
-  // finds ALL of it instead of walking to just the one rack the label
-  // remembers. Single-holding (or holdings-unavailable) items fall
-  // through to the label exactly as before.
-  const holdings = rackHoldingsByItemId?.get(item.id) ?? [];
-  if (holdings.length > 1) {
-    return { primary: formatRackHoldings(holdings), secondary: null };
-  }
-
-  const cf = (item.custom_fields ?? {}) as Record<string, unknown>;
-  if (item.item_type === 'book') {
-    const info = readBookStorage(cf);
-    return {
-      primary: info.rackLabel ? `Rack ${info.rackLabel}` : null,
-      secondary: info.crateLabel ? `Crate ${info.crateLabel}` : null,
-    };
-  }
-  const info = readItemRack(cf);
-  return {
-    primary: info.rackLabel ? `Rack ${info.rackLabel}` : null,
-    secondary: null,
-  };
-}
+export { locationFor };
 
 /**
  * Brand mark — vector reproduction of the SVG used in the mock so the

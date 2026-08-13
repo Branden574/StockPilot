@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { readBookStorage, readItemRack } from '@/lib/book-storage';
+import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { cn } from '@/lib/utils';
 
@@ -28,6 +28,12 @@ interface PickerRow {
   quantity_on_hand: number;
   item_type: string;
   custom_fields: Record<string, unknown> | null;
+  /** WHERE THE STOCK IS (item_stock_levels + locations.kind), served by
+   *  /api/items/search off the same holdings scan InventoryService.list
+   *  already runs. Without it this picker cannot apply the crate rule, and the
+   *  label a counter reads while CHOOSING what to count disagrees with the
+   *  count sheet the choice produces. */
+  placed_holdings?: RackHoldingLike[];
 }
 
 /** A product group as the picker lists it. Carries a DERIVED roll-up only —
@@ -351,18 +357,18 @@ export function CountItemPicker({
           <ul className="divide-border max-h-80 divide-y overflow-y-auto">
             {rows.map((row) => {
               const checked = Boolean(picks[row.id]);
-              const place =
-                row.item_type === 'book'
-                  ? readBookStorage(row.custom_fields)
-                  : readItemRack(row.custom_fields);
-              const placeLabel = [
-                place.rackLabel ? `Rack ${place.rackLabel}` : null,
-                'crateLabel' in place && place.crateLabel
-                  ? `Crate ${place.crateLabel}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · ');
+              // Same predicate, same rendering as the count SHEET this
+               // selection feeds (lib/pdf/count-sheet-location.ts) — both go
+               // through resolvePlacement + formatPlacementLabel, so the picker
+               // and the printed sheet can no longer name different aisles.
+              const placeLabel =
+                formatPlacementLabel(
+                  resolvePlacement({
+                    itemType: row.item_type,
+                    customFields: row.custom_fields,
+                    holdings: row.placed_holdings,
+                  }),
+                ) ?? '';
               return (
                 <li key={row.id}>
                   <label

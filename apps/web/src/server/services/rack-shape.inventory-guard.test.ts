@@ -218,7 +218,6 @@ const RACK_READ_ONLY = [
   // display / export only — both compose the label, never store a pair
   'apps/web/src/server/loaders/orders-new-catalog.ts',
   'apps/web/src/lib/inventory-export.ts',
-  'apps/mobile/app/(drawer)/(tabs)/books.tsx',
   // THE canonical reader: readItemRack / readBookStorage lift the pair out of
   // custom_fields and join the display label. It writes nothing durable — it is
   // the helper every other reader below should be delegating to.
@@ -230,9 +229,6 @@ const RACK_READ_ONLY = [
   // of a reader is how a reader and a writer come to disagree in the first
   // place. If it grows a write, it moves up to RACK_WRITERS.
   'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
-  // The rental item picker: lifts the non-book pair off custom_fields purely to
-  // label a row, falling back to bin_location. No write.
-  'apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx',
   // THE mapper: the one place a `locations` row becomes a placement
   // destination. It copies the pair into camelCase and hands it to
   // stampPlacementBin, which normalises through the shared parser — so it
@@ -243,7 +239,24 @@ const RACK_READ_ONLY = [
 ] as const;
 
 /**
- * DELIBERATELY ABSENT, and the reason matters.
+ * DELIBERATELY ABSENT (1) — they stopped naming a rack key when the PLACEMENT
+ * PRECEDENCE was extracted.
+ *
+ * `apps/mobile/app/(drawer)/(tabs)/books.tsx` and
+ * `apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx` each used to
+ * lift `rack_number` / `book_rack_row` off `custom_fields` by hand to label a
+ * row — two more hand-rolled copies of a reader, and two more places that
+ * decided on their own which of the rack pair / `bin_location` / the holdings
+ * wins. Both now call `resolvePlacement` (packages/core), which reads the pair
+ * through `readBookStorage` / `readItemRack`, so neither file names a key any
+ * more and the scan stops seeing them.
+ *
+ * If either reappears here, someone re-introduced a hand-rolled read — send it
+ * back to `resolvePlacement` rather than re-adding it to READ_ONLY. The
+ * cross-formatter guard (apps/web/src/lib/placement-label.guard.test.ts) is the
+ * arm that polices the DECISION; this one polices the KEY.
+ *
+ * DELIBERATELY ABSENT (2), and the reason matters.
  *
  * `apps/web/src/server/actions/inventory.ts` and
  * `apps/web/src/app/api/v1/items/[id]/transfer/route.ts` used to appear in

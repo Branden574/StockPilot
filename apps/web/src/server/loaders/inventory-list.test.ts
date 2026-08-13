@@ -463,6 +463,7 @@ function cachedRow(over: Partial<InventoryListCachedRow> = {}): InventoryListCac
     placed_quantity: 10,
     placed_racks: [],
     rackHoldingsCount: 0,
+    placed_holdings: [],
     image_storage_path: null,
     image_thumb_path: null,
     image_lqip: null,

@@ -55,7 +55,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { can, isLikelyIsbn } from '@stockpilot/core';
+import { can, isLikelyIsbn, resolvePlacement } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
 
@@ -623,11 +623,27 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                       ''
                     : '';
                   const isbn = isbnRaw.trim();
+                  // WHERE THE STOCK IS vs what the item REMEMBERS. `storage`
+                  // above is the custom_fields SUMMARY; a put-away into a
+                  // position-less crate preserves it on purpose (mig 0335), so
+                  // it can name a rack the stock has entirely left. The live
+                  // PlacementsBreakdown a few rows up already shows the truth,
+                  // which made this card CONTRADICT ITSELF rather than merely
+                  // mislead — so when the holdings disagree, the summary rows
+                  // stand down and point at the breakdown instead.
+                  const placementRes = resolvePlacement({
+                    itemType: item.item_type as string | null,
+                    customFields: item.custom_fields as Record<string, unknown> | null,
+                    holdings: holdings
+                      .filter((h) => h.kind === 'rack' || h.kind === 'crate')
+                      .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
+                  });
+                  const summaryStands = placementRes.source !== 'holdings';
                   const hasAny =
                     isBook ||
                     storage.grade ||
-                    storage.rackLabel ||
-                    storage.crateNumber ||
+                    (summaryStands && storage.rackLabel) ||
+                    (summaryStands && storage.crateNumber) ||
                     isbn;
                   if (!hasAny) return null;
                   return (
@@ -646,12 +662,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                           <span>{formatGrade(storage.grade)}</span>
                         </DetailRow>
                       )}
-                      {storage.rackLabel && (
+                      {summaryStands && storage.rackLabel && (
                         <DetailRow icon={MapPin} label="Rack">
                           <span className="font-mono tabular-nums">{storage.rackLabel}</span>
                         </DetailRow>
                       )}
-                      {storage.crateNumber && (
+                      {summaryStands && storage.crateNumber && (
                         <DetailRow icon={Box} label="Crate">
                           <span className="inline-flex items-center gap-2">
                             <span
