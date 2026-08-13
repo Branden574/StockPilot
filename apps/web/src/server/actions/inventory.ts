@@ -24,6 +24,8 @@ import {
   planNewLocation,
   refineNewLocation,
   removeStockFromLocationSchema,
+  sumPlacementQuantities,
+  toBookCratePlacementMoves,
   updateItemSchema,
   type ActionResult,
   type AdjustStockInput,
@@ -861,12 +863,15 @@ export async function bulkPlaceStockAction(
       {
         acknowledged: data.acknowledgedCrateChanges,
         toLocationId,
-        moves: new Map(
-          data.placements.map((p) => [
-            p.itemId,
-            { fromLocationId: p.fromLocationId, quantity: p.quantity },
-          ]),
-        ),
+        // NOT `new Map(...)`: that keeps the LAST entry per item, so a book
+        // listed in two placements is described to the gate by only one of its
+        // moves. The gate then reasons "its other holding survives, so it stays
+        // split, so the sync writes nothing" and asks nothing — while both
+        // transfers run and the sync, reading live post-move state, overwrites
+        // the recorded crate. toBookCratePlacementMoves fails CLOSED instead:
+        // an item whose full move set cannot be described is omitted, so the
+        // gate asks about it rather than waiving it.
+        moves: toBookCratePlacementMoves(data.placements),
       },
     );
     let placed = 0;
@@ -905,7 +910,12 @@ export async function bulkPlaceStockAction(
         verified,
         audit: {
           toLocationId,
-          quantityByItemId: new Map(data.placements.map((p) => [p.itemId, p.quantity])),
+          // Also not `new Map(...)`, for a reason that needs no forged request:
+          // the staging table keys rows `${itemId}::${sourceLocationId}` because
+          // one book can hold stock in BOTH staging and unplaced, and Select-all
+          // takes both rows. Last-wins would record only the second quantity
+          // (7 instead of 8 + 7) in the audit trail.
+          quantityByItemId: sumPlacementQuantities(data.placements),
         },
       },
     );

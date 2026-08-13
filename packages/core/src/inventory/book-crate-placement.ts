@@ -158,15 +158,13 @@ export function normalizeCrateNumber(value: string | null | undefined): string |
  *   ('taupe','4')  → "taupe 4"     (null,'42')    → "42"
  *   ('blue',null)  → "Blue"        (null,null)    → null
  *
- * INVARIANT (pinned by the label-matrix tests): whenever
- * `compareBookCratePlacement` reports `changed: true`, these two labels differ.
- * A confirmation that says "X will change to X" is worse than no confirmation
- * at all. The one residual collision is a crate NUMBER whose free text happens
- * to equal "<ColorLabel> <other number>" — ('blue','Shelf') vs (null,'Blue
- * Shelf') both render "Blue Shelf". That is a re-partition of identical text
- * between two columns rather than a move between two crates, and the
- * field-level `describeBookCrateChange` lines the dialog renders still name
- * exactly which column moves.
+ * THIS FUNCTION IS THE RAW COMPOSER and it can still collide: a crate NUMBER
+ * whose free text happens to equal "<ColorLabel> <other number>" renders the
+ * same string as the pair that spells it out — ('blue','Shelf') and
+ * (null,'Blue Shelf') both read "Blue Shelf", and production really does store
+ * "Blue Shelf" as a number. `compareBookCratePlacement` is what resolves that
+ * (see `qualifyCratePlacementLabel`); nothing that shows a user one of these
+ * labels should call this directly.
  */
 export function formatCratePlacementLabel(
   crateColor: string | null | undefined,
@@ -176,6 +174,57 @@ export function formatCratePlacementLabel(
   const number = normalizeText(crateNumber);
   if (color && number) return `${color} ${number}`;
   return color ?? number;
+}
+
+/**
+ * The same label, plus the columns it is made of: "Blue Shelf (crate color
+ * Blue, crate number Shelf)".
+ *
+ * ═══ NEVER SHOW A HUMAN "X will change to X" ═══
+ *
+ * `formatCratePlacementLabel` composes colour and number into one string, so
+ * the SAME text re-partitioned between the two columns composes to the SAME
+ * label while the underlying fields genuinely differ. With this org's real
+ * values that is not a curiosity:
+ *
+ *   book_crate_number 'Blue Shelf' (a real production value, no colour)
+ *     placed into a crate with crate_color 'blue' / crate_number 'Shelf'
+ *   → changed: true, and both labels read "Blue Shelf".
+ *
+ * The refusal then read "Persepolis is recorded in Blue Shelf. Placing it here
+ * will change that to Blue Shelf." — a sentence whose only sane response is to
+ * click Continue, which drops the colour the operator was never told about.
+ * ('blue','4') vs (null,'Blue 4') and ('blue',null) vs (null,'Blue') do the
+ * same thing.
+ *
+ * So whenever the two composed labels READ THE SAME (compared trimmed and
+ * case-insensitively — "Blue 4" and "blue 4" are the same string to a person),
+ * both sides are qualified with their field breakdown. The label-only surfaces
+ * — the server's single-item refusal sentence, the aggregated bulk group list,
+ * the native move sheet's line — then name the column that moves without any
+ * of them having to grow their own field-level branch. `describeBookCrateChange`
+ * already does it per field; this is the same disclosure for the places that
+ * only have room for a label.
+ */
+export function qualifyCratePlacementLabel(
+  crateColor: string | null | undefined,
+  crateNumber: string | null | undefined,
+): string | null {
+  const base = formatCratePlacementLabel(crateColor, crateNumber);
+  if (base === null) return null;
+  const color = formatCrateColorLabel(crateColor);
+  const number = normalizeText(crateNumber);
+  const parts = [
+    color ? `crate color ${color}` : 'no crate color',
+    number ? `crate number ${number}` : 'no crate number',
+  ];
+  return `${base} (${parts.join(', ')})`;
+}
+
+/** Would a person read these two labels as the same string? */
+function labelsReadAlike(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 export interface BookCratePlacementInput {
@@ -194,9 +243,15 @@ export interface BookCratePlacementComparison {
   changed: boolean;
   colorChanged: boolean;
   numberChanged: boolean;
-  /** "Blue 42" — how the item's crate reads today; null when it has none. */
+  /**
+   * "Blue 42" — how the item's crate reads today; null when it has none.
+   * QUALIFIED with its field breakdown ("Blue Shelf (crate color Blue, crate
+   * number Shelf)") when `changed` and the two labels would otherwise read
+   * alike, so no surface can render the same string on both sides.
+   */
   currentLabel: string | null;
-  /** "Green 2" — how it would read after; null when the destination is a rack. */
+  /** "Green 2" — how it would read after; null when the destination is a rack.
+   *  Qualified alongside `currentLabel` under the same condition. */
   nextLabel: string | null;
   /** True when the item carries no crate color AND no crate number today. */
   isFirstAssignment: boolean;
@@ -238,15 +293,26 @@ export function compareBookCratePlacement(
 
   const colorChanged = fieldOverwritten(currentColor, nextColor);
   const numberChanged = fieldOverwritten(currentNumber, nextNumber);
+  const changed = colorChanged || numberChanged;
+
+  // Labels are built from the RAW values so the user sees what is actually
+  // stored ("Bin", "Blue Shelf"), not the lower-cased comparison key.
+  let currentLabel = formatCratePlacementLabel(input.currentColor, input.currentNumber);
+  let nextLabel = formatCratePlacementLabel(input.nextColor, input.nextNumber);
+  // THE INVARIANT, enforced here rather than asked of every caller: a reported
+  // change never renders as one label twice. When the composed strings read
+  // alike, both grow their field breakdown — see qualifyCratePlacementLabel.
+  if (changed && labelsReadAlike(currentLabel, nextLabel)) {
+    currentLabel = qualifyCratePlacementLabel(input.currentColor, input.currentNumber);
+    nextLabel = qualifyCratePlacementLabel(input.nextColor, input.nextNumber);
+  }
 
   return {
-    changed: colorChanged || numberChanged,
+    changed,
     colorChanged,
     numberChanged,
-    // Labels are built from the RAW values so the user sees what is actually
-    // stored ("Bin", "Blue Shelf"), not the lower-cased comparison key.
-    currentLabel: formatCratePlacementLabel(input.currentColor, input.currentNumber),
-    nextLabel: formatCratePlacementLabel(input.nextColor, input.nextNumber),
+    currentLabel,
+    nextLabel,
     isFirstAssignment: currentColor === null && currentNumber === null,
   };
 }
@@ -402,7 +468,14 @@ export function bookCrateAcknowledgementsMatch(
   sent: ReadonlyArray<BookCrateAcknowledgedChange> | null | undefined,
   required: ReadonlyArray<BookCrateAcknowledgedChange>,
 ): boolean {
-  const key = (a: BookCrateAcknowledgedChange) => `${a.itemId} ${a.currentFingerprint}`;
+  // JSON-encode rather than joining on a separator: itemId and fingerprint are
+  // both attacker-influenced strings, so any literal delimiter can be smuggled
+  // into a value to make two different pairs share one key. A NUL separator
+  // would also be collision-proof, but it makes this file read as binary to
+  // git, grep and review tools — one was already removed from inventory.ts for
+  // exactly that reason.
+  const key = (a: BookCrateAcknowledgedChange) =>
+    JSON.stringify([a.itemId, a.currentFingerprint]);
   const have = new Set((sent ?? []).map(key));
   return required.every((r) => have.has(key(r)));
 }
@@ -497,6 +570,65 @@ export function bookCratePlacementWillSync(input: {
     if (remaining > 0) return false;
   }
   return true;
+}
+
+/**
+ * Build the per-item move map the gate reasons about, from a batch of
+ * placements — and OMIT any item that appears more than once.
+ *
+ * ═══ AN ITEM DESCRIBED BY ONE OF ITS TWO MOVES IS DESCRIBED WRONGLY ═══
+ *
+ * The gate uses `moves` to answer "will the reconciliation actually write this
+ * book's summary" (`bookCratePlacementWillSync`), and that answer is only as
+ * good as the move-set it was given. A batch was previously turned into
+ * `new Map(placements.map(p => [p.itemId, …]))`, and `new Map` keeps the LAST
+ * entry per key — so a book listed TWICE was described by half its move:
+ *
+ *   The Outsiders holds 10 in rack A and 5 in staging. A batch places BOTH into
+ *   crate Green 2. The map keeps only the staging line, so the gate looks at
+ *   rack A, sees 10 units that survive "this" move, concludes the book stays
+ *   SPLIT, and therefore concludes the sync will write nothing — so it asks
+ *   nothing. Both transfers then run, rack A is emptied, the book's only
+ *   placement IS Green 2, and the sync writes it. The freshness proof cannot
+ *   catch it either: the row never changed, so nothing is stale. A crate a
+ *   human recorded is destroyed with no confirmation and no flag.
+ *
+ * Two placements for one item is NOT a forged-request-only shape: the staging
+ * worklist emits one row per holding (`itemId::sourceLocationId`), so a book
+ * sitting in both the staging and the unplaced bucket is two selectable rows.
+ * Rejecting the payload would newly refuse that shipped selection.
+ *
+ * So this FAILS CLOSED instead: an item whose full move-set cannot be
+ * expressed as one entry is left OUT of the map, and the gate's own
+ * fail-closed rule (no entry → "assume the sync writes") makes it ASK. The
+ * worst case is one confirmation the operator could arguably have been spared;
+ * the alternative was a silent overwrite.
+ */
+export function toBookCratePlacementMoves(
+  placements: ReadonlyArray<{ itemId: string; fromLocationId: string; quantity: number }>,
+): Map<string, { fromLocationId: string; quantity: number }> {
+  const seen = new Map<string, number>();
+  for (const p of placements) seen.set(p.itemId, (seen.get(p.itemId) ?? 0) + 1);
+  const out = new Map<string, { fromLocationId: string; quantity: number }>();
+  for (const p of placements) {
+    if ((seen.get(p.itemId) ?? 0) > 1) continue;
+    out.set(p.itemId, { fromLocationId: p.fromLocationId, quantity: p.quantity });
+  }
+  return out;
+}
+
+/**
+ * Units placed per item across a batch — SUMMED, not last-wins.
+ *
+ * Only the audit trail reads this, and the same duplicate that fooled the gate
+ * made it under-report: two placements of 20 and 20 recorded "quantity: 20".
+ */
+export function sumPlacementQuantities(
+  placements: ReadonlyArray<{ itemId: string; quantity: number }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const p of placements) out.set(p.itemId, (out.get(p.itemId) ?? 0) + p.quantity);
+  return out;
 }
 
 /**
@@ -595,7 +727,10 @@ export function summarizeBookCrateChanges(
 } {
   const counts = new Map<string, { currentLabel: string | null; count: number }>();
   for (const it of items) {
-    const key = it.currentLabel ?? ' none';
+    // JSON-encode so the "no crate" bucket cannot be impersonated by a book
+    // whose crate label is literally the sentinel text. null encodes as `null`
+    // and a real label as `"null"`, which are distinct keys.
+    const key = JSON.stringify(it.currentLabel ?? null);
     const entry = counts.get(key) ?? { currentLabel: it.currentLabel, count: 0 };
     entry.count += 1;
     counts.set(key, entry);
