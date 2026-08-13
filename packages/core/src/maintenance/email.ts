@@ -49,6 +49,7 @@
  */
 import {
   composeOutlookWebUrl,
+  composeOutlookMobileUrl,
   composeMailtoUrl,
   composeClipboardText,
   DRAFT_URL_LIMIT,
@@ -115,7 +116,15 @@ export interface MaintenanceEmailDraft {
 
 export interface PreparedMaintenanceEmail {
   draft: MaintenanceEmailDraft;
+  /** OWA WEB compose deep link (https). What the web app opens in a new tab.
+   *  Unchanged, byte-for-byte — do NOT repoint this at the native scheme. */
   outlookUrl: string;
+  /** NATIVE Outlook app deep link (ms-outlook://compose). ADDED alongside
+   *  `outlookUrl`, never instead of it: handing the https URL to
+   *  Linking.openURL lands the employee in a browser on Outlook Web, which is
+   *  correct on desktop and wrong on a phone. Same draft, same CC, same
+   *  encoder — only the transport differs. */
+  outlookMobileUrl: string;
   mailtoUrl: string;
   /** ALWAYS the full draft — the clipboard has no URL-length limit. */
   clipboardText: string;
@@ -382,7 +391,11 @@ export function buildMaintenanceEmailDraft(
   };
 }
 
-function urlsFor(draft: MaintenanceEmailDraft): { outlookUrl: string; mailtoUrl: string } {
+function urlsFor(draft: MaintenanceEmailDraft): {
+  outlookUrl: string;
+  outlookMobileUrl: string;
+  mailtoUrl: string;
+} {
   return {
     outlookUrl: composeOutlookWebUrl({
       to: draft.to,
@@ -394,6 +407,16 @@ function urlsFor(draft: MaintenanceEmailDraft): { outlookUrl: string; mailtoUrl:
       // (Task 4 forward-note: composeOutlookWebUrl throws on unsafe names).
       toName: L4L_MAINTENANCE_EMAIL_NAMES.to,
       ccName: L4L_MAINTENANCE_EMAIL_NAMES.cc,
+    }),
+    // Same draft object — the mobile app NEVER rebuilds maintenance email
+    // content of its own. The native composer takes bare addresses (its own
+    // doc explains why the cosmetic chips stop at the OWA boundary), so the
+    // frozen display names are not passed here at all.
+    outlookMobileUrl: composeOutlookMobileUrl({
+      to: draft.to,
+      cc: draft.cc,
+      subject: draft.subject,
+      body: draft.body,
     }),
     mailtoUrl: composeMailtoUrl(draft),
   };
@@ -409,6 +432,15 @@ export function prepareMaintenanceEmail(input: MaintenanceEmailInput): PreparedM
   // in both return paths below.
   const clipboardText = composeClipboardText(full);
 
+  // The measured pair stays EXACTLY the web URL and the mailto URL — the
+  // condense decision (and therefore the body every platform sends) is
+  // byte-identical to what shipped. `outlookMobileUrl` is deliberately NOT
+  // added to this comparison: it is structurally shorter than `outlookUrl`
+  // for identical input (one encoding layer onto a 20-char scheme, versus a
+  // double-encoded inner mailto onto a 52-char https base), so the existing
+  // guard already covers it. Pinned by test in BOTH email.test.ts and
+  // outlook-compose.test.ts — if that inequality ever inverts, those tests
+  // fail and this comparison has to grow a third term.
   if (fullUrls.outlookUrl.length <= DRAFT_URL_LIMIT && fullUrls.mailtoUrl.length <= DRAFT_URL_LIMIT) {
     return { draft: full, ...fullUrls, clipboardText, linkFits: true };
   }

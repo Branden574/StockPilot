@@ -10,13 +10,17 @@ import {
   CONDENSED_NOTICE,
   COPY_HELPER_TEXT,
   DUPLICATE_WARNING,
+  MAIL_APP_SUCCESS_MESSAGE,
+  NATIVE_OUTLOOK_CC_TRUSTED,
   OVERSIZED_MESSAGE,
   SUCCESS_MESSAGE,
   openMailtoDraft,
   openMaintenanceDraft,
   openOutlookDraft,
+  planOutlookOpen,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  successMessageFor,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
   withShareUrl,
@@ -55,11 +59,58 @@ const PREPARED = prepareMaintenanceEmail({
 
 beforeEach(() => vi.clearAllMocks());
 
+/** The one thing every branch of this file has to prove: whatever URL we
+ *  hand the OS, the mandatory CC is in it. Decodes an opaque-scheme deep link
+ *  (ms-outlook:, mailto:) or the https OWA wrapper. */
+function ccOf(url: string): string | undefined {
+  const inner = url.includes('mailtouri=')
+    ? decodeURIComponent(url.slice(url.indexOf('mailtouri=') + 'mailtouri='.length))
+    : url;
+  const q = inner.indexOf('?');
+  if (q === -1) return undefined;
+  for (const pair of inner.slice(q + 1).split('&')) {
+    const eq = pair.indexOf('=');
+    if (pair.slice(0, eq) === 'cc') return decodeURIComponent(pair.slice(eq + 1));
+  }
+  return undefined;
+}
+
+/** The mandatory CC, in the only two forms any transport is allowed to carry
+ *  it: BARE on the native/mailto links, and as the tenant-verified OWA
+ *  name-addr chip on the web one. Anything else — absent, empty, split into a
+ *  second recipient — fails. */
+const ACCEPTED_CC_FORMS = ['arosas@cvwest.org', 'Andrew Rosas <arosas@cvwest.org>'];
+
 describe('mobile email actions (string assertions ONLY — never a real open in tests)', () => {
-  it('outlook action opens the tenant-verified compose URL', async () => {
-    await expect(openOutlookDraft(PREPARED)).resolves.toBe('opened');
+  it('THE FIX: the outlook action opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
+    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('opened');
+    const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+    expect(url.startsWith('ms-outlook://compose?')).toBe(true);
+    expect(url.startsWith('http')).toBe(false);
+    // CC GATE at the actual call site — not just in the composer:
+    expect(ccOf(url)).toBe('arosas@cvwest.org');
+  });
+
+  it('CC GATE: exactly ONE openURL invocation per tap — the deep link is never auto-retried (duplicate compose screens)', async () => {
+    await openOutlookDraft(PREPARED, 'ios');
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('no native Outlook installed: falls back to the tenant-verified web compose URL, CC still intact', async () => {
+    vi.mocked(Linking.canOpenURL).mockResolvedValueOnce(false);
+    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('opened');
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(true);
+    expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
+  });
+
+  it('a canOpenURL rejection is treated as "not installed", never as a crash — one open, web transport', async () => {
+    vi.mocked(Linking.canOpenURL).mockRejectedValueOnce(new Error('scheme not declared'));
+    await expect(openOutlookDraft(PREPARED, 'android')).resolves.toBe('opened');
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+    expect(url.startsWith('https://outlook.cloud.microsoft/')).toBe(true);
   });
 
   it('mailto action opens the RFC 6068 URL with the CC intact', async () => {
@@ -68,16 +119,60 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
     expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
   });
 
-  it('linkFits=false refuses to open either transport', async () => {
+  it('linkFits=false refuses to open either transport (and never even probes for Outlook)', async () => {
     const oversized = { ...PREPARED, linkFits: false };
-    await expect(openOutlookDraft(oversized)).resolves.toBe('blocked');
+    await expect(openOutlookDraft(oversized, 'ios')).resolves.toBe('blocked');
     await expect(openMailtoDraft(oversized)).resolves.toBe('blocked');
     expect(Linking.openURL).not.toHaveBeenCalled();
+    expect(Linking.canOpenURL).not.toHaveBeenCalled();
   });
 
-  it('an openURL rejection reports blocked instead of throwing', async () => {
+  it('an openURL rejection reports blocked instead of throwing — and does NOT silently open something else', async () => {
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
-    await expect(openOutlookDraft(PREPARED)).resolves.toBe('blocked');
+    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('blocked');
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('planOutlookOpen — transport decision (CC beats the Outlook brand)', () => {
+  it('native Outlook present on a cc-trusted platform: the ms-outlook deep link', () => {
+    for (const platform of ['ios', 'android'] as const) {
+      const plan = planOutlookOpen(PREPARED, { nativeOutlookAvailable: true, platform });
+      expect(plan).toEqual({ transport: 'outlook-native', url: PREPARED.outlookMobileUrl });
+    }
+  });
+
+  it('native Outlook absent: the EXISTING web compose URL — never a silent switch to another mailbox', () => {
+    const plan = planOutlookOpen(PREPARED, { nativeOutlookAvailable: false, platform: 'ios' });
+    expect(plan).toEqual({ transport: 'outlook-web', url: PREPARED.outlookUrl });
+  });
+
+  it('a platform whose native Outlook is found to DROP cc= falls back to mailto: — the business invariant wins', () => {
+    // The owner-owned device check is the only thing that can establish this;
+    // flipping the entry below is the whole remediation, no redesign.
+    const plan = planOutlookOpen(
+      PREPARED,
+      { nativeOutlookAvailable: true, platform: 'android' },
+      { ios: true, android: false },
+    );
+    expect(plan).toEqual({ transport: 'default-mail', url: PREPARED.mailtoUrl });
+  });
+
+  it('CC GATE: every branch of the decision produces a URL that carries the cc', () => {
+    const plans = [
+      planOutlookOpen(PREPARED, { nativeOutlookAvailable: true, platform: 'ios' }),
+      planOutlookOpen(PREPARED, { nativeOutlookAvailable: false, platform: 'ios' }),
+      planOutlookOpen(PREPARED, { nativeOutlookAvailable: true, platform: 'android' }, { ios: false, android: false }),
+    ];
+    expect(plans).toHaveLength(3);
+    expect(new Set(plans.map((p) => p.transport)).size).toBe(3);
+    for (const plan of plans) {
+      expect(ACCEPTED_CC_FORMS).toContain(ccOf(plan.url));
+    }
+  });
+
+  it('both platforms currently ship TRUSTING the native transport (pinned so a flip is a deliberate, reviewed edit)', () => {
+    expect(NATIVE_OUTLOOK_CC_TRUSTED).toEqual({ ios: true, android: true });
   });
 });
 
@@ -89,29 +184,69 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
       return true;
     });
     const onOpened = vi.fn(() => order.push('recorded'));
-    await expect(openMaintenanceDraft('outlook', PREPARED, onOpened)).resolves.toBe('opened');
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
     expect(onOpened).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['opened-url', 'recorded']);
   });
 
   it('calls onOpened exactly once for a successful mailto open', async () => {
     const onOpened = vi.fn();
-    await expect(openMaintenanceDraft('mailto', PREPARED, onOpened)).resolves.toBe('opened');
+    await expect(openMaintenanceDraft('mailto', PREPARED, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'opened',
+      used: 'default-mail',
+    });
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports which transport ACTUALLY ran, so the screen never claims Outlook opened when it did not', async () => {
+    vi.mocked(Linking.canOpenURL).mockResolvedValueOnce(false);
+    const onOpened = vi.fn();
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'android', onOpened)).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-web',
+    });
   });
 
   it('never calls onOpened when the open is blocked by an oversized draft', async () => {
     const oversized = { ...PREPARED, linkFits: false };
     const onOpened = vi.fn();
-    await expect(openMaintenanceDraft('outlook', oversized, onOpened)).resolves.toBe('blocked');
+    await expect(openMaintenanceDraft('outlook', oversized, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+    });
     expect(onOpened).not.toHaveBeenCalled();
   });
 
   it('never calls onOpened when Linking.openURL rejects (a failed open must not be recorded as opened)', async () => {
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
     const onOpened = vi.fn();
-    await expect(openMaintenanceDraft('outlook', PREPARED, onOpened)).resolves.toBe('blocked');
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+    });
     expect(onOpened).not.toHaveBeenCalled();
+    // One tap, one invocation — no automatic second attempt down another
+    // transport, which is how duplicate compose screens got created before.
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('successMessageFor — the copy matches the transport that actually ran', () => {
+  it('names Outlook only when Outlook (native or web) is what opened', () => {
+    expect(successMessageFor('outlook-native')).toBe(SUCCESS_MESSAGE);
+    expect(successMessageFor('outlook-web')).toBe(SUCCESS_MESSAGE);
+  });
+
+  it('says "email app" — never "Outlook" — when the mailto fallback is what opened', () => {
+    expect(successMessageFor('default-mail')).toBe(MAIL_APP_SUCCESS_MESSAGE);
+    expect(MAIL_APP_SUCCESS_MESSAGE).not.toContain('Outlook');
+  });
+
+  it('a null transport (nothing opened) still never claims a send', () => {
+    expect(successMessageFor(null)).toBe(SUCCESS_MESSAGE);
   });
 });
 
@@ -197,6 +332,7 @@ describe('exported copy is the literal, brief-pinned text', () => {
     ];
     for (const text of [
       SUCCESS_MESSAGE,
+      MAIL_APP_SUCCESS_MESSAGE,
       BLOCKED_HEADLINE,
       BLOCKED_RETRY_MESSAGE,
       DUPLICATE_WARNING,

@@ -63,6 +63,17 @@ const config: ExpoConfig = {
       // by Apple's export-compliance prompt at submit time; setting it
       // here means TestFlight/App Store builds skip the question.
       ITSAppUsesNonExemptEncryption: false,
+      // Schemes this app is allowed to ASK about. Since iOS 9,
+      // Linking.canOpenURL() returns false for any scheme missing from this
+      // list EVEN WHEN THE APP IS INSTALLED — so without `ms-outlook` the
+      // maintenance screen can never detect native Outlook and always falls
+      // back to the browser (which is the bug being fixed). Declaring a
+      // scheme grants no ability to open anything the user hasn't asked for;
+      // it only makes the probe answer truthfully.
+      // NOTE: this is NATIVE config. It reaches devices only through a NEW
+      // BINARY (EAS build) — `pnpm release:ota` cannot deliver it, and on an
+      // OTA-only 1.2.0 build the fallback path stays in force.
+      LSApplicationQueriesSchemes: ['ms-outlook'],
     },
   },
   android: {
@@ -183,6 +194,12 @@ const config: ExpoConfig = {
         url: 'https://sentry.io/',
       },
     ],
+    // Android twin of the iOS LSApplicationQueriesSchemes entry above: adds
+    // the <queries> block that lets Linking.canOpenURL see native Outlook on
+    // API 30+. No ExpoConfig key exists for <queries>, hence a plugin. It
+    // edits the PARSED AndroidManifest (never string-matches generated
+    // files), and is idempotent. See the file header for the full rationale.
+    './plugins/with-android-outlook-queries.js',
   ],
   experiments: {
     typedRoutes: true,

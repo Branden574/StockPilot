@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   OUTLOOK_COMPOSE_BASE,
+  OUTLOOK_MOBILE_COMPOSE_BASE,
   DRAFT_URL_LIMIT,
   encodeDraftQuery,
   composeOutlookWebUrl,
+  composeOutlookMobileUrl,
   composeMailtoUrl,
   composeClipboardText,
   createOutlookComposeEmail,
@@ -151,6 +153,148 @@ describe('outlook-compose transport', () => {
     expect(assertSafeDisplayName('Fresno Warehouse DC4')).toBe('Fresno Warehouse DC4');
     for (const bad of ['A, B', 'A <B>', 'A "B"', 'A @ B', 'A; B']) {
       expect(() => assertSafeDisplayName(bad)).toThrow();
+    }
+  });
+});
+
+/** Reference decode for an opaque-scheme deep link. `ms-outlook:` is NOT a
+ *  hierarchical URL any more than `mailto:` is — slice at the first '?',
+ *  never new URL().searchParams. */
+function decodeMobileCompose(url: string): { base: string; params: Record<string, string>; order: string[] } {
+  const q = url.indexOf('?');
+  const base = url.slice(0, q === -1 ? undefined : q);
+  const params: Record<string, string> = {};
+  const order: string[] = [];
+  if (q !== -1) {
+    for (const pair of url.slice(q + 1).split('&')) {
+      const eq = pair.indexOf('=');
+      const key = pair.slice(0, eq);
+      order.push(key);
+      params[key] = decodeURIComponent(pair.slice(eq + 1));
+    }
+  }
+  return { base, params, order };
+}
+
+/**
+ * THE CC ACCEPTANCE GATE for the native transport.
+ *
+ * The maintenance workflow depends on the requester creating the Zendesk
+ * ticket while a FIXED cc address receives the copy. "Outlook opened" is not
+ * success — a compose screen that opened with the cc silently missing is a
+ * WORSE failure than not opening at all, because nobody notices. Every
+ * assertion below exists to make a dropped cc a red test, not a quiet
+ * business-process break.
+ */
+describe('composeOutlookMobileUrl — native ms-outlook: transport (CC regression gate)', () => {
+  it('is a NATIVE app scheme, never an https URL (the whole bug: expo-linking hands https to the browser)', () => {
+    expect(OUTLOOK_MOBILE_COMPOSE_BASE).toBe('ms-outlook://compose');
+    const url = composeOutlookMobileUrl(BASE_INPUT);
+    expect(url.startsWith('ms-outlook://compose?')).toBe(true);
+    expect(url.startsWith('http')).toBe(false);
+    expect(url).not.toContain('outlook.cloud.microsoft');
+    expect(url).not.toContain('mailtouri=');
+  });
+
+  it('CC GATE: the cc parameter is present and decodes to the exact address', () => {
+    const { params } = decodeMobileCompose(composeOutlookMobileUrl(BASE_INPUT));
+    expect('cc' in params).toBe(true);
+    expect(params.cc).toBe('cc@example.test');
+    // An EMPTY cc= would satisfy "the param exists" while dropping the copy:
+    expect((params.cc ?? '').length).toBeGreaterThan(0);
+  });
+
+  it('golden URL: known input, full literal string (to, cc, subject, body — in that order)', () => {
+    // Hardcoded end-to-end, NOT derived by calling encodeDraftQuery or the
+    // composer — this is the actual byte string handed to Linking.openURL.
+    expect(composeOutlookMobileUrl(BASE_INPUT)).toBe(
+      'ms-outlook://compose?to=to%40example.test&cc=cc%40example.test&subject=Subject%20with%20spaces%20%26%20specials&body=Line%20one%0ALine%20two',
+    );
+    expect(decodeMobileCompose(composeOutlookMobileUrl(BASE_INPUT)).order).toEqual([
+      'to',
+      'cc',
+      'subject',
+      'body',
+    ]);
+  });
+
+  it('uses the SAME encodeDraftQuery encoder as the web path: %20 for spaces, never +', () => {
+    const url = composeOutlookMobileUrl(BASE_INPUT);
+    expect(url).toBe(
+      `${OUTLOOK_MOBILE_COMPOSE_BASE}?${encodeDraftQuery({
+        to: BASE_INPUT.to,
+        cc: BASE_INPUT.cc,
+        subject: BASE_INPUT.subject,
+        body: BASE_INPUT.body,
+      })}`,
+    );
+    expect(url).not.toContain('+');
+    expect(url).toContain('%20');
+  });
+
+  it('one encoding layer only: decode recovers the exact subject and body, unicode included', () => {
+    const { params } = decodeMobileCompose(
+      composeOutlookMobileUrl({
+        ...BASE_INPUT,
+        subject: 'Café résumé 日本語 test',
+        body: 'Price: $5 + tax\napostrophe test',
+      }),
+    );
+    expect(params.to).toBe('to@example.test');
+    expect(params.cc).toBe('cc@example.test');
+    expect(params.subject).toBe('Café résumé 日本語 test');
+    expect(params.body).toBe('Price: $5 + tax\napostrophe test');
+  });
+
+  it('CC GATE: the SAME assertSafeDisplayName guard applies — an RFC 5322 special in a name THROWS, it never splits the recipients', () => {
+    // Why the guard has to run on this path too: an unquoted name-addr
+    // containing a comma/semicolon/angle bracket splits into TWO recipients,
+    // and the mandatory cc is what silently disappears. Failing loudly is the
+    // only acceptable outcome — on both transports, identically.
+    for (const bad of ['A, B', 'A <B>', 'A "B"', 'A @ B', 'A; B']) {
+      expect(() => composeOutlookMobileUrl({ ...BASE_INPUT, ccName: bad })).toThrow();
+      expect(() => composeOutlookMobileUrl({ ...BASE_INPUT, toName: bad })).toThrow();
+      // ...exactly as the web path already does, for the same input:
+      expect(() => composeOutlookWebUrl({ ...BASE_INPUT, ccName: bad })).toThrow();
+    }
+    expect(() => composeOutlookMobileUrl({ ...BASE_INPUT, toName: "O'Brien Warehouse" })).not.toThrow();
+  });
+
+  it('CC GATE: addresses ride BARE — a cosmetic display name never reshapes the cc value handed to an unverified parser', () => {
+    // The name-addr chip is a VERIFIED OWA-web parser extension (see the
+    // module doc). The native app is a different parser that nobody in this
+    // repo has verified, and the failure mode of guessing wrong is exactly
+    // the silent cc drop this gate exists to prevent. So the mobile deep link
+    // holds the same bare-address boundary composeMailtoUrl already holds:
+    // names are validated, then left out of the wire format. A missing chip
+    // is cosmetic; a missing cc breaks the workflow.
+    const named = composeOutlookMobileUrl({ ...BASE_INPUT, toName: 'To Name', ccName: 'Cc Name' });
+    expect(named).toBe(composeOutlookMobileUrl(BASE_INPUT));
+    const { params } = decodeMobileCompose(named);
+    expect(params.cc).toBe('cc@example.test');
+    expect(params.to).toBe('to@example.test');
+    expect(named).not.toContain('Cc%20Name');
+    expect(named).not.toContain('%3C');
+  });
+
+  it('cc is OPTIONAL at the transport layer: an omitted cc emits no empty cc= param', () => {
+    const url = composeOutlookMobileUrl({ to: 'to@example.test', subject: 'S', body: 'B' });
+    expect(url).toBe('ms-outlook://compose?to=to%40example.test&subject=S&body=B');
+    expect(decodeMobileCompose(url).params).not.toHaveProperty('cc');
+  });
+
+  it('never longer than the web compose URL, so the shared DRAFT_URL_LIMIT guard already covers it', () => {
+    // The web URL double-encodes an inner mailto: URI (every %xx becomes
+    // %25xx) on top of a 52-char https base; this one encodes once onto a
+    // 20-char scheme. That is why callers can keep measuring the web URL as
+    // the binding constraint. If this ever inverts, the length guard has to
+    // be revisited — hence the pin.
+    for (const input of [
+      BASE_INPUT,
+      { ...BASE_INPUT, body: 'x'.repeat(1200) },
+      { ...BASE_INPUT, body: 'line\nline '.repeat(120) },
+    ]) {
+      expect(composeOutlookMobileUrl(input).length).toBeLessThan(composeOutlookWebUrl(input).length);
     }
   });
 });
