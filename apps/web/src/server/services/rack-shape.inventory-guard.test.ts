@@ -229,6 +229,19 @@ const RACK_READ_ONLY = [
   // of a reader is how a reader and a writer come to disagree in the first
   // place. If it grows a write, it moves up to RACK_WRITERS.
   'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
+  // The native ITEM screen, and the SECOND hand-rolled copy of the core reader
+  // (the block dates to the 2026-07-10 crate-fields fix, long before this
+  // branch — it is not new, it is newly VISIBLE, because widening this arm to
+  // see guarded reads is what finally surfaced it). It lifts the pair with its
+  // own book-first / product-first fallback plus three legacy spellings
+  // (`rackLabel` / `rack_label` / `rack`) that `readItemRack` does not know
+  // about, which is exactly why deleting it is a real change and not a tidy-up:
+  // dropping those spellings would blank the rack for legacy-imported items.
+  // Reads only — it stores nothing. OWED: fold the legacy spellings into the
+  // core reader, then delete this copy and remove this entry. Until then it is
+  // listed rather than hidden, because an unclassified reader is how a reader
+  // and a writer come to disagree.
+  'apps/mobile/app/item/[id].tsx',
   // THE mapper: the one place a `locations` row becomes a placement
   // destination. It copies the pair into camelCase and hands it to
   // stampPlacementBin, which normalises through the shared parser — so it

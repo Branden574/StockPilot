@@ -25,6 +25,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   formatPlacementLabel,
+  holdingsContradictRack,
   resolvePlacement,
   type RackHoldingLike,
 } from '@stockpilot/core';
@@ -729,10 +730,11 @@ export default function Scan() {
 
   const storage = item ? readBookStorage(item.custom_fields) : null;
   // WHERE THE STOCK IS, decided once by the shared resolver rather than by
-  // this screen. The sheet used to draw its "Rack" row UNCONDITIONALLY, beside
-  // both the split breakdown and the Bin/shelf row — so a Chromebook moved
-  // into "Blue Shelf" rendered "Bin/shelf: Blue Shelf" directly above
-  // "Rack: 38-A" and contradicted itself on one screen.
+  // this screen. Drives the holdings row and the Bin/shelf row it displaces.
+  // The Chromebook this fix was for — moved wholly into "Blue Shelf" while its
+  // `rack_number` pair still says 38-A — is caught by the refutation predicate
+  // below, not here; before either existed the sheet printed "Bin/shelf: Blue
+  // Shelf" directly above "Rack: 38-A" and contradicted itself on one screen.
   const placement = item
     ? resolvePlacement({
         itemType: item.item_type ?? null,
@@ -741,14 +743,37 @@ export default function Scan() {
         holdings: item.rackHoldings,
       })
     : null;
-  // The item's own rack/crate keys are shown ONLY when they are still what the
-  // stock is known by. Any other resolution means the holdings contradict them.
-  const showStructured = placement?.source === 'structured';
-  // Taken from the RESOLUTION, not from the local readBookStorage above: the
-  // resolver picks the right key family per item_type, so a non-book's
-  // `rack_number`/`rack_row` finally renders here instead of nothing.
+  // WHAT THE ITEM REMEMBERS, as opposed to where the stock is. Same resolver,
+  // holdings deliberately WITHHELD: a caller that carries none gets the item's
+  // own structured pair back (see "WHY `holdings` AND `kind` ARE BOTH OPTIONAL"
+  // in placement-resolution.ts), read through the resolver's key-family rule —
+  // `book_rack_*` for a book, the neutral `rack_*` pair for everything else —
+  // so a non-book's rack renders here instead of nothing, and this screen owns
+  // no second copy of which keys to read.
+  const summary = item
+    ? resolvePlacement({ itemType: item.item_type ?? null, customFields: item.custom_fields })
+    : null;
+  const summaryRack = summary?.source === 'structured' ? summary.rackLabel : null;
+  // A SPLIT IS NOT A CONTRADICTION. This sheet gated its Rack and Crate rows on
+  // `placement.source === 'structured'`, which is false for every split — so a
+  // book split across two racks scanned with NO Rack and NO Crate row beside
+  // its "Split stock: 39-B x4 · 5-A x5" line. main showed both unconditionally,
+  // for stock whose summary was perfectly true, and the same fold has now been
+  // undone twice already (web item-detail.tsx, app/item/[id].tsx). This sheet
+  // has room for the summary AND the holdings, so it hides a summary only when
+  // the holdings REFUTE it, which is a different question and has its own
+  // predicate. Nothing here refutes a CRATE note, so that row is gated on
+  // nothing at all.
+  //
+  // `summaryRack` is a STRUCTURED value, never a rendered label: the predicate
+  // canonicalises both sides through parseRackLabel, which splits a rack on its
+  // last DASH. Hand it a display string joined any other way ("38 · A") and it
+  // parses as a row-less number that matches no holding, quietly reporting
+  // every true label as refuted.
   const structuredRack =
-    placement?.source === 'structured' ? placement.rackLabel : null;
+    summaryRack && !holdingsContradictRack(summaryRack, item?.rackHoldings)
+      ? summaryRack
+      : null;
   const crateHex =
     storage?.crateColor && CRATE_HEX[storage.crateColor]
       ? CRATE_HEX[storage.crateColor]
@@ -878,7 +903,7 @@ export default function Scan() {
               item.bin_location ||
               placement?.source === 'holdings' ||
               structuredRack ||
-              (showStructured && storage?.crateNumber) ||
+              storage?.crateNumber ||
               storage?.grade) && (
               <View style={styles.locationBox}>
                 {item.primary_location_name && (
@@ -900,7 +925,7 @@ export default function Scan() {
                   )
                 )}
                 {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
-                {showStructured && storage?.crateNumber && (
+                {storage?.crateNumber && (
                   <View style={styles.locRow}>
                     <Text style={styles.locLabel}>Crate</Text>
                     <View

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import {
+  formatCrateLocationName,
   formatRackLabel,
   formatRackPosition,
   locationNameSitsOnRack,
@@ -36,6 +37,71 @@ export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
 /** A location an operator should pick as a normal bin (not a system bucket). */
 export function isUserFacingLocation(loc: { kind: string | null }): boolean {
   return loc.kind !== 'staging' && loc.kind !== 'unplaced';
+}
+
+/**
+ * ═══ A POSITIONED CRATE'S NAME CARRIES ITS RACK — DECIDED HERE, NOT BY CALLERS ═══
+ *
+ * The `locations.name` a crate row is actually inserted with. Racks, sites and
+ * everything else pass straight through; only `kind: 'crate'` is touched.
+ *
+ * A crate's rack lives in its NAME ("Gray #BIN on rack 43-B") because that is
+ * what keeps migration 0270's `lower(name)` index holding five physically
+ * distinct "gray BIN" bins as five rows, and because nothing that renders a
+ * placement reads `rack_number`/`rack_row` — a holding reaches every formatter
+ * as `{ name, quantity, kind }`. A row whose COLUMNS say 43-B while its NAME
+ * has lost the suffix has quietly stopped sitting on a rack everywhere at once,
+ * and `assertRenameKeepsCratePosition` then refuses every future rename of it,
+ * because it reads the columns. That row is unrenameable and mis-rendered for
+ * life.
+ *
+ * THIS FUNCTION EXISTS BECAUSE THE INVARIANT USED TO BE ENFORCED ON RENAME ONLY.
+ * `create()` inserted `input.name` verbatim next to whatever rack columns came
+ * with it, and the doc on the rename guard claimed "create composes the name
+ * through formatCrateLocationName" — true of its CALLERS (they all go through
+ * `planNewLocation`), false of `create` itself. `createLocationAction` is a live
+ * authenticated server action that takes the whole `createLocationSchema`, so
+ * `{ name: 'Gray BIN', kind: 'crate', rackNumber: '43', rackRow: 'B' }` minted
+ * exactly the shape the rename guard refuses. No shipped UI sends it (the
+ * Locations manager form posts name/type/notes only), so nothing in production
+ * carries it — but "no caller does this today" is not an invariant, it is a
+ * coincidence, and the gate belongs at the single insert every caller shares.
+ *
+ * THE THREE OUTCOMES, in order:
+ *
+ *   1. NO POSITION → the name is the caller's, verbatim. A position-less crate
+ *      ("Blue #Shelf") is a legitimate permanent shape — production holds one —
+ *      and there is nothing for the name to carry.
+ *   2. THE NAME ALREADY SITS ON THE POSITION → verbatim, byte for byte. This is
+ *      the branch every shipped caller takes, and taking it by TEST rather than
+ *      by re-deriving is what makes double-composition ("Gray #BIN on rack 43-B
+ *      on rack 43-B") structurally impossible rather than merely unlikely.
+ *   3. OTHERWISE → COMPOSE it, through the one `formatCrateLocationName` that
+ *      writes 0270's dedupe key. The columns win over the name: they are what
+ *      the rename guard, the put-away stamp and the placement readers key on,
+ *      so a name disagreeing with them is the defect, not the intent.
+ *
+ * A crate with a position and NO NUMBER cannot be composed — a colour alone
+ * does not name a crate (`formatCrateLocationName` returns '') — so it is
+ * REFUSED rather than inserted position-less. Unreachable from every shipped
+ * caller: `planNewLocation`'s crate branch always carries a number.
+ */
+function crateAwareLocationName(input: CreateLocationInput): string {
+  if (input.kind !== 'crate') return input.name;
+  const position = formatRackPosition({ rackNumber: input.rackNumber, rackRow: input.rackRow });
+  if (!position) return input.name;
+  if (locationNameSitsOnRack(input.name, position)) return input.name;
+  const composed = formatCrateLocationName(input.crateColor, input.crateNumber, {
+    rackNumber: input.rackNumber,
+    rackRow: input.rackRow,
+  });
+  if (!composed) {
+    throw new ServiceError(
+      'validation_error',
+      `This crate sits on rack ${position}, and the position is part of its name — every pick slip, count sheet and item card reads the rack out of the name. Give the crate a number so it can be named, or create it without a rack position.`,
+    );
+  }
+  return composed;
 }
 
 export class LocationsService {
@@ -87,12 +153,22 @@ export class LocationsService {
     if (isSiteLocation({ type: input.type ?? null, kind: input.kind ?? null })) {
       await assertPlanLimit(this.ctx, 'locations');
     }
+    // BEFORE the insert, so an uncomposable positioned crate is refused rather
+    // than half-written (`.update().eq()`/insert both fail open on a guard that
+    // runs alongside the write instead of ahead of it).
+    const name = crateAwareLocationName(input);
     const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .insert({
         organization_id: this.ctx.organizationId,
-        name: input.name,
+        // A POSITIONED CRATE IS NAMED HERE, not by whoever called. See
+        // `crateAwareLocationName`: the rack a crate sits on travels in its
+        // name, so an insert that took `input.name` verbatim could mint the
+        // exact name/column disagreement `assertRenameKeepsCratePosition`
+        // refuses — and that row could then never be renamed again. Every
+        // other kind (rack, site, area) passes through untouched.
+        name,
         type: input.type ?? null,
         parent_id: input.parentId ?? null,
         notes: input.notes ?? null,
@@ -177,6 +253,15 @@ export class LocationsService {
    * scoped per-warehouse; without one there's nothing to dedupe against).
    */
   async findOrCreateRackOrCrate(input: CreateLocationInput) {
+    // THE NAME THIS RESOLVES AGAINST MUST BE THE NAME `create` WOULD INSERT.
+    // For every shipped caller they are identical (all compose through
+    // `planNewLocation`), but a positioned crate handed an uncomposed name is
+    // renamed by `crateAwareLocationName` on the way into the insert — so
+    // matching on the raw `input.name` would miss the row this very function
+    // created a moment ago and fall through to a second insert, which 0270's
+    // unique index rejects with a 23505 the caller reads as an internal error.
+    // One name, one lookup, one insert.
+    const name = crateAwareLocationName(input);
     if (input.warehouseId && input.kind) {
       const { data: candidates, error } = await this.ctx.supabase
         .from('locations')
@@ -189,7 +274,7 @@ export class LocationsService {
       const rows = candidates ?? [];
       // Exact trimmed/lowercased match (what migration 0270's unique index
       // keys on) — the fast, common path.
-      const target = input.name.trim().toLowerCase();
+      const target = name.trim().toLowerCase();
       const existing = rows.find(
         (loc) => (loc as { name: string }).name.trim().toLowerCase() === target,
       );
@@ -202,7 +287,7 @@ export class LocationsService {
       // "22-B". Crates are excluded — their names ("Blue #42") are not
       // rack-shaped and must not be run through the rack parser.
       if (input.kind === 'rack') {
-        const canonTarget = formatRackLabel(parseRackLabel(input.name)).toLowerCase();
+        const canonTarget = formatRackLabel(parseRackLabel(name)).toLowerCase();
         const canonMatch = rows.find(
           (loc) =>
             formatRackLabel(parseRackLabel((loc as { name: string }).name)).toLowerCase() ===
@@ -226,10 +311,14 @@ export class LocationsService {
    *
    * So a crate whose columns say 43-B but whose NAME has lost the suffix is a
    * row that has quietly stopped sitting on a rack, everywhere at once — every
-   * pick slip, count sheet and detail card. No write path produces that shape:
-   * `create` composes the name through `formatCrateLocationName`, and this
+   * pick slip, count sheet and detail card. No write path produces that shape,
+   * and each of the two is stopped by its OWN gate: `create` composes (or
+   * refuses) the name inside `crateAwareLocationName`, in the single insert
+   * every caller shares — this used to say "create composes through
+   * `formatCrateLocationName`" while only create's CALLERS did, leaving
+   * `createLocationAction` able to mint the shape this guard refuses — and this
    * `update` cannot touch the columns at all (it patches name/type/parent/notes
-   * only). A RENAME is the one way in, and this is the gate on it.
+   * only). A RENAME is the other way in, and this is the gate on it.
    *
    * REFUSE rather than regenerate. Regenerating would silently discard what the
    * operator typed, and it cannot be right in the case they most plausibly

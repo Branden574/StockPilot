@@ -273,6 +273,15 @@ export function BulkActions({
     // Same voice, and the same order, as the placement dialogs report
     // crateSyncStale/crateSyncUnplaced: the success stays a success, and what
     // the label did (or didn't) do is a separate warning line.
+    // ═══ AND WHETHER THE STOCK ACTUALLY GOT THERE ═══
+    // The placement pass is per-holding best-effort: a refused transfer is
+    // logged on the SERVER and skipped so the rest of the batch still places.
+    // That left the operator with "Updated N items." for a rack their stock
+    // never reached — `placed: 0` reads identically to "everything was already
+    // on it". The label and the pair ARE set (they typed them; the app does not
+    // quietly revert a human instruction), so the honest report is that the
+    // label is now ahead of the stock.
+    const placeFailed = r.data.placeFailed ?? 0;
     const cleared = r.data.crateCleared ?? 0;
     const unchanged = r.data.crateUnchanged ?? 0;
     const changed = r.data.crateChanged ?? 0;
@@ -286,6 +295,13 @@ export function BulkActions({
       );
     }
     toast.success(parts.join(' '));
+    if (placeFailed > 0) {
+      toast.warning(
+        placeFailed === 1
+          ? 'One item’s stock did not move onto the rack. Its rack label was still set, so the label is ahead of the stock — move it with Transfer.'
+          : `${placeFailed} items’ stock did not move onto the rack. Their rack labels were still set, so the labels are ahead of the stock — move them with Transfer.`,
+      );
+    }
     if (unchanged > 0) {
       toast.warning(
         unchanged === 1

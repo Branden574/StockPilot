@@ -3809,6 +3809,22 @@ export class InventoryService {
     skipped: number;
     placed?: number;
     /**
+     * Set rack only: items whose stock demonstrably did NOT reach the rack —
+     * every transfer for them was refused, or the destination rack could not be
+     * resolved in their warehouse. The rack LABEL and pair were still written,
+     * because that is what the operator typed and this op does not revert a
+     * human instruction on their behalf; so the label is now ahead of the
+     * stock, and saying so is the whole point of the count.
+     *
+     * `placed` cannot carry this: 0 also means "everything was already there",
+     * so a batch where every move was refused was indistinguishable from one
+     * that needed no moves — both printed a plain "Updated N items."
+     *
+     * Excludes the deliberate non-moves (already on the rack, split placement,
+     * no stock) — see `placeItemsOntoRackByName`.
+     */
+    placeFailed?: number;
+    /**
      * Set rack only: BOOKS whose crate summary was cleared because their stock
      * now sits on the rack and nowhere else. Reported so the toast can say it —
      * a crate label silently surviving a physical move is what sent pickers to
@@ -3953,6 +3969,7 @@ export class InventoryService {
       // clears the label). Best-effort: a placement hiccup must not undo the
       // label set, so failures are logged and `placed` just stays 0.
       let placed = 0;
+      let placeFailed = 0;
       let crateCleared = 0;
       let crateUnchanged = 0;
       let crateChanged = 0;
@@ -3962,12 +3979,22 @@ export class InventoryService {
         // requires, and reading it after the move would compare the row against
         // itself and prove nothing.
         const before = await this.readBookCrateSummaries(allowedIds).catch(() => null);
-        placed = await this.placeItemsOntoRackByName(allowedIds, num, row, composedBin).catch(
-          (e) => {
-            console.error('[bulkUpdate set_rack] bulk placement failed', e);
-            return 0;
-          },
-        );
+        const placement = await this.placeItemsOntoRackByName(
+          allowedIds,
+          num,
+          row,
+          composedBin,
+        ).catch((e) => {
+          // The helper swallows its own per-holding failures, so reaching here
+          // means the whole placement pass died. Nothing about it can be
+          // claimed, so NOTHING is: every selected item is reported as not
+          // placed. Erring toward a warning is the only safe direction — the
+          // silent version of this is the bug being fixed.
+          console.error('[bulkUpdate set_rack] bulk placement failed', e);
+          return { placed: 0, failedItemIds: [...allowedIds] };
+        });
+        placed = placement.placed;
+        placeFailed = placement.failedItemIds.length;
         // ═══ THE CRATE SUMMARY MUST FOLLOW THE STOCK — DEFECT 3(4) ═══
         // inventory_set_rack above writes the RACK keys only (migration 0068).
         // This branch then PHYSICALLY RELOCATES every selected item's stock onto
@@ -3995,7 +4022,16 @@ export class InventoryService {
           // NAME into a field every other caller fills with a uuid would put a
           // lie in the trail. The before→after diff and the `bulk_op:'set_rack'`
           // row emitted above already say what happened.
-          const sync = await this.syncBookCratePlacement(allowedIds, { verified: before });
+          // `rackWrittenByCaller` — the operator TYPED this pair and
+          // `inventory_set_rack` already wrote it above. Handing it to the sync
+          // is what stops the holdings-derivation from reverting it when the
+          // physical move failed; see the option's doc for the full defect.
+          // Both writers therefore emit the identical decomposed, upper-cased
+          // pair, so the row can never end up labelled "28-A" on no rack.
+          const sync = await this.syncBookCratePlacement(allowedIds, {
+            verified: before,
+            rackWrittenByCaller: { number: num, row },
+          });
           // Count only books that HAD a crate recorded — those are the ones a
           // label change is visible for. A book with no crate is written the
           // same way and changes nothing anyone can see.
@@ -4083,6 +4119,7 @@ export class InventoryService {
         ok,
         skipped: skipped + (allowedIds.length - ok),
         placed,
+        ...(placeFailed > 0 ? { placeFailed } : {}),
         ...(crateCleared > 0 ? { crateCleared } : {}),
         ...(crateUnchanged > 0 ? { crateUnchanged } : {}),
         ...(crateChanged > 0 ? { crateChanged } : {}),
@@ -5027,6 +5064,41 @@ export class InventoryService {
         /** Units placed per item; omitted keys simply record no quantity. */
         quantityByItemId?: Map<string, number>;
       };
+      /**
+       * ═══ THE RACK PAIR THE CALLER ALREADY WROTE, IN THIS SAME OPERATION ═══
+       *
+       * Set ONLY by bulk "Set rack", which is the one caller that does not
+       * discover the destination — the operator TYPED it, and
+       * `inventory_set_rack` has already stamped that pair (and the matching
+       * `bin_location`) onto every selected row before the stock is touched.
+       * When present, the rack half of the summary is this pair instead of the
+       * derived one; the crate half still derives from the holdings.
+       *
+       * WHY THE DERIVATION MUST NOT WIN HERE. The derivation answers "where
+       * does this book's live stock resolve to", which is the right question
+       * for a put-away, where the destination and the holdings are the same
+       * fact seen twice. Bulk Set rack is different: it also PHYSICALLY MOVES
+       * the stock, per holding, best-effort — and when that move fails
+       * (`placeItemsOntoRackByName` logs and continues) the holdings still name
+       * the crate the book never left. Deriving from them then wrote
+       * `p_rack_number: null` straight over the pair the operator had just
+       * typed: the book dropped out of the very "28-A" filter they set, the
+       * toast said "Updated 1", and `bin_location` went on reading "28-A" — a
+       * row saying "labelled 28-A, on no rack", which is the exact
+       * self-contradiction migration 0336 exists to make unreachable.
+       *
+       * Two writes of one key, and the second one silently reverting the
+       * first, is not a reconciliation; it is the operation undoing itself. So
+       * the pair stays what the human said, BOTH writers agree byte-for-byte,
+       * and the thing that actually went wrong — the stock never reached the
+       * rack — is reported as `placeFailed` and said out loud, instead of being
+       * expressed as a mutation nobody can see.
+       *
+       * Normalised here as well as by the caller (see the top of Inner): the
+       * two writers must produce the SAME item-side spelling of one rack, and
+       * a guarantee that lives only in the caller is not a guarantee.
+       */
+      rackWrittenByCaller?: { number: string | null; row: string | null };
     },
   ): Promise<BookCrateSyncResult> {
     try {
@@ -5058,6 +5130,7 @@ export class InventoryService {
         toLocationId: string;
         quantityByItemId?: Map<string, number>;
       };
+      rackWrittenByCaller?: { number: string | null; row: string | null };
     },
   ): Promise<BookCrateSyncResult> {
     if (itemIds.length === 0)
@@ -5068,6 +5141,21 @@ export class InventoryService {
         staleItemIds: [],
         unplacedItemIds: [],
       };
+    // The operator's own typed rack, decomposed and upper-cased with the SAME
+    // helper every other writer of these keys uses — so the pair this statement
+    // writes is byte-identical to the one `inventory_set_rack` already wrote,
+    // and the books rack filter never sees two spellings of one rack. A caller
+    // that passes an EMPTY number is saying nothing, and falls back to the
+    // derivation rather than clearing the pair by accident.
+    const typedRack = (() => {
+      const t = opts.rackWrittenByCaller;
+      if (!t) return null;
+      const n = normalizeRackFields({ number: t.number, row: t.row });
+      const number = n.number || null;
+      if (!number) return null;
+      return { number, row: n.row?.toUpperCase() ?? null };
+    })();
+
     // THE FRESH READ. Everything below compares against it; nothing trusts the
     // caller's snapshot.
     const summaries = await this.readBookCrateSummaries(itemIds);
@@ -5238,8 +5326,23 @@ export class InventoryService {
       // item-side value for the same location, or the books rack filter sees two
       // spellings of one rack.
       const position = normalizeRackFields({ number: loc!.rack_number, row: loc!.rack_row });
-      const rackNumber = position.number || null;
-      const rackRow = rackNumber ? position.row?.toUpperCase() ?? null : null;
+      const derivedRackNumber = position.number || null;
+      const derivedRackRow = derivedRackNumber ? position.row?.toUpperCase() ?? null : null;
+
+      // ═══ A DIRECT HUMAN INSTRUCTION OUTRANKS THE DERIVATION ═══
+      // The derivation is right about a put-away, where the destination and the
+      // holdings are one fact seen twice. It is WRONG about bulk "Set rack",
+      // where the operator typed the pair and the physical move is separately
+      // fallible: a swallowed transfer failure left the holdings naming the
+      // crate the book never left, and deriving from them reverted the pair the
+      // operator had just set — silently, under an "Updated 1" toast, on a row
+      // whose `bin_location` still read "28-A". See `rackWrittenByCaller`.
+      //
+      // The crate half is NOT overridden. Nobody typed a crate here; that half
+      // is the derived label whose only job is to stop sending a picker to an
+      // empty crate, and it stays derived on every path.
+      const rackNumber = typedRack ? typedRack.number : derivedRackNumber;
+      const rackRow = typedRack ? typedRack.row : derivedRackRow;
 
       // ═══ THE FRESHNESS CHECK — DEFECT 5 ═══
       // The gate compared the row at T0 and the operator answered about THAT
@@ -5422,15 +5525,34 @@ export class InventoryService {
    *    NEVER move a split item's stock.
    *
    * Returns the number of holdings actually moved (0 if nothing needed
-   * placing, or every move failed/no-opped) so the caller can report it.
+   * placing, or every move failed/no-opped) so the caller can report it —
+   * AND `failedItemIds`, the items whose stock demonstrably did NOT reach the
+   * rack.
+   *
+   * THE FAILURE LIST IS NOT OPTIONAL BOOKKEEPING. Every transfer here is
+   * per-holding best-effort: a permission floor, a stock guard or a DB hiccup
+   * is logged to the server console and skipped so the other 499 items still
+   * place. That is the right behaviour for the batch and a silent one for the
+   * operator — `placed` alone cannot distinguish "nothing needed placing" from
+   * "every move was refused", so a whole batch could fail to move a single unit
+   * and still report `{ ok: 500, placed: 0 }` under a green toast. The caller
+   * surfaces this as `placeFailed`.
+   *
+   * NOT counted as a failure, because neither is a thing that went wrong:
+   *  - a holding ALREADY on the destination rack (`toLoc === location_id`) —
+   *    the stock is where the operator asked for it;
+   *  - an item with a SPLIT fine-grained placement, which this method refuses
+   *    to move by design and the toolbar already warns about BEFORE the run
+   *    (bulk-actions' "use Transfer for those" dialog copy);
+   *  - an item with no positive holding at all — there is nothing to place.
    */
   private async placeItemsOntoRackByName(
     itemIds: string[],
     num: string | null,
     row: string | null,
     name: string,
-  ): Promise<number> {
-    if (itemIds.length === 0 || !num) return 0;
+  ): Promise<{ placed: number; failedItemIds: string[] }> {
+    if (itemIds.length === 0 || !num) return { placed: 0, failedItemIds: [] };
 
     const { data: items } = await this.ctx.supabase
       .from('inventory_items')
@@ -5491,7 +5613,8 @@ export class InventoryService {
       });
     }
 
-    if (levels.length === 0 && singleRackMoves.length === 0) return 0;
+    if (levels.length === 0 && singleRackMoves.length === 0)
+      return { placed: 0, failedItemIds: [] };
 
     // Resolve (find or create) the destination rack ONCE per warehouse —
     // shared by both the not-yet-placed auto-place and the single-holding
@@ -5506,6 +5629,10 @@ export class InventoryService {
     }
 
     let placedCount = 0;
+    // A SET, not a count: one item can own several not-yet-placed holdings, and
+    // "this item's stock did not all reach the rack" is true once, no matter how
+    // many of its transfers were refused.
+    const failedItemIds = new Set<string>();
 
     // Run the per-holding transfers CONCURRENTLY (in capped chunks) instead of
     // one-at-a-time — a 13-item bulk Set rack was ~13 sequential RPC round-trips
@@ -5518,7 +5645,16 @@ export class InventoryService {
         levels.slice(i, i + CONCURRENCY).map(async (h) => {
           const wh = whByItem.get(h.item_id) ?? null;
           const toLoc = wh ? rackByWh.get(wh) : undefined;
-          if (!toLoc || toLoc === h.location_id) return;
+          // No destination: the item has no warehouse, or findOrCreateRackLocation
+          // could not resolve or mint the rack in it (it logged why). Either way
+          // this holding is not going anywhere, and that is a failure to place —
+          // it used to share a `return` with the already-on-the-rack case below,
+          // which is the opposite outcome.
+          if (!toLoc) {
+            failedItemIds.add(h.item_id);
+            return;
+          }
+          if (toLoc === h.location_id) return;
           try {
             await this.transferStock({
               itemId: h.item_id,
@@ -5529,6 +5665,7 @@ export class InventoryService {
             });
             placedCount += 1;
           } catch (e) {
+            failedItemIds.add(h.item_id);
             console.error('[set_rack place] transfer failed', {
               item: h.item_id,
               error: e instanceof Error ? e.message : String(e),
@@ -5547,7 +5684,11 @@ export class InventoryService {
       await Promise.all(
         singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
           const toLoc = mv.warehouseId ? rackByWh.get(mv.warehouseId) : undefined;
-          if (!toLoc || toLoc === mv.location_id) return;
+          if (!toLoc) {
+            failedItemIds.add(mv.item_id);
+            return;
+          }
+          if (toLoc === mv.location_id) return;
           try {
             await this.transferStock({
               itemId: mv.item_id,
@@ -5558,6 +5699,7 @@ export class InventoryService {
             });
             placedCount += 1;
           } catch (e) {
+            failedItemIds.add(mv.item_id);
             console.error('[set_rack move] transfer failed', {
               item: mv.item_id,
               error: e instanceof Error ? e.message : String(e),
@@ -5567,7 +5709,7 @@ export class InventoryService {
       );
     }
 
-    return placedCount;
+    return { placed: placedCount, failedItemIds: [...failedItemIds] };
   }
 
   /** Find an existing rack/crate location named `name` in the warehouse, or

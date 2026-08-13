@@ -275,6 +275,18 @@ export async function bulkUpdateInventoryAction(input: {
     skipped: number;
     placed?: number;
     /**
+     * Set rack only: items whose stock did NOT reach the rack — every transfer
+     * for them was refused, or the rack could not be resolved in their
+     * warehouse. Their rack label and pair were still set to what the operator
+     * typed, so the label now runs ahead of the stock.
+     *
+     * A WARNING, and the one the toast could never give: the placement pass is
+     * per-holding best-effort and logged its failures to the SERVER console
+     * only, while `placed: 0` reads the same as "nothing needed moving". A
+     * whole batch could be refused and the operator still saw "Updated N items."
+     */
+    placeFailed?: number;
+    /**
      * Set rack only: BOOKS whose recorded crate was CLEARED because this op
      * moved their stock onto the rack and nowhere else.
      *

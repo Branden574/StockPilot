@@ -624,7 +624,12 @@ function scanPlacementFiles(): string[] {
 const DELEGATES_TO_RESOLVER = [
   'apps/mobile/app/(drawer)/(tabs)/books.tsx',
   'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
-  'apps/mobile/app/item/[id].tsx',
+  // The native item screen's row list was EXTRACTED here so it could be tested:
+  // apps/mobile's vitest config is environment 'node' with include
+  // ['src/**/*.test.ts'], so a .tsx screen is unreachable but a src/lib module
+  // is not. This module owns the precedence; the screen it serves renders the
+  // rows and now appears under RENDERS_PRECOMPUTED.
+  'apps/mobile/src/lib/placement-rows.ts',
   'apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx',
   'apps/web/src/components/cycle-counts/count-item-picker.tsx',
   'apps/web/src/components/inventory/inventory-table.tsx',
@@ -672,6 +677,13 @@ const RAW_FIELD_PROJECTIONS = [
 /** Renders a `rackLabel` computed upstream (by a delegate or the exception).
  *  Owns no precedence of its own. */
 const RENDERS_PRECOMPUTED = [
+  // MOVED here from DELEGATES_TO_RESOLVER (reason): the screen no longer decides
+  // anything — it calls buildPlacementRows() and renders what comes back. It
+  // still matches the scan because it names `rackLabel` in code, so it must stay
+  // classified; it simply is not a delegate any more. If it ever re-grows its own
+  // precedence, the delegate arm below will not catch it — the hand-rolled-rule
+  // check will.
+  'apps/mobile/app/item/[id].tsx',
   'apps/web/src/components/orders/storefront/storefront-overlays.tsx',
   'apps/web/src/components/orders/v2/item-card.tsx',
   'apps/web/src/components/orders/v2/types.ts',

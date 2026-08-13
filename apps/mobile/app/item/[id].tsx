@@ -37,13 +37,9 @@ import {
   can,
   collectLegacyRefIdsByKind,
   formatOrderNumber,
-  formatPlacementLabel,
-  getCrateColor,
-  holdingsContradictRack,
   legacyOrderRefId,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
-  resolvePlacement,
   type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
@@ -93,6 +89,7 @@ import {
   applyNoteToMovements,
   normalizeMovementNote,
 } from '@/lib/movement-note';
+import { buildPlacementRows } from '@/lib/placement-rows';
 import {
   SERIAL_STATUSES,
   SERIAL_STATUS_LABELS,
@@ -146,7 +143,18 @@ interface Item {
   bin_location: string | null;
   charter_name: string | null;
   item_type: string | null;
-  rack_label: string | null;
+  /**
+   * The rack SUMMARY as the PAIR it is stored as, never as a rendered label.
+   * The location card needs it in two different alphabets — "38 · A" for a
+   * human, "38-A" to compare against a `locations.name` — and holding only the
+   * rendered one is what made the RACK row vanish for almost every item
+   * (see src/lib/placement-rows.ts). Carrying the pair lets each spelling be
+   * derived from the source instead of from the other.
+   */
+  rack_number: string | null;
+  rack_row: string | null;
+  /** Legacy single free-text rack label; used only when the pair is empty. */
+  legacy_rack_label: string | null;
   crate_color: string | null;
   crate_number: string | null;
   grade: string | null;
@@ -543,8 +551,6 @@ export default function ItemDetail() {
     // Legacy free-text rack label support (older imports stamped this
     // single value before the structured number/row split).
     const legacyRack = cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
-    const rackLabel =
-      rackNum || rackRow ? [rackNum, rackRow].filter(Boolean).join(' · ') : legacyRack;
     // Canonical keys (what the web book form writes, see lib/book-storage.ts):
     // book_crate_color / book_crate_number / book_grade. The bare variants are
     // legacy fallbacks only — reading ONLY those was why book details showed no
@@ -650,7 +656,9 @@ export default function ItemDetail() {
       bin_location: (r.bin_location as string | null) ?? null,
       charter_name: charterName,
       item_type: (r.item_type as string | null) ?? null,
-      rack_label: rackLabel,
+      rack_number: rackNum,
+      rack_row: rackRow,
+      legacy_rack_label: legacyRack,
       crate_color: crateColor,
       crate_number: crateNumber,
       grade,
@@ -1546,62 +1554,27 @@ export default function ItemDetail() {
                 populated. Mirrors what the web detail page shows under
                 its "Location & storage" section. */}
             {(() => {
-              const isBookView = item.item_type === 'book';
-              const rows: { label: string; value: string; dot?: string | null }[] = [];
-              if (item.warehouse_name)
-                rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
-              if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
-              if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
-              // WHERE THE STOCK IS vs what the item REMEMBERS. `rack_label`
-              // above is the custom_fields summary; a put-away into a
-              // position-less crate preserves it on purpose (mig 0335), so it
-              // can name a rack the stock has entirely left. This screen has no
-              // PlacementsBreakdown, so the live holdings get their OWN row —
-              // added information, never a replacement for the summary.
-              const placement = resolvePlacement({
+              // WHICH ROWS, and why, lives in src/lib/placement-rows.ts — a
+              // pure module so the answers can be TESTED. While this logic was
+              // inline the only available test was a source-text pin, and a
+              // source-text pin cannot tell a true row from a hidden one: it
+              // happily pinned the wiring that fed the DISPLAY label ("38 · A")
+              // into a comparison against a `locations.name` ("38-A"), which
+              // hid the RACK row for essentially every item with a holding.
+              const rows = buildPlacementRows({
                 itemType: item.item_type,
-                customFields: null,
+                warehouseName: item.warehouse_name,
+                charterName: item.charter_name,
+                locationName: item.location_name,
+                rackNumber: item.rack_number,
+                rackRow: item.rack_row,
+                legacyRackLabel: item.legacy_rack_label,
+                crateColor: item.crate_color,
+                crateNumber: item.crate_number,
+                grade: item.grade,
+                binLocation: item.bin_location,
                 holdings: item.rackHoldings,
               });
-              const holdingsRowShown = placement.source === 'holdings';
-              if (holdingsRowShown) {
-                rows.push({
-                  label: placement.reason === 'split' ? 'SPLIT STOCK' : 'IN CRATE',
-                  value: formatPlacementLabel(placement) ?? '',
-                });
-              }
-              // The RACK row stands down only when the holdings REFUTE it. The
-              // first cut suppressed it (and CRATE, and BIN) whenever the
-              // holdings were authoritative at all, which swept in every split:
-              // a book split across two racks lost every summary row it had on
-              // main. A crate summary is refuted by nothing here, so it always
-              // renders — same rule as the web card.
-              const rackStands =
-                !!item.rack_label && !holdingsContradictRack(item.rack_label, item.rackHoldings);
-              if (rackStands) rows.push({ label: 'RACK', value: item.rack_label as string });
-              if (isBookView && (item.crate_color || item.crate_number)) {
-                // Same presentation as web: "Red 5" + a color swatch (the
-                // number identifies the crate; the color is the visual aid).
-                const cc = getCrateColor(item.crate_color);
-                rows.push({
-                  label: 'CRATE',
-                  value: [cc?.label ?? item.crate_color, item.crate_number]
-                    .filter(Boolean)
-                    .join(' '),
-                  dot: cc?.hex ?? null,
-                });
-              }
-              if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
-              // bin_location is a separate free-text field — only render it
-              // when there's NO structured rack info, to avoid double labelling
-              // for the same physical spot. A rack label the HOLDINGS refute no
-              // longer counts as structured info (hiding the fresh crate label
-              // behind a stale rack was this screen's own half of the 0335
-              // defect), and a holdings row already names the physical place,
-              // so bin would only repeat it.
-              if (!rackStands && !holdingsRowShown && item.bin_location) {
-                rows.push({ label: isBookView ? 'BIN' : 'RACK', value: item.bin_location });
-              }
               if (rows.length === 0) return null;
               return (
                 <>

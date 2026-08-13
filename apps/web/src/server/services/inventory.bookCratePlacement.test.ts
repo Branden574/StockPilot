@@ -1765,19 +1765,36 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     expect(call!.args).toEqual(placementArgs([BOOK_A], { rackNumber: '28', rackRow: 'A' }));
     // …and it is REPORTED, so the toast can say a label changed.
     expect(res.crateCleared).toBe(1);
+    // The stock reached the rack, so there is nothing to warn about. This is
+    // the count that separates "everything moved" from "nothing moved" —
+    // `placed` alone reads 0 for both "already there" and "all refused".
+    expect(res.placeFailed).toBeUndefined();
   });
 
-  // ── The counts are PROVED, not inferred from "a write ran" ────────────────
+  // ═══ THE OPERATOR TYPED THE RACK, AND THE APP MAY NOT UN-TYPE IT ═════════
   //
-  // `placeItemsOntoRackByName` is per-holding best-effort: one failed transfer
-  // is logged and the rest still place. When the failure is a book whose only
-  // remaining holding is a CRATE, the reconciliation still runs and rewrites
-  // that crate — so the book lands in `syncedItemIds` while its label was never
-  // cleared and its stock never reached the rack. `crateCleared` counted every
-  // synced book that had a crate, so the operator was shown
-  // "Cleared the crate label on 1 book now on the rack" about a label that
-  // still exists, on a book that did not move. Both halves of that sentence
-  // were false.
+  // TESTS REWRITTEN, WITH THE REASON. The two cases below used to assert
+  // `p_rack_number: null` — that the holdings-derivation CLEARS the pair on the
+  // swallowed-placement-failure path. That expectation pinned the defect, so it
+  // is replaced rather than weakened: what is asserted here is strictly more
+  // than before (the same crate half, plus the rack half, plus the new
+  // `placeFailed` report), and the crate-side counts they were written for are
+  // untouched.
+  //
+  // THE DEFECT. `inventory_set_rack` writes {28, A, bin_location '28-A'} — the
+  // operator's typed intent. `placeItemsOntoRackByName` is per-holding
+  // best-effort, so a refused transfer left the book in position-less crate
+  // Blue 4; the derivation then read THAT holding and wrote
+  // {p_rack_number: null, p_rack_row: null}, reverting the pair the same
+  // operation had just written. The book dropped straight out of the "28-A"
+  // filter the operator had just set, `bin_location` still read "28-A" — the
+  // "labelled 28-A, on no rack" row migration 0336's header exists to make
+  // unreachable — and the toast said "Updated 1".
+  //
+  // THE RULE. The derivation is authoritative about the CRATE, which nobody
+  // typed; the rack pair on this path is a direct human instruction and stands.
+  // What is wrong is not the label, it is the world — so the failure to place
+  // is REPORTED (`placeFailed`) instead of being expressed as a silent revert.
 
   it('does NOT count a clear when the sync rewrote the crate the book already named', async () => {
     const { svc, stub } = setRackStub(
@@ -1795,17 +1812,23 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     });
 
     // It DID write — the summary is derived, and writing the value it already
-    // holds is harmless. Crate Blue 4 states no rack position, so the pair the
-    // failed set_rack wrote is cleared by the derivation: the stock is in the
-    // crate, not on 28-A, and the row must not claim otherwise.
+    // holds is harmless. The CRATE half comes off the holding (Blue 4, where the
+    // stock actually is); the RACK half is the pair the operator typed and
+    // `inventory_set_rack` already wrote, carried through unchanged so the two
+    // writers agree and the row cannot end up labelled "28-A" on no rack.
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
-      placementArgs([BOOK_A], { color: 'blue', number: '4' }),
+      placementArgs([BOOK_A], { color: 'blue', number: '4', rackNumber: '28', rackRow: 'A' }),
     );
-    // …but nothing was cleared, and the book is on no rack. The truthful line
-    // is the warning one: the label is exactly what it was.
+    // …but nothing was cleared. The truthful line is the warning one: the label
+    // is exactly what it was.
     expect(res.crateCleared).toBeUndefined();
     expect(res.crateChanged).toBeUndefined();
     expect(res.crateUnchanged).toBe(1);
+    // AND the operator hears the thing that actually went wrong. Without this
+    // the whole event is invisible: `placed` is 0, which is also what a batch
+    // already sitting on the rack returns.
+    expect(res.placeFailed).toBe(1);
+    expect(res.placed).toBe(0);
   });
 
   it('reports a label rewritten to a DIFFERENT crate as changed — not cleared, not unchanged', async () => {
@@ -1822,7 +1845,7 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     });
 
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
-      placementArgs([BOOK_A], { color: 'red', number: '7' }),
+      placementArgs([BOOK_A], { color: 'red', number: '7', rackNumber: '28', rackRow: 'A' }),
     );
     // "Cleared" would be false (the label names a crate), "unchanged" would be
     // false (Blue 4 is gone), and silence would be the worst of the three — the
@@ -1830,6 +1853,91 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     expect(res.crateCleared).toBeUndefined();
     expect(res.crateUnchanged).toBeUndefined();
     expect(res.crateChanged).toBe(1);
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('keeps the typed pair even when the book’s crate is POSITIONED on a different rack', async () => {
+    // The derivation's sharpest case: crate "Gray #BIN on rack 43-B" states a
+    // real rack position, so deriving would write 43-B — not null — straight
+    // over the 28-A the operator typed. A plausible-looking value is a WORSE
+    // silent revert than a null one, because nothing about the row looks wrong.
+    const { svc, stub } = setRackStub(
+      [bookRow({ color: 'gray', number: 'BIN' })],
+      [
+        holding(BOOK_A, 'loc-crate-gray-bin', {
+          kind: 'crate',
+          type: 'bin',
+          crate_color: 'gray',
+          crate_number: 'BIN',
+          rack_number: '43',
+          rack_row: 'B',
+        }),
+      ],
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'gray', number: 'BIN', rackNumber: '28', rackRow: 'A' }),
+    );
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('reports placeFailed for a NON-BOOK too — the crate counts can never speak for it', async () => {
+    // Every existing warning on this path is a BOOK crate count, and a widget
+    // has no crate summary at all: `syncBookCratePlacement` returns an empty map
+    // for it and every crate bucket stays 0. So a widget whose transfer was
+    // refused produced a bare "Updated 1 item." with nothing anywhere — the
+    // silence this count exists to break.
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: WIDGET,
+          name: 'Blue Widget',
+          item_type: 'part',
+          warehouse_id: 'wh-1',
+          bin_location: null,
+          custom_fields: {},
+        },
+      ],
+      [holding(WIDGET, 'loc-unplaced', { kind: 'unplaced', type: 'unplaced' })],
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [WIDGET],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    // No book, so no crate reconciliation at all…
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBeUndefined();
+    expect(res.crateChanged).toBeUndefined();
+    // …and the failure is still reported.
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('does NOT report placeFailed when the stock was ALREADY on the typed rack', async () => {
+    // The other half of the count's meaning: `placed` is 0 here too, and this is
+    // the case a warning must never fire for. Nothing moved because nothing
+    // needed to.
+    const { svc } = setRackStub(
+      [bookRow({ color: null, number: null })],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' })],
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.placed).toBe(0);
+    expect(res.placeFailed).toBeUndefined();
   });
 
   it('leaves a SPLIT book alone and says so', async () => {
