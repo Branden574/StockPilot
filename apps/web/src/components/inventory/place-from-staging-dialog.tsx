@@ -265,9 +265,21 @@ export function PlaceFromStagingDialog({
     const where = opts.describe ? ` ${destinationPhrase(opts.describe)}` : '';
     toast.success(`Placed ${qtyNum} ${unit} of ${itemName}${where}.`);
     // The stock genuinely moved either way; these say the LABEL did not follow.
+    // All three are reported the same way the Transfer dialog and the mobile
+    // Move-stock modal report them — a plain success next to a summary naming a
+    // crate the stock has left is the exact falsehood this whole gate exists to
+    // prevent, so `crateSyncStale` warns here too rather than passing silently.
     if (res.data.crateSyncFailed) {
       toast.warning(
         `${itemName} was placed, but its crate label could not be updated — check the book’s details.`,
+      );
+    } else if (res.data.crateSyncStale) {
+      toast.warning(
+        `${itemName} was placed, but someone else changed its crate while it was moving — its label was left as they set it.`,
+      );
+    } else if (res.data.crateSyncUnplaced) {
+      toast.warning(
+        `${itemName} was placed, but none of its stock is in a rack or crate now — its crate label was left unchanged and may be wrong.`,
       );
     } else if (res.data.crateSyncSkipped) {
       toast.warning(

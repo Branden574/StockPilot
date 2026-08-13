@@ -560,4 +560,48 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       'The Outsiders now has stock in more than one location, so its crate label was left unchanged.',
     );
   });
+
+  // ═══ THE SILENT SUCCESS — crateSyncStale ═══
+  // The server refuses to overwrite a crate that was re-recorded WHILE the
+  // stock was moving, and reports that as { ok: true, crateSyncStale: true }.
+  // The stock landed; the summary still names the crate it left. This dialog
+  // branched only on crateSyncFailed/crateSyncSkipped, so the operator got a
+  // plain green "Placed 10 copies…" and nothing said the label was now wrong —
+  // while the Transfer dialog and the mobile Move-stock modal both warned.
+  it('warns when someone else changed the crate while the stock was moving', async () => {
+    const user = userEvent.setup();
+    mockPlaceStockAction.mockResolvedValue({
+      ok: true,
+      data: { toLocationId: 'c-blue4', crateSyncStale: true },
+    });
+    renderBookDialog();
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // The green toast still fires — the stock DID move. The warning is what
+    // stops that green toast from being the whole story.
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Placed 10 copies of The Outsiders into Blue crate 4.',
+    );
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The Outsiders was placed, but someone else changed its crate while it was moving — its label was left as they set it.',
+    );
+  });
+
+  it('warns when the crate summary could not be written at all', async () => {
+    const user = userEvent.setup();
+    mockPlaceStockAction.mockResolvedValue({
+      ok: true,
+      data: { toLocationId: 'c-blue4', crateSyncFailed: true },
+    });
+    renderBookDialog();
+    await openDialog(user);
+    await chooseDestination(user, 'Blue #4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The Outsiders was placed, but its crate label could not be updated — check the book’s details.',
+    );
+  });
 });

@@ -375,4 +375,63 @@ describe('BulkPlaceDialog — book crates', () => {
 
     expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 7.');
   });
+
+  // ═══ THE SILENT SUCCESS — crateSyncStale ═══
+  // The server refuses to overwrite a crate that was re-recorded WHILE the
+  // batch was placing, and reports that as { ok: true, crateSyncStale: true }.
+  // The stock landed; those summaries still name the crate the stock left. This
+  // dialog branched only on crateSyncFailed/crateSyncSkipped, so the operator
+  // got a plain green "Placed 2 items into Red crate 7." and nothing said the
+  // labels were now wrong — while the Transfer dialog and the mobile Move-stock
+  // modal both warned on exactly this flag.
+  it('warns when someone else changed a crate while the batch was placing', async () => {
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValue({
+      ok: true,
+      data: { placed: 2, failed: [], crateSyncStale: true },
+    });
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    // The green toast still fires — the stock DID move. The warning is what
+    // stops that green toast from being the whole story.
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 7.');
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Someone else changed some titles’ crates while they were moving — those labels were left as they set them.',
+    );
+  });
+
+  it('warns when a crate summary could not be written at all', async () => {
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValue({
+      ok: true,
+      data: { placed: 2, failed: [], crateSyncFailed: true },
+    });
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Some crate labels could not be updated — check those books’ details.',
+    );
+  });
+
+  it('warns when a summary was left alone because the title is now split', async () => {
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValue({
+      ok: true,
+      data: { placed: 2, failed: [], crateSyncSkipped: true },
+    });
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
+    await open(user);
+    await chooseDestination(user, 'Red #7');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Some titles now hold stock in more than one location, so their crate labels were left unchanged.',
+    );
+  });
 });

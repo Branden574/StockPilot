@@ -369,8 +369,22 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     } else {
       toast.error('Nothing could be placed.');
     }
+    // The stock genuinely moved either way; these say the crate LABEL did not
+    // follow it. Reported the same way, and in the same order, as the Transfer
+    // dialog and the mobile Move-stock modal report them — a bare "Placed 10
+    // items" next to a summary still naming a crate those items have left is
+    // the exact falsehood the gate exists to prevent, so `crateSyncStale` warns
+    // here too rather than passing silently.
     if (res.data.crateSyncFailed) {
       toast.warning('Some crate labels could not be updated — check those books’ details.');
+    } else if (res.data.crateSyncStale) {
+      toast.warning(
+        'Someone else changed some titles’ crates while they were moving — those labels were left as they set them.',
+      );
+    } else if (res.data.crateSyncUnplaced) {
+      toast.warning(
+        'Some titles have no stock in a rack or crate now, so their crate labels were left unchanged and may be wrong.',
+      );
     } else if (res.data.crateSyncSkipped) {
       toast.warning(
         'Some titles now hold stock in more than one location, so their crate labels were left unchanged.',
