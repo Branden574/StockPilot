@@ -1484,6 +1484,65 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       expect(cell.textContent).toBe('2 racks +1 unset');
       expect(cell.querySelector('span')?.getAttribute('title')).toContain('+1 with no rack set');
     });
+
+    // The same defect one level down. Once the cell started resolving through
+    // the HOLDINGS, one placement can legitimately name two racks — and the
+    // roll-up was still counting distinct LABEL STRINGS, so the split row's
+    // "39-B, 5-A" counted as one. The header said "1 rack" directly above its
+    // own tooltip naming two.
+    /** A placement whose custom_fields summary agrees with its FIRST holding —
+     *  the shape a synced row really has — split across the racks given. */
+    const split = (id: string, holdings: Array<[string, number]>) =>
+      item({
+        id,
+        name: 'Persepolis',
+        sku: 'SP-THV69-MG8',
+        custom_fields: {
+          book_rack_number: holdings[0]![0].split('-')[0],
+          book_rack_row: holdings[0]![0].split('-')[1],
+        },
+        placed_holdings: holdings.map(([name, quantity]) => ({
+          name,
+          quantity,
+          kind: 'rack' as const,
+        })),
+      });
+
+    it('a SPLIT placement counts as the racks it names, not as one label', () => {
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          split('s1', [
+            ['39-B', 4],
+            ['5-A', 5],
+          ]),
+          split('s2', [['2-C', 6]]),
+        ],
+      });
+      const cell = headerRows(container)[0]!.children[RACK_CELL]!;
+      expect(cell.textContent).toBe('3 racks');
+      expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+        'Placements span: 39-B, 5-A, 2-C',
+      );
+    });
+
+    it('never announces fewer racks than its own tooltip names', () => {
+      // The reported shape: ONE split placement beside one with no rack at all.
+      // Counting labels read "1 rack +1 unset" over a tooltip listing two.
+      const { container } = renderSurface(SURFACES[1], {
+        items: [
+          split('t1', [
+            ['39-B', 4],
+            ['5-A', 5],
+          ]),
+          rack('t2', null, null),
+        ],
+      });
+      const cell = headerRows(container)[0]!.children[RACK_CELL]!;
+      const title = cell.querySelector('span')?.getAttribute('title') ?? '';
+      const named = title.replace('Placements span: ', '').split(' (')[0]!.split(', ');
+      expect(named).toEqual(['39-B', '5-A']);
+      expect(cell.textContent).toBe(`${named.length} racks +1 unset`);
+    });
   });
 
   // W5. D4 was fixed on Books only. The ITEMS header's twin cell still

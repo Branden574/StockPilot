@@ -14,6 +14,18 @@ import { makeServiceContext, makeSupabaseStub, type SupabaseStub } from '@/test/
 //   • overwriting a recorded crate needs acknowledgement; first assignment and
 //     same-crate do not
 //   • the CURRENT crate is always re-read from the DB, never taken from a caller
+//
+// "THE SUMMARY" IS BOTH PAIRS. book_rack_number / book_rack_row are derived from
+// the SAME single location as book_crate_color / book_crate_number and written by
+// the same statement (inventory_set_book_placement, migration 0336) — they are two
+// projections of one fact, "which single location does this book's live stock
+// resolve to". The four derived cases are pinned in their own describe block near
+// the bottom of this file ("THE RACK PAIR IS DERIVED, TOO"); every reconciliation
+// test in between therefore asserts the whole five-argument RPC, not a crate-only
+// subset. Before this, the sync called inventory_set_book_storage (0334, crate
+// keys only) and the rack pair was preserved unconditionally — right for a partial
+// put-away, wrong for a full one, which left the pair naming a rack the stock had
+// entirely left.
 // ---------------------------------------------------------------------------
 
 vi.mock('./context', async (importOriginal) => {
@@ -65,7 +77,14 @@ function itemRow(
   return { id, name, item_type: itemType, custom_fields: customFields };
 }
 
-/** A holding row as the reconciliation read sees it. */
+/**
+ * A holding row as the reconciliation read sees it.
+ *
+ * `rack_number` / `rack_row` are the LOCATION's own position — a rack row carries
+ * its own, a CRATE row carries the position it sits on, a Site carries neither.
+ * Omitting them means "this location states no rack position", which is the shape
+ * of every crate in production today.
+ */
 function holding(
   itemId: string,
   locationId: string,
@@ -74,6 +93,8 @@ function holding(
     type?: string | null;
     crate_color?: string | null;
     crate_number?: string | null;
+    rack_number?: string | null;
+    rack_row?: string | null;
   },
 ) {
   return {
@@ -86,7 +107,34 @@ function holding(
       type: loc.type ?? null,
       crate_color: loc.crate_color ?? null,
       crate_number: loc.crate_number ?? null,
+      rack_number: loc.rack_number ?? null,
+      rack_row: loc.rack_row ?? null,
     },
+  };
+}
+
+/**
+ * The five-argument RPC payload, spelled once. Every reconciliation write is
+ * asserted against this so a crate-only expectation can never silently pass while
+ * the rack half goes unpinned — the exact gap that let the pair be preserved
+ * unconditionally. Defaults are the CLEARED pair, because a position-less crate
+ * (every crate in production) clears it.
+ */
+function placementArgs(
+  ids: string[],
+  summary: {
+    color?: string | null;
+    number?: string | null;
+    rackNumber?: string | null;
+    rackRow?: string | null;
+  },
+) {
+  return {
+    p_item_ids: ids,
+    p_crate_color: summary.color ?? null,
+    p_crate_number: summary.number ?? null,
+    p_rack_number: summary.rackNumber ?? null,
+    p_rack_row: summary.rackRow ?? null,
   };
 }
 
@@ -168,6 +216,78 @@ describe('assertBookCratePlacementAllowed', () => {
         },
       ],
     });
+  });
+
+  it('the refusal NAMES THE RACK on both sides — "gray BIN" is five bins', async () => {
+    // A crate number does not locate a bin here: production has "gray BIN" on
+    // FIVE racks and "yellow 5" on two. A sentence that stops at the crate
+    // asks the operator to approve a move it has not fully described.
+    //
+    // The rack is LABEL context only: `changed` is still the crate comparison,
+    // and the fingerprint is still the crate pair, so a shipped client's
+    // acknowledgement keeps matching.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'gray',
+            book_crate_number: 'BIN',
+            book_rack_number: '43',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const thrown = await svc
+      .assertBookCratePlacementAllowed([BOOK_A], {
+        kind: 'crate',
+        name: 'Blue #13 on rack 38-B',
+        rackNumber: '38',
+        rackRow: 'B',
+        crateColor: 'blue',
+        crateNumber: '13',
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    const err = thrown as ServiceError;
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'Persepolis is recorded in Gray BIN on rack 43-B. Placing it here will change that to Blue 13 on rack 38-B.',
+    );
+    expect((err.details as { items: Array<{ currentFingerprint: string }> }).items[0]!
+      .currentFingerprint).toBe(bookCrateFingerprint('gray', 'BIN'));
+  });
+
+  it('a rack-only move is NOT a crate conflict — the gate stays silent', async () => {
+    // Same crate, different rack. Folding the rack into `changed` would
+    // interrogate an operator every time a bin is re-shelved.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'gray',
+            book_crate_number: 'BIN',
+            book_rack_number: '43',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    await expect(
+      svc.assertBookCratePlacementAllowed([BOOK_A], {
+        kind: 'crate',
+        name: 'Gray #BIN on rack 41-C',
+        rackNumber: '41',
+        rackRow: 'C',
+        crateColor: 'gray',
+        crateNumber: 'BIN',
+      }),
+    ).resolves.toBeInstanceOf(Map);
   });
 
   it('PASSES once the caller acknowledges THAT SPECIFIC change', async () => {
@@ -518,7 +638,7 @@ describe('syncBookCratePlacement', () => {
         data: [holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' })],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
@@ -527,12 +647,11 @@ describe('syncBookCratePlacement', () => {
 
     expect(res.failedItemIds).toEqual([]);
     expect(res.syncedItemIds).toEqual([BOOK_A]);
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
-    expect(call.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: 'green',
-      p_crate_number: '2',
-    });
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // Green #2 states no rack position, and this book's every copy is now inside
+    // it — so the rack pair CLEARS in the same statement. See the derived-cases
+    // block below for why that is the whole point.
+    expect(call.args).toEqual(placementArgs([BOOK_A], { color: 'green', number: '2' }));
   });
 
   it('SPLIT holdings → the summary is NOT overwritten (no RPC at all)', async () => {
@@ -555,7 +674,7 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
@@ -568,7 +687,7 @@ describe('syncBookCratePlacement', () => {
     // 0292: 405 units on DC4 alone) the skip is the COMMON outcome — the whole
     // feature would look like it worked and changed nothing.
     expect(res.skippedItemIds).toEqual([BOOK_A]);
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('a split across a crate AND a NULL-kind site holding still counts as split', async () => {
@@ -587,13 +706,13 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A], {
       verified: verified([[BOOK_A, { crateNumber: '4' }]]),
     });
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('leftover STAGING/UNPLACED stock does not make a placement look split', async () => {
@@ -612,11 +731,11 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, NO_CRATE]]) });
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
     expect(call.args).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
@@ -670,7 +789,7 @@ describe('syncBookCratePlacement', () => {
     // The summary is LEFT ALONE, not cleared: a book with no placed stock is a
     // book whose recorded crate is a human's restocking intent, and wiping it
     // on a read that came back empty would be data loss dressed as tidy-up.
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('NO positive holding anywhere → unplaced, not a silent all-clear', async () => {
@@ -695,7 +814,7 @@ describe('syncBookCratePlacement', () => {
 
     expect(res.unplacedItemIds).toEqual([BOOK_A]);
     expect(res.syncedItemIds).toEqual([]);
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('an unplaced book does not stop its BATCH-MATE from synchronizing', async () => {
@@ -719,7 +838,7 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     const res = await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
@@ -731,16 +850,12 @@ describe('syncBookCratePlacement', () => {
 
     expect(res.unplacedItemIds).toEqual([BOOK_A]);
     expect(res.syncedItemIds).toEqual([BOOK_B]);
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
     // ...and only BOOK_B is in the write.
-    expect(call.args).toEqual({
-      p_item_ids: [BOOK_B],
-      p_crate_color: 'green',
-      p_crate_number: '2',
-    });
+    expect(call.args).toEqual(placementArgs([BOOK_B], { color: 'green', number: '2' }));
   });
 
-  it('a RACK-only destination CLEARS the crate summary (both args null)', async () => {
+  it('a RACK-only destination CLEARS the crate and RECORDS that rack', async () => {
     const { svc, stub } = svcWith({
       'inventory_items.select': {
         data: [
@@ -752,20 +867,20 @@ describe('syncBookCratePlacement', () => {
         error: null,
       },
       'item_stock_levels.select': {
-        data: [holding(BOOK_A, 'loc-rack', { kind: 'rack' })],
+        data: [holding(BOOK_A, 'loc-rack', { kind: 'rack', rack_number: '22', rack_row: 'B' })],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, BLUE_4]]) });
 
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!;
-    expect(call.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: null,
-      p_crate_number: null,
-    });
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // A book on a rack is in no crate — a stale "Blue 4" walks a picker to a
+    // bin that holds none of it. And the rack it IS on is recorded, from the
+    // same location row, in the same statement: the pair is not left to whatever
+    // a previous placement happened to write.
+    expect(call.args).toEqual(placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }));
   });
 
   it('NON-BOOKS are never written', async () => {
@@ -785,7 +900,7 @@ describe('syncBookCratePlacement', () => {
     const res = await svc.syncBookCratePlacement([WIDGET], { verified: new Map() });
     expect(res.failedItemIds).toEqual([]);
     expect(res.staleItemIds).toEqual([]);
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     // Not even a holdings read — there was no book to reconcile.
     expect(stub.fromCalls).not.toContain('item_stock_levels');
   });
@@ -829,7 +944,7 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
@@ -839,14 +954,14 @@ describe('syncBookCratePlacement', () => {
       ]),
     });
 
-    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
+    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_placement');
     expect(calls).toHaveLength(2);
     expect(calls.map((c) => c.args)).toEqual([
       // 'Blue' canonicalises to the registry slug on the way onto the item
       // summary; 'Blue Shelf' is not a registry color, so it keeps the only
       // spelling anyone has of it. Neither batch merges into the other.
-      { p_item_ids: [BOOK_A], p_crate_color: 'blue', p_crate_number: 'Shelf 2' },
-      { p_item_ids: [BOOK_B], p_crate_color: 'Blue Shelf', p_crate_number: '2' },
+      placementArgs([BOOK_A], { color: 'blue', number: 'Shelf 2' }),
+      placementArgs([BOOK_B], { color: 'Blue Shelf', number: '2' }),
     ]);
   });
 
@@ -866,7 +981,7 @@ describe('syncBookCratePlacement', () => {
         ],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 2, error: null },
+      'rpc:inventory_set_book_placement': { data: 2, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
@@ -876,7 +991,7 @@ describe('syncBookCratePlacement', () => {
       ]),
     });
 
-    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_storage');
+    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_placement');
     expect(calls).toHaveLength(1);
     expect(calls[0]!.args).toMatchObject({ p_item_ids: [BOOK_A, BOOK_B] });
   });
@@ -891,7 +1006,7 @@ describe('syncBookCratePlacement', () => {
         data: [holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' })],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: null, error: { message: 'boom' } },
+      'rpc:inventory_set_book_placement': { data: null, error: { message: 'boom' } },
     });
 
     // NEVER throws: the stock really moved and hand-rolling a rollback of a
@@ -919,7 +1034,7 @@ describe('syncBookCratePlacement', () => {
         data: [holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' })],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 0, error: null },
+      'rpc:inventory_set_book_placement': { data: 0, error: null },
     });
 
     await expect(
@@ -933,13 +1048,22 @@ describe('syncBookCratePlacement', () => {
     });
   });
 
-  it('audits the crate change on the EXISTING inventory.item.updated event', async () => {
+  // REWRITTEN, deliberately: this test used to pin `before`/`after` as the CRATE
+  // PAIR ONLY, which was complete when the sync wrote only the crate pair. It now
+  // writes all four keys in one statement, so a two-key trail would show the
+  // crate moving and stay SILENT about a rack pair the same statement cleared —
+  // and "who cleared 38-A, and when" is precisely the question this trail is read
+  // to answer. The fixture is the full-move-into-a-position-less-crate case for
+  // the same reason: it is the case where the pair changes.
+  it('audits the WHOLE summary on the EXISTING inventory.item.updated event', async () => {
     const { svc } = svcWith({
       'inventory_items.select': {
         data: [
           itemRow(BOOK_A, 'Persepolis', 'book', {
             book_crate_color: 'blue',
             book_crate_number: '4',
+            book_rack_number: '38',
+            book_rack_row: 'A',
           }),
         ],
         error: null,
@@ -948,7 +1072,7 @@ describe('syncBookCratePlacement', () => {
         data: [holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' })],
         error: null,
       },
-      'rpc:inventory_set_book_storage': { data: 1, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
     await svc.syncBookCratePlacement([BOOK_A], {
@@ -961,12 +1085,29 @@ describe('syncBookCratePlacement', () => {
     // No parallel event name — the same one every other custom_fields write uses.
     expect(payload.event).toBe('inventory.item.updated');
     expect(payload.entityId).toBe(BOOK_A);
-    expect(payload.before).toEqual({ book_crate_color: 'blue', book_crate_number: '4' });
-    expect(payload.after).toEqual({ book_crate_color: 'green', book_crate_number: '2' });
+    expect(payload.before).toEqual({
+      book_crate_color: 'blue',
+      book_crate_number: '4',
+      book_rack_number: '38',
+      book_rack_row: 'A',
+    });
+    // The clear is IN the trail, not implied by its absence.
+    expect(payload.after).toEqual({
+      book_crate_color: 'green',
+      book_crate_number: '2',
+      book_rack_number: null,
+      book_rack_row: null,
+    });
     expect(payload.extra).toMatchObject({
       placement: 'book_crate',
       to_location_id: 'loc-green',
       quantity: 12,
+      changed_keys: [
+        'book_crate_color',
+        'book_crate_number',
+        'book_rack_number',
+        'book_rack_row',
+      ],
     });
   });
 
@@ -1005,7 +1146,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       ],
       error: null,
     },
-    'rpc:inventory_set_book_storage': { data: 1, error: null },
+    'rpc:inventory_set_book_placement': { data: 1, error: null },
   };
 
   it('a crate edited BETWEEN the two reads is left alone, not overwritten', async () => {
@@ -1030,7 +1171,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       verified: verified([[BOOK_A, BLUE_4]]),
     });
 
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(res.staleItemIds).toEqual([BOOK_A]);
     expect(res.syncedItemIds).toEqual([]);
     // Not a FAILURE — nothing broke. The stock moved and someone else's edit
@@ -1057,7 +1198,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
     });
     expect(res.syncedItemIds).toEqual([BOOK_A]);
     expect(res.staleItemIds).toEqual([]);
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toMatchObject({
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toMatchObject({
       p_crate_color: 'green',
       p_crate_number: '2',
     });
@@ -1123,7 +1264,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       ...intoGreen2,
     });
     const res = await svc.syncBookCratePlacement([BOOK_A], { verified: new Map() });
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(res.staleItemIds).toEqual([BOOK_A]);
   });
 
@@ -1175,6 +1316,335 @@ describe('syncBookCratePlacement — the freshness check', () => {
       staleItemIds: [],
       unplacedItemIds: [],
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE RACK PAIR IS DERIVED, TOO — the four cases, at the seam that decides them
+//
+// The item's book_rack_number / book_rack_row are not an independent fact; they
+// are the other projection of the fact the reconciliation already establishes —
+// WHICH SINGLE LOCATION the book's live stock resolves to. Two rules preceded
+// this, each an UNCONDITIONAL answer to a conditional question:
+//
+//   main CLEARED the pair on every put-away into a position-less crate
+//   (inventory_set_rack deletes it when both rack arguments are null, 0068):
+//   right for a FULL move, wrong for a PARTIAL one, which erased a rack the
+//   remaining copies really were on.
+//
+//   Migration 0335 then PRESERVED it always: right for the partial move, wrong
+//   for the full one — the pair went on naming a rack the stock had entirely
+//   left, and nine surfaces reprinted it, including the pick slip and the
+//   warehouse packing slip a picker physically carries and the mobile scan sheet,
+//   which printed "Bin/shelf: Blue Shelf" directly above "Rack: 38-A".
+//
+// These tests drive the REAL service through all four outcomes. Each asserts the
+// FULL five-argument RPC payload (or that no RPC happened at all), because a
+// crate-only assertion is exactly what let the rack half go unpinned in both
+// directions.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('syncBookCratePlacement — the rack pair follows the holdings', () => {
+  /** A book recorded in Blue 4 on rack 38-A: the production shape at issue. */
+  const ON_38A = {
+    book_crate_color: 'blue',
+    book_crate_number: '4',
+    book_rack_number: '38',
+    book_rack_row: 'A',
+  };
+
+  function world(holdings: unknown[], rpc: { data: unknown } = { data: 1 }) {
+    return svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Persepolis', 'book', ON_38A)],
+        error: null,
+      },
+      'item_stock_levels.select': { data: holdings, error: null },
+      'rpc:inventory_set_book_placement': { data: rpc.data, error: null },
+    });
+  }
+
+  // ── CASE 1 — all stock in a POSITION-LESS crate: the pair CLEARS ──────────
+  it('a FULL move into a POSITION-LESS crate CLEARS the rack pair', async () => {
+    // Every crate in production today is position-less. The book's every copy is
+    // now inside Gray #BIN, so it is on NO rack, and 38-A is no longer a fact
+    // about it — keeping it is how the pick slip came to send a picker to 38-A
+    // for a book that is entirely in a crate.
+    const { svc, stub } = world([
+      holding(BOOK_A, 'loc-gray', { kind: 'crate', crate_color: 'gray', crate_number: 'BIN' }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'gray', number: 'BIN' }),
+    );
+    // AND THE OPERATOR IS NOT TOLD SOMETHING FALSE. This is reported as SYNCED —
+    // not skipped, which would claim the summary was deliberately left describing
+    // another location, and not unplaced, which would claim there was nothing to
+    // synchronize to.
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.skippedItemIds).toEqual([]);
+    expect(res.unplacedItemIds).toEqual([]);
+    expect(res.failedItemIds).toEqual([]);
+    expect(res.staleItemIds).toEqual([]);
+  });
+
+  it('and the gate SAID SO before the stock moved — the refusal names the rack it loses', async () => {
+    // The other half of "not told something false", at the surface an operator
+    // actually reads. The gate only speaks when the reconciliation provably WILL
+    // write (bookCratePlacementWillSync), and the case above is exactly that — so
+    // this sentence describes a rack that really does disappear. Under 0335's
+    // unconditional preservation the identical sentence was a lie: it named 40-B
+    // as part of what "will change" while the writer kept 40-B forever.
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '4',
+            book_rack_number: '40',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+      // The book's ONLY holding is the source, so this placement leaves the
+      // destination as its only placement: the sync will write.
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-40b', { kind: 'rack', rack_number: '40', rack_row: 'B' })],
+        error: null,
+      },
+    });
+
+    const thrown = await svc
+      .assertBookCratePlacementAllowed(
+        [BOOK_A],
+        {
+          kind: 'crate',
+          name: 'Gray #BIN',
+          rackNumber: null,
+          rackRow: null,
+          crateColor: 'gray',
+          crateNumber: 'BIN',
+        },
+        { toLocationId: 'loc-gray', moves: new Map([[BOOK_A, { fromLocationId: 'loc-40b', quantity: 5 }]]) },
+      )
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((thrown as ServiceError).code).toBe('conflict');
+    expect((thrown as ServiceError).message).toBe(
+      'Persepolis is recorded in Blue 4 on rack 40-B. Placing it here will change that to Gray BIN.',
+    );
+  });
+
+  // ── CASE 2 — all stock in a POSITIONED crate: the pair IS that position ───
+  it('a FULL move into a POSITIONED crate makes the pair the CRATE’s position', async () => {
+    // A crate SITS ON a rack: one physical place, two item keys. Clearing the
+    // pair here would publish "in Gray BIN, on no rack" about a crate that is
+    // demonstrably on 43-B — and "gray BIN" alone names five different bins in
+    // this warehouse.
+    const { svc, stub } = world([
+      holding(BOOK_A, 'loc-gray', {
+        kind: 'crate',
+        crate_color: 'gray',
+        crate_number: 'BIN',
+        rack_number: '43',
+        rack_row: 'B',
+      }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], {
+        color: 'gray',
+        number: 'BIN',
+        rackNumber: '43',
+        rackRow: 'B',
+      }),
+    );
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+  });
+
+  // ── CASE 3 — all stock on a plain RACK: the pair is that rack ─────────────
+  it('a FULL move onto a plain RACK records that rack and clears the crate', async () => {
+    const { svc, stub } = world([
+      holding(BOOK_A, 'loc-22b', { kind: 'rack', rack_number: '22', rack_row: 'b' }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    // The row is UPPER-CASED, exactly as stampPlacementBin upper-cases it. Both
+    // writers must produce the same item-side value for the same location, or the
+    // books rack filter — which matches number AND row with an exact eq — sees two
+    // spellings of one rack and one of them finds nothing.
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }),
+    );
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+  });
+
+  it('DECOMPOSES a legacy composite rack number off the location row', async () => {
+    // Incident 2026-07-23: a rack created as ("22-B", null). Copying that pair
+    // verbatim onto the item makes it invisible to its own rack filter, which
+    // requires number="22" AND row="B". Every writer of these keys decomposes
+    // through the shared parser, and this derivation is now one of them.
+    const { svc, stub } = world([
+      holding(BOOK_A, 'loc-legacy', { kind: 'rack', rack_number: '22-B', rack_row: null }),
+    ]);
+
+    await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, BLUE_4]]) });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }),
+    );
+  });
+
+  // ── CASE 4 — SPLIT: the pair is PRESERVED, and the operator is TOLD ───────
+  it('a PARTIAL move leaves the rack pair ALONE and reports the skip', async () => {
+    // Half the copies moved into Gray #BIN; the rest are still on 38-A. Clearing
+    // the pair here would erase a true fact — this is the case 0335 was right
+    // about — and stamping the crate would assert something false about the half
+    // that stayed. So NOTHING is written…
+    const { svc, stub } = world([
+      holding(BOOK_A, 'loc-gray', { kind: 'crate', crate_color: 'gray', crate_number: 'BIN' }),
+      holding(BOOK_A, 'loc-38a', { kind: 'rack', rack_number: '38', rack_row: 'A' }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
+    // …and the skip is REPORTED through the existing vocabulary, so the caller
+    // can say the label was deliberately left alone instead of showing a plain
+    // success toast for a sync that changed nothing. For this org the split is
+    // the COMMON outcome (405 units sit on Site DC4 per migration 0292).
+    expect(res.skippedItemIds).toEqual([BOOK_A]);
+    expect(res.syncedItemIds).toEqual([]);
+    expect(res.failedItemIds).toEqual([]);
+    expect(res.unplacedItemIds).toEqual([]);
+  });
+
+  it('a NULL-kind SITE holding is a REAL placement — it clears both pairs, and is never dropped', async () => {
+    // Recurring pattern #23. `.in('locations.kind', [...])` is never true for a
+    // NULL column, so a kind filter in the holdings read would drop this row —
+    // the bug migration 0292 fixed for the placed draw-down, in this exact area.
+    // Dropped, this book would look UNPLACED and keep naming Blue 4 on 38-A.
+    // Kept, it is the single placement: on no rack and in no crate.
+    const { svc, stub } = world([holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' })]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], {}),
+    );
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.unplacedItemIds).toEqual([]);
+  });
+
+  it('two books in the SAME crate on DIFFERENT racks are two batches, never one', async () => {
+    // The batching key carries all four values because one statement writes all
+    // four. Keying on the crate alone would put both books in one call and stamp
+    // the first book's rack onto the second — a silent wrong rack on a picker's
+    // slip, which is the whole failure class this module exists to prevent.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', ON_38A),
+          itemRow(BOOK_B, 'Maus I', 'book', ON_38A),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-gray-43b', {
+            kind: 'crate',
+            crate_color: 'gray',
+            crate_number: 'BIN',
+            rack_number: '43',
+            rack_row: 'B',
+          }),
+          holding(BOOK_B, 'loc-gray-41c', {
+            kind: 'crate',
+            crate_color: 'gray',
+            crate_number: 'BIN',
+            rack_number: '41',
+            rack_row: 'C',
+          }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, BLUE_4],
+        [BOOK_B, BLUE_4],
+      ]),
+    });
+
+    const calls = stub.rpcCalls.filter((c) => c.name === 'inventory_set_book_placement');
+    expect(calls.map((c) => c.args)).toEqual([
+      placementArgs([BOOK_A], {
+        color: 'gray',
+        number: 'BIN',
+        rackNumber: '43',
+        rackRow: 'B',
+      }),
+      placementArgs([BOOK_B], {
+        color: 'gray',
+        number: 'BIN',
+        rackNumber: '41',
+        rackRow: 'C',
+      }),
+    ]);
+  });
+
+  it('a stale crate skips BOTH halves — the pair never rides in behind a refused write', async () => {
+    // Someone re-crated the book to Red 7 between the gate and the write, so the
+    // acknowledgement we hold is not an answer to this question. The crate is left
+    // alone — and because both pairs travel in ONE statement, the rack pair is
+    // left alone with it rather than being written on the strength of an
+    // acknowledgement that named a different crate.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Persepolis', 'book', {
+            book_crate_color: 'red',
+            book_crate_number: '7',
+            book_rack_number: '38',
+            book_rack_row: 'A',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-gray', { kind: 'crate', crate_color: 'gray', crate_number: 'BIN' }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4]]),
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
+    expect(res.staleItemIds).toEqual([BOOK_A]);
   });
 });
 
@@ -1235,7 +1705,7 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
         error: null,
       },
       'rpc:inventory_set_rack': { data: 1, error: null },
-      'rpc:inventory_set_book_storage': () => {
+      'rpc:inventory_set_book_placement': () => {
         const last = stub.rpcCalls[stub.rpcCalls.length - 1]!.args as {
           p_item_ids: string[];
           p_crate_color: string | null;
@@ -1277,7 +1747,7 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
           custom_fields: { book_crate_color: 'blue', book_crate_number: '4' },
         },
       ],
-      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' })],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' })],
     );
 
     const res = await svc.bulkUpdate({
@@ -1285,28 +1755,46 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
       op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
     });
 
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'bulk Set rack never reconciled the crate summary at all').toBeDefined();
-    expect(call!.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: null,
-      p_crate_number: null,
-    });
+    // THE TWO WRITERS AGREE. `inventory_set_rack` already stamped 28-A from the
+    // typed destination; the reconciliation derives the pair from where the stock
+    // now IS and arrives at the same 28-A. That agreement is the point — if the
+    // derivation disagreed with the destination writer on the common path, one of
+    // the two would be overwriting the other on every bulk place.
+    expect(call!.args).toEqual(placementArgs([BOOK_A], { rackNumber: '28', rackRow: 'A' }));
     // …and it is REPORTED, so the toast can say a label changed.
     expect(res.crateCleared).toBe(1);
+    // The stock reached the rack, so there is nothing to warn about. This is
+    // the count that separates "everything moved" from "nothing moved" —
+    // `placed` alone reads 0 for both "already there" and "all refused".
+    expect(res.placeFailed).toBeUndefined();
   });
 
-  // ── The counts are PROVED, not inferred from "a write ran" ────────────────
+  // ═══ THE OPERATOR TYPED THE RACK, AND THE APP MAY NOT UN-TYPE IT ═════════
   //
-  // `placeItemsOntoRackByName` is per-holding best-effort: one failed transfer
-  // is logged and the rest still place. When the failure is a book whose only
-  // remaining holding is a CRATE, the reconciliation still runs and rewrites
-  // that crate — so the book lands in `syncedItemIds` while its label was never
-  // cleared and its stock never reached the rack. `crateCleared` counted every
-  // synced book that had a crate, so the operator was shown
-  // "Cleared the crate label on 1 book now on the rack" about a label that
-  // still exists, on a book that did not move. Both halves of that sentence
-  // were false.
+  // TESTS REWRITTEN, WITH THE REASON. The two cases below used to assert
+  // `p_rack_number: null` — that the holdings-derivation CLEARS the pair on the
+  // swallowed-placement-failure path. That expectation pinned the defect, so it
+  // is replaced rather than weakened: what is asserted here is strictly more
+  // than before (the same crate half, plus the rack half, plus the new
+  // `placeFailed` report), and the crate-side counts they were written for are
+  // untouched.
+  //
+  // THE DEFECT. `inventory_set_rack` writes {28, A, bin_location '28-A'} — the
+  // operator's typed intent. `placeItemsOntoRackByName` is per-holding
+  // best-effort, so a refused transfer left the book in position-less crate
+  // Blue 4; the derivation then read THAT holding and wrote
+  // {p_rack_number: null, p_rack_row: null}, reverting the pair the same
+  // operation had just written. The book dropped straight out of the "28-A"
+  // filter the operator had just set, `bin_location` still read "28-A" — the
+  // "labelled 28-A, on no rack" row migration 0336's header exists to make
+  // unreachable — and the toast said "Updated 1".
+  //
+  // THE RULE. The derivation is authoritative about the CRATE, which nobody
+  // typed; the rack pair on this path is a direct human instruction and stands.
+  // What is wrong is not the label, it is the world — so the failure to place
+  // is REPORTED (`placeFailed`) instead of being expressed as a silent revert.
 
   it('does NOT count a clear when the sync rewrote the crate the book already named', async () => {
     const { svc, stub } = setRackStub(
@@ -1324,17 +1812,23 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     });
 
     // It DID write — the summary is derived, and writing the value it already
-    // holds is harmless…
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: 'blue',
-      p_crate_number: '4',
-    });
-    // …but nothing was cleared, and the book is on no rack. The truthful line
-    // is the warning one: the label is exactly what it was.
+    // holds is harmless. The CRATE half comes off the holding (Blue 4, where the
+    // stock actually is); the RACK half is the pair the operator typed and
+    // `inventory_set_rack` already wrote, carried through unchanged so the two
+    // writers agree and the row cannot end up labelled "28-A" on no rack.
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'blue', number: '4', rackNumber: '28', rackRow: 'A' }),
+    );
+    // …but nothing was cleared. The truthful line is the warning one: the label
+    // is exactly what it was.
     expect(res.crateCleared).toBeUndefined();
     expect(res.crateChanged).toBeUndefined();
     expect(res.crateUnchanged).toBe(1);
+    // AND the operator hears the thing that actually went wrong. Without this
+    // the whole event is invisible: `placed` is 0, which is also what a batch
+    // already sitting on the rack returns.
+    expect(res.placeFailed).toBe(1);
+    expect(res.placed).toBe(0);
   });
 
   it('reports a label rewritten to a DIFFERENT crate as changed — not cleared, not unchanged', async () => {
@@ -1350,17 +1844,100 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
       op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
     });
 
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: 'red',
-      p_crate_number: '7',
-    });
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'red', number: '7', rackNumber: '28', rackRow: 'A' }),
+    );
     // "Cleared" would be false (the label names a crate), "unchanged" would be
     // false (Blue 4 is gone), and silence would be the worst of the three — the
     // operator typed a rack number and a value a human recorded was replaced.
     expect(res.crateCleared).toBeUndefined();
     expect(res.crateUnchanged).toBeUndefined();
     expect(res.crateChanged).toBe(1);
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('keeps the typed pair even when the book’s crate is POSITIONED on a different rack', async () => {
+    // The derivation's sharpest case: crate "Gray #BIN on rack 43-B" states a
+    // real rack position, so deriving would write 43-B — not null — straight
+    // over the 28-A the operator typed. A plausible-looking value is a WORSE
+    // silent revert than a null one, because nothing about the row looks wrong.
+    const { svc, stub } = setRackStub(
+      [bookRow({ color: 'gray', number: 'BIN' })],
+      [
+        holding(BOOK_A, 'loc-crate-gray-bin', {
+          kind: 'crate',
+          type: 'bin',
+          crate_color: 'gray',
+          crate_number: 'BIN',
+          rack_number: '43',
+          rack_row: 'B',
+        }),
+      ],
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'gray', number: 'BIN', rackNumber: '28', rackRow: 'A' }),
+    );
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('reports placeFailed for a NON-BOOK too — the crate counts can never speak for it', async () => {
+    // Every existing warning on this path is a BOOK crate count, and a widget
+    // has no crate summary at all: `syncBookCratePlacement` returns an empty map
+    // for it and every crate bucket stays 0. So a widget whose transfer was
+    // refused produced a bare "Updated 1 item." with nothing anywhere — the
+    // silence this count exists to break.
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: WIDGET,
+          name: 'Blue Widget',
+          item_type: 'part',
+          warehouse_id: 'wh-1',
+          bin_location: null,
+          custom_fields: {},
+        },
+      ],
+      [holding(WIDGET, 'loc-unplaced', { kind: 'unplaced', type: 'unplaced' })],
+      { 'rpc:transfer_stock': { data: null, error: { message: 'permission denied' } } },
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [WIDGET],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    // No book, so no crate reconciliation at all…
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBeUndefined();
+    expect(res.crateChanged).toBeUndefined();
+    // …and the failure is still reported.
+    expect(res.placeFailed).toBe(1);
+  });
+
+  it('does NOT report placeFailed when the stock was ALREADY on the typed rack', async () => {
+    // The other half of the count's meaning: `placed` is 0 here too, and this is
+    // the case a warning must never fire for. Nothing moved because nothing
+    // needed to.
+    const { svc } = setRackStub(
+      [bookRow({ color: null, number: null })],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' })],
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(res.placed).toBe(0);
+    expect(res.placeFailed).toBeUndefined();
   });
 
   it('leaves a SPLIT book alone and says so', async () => {
@@ -1376,7 +1953,7 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
         },
       ],
       [
-        holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' }),
+        holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' }),
         // Also on a NULL-kind Site — a real second placement (migration 0292).
         holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' }),
       ],
@@ -1387,7 +1964,7 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
       op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
     });
 
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(res.crateCleared).toBeUndefined();
     expect(res.crateUnchanged).toBe(1);
   });
@@ -1404,13 +1981,13 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
           custom_fields: { book_crate_color: 'blue', book_crate_number: '4' },
         },
       ],
-      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf' })],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' })],
     );
 
     await svc.bulkUpdate({ ids: [BOOK_A], op: { kind: 'set_rack', rackNumber: null, rackRow: null } });
 
     // Nothing was placed, so nothing about the crate changed.
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 });
 
@@ -1435,13 +2012,17 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
   const RACK_22B_ID = 'loc-rack-22b';
 
   const crateLoc = { kind: 'crate', type: 'bin', crate_color: 'blue', crate_number: '4' };
-  const rackLoc = { kind: 'rack', type: 'shelf' };
+  // A real rack row carries its own position (LocationsService.create /
+  // findOrCreateRackOrCrate always write it), and the reconciliation derives the
+  // item's pair from exactly these columns — so a fixture that omitted them
+  // would pin the sync CLEARING a pair it should be setting.
+  const rackLoc = { kind: 'rack', type: 'shelf', rack_number: '22', rack_row: 'B' };
 
   /**
    * A small stateful world, because this flow reads the SAME two tables on both
    * sides of the mutation and the whole point is that the two reads differ:
    *   • adjust_stock flips the holdings from `before` to `after`
-   *   • inventory_set_book_storage writes the summary the next read returns
+   *   • inventory_set_book_placement writes the summary the next read returns
    * The set-storage fake takes its values from the call the stub just recorded
    * (rpcCalls is pushed before the result is resolved), so the "did the label
    * actually move" check is exercised against a real written value rather than
@@ -1484,7 +2065,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
         removed = true;
         return { data: { quantity_on_hand: 0, reorder_point: 0 }, error: null };
       },
-      'rpc:inventory_set_book_storage': () => {
+      'rpc:inventory_set_book_placement': () => {
         const last = stub.rpcCalls[stub.rpcCalls.length - 1]!.args as {
           p_crate_color: string | null;
           p_crate_number: string | null;
@@ -1512,7 +2093,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
     // The summary is NOT wiped — a book with no placed stock has no
     // authoritative location, and clearing it is data loss in a tidy-up
     // costume (see BookCrateSyncResult.unplacedItemIds).
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     // …but the operator is TOLD, which is the whole fix. Before this, the
     // response carried no crate information at all.
     expect(res.crateSync).not.toBeNull();
@@ -1535,13 +2116,11 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
       reason: 'Consolidated onto 22-B',
     });
 
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'the write-off never reconciled the crate summary').toBeDefined();
-    expect(call!.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: null,
-      p_crate_number: null,
-    });
+    // Crate cleared AND rack 22-B recorded: the write-off left the book on that
+    // rack and only that rack, so both halves of the summary follow.
+    expect(call!.args).toEqual(placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }));
     expect(res.crateSync!.syncedItemIds).toEqual([BOOK_A]);
     // Blue 4 → no crate is a REAL change, so the operator is told.
     expect(res.crateSyncUpdated).toBe(true);
@@ -1563,12 +2142,11 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
     });
 
     // It still writes (the summary is derived; writing the value it already
-    // holds is harmless)…
-    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
-      p_item_ids: [BOOK_A],
-      p_crate_color: 'blue',
-      p_crate_number: '4',
-    });
+    // holds is harmless)… and the rack pair clears, because writing off 22-B is
+    // exactly what stopped the book being on a rack at all.
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'blue', number: '4' }),
+    );
     // …but "your crate label changed" would be a lie, so it is not reported.
     expect(res.crateSyncUpdated).toBe(false);
   });
@@ -1592,7 +2170,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
       reason: 'Damaged',
     });
 
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(res.crateSync!.skippedItemIds).toEqual([BOOK_A]);
     expect(res.crateSyncUpdated).toBe(false);
   });
@@ -1610,7 +2188,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
       reason: 'Two copies chewed by the dog',
     });
 
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     // Not "reconciled and found nothing" — not attempted at all, so the common
     // path pays for none of this.
     expect(res.crateSync).toBeNull();
@@ -1632,7 +2210,7 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
       reason: 'Scrapped',
     });
 
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
     expect(res.crateSync).toBeNull();
   });
 });

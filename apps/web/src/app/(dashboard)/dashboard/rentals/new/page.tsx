@@ -7,7 +7,8 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
-import { can } from '@stockpilot/core';
+import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
+import { can, resolvePlacement } from '@stockpilot/core';
 
 function buildAisles(items: CatalogItem[]): AisleSummary[] {
   const byId = new Map<string | null, { name: string; count: number }>();
@@ -100,6 +101,17 @@ export default async function NewRentalPage({
   // Get reservations for these items
   const rentalItemIds = ((rentalItemsData ?? []) as Array<{ id: string }>).map((r) => r.id);
 
+  // Rack/crate HOLDINGS for the catalog, scoped to the warehouse the page is
+  // showing. WHERE THE STOCK IS, as against what each row's custom_fields
+  // remember — without this the card label preferred the item's rack pair over
+  // everything, and a put-away into a position-less crate (mig 0335) leaves
+  // that pair naming the rack the stock has left.
+  const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+    { supabase, organizationId: ctx.organizationId },
+    rentalItemIds,
+    warehouseId,
+  );
+
   let reservedByItem = new Map<string, number>();
   if (rentalItemIds.length > 0) {
     const { data: reservations } = await supabase
@@ -146,14 +158,27 @@ export default async function NewRentalPage({
     unit_cost: number | null;
     reorder_point: number;
   }>).map((it) => {
-    const cf = it.custom_fields ?? {};
-    const rackNum = (cf.rack_number as string | null) ?? null;
-    const rackRow = (cf.rack_row as string | null) ?? null;
-    const rackLabel = rackNum
-      ? rackRow
-        ? `${rackNum}-${rackRow}`
-        : rackNum
-      : (it.bin_location ?? null);
+    // The card's walk-to label. The rack pair used to be lifted off
+    // custom_fields and preferred over bin_location right here — the exact
+    // INVERSION of the sibling orders catalog loader (server/loaders/
+    // orders-new-catalog.ts), and the reason this page could send someone to
+    // rack 38-A for stock sitting in "Blue Shelf". The precedence is now
+    // resolvePlacement's; this only picks the compact rendering the card has
+    // room for (bare "38-A", not "Rack 38-A").
+    const res = resolvePlacement({
+      itemType: it.item_type,
+      customFields: it.custom_fields,
+      binLocation: it.bin_location,
+      holdings: rackHoldingsByItemId.get(it.id),
+    });
+    const rackLabel =
+      res.source === 'holdings'
+        ? res.holdings.map((h) => h.name).sort((a, b) => a.localeCompare(b)).join(', ')
+        : res.source === 'structured'
+          ? res.rackLabel
+          : res.source === 'bin'
+            ? res.binLocation
+            : null;
 
     return {
       id: it.id,

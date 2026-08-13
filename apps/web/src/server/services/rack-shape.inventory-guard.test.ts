@@ -218,7 +218,6 @@ const RACK_READ_ONLY = [
   // display / export only — both compose the label, never store a pair
   'apps/web/src/server/loaders/orders-new-catalog.ts',
   'apps/web/src/lib/inventory-export.ts',
-  'apps/mobile/app/(drawer)/(tabs)/books.tsx',
   // THE canonical reader: readItemRack / readBookStorage lift the pair out of
   // custom_fields and join the display label. It writes nothing durable — it is
   // the helper every other reader below should be delegating to.
@@ -230,9 +229,19 @@ const RACK_READ_ONLY = [
   // of a reader is how a reader and a writer come to disagree in the first
   // place. If it grows a write, it moves up to RACK_WRITERS.
   'apps/mobile/app/(drawer)/(tabs)/scan.tsx',
-  // The rental item picker: lifts the non-book pair off custom_fields purely to
-  // label a row, falling back to bin_location. No write.
-  'apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx',
+  // The native ITEM screen, and the SECOND hand-rolled copy of the core reader
+  // (the block dates to the 2026-07-10 crate-fields fix, long before this
+  // branch — it is not new, it is newly VISIBLE, because widening this arm to
+  // see guarded reads is what finally surfaced it). It lifts the pair with its
+  // own book-first / product-first fallback plus three legacy spellings
+  // (`rackLabel` / `rack_label` / `rack`) that `readItemRack` does not know
+  // about, which is exactly why deleting it is a real change and not a tidy-up:
+  // dropping those spellings would blank the rack for legacy-imported items.
+  // Reads only — it stores nothing. OWED: fold the legacy spellings into the
+  // core reader, then delete this copy and remove this entry. Until then it is
+  // listed rather than hidden, because an unclassified reader is how a reader
+  // and a writer come to disagree.
+  'apps/mobile/app/item/[id].tsx',
   // THE mapper: the one place a `locations` row becomes a placement
   // destination. It copies the pair into camelCase and hands it to
   // stampPlacementBin, which normalises through the shared parser — so it
@@ -243,7 +252,24 @@ const RACK_READ_ONLY = [
 ] as const;
 
 /**
- * DELIBERATELY ABSENT, and the reason matters.
+ * DELIBERATELY ABSENT (1) — they stopped naming a rack key when the PLACEMENT
+ * PRECEDENCE was extracted.
+ *
+ * `apps/mobile/app/(drawer)/(tabs)/books.tsx` and
+ * `apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx` each used to
+ * lift `rack_number` / `book_rack_row` off `custom_fields` by hand to label a
+ * row — two more hand-rolled copies of a reader, and two more places that
+ * decided on their own which of the rack pair / `bin_location` / the holdings
+ * wins. Both now call `resolvePlacement` (packages/core), which reads the pair
+ * through `readBookStorage` / `readItemRack`, so neither file names a key any
+ * more and the scan stops seeing them.
+ *
+ * If either reappears here, someone re-introduced a hand-rolled read — send it
+ * back to `resolvePlacement` rather than re-adding it to READ_ONLY. The
+ * cross-formatter guard (apps/web/src/lib/placement-label.guard.test.ts) is the
+ * arm that polices the DECISION; this one polices the KEY.
+ *
+ * DELIBERATELY ABSENT (2), and the reason matters.
  *
  * `apps/web/src/server/actions/inventory.ts` and
  * `apps/web/src/app/api/v1/items/[id]/transfer/route.ts` used to appear in
@@ -470,19 +496,51 @@ describe('destination-name recurrence guard: the label IS the planner, by value'
     expect(deriveLocationName(fields)).toBe(expected);
   });
 
-  const NEW_CRATE: Array<[{ crateColor: string; crateNumber: string }, string]> = [
-    [{ crateColor: 'blue', crateNumber: '42' }, 'Blue #42'],
+  type CrateFields = { crateColor: string; crateNumber: string; rackNumber: string; rackRow: string };
+  const crate = (over: Partial<CrateFields>): CrateFields => ({
+    crateColor: '',
+    crateNumber: '',
+    rackNumber: '',
+    rackRow: '',
+    ...over,
+  });
+  const NEW_CRATE: Array<[CrateFields, string]> = [
+    [crate({ crateColor: 'blue', crateNumber: '42' }), 'Blue #42'],
     // Production colours are already mixed case. The registry LABEL wins, so
     // the 0270 dedupe key stays one spelling; `${color} #${n}` yields "BLUE #Bin"
     // and mints a second locations row for the same crate.
-    [{ crateColor: 'BLUE', crateNumber: 'Bin' }, 'Blue #Bin'],
+    [crate({ crateColor: 'BLUE', crateNumber: 'Bin' }), 'Blue #Bin'],
     // A crate number is free text: production holds 0, 1..16, "Bin", "BIN",
     // "Blue Shelf". "0" is truthy as a STRING — a falsy check on it names ''.
-    [{ crateColor: '', crateNumber: '0' }, 'Crate #0'],
-    [{ crateColor: '', crateNumber: 'Blue Shelf' }, 'Crate #Blue Shelf'],
+    [crate({ crateNumber: '0' }), 'Crate #0'],
+    [crate({ crateNumber: 'Blue Shelf' }), 'Crate #Blue Shelf'],
     // A colour with no number is not a crate identity — it used to fall back to
-    // the rack number and mint "Blue #A1".
-    [{ crateColor: 'blue', crateNumber: '' }, ''],
+    // the rack number and mint "Blue #A1". A POSITION does not rescue it either:
+    // where a crate sits is not what it is called.
+    [crate({ crateColor: 'blue' }), ''],
+    [crate({ crateColor: 'blue', rackNumber: '38', rackRow: 'B' }), ''],
+    // ── THE CRATE SITS ON A RACK ──────────────────────────────────────────
+    // The position is part of the NAME, which is the 0270 dedupe key: "gray
+    // BIN" is FIVE physically distinct bins in production (43-B, 43-C, 42-B,
+    // 42-C, 41-C), and a position-blind name collapses them into one row.
+    [
+      crate({ crateColor: 'gray', crateNumber: 'BIN', rackNumber: '43', rackRow: 'B' }),
+      'Gray #BIN on rack 43-B',
+    ],
+    [
+      crate({ crateColor: 'gray', crateNumber: 'BIN', rackNumber: '41', rackRow: 'C' }),
+      'Gray #BIN on rack 41-C',
+    ],
+    // A whole rack label typed into the crate form's "On rack" box decomposes
+    // exactly as it does for a rack — a hand-rolled join renders "38-B-" or
+    // "38-B-B" and drifts from the columns stored (incident 2026-07-23).
+    [crate({ crateNumber: '13', rackNumber: '38-B' }), 'Crate #13 on rack 38-B'],
+    [crate({ crateNumber: '13', rackNumber: '38-B', rackRow: 'B' }), 'Crate #13 on rack 38-B'],
+    // Padding is the operator's, not the crate's.
+    [crate({ crateNumber: '13', rackNumber: ' 38 ', rackRow: ' B ' }), 'Crate #13 on rack 38-B'],
+    // BACKWARD COMPATIBILITY: no position, byte-identical to the shipped name,
+    // so every crate row already in production is still FOUND and REUSED.
+    [crate({ crateColor: 'blue', crateNumber: 'Shelf' }), 'Blue #Shelf'],
   ];
 
   it.each(NEW_CRATE)('new crate %o is named %o', (fields, expected) => {

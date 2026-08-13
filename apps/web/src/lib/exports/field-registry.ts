@@ -523,6 +523,27 @@ export const EXPORT_FIELDS: readonly InventoryExportField[] = [
     wrap: false,
     // The combined label readBookStorage already computes for the list page
     // ("38-A"). The raw parts stay available as their own fields.
+    //
+    // A RAW FIELD PROJECTION, deliberately — NOT a walk-to label, and NOT
+    // routed through resolvePlacement like the pick slip / count sheet /
+    // storefront are. Two reasons, recorded so this is a decision and not an
+    // omission:
+    //
+    //   1. This column is named after the STORED key. A column headed "Rack"
+    //      whose value is not the item's rack field is lying about what it is;
+    //      the raw `rack_number` / `rack_row` columns sitting beside it would
+    //      then disagree with it inside one spreadsheet.
+    //   2. InventoryExportSourceRow carries neither holdings nor bin_location
+    //      (see source-row.ts), so there is no truth here to prefer — fixing
+    //      this needs a NEW holdings-derived source field and a new column,
+    //      i.e. an additive feature with its own preset/width tests, not a
+    //      predicate change.
+    //
+    // The consequence is real: after a put-away into a position-less crate
+    // (mig 0335) this column CAN name a rack the stock has left. That is
+    // acceptable here and was not on the slips, because a spreadsheet is not
+    // a document a picker walks the warehouse with. Classified as
+    // RAW_FIELD_PROJECTIONS in lib/placement-label.guard.test.ts.
     value: (r) => r.rackLabel,
   },
   {

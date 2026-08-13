@@ -200,6 +200,13 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(screen.getByRole('radio', { name: 'Rack' })).toHaveAttribute('aria-checked', 'true');
     await user.click(screen.getByRole('radio', { name: 'Crate' }));
     expect(screen.getByLabelText(/crate number/i)).toBeInTheDocument();
+    // The toggle picks the KIND of row, not which of two facts survives: a
+    // crate SITS ON a rack, so the crate branch still asks where it sits. This
+    // assertion used to be `queryByLabelText(/rack number/i)` →
+    // not.toBeInTheDocument(), which pinned the exclusivity misread and made a
+    // positioned crate unexpressible on this surface.
+    expect(screen.getByLabelText(/on rack/i)).toBeInTheDocument();
+    // The rack branch's own REQUIRED number box is what goes away.
     expect(screen.queryByLabelText(/rack number/i)).not.toBeInTheDocument();
     unmount();
 
@@ -314,6 +321,104 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
   });
 
+  it('a crate ON a rack is created as ONE positioned crate, named in full', async () => {
+    // The owner's correction: rack 38-B + crate 13 is CRATE 13 LOCATED AT RACK
+    // 38-B. Both halves reach the server, the confirmation names both, and the
+    // created row's name is what migration 0270 dedupes on — which is what
+    // keeps the five real "gray BIN" bins five rows.
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: null });
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'Create new crate Crate #13 on rack 38-B?',
+    );
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      newRack: { warehouseId: 'wh-1', crateNumber: '13', rackNumber: '38', rackRow: 'B' },
+    });
+  });
+
+  it('a positioned crate names the RACK CHANGE too — both comparisons, separately', async () => {
+    // The book is recorded in Blue 4 on rack 38-A. Placing it into crate 13 on
+    // rack 40-C moves BOTH facts, and the confirmation states each one in its
+    // own sentence. The rack line used to be skipped entirely for any crate
+    // destination (`!isCrateChoice(dest)`), so a crate that moved the rack said
+    // nothing about it.
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/on rack/i), '40');
+    await user.type(screen.getByLabelText(/^row/i), 'C');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new crate Crate #13 on rack 40-C?');
+    expect(confirm).toHaveTextContent('Crate number will change from 4 to 13.');
+    expect(confirm).toHaveTextContent('Rack will change from 38-A to 40-C.');
+  });
+
+  it('a crate with NO position never promises to clear the rack', async () => {
+    // The writer leaves the rack keys alone for a position-less crate, so a
+    // "rack will be cleared" sentence would promise an erasure that does not
+    // happen — the same class of lie as a silent overwrite.
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new crate Crate #13?');
+    expect(confirm).not.toHaveTextContent(/rack/i);
+  });
+
+  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+    // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT.
+    //
+    // The gate used to be a hand-rolled field check — `crateNumber` non-empty
+    // on the crate branch — and this input walked straight through it: crate 13
+    // plus a Row with no "On rack" number. `planNewLocation` refuses that pair
+    // (`rack_needs_number`: a row alone names no position), so the name derived
+    // to '' and the confirmation rendered, verbatim:
+    //
+    //   "Create new crate ? does not exist in Main Warehouse yet. Continuing
+    //    creates it and moves 10 units into it."
+    //
+    // A confirmation that NAMES NOTHING, in front of a server whose schema
+    // refuses the same input — the 2026-07-23 rule (the string confirmed must be
+    // the string created) failing in its emptiest possible form.
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openNewRackForm(user);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    // The planner's OWN words, inline — not a fourth hand-written string.
+    expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+
+    // Filling in the missing half clears the refusal and re-arms the button —
+    // the message is a statement about the fields, not a dead end.
+    await user.type(screen.getByLabelText(/on rack/i), '38');
+    expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
+  });
+
   it('a crate identified by its NUMBER ALONE is created as a crate, with no rack number', async () => {
     const user = userEvent.setup();
     renderBookDialog({ bookStorage: null });
@@ -324,8 +429,10 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Create new crate Crate #9?');
     await user.click(screen.getByRole('button', { name: /create and place/i }));
-    // No rackNumber in the payload: sending one is what used to make the
-    // server resolve a colorless crate as a RACK.
+    // No rack keys in the payload when none were typed — a crate on NO rack is
+    // a legitimate permanent shape (production: blue "Blue Shelf", 5 books),
+    // and the omission is what keeps the existing position-less row matched
+    // and REUSED rather than duplicated.
     expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
       newRack: { warehouseId: 'wh-1', crateNumber: '9' },
     });

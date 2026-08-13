@@ -55,7 +55,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { can, isLikelyIsbn } from '@stockpilot/core';
+import { can, holdingsContradictRack, isLikelyIsbn } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
 
@@ -623,12 +623,31 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                       ''
                     : '';
                   const isbn = isbnRaw.trim();
-                  const hasAny =
-                    isBook ||
-                    storage.grade ||
-                    storage.rackLabel ||
-                    storage.crateNumber ||
-                    isbn;
+                  // WHERE THE STOCK IS vs what the item REMEMBERS. `storage`
+                  // above is the custom_fields SUMMARY; a put-away into a
+                  // position-less crate preserves it on purpose (mig 0335), so
+                  // it can name a rack the stock has entirely left. The live
+                  // PlacementsBreakdown a few rows up already shows the truth,
+                  // which made this card CONTRADICT ITSELF rather than merely
+                  // mislead — so a rack the holdings REFUTE stands down and
+                  // points at the breakdown instead.
+                  //
+                  // ONLY the Rack row, and only on a real contradiction. The
+                  // first cut of this gate hid BOTH rows whenever the holdings
+                  // were authoritative at all, which swept in every SPLIT item:
+                  // a book split across two racks lost its crate summary ("Red
+                  // 5") entirely, a row main has always shown. The crate
+                  // summary is a human's note about which box, refuted by
+                  // nothing here — the split is described in full by the
+                  // breakdown directly above.
+                  const rackContradicted = holdingsContradictRack(
+                    storage.rackLabel,
+                    holdings
+                      .filter((h) => h.kind === 'rack' || h.kind === 'crate')
+                      .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
+                  );
+                  const showRack = !!storage.rackLabel && !rackContradicted;
+                  const hasAny = isBook || storage.grade || showRack || storage.crateNumber || isbn;
                   if (!hasAny) return null;
                   return (
                     <>
@@ -646,7 +665,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                           <span>{formatGrade(storage.grade)}</span>
                         </DetailRow>
                       )}
-                      {storage.rackLabel && (
+                      {showRack && (
                         <DetailRow icon={MapPin} label="Rack">
                           <span className="font-mono tabular-nums">{storage.rackLabel}</span>
                         </DetailRow>

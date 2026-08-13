@@ -5,6 +5,7 @@ import {
   describeBookCrateChange,
   describeBookCrateConflict,
   describeNewRackPlacement,
+  describeRackChange,
   parseBookCrateChangeDetail,
   toBookCrateAcknowledgement,
   type BookCrateAcknowledgedChange,
@@ -18,6 +19,7 @@ import { toast } from 'sonner';
 import {
   CrateColorSelect,
   CrateNumberInput,
+  CrateRackPositionFields,
   CurrentStorageSummary,
   DestinationCrateNote,
   DestinationKindToggle,
@@ -53,7 +55,11 @@ import {
   destinationCrate,
   destinationLabel,
   destinationPhrase,
+  destinationPosition,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
+  planNewDestination,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
 import { placeStockAction } from '@/server/actions/inventory';
@@ -171,30 +177,49 @@ export function PlaceFromStagingDialog({
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
 
-  const newFieldsFilled =
-    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
-  const canSubmit = !submitting && qtyValid && (isNew ? newFieldsFilled : destId.length > 0);
-
-  /** The destination as chosen in this form — the input to every derivation. */
+  /** The destination as chosen in this form — the input to every derivation.
+   *
+   *  The crate branch carries the SAME rack fields the rack branch does: a
+   *  crate sits on a rack, so the toggle picks the kind of row, not which of
+   *  two facts survives. Anything typed into "On rack" therefore follows the
+   *  operator across the toggle instead of being silently discarded. */
   function chosenDestination(): ChosenDestination | null {
     if (isNew) {
       return newKind === 'crate'
-        ? { mode: 'new-crate', crateColor, crateNumber }
+        ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
         : { mode: 'new-rack', rackNumber, rackRow };
     }
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
 
+  // THE READINESS GATE IS THE PLANNER. It used to be a hand-rolled field check
+  // (`crateNumber` non-empty on the crate branch) and it drifted from
+  // planNewLocation inside the very commit that added the crate's rack pair:
+  // crate 13 plus a "Row" with no "On rack" number satisfied it, the planner
+  // refused the pair, and this dialog offered "Create new crate ?". Delegating
+  // is what the phone has always done (newLocationReady in
+  // apps/mobile/src/lib/move-stock-form.ts).
+  const chosen = chosenDestination();
+  const newReady = chosen !== null && newDestinationReady(chosen);
+  // The planner's OWN sentence, rendered inline beside the fields it is about.
+  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
+  const canSubmit = !submitting && qtyValid && (isNew ? newReady : destId.length > 0);
+
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
     if (dest.mode === 'new-crate') {
-      // NO rackNumber. A crate is identified by its NUMBER; sending a rack
-      // number as well is what used to make a crate resolve as a rack.
+      // The rack pair travels WITH the crate when one was typed — it is the
+      // crate's position, and the server names the row "Blue #13 on rack 38-B"
+      // from exactly these fields. Omitted entirely when blank, so a crate on
+      // no rack (production holds one) stays position-less and keeps matching
+      // the existing "Blue #13" row.
       return {
         newRack: {
           warehouseId,
           crateNumber: dest.crateNumber.trim(),
           ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+          ...(dest.rackNumber.trim() ? { rackNumber: dest.rackNumber.trim() } : {}),
+          ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
         },
       };
     }
@@ -304,8 +329,15 @@ export function PlaceFromStagingDialog({
       toast.error('Select a destination location.');
       return;
     }
-    if (isNew && !newFieldsFilled) {
-      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
+    // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT. `destinationLabel` is ''
+    // for an invalid plan, and describeNewRackPlacement would happily dress
+    // that up as "Create new crate ? does not exist in Main Warehouse yet."
+    // Refusing here means no creation prompt can ever name nothing — and the
+    // words are the planner's, so the toast, the inline message and the
+    // server's zod issue are one sentence.
+    const plan = planNewDestination(dest);
+    if (plan?.kind === 'invalid') {
+      toast.error(plan.message);
       return;
     }
 
@@ -322,6 +354,12 @@ export function PlaceFromStagingDialog({
     //    so a snapshot that no longer matches the row is refused by the server
     //    and re-asked against current truth instead of waving the write through.
     const next = destinationCrate(dest);
+    // The rack halves are LABEL context on both sides — the comparison stays
+    // crate-only (see BookCratePlacementInput), but "Blue 4" and "Blue 13" mean
+    // little without the rack each sits on when one crate number names five
+    // different bins.
+    const currentPosition = { rackNumber: bookStorage?.rackNumber, rackRow: bookStorage?.rackRow };
+    const nextPosition = destinationPosition(dest);
     const crateChange =
       isBook && bookStorage
         ? describeBookCrateConflict({
@@ -329,8 +367,10 @@ export function PlaceFromStagingDialog({
             itemName,
             currentColor: bookStorage.crateColor,
             currentNumber: bookStorage.crateNumber,
+            currentPosition,
             nextColor: next.color,
             nextNumber: next.number,
+            nextPosition,
           })
         : null;
     const crateLines =
@@ -373,11 +413,19 @@ export function PlaceFromStagingDialog({
         `${availableQuantity - qtyNum} of ${availableQuantity} will stay in ${sourceLabel.toLowerCase()}, so this title will sit in more than one place.`,
       );
     }
-    if (isBook && bookStorage?.rackLabel && !isCrateChoice(dest)) {
-      const nextRack = destinationLabel(dest);
-      if (bookStorage.rackLabel.toLowerCase() !== nextRack.toLowerCase()) {
-        notices.push(`Rack will change from ${bookStorage.rackLabel} to ${nextRack}.`);
-      }
+    // THE RACK LINE IS ITS OWN COMPARISON — and it now covers a CRATE that
+    // sits on a rack, which the old `!isCrateChoice(dest)` guard skipped
+    // entirely. `describeRackChange` never promises a clear: whether the pair
+    // clears depends on the LIVE HOLDINGS after the move (full move clears it,
+    // partial keeps it), which this dialog cannot see. The server-side gate is
+    // what states the before-and-after, and it only speaks when the write will
+    // actually happen.
+    if (isBook && bookStorage) {
+      const rackLine = describeRackChange(
+        { rackNumber: bookStorage.rackNumber, rackRow: bookStorage.rackRow },
+        destinationPosition(dest),
+      );
+      if (rackLine) notices.push(rackLine);
     }
 
     setPendingConfirm({
@@ -506,27 +554,44 @@ export function PlaceFromStagingDialog({
               )}
 
               {isBook && newKind === 'crate' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="place-crate-color">Crate color (optional)</Label>
-                    <CrateColorSelect
-                      id="place-crate-color"
-                      value={crateColor}
-                      onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
-                    />
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="place-crate-color">Crate color (optional)</Label>
+                      <CrateColorSelect
+                        id="place-crate-color"
+                        value={crateColor}
+                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="place-crate-number">
+                        Crate number <span className="text-destructive">*</span>
+                      </Label>
+                      <CrateNumberInput
+                        id="place-crate-number"
+                        value={crateNumber}
+                        onChange={setCrateNumber}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="place-crate-number">
-                      Crate number <span className="text-destructive">*</span>
-                    </Label>
-                    <CrateNumberInput
-                      id="place-crate-number"
-                      value={crateNumber}
-                      onChange={setCrateNumber}
-                    />
-                  </div>
-                </div>
+                  {/* A crate SITS ON a rack — both, or the picker only ever
+                      learns half of where the book is. */}
+                  <CrateRackPositionFields
+                    idPrefix="place"
+                    rackNumber={rackNumber}
+                    rackRow={rackRow}
+                    onRackNumberChange={setRackNumber}
+                    onRackRowChange={setRackRow}
+                  />
+                </>
               )}
+
+              {/* The planner's refusal, said where the fields are. Without it a
+                  half-filled form would just have a dead Place button and no
+                  explanation — and the version of this dialog that had neither
+                  offered to create a crate it could not name. */}
+              {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
             </div>
           )}
 

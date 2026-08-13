@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import {
   CrateColorSelect,
   CrateNumberInput,
+  CrateRackPositionFields,
   DestinationCrateNote,
   DestinationKindToggle,
   NO_CRATE_COLOR,
@@ -53,7 +54,11 @@ import {
   destinationCrate,
   destinationLabel,
   destinationPhrase,
+  destinationPosition,
   isCrateChoice,
+  newDestinationProblem,
+  newDestinationReady,
+  planNewDestination,
   type ChosenDestination,
 } from '@/lib/locations/placement-destination';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
@@ -164,22 +169,31 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     setPendingConfirm(null);
   }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber]);
 
-  const newFieldsFilled =
-    newKind === 'rack' ? rackNumber.trim().length > 0 : crateNumber.trim().length > 0;
-  const canSubmit =
-    !submitting &&
-    singleWarehouse &&
-    rows.length > 0 &&
-    (isNew ? newFieldsFilled : destId.length > 0);
-
+  // The crate branch carries the SAME rack pair the rack branch does: the
+  // toggle picks the KIND of row, not which of two true facts survives. A crate
+  // sits on a rack.
   function chosenDestination(): ChosenDestination | null {
     if (isNew) {
       return allBooks && newKind === 'crate'
-        ? { mode: 'new-crate', crateColor, crateNumber }
+        ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
         : { mode: 'new-rack', rackNumber, rackRow };
     }
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
+
+  // THE READINESS GATE IS THE PLANNER, not a hand-rolled field check that
+  // drifts from it — see newDestinationReady. On BULK the drift was worst: a
+  // crate number plus a "Row" with no "On rack" number armed one Continue that
+  // would have taken EVERY selected row into a location the dialog could not
+  // name ("Create new crate ?").
+  const chosen = chosenDestination();
+  const newReady = chosen !== null && newDestinationReady(chosen);
+  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
+  const canSubmit =
+    !submitting &&
+    singleWarehouse &&
+    rows.length > 0 &&
+    (isNew ? newReady : destId.length > 0);
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -189,6 +203,11 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           warehouseId: warehouseId!,
           crateNumber: dest.crateNumber.trim(),
           ...(dest.crateColor.trim() ? { crateColor: dest.crateColor.trim() } : {}),
+          // The crate's POSITION when one was typed — part of its identity, and
+          // of the name the server dedupes on. Omitted when blank so a crate on
+          // no rack still matches the existing position-less row.
+          ...(dest.rackNumber.trim() ? { rackNumber: dest.rackNumber.trim() } : {}),
+          ...(dest.rackRow.trim() ? { rackRow: dest.rackRow.trim() } : {}),
         },
       };
     }
@@ -208,6 +227,8 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
    */
   function predictCrateChanges(dest: ChosenDestination): BookCrateChangeItem[] {
     const next = destinationCrate(dest);
+    // Label context only, on both sides — the comparison stays crate-only.
+    const nextPosition = destinationPosition(dest);
     const changed: BookCrateChangeItem[] = [];
     for (const r of rows) {
       if (r.itemType !== 'book' || !r.bookStorage) continue;
@@ -221,8 +242,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
         itemName: r.name,
         currentColor: r.bookStorage.crateColor,
         currentNumber: r.bookStorage.crateNumber,
+        currentPosition: {
+          rackNumber: r.bookStorage.rackNumber,
+          rackRow: r.bookStorage.rackRow,
+        },
         nextColor: next.color,
         nextNumber: next.number,
+        nextPosition,
       });
       if (conflict) changed.push(conflict);
     }
@@ -240,8 +266,13 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       toast.error('Select a destination location.');
       return;
     }
-    if (isNew && !newFieldsFilled) {
-      toast.error(newKind === 'crate' ? 'Enter a crate number.' : 'Enter a rack number.');
+    // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT: `destinationLabel` is ''
+    // for an invalid plan, and describeNewRackPlacement would dress that up as
+    // "Create new crate ?" over the whole batch. The words are the planner's, so
+    // this toast, the inline message and the server's zod issue agree.
+    const plan = planNewDestination(dest);
+    if (plan?.kind === 'invalid') {
+      toast.error(plan.message);
       return;
     }
 
@@ -487,27 +518,40 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
                 )}
 
                 {allBooks && newKind === 'crate' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
-                      <CrateColorSelect
-                        id="bulk-crate-color"
-                        value={crateColor}
-                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
-                      />
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
+                        <CrateColorSelect
+                          id="bulk-crate-color"
+                          value={crateColor}
+                          onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bulk-crate-number">
+                          Crate number <span className="text-destructive">*</span>
+                        </Label>
+                        <CrateNumberInput
+                          id="bulk-crate-number"
+                          value={crateNumber}
+                          onChange={setCrateNumber}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-crate-number">
-                        Crate number <span className="text-destructive">*</span>
-                      </Label>
-                      <CrateNumberInput
-                        id="bulk-crate-number"
-                        value={crateNumber}
-                        onChange={setCrateNumber}
-                      />
-                    </div>
-                  </div>
+                    <CrateRackPositionFields
+                      idPrefix="bulk"
+                      rackNumber={rackNumber}
+                      rackRow={rackRow}
+                      onRackNumberChange={setRackNumber}
+                      onRackRowChange={setRackRow}
+                    />
+                  </>
                 )}
+
+                {/* The planner's refusal, said where the fields are — so a
+                    disabled Place button always has a stated reason. */}
+                {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
               </div>
             )}
 

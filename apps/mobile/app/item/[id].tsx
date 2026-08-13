@@ -37,10 +37,10 @@ import {
   can,
   collectLegacyRefIdsByKind,
   formatOrderNumber,
-  getCrateColor,
   legacyOrderRefId,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
+  type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
 
@@ -89,6 +89,7 @@ import {
   applyNoteToMovements,
   normalizeMovementNote,
 } from '@/lib/movement-note';
+import { buildPlacementRows } from '@/lib/placement-rows';
 import {
   SERIAL_STATUSES,
   SERIAL_STATUS_LABELS,
@@ -142,11 +143,30 @@ interface Item {
   bin_location: string | null;
   charter_name: string | null;
   item_type: string | null;
-  rack_label: string | null;
+  /**
+   * The rack SUMMARY as the PAIR it is stored as, never as a rendered label.
+   * The location card needs it in two different alphabets — "38 · A" for a
+   * human, "38-A" to compare against a `locations.name` — and holding only the
+   * rendered one is what made the RACK row vanish for almost every item
+   * (see src/lib/placement-rows.ts). Carrying the pair lets each spelling be
+   * derived from the source instead of from the other.
+   */
+  rack_number: string | null;
+  rack_row: string | null;
+  /** Legacy single free-text rack label; used only when the pair is empty. */
+  legacy_rack_label: string | null;
   crate_color: string | null;
   crate_number: string | null;
   grade: string | null;
   imageUrl: string | null;
+  /** Rack/crate HOLDINGS (item_stock_levels, qty > 0) — WHERE THE STOCK IS,
+   *  as opposed to `rack_label` above, which is what the item's custom_fields
+   *  REMEMBER. The two diverge after a put-away into a position-less crate
+   *  (mig 0335 preserves the rack keys on purpose), and this screen used to
+   *  show only the remembered one — and to SUPPRESS `bin_location` behind it,
+   *  so it hid the correct label to print the stale one. Carries
+   *  `locations.kind`, without which the crate rule cannot fire. */
+  rackHoldings: RackHoldingLike[];
 }
 
 interface MovementRow {
@@ -531,8 +551,6 @@ export default function ItemDetail() {
     // Legacy free-text rack label support (older imports stamped this
     // single value before the structured number/row split).
     const legacyRack = cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
-    const rackLabel =
-      rackNum || rackRow ? [rackNum, rackRow].filter(Boolean).join(' · ') : legacyRack;
     // Canonical keys (what the web book form writes, see lib/book-storage.ts):
     // book_crate_color / book_crate_number / book_grade. The bare variants are
     // legacy fallbacks only — reading ONLY those was why book details showed no
@@ -560,7 +578,7 @@ export default function ItemDetail() {
     // Serial count rides the same round trip — a cheap head-only count so
     // the Serials card can show for items that hold registry rows even
     // when tracking_type isn't 'serial' (e.g. tracking switched off later).
-    const [whResp, chResp, serialResp] = await Promise.all([
+    const [whResp, chResp, serialResp, holdingResp] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
@@ -572,7 +590,28 @@ export default function ItemDetail() {
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', r.organization_id as string)
         .eq('item_id', r.id as string),
+      // Rack/crate holdings ride the same round trip. No warehouse scope: this
+      // screen has no single-warehouse context, same as the scan sheet and the
+      // web lookup API.
+      supabase
+        .from('item_stock_levels')
+        .select('quantity, locations!inner(name, kind)')
+        .eq('organization_id', r.organization_id as string)
+        .eq('item_id', r.id as string)
+        .in('locations.kind', ['rack', 'crate'])
+        .gt('quantity', 0),
     ]);
+    const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
+      quantity: number;
+      locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
+    }[])
+      .map((h): RackHoldingLike | null => {
+        const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
+        return l?.name
+          ? { name: l.name, quantity: Number(h.quantity) || 0, kind: l.kind ?? null }
+          : null;
+      })
+      .filter((h): h is RackHoldingLike => h !== null);
     setSerialCount(serialResp.count ?? 0);
     warehouseName = (whResp?.data?.name as string | undefined) ?? null;
     charterName = charterId ? ((chResp?.data?.name as string | undefined) ?? null) : 'Generic';
@@ -617,11 +656,14 @@ export default function ItemDetail() {
       bin_location: (r.bin_location as string | null) ?? null,
       charter_name: charterName,
       item_type: (r.item_type as string | null) ?? null,
-      rack_label: rackLabel,
+      rack_number: rackNum,
+      rack_row: rackRow,
+      legacy_rack_label: legacyRack,
       crate_color: crateColor,
       crate_number: crateNumber,
       grade,
       imageUrl,
+      rackHoldings,
     });
   }, [id, router]);
 
@@ -1512,32 +1554,27 @@ export default function ItemDetail() {
                 populated. Mirrors what the web detail page shows under
                 its "Location & storage" section. */}
             {(() => {
-              const isBookView = item.item_type === 'book';
-              const rows: { label: string; value: string; dot?: string | null }[] = [];
-              if (item.warehouse_name)
-                rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
-              if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
-              if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
-              if (item.rack_label) rows.push({ label: 'RACK', value: item.rack_label });
-              if (isBookView && (item.crate_color || item.crate_number)) {
-                // Same presentation as web: "Red 5" + a color swatch (the
-                // number identifies the crate; the color is the visual aid).
-                const cc = getCrateColor(item.crate_color);
-                rows.push({
-                  label: 'CRATE',
-                  value: [cc?.label ?? item.crate_color, item.crate_number]
-                    .filter(Boolean)
-                    .join(' '),
-                  dot: cc?.hex ?? null,
-                });
-              }
-              if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
-              // bin_location is a separate free-text field — only render
-              // it when there's NO structured rack info, to avoid double
-              // labelling for the same physical spot.
-              if (!item.rack_label && item.bin_location) {
-                rows.push({ label: isBookView ? 'BIN' : 'RACK', value: item.bin_location });
-              }
+              // WHICH ROWS, and why, lives in src/lib/placement-rows.ts — a
+              // pure module so the answers can be TESTED. While this logic was
+              // inline the only available test was a source-text pin, and a
+              // source-text pin cannot tell a true row from a hidden one: it
+              // happily pinned the wiring that fed the DISPLAY label ("38 · A")
+              // into a comparison against a `locations.name` ("38-A"), which
+              // hid the RACK row for essentially every item with a holding.
+              const rows = buildPlacementRows({
+                itemType: item.item_type,
+                warehouseName: item.warehouse_name,
+                charterName: item.charter_name,
+                locationName: item.location_name,
+                rackNumber: item.rack_number,
+                rackRow: item.rack_row,
+                legacyRackLabel: item.legacy_rack_label,
+                crateColor: item.crate_color,
+                crateNumber: item.crate_number,
+                grade: item.grade,
+                binLocation: item.bin_location,
+                holdings: item.rackHoldings,
+              });
               if (rows.length === 0) return null;
               return (
                 <>

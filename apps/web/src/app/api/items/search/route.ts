@@ -271,6 +271,13 @@ export async function GET(req: Request): Promise<Response> {
       warehouse_id: (i as { warehouse_id?: string | null }).warehouse_id ?? null,
       item_type: i.item_type as 'product' | 'book' | 'asset' | 'consumable',
       custom_fields: cf ?? null,
+      // WHERE THE STOCK IS (item_stock_levels, carrying locations.kind), which
+      // InventoryService.list already fetched for its own placement math. The
+      // cycle-count picker renders a walk-to label off this row and had no way
+      // to tell a crate from a rack without it — so it printed the rack an
+      // item's custom_fields still name after a position-less put-away, and
+      // disagreed with the very count sheet the picker produces.
+      placed_holdings: (i as { placed_holdings?: unknown }).placed_holdings ?? [],
       updated_at: i.updated_at as string,
       image_url:
         imagesById.get(i.id as string) ?? cfThumb ?? null,

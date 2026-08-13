@@ -48,6 +48,7 @@
  */
 
 import { getCrateColor } from './crate-colors';
+import { formatRackPosition, type RackPosition } from './rack-label';
 
 /**
  * Display name for a crate COLOR: the CRATE_COLORS label when the value is a
@@ -165,15 +166,25 @@ export function normalizeCrateNumber(value: string | null | undefined): string |
  * "Blue Shelf" as a number. `compareBookCratePlacement` is what resolves that
  * (see `qualifyCratePlacementLabel`); nothing that shows a user one of these
  * labels should call this directly.
+ *
+ * THE POSITION, when there is one, is spoken in full: ('blue','13',38-B) reads
+ * "Blue 13 on rack 38-B". A crate sits on a rack, and "gray BIN" alone names
+ * five different bins in this warehouse — a sentence that stops at the crate
+ * sends a picker to the wrong aisle. It is APPENDED, never folded into the
+ * comparison: `changed` below is still decided by the crate pair alone, and the
+ * rack half is its own sentence (`describeRackChange`, rack-label.ts).
  */
 export function formatCratePlacementLabel(
   crateColor: string | null | undefined,
   crateNumber: string | null | undefined,
+  position?: RackPosition | null,
 ): string | null {
   const color = formatCrateColorLabel(crateColor);
   const number = normalizeText(crateNumber);
-  if (color && number) return `${color} ${number}`;
-  return color ?? number;
+  const crate = color && number ? `${color} ${number}` : (color ?? number);
+  if (crate === null) return null;
+  const rack = formatRackPosition(position);
+  return rack ? `${crate} on rack ${rack}` : crate;
 }
 
 /**
@@ -209,8 +220,9 @@ export function formatCratePlacementLabel(
 export function qualifyCratePlacementLabel(
   crateColor: string | null | undefined,
   crateNumber: string | null | undefined,
+  position?: RackPosition | null,
 ): string | null {
-  const base = formatCratePlacementLabel(crateColor, crateNumber);
+  const base = formatCratePlacementLabel(crateColor, crateNumber, position);
   if (base === null) return null;
   const color = formatCrateColorLabel(crateColor);
   const number = normalizeText(crateNumber);
@@ -236,6 +248,18 @@ export interface BookCratePlacementInput {
   nextColor: string | null | undefined;
   /** The destination location's `crate_number` (null for a rack). */
   nextNumber: string | null | undefined;
+  /**
+   * LABELS ONLY, both of them. The rack a crate sits on is part of how a human
+   * identifies it ("gray BIN" is five different bins in this warehouse), so the
+   * sentences below name it — but it is NOT part of `changed`, and NOT part of
+   * `bookCrateFingerprint`. Mixing it in would make the acknowledgement gate
+   * refuse on a rack move that changes no crate, and would silently invalidate
+   * every fingerprint a shipped client already computes.
+   */
+  /** The rack the ITEM is recorded on today (book_rack_number / book_rack_row). */
+  currentPosition?: RackPosition | null;
+  /** The destination's own rack position — its own for a rack, the crate's for a crate. */
+  nextPosition?: RackPosition | null;
 }
 
 export interface BookCratePlacementComparison {
@@ -296,15 +320,25 @@ export function compareBookCratePlacement(
   const changed = colorChanged || numberChanged;
 
   // Labels are built from the RAW values so the user sees what is actually
-  // stored ("Bin", "Blue Shelf"), not the lower-cased comparison key.
-  let currentLabel = formatCratePlacementLabel(input.currentColor, input.currentNumber);
-  let nextLabel = formatCratePlacementLabel(input.nextColor, input.nextNumber);
+  // stored ("Bin", "Blue Shelf"), not the lower-cased comparison key — and they
+  // carry the rack the crate sits on, because that is half of how a human tells
+  // one "gray BIN" from the other four.
+  let currentLabel = formatCratePlacementLabel(
+    input.currentColor,
+    input.currentNumber,
+    input.currentPosition,
+  );
+  let nextLabel = formatCratePlacementLabel(input.nextColor, input.nextNumber, input.nextPosition);
   // THE INVARIANT, enforced here rather than asked of every caller: a reported
   // change never renders as one label twice. When the composed strings read
   // alike, both grow their field breakdown — see qualifyCratePlacementLabel.
   if (changed && labelsReadAlike(currentLabel, nextLabel)) {
-    currentLabel = qualifyCratePlacementLabel(input.currentColor, input.currentNumber);
-    nextLabel = qualifyCratePlacementLabel(input.nextColor, input.nextNumber);
+    currentLabel = qualifyCratePlacementLabel(
+      input.currentColor,
+      input.currentNumber,
+      input.currentPosition,
+    );
+    nextLabel = qualifyCratePlacementLabel(input.nextColor, input.nextNumber, input.nextPosition);
   }
 
   return {
@@ -328,11 +362,12 @@ export function compareBookCratePlacement(
  *
  * THIS IS NOT THE WRITE-PATH DECISION. It answers one narrow question and says
  * nothing about whether the fields are usable: a color with no number returns
- * true here and is a validation ERROR downstream, and rack fields alongside
- * crate fields are refused outright. `planNewLocation`
+ * true here and is a validation ERROR downstream. Rack fields alongside crate
+ * fields do NOT change the answer — a crate sits on a rack, so the rack pair is
+ * that crate's POSITION and the destination is still a crate. `planNewLocation`
  * (new-location.ts) is what every writer asks — it consumes this predicate and
- * returns the kind, the name and the columns as one verdict, so they cannot
- * disagree.
+ * returns the kind, the name, the position and the columns as one verdict, so
+ * they cannot disagree.
  */
 export function isCrateDestination(input: {
   crateColor?: string | null;

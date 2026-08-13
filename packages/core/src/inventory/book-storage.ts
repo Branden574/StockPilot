@@ -30,6 +30,12 @@
  */
 
 import { getCrateColor } from './crate-colors';
+import {
+  formatRackLabel,
+  formatRackPosition,
+  parseRackLabel,
+  type RackPosition,
+} from './rack-label';
 
 /**
  * K-12 + post-secondary grade levels for educational books. Order
@@ -150,17 +156,105 @@ export function formatCrateLabel(
  * the rack number ("Blue #A1"), which mixed two different destinations into one
  * name; `planNewLocation` (new-location.ts) now refuses a colour with no number
  * outright, and it is the only thing that should ever call this.
+ *
+ * ═══ THE POSITION IS PART OF THE NAME, AND THAT IS THE DEDUPE DECISION ═══
+ *
+ *   ('gray', 'BIN', {rackNumber:'43', rackRow:'B'}) → "Gray #BIN on rack 43-B"
+ *   ('blue', '13',  {rackNumber:'38-B'})            → "Blue #13 on rack 38-B"
+ *   ('blue', 'Shelf', null)                         → "Blue #Shelf"
+ *
+ * A CRATE SITS ON A RACK, and a crate's identity is (colour, number, rack
+ * number, rack row) — NEVER colour+number alone. Production proves it: "gray
+ * BIN" exists on FIVE distinct rack positions (43-B, 43-C, 42-B, 42-C, 41-C),
+ * "yellow 5" on two, "blue 0" on three. "BIN" is a generic label repeated per
+ * rack, not one bin.
+ *
+ * Migration 0270's partial unique index keys crate identity on `lower(name)`,
+ * and `findOrCreateRackOrCrate` matches the same way. So folding the position
+ * INTO the name is what keeps those five bins five `locations` rows: any
+ * position-blind key would collapse them into one and stamp one crate's books
+ * with another crate's location — a worse integrity failure than the bug this
+ * change fixes. Doing it here rather than in the match predicate also means no
+ * index migration, and every picker that renders `locations.name` shows a label
+ * that distinguishes the bins instead of five identical "Gray #BIN" rows.
+ *
+ * A POSITION-LESS CRATE KEEPS ITS OLD NAME EXACTLY. That is not a nicety, it is
+ * the backward-compatibility guarantee: every crate row in production today was
+ * created position-less, so put-away must still FIND and REUSE it (production
+ * really does hold a crate whose books have no rack at all — 5 books in blue
+ * "Blue Shelf"). A position-less crate is a legitimate, permanent shape; never
+ * backfill one.
+ *
+ * The rack half is composed by `formatRackPosition` (rack-label.ts), which
+ * decomposes first — so "38-B" typed into an "On rack" box names "…on rack
+ * 38-B", not "…on rack 38-B-B", and a row with no number names nothing at all.
  */
 export function formatCrateLocationName(
   crateColor: string | null | undefined,
   crateNumber: string | null | undefined,
+  position?: RackPosition | null,
 ): string {
   const number = strOrNull(crateNumber);
   if (!number) return '';
   const raw = strOrNull(crateColor);
   const known = getCrateColor(raw);
   const word = known ? known.label : raw;
-  return word ? `${word} #${number}` : `Crate #${number}`;
+  const base = word ? `${word} #${number}` : `Crate #${number}`;
+  const rack = formatRackPosition(position);
+  return rack ? `${base}${CRATE_ON_RACK} ${rack}` : base;
+}
+
+/**
+ * The separator `formatCrateLocationName` folds a crate's POSITION into its
+ * name with. Exported so the one reader of that suffix (`locationNameSitsOnRack`
+ * below) cannot spell it differently from the writer — the two halves of a
+ * name-carried fact are exactly the pair that drifts.
+ */
+export const CRATE_ON_RACK = ' on rack';
+
+/**
+ * Does a `locations.name` place stock ON the rack labelled `rackLabel`?
+ *
+ * TRUE in exactly two shapes, and this is the whole reason the function exists:
+ *
+ *   • the location IS that rack           — "43-B"                  vs "43-B"
+ *   • the location is a CRATE SITTING ON IT — "Gray #BIN on rack 43-B" vs "43-B"
+ *
+ * The second shape is why a caller cannot just compare strings. Since crate
+ * identity started carrying the position (see `formatCrateLocationName`), a
+ * positioned crate's rack is INSIDE ITS NAME and nowhere else on a holding —
+ * `RackHoldingLike` carries a name, a quantity and a kind, never a rack pair.
+ * A reader that missed this would call a book in "Gray #BIN on rack 43-B" a
+ * contradiction of its own "43-B" summary and blank a row that is TRUE.
+ *
+ * Both sides are canonicalised through `parseRackLabel`/`formatRackLabel`
+ * before comparing, so a legacy rack stored "22 - B" still matches the summary
+ * "22-B" — the same tolerance `findOrCreateRackOrCrate` applies at the write
+ * boundary, for the same reason (the 2026-07-23 shape incident).
+ *
+ * NOTE — the crate arm depends on the suffix surviving in the name. It is a
+ * rename away from being lost, which is why `LocationsService.update` refuses a
+ * rename that strips it rather than leaving this function to guess.
+ */
+export function locationNameSitsOnRack(
+  locationName: string | null | undefined,
+  rackLabel: string | null | undefined,
+): boolean {
+  const canonRack = canonicalRack(rackLabel);
+  if (!canonRack) return false;
+  const name = (locationName ?? '').trim();
+  if (!name) return false;
+  if (canonicalRack(name) === canonRack) return true;
+  // lastIndexOf, not endsWith: the tail is canonicalised too, so a crate named
+  // "…on rack 43 - B" still resolves onto 43-B.
+  const idx = name.toLowerCase().lastIndexOf(`${CRATE_ON_RACK} `);
+  if (idx < 0) return false;
+  return canonicalRack(name.slice(idx + CRATE_ON_RACK.length + 1)) === canonRack;
+}
+
+/** A rack label reduced to the one spelling every comparison uses. */
+function canonicalRack(label: string | null | undefined): string {
+  return formatRackLabel(parseRackLabel(label)).trim().toLowerCase();
 }
 
 /**

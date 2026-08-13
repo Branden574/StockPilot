@@ -56,12 +56,25 @@ const GREEN_CRATE_ROW = {
   name: 'Green #2',
 };
 
-/** The book's only holding, now inside Green #2. */
+/**
+ * The book's only holding, now inside Green #2 — which, like every crate in
+ * production, states no rack position. `rack_number` / `rack_row` are on the
+ * embed because the reconciliation derives the item's rack pair from them too;
+ * null here means "this crate sits on no rack", and the pair therefore CLEARS.
+ */
 const GREEN_HOLDING = {
   item_id: ITEM,
   location_id: CRATE,
   quantity: 12,
-  locations: { id: CRATE, kind: 'crate', type: 'bin', crate_color: 'green', crate_number: '2' },
+  locations: {
+    id: CRATE,
+    kind: 'crate',
+    type: 'bin',
+    crate_color: 'green',
+    crate_number: '2',
+    rack_number: null,
+    rack_row: null,
+  },
 };
 
 function installSpies() {
@@ -96,7 +109,7 @@ function install(opts: {
     'locations.insert': { data: opts.insertedLocation ?? null, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
-    'rpc:inventory_set_book_storage': { data: 1, error: null },
+    'rpc:inventory_set_book_placement': { data: 1, error: null },
     'rpc:inventory_set_rack': { data: 1, error: null },
   });
   vi.mocked(withApiContext).mockResolvedValue({
@@ -151,12 +164,18 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     expect(res.status).toBe(200);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(mockStamp).toHaveBeenCalledOnce();
-    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'mobile put-away wrote no crate summary at all').toBeDefined();
+    // The WHOLE summary, in one statement: Green #2 states no rack position and
+    // the book's every copy is now inside it, so the rack pair is cleared rather
+    // than left naming a rack the stock has left. The mobile scan sheet reads
+    // these keys, and it printed "Bin/shelf: Blue Shelf" above "Rack: 38-A".
     expect(call!.args).toEqual({
       p_item_ids: [ITEM],
       p_crate_color: 'green',
       p_crate_number: '2',
+      p_rack_number: null,
+      p_rack_row: null,
     });
   });
 
@@ -212,7 +231,7 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     expect(res.status).toBe(200);
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(
-      stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args,
+      stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args,
     ).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
@@ -254,7 +273,7 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_placement')).toBe(false);
   });
 
   it('an internal_error NEVER leaks its details to the client (S13)', async () => {
@@ -277,10 +296,26 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
   });
 });
 
-describe('POST /api/v1/items/[id]/transfer — a new destination is a rack OR a crate', () => {
-  it('REPRO A: rack "A1" + crate "9" is refused, and NOTHING is created or moved', async () => {
-    // The sheet asked "Create new rack A1?" and the server minted "Crate #9".
-    const stub = install({ locationRows: [STAGING_ROW, []], itemRows: [book({})] });
+describe('POST /api/v1/items/[id]/transfer — a new destination may be a crate ON a rack', () => {
+  it('REPRO A: rack "A1" + crate "9" creates ONE crate at that position, and says so', async () => {
+    // The sheet asked "Create new rack A1?" and the server minted "Crate #9" —
+    // two different strings for one action. The first fix refused the input;
+    // this pins the corrected model instead: the input is CRATE 9 ON RACK A1,
+    // the name states both facts, and the typed rack is kept, not dropped.
+    const stub = install({
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+      insertedLocation: {
+        id: CRATE,
+        kind: 'crate',
+        name: 'Crate #9 on rack A1',
+        rack_number: 'A1',
+        rack_row: null,
+        crate_color: null,
+        crate_number: '9',
+      },
+    });
 
     const res = await POST(
       request({
@@ -291,11 +326,75 @@ describe('POST /api/v1/items/[id]/transfer — a new destination is a rack OR a 
       { params },
     );
 
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { message: string };
-    expect(body.message).toMatch(/either a rack or a crate/i);
-    expect(stub.chainArgs.has('locations.insert')).toBe(false);
-    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
+    expect(insert.kind).toBe('crate');
+    expect(insert.name).toBe('Crate #9 on rack A1');
+    expect(insert.crate_number).toBe('9');
+    expect(insert.rack_number).toBe('A1');
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+  });
+
+  it('a rack→crate move stamps the RACK too when the crate sits on one', async () => {
+    // A transfer is not a put-away and normally writes no placement label. A
+    // POSITIONED crate is the one exception: its crate summary and its rack
+    // summary describe the same physical place, so writing one without the
+    // other publishes "recorded in Blue 13, on no rack" — the owner-reported
+    // half-empty row.
+    const RACK_SOURCE = { warehouse_id: WAREHOUSE, kind: 'rack' };
+    const POSITIONED = {
+      id: CRATE,
+      warehouse_id: WAREHOUSE,
+      kind: 'crate',
+      rack_number: '38',
+      rack_row: 'B',
+      crate_color: 'blue',
+      crate_number: '13',
+      name: 'Blue #13 on rack 38-B',
+    };
+    install({
+      locationRows: [RACK_SOURCE, POSITIONED],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 12, toLocationId: CRATE }),
+      { params },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockStamp).toHaveBeenCalledWith(
+      [ITEM],
+      expect.objectContaining({ kind: 'crate', rackNumber: '38', rackRow: 'B' }),
+    );
+  });
+
+  it('a rack→rack move still stamps NOTHING — the old asymmetry is untouched', async () => {
+    const RACK_SOURCE = { warehouse_id: WAREHOUSE, kind: 'rack' };
+    const RACK_DEST = {
+      id: CRATE,
+      warehouse_id: WAREHOUSE,
+      kind: 'rack',
+      rack_number: '40',
+      rack_row: 'B',
+      crate_color: null,
+      crate_number: null,
+      name: '40-B',
+    };
+    install({
+      locationRows: [RACK_SOURCE, RACK_DEST],
+      itemRows: [book({})],
+      holdingRows: [GREEN_HOLDING],
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 12, toLocationId: CRATE }),
+      { params },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockStamp).not.toHaveBeenCalled();
   });
 
   it('a NUMBER-ONLY crate is reachable and created as a CRATE', async () => {

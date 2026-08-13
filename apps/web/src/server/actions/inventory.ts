@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import {
+  isPositionedCrate,
   PLACE_DEST_COLUMNS,
   toPlaceDest,
   type PlaceDest,
@@ -274,6 +275,18 @@ export async function bulkUpdateInventoryAction(input: {
     skipped: number;
     placed?: number;
     /**
+     * Set rack only: items whose stock did NOT reach the rack — every transfer
+     * for them was refused, or the rack could not be resolved in their
+     * warehouse. Their rack label and pair were still set to what the operator
+     * typed, so the label now runs ahead of the stock.
+     *
+     * A WARNING, and the one the toast could never give: the placement pass is
+     * per-holding best-effort and logged its failures to the SERVER console
+     * only, while `placed: 0` reads the same as "nothing needed moving". A
+     * whole batch could be refused and the operator still saw "Updated N items."
+     */
+    placeFailed?: number;
+    /**
      * Set rack only: BOOKS whose recorded crate was CLEARED because this op
      * moved their stock onto the rack and nowhere else.
      *
@@ -374,8 +387,9 @@ const newRackSchema = z
     // The four destination fields and the rule they obey come from ONE place —
     // packages/core/src/inventory/new-location.ts — so the web actions, the
     // mobile transfer route and every dialog refuse the same combinations with
-    // the same words. RACK **XOR** CRATE: both together is a validation error,
-    // never a precedence guess (see that header for REPRO A/B).
+    // the same words. A CRATE SITS ON A RACK: rack fields alongside crate
+    // fields are that crate's POSITION, kept and named in full, never resolved
+    // by precedence and never dropped (see that header for REPRO A/B).
     ...newLocationFieldsShape,
     parentId: z.string().uuid().optional(),
   })
@@ -623,10 +637,12 @@ export async function transferStockAction(
     // that was the actual missing piece, not a reason to skip the gate.
     //
     // The rack LABEL (stampPlacementBin) is still deliberately not written
-    // here: a transfer is not a put-away, and that asymmetry predates this and
-    // is unchanged. The crate summary is different — book-crate-placement.ts
-    // makes it a derived view of the holdings, so leaving it describing a
-    // location the stock has left is a falsehood, not a stale convenience.
+    // here for a rack or a position-less crate: a transfer is not a put-away,
+    // and that asymmetry predates this and is unchanged. The crate summary is
+    // different — book-crate-placement.ts makes it a derived view of the
+    // holdings, so leaving it describing a location the stock has left is a
+    // falsehood, not a stale convenience. The ONE narrowing is a POSITIONED
+    // crate; see the call below.
     const verified = await svc.assertBookCratePlacementAllowed([data.itemId], dest, {
       acknowledged: data.acknowledgedCrateChanges,
       toLocationId,
@@ -641,6 +657,17 @@ export async function transferStockAction(
       quantity: data.quantity,
       notes: data.notes,
     });
+    // ═══ A POSITIONED CRATE WRITES BOTH SUMMARIES, ON A TRANSFER TOO ═══
+    //
+    // A crate that sits on a rack describes ONE physical place with TWO item
+    // keys, so writing the crate pair and not the rack pair publishes a row
+    // that contradicts itself: "recorded in Blue 13, on no rack" — the exact
+    // half-empty row this change exists to fix. `isPositionedCrate` keeps the
+    // narrowing honest: a rack destination and a crate with no position still
+    // write no label here, exactly as before.
+    if (isPositionedCrate(dest)) {
+      await svc.stampPlacementBin([data.itemId], dest);
+    }
     const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds } =
       await svc.syncBookCratePlacement([data.itemId], {
         verified,

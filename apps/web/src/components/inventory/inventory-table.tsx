@@ -26,7 +26,10 @@ import {
   countingUnitLabel,
   groupBySizeRun,
   groupRollupLabel,
+  placementPhysicalNames,
+  resolvePlacement,
   type CountingUnit,
+  type RackHoldingLike,
   type SizeRunGroup,
 } from '@stockpilot/core';
 import {
@@ -143,6 +146,14 @@ interface Item {
    *  same in two different warehouses. Optional so older callers without
    *  the field still render (treated as 0 = "not split"). */
   rackHoldingsCount?: number;
+  /** The same holdings as `placed_racks`, carrying QUANTITY and
+   *  `locations.kind`. The BOOKS view has no holdings-derived cell at all (the
+   *  `placed_racks` cell is gated behind `!showBookFields`), so its RACK column
+   *  reads custom_fields straight — and a book whose stock moved into a
+   *  position-less crate keeps its old rack printed there (mig 0335). This is
+   *  what lets that column apply the crate rule. Optional so older callers
+   *  render unchanged. */
+  placed_holdings?: RackHoldingLike[];
   /** True only when the SYSTEM auto-archived this item on zero stock
    *  (migration 0266) — drives the "Auto-archived" badge next to the
    *  Archived pill and the Archived view's "Auto-archived only" filter
@@ -2258,11 +2269,14 @@ export function InventoryTable({
                             )}
                           </td>
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                            {storage.rackLabel ? (
-                              <span className="font-mono tabular-nums">{storage.rackLabel}</span>
-                            ) : (
-                              <span className="text-[var(--ed-ink-4)]">—</span>
-                            )}
+                            {(() => {
+                              const rackLabel = bookRackLabelFor(item);
+                              return rackLabel ? (
+                                <span className="font-mono tabular-nums">{rackLabel}</span>
+                              ) : (
+                                <span className="text-[var(--ed-ink-4)]">—</span>
+                              );
+                            })()}
                           </td>
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                             {storage.crateNumber ? (
@@ -2617,6 +2631,50 @@ function itemRackLabels(item: Item): string[] {
  * 'multiple' instead and lets the caller render a neutral label. Nulls
  * count as a distinct absence: [null, '38-A'] is 'multiple', not '38-A'.
  */
+/**
+ * The BOOKS view's RACK cell value for one row.
+ *
+ * The books layout has NO holdings-derived cell — the `placed_racks` column is
+ * gated behind `!showBookFields` — so this column used to read
+ * `readBookStorage(custom_fields).rackLabel` straight, and a book whose stock
+ * had moved entirely into a position-less crate kept printing the rack it left
+ * (mig 0335 preserves those keys on purpose). `resolvePlacement` owns the
+ * decision; this only picks the compact rendering the narrow cell has room for.
+ *
+ * `itemType: 'book'` is asserted rather than read: every caller is inside a
+ * `showBookFields` branch, and that flag is what puts the row in this layout.
+ */
+export function bookRackLabelFor(item: {
+  custom_fields?: Record<string, unknown> | null;
+  placed_holdings?: RackHoldingLike[];
+}): string | null {
+  const names = bookRackNamesFor(item);
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+/**
+ * The same answer as `bookRackLabelFor`, UN-JOINED — one entry per physical
+ * place, sorted.
+ *
+ * The SKU-group header counts DISTINCT RACKS across the rows it collapses, and
+ * that is not the same number as distinct LABELS the moment one row is split:
+ * "39-B, 5-A" is ONE label and TWO racks. Rolling up the composed strings made
+ * the header announce "1 rack" directly above its own tooltip naming two. So
+ * the header counts these, and only joins for display.
+ */
+export function bookRackNamesFor(item: {
+  custom_fields?: Record<string, unknown> | null;
+  placed_holdings?: RackHoldingLike[];
+}): string[] {
+  return placementPhysicalNames(
+    resolvePlacement({
+      itemType: 'book',
+      customFields: item.custom_fields ?? null,
+      holdings: item.placed_holdings,
+    }),
+  );
+}
+
 function rollupText(
   values: ReadonlyArray<string | null>,
 ): { kind: 'none' } | { kind: 'same'; value: string } | { kind: 'multiple'; count: number } {
@@ -2993,7 +3051,16 @@ function SkuGroupHeaderRow({
           // graded during a PO import, its sibling graded by hand).
           const storages = items.map((it) => readBookStorage(it.custom_fields));
           const grade = rollupText(storages.map((s) => s.grade));
-          const rack = rollupText(storages.map((s) => s.rackLabel));
+          // Rolled up from the RESOLVED label, not the raw custom_fields one —
+          // otherwise the collapsed header names a rack that its own expanded
+          // rows (which resolve) no longer show. Kept as NAMES per row, because
+          // the count below is a count of racks and a split row carries two of
+          // them inside one label.
+          const rackNames_ = items.map(bookRackNamesFor);
+          const rackLabels_ = rackNames_.map((names) =>
+            names.length > 0 ? names.join(', ') : null,
+          );
+          const rack = rollupText(rackLabels_);
           // Colour is only a visual aid attached to a crate NUMBER, so
           // both must agree before a swatch is drawn — a coloured dot for
           // a group whose placements sit in different crates sends staff
@@ -3008,17 +3075,18 @@ function SkuGroupHeaderRow({
           // placement carries this exact colour + number.
           const crateColor = crate.kind === 'same' ? getCrateColor(storages[0]?.crateColor) : null;
           const crateNumber = crate.kind === 'same' ? (storages[0]?.crateNumber ?? '') : '';
-          // Every DISTINCT rack label present. The count below is a count
-          // of RACKS, not of placements: three placements sharing two
-          // racks is "2 racks", and printing items.length there said "3
-          // racks" while this very tooltip listed only two.
-          const rackLabels = Array.from(
-            new Set(storages.map((s) => s.rackLabel).filter((l): l is string => !!l)),
-          );
+          // Every DISTINCT rack present. The count below is a count of
+          // RACKS, not of placements and not of LABELS: three placements
+          // sharing two racks is "2 racks", and printing items.length
+          // there said "3 racks" while this very tooltip listed only two.
+          // Counting the composed labels had the mirror-image fault — a
+          // single split placement's "39-B, 5-A" counted once, so the
+          // header said "1 rack" above a tooltip naming two.
+          const rackLabels = Array.from(new Set(rackNames_.flat()));
           // Placements with no rack set at all are not a rack — counting
           // them into "N racks" would send staff looking for a shelf that
           // doesn't exist, so they get their own explicit "unset" tail.
-          const rackUnset = storages.filter((s) => !s.rackLabel).length;
+          const rackUnset = rackNames_.filter((names) => names.length === 0).length;
           const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
             rackUnset > 0 ? ` +${rackUnset} unset` : ''
           }`;

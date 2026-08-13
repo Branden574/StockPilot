@@ -268,6 +268,14 @@ export async function buildInventoryExportRows(
     // 6's refactor, whitespace and all. Do not "helpfully" switch these back
     // to the trimmed fields — that reintroduces the exact regression this
     // comment is guarding against.
+    //
+    // These are RAW STORED KEYS and stay that way. Post-0335 `rack_number` can
+    // name a rack the stock has left, and this projection deliberately does NOT
+    // consult holdings the way every walk-to label now does (see
+    // placement-resolution.ts): the header contract above is byte-frozen, so
+    // changing what `rack_number` MEANS here is a breaking change to a
+    // published CSV, not a bug fix. Classified as RAW_FIELD_PROJECTIONS in
+    // lib/placement-label.guard.test.ts.
     grade: r.legacyRawBookFields.grade,
     rack_number: r.legacyRawBookFields.rackNumber,
     rack_row: r.legacyRawBookFields.rackRow,

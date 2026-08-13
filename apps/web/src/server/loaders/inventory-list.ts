@@ -78,7 +78,7 @@ import 'server-only';
 
 import { revalidateTag, unstable_cache } from 'next/cache';
 
-import { can, isManagerOrAbove, type Permission, type Role } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Permission, type RackHoldingLike, type Role } from '@stockpilot/core';
 
 import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
 import { isSiteLocation } from '@/lib/locations/groups';
@@ -310,6 +310,12 @@ interface InventoryListRowBase {
    *  (InventoryService) — the bulk Set-rack split warning must agree
    *  with this count exactly, not with placed_racks. */
   rackHoldingsCount: number;
+  /** The same holdings as `placed_racks`, but carrying QUANTITY and
+   *  `locations.kind`, deduped by location_id like rackHoldingsCount. The
+   *  input `resolvePlacement` needs — `placed_racks` is names only, so no
+   *  consumer of it can tell a crate from a rack and every one of them keeps
+   *  printing the rack a position-less put-away left behind (mig 0335). */
+  placed_holdings: RackHoldingLike[];
 }
 
 /**
@@ -628,6 +634,10 @@ function assembleInventoryRows(
   // A rack named "1-A" in two different warehouses is ONE entry in
   // placedRacksByItem (name-deduped, for display) but TWO here.
   const rackHoldingsByItem = new Map<string, Set<string>>();
+  // Kind-carrying holdings — see the field doc on InventoryListRowBase. Keyed
+  // by location_id so this matches rackHoldingsCount's grouping, not
+  // placed_racks' name-dedupe.
+  const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
   const placement: Record<string, InventoryPlacementLine[]> = {};
   for (const lvl of levels) {
     // Row-summary math uses the RAW kind — identical to the live
@@ -647,6 +657,15 @@ function assembleInventoryRows(
       const set = rackHoldingsByItem.get(lvl.item_id) ?? new Set<string>();
       set.add(lvl.location_id);
       rackHoldingsByItem.set(lvl.item_id, set);
+
+      const byLoc = placedHoldingsByItem.get(lvl.item_id) ?? new Map<string, RackHoldingLike>();
+      const prior = byLoc.get(lvl.location_id);
+      byLoc.set(lvl.location_id, {
+        name: lvl.locations.name,
+        quantity: (prior?.quantity ?? 0) + qty,
+        kind: rawKind,
+      });
+      placedHoldingsByItem.set(lvl.item_id, byLoc);
     }
     // The placement LINES coalesce NULL → 'unplaced' — exactly (and
     // only) where the live placementBreakdown() coalesces.
@@ -690,6 +709,9 @@ function assembleInventoryRows(
       placed_quantity: Math.max(0, Number(r.quantity_on_hand) - staged - unplaced),
       placed_racks: (placedRacksByItem.get(r.id) ?? []).sort((a, b) => a.localeCompare(b)),
       rackHoldingsCount: rackHoldingsByItem.get(r.id)?.size ?? 0,
+      placed_holdings: [...(placedHoldingsByItem.get(r.id)?.values() ?? [])].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
       image_storage_path: img?.storage_path ?? null,
       image_thumb_path: img?.thumb_path ?? null,
       image_lqip: img?.lqip ?? null,

@@ -21,6 +21,7 @@ export * from './inventory/book-storage';
 export * from './inventory/book-crate-placement';
 export * from './inventory/new-location';
 export * from './inventory/rack-holdings';
+export * from './inventory/placement-resolution';
 export * from './inventory/stock-writeoff';
 export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';

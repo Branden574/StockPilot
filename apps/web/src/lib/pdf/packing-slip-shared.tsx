@@ -1,4 +1,4 @@
-import { formatOrderNumber, formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
+import { formatOrderNumber, type RackHoldingLike } from '@stockpilot/core';
 import {
   Image as PdfImage,
   Path,
@@ -9,7 +9,6 @@ import {
   View,
 } from '@react-pdf/renderer';
 
-import { readBookStorage, readItemRack } from '@/lib/book-storage';
 import type {
   OrderRequestDetail,
   OrderRequestLineWithItem,
@@ -621,49 +620,17 @@ export interface LinesTableOptions {
   rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
 }
 
-/** Exported for direct unit testing — @react-pdf's rendered output isn't
- *  text-extractable in this test suite (existing tests only assert on
- *  buffer size / the %PDF magic header), so the split-vs-single-vs-label
- *  decision is covered by calling this function directly instead. Mirrors
- *  `locationFor` in lib/pdf/pick-slip.tsx — kept as a separate copy (not a
- *  shared import) because the two files already diverge in their other
- *  location-column concerns and neither depends on the other. */
-export function locationFor(
-  line: OrderRequestLineWithItem,
-  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>,
-): {
-  primary: string | null;
-  secondary: string | null;
-} {
-  const item = line.item;
-  if (!item) return { primary: null, secondary: null };
+/**
+ * THE COPY IS GONE. This used to be a byte-for-byte duplicate of `locationFor`
+ * in lib/pdf/pick-slip.tsx, kept separate on the reasoning that "the two files
+ * already diverge in their other location-column concerns" — and both copies
+ * then shipped the same stale-rack bug. The two renderers still own their own
+ * tables and columns; they no longer own separate opinions about where a picker
+ * walks. See lib/pdf/slip-location.ts.
+ */
+import { locationFor } from './slip-location';
 
-  // Stock split across >1 rack/crate HOLDING makes the single free-text
-  // label misleading — it points at one rack while stock actually sits on
-  // several, and it can also go stale. When holdings say the item is
-  // split, print the full breakdown ("2-C ×20 · 5-A ×5") so the packer
-  // finds ALL of it instead of walking to just the one rack the label
-  // remembers. Single-holding (or holdings-unavailable) items fall
-  // through to the label exactly as before.
-  const holdings = rackHoldingsByItemId?.get(item.id) ?? [];
-  if (holdings.length > 1) {
-    return { primary: formatRackHoldings(holdings), secondary: null };
-  }
-
-  const cf = (item.custom_fields ?? {}) as Record<string, unknown>;
-  if (item.item_type === 'book') {
-    const info = readBookStorage(cf);
-    return {
-      primary: info.rackLabel ? `Rack ${info.rackLabel}` : null,
-      secondary: info.crateLabel ? `Crate ${info.crateLabel}` : null,
-    };
-  }
-  const info = readItemRack(cf);
-  return {
-    primary: info.rackLabel ? `Rack ${info.rackLabel}` : null,
-    secondary: null,
-  };
-}
+export { locationFor };
 
 export function LinesTable({
   lines,

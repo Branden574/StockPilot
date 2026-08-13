@@ -384,6 +384,49 @@ export async function loadCatalogItems(
   return loadCatalogItemsCached(organizationId, warehouseId, accessKey);
 }
 
+/** The four flattened rack keys this loader selects, plus what decides between
+ *  them. Declared so `rackLabelFor` can live at module scope and be TESTED. */
+export interface OrdersCatalogRackRow {
+  item_type: string | null;
+  bin_location: string | null;
+  rack_number: string | null;
+  rack_row: string | null;
+  book_rack_number: string | null;
+  book_rack_row: string | null;
+}
+
+/**
+ * The storefront card's walk-to label — and THE ONE DELIBERATE EXCEPTION to
+ * `resolvePlacement` (packages/core/src/inventory/placement-resolution.ts).
+ *
+ * ═══ DO NOT "HARMONISE" THIS TO THE OTHERS ═══
+ *
+ * Every other picker-facing formatter prefers the structured rack pair over
+ * `bin_location`. This one is BIN-FIRST, and post-0335 that inversion is what
+ * makes it the only pair-reader in the repo that was never wrong: a put-away
+ * stamps `bin_location` and nothing else, so the label names the crate the
+ * stock is actually in, while `custom_fields.rack_number` can still name the
+ * rack it left.
+ *
+ * The reason this loader does not simply call `resolvePlacement` is that it
+ * carries NO HOLDINGS. It is `unstable_cache`d and perf-critical (see the
+ * orders-storefront perf notes), and the resolver with an empty holdings array
+ * falls through to the structured pair FIRST — so adopting it here WITHOUT
+ * also fetching holdings would replace a correct rule with a stale one.
+ *
+ * The right end state is holdings + `resolvePlacement`, same as everywhere
+ * else; that is a measured perf change, not a drive-by. Until then the rule
+ * below is pinned BY LITERAL VALUE in placement-label.guard.test.ts so it
+ * cannot drift in either direction.
+ */
+export function rackLabelFor(it: OrdersCatalogRackRow): string | null {
+  if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
+  const num = it.item_type === 'book' ? it.book_rack_number : it.rack_number;
+  const row = it.item_type === 'book' ? it.book_rack_row : it.rack_row;
+  if (!num) return null;
+  return row ? `${num}-${row}` : String(num);
+}
+
 async function loadCatalogItemsUncached(
   organizationId: string,
   warehouseId: string,
@@ -513,14 +556,6 @@ async function loadCatalogItemsUncached(
     code: string | null;
   }>) {
     charterById.set(c.id, { name: c.name, code: c.code ?? null });
-  }
-
-  function rackLabelFor(it: typeof items[number]): string | null {
-    if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
-    const num = it.item_type === 'book' ? it.book_rack_number : it.rack_number;
-    const row = it.item_type === 'book' ? it.book_rack_row : it.rack_row;
-    if (!num) return null;
-    return row ? `${num}-${row}` : String(num);
   }
 
   return items.map((it) => ({

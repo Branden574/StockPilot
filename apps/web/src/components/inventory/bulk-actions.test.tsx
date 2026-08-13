@@ -493,6 +493,40 @@ describe('BulkActions — Set rack reports the crate labels', () => {
     expect(toast.success).toHaveBeenCalledWith('Updated 3 items.');
   });
 
+  it('WARNS when the stock never moved onto the rack, for ANY item type', async () => {
+    const user = userEvent.setup();
+    // A non-book: no crate summary exists, so every crate count is absent and
+    // this is the ONLY thing standing between the operator and a bare
+    // "Updated 3 items." for a rack their stock never reached. `placed: 0` is
+    // no help — a batch already sitting on the rack returns 0 as well.
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 3, skipped: 0, placed: 0, placeFailed: 3 },
+    });
+    await applySetRack(user);
+
+    expect(toast.success).toHaveBeenCalledWith('Updated 3 items.');
+    // "ahead of the stock" is the precise claim: the label WAS written, because
+    // the operator typed it and this op does not quietly revert a human
+    // instruction — the world is what failed to keep up.
+    expect(toast.warning).toHaveBeenCalledWith(
+      '3 items’ stock did not move onto the rack. Their rack labels were still set, so the labels are ahead of the stock — move them with Transfer.',
+    );
+  });
+
+  it('says the un-moved stock in the singular for one item', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 1, skipped: 0, placed: 0, placeFailed: 1, crateUnchanged: 1 },
+    });
+    await applySetRack(user);
+
+    expect(toast.warning).toHaveBeenCalledWith(
+      'One item’s stock did not move onto the rack. Its rack label was still set, so the label is ahead of the stock — move it with Transfer.',
+    );
+  });
+
   it('says the rewrite in the plural for several books', async () => {
     const user = userEvent.setup();
     vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({

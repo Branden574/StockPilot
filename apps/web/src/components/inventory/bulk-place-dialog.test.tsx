@@ -176,6 +176,61 @@ describe('BulkPlaceDialog — book crates', () => {
     });
   });
 
+  it('an ALL-BOOKS selection can create a crate ON A RACK, and names both', async () => {
+    // Bulk put-away is where five books land in "gray BIN" at once, so this is
+    // the surface where a position-blind crate would merge two physical bins
+    // fastest. The whole batch goes into ONE named row: "Gray #BIN on rack
+    // 43-B".
+    const user = userEvent.setup();
+    renderDialog();
+    await open(user);
+    await chooseDestination(user, /new rack \/ crate/i);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), 'BIN');
+    await user.type(screen.getByLabelText(/on rack/i), '43');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'Create new crate Crate #BIN on rack 43-B?',
+    );
+    await user.click(screen.getByRole('button', { name: /create and place 2/i }));
+
+    expect(mockBulkPlace.mock.calls[0]![0].destination).toEqual({
+      newRack: { warehouseId: 'wh-1', crateNumber: 'BIN', rackNumber: '43', rackRow: 'B' },
+    });
+  });
+
+  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+    // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT. The hand-rolled
+    // gate checked `crateNumber` alone, so crate BIN + a Row with no "On rack"
+    // number passed it — `planNewLocation` refuses that pair
+    // (`rack_needs_number`), the name derived to '', and this dialog offered to
+    // create "Create new crate ?" for the whole batch.
+    //
+    // Bulk is the worst place for it: one Continue would have taken every
+    // selected row into a location nobody could name.
+    const user = userEvent.setup();
+    renderDialog();
+    await open(user);
+    await chooseDestination(user, /new rack \/ crate/i);
+    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await user.type(screen.getByLabelText(/crate number/i), 'BIN');
+    await user.type(screen.getByLabelText(/^row/i), 'B');
+
+    expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/on rack/i), '43');
+    expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
+  });
+
   it('a MIXED selection is rack-only — no crate can be minted over non-books', async () => {
     const user = userEvent.setup();
     renderDialog(MIXED);

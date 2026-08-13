@@ -119,3 +119,78 @@ export function normalizeRackFields(input: {
       : tidy(input.number ?? '');
   return { number, row: explicitRow };
 }
+
+/**
+ * A rack POSITION as every app-layer surface spells it — the camelCase twin of
+ * the `rack_number` / `rack_row` columns.
+ *
+ * It exists because a rack position is no longer only "what a rack is": a CRATE
+ * SITS ON A RACK, so a crate row carries the same pair as its position (see
+ * new-location.ts). Passing the pair around as one object is what stops the two
+ * halves being separated and one of them dropped — which is the shape of both
+ * the 2026-07-23 incident and the crate bug this type was added for.
+ */
+export interface RackPosition {
+  rackNumber?: string | null;
+  rackRow?: string | null;
+}
+
+/**
+ * The display label for a position — '' when there is none.
+ *
+ * Decomposes first, so a whole label parked in the number field ("38-B" typed
+ * into an "On rack" box) reads as "38-B" rather than "38-B-" or "38-B-B", and
+ * a row with no number reads as '' rather than inventing the rack "B".
+ */
+export function formatRackPosition(position: RackPosition | null | undefined): string {
+  if (!position) return '';
+  return formatRackLabel(normalizeRackFields({ number: position.rackNumber, row: position.rackRow }));
+}
+
+/** True when the pair names a rack position at all (a number is required). */
+export function hasRackPosition(position: RackPosition | null | undefined): boolean {
+  return formatRackPosition(position).length > 0;
+}
+
+/**
+ * The ONE sentence a confirmation shows when a placement moves the RACK a book
+ * is recorded on — or null when it does not.
+ *
+ * ═══ THE RACK LINE IS A SEPARATE COMPARISON FROM THE CRATE LINE ═══
+ *
+ * A crate sits on a rack, so a placement can change the crate, the rack, both,
+ * or neither, and the four cases are genuinely independent facts. Merging them
+ * into one predicate is how "rack A1 + crate 9" came to be read as a single
+ * malformed input instead of two true statements. `compareBookCratePlacement`
+ * answers the crate half; this answers the rack half, and callers render both.
+ *
+ * NEVER SAYS "CLEARED", because whether the pair clears is not knowable from the
+ * two arguments this function has. A destination with no rack position (a crate
+ * that is not on a rack) asserts nothing about the rack; what actually happens to
+ * the pair is decided AFTER the stock moves, by `syncBookCratePlacement`, from
+ * the live holdings — it clears on a FULL move (no stock left on any rack) and is
+ * kept on a PARTIAL one (the copies that stayed are still on that rack). A
+ * destination cannot tell those apart, so promising either here would be right
+ * half the time, which is the same class of lie as a silent overwrite.
+ *
+ * The operator is not left uninformed: the gate only refuses — and only shows its
+ * sentence — when the reconciliation provably WILL write
+ * (`bookCratePlacementWillSync`), and that sentence names the current position
+ * inside `currentLabel` ("recorded in Blue 4 on rack 40-B") while `nextLabel`
+ * names a crate with no rack. So the case where the pair really does clear is
+ * exactly the case the operator is shown a before-and-after for.
+ *
+ * Filling a BLANK rack is not announced either: nothing a human recorded is
+ * being replaced, which is the same asymmetry `fieldOverwritten` applies to the
+ * crate pair.
+ */
+export function describeRackChange(
+  current: RackPosition | null | undefined,
+  next: RackPosition | null | undefined,
+): string | null {
+  const from = formatRackPosition(current);
+  const to = formatRackPosition(next);
+  if (!to || !from) return null;
+  if (from.trim().toLowerCase() === to.trim().toLowerCase()) return null;
+  return `Rack will change from ${from} to ${to}.`;
+}
