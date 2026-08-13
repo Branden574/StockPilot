@@ -25,7 +25,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   formatPlacementLabel,
+  getCrateColor,
   holdingsContradictRack,
+  readDisplayStorage,
   resolvePlacement,
   type RackHoldingLike,
 } from '@stockpilot/core';
@@ -141,30 +143,6 @@ function mimeForExt(ext: string): string {
   return `image/${e}`;
 }
 
-function readBookStorage(cf: Record<string, unknown> | null) {
-  const f = cf ?? {};
-  const rackNumber = f.book_rack_number ? String(f.book_rack_number) : null;
-  const rackRow = f.book_rack_row ? String(f.book_rack_row) : null;
-  const crateColor = f.book_crate_color ? String(f.book_crate_color) : null;
-  const crateNumber = f.book_crate_number ? String(f.book_crate_number) : null;
-  const grade = f.book_grade ? String(f.book_grade) : null;
-  const rackLabel =
-    rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
-  return { rackLabel, crateColor, crateNumber, grade };
-}
-
-const CRATE_HEX: Record<string, string> = {
-  red: '#ef4444',
-  orange: '#f97316',
-  yellow: '#eab308',
-  green: '#22c55e',
-  blue: '#3b82f6',
-  purple: '#a855f7',
-  pink: '#ec4899',
-  black: '#27272a',
-  white: '#f4f4f5',
-  gray: '#9ca3af',
-};
 
 export default function Scan() {
   const router = useRouter();
@@ -728,7 +706,10 @@ export default function Scan() {
     );
   }
 
-  const storage = item ? readBookStorage(item.custom_fields) : null;
+  // Shared reader, not a local copy: this screen used to hand-roll a
+  // canonical-only version, so a book recorded under a legacy key showed a
+  // blank rack here while the item screen showed it.
+  const storage = item ? readDisplayStorage(item.custom_fields, item.item_type) : null;
   // WHERE THE STOCK IS, decided once by the shared resolver rather than by
   // this screen. Drives the holdings row and the Bin/shelf row it displaces.
   // The Chromebook this fix was for — moved wholly into "Blue Shelf" while its
@@ -774,10 +755,12 @@ export default function Scan() {
     summaryRack && !holdingsContradictRack(summaryRack, item?.rackHoldings)
       ? summaryRack
       : null;
-  const crateHex =
-    storage?.crateColor && CRATE_HEX[storage.crateColor]
-      ? CRATE_HEX[storage.crateColor]
-      : null;
+  // Resolved through the shared CRATE_COLORS registry, not a local hex map.
+  // The map this replaces was keyed lower-case and looked up the RAW stored
+  // value, so a row holding "Blue" (a real legacy spelling) matched nothing and
+  // lost its swatch. `getCrateColor` lower-cases before matching, and its hexes
+  // are the same ten values the local copy carried.
+  const crateHex = getCrateColor(storage?.crateColor)?.hex ?? null;
   const lowStock =
     item && item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
 

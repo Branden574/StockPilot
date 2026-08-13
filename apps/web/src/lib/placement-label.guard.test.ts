@@ -677,13 +677,19 @@ const RAW_FIELD_PROJECTIONS = [
 /** Renders a `rackLabel` computed upstream (by a delegate or the exception).
  *  Owns no precedence of its own. */
 const RENDERS_PRECOMPUTED = [
-  // MOVED here from DELEGATES_TO_RESOLVER (reason): the screen no longer decides
-  // anything — it calls buildPlacementRows() and renders what comes back. It
-  // still matches the scan because it names `rackLabel` in code, so it must stay
-  // classified; it simply is not a delegate any more. If it ever re-grows its own
-  // precedence, the delegate arm below will not catch it — the hand-rolled-rule
-  // check will.
-  'apps/mobile/app/item/[id].tsx',
+  // DELIBERATELY EMPTY. `apps/mobile/app/item/[id].tsx` lived here: it had
+  // stopped deciding anything (it calls buildPlacementRows() and renders the
+  // result) but still NAMED `rackLabel` in code, because it hand-rolled the
+  // read of that label out of custom_fields.
+  //
+  // That read now lives in `readDisplayStorage` (packages/core), so the screen
+  // no longer names the identifier at all and the scan stops seeing it. There
+  // is nothing left in this bucket.
+  //
+  // If a file appears here again, prefer sending its read to the core reader
+  // over re-adding it — a second copy of a reader is how a reader and a writer
+  // come to disagree, and the entry this replaced sat unresolved long enough
+  // to accumulate three legacy spellings the core reader had never heard of.
   'apps/web/src/components/orders/storefront/storefront-overlays.tsx',
   'apps/web/src/components/orders/v2/item-card.tsx',
   'apps/web/src/components/orders/v2/types.ts',
