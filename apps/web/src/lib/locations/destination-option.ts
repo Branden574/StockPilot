@@ -110,6 +110,54 @@ export function toPlaceDest(loc: Record<string, unknown>): PlaceDest {
 }
 
 /**
+ * The PROVISIONAL destination for a "+ New rack / crate" branch — the row the
+ * server is ABOUT to create, described before it exists.
+ *
+ * ═══ WHY A DESTINATION THAT DOES NOT EXIST YET IS A LEGITIMATE ONE ═══
+ *
+ * The placement gate now runs BEFORE the mint, because a gate that runs after it
+ * leaves an empty rack/crate behind whenever the operator taps "Go back" — a
+ * user-visible orphan with no cleanup path. Running first means the gate has to
+ * compare against values that are not in the database yet.
+ *
+ * That is safe, and it is worth being precise about why, because the opposite
+ * mistake caused the original data loss. The gate has two halves. The ITEM's
+ * current summary is the safety-critical one and it still comes from the row the
+ * server just read — never from the client, on any path. The DESTINATION half is
+ * simply what the operator typed and is about to create; there is no stored
+ * truth to disagree with, and trusting it here is not trusting a client's claim
+ * about STATE.
+ *
+ * It is built from the ONE `planNewLocation` verdict — the same verdict that
+ * names the row and fills its columns — so the crate the gate compares against
+ * is character-for-character the crate the insert will hold. Hand-assembling
+ * this from the raw form fields is exactly how a confirmation and a created row
+ * came to differ before.
+ *
+ * An EXISTING match is never described this way: the caller resolves it first
+ * (`LocationsService.findRackOrCrate`) and uses that row's real columns, because
+ * a case-insensitive reuse means the stored spelling — not the typed one — is
+ * the truth about that crate.
+ */
+export function plannedPlaceDest(plan: {
+  kind: 'rack' | 'crate';
+  name: string;
+  rackNumber: string | null;
+  rackRow: string | null;
+  crateColor: string | null;
+  crateNumber: string | null;
+}): PlaceDest {
+  return {
+    kind: plan.kind,
+    name: plan.name,
+    rackNumber: plan.rackNumber,
+    rackRow: plan.rackRow,
+    crateColor: plan.crateColor,
+    crateNumber: plan.crateNumber,
+  };
+}
+
+/**
  * Is this destination a CRATE that sits on a rack?
  *
  * The TRANSFER paths (web `transferStockAction`, the mobile route's rack→rack

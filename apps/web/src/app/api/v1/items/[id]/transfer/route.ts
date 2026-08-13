@@ -3,7 +3,12 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { isPositionedCrate, toPlaceDest, type PlaceDest } from '@/lib/locations/destination-option';
+import {
+  isPositionedCrate,
+  plannedPlaceDest,
+  toPlaceDest,
+  type PlaceDest,
+} from '@/lib/locations/destination-option';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
@@ -28,7 +33,7 @@ export const dynamic = 'force-dynamic';
  * a member without stock:transfer could move stock by calling the RPC directly.
  *
  * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack),
- *         acknowledgedCrateChanges? }
+ *         acknowledgedCrateChanges?, acknowledgedRackChanges? }
  *   - toLocationId: an existing rack/crate in your org.
  *   - newRack: a RACK ({ rackNumber, rackRow? }) or a CRATE ({ crateNumber,
  *     crateColor?, rackNumber?, rackRow? }) — a crate SITS ON a rack, so the
@@ -40,10 +45,17 @@ export const dynamic = 'force-dynamic';
  *   - acknowledgedCrateChanges: the answer to a
  *     BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal — item id + the
  *     fingerprint of the crate the client displayed, never a blanket flag.
+ *   - acknowledgedRackChanges: the answer to the RACK half of the same
+ *     confirmation, and — by its PRESENCE, even empty — the client's
+ *     declaration that it can be asked one. A body WITHOUT it is never refused
+ *     over a rack: the placement succeeds and the recorded rack pair is kept
+ *     instead of erased, reported as `crateSyncRackPreserved`. That is what
+ *     keeps the shipped OTA working, since it has no rack channel at all.
  *
  * Answers { ok, toLocationId, crateSyncFailed?, crateSyncSkipped?,
- * crateSyncStale?, crateSyncUnplaced? }. The stock moved in every one of those
- * cases; the flags say whether the book's crate LABEL followed it.
+ * crateSyncStale?, crateSyncUnplaced?, crateSyncRackPreserved? }. The stock
+ * moved in every one of those cases; the flags say whether the book's crate and
+ * rack LABELS followed it.
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -82,6 +94,22 @@ const bodySchema = z
      * fingerprint of the crate the phone displayed. Never a blanket flag.
      */
     acknowledgedCrateChanges: z
+      .array(
+        z.object({
+          itemId: z.string().uuid(),
+          currentFingerprint: z.string().min(1).max(256),
+        }),
+      )
+      .max(200)
+      .optional(),
+    /**
+     * The sheet's answer to the RACK half — the same scoped shape, fingerprinted
+     * over the rack pair rather than the crate pair. Its PRESENCE is a
+     * capability declaration; see the header and
+     * packages/core/src/inventory/book-rack-placement.ts. `.optional()` keeps
+     * `[]` and absent distinguishable, which is the whole mechanism.
+     */
+    acknowledgedRackChanges: z
       .array(
         z.object({
           itemId: z.string().uuid(),
@@ -158,8 +186,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // Resolve the destination location id from either an existing location or an
     // inline-created rack/crate, and capture what we need to stamp its label.
-    let toLocationId: string;
+    let toLocationId: string | null;
     let dest: PlaceDest;
+    // The inline-creation arguments, held while the row is still hypothetical —
+    // the gate runs BEFORE the mint so a refusal cannot leave an empty
+    // rack/crate behind. See the web actions' resolveNewLocation for the full
+    // reasoning; this route mirrors it.
+    let pendingNewRack: Parameters<LocationsService['findRackOrCrate']>[0] | null = null;
     if (body.newRack) {
       if (!srcLoc?.warehouse_id) {
         return NextResponse.json(
@@ -190,7 +223,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         );
       }
       const isCrate = plan.kind === 'crate';
-      const created = await new LocationsService(ctx).findOrCreateRackOrCrate({
+      pendingNewRack = {
         name: plan.name,
         type: isCrate ? 'bin' : 'shelf',
         kind: isCrate ? 'crate' : 'rack',
@@ -199,11 +232,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         rackRow: plan.rackRow,
         crateColor: plan.crateColor,
         crateNumber: plan.crateNumber,
-      });
-      toLocationId = created.id as string;
-      // From the RESOLVED row, not the typed input: a case-insensitive reuse
-      // returns the crate that already exists and ITS columns are the truth.
-      dest = toPlaceDest(created as Record<string, unknown>);
+      };
+      const existing = await new LocationsService(ctx).findRackOrCrate(pendingNewRack);
+      if (existing) {
+        // From the RESOLVED row, not the typed input: a case-insensitive reuse
+        // returns the crate that already exists and ITS columns are the truth.
+        toLocationId = (existing as { id: string }).id;
+        dest = toPlaceDest(existing as unknown as Record<string, unknown>);
+      } else {
+        // Nothing to reuse — describe the row the insert will hold, from the
+        // same ONE planner verdict that will name it. Minted below, after the
+        // gate.
+        toLocationId = null;
+        dest = plannedPlaceDest({
+          kind: plan.kind,
+          name: plan.name,
+          rackNumber: plan.rackNumber,
+          rackRow: plan.rackRow,
+          crateColor: plan.crateColor,
+          crateNumber: plan.crateNumber,
+        });
+      }
     } else {
       // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
       // reject the staging/unplaced system buckets. transfer_stock already asserts
@@ -257,9 +306,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // quietly is not.
     const verified = await svc.assertBookCratePlacementAllowed([id], dest, {
       acknowledged: body.acknowledgedCrateChanges,
+      acknowledgedRacks: body.acknowledgedRackChanges,
       toLocationId,
       moves: new Map([[id, { fromLocationId: body.fromLocationId, quantity: body.quantity }]]),
     });
+
+    // THE GATE IS SATISFIED — only now is the row minted. Every refusal above
+    // leaves the warehouse exactly as it found it.
+    if (toLocationId === null) {
+      if (!pendingNewRack) {
+        return NextResponse.json(
+          { error: 'validation_error', message: 'Pick a rack or crate as the destination.' },
+          { status: 400 },
+        );
+      }
+      const created = await new LocationsService(ctx).findOrCreateRackOrCrate(pendingNewRack);
+      toLocationId = created.id as string;
+      dest = toPlaceDest(created as Record<string, unknown>);
+    }
 
     await svc.transferStock({
       itemId: id,
@@ -309,6 +373,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // the summary was left alone — it may now name a crate holding none of
       // it. Silence here was the web bug this route would otherwise inherit.
       ...(crate.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      // The crate label followed the stock but the RACK label was left as it
+      // was, because erasing it was never shown to anyone. Silence here is what
+      // the whole rack channel exists to end.
+      ...(crate.rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as

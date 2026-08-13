@@ -28,26 +28,33 @@ import type { CountingUnit } from '@stockpilot/core';
 import type { RackHoldingLike } from '@stockpilot/core';
 import type {
   BookCrateAcknowledgedChange,
-  BookCrateChangeDetail,
   BookCrateChangeItem,
+  BookRackAcknowledgedChange,
+  BookRackChangeItem,
   BookStorageInfo,
 } from '@stockpilot/core';
 import {
   BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
+  BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION,
   bookCrateAcknowledgementIndex,
   bookCrateFingerprint,
   bookCratePlacementWillSync,
+  bookRackAcknowledgementIndex,
   buildVariantKey,
   normalizeCrateColorForWrite,
   describeBookCrateConflict,
+  describeBookRackClear,
   describeRackChange,
   rackOutcomeBasis,
   isBookCrateChangeAcknowledged,
+  isBookRackChangeAcknowledged,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
   formatRackLabel,
+  formatRackPosition,
   formatStockQuantity,
+  hasRackPosition,
   historyNote,
   collectLegacyRefIdsByKind,
   normalizeRackFields,
@@ -534,6 +541,38 @@ export { BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION } from '@stockpilot/core';
 export type { BookCrateChangeDetail } from '@stockpilot/core';
 
 /**
+ * The RACK half of the same refusal — see
+ * packages/core/src/inventory/book-rack-placement.ts for why it is its own
+ * channel rather than a wider crate fingerprint.
+ */
+export { BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION } from '@stockpilot/core';
+export type { BookRackChangeDetail } from '@stockpilot/core';
+
+/**
+ * ═══ ONE PAYLOAD, TWO QUESTIONS — NEVER TWO STACKED REFUSALS ═══
+ *
+ * A placement can change the crate, erase the rack, or both, and the operator
+ * must read that as ONE confirmation. So the gate throws ONE `details` blob:
+ * `items` carries the crate lines and `rackItems` the rack ones.
+ *
+ * `reason` KEEPS NAMING THE CRATE CONSTANT whenever there is at least one crate
+ * line. That is the compatibility hinge: every already-shipped client matches on
+ * that string, and `parseBookCrateChangeDetail` ignores keys it does not know,
+ * so a combined payload reads to an old client exactly as it always did. A
+ * rack-ONLY refusal is the one shape that carries the rack reason — and it can
+ * only ever be sent to a caller that declared it can answer one (see
+ * `assertBookCratePlacementAllowed`), so no shipped client can receive a payload
+ * it cannot act on.
+ */
+interface BookPlacementChangeDetail {
+  reason:
+    | typeof BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION
+    | typeof BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION;
+  items: BookCrateChangeItem[];
+  rackItems?: BookRackChangeItem[];
+}
+
+/**
  * A book's crate SUMMARY as read from `inventory_items` at one instant.
  *
  * The gate reads one of these per book BEFORE the stock moves and the
@@ -566,6 +605,36 @@ export interface BookCrateSummary {
    */
   rackNumber?: string | null;
   rackRow?: string | null;
+}
+
+/**
+ * What the GATE cleared, per book: the summary it verified, plus the one
+ * authorisation it can grant.
+ *
+ * ═══ WHY AN AUTHORISATION TRAVELS WITH THE FRESHNESS PROOF ═══
+ *
+ * The reconciliation runs after the stock has moved and derives both pairs from
+ * the location the live holdings resolve to. Three of its four outcomes replace
+ * a value with another TRUE value the operator could read off the destination
+ * they picked. The fourth — CLEARING a rack a human typed, because the
+ * destination states no position — is the one write that destroys a fact and
+ * leaves nothing behind that remembers it. So the sync is allowed to perform it
+ * only for a book whose erasure the operator was actually shown, and this flag
+ * is how the gate says which. Everything else about the placement is unchanged.
+ *
+ * It rides on the verified map rather than in a second argument for the same
+ * reason `verified` exists at all: the gate's read and the gate's verdict are
+ * one fact about one book at one instant, and a caller that could pass one
+ * without the other would eventually pass a mismatched pair.
+ */
+export interface BookPlacementVerdict extends BookCrateSummary {
+  /**
+   * The operator was SHOWN this book's rack pair being erased by this
+   * placement, and agreed to it. FALSE is the safe answer and the default:
+   * absent authorisation the sync keeps the recorded pair and reports it,
+   * because a stale rack label is recoverable and a wiped one is not.
+   */
+  rackClearAcknowledged: boolean;
 }
 
 /**
@@ -613,6 +682,31 @@ export interface BookCrateSyncResult {
    * never silent again — for any entry point.
    */
   unplacedItemIds: string[];
+  /**
+   * The crate half was written and the RACK half was deliberately NOT — the
+   * derivation would have CLEARED a rack a human recorded, and nobody was shown
+   * that erasure, so the recorded pair was kept exactly as it stood.
+   *
+   * ═══ THIS IS THE "FAIL SAFE, NOT FAIL CLOSED" BUCKET ═══
+   *
+   * It is reached by a caller that could not be asked the rack question (an old
+   * client that predates the channel, or a forged request that omitted it), and
+   * by a placement whose rack outcome the gate could not predict in time to ask.
+   * Refusing those would recreate the exact Critical the first review of this
+   * feature found — a gate with no client able to answer it, which made put-away
+   * impossible. So the placement SUCCEEDS, the stock is where the operator put
+   * it, the crate label follows it, and the rack label stays as it was.
+   *
+   * WHICH MEANS THE LABEL MAY NOW BE STALE, and every caller must say so. That
+   * is the whole trade: a stale rack label is visibly wrong, the reader guards
+   * downrank it, and the audit row records what it was — a wiped one is gone,
+   * the count still reads healthy, and nobody on the floor knows where to stand.
+   * Reporting is what makes "recoverable" true rather than aspirational.
+   *
+   * NOT mutually exclusive with `syncedItemIds`: the item IS in both, because
+   * the write happened and only the rack half was held back.
+   */
+  rackPreservedItemIds: string[];
 }
 
 export class InventoryService {
@@ -4814,11 +4908,18 @@ export class InventoryService {
    *      block at the call site: a full move into a position-less crate really
    *      does clear a rack a human typed, and saying nothing about it is how the
    *      owner lost 38-A while approving a crate change.
-   *   3. WAIVE only the conflicts the caller was actually SHOWN, matched by
-   *      item id AND crate fingerprint. The rack sentence is DISCLOSURE and is
-   *      deliberately not part of that match — see `BookCrateChangeItem.rackLine`.
-   *   4. REFUSE the rest with the fresh payload, so the client re-confirms
-   *      against current truth. NO STOCK MOVES on that path.
+   *   2c. COMPUTE THE RACK ERASURES, from the same two inputs. A rack the
+   *      derivation will WIPE is its own question with its own fingerprint — the
+   *      crate fingerprint cannot carry it (every shipped client computes that
+   *      one from the crate pair alone) and the crate comparison cannot raise it
+   *      (the reported defect had `changed: false`, because the crate was
+   *      identical and only the rack died). See book-rack-placement.ts.
+   *   3. WAIVE only the conflicts the caller was actually SHOWN, matched by item
+   *      id AND fingerprint — each question against its OWN fingerprint. The
+   *      rack SENTENCE on a crate line stays pure disclosure, unfingerprinted,
+   *      exactly as before (see `BookCrateChangeItem.rackLine`).
+   *   4. REFUSE the rest with the fresh payload — one payload carrying both
+   *      questions, so the operator answers once. NO STOCK MOVES on that path.
    *
    * `opts.acknowledged` used to be a bare boolean, and step 1 was skipped
    * whenever it was set — so "the user approved this change" and "do not
@@ -4837,26 +4938,70 @@ export class InventoryService {
    * entry (or a holdings read that errors) is treated as "the sync will write",
    * i.e. it still asks.
    *
-   * RETURNS THE SUMMARIES IT READ, and the caller MUST pass them on to
+   * ═══ THE RACK QUESTION NEVER REFUSES A CALLER THAT CANNOT ANSWER IT ═══
+   *
+   * `opts.acknowledgedRacks` is the caller's answer AND, by its mere presence,
+   * the caller's declaration that it understands the question — an EMPTY array
+   * is a capability declaration, `undefined` is "cannot answer". Nothing else
+   * could serve: the client cannot predict a rack erasure locally (only a reader
+   * of the live holdings can), so a capable client's first request carries an
+   * empty list and answers the refusal on the retry.
+   *
+   * For a caller that cannot answer, the placement is NOT refused. A refusal no
+   * client can answer is not a safety feature, it is an outage — this feature's
+   * first review found exactly that shape and put-away was impossible until it
+   * was caught, and the mobile OTA in the field today has no rack channel at
+   * all. Instead the rack pair is withheld from the write: the gate returns
+   * `rackClearAcknowledged: false`, the reconciliation keeps the recorded pair,
+   * and the result reports `rackPreservedItemIds` so the operator is told the
+   * label may now be stale. Fail safe, not fail closed.
+   *
+   * RETURNS ITS VERDICT PER BOOK, and the caller MUST pass it on to
    * `syncBookCratePlacement` as `verified`. That is not a convenience: it is
-   * the other half of the freshness guarantee. This map says "these are the
+   * the other half of the freshness guarantee. The summaries say "these are the
    * crates the gate cleared", and the reconciliation compares its own fresh
-   * read against it, so a crate someone edited while the stock was moving is
+   * read against them, so a crate someone edited while the stock was moving is
    * left alone instead of being overwritten by an acknowledgement that was
-   * about a different crate.
+   * about a different crate. `rackClearAcknowledged` rides along for the one
+   * write the reconciliation may not perform unasked.
    */
   async assertBookCratePlacementAllowed(
     itemIds: string[],
     dest: PlaceDest,
     opts: {
       acknowledged?: ReadonlyArray<BookCrateAcknowledgedChange>;
+      /**
+       * The answer to the RACK question — and, by its PRESENCE alone, the
+       * caller's declaration that it can be asked one. An EMPTY array declares
+       * capability with nothing yet acknowledged; `undefined` means "cannot
+       * answer" and is the correct reading for both an old client and a forged
+       * request. See the header: a caller that cannot answer is never refused,
+       * it simply does not get the erasure.
+       */
+      acknowledgedRacks?: ReadonlyArray<BookRackAcknowledgedChange>;
       moves?: ReadonlyMap<string, { fromLocationId: string; quantity: number }>;
-      /** The resolved destination `locations.id`. Required for step 2. */
-      toLocationId?: string;
+      /**
+       * The resolved destination `locations.id`. Required for step 2.
+       *
+       * NULL when the destination is about to be CREATED and has not been minted
+       * yet — the "+ New rack / crate" branch consults this gate BEFORE it mints,
+       * so that backing out of the confirmation leaves no orphaned empty location
+       * behind. A row that does not exist can hold no stock, so the prediction is
+       * exact rather than degraded. `undefined` still means "not supplied", which
+       * fails closed to asking.
+       */
+      toLocationId?: string | null;
     } = {},
-  ): Promise<Map<string, BookCrateSummary>> {
+  ): Promise<Map<string, BookPlacementVerdict>> {
     const summaries = await this.readBookCrateSummaries(itemIds);
-    if (summaries.size === 0) return summaries;
+    // The verdict every book gets unless something below grants more. FALSE is
+    // the safe default for the rack erasure and the only default that can be:
+    // an authorisation nobody granted must never be inferred from silence.
+    const verdicts = new Map<string, BookPlacementVerdict>();
+    for (const [itemId, s] of summaries) {
+      verdicts.set(itemId, { ...s, rackClearAcknowledged: false });
+    }
+    if (summaries.size === 0) return verdicts;
 
     // 1. THE CONFLICT SET, from the row just read — never from the caller.
     const conflicts: BookCrateChangeItem[] = [];
@@ -4879,17 +5024,41 @@ export class InventoryService {
       });
       if (conflict) conflicts.push(conflict);
     }
-    if (conflicts.length === 0) return summaries;
+
+    // ═══ THE RACK ERASURE IS A SEPARATE QUESTION, ASKED FOR SEPARATE BOOKS ═══
+    //
+    // The reported defect reached this line with `conflicts.length === 0`. A book
+    // recorded in crate "Blue Shelf" placed into the position-less crate
+    // ('blue','Shelf') is going into THE SAME CRATE — the comparison is right to
+    // be silent — and rack 38-A was erased anyway. So the rack half is computed
+    // over every book the gate read, not over the crate conflicts, and the early
+    // return below covers both or it re-creates the exact bug.
+    //
+    // CANDIDATES ARE NARROWED FIRST, and that narrowing is what keeps the cost
+    // at zero on the ordinary path: only a PLACED destination that states NO
+    // rack position can erase anything (`describeBookRackClear` re-checks both,
+    // it is not trusted from here), and only a book that RECORDS a rack has
+    // anything to lose. A put-away onto a rack — the commonest operation in this
+    // warehouse — produces no candidates and therefore no extra query.
+    const destPosition = { rackNumber: dest.rackNumber, rackRow: dest.rackRow };
+    const destIsPlaced = !isSystemLocation({ type: null, kind: dest.kind });
+    const rackCandidateIds =
+      destIsPlaced && !hasRackPosition(destPosition)
+        ? [...summaries]
+            .filter(([, s]) => hasRackPosition({ rackNumber: s.rackNumber, rackRow: s.rackRow }))
+            .map(([id]) => id)
+        : [];
+
+    if (conflicts.length === 0 && rackCandidateIds.length === 0) return verdicts;
 
     // 2. Drop the ones whose summary the reconciliation will deliberately
     //    leave alone. Only reached when something genuinely conflicts, so the
     //    common placement still costs exactly one query.
     const willSync = await this.readBookCrateSyncPrediction(
-      conflicts.map((c) => c.itemId),
+      [...new Set([...conflicts.map((c) => c.itemId), ...rackCandidateIds])],
       opts,
     );
     const kept = conflicts.filter((c) => willSync.get(c.itemId) !== false);
-    if (kept.length === 0) return summaries;
 
     // ═══ 2b. THE RACK OUTCOME — SAID HERE BECAUSE ONLY HERE IS IT KNOWN ═══
     //
@@ -4913,8 +5082,6 @@ export class InventoryService {
     // a failed holdings read, a genuine split — yields `'unknown'` and says
     // nothing (see `rackOutcomeBasis`). Fail-closed for asking, silent for
     // asserting.
-    const destPosition = { rackNumber: dest.rackNumber, rackRow: dest.rackRow };
-    const destIsPlaced = !isSystemLocation({ type: null, kind: dest.kind });
     const real: BookCrateChangeItem[] = kept.map((c) => {
       const current = summaries.get(c.itemId);
       const rackLine = current
@@ -4927,18 +5094,75 @@ export class InventoryService {
       return rackLine ? { ...c, rackLine } : c;
     });
 
-    // 3. Waive ONLY what was shown, item by item.
+    // ═══ 2c. THE RACK ERASURES, WITH THEIR OWN FINGERPRINTS ═══
+    //
+    // Same two inputs as 2b and the same helper underneath (`describeRackChange`
+    // via `describeBookRackClear`), so the QUESTION and the DISCLOSURE are
+    // provably the same sentence and a client can dedupe them by string. The
+    // difference is that this one is answerable: it carries a fingerprint of the
+    // rack pair being destroyed.
+    //
+    // `destIsPlaced` is already true for every candidate, so the basis here is
+    // the prediction alone — and an unknown prediction yields no sentence, hence
+    // no question, hence no authorisation, hence a preserved rack. That chain is
+    // the fail-safe: silence never becomes permission.
+    const rackConflicts: BookRackChangeItem[] = [];
+    for (const itemId of rackCandidateIds) {
+      const current = summaries.get(itemId)!;
+      const clear = describeBookRackClear({
+        itemId,
+        itemName: current.name,
+        current: { rackNumber: current.rackNumber, rackRow: current.rackRow },
+        next: destPosition,
+        basis: rackOutcomeBasis(willSync.get(itemId)),
+      });
+      if (clear) rackConflicts.push(clear);
+    }
+
+    // 3. Waive ONLY what was shown, item by item — each question against its
+    //    OWN fingerprint.
     const ackIndex = bookCrateAcknowledgementIndex(opts.acknowledged);
     const unacknowledged = real.filter((c) => !isBookCrateChangeAcknowledged(ackIndex, c));
-    if (unacknowledged.length === 0) return summaries;
+
+    // CAPABILITY IS INFERRED FROM THE REQUEST. A caller that sent the list —
+    // even an empty one — understands the rack question; one that sent nothing
+    // cannot be asked it and must never be refused for it (see the header).
+    const canAnswerRack = opts.acknowledgedRacks !== undefined;
+    const rackAckIndex = bookRackAcknowledgementIndex(opts.acknowledgedRacks);
+    const unacknowledgedRacks = canAnswerRack
+      ? rackConflicts.filter((c) => !isBookRackChangeAcknowledged(rackAckIndex, c))
+      : [];
+    // GRANT the erasure for exactly the books whose erasure was shown and
+    // agreed. Everything else keeps the safe default, so an unasked, unanswered
+    // or unanswerable rack survives the placement.
+    if (canAnswerRack) {
+      for (const c of rackConflicts) {
+        if (!isBookRackChangeAcknowledged(rackAckIndex, c)) continue;
+        const verdict = verdicts.get(c.itemId);
+        if (verdict) verdict.rackClearAcknowledged = true;
+      }
+    }
+
+    if (unacknowledged.length === 0 && unacknowledgedRacks.length === 0) return verdicts;
 
     // 4. Refuse — carrying EVERY real conflict, not just the unacknowledged
-    //    ones. The client rebuilds its acknowledgement from this payload, so a
-    //    partial payload would drop the lines it already answered and refuse
-    //    the retry forever.
-    const detail: BookCrateChangeDetail = {
-      reason: BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
+    //    ones, and BOTH questions in ONE payload. The client rebuilds its
+    //    acknowledgement from this payload, so a partial payload would drop the
+    //    lines it already answered and refuse the retry forever; and two
+    //    payloads would be two stacked modals for one decision.
+    //
+    // `reason` STAYS THE CRATE CONSTANT whenever there is a crate line, because
+    // that string is what every shipped client matches on. `rackItems` rides
+    // alongside and is ignored by anything that has not heard of it. Only a
+    // rack-ONLY refusal carries the rack reason — and `canAnswerRack` is what
+    // makes that reachable exclusively for a caller that can answer it.
+    const detail: BookPlacementChangeDetail = {
+      reason:
+        real.length > 0
+          ? BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION
+          : BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION,
       items: real,
+      ...(canAnswerRack && rackConflicts.length > 0 ? { rackItems: rackConflicts } : {}),
     };
     // THE MESSAGE CARRIES THE RACK SENTENCE TOO, for the single-item case. Not
     // every surface renders the structured lines — the web confirmation shows
@@ -4952,7 +5176,14 @@ export class InventoryService {
       'conflict',
       real.length === 1
         ? `${real[0]!.itemName} is recorded in ${real[0]!.currentLabel ?? 'no crate'}. Placing it here will change that to ${real[0]!.nextLabel ?? 'no crate'}.${singleRack}`
-        : `${real.length} books are recorded in a different crate. Placing them here will change that.`,
+        : real.length > 1
+          ? `${real.length} books are recorded in a different crate. Placing them here will change that.`
+          : // RACK-ONLY. The crate is unchanged (that is the whole defect: the
+            // reported case had an identical crate), so a message about crates
+            // would name a change that is not happening.
+            rackConflicts.length === 1
+            ? `${rackConflicts[0]!.itemName} is recorded on rack ${rackConflicts[0]!.currentLabel}. Placing it here will clear that.`
+            : `${rackConflicts.length} books are recorded on a rack. Placing them here will clear it.`,
       detail as unknown as Record<string, unknown>,
     );
   }
@@ -4984,12 +5215,19 @@ export class InventoryService {
     itemIds: string[],
     opts: {
       moves?: ReadonlyMap<string, { fromLocationId: string; quantity: number }>;
-      toLocationId?: string;
+      toLocationId?: string | null;
     },
   ): Promise<Map<string, boolean>> {
     const out = new Map<string, boolean>();
     const { moves, toLocationId } = opts;
-    if (!toLocationId || !moves || moves.size === 0) return out;
+    // `undefined` = the caller supplied no destination, which fails closed to
+    // "assume it writes". `null` = the destination is about to be CREATED and
+    // does not exist yet (the gate now runs BEFORE the mint, so backing out
+    // leaves no orphan) — a row that does not exist holds nothing, so every
+    // surviving holding really is a rival placement and the prediction below is
+    // exact. Compared against `undefined` explicitly: `!toLocationId` would
+    // collapse the two opposite answers into one.
+    if (toLocationId === undefined || !moves || moves.size === 0) return out;
     const known = itemIds.filter((id) => moves.has(id));
     if (known.length === 0) return out;
 
@@ -5060,6 +5298,17 @@ export class InventoryService {
    * to the crate's position, a plain rack sets it to that rack, and a split
    * writes neither pair and says so.
    *
+   * ═══ …EXCEPT THAT THE CLEAR NOW NEEDS PERMISSION ═══
+   *
+   * Of those four outcomes, three replace a value with another TRUE value the
+   * operator could read off the destination they picked. The CLEAR is different:
+   * it destroys a rack a human typed and leaves nothing that remembers it. So it
+   * is performed only for a book whose erasure the gate says was shown and
+   * agreed (`BookPlacementVerdict.rackClearAcknowledged`). Absent that, the
+   * recorded pair is kept VERBATIM and the item is reported in
+   * `rackPreservedItemIds` — a stale rack label is recoverable and a wiped one
+   * is not. The crate half is unaffected either way.
+   *
    * ═══ THE SECOND READ IS THE FRESHNESS PROOF, NOT A FORMALITY ═══
    *
    * `opts.verified` is what `assertBookCratePlacementAllowed` returned at T0,
@@ -5107,11 +5356,19 @@ export class InventoryService {
     itemIds: string[],
     opts: {
       /**
-       * The summaries `assertBookCratePlacementAllowed` read BEFORE the stock
-       * moved — the crates the operator was actually shown and cleared.
-       * Required; see the header.
+       * The verdict `assertBookCratePlacementAllowed` returned BEFORE the stock
+       * moved — the crates the operator was actually shown and cleared, plus
+       * whether a rack ERASURE was among the things they agreed to. Required;
+       * see the header.
+       *
+       * `rackClearAcknowledged` is OPTIONAL on the read side so a caller that
+       * builds its own freshness proof by hand — `removeStockFromLocation` reads
+       * the summaries directly, there being no destination to gate on — stays
+       * valid without claiming an authorisation nobody gave. Absent reads as
+       * FALSE, which keeps the recorded rack; that is the safe direction, and the
+       * only one that can be a default.
        */
-      verified: ReadonlyMap<string, BookCrateSummary>;
+      verified: ReadonlyMap<string, BookCrateSummary & { rackClearAcknowledged?: boolean }>;
       audit?: {
         toLocationId: string;
         /** Units placed per item; omitted keys simply record no quantity. */
@@ -5171,6 +5428,7 @@ export class InventoryService {
         skippedItemIds: [],
         staleItemIds: [],
         unplacedItemIds: [],
+        rackPreservedItemIds: [],
       };
     }
   }
@@ -5178,7 +5436,7 @@ export class InventoryService {
   private async syncBookCratePlacementInner(
     itemIds: string[],
     opts: {
-      verified: ReadonlyMap<string, BookCrateSummary>;
+      verified: ReadonlyMap<string, BookCrateSummary & { rackClearAcknowledged?: boolean }>;
       audit?: {
         toLocationId: string;
         quantityByItemId?: Map<string, number>;
@@ -5193,6 +5451,7 @@ export class InventoryService {
         skippedItemIds: [],
         staleItemIds: [],
         unplacedItemIds: [],
+        rackPreservedItemIds: [],
       };
     // The operator's own typed rack, decomposed and upper-cased with the SAME
     // helper every other writer of these keys uses — so the pair this statement
@@ -5227,6 +5486,7 @@ export class InventoryService {
         skippedItemIds: [],
         staleItemIds,
         unplacedItemIds: [],
+        rackPreservedItemIds: [],
       };
 
     // ONE bounded read of every positive holding for these books. No kind
@@ -5249,6 +5509,7 @@ export class InventoryService {
         skippedItemIds: [],
         staleItemIds,
         unplacedItemIds: [],
+        rackPreservedItemIds: [],
       };
 
     type HoldingRow = {
@@ -5295,6 +5556,7 @@ export class InventoryService {
     >();
     const skippedItemIds: string[] = [];
     const unplacedItemIds: string[] = [];
+    const rackPreservedItemIds: string[] = [];
     for (const itemId of bookIds) {
       const placed = placedByItem.get(itemId);
       // ═══ NO PLACED HOLDING — LEFT ALONE, BUT NEVER SILENTLY ═══
@@ -5394,8 +5656,8 @@ export class InventoryService {
       // The crate half is NOT overridden. Nobody typed a crate here; that half
       // is the derived label whose only job is to stop sending a picker to an
       // empty crate, and it stays derived on every path.
-      const rackNumber = typedRack ? typedRack.number : derivedRackNumber;
-      const rackRow = typedRack ? typedRack.row : derivedRackRow;
+      let rackNumber = typedRack ? typedRack.number : derivedRackNumber;
+      let rackRow = typedRack ? typedRack.row : derivedRackRow;
 
       // ═══ THE FRESHNESS CHECK — DEFECT 5 ═══
       // The gate compared the row at T0 and the operator answered about THAT
@@ -5433,6 +5695,46 @@ export class InventoryService {
       ) {
         staleItemIds.push(itemId);
         continue;
+      }
+
+      // ═══ AN ERASURE NOBODY WAS SHOWN IS NOT PERFORMED ═══
+      //
+      // THE DEFECT: a book recorded in crate "Blue Shelf" ON RACK 38-A, placed
+      // into the position-less crate ('blue','Shelf'). The crate is IDENTICAL,
+      // so the crate gate is right to stay silent — and the statement below then
+      // wrote `p_rack_number: null` and 38-A was gone. Nobody was asked, nothing
+      // remembers what it said, the on-hand count still reads healthy, and the
+      // next picker has nowhere to stand.
+      //
+      // Three of this derivation's four outcomes replace a value with another
+      // TRUE value the operator could read off the destination they picked
+      // (a rack, a positioned crate, the crate half). The CLEAR is the only one
+      // that destroys a fact, so it is the only one that needs permission —
+      // granted per book by the gate, which is the only place that both reads
+      // the live holdings and can put the sentence in front of a human.
+      //
+      // WITHHELD, NOT FAILED. The stock really moved and the crate label really
+      // should follow it, so the write still happens; only the rack half keeps
+      // what the row already said, VERBATIM (not re-normalised — "preserved"
+      // must mean the bytes that are there, or a preserve becomes its own quiet
+      // edit). The item is then reported in `rackPreservedItemIds` so the
+      // operator hears that the label may now be stale, which is what makes
+      // "recoverable" true rather than aspirational.
+      //
+      // Reached by an old client with no rack channel, by a forged request that
+      // omitted it, and by a placement whose rack outcome the gate could not
+      // predict in time to ask. All three are answered the same way, because in
+      // all three the operator was shown nothing.
+      const recordedRack = formatRackPosition({
+        rackNumber: fresh.rackNumber,
+        rackRow: fresh.rackRow,
+      });
+      const erasesRecordedRack = rackNumber === null && recordedRack !== '';
+      const mayErase = opts.verified.get(itemId)?.rackClearAcknowledged === true;
+      if (erasesRecordedRack && !mayErase) {
+        rackNumber = fresh.rackNumber ?? null;
+        rackRow = fresh.rackRow ?? null;
+        rackPreservedItemIds.push(itemId);
       }
 
       // JSON, not a space-joined string. `crate_number` is FREE TEXT and
@@ -5542,7 +5844,20 @@ export class InventoryService {
         );
       }
     }
-    return { syncedItemIds, failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds };
+    // The preserve is reported only for books whose write actually LANDED, so
+    // `rackPreservedItemIds ⊆ syncedItemIds` holds. A batch the RPC refused
+    // wrote neither half, and "we kept your rack" alongside "the label could not
+    // be written" is two answers to one question — the failure is the louder and
+    // more actionable of the two, and it already wins every precedence chain.
+    const synced = new Set(syncedItemIds);
+    return {
+      syncedItemIds,
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds: rackPreservedItemIds.filter((id) => synced.has(id)),
+    };
   }
 
   /**

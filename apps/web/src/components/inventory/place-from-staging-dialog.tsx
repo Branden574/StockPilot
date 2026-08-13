@@ -2,14 +2,18 @@
 
 import {
   bookCrateAcknowledgementsMatch,
+  bookRackAcknowledgementsMatch,
   describeBookCrateChange,
   describeBookCrateConflict,
   describeNewRackPlacement,
   describeRackChange,
   hasRackPosition,
   parseBookCrateChangeDetail,
+  parseBookRackChangeDetail,
   toBookCrateAcknowledgement,
+  toBookRackAcknowledgement,
   type BookCrateAcknowledgedChange,
+  type BookRackAcknowledgedChange,
   type BookStorageInfo,
 } from '@stockpilot/core';
 import { Loader2, PackageCheck } from 'lucide-react';
@@ -139,6 +143,13 @@ export function PlaceFromStagingDialog({
      * matches and the server refuses, re-asking with current truth.
      */
     acknowledged: BookCrateAcknowledgedChange[];
+    /**
+     * The RACK erasures this dialog put on screen, fingerprinted over the rack
+     * pair. Always the SERVER's lines: this component holds a render-time
+     * snapshot and no holdings, so it can never tell a full move (which clears
+     * the pair) from a split (which does not) — see `deferToServer` below.
+     */
+    acknowledgedRacks: BookRackAcknowledgedChange[];
   } | null>(null);
   // Server failures render inline (persistent) as well as via toast — same
   // rationale as StockTransferDialog: a toast alone auto-dismisses outside
@@ -254,7 +265,11 @@ export function PlaceFromStagingDialog({
   // and the "Did you mean…" one-tap alternatives share ONE write path.
   async function place(
     destination: ActionDestination,
-    opts: { acknowledged?: BookCrateAcknowledgedChange[]; describe?: ChosenDestination } = {},
+    opts: {
+      acknowledged?: BookCrateAcknowledgedChange[];
+      acknowledgedRacks?: BookRackAcknowledgedChange[];
+      describe?: ChosenDestination;
+    } = {},
   ) {
     setSubmitting(true);
     setServerError(null);
@@ -267,6 +282,13 @@ export function PlaceFromStagingDialog({
       ...(opts.acknowledged && opts.acknowledged.length > 0
         ? { acknowledgedCrateChanges: opts.acknowledged }
         : {}),
+      // ALWAYS SENT, EVEN EMPTY. Its presence is how this client declares it can
+      // answer the rack question at all; omitting it tells the server "cannot
+      // answer", and the server then preserves the rack rather than refusing —
+      // correct for an old client, wrong for this one, which would silently stop
+      // being asked. An empty array on the first request is exactly right: this
+      // dialog cannot predict a rack erasure, so it asks to be told.
+      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
     });
     setSubmitting(false);
 
@@ -279,9 +301,19 @@ export function PlaceFromStagingDialog({
       // the row, not our snapshot. Asked at most once more: a refusal that
       // survives an acknowledgement matching the server's own labels is a real
       // error, not a staleness loop.
+      // TWO QUESTIONS, ONE PAYLOAD, ONE DIALOG. The crate half and the rack half
+      // are separately fingerprinted and can arrive together or alone; a refusal
+      // that says ANYTHING our last answer did not cover is re-asked, and one
+      // that repeats what we already answered falls through to the plain error
+      // rather than looping.
       const detail = parseBookCrateChangeDetail(res.error.details);
-      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
-      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+      const rackDetail = parseBookRackChangeDetail(res.error.details);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : [];
+      const freshRacks = rackDetail ? toBookRackAcknowledgement(rackDetail.items) : [];
+      const unanswered =
+        !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh) ||
+        !bookRackAcknowledgementsMatch(opts.acknowledgedRacks, freshRacks);
+      if ((detail || rackDetail) && unanswered) {
         // ON THE DEFERRED PATH THIS IS THE ONLY PANEL THE OPERATOR SEES, so the
         // notices that are not part of the crate question have to ride here too
         // — otherwise deferring silently drops them. The remainder is the one
@@ -289,14 +321,19 @@ export function PlaceFromStagingDialog({
         const remainder = remainderNotice();
         setPendingConfirm({
           content: {
-            title: 'Change this book’s crate?',
+            // The rack-only refusal is the reported defect's own case: the crate
+            // is IDENTICAL, so a title about changing the crate would name a
+            // change that is not happening.
+            title: detail ? 'Change this book’s crate?' : 'Clear this book’s rack?',
             message: res.error.message,
-            crateItems: detail.items,
+            ...(detail ? { crateItems: detail.items } : {}),
+            ...(rackDetail ? { rackItems: rackDetail.items } : {}),
             ...(remainder ? { notices: [remainder] } : {}),
             confirmLabel: 'Continue placement',
           },
           destination,
           acknowledged: fresh,
+          acknowledgedRacks: freshRacks,
         });
         return;
       }
@@ -333,6 +370,13 @@ export function PlaceFromStagingDialog({
     } else if (res.data.crateSyncSkipped) {
       toast.warning(
         `${itemName} now has stock in more than one location, so its crate label was left unchanged.`,
+      );
+    } else if (res.data.crateSyncRackPreserved) {
+      // The rack label was KEPT rather than erased, because nobody was shown the
+      // erasure. Saying so is the whole reason keeping it is safe: a stale label
+      // somebody knows about is recoverable, a wiped one is not.
+      toast.warning(
+        `${itemName} was placed, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
     }
     setPendingConfirm(null);
@@ -545,6 +589,12 @@ export function PlaceFromStagingDialog({
       // the server's fuller question instead.
       acknowledged:
         crateChange && !deferToServer ? toBookCrateAcknowledgement([crateChange]) : [],
+      // NEVER PRE-ACKNOWLEDGED FROM A SNAPSHOT. A rack erasure depends on the
+      // live holdings, which this component has never read, so it has nothing to
+      // fingerprint and nothing it could honestly claim to have shown. The empty
+      // array still DECLARES the capability (see `place`), which is what makes
+      // the server ask instead of silently preserving.
+      acknowledgedRacks: [],
     });
   }
 
@@ -757,6 +807,7 @@ export function PlaceFromStagingDialog({
           const dest = chosenDestination();
           void place(pendingConfirm.destination, {
             acknowledged: pendingConfirm.acknowledged,
+            acknowledgedRacks: pendingConfirm.acknowledgedRacks,
             ...(dest ? { describe: dest } : {}),
           });
         }}

@@ -32,6 +32,7 @@ const {
   mockAssertBookCrate,
   mockSyncBookCrate,
   mockFindOrCreateRackOrCrate,
+  mockFindRackOrCrate,
   ctxRef,
 } = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
@@ -46,8 +47,10 @@ const {
     skippedItemIds: [] as string[],
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
+    rackPreservedItemIds: [] as string[],
   })),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
+  mockFindRackOrCrate: vi.fn(async () => null as { id: string } | null),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -71,6 +74,10 @@ vi.mock('@/server/services/inventory', () => ({
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
     findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
+    // The READ half, now that the gate runs BEFORE the row is minted. Defaults
+    // to "nothing to reuse", so these suites still exercise the create path and
+    // `findOrCreateRackOrCrate` is still what actually mints.
+    findRackOrCrate = mockFindRackOrCrate;
   },
 }));
 
@@ -128,6 +135,7 @@ beforeEach(() => {
     skippedItemIds: [],
     staleItemIds: [],
     unplacedItemIds: [],
+    rackPreservedItemIds: [],
   });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();

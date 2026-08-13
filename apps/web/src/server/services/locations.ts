@@ -253,6 +253,39 @@ export class LocationsService {
    * scoped per-warehouse; without one there's nothing to dedupe against).
    */
   async findOrCreateRackOrCrate(input: CreateLocationInput) {
+    return (await this.findRackOrCrate(input)) ?? (await this.create(input));
+  }
+
+  /**
+   * The FIND half of `findOrCreateRackOrCrate`, on its own: the existing row
+   * this input would reuse, or null when it would mint a new one. Creates
+   * nothing and asserts nothing — it is a read.
+   *
+   * ═══ WHY THE HALVES ARE SEPARABLE: GATE BEFORE MINT ═══
+   *
+   * The placement gate must run BEFORE the destination row is created, or
+   * "Go back" at the confirmation leaves an empty rack/crate behind that no
+   * flow ever cleans up. (L4L runs 50 racks and zero crates today, so an orphan
+   * would be visible clutter in their locations list from day one.)
+   *
+   * The gate's safety-critical half — the ITEM's current summary — still comes
+   * from the database and never from the client. The DESTINATION half is
+   * different: it is what the operator typed and is about to create, so
+   * comparing against those provisional values is legitimate and is NOT the
+   * "trust the client" hazard that caused the original data loss. This split is
+   * what lets the caller resolve an EXISTING destination (whose real columns are
+   * the truth, exactly as before) without committing to an insert for one that
+   * does not exist yet.
+   *
+   * THE WINDOW between this read and the later create is closed by
+   * `findOrCreateRackOrCrate` itself, which re-runs this lookup and reuses
+   * whatever appeared. And a row that appears in that window cannot change the
+   * gate's verdict: the dedupe key is `lower(name)`, the name is COMPOSED from
+   * the very crate columns being compared (`crateAwareLocationName`), and the
+   * comparison normalises case — so any row that matches the name carries the
+   * same normalised crate pair the provisional values did.
+   */
+  async findRackOrCrate(input: CreateLocationInput) {
     // THE NAME THIS RESOLVES AGAINST MUST BE THE NAME `create` WOULD INSERT.
     // For every shipped caller they are identical (all compose through
     // `planNewLocation`), but a positioned crate handed an uncomposed name is
@@ -296,7 +329,7 @@ export class LocationsService {
         if (canonMatch) return canonMatch;
       }
     }
-    return this.create(input);
+    return null;
   }
 
   /**

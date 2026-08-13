@@ -156,7 +156,21 @@ function svcWith(results: Record<string, { data: unknown; error: { message: stri
  */
 function verified(
   entries: Array<
-    [string, { name?: string; crateColor?: string | null; crateNumber?: string | null }]
+    [
+      string,
+      {
+        name?: string;
+        crateColor?: string | null;
+        crateNumber?: string | null;
+        /**
+         * The gate's ONE authorisation: the operator was shown this book's rack
+         * pair being ERASED and agreed. Defaults to FALSE here exactly as it
+         * does in production, so a fixture that says nothing gets the safe
+         * answer — the recorded rack is kept, never wiped.
+         */
+        rackClearAcknowledged?: boolean;
+      },
+    ]
   >,
 ) {
   return new Map(
@@ -166,12 +180,15 @@ function verified(
         name: v.name ?? '',
         crateColor: v.crateColor ?? null,
         crateNumber: v.crateNumber ?? null,
+        rackClearAcknowledged: v.rackClearAcknowledged === true,
       },
     ]),
   );
 }
 
 const BLUE_4 = { crateColor: 'blue', crateNumber: '4' };
+/** Blue 4, with the rack erasure shown to the operator and agreed to. */
+const BLUE_4_RACK_CLEAR_OK = { ...BLUE_4, rackClearAcknowledged: true };
 const NO_CRATE = {};
 
 beforeEach(() => vi.clearAllMocks());
@@ -799,6 +816,7 @@ describe('syncBookCratePlacement', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [BOOK_A],
+      rackPreservedItemIds: [],
     });
     // The summary is LEFT ALONE, not cleared: a book with no placed stock is a
     // book whose recorded crate is a human's restocking intent, and wiping it
@@ -936,6 +954,7 @@ describe('syncBookCratePlacement', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
   });
 
@@ -1033,6 +1052,7 @@ describe('syncBookCratePlacement', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
   });
 
@@ -1059,6 +1079,7 @@ describe('syncBookCratePlacement', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
   });
 
@@ -1090,7 +1111,10 @@ describe('syncBookCratePlacement', () => {
     });
 
     await svc.syncBookCratePlacement([BOOK_A], {
-      verified: verified([[BOOK_A, BLUE_4]]),
+      // The erasure was SHOWN and agreed, which is the only way the pair is
+      // allowed to clear — and the audit row is what makes that clear
+      // recoverable afterwards, so it is the case worth pinning here.
+      verified: verified([[BOOK_A, BLUE_4_RACK_CLEAR_OK]]),
       audit: { toLocationId: 'loc-green', quantityByItemId: new Map([[BOOK_A, 12]]) },
     });
 
@@ -1133,6 +1157,7 @@ describe('syncBookCratePlacement', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
     expect(stub.fromCalls).toEqual([]);
   });
@@ -1314,6 +1339,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       skippedItemIds: [],
       staleItemIds: [BOOK_A],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
     // No holdings read either — there was nothing left to reconcile.
     expect(stub.fromCalls).not.toContain('item_stock_levels');
@@ -1329,6 +1355,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       skippedItemIds: [],
       staleItemIds: [],
       unplacedItemIds: [],
+      rackPreservedItemIds: [],
     });
   });
 });
@@ -1389,7 +1416,10 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
     ]);
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
-      verified: verified([[BOOK_A, BLUE_4]]),
+      // …AND THE OPERATOR AGREED TO LOSE IT. The clear is the one write that
+      // destroys a fact, so it only happens for a book whose erasure the gate
+      // put in front of a human. The sibling test below pins the other half.
+      verified: verified([[BOOK_A, BLUE_4_RACK_CLEAR_OK]]),
     });
 
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
@@ -1683,7 +1713,7 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
     const { svc, stub } = world([holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' })]);
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
-      verified: verified([[BOOK_A, BLUE_4]]),
+      verified: verified([[BOOK_A, BLUE_4_RACK_CLEAR_OK]]),
     });
 
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(

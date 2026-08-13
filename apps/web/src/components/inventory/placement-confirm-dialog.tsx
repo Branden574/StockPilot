@@ -1,7 +1,7 @@
 'use client';
 
-import type { BookCrateChangeItem } from '@stockpilot/core';
-import { summarizeBookCrateChanges } from '@stockpilot/core';
+import type { BookCrateChangeItem, BookRackChangeItem } from '@stockpilot/core';
+import { summarizeBookCrateChanges, summarizeBookRackClears } from '@stockpilot/core';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as React from 'react';
 
@@ -52,6 +52,19 @@ export interface PlacementConfirmContent {
    * for 200 books, never 200 dialogs.
    */
   crateItems?: BookCrateChangeItem[];
+  /**
+   * The RACK ERASURES this placement would perform — a SEPARATE question from
+   * the crate one, with its own acknowledgement, and the only one that can be
+   * asked when the crate does not change at all (the reported defect: crate
+   * "Blue Shelf" into crate ('blue','Shelf') is the same crate, and rack 38-A
+   * died anyway).
+   *
+   * Server-derived, always. Only a reader of the live holdings can tell a full
+   * move from a split, so this dialog prints what it was told and never
+   * predicts — predicting from a render-time snapshot is the mistake that
+   * caused the original data loss.
+   */
+  rackItems?: BookRackChangeItem[];
   /** Anything else worth saying before committing (split stock, mixed types). */
   notices?: string[];
   /** "Create and place" when a location will be minted, else "Continue placement". */
@@ -79,23 +92,29 @@ export function PlacementConfirmDialog({
     content.crateItems && content.crateItems.length > 0
       ? summarizeBookCrateChanges(content.crateItems)
       : null;
+  const rackSummary =
+    content.rackItems && content.rackItems.length > 0
+      ? summarizeBookRackClears(content.rackItems)
+      : null;
 
-  // ═══ THE RACK SENTENCE IS SAID ONCE, AND THE PANEL IS WHERE IT IS SAID ═══
+  // ═══ THE RACK SENTENCE IS SAID ONCE, WHEREVER IT CAME FROM ═══
   //
-  // For a SINGLE-title refusal the server puts the rack sentence in two places
-  // on purpose: appended to `message` (some callers render nothing but that
-  // string, so a consequence living only in `details` is one some operators
-  // never see) and structurally on the change line, which this dialog renders
-  // in the amber panel. Both are right; together they printed it twice, once
-  // muted and once bold.
+  // One rack sentence can reach this component by three routes, and they are
+  // deliberately the SAME STRING (`describeRackChange` composes all of them):
+  // appended to `message` for the surfaces that render nothing else, carried as
+  // DISCLOSURE on a crate change line, and carried as the answerable QUESTION on
+  // a rack line. A placement that changes the crate AND erases the rack produces
+  // all three at once.
   //
-  // The duplicate comes out of the LEAD PARAGRAPH, never out of the panel — a
-  // rack a human typed by hand being erased is the loudest thing here, not a
-  // footnote. And only a sentence that this render is provably about to show
-  // below is removed, so this can shorten the message and can never delete the
-  // sentence: no match, no change; nothing but the sentence, no change.
+  // So they are merged and deduped into ONE list, and the duplicate comes out of
+  // the LEAD PARAGRAPH, never out of the panel — a rack a human typed by hand
+  // being erased is the loudest thing here, not a footnote. Only a sentence this
+  // render is provably about to show below is removed, so this can shorten the
+  // message and can never delete the sentence: no match, no change; nothing but
+  // the sentence, no change.
+  const rackLines = [...new Set([...(summary?.rackLines ?? []), ...(rackSummary?.lines ?? [])])];
   let message = content.message;
-  for (const line of summary?.rackLines ?? []) {
+  for (const line of rackLines) {
     if (!message.includes(line)) continue;
     const without = message.replace(line, '').replace(/ {2,}/g, ' ').trim();
     if (without.length > 0) message = without;
@@ -159,13 +178,46 @@ export function PlacementConfirmDialog({
                 Rendered at full contrast rather than muted: a rack a human
                 typed by hand is about to be erased, which is the loudest thing
                 on this panel, not a footnote to the group counts. */}
-            {summary.rackLines.length > 0 && (
+            {rackLines.length > 0 && (
               <ul className="space-y-0.5 border-t border-amber-500/30 pt-1.5 font-medium">
-                {summary.rackLines.map((line) => (
+                {rackLines.map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>
             )}
+          </div>
+        )}
+
+        {/* THE RACK QUESTION ON ITS OWN. Reached when the crate does not change
+            — which is the case the whole rack channel exists for — so there is
+            no crate panel above to ride in. Same amber weight: this is the
+            erasure of a value a human typed, and the operator is being asked to
+            approve it, not merely told.
+
+            Rendered only when the crate panel is absent, because when both apply
+            the sentences have already been merged into that one panel above and
+            printing them twice is exactly what this component spent a commit
+            fixing. */}
+        {!summary && rackSummary && (
+          <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <p className="font-medium">
+              {rackSummary.total === 1
+                ? 'This clears the rack recorded on this title:'
+                : `This clears the rack recorded on ${rackSummary.total} titles:`}
+            </p>
+            <ul className="space-y-0.5">
+              {rackSummary.groups.map((g) => (
+                <li key={`${g.currentLabel}|${g.line}`}>
+                  {g.line}
+                  {rackSummary.total > 1 && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      ({g.count} {g.count === 1 ? 'title' : 'titles'})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

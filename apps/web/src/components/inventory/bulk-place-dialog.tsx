@@ -2,13 +2,17 @@
 
 import {
   bookCrateAcknowledgementsMatch,
+  bookRackAcknowledgementsMatch,
   describeBookCrateConflict,
   describeNewRackPlacement,
   hasRackPosition,
   parseBookCrateChangeDetail,
+  parseBookRackChangeDetail,
   toBookCrateAcknowledgement,
+  toBookRackAcknowledgement,
   type BookCrateAcknowledgedChange,
   type BookCrateChangeItem,
+  type BookRackAcknowledgedChange,
   type BookStorageInfo,
 } from '@stockpilot/core';
 import { Loader2, PackageCheck } from 'lucide-react';
@@ -118,6 +122,12 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
      * re-asks rather than taking one click as consent for 200 unseen changes.
      */
     acknowledged: BookCrateAcknowledgedChange[];
+    /**
+     * The RACK erasures this batch would perform, fingerprinted per book over
+     * the rack pair. Always the SERVER's lines — only a reader of the live
+     * holdings can tell which books' racks actually die.
+     */
+    acknowledgedRacks: BookRackAcknowledgedChange[];
     describe: ChosenDestination | null;
   } | null>(null);
 
@@ -370,6 +380,11 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       // Only the books this dialog actually listed, each pinned to the crate it
       // was listed as being in.
       acknowledged: toBookCrateAcknowledgement(crateItems),
+      // NEVER PRE-ACKNOWLEDGED FROM A SNAPSHOT — this dialog holds render-time
+      // summaries and no holdings, so it cannot know which of 200 books lose a
+      // rack. Empty still DECLARES the capability, which is what makes the gate
+      // ask rather than silently preserve.
+      acknowledgedRacks: [],
       describe: dest,
     });
   }
@@ -392,6 +407,7 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     destination: ActionDestination,
     opts: {
       acknowledged?: BookCrateAcknowledgedChange[];
+      acknowledgedRacks?: BookRackAcknowledgedChange[];
       describe?: ChosenDestination | null;
     } = {},
   ) {
@@ -407,6 +423,9 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       ...(opts.acknowledged && opts.acknowledged.length > 0
         ? { acknowledgedCrateChanges: opts.acknowledged }
         : {}),
+      // ALWAYS SENT, EVEN EMPTY — the capability declaration. See the single
+      // put-away dialog for why omitting it would silently stop the asking.
+      acknowledgedRackChanges: opts.acknowledgedRacks ?? [],
     });
     setSubmitting(false);
 
@@ -419,22 +438,32 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       // our last acknowledgement did not cover; an identical refusal is a real
       // error, not a staleness loop.
       const detail = parseBookCrateChangeDetail(res.error.details);
-      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : null;
-      if (detail && fresh && !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)) {
+      const rackDetail = parseBookRackChangeDetail(res.error.details);
+      const fresh = detail ? toBookCrateAcknowledgement(detail.items) : [];
+      const freshRacks = rackDetail ? toBookRackAcknowledgement(rackDetail.items) : [];
+      // Re-asked while the payload says anything our last answer did not cover —
+      // either half of it. An identical refusal is a real error, not a staleness
+      // loop.
+      const unanswered =
+        !bookCrateAcknowledgementsMatch(opts.acknowledged, fresh) ||
+        !bookRackAcknowledgementsMatch(opts.acknowledgedRacks, freshRacks);
+      if ((detail || rackDetail) && unanswered) {
         // ON THE DEFERRED PATH THIS IS THE ONLY PANEL, so the notices that are
         // not part of the crate question ride here too — otherwise deferring
         // drops them.
         const notices = selectionNotices(opts.describe ?? null);
         setPendingConfirm({
           content: {
-            title: 'Change the recorded crate?',
+            title: detail ? 'Change the recorded crate?' : 'Clear the recorded rack?',
             message: res.error.message,
-            crateItems: detail.items,
+            ...(detail ? { crateItems: detail.items } : {}),
+            ...(rackDetail ? { rackItems: rackDetail.items } : {}),
             ...(notices.length > 0 ? { notices } : {}),
             confirmLabel: 'Continue placement',
           },
           destination,
           acknowledged: fresh,
+          acknowledgedRacks: freshRacks,
           describe: opts.describe ?? null,
         });
         return;
@@ -474,6 +503,10 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
     } else if (res.data.crateSyncSkipped) {
       toast.warning(
         'Some titles now hold stock in more than one location, so their crate labels were left unchanged.',
+      );
+    } else if (res.data.crateSyncRackPreserved) {
+      toast.warning(
+        'Some titles kept a rack label this placement would have cleared — nobody was asked, so it was left as it was and may now be wrong.',
       );
     }
     setPendingConfirm(null);
@@ -649,6 +682,7 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           if (!pendingConfirm) return;
           void place(pendingConfirm.destination, {
             acknowledged: pendingConfirm.acknowledged,
+            acknowledgedRacks: pendingConfirm.acknowledgedRacks,
             describe: pendingConfirm.describe,
           });
         }}

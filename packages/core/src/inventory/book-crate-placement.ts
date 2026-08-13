@@ -611,10 +611,18 @@ export function describeBookCrateConflict(
  * put away is not a location the book is in) — same filter the sync applies.
  * Returns true when the destination would be the only placement left, which is
  * exactly when the sync writes.
+ *
+ * `destinationLocationId` is NULL when the destination does not exist yet — the
+ * "+ New rack / crate" branch, which now consults the gate BEFORE minting the
+ * row so that backing out of the confirmation cannot leave an orphaned empty
+ * location behind. A row that does not exist can hold nothing, so no holding can
+ * match it, and every holding is a rival placement. That is the correct answer
+ * rather than a degraded one, and it is spelled as `null` instead of a
+ * placeholder id so no real location can ever be excluded by accident.
  */
 export function bookCratePlacementWillSync(input: {
   placedHoldings: ReadonlyArray<{ locationId: string; quantity: number }>;
-  destinationLocationId: string;
+  destinationLocationId: string | null;
   fromLocationId: string;
   quantity: number;
 }): boolean {

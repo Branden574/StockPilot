@@ -19,6 +19,7 @@ export * from './inventory/apparel-sizes';
 export * from './inventory/crate-colors';
 export * from './inventory/book-storage';
 export * from './inventory/book-crate-placement';
+export * from './inventory/book-rack-placement';
 export * from './inventory/new-location';
 export * from './inventory/rack-holdings';
 export * from './inventory/placement-resolution';
