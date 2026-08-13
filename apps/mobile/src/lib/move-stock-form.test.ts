@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bookCrateAlertMessage,
   bookCrateRefusal,
+  crateSyncWarning,
   decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
@@ -511,15 +512,134 @@ describe('the sheet answers the book-crate gate', () => {
     expect(modal).toContain('bookCrateAcknowledgementsMatch(opts.acknowledged, fresh)');
   });
 
-  it('says when the stock moved but the crate label did not follow', () => {
-    expect(modal).toContain('res.crateSyncFailed');
-    expect(modal).toContain('res.crateSyncStale');
-    expect(modal).toContain('res.crateSyncSkipped');
-    // The fourth bucket: the reconciliation found NO placed holding to follow
-    // (everything still in a bucket, or the stock picked away), so the label
-    // was left naming a crate that may hold none of it. It used to be a bare
-    // `continue` server-side — no flag, no alert, plain success on the phone.
-    expect(modal).toContain('res.crateSyncUnplaced');
+  it('renders the crate-sync verdict as an Alert, and owns no copy of its own', () => {
+    // WIRING PIN ONLY. The four cases are asserted for real in the
+    // `crateSyncWarning` block below — this just proves the modal is plugged
+    // into that decision and did not keep a second, untested copy of the rules.
+    expect(modal).toContain('const crateWarning = crateSyncWarning(res, itemName);');
+    expect(modal).toContain('Alert.alert(crateWarning.title, crateWarning.message);');
+    // No inline branch survives: every `res.crateSync*` read now lives in the
+    // helper, so there is nothing left in this component to test by reading it.
+    expect(modal).not.toContain('res.crateSync');
+  });
+});
+
+// ── The four SILENT SUCCESSES — what the phone actually SAYS ─────────────────
+//
+// These four used to be "tested" by asserting that move-stock-modal.tsx's source
+// text CONTAINS the strings 'res.crateSyncStale' & co. That is not coverage: it
+// passes against a branch whose body is empty, passes against a branch that
+// alerts the wrong words, passes against an else-if chain in an order that makes
+// one case unreachable — and FAILS on a correct rename. It was also the only
+// coverage the mobile client's crate-warning path had.
+//
+// Rendering the modal is genuinely impossible in this harness: apps/mobile runs
+// vitest with `environment: 'node'` and `include: ['src/**/*.test.ts']`, has no
+// react-test-renderer, no @testing-library/react-native, and no `@/` alias for
+// vitest to resolve the component's imports with. So the branches were moved to
+// the pure decision function the modal now delegates to, and the assertions
+// below pin its user-visible output the way the web dialog specs pin theirs
+// (apps/web/src/components/inventory/place-from-staging-dialog.test.tsx,
+// bulk-place-dialog.test.tsx): literal, whole strings, no substring matching.
+
+describe('crateSyncWarning — a move that succeeded is never silent about the label', () => {
+  const BOOK = 'The Outsiders';
+
+  it('a clean move says nothing at all', () => {
+    // The common path: no Alert. If this ever returns an object, every ordinary
+    // put-away grows a modal the picker has to dismiss.
+    expect(crateSyncWarning({ toLocationId: 'rack-a1' }, BOOK)).toBeNull();
+    expect(crateSyncWarning({}, BOOK)).toBeNull();
+  });
+
+  // ═══ crateSyncFailed — the write itself errored ═══
+  it('says the label could not be written, and names the book', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncFailed: true }, BOOK)).toEqual({
+      title: 'Moved, but the crate label did not update',
+      message:
+        "The Outsiders was moved. Its crate label could not be written — check the book's details.",
+    });
+  });
+
+  // ═══ crateSyncUnplaced — nothing left for the label to follow ═══
+  // The reconciliation writes only when the book's stock resolves to ONE
+  // rack/crate. When it resolves to NONE — every unit still in a bucket after a
+  // partial move, or the stock picked away underneath it — there is nothing
+  // authoritative to write. Server-side this used to be a bare `continue`: no
+  // flag, no alert, plain success on the phone, item still naming a crate that
+  // holds none of it.
+  it('says the label may now be wrong when no stock is in a rack or crate', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncUnplaced: true }, BOOK)).toEqual({
+      title: 'Moved — crate label may now be wrong',
+      message:
+        'The Outsiders has no stock in a rack or crate now, so its crate label was left unchanged.',
+    });
+  });
+
+  // ═══ crateSyncStale — someone else re-recorded the crate mid-move ═══
+  it('says someone else changed the crate, and that their label stands', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncStale: true }, BOOK)).toEqual({
+      title: 'Moved — someone else changed the crate',
+      message:
+        'The Outsiders was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.',
+    });
+  });
+
+  // ═══ crateSyncSkipped — the title is now split across locations ═══
+  it('says the label was left alone when the stock sits in more than one place', () => {
+    expect(crateSyncWarning({ toLocationId: 'c-blue4', crateSyncSkipped: true }, BOOK)).toEqual({
+      title: 'Moved — crate label left unchanged',
+      message:
+        'The Outsiders now has stock in more than one location, so its crate label was left as it was.',
+    });
+  });
+
+  it('interpolates the item it was actually given, not a generic noun', () => {
+    // The Alert fires AFTER onClose(), so "this item" has no on-screen referent
+    // by the time it is read. A hard-coded noun would be indistinguishable from
+    // a correct message in a source-text assertion — and useless on the phone.
+    expect(crateSyncWarning({ crateSyncStale: true }, 'Persepolis')?.message).toBe(
+      'Persepolis was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.',
+    );
+    expect(crateSyncWarning({ crateSyncSkipped: true }, 'Persepolis')?.message).toBe(
+      'Persepolis now has stock in more than one location, so its crate label was left as it was.',
+    );
+  });
+
+  it('says ONE thing when the route reports several, worst first', () => {
+    // A native Alert is modal and stacks badly; the route can legitimately set
+    // more than one flag for a multi-book move. The order is the point: an
+    // else-if chain in the wrong order makes a case unreachable, and a source
+    // pin cannot see the difference because all four names are still present.
+    const all = {
+      crateSyncFailed: true,
+      crateSyncUnplaced: true,
+      crateSyncStale: true,
+      crateSyncSkipped: true,
+    };
+    expect(crateSyncWarning(all, BOOK)?.title).toBe('Moved, but the crate label did not update');
+    expect(crateSyncWarning({ ...all, crateSyncFailed: false }, BOOK)?.title).toBe(
+      'Moved — crate label may now be wrong',
+    );
+    expect(
+      crateSyncWarning({ crateSyncStale: true, crateSyncSkipped: true }, BOOK)?.title,
+    ).toBe('Moved — someone else changed the crate');
+  });
+
+  it('treats an absent flag as absent, not as a warning', () => {
+    // The route omits the key entirely on the clean path; an explicit false is
+    // what a caller building the body by hand produces. Neither may speak.
+    expect(
+      crateSyncWarning(
+        {
+          crateSyncFailed: false,
+          crateSyncUnplaced: false,
+          crateSyncStale: false,
+          crateSyncSkipped: false,
+        },
+        BOOK,
+      ),
+    ).toBeNull();
   });
 });
 

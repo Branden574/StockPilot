@@ -17,6 +17,7 @@ import { Chip } from '@/components/ui/chip';
 import {
   bookCrateAlertMessage,
   bookCrateRefusal,
+  crateSyncWarning,
   decideNewRackPlacement,
   initialMoveQuantity,
   initialMoveQuantityForSource,
@@ -364,30 +365,14 @@ export function MoveStockModal({
           ? { acknowledgedCrateChanges: opts.acknowledged }
           : {}),
       });
-      // The stock moved. These say whether the book's CRATE LABEL followed it —
+      // The stock moved. This says whether the book's CRATE LABEL followed it —
       // silence would make a move that relabelled nothing look identical to one
       // that did, which is the whole reason the summary drifted in the first
-      // place.
-      if (res.crateSyncFailed) {
-        Alert.alert(
-          'Moved, but the crate label did not update',
-          `${itemName} was moved. Its crate label could not be written — check the book's details.`,
-        );
-      } else if (res.crateSyncUnplaced) {
-        Alert.alert(
-          'Moved — crate label may now be wrong',
-          `${itemName} has no stock in a rack or crate now, so its crate label was left unchanged.`,
-        );
-      } else if (res.crateSyncStale) {
-        Alert.alert(
-          'Moved — someone else changed the crate',
-          `${itemName} was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.`,
-        );
-      } else if (res.crateSyncSkipped) {
-        Alert.alert(
-          'Moved — crate label left unchanged',
-          `${itemName} now has stock in more than one location, so its crate label was left as it was.`,
-        );
+      // place. The four cases and their words live in crateSyncWarning(), where
+      // they can actually be tested; this only renders the Alert.
+      const crateWarning = crateSyncWarning(res, itemName);
+      if (crateWarning) {
+        Alert.alert(crateWarning.title, crateWarning.message);
       }
       onMoved();
       onClose();

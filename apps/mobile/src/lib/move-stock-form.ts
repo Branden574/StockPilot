@@ -45,6 +45,13 @@ import {
   type NewRackPlacementDecision,
 } from '@stockpilot/core';
 
+// Type-only (erased at build): the transfer route's own success body, so the
+// crate-sync verdict below reads the SAME shape the caller hands it and a new
+// flag on the route surfaces here as a type change rather than a silent gap.
+// A value import would pull './api' — and with it the Supabase client — into
+// this pure module and out of reach of the node test environment.
+import type { TransferStockResult } from './stock-api';
+
 export interface MoveDestination {
   id: string;
   name: string;
@@ -323,4 +330,77 @@ export function bookCrateAlertMessage(detail: BookCrateChangeDetail): string {
         `${i.itemName} is recorded in ${i.currentLabel ?? 'no crate'} — this move records it in ${i.nextLabel ?? 'no crate'}.`,
     )
     .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// The four SILENT SUCCESSES, on the phone.
+//
+// A transfer can succeed — the stock really did move — while the book's crate
+// LABEL did not follow it. The route reports that as a flag on a 2xx body, and
+// a sheet that only branches on failure shows a plain "Moved" for a move that
+// left the item naming a crate holding none of it. Web says so in every one of
+// the four cases (place-from-staging-dialog.tsx, bulk-place-dialog.tsx,
+// stock-transfer-dialog.tsx); the phone must too.
+//
+// The words live HERE rather than inline in the modal for the same reason every
+// other rule in this file does: apps/mobile has no component-test harness (node
+// vitest, `include: ['src/**/*.test.ts']`, no react-test-renderer and no
+// @testing-library/react-native), so a branch left inside the component can only
+// ever be "tested" by reading the component's source text — which passes just as
+// happily against a branch that renders nothing.
+// ---------------------------------------------------------------------------
+
+/** A native Alert's two strings: what the sheet SAYS after a successful move. */
+export interface CrateSyncWarning {
+  title: string;
+  message: string;
+}
+
+/**
+ * What the sheet must say about a move that SUCCEEDED, given what the route
+ * reported about the crate label. `null` = nothing to say; the move was clean
+ * and the summary followed the stock.
+ *
+ * At most ONE thing is said, and the order is deliberate — it runs from "the
+ * label is wrong and we know why we could not fix it" down to "the label is
+ * merely unchanged, on purpose":
+ *
+ *   1. failed   — the write itself errored. The most actionable, so it wins.
+ *   2. unplaced — nothing is left in a rack or crate for the label to follow.
+ *   3. stale    — someone else re-recorded the crate mid-move; theirs stands.
+ *   4. skipped  — stock now sits in several places, so there is no one crate.
+ *
+ * The item name is interpolated rather than left generic because the phone
+ * fires this Alert after the sheet has already closed, when "the item" no longer
+ * has an on-screen referent.
+ */
+export function crateSyncWarning(
+  res: TransferStockResult,
+  itemName: string,
+): CrateSyncWarning | null {
+  if (res.crateSyncFailed) {
+    return {
+      title: 'Moved, but the crate label did not update',
+      message: `${itemName} was moved. Its crate label could not be written — check the book's details.`,
+    };
+  }
+  if (res.crateSyncUnplaced) {
+    return {
+      title: 'Moved — crate label may now be wrong',
+      message: `${itemName} has no stock in a rack or crate now, so its crate label was left unchanged.`,
+    };
+  }
+  if (res.crateSyncStale) {
+    return {
+      title: 'Moved — someone else changed the crate',
+      message: `${itemName} was moved, but its crate was changed by someone else while it was moving. The label was left as they set it.`,
+    };
+  }
+  if (res.crateSyncSkipped) {
+    return {
+      title: 'Moved — crate label left unchanged',
+      message: `${itemName} now has stock in more than one location, so its crate label was left as it was.`,
+    };
+  }
+  return null;
 }
