@@ -125,20 +125,48 @@ export async function archiveItemAction(
 
 export async function removeStockFromLocationAction(
   input: z.input<typeof removeStockFromLocationSchema>,
-): Promise<ActionResult<void>> {
+): Promise<
+  ActionResult<{
+    /** The stock left, but the book's crate SUMMARY could not be written. */
+    crateSyncFailed?: boolean;
+    /** The stock left; this title still holds stock in more than one location,
+     *  so its crate summary was deliberately left alone. */
+    crateSyncSkipped?: boolean;
+    /** The stock left; someone else changed the book's crate while it was being
+     *  removed, so the summary was left as they set it. */
+    crateSyncStale?: boolean;
+    /** The stock left, and this title now holds NO stock in any rack or crate,
+     *  so there was nothing to synchronize the summary to. It may now name a
+     *  crate that holds none of it — the write-off's headline failure mode. */
+    crateSyncUnplaced?: boolean;
+    /** The summary followed the stock: it now names the one location this title
+     *  is left in (or no crate at all). Reported because the operator asked to
+     *  remove stock, not to relabel anything. */
+    crateSyncUpdated?: boolean;
+  }>
+> {
   const parsed = removeStockFromLocationSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
     const svc = await InventoryService.forCurrentUser();
-    await svc.removeStockFromLocation(parsed.data);
+    // The reconciliation lives in the SERVICE, not here, so the phone's
+    // /api/v1/items/[id]/remove-stock route gets the identical behavior — a
+    // derived summary must never depend on which surface the operator used.
+    const { crateSync, crateSyncUpdated } = await svc.removeStockFromLocation(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${parsed.data.itemId}`);
-    return ok(undefined);
+    return ok({
+      ...(crateSync && crateSync.failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(crateSync && crateSync.skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(crateSync && crateSync.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      ...(crateSync && crateSync.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
+    });
   } catch (e) {
     return toResult(e);
   }
@@ -240,7 +268,32 @@ export async function bulkUpdateInventoryAction(input: {
   // Deliberate archive-with-stock override for a bulk archive / set_status
   // 'archived' batch. Ignored for every other op.
   acknowledgeStock?: boolean;
-}): Promise<ActionResult<{ ok: number; skipped: number; placed?: number }>> {
+}): Promise<
+  ActionResult<{
+    ok: number;
+    skipped: number;
+    placed?: number;
+    /**
+     * Set rack only: BOOKS whose recorded crate was CLEARED because this op
+     * moved their stock onto the rack and nowhere else.
+     *
+     * This action used to declare `{ ok, skipped, placed? }`, which TYPE-ERASED
+     * the two counts the service has always returned — so the toolbar could only
+     * ever say "Updated N items." for an operation that also wiped a crate label
+     * the operator never mentioned. A write nobody asked for and nobody is told
+     * about is exactly what the crate gate exists to stop.
+     */
+    crateCleared?: number;
+    /**
+     * Set rack only: books whose crate label could NOT be reconciled — split
+     * holdings, a concurrent re-crate, a failed write, or stock that never
+     * reached the rack. Their label still names the old crate while their stock
+     * may have moved, so this is a WARNING, not a footnote: it is the picker
+     * walking to an empty crate.
+     */
+    crateUnchanged?: number;
+  }>
+> {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
     return err('validation_error', 'No items selected');
   }

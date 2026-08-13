@@ -1033,7 +1033,12 @@ describe('InventoryService.removeStockFromLocation', () => {
 
   it('draws down exactly ONE location with a negative "remove" delta + the reason verbatim', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: ACTIVE_ITEM, error: null },
+      // An ARRAY, because a list select genuinely returns one: adjustStock's
+      // get() reads it through .maybeSingle() (which unwraps [row] → row, so
+      // nothing below changes), while the crate-summary reader iterates it.
+      // A bare object would have thrown "not iterable" — a stub artifact, not a
+      // behavior. Every assertion in this test is untouched.
+      'inventory_items.select': { data: [ACTIVE_ITEM], error: null },
       // The pre-read (maybeSingle) sees 140 in this holding; adjustStock's get()
       // staged/unplaced read sees the same rows harmlessly.
       'item_stock_levels.select': { data: [{ quantity: 140 }], error: null },
@@ -1125,7 +1130,8 @@ describe('InventoryService.removeStockFromLocation', () => {
     let removed = false;
     const stub = makeSupabaseStub({
       'inventory_items.select': () => ({
-        data: { ...ACTIVE_ITEM, quantity_on_hand: removed ? 0 : 41 },
+        // Array for the same reason as the first test in this describe.
+        data: [{ ...ACTIVE_ITEM, quantity_on_hand: removed ? 0 : 41 }],
         error: null,
       }),
       'item_stock_levels.select': () => ({

@@ -95,6 +95,31 @@ export function RemoveFromRackDialog({
     toast.success(
       `Removed ${formatStockQuantity(qtyNum)} from ${locationName}.`,
     );
+    // The stock genuinely left in every one of these cases; they say what
+    // happened to the book's crate LABEL. Reported the same way, and in the
+    // same order, as the place / put-away dialogs report them — a bare "Removed
+    // 40 from Blue #4" next to a summary still naming Blue 4 is exactly the
+    // empty crate the picker walks to. The last line is the opposite debt: the
+    // label DID move, and the operator only asked to remove stock.
+    if (res.data.crateSyncFailed) {
+      toast.warning(
+        `The crate label on ${itemName} could not be updated — check the book’s details.`,
+      );
+    } else if (res.data.crateSyncStale) {
+      toast.warning(
+        `Someone else changed the crate on ${itemName} while the stock was being removed — its label was left as they set it.`,
+      );
+    } else if (res.data.crateSyncUnplaced) {
+      toast.warning(
+        `${itemName} has no stock in a rack or crate now — its crate label was left unchanged and may be wrong.`,
+      );
+    } else if (res.data.crateSyncSkipped) {
+      toast.warning(
+        `${itemName} still has stock in more than one location, so its crate label was left unchanged.`,
+      );
+    } else if (res.data.crateSyncUpdated) {
+      toast.success(`The crate label on ${itemName} now follows the stock it has left.`);
+    }
     setOpen(false);
     router.refresh();
   }

@@ -257,13 +257,36 @@ export function BulkActions({
       toast.error(r.error.message);
       return;
     }
+    // ═══ WHAT SET RACK DID TO THE CRATE LABELS IS PART OF THE RESULT ═══
+    // Bulk "Set rack" MOVES stock, so for a book it also reconciles the crate
+    // summary — and both outcomes are invisible in "Updated N items.":
+    //   • cleared  — a crate label this op wiped. The operator typed a rack
+    //     number and nothing else; they are owed the fact that a second field
+    //     changed on those books.
+    //   • unchanged — the label did NOT follow the stock (split holdings, a
+    //     concurrent re-crate, a failed write, stock that never reached the
+    //     rack). Those books still name a crate that may hold none of them,
+    //     which is the picker-walks-to-an-empty-crate failure itself.
+    // Same voice, and the same order, as the placement dialogs report
+    // crateSyncStale/crateSyncUnplaced: the success stays a success, and what
+    // the label did (or didn't) do is a separate warning line.
+    const cleared = r.data.crateCleared ?? 0;
+    const unchanged = r.data.crateUnchanged ?? 0;
+    const parts = [`Updated ${r.data.ok} item${r.data.ok === 1 ? '' : 's'}.`];
     if (r.data.skipped > 0) {
-      toast.success(
-        `Updated ${r.data.ok} item${r.data.ok === 1 ? '' : 's'}. Skipped ${r.data.skipped} you don't have write access to.`,
+      parts.push(`Skipped ${r.data.skipped} you don't have write access to.`);
+    }
+    if (cleared > 0) {
+      parts.push(
+        `Cleared the crate label on ${cleared} book${cleared === 1 ? '' : 's'} now on the rack.`,
       );
-    } else {
-      toast.success(
-        `Updated ${r.data.ok} item${r.data.ok === 1 ? '' : 's'}.`,
+    }
+    toast.success(parts.join(' '));
+    if (unchanged > 0) {
+      toast.warning(
+        unchanged === 1
+          ? 'One book’s crate label was left unchanged and may now be wrong — check that book’s details.'
+          : `${unchanged} books’ crate labels were left unchanged and may now be wrong — check those books’ details.`,
       );
     }
     setDialog(null);

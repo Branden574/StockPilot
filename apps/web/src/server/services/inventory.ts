@@ -4272,8 +4272,52 @@ export class InventoryService {
    * signed delta), so over-drawing one rack while the item has stock elsewhere
    * would push that location negative. We pre-read the level and refuse an
    * over-draw with a clear message rather than let it happen.
+   *
+   * ═══ IT RECONCILES THE BOOK CRATE SUMMARY TOO — AND IT MUST ═══
+   *
+   * This path used to be the one write that emptied a crate and never looked at
+   * `book_crate_*`. Draining crate Blue 4 of every copy of a title left that
+   * title reading "Blue 4" in the Books list, on printed labels, in the CSV and
+   * in Export Builder, with no flag of any kind — a picker walks to an empty
+   * crate. It is the same falsehood the placement paths were fixed for; it was
+   * out of scope there only because a write-off shares none of their code.
+   *
+   * WHY RECONCILE RATHER THAN LEAVE IT ALONE: book-crate-placement.ts makes the
+   * summary a DERIVED view of the holdings. A write-off changes the holdings, so
+   * it changes what the summary should say. Leaving it is not "not touching the
+   * operator's data" — it is publishing a location the stock has left.
+   *
+   * NOT GATED, for the same reason the bulk "Set rack" branch is not: the gate
+   * (assertBookCratePlacementAllowed) asks "placing here will change the
+   * recorded crate — confirm?", and there is no destination here to ask about.
+   * The stock leaving is the operator's own explicit instruction, typed with a
+   * mandatory reason. What is owed is not a prompt but an honest report, which
+   * is what the return value carries.
+   *
+   * ONLY WHEN THE DRAW-DOWN EMPTIES THE HOLDING. A partial removal leaves the
+   * same set of locations holding this item, so the correct summary is
+   * unchanged by construction — reconciling then could only rewrite a label
+   * from state that PREDATES this operation, which would be a surprise write
+   * the operator did not cause, plus an audit row per partial pick. So the
+   * common path pays nothing: no extra read, no write, no flag.
    */
-  async removeStockFromLocation(input: RemoveStockFromLocationInput) {
+  async removeStockFromLocation(input: RemoveStockFromLocationInput): Promise<{
+    /** The authoritative row adjust_stock returned. Unchanged from before. */
+    item: unknown;
+    /**
+     * What the crate reconciliation did, or null when none was attempted — a
+     * non-book, a partial draw-down (see above), or a pre-read that failed.
+     * Every bucket must be surfaced; see BookCrateSyncResult.
+     */
+    crateSync: BookCrateSyncResult | null;
+    /**
+     * The summary was rewritten AND its value actually changed. A rewrite to
+     * the same crate is invisible to the operator, and claiming a label changed
+     * when it did not is its own small lie — so this is checked, not assumed
+     * from `syncedItemIds`.
+     */
+    crateSyncUpdated: boolean;
+  }> {
     assertPermission(this.ctx, 'stock:adjust');
     const reason = input.reason.trim();
     if (!reason) {
@@ -4312,15 +4356,60 @@ export class InventoryService {
       );
     }
 
+    // The crate summary as it stands BEFORE the stock leaves. Read here, not
+    // after, for the same two reasons the bulk "Set rack" branch reads it here:
+    // it is the freshness proof `syncBookCratePlacement` requires, and a read
+    // taken after the draw-down would compare the row against itself and prove
+    // nothing. A NON-BOOK comes back as an empty map, which is the cheapest
+    // possible "nothing to do".
+    const drainsHolding = qty >= onHandAtLocation;
+    const verified = drainsHolding
+      ? await this.readBookCrateSummaries([input.itemId]).catch((e: unknown) => {
+          // Same posture as the Set rack branch: no freshness proof means
+          // nothing may be written. The stock still leaves; only the crate
+          // summary is untouched.
+          console.error('[remove-from-location] crate summary unreadable — label left as it was', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return null;
+        })
+      : null;
+
     // Delegate the mutation: adjustStock re-asserts stock:adjust + warehouse
     // write access, blocks archived items, and emits the movement + audit row.
-    return this.adjustStock({
+    const item = await this.adjustStock({
       itemId: input.itemId,
       quantityChange: -qty,
       movementType: RACK_WRITE_OFF_MOVEMENT_TYPE,
       locationId: input.locationId,
       reason,
     });
+
+    if (!verified || verified.size === 0) {
+      return { item, crateSync: null, crateSyncUpdated: false };
+    }
+
+    // NO `audit.toLocationId`: a write-off has no destination, and stamping one
+    // would put a lie in the trail. The reconciliation's own before→after rows
+    // (and the 'remove' movement adjustStock just wrote) already say what
+    // happened.
+    const crateSync = await this.syncBookCratePlacement([input.itemId], { verified });
+
+    // Did the label actually MOVE? Only worth asking when the summary was
+    // rewritten at all — every other bucket left the row exactly as it was.
+    // One tiny read, on a path that already runs several, and only for a book
+    // whose holding was fully drained.
+    let crateSyncUpdated = false;
+    if (crateSync.syncedItemIds.includes(input.itemId)) {
+      const after = await this.readBookCrateSummaries([input.itemId]).catch(() => null);
+      const before = verified.get(input.itemId)!;
+      const now = after?.get(input.itemId);
+      crateSyncUpdated =
+        !!now &&
+        bookCrateFingerprint(before.crateColor, before.crateNumber) !==
+          bookCrateFingerprint(now.crateColor, now.crateNumber);
+    }
+    return { item, crateSync, crateSyncUpdated };
   }
 
   async transferStock(input: TransferStockInput) {

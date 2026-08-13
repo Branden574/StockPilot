@@ -1291,3 +1291,226 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REMOVE FROM RACK / CRATE — the write-off path
+//
+// removeStockFromLocation → adjustStock never touched `book_crate_*` at all.
+// Draining crate Blue 4 of every copy of a title left that title reading
+// "Blue 4" in the Books list, on printed labels, in the CSV and in Export
+// Builder, with no flag of any kind — the picker walks to an empty crate. Same
+// failure class as the placement paths; out of scope there only because a
+// write-off shares none of their code.
+//
+// It reconciles ONLY when the draw-down empties the holding: a partial removal
+// leaves the same set of locations holding the item, so the correct summary is
+// unchanged by construction and a write then could only rewrite a label from
+// state that predates the operation.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('removeStockFromLocation — the crate summary follows the stock OUT', () => {
+  const CRATE_BLUE_4 = 'loc-crate-blue4';
+  const RACK_22B_ID = 'loc-rack-22b';
+
+  const crateLoc = { kind: 'crate', type: 'bin', crate_color: 'blue', crate_number: '4' };
+  const rackLoc = { kind: 'rack', type: 'shelf' };
+
+  /**
+   * A small stateful world, because this flow reads the SAME two tables on both
+   * sides of the mutation and the whole point is that the two reads differ:
+   *   • adjust_stock flips the holdings from `before` to `after`
+   *   • inventory_set_book_storage writes the summary the next read returns
+   * The set-storage fake takes its values from the call the stub just recorded
+   * (rpcCalls is pushed before the result is resolved), so the "did the label
+   * actually move" check is exercised against a real written value rather than
+   * a hardcoded one.
+   */
+  function removeWorld(opts: {
+    itemType?: string;
+    crate?: { color: string | null; number: string | null };
+    before: unknown[];
+    after: unknown[];
+  }) {
+    let removed = false;
+    let storage = opts.crate ?? { color: 'blue', number: '4' };
+    let stub!: SupabaseStub;
+    stub = makeSupabaseStub({
+      'inventory_items.select': () => ({
+        data: [
+          {
+            id: BOOK_A,
+            name: 'Persepolis',
+            item_type: opts.itemType ?? 'book',
+            status: 'active',
+            // No warehouse: this test is about the crate summary, not the
+            // warehouse-access gate adjustStock applies on top of it.
+            warehouse_id: null,
+            quantity_on_hand: removed ? 0 : 5,
+            reorder_point: 0,
+            custom_fields: {
+              book_crate_color: storage.color,
+              book_crate_number: storage.number,
+            },
+          },
+        ],
+        error: null,
+      }),
+      // The pre-read takes .maybeSingle() → the FIRST row, whose quantity (5,
+      // from `holding`) is what the draw-down is measured against.
+      'item_stock_levels.select': () => ({ data: removed ? opts.after : opts.before, error: null }),
+      'rpc:adjust_stock': () => {
+        removed = true;
+        return { data: { quantity_on_hand: 0, reorder_point: 0 }, error: null };
+      },
+      'rpc:inventory_set_book_storage': () => {
+        const last = stub.rpcCalls[stub.rpcCalls.length - 1]!.args as {
+          p_crate_color: string | null;
+          p_crate_number: string | null;
+        };
+        storage = { color: last.p_crate_color, number: last.p_crate_number };
+        return { data: 1, error: null };
+      },
+    });
+    return { svc: new InventoryService(makeServiceContext(stub.client)), stub };
+  }
+
+  it('REPORTS the drained crate: nothing placed left, so the label is untouched and never silent', async () => {
+    const { svc, stub } = removeWorld({
+      before: [holding(BOOK_A, CRATE_BLUE_4, crateLoc)],
+      after: [],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: CRATE_BLUE_4,
+      quantity: 5,
+      reason: 'Water damage on the bottom row',
+    });
+
+    // The summary is NOT wiped — a book with no placed stock has no
+    // authoritative location, and clearing it is data loss in a tidy-up
+    // costume (see BookCrateSyncResult.unplacedItemIds).
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    // …but the operator is TOLD, which is the whole fix. Before this, the
+    // response carried no crate information at all.
+    expect(res.crateSync).not.toBeNull();
+    expect(res.crateSync!.unplacedItemIds).toEqual([BOOK_A]);
+    expect(res.crateSyncUpdated).toBe(false);
+  });
+
+  it('FOLLOWS the stock: draining one of two holdings re-points the summary at the one left', async () => {
+    const { svc, stub } = removeWorld({
+      // Recorded Blue 4, and physically in Blue 4 + rack 22-B.
+      before: [holding(BOOK_A, CRATE_BLUE_4, crateLoc), holding(BOOK_A, RACK_22B_ID, rackLoc)],
+      // Blue 4 emptied; only the rack is left, and a rack CLEARS the crate.
+      after: [holding(BOOK_A, RACK_22B_ID, rackLoc)],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: CRATE_BLUE_4,
+      quantity: 5,
+      reason: 'Consolidated onto 22-B',
+    });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage');
+    expect(call, 'the write-off never reconciled the crate summary').toBeDefined();
+    expect(call!.args).toEqual({
+      p_item_ids: [BOOK_A],
+      p_crate_color: null,
+      p_crate_number: null,
+    });
+    expect(res.crateSync!.syncedItemIds).toEqual([BOOK_A]);
+    // Blue 4 → no crate is a REAL change, so the operator is told.
+    expect(res.crateSyncUpdated).toBe(true);
+  });
+
+  it('does NOT claim the label moved when the reconciliation rewrote the same crate', async () => {
+    const { svc, stub } = removeWorld({
+      // Recorded Blue 4, physically in Blue 4 + rack 22-B — and it is the RACK
+      // being written off, so Blue 4 survives as the only placement.
+      before: [holding(BOOK_A, RACK_22B_ID, rackLoc), holding(BOOK_A, CRATE_BLUE_4, crateLoc)],
+      after: [holding(BOOK_A, CRATE_BLUE_4, crateLoc)],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: RACK_22B_ID,
+      quantity: 5,
+      reason: 'Cleared 22-B',
+    });
+
+    // It still writes (the summary is derived; writing the value it already
+    // holds is harmless)…
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_storage')!.args).toEqual({
+      p_item_ids: [BOOK_A],
+      p_crate_color: 'blue',
+      p_crate_number: '4',
+    });
+    // …but "your crate label changed" would be a lie, so it is not reported.
+    expect(res.crateSyncUpdated).toBe(false);
+  });
+
+  it('leaves a still-SPLIT book alone and says so', async () => {
+    const { svc, stub } = removeWorld({
+      before: [
+        holding(BOOK_A, CRATE_BLUE_4, crateLoc),
+        holding(BOOK_A, RACK_22B_ID, rackLoc),
+        // A NULL-kind Site holding — a real third placement (migration 0292),
+        // and the row a `.in('locations.kind', …)` filter would silently drop.
+        holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' }),
+      ],
+      after: [holding(BOOK_A, RACK_22B_ID, rackLoc), holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' })],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: CRATE_BLUE_4,
+      quantity: 5,
+      reason: 'Damaged',
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(res.crateSync!.skippedItemIds).toEqual([BOOK_A]);
+    expect(res.crateSyncUpdated).toBe(false);
+  });
+
+  it('a PARTIAL draw-down reconciles nothing — the holdings set is unchanged', async () => {
+    const { svc, stub } = removeWorld({
+      before: [holding(BOOK_A, CRATE_BLUE_4, crateLoc)],
+      after: [holding(BOOK_A, CRATE_BLUE_4, crateLoc)],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: CRATE_BLUE_4,
+      quantity: 2, // of 5
+      reason: 'Two copies chewed by the dog',
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    // Not "reconciled and found nothing" — not attempted at all, so the common
+    // path pays for none of this.
+    expect(res.crateSync).toBeNull();
+    expect(res.crateSyncUpdated).toBe(false);
+  });
+
+  it('a NON-BOOK write-off attempts no reconciliation', async () => {
+    const { svc, stub } = removeWorld({
+      itemType: 'asset',
+      crate: { color: null, number: null },
+      before: [holding(BOOK_A, RACK_22B_ID, rackLoc)],
+      after: [],
+    });
+
+    const res = await svc.removeStockFromLocation({
+      itemId: BOOK_A,
+      locationId: RACK_22B_ID,
+      quantity: 5,
+      reason: 'Scrapped',
+    });
+
+    expect(stub.rpcCalls.some((c) => c.name === 'inventory_set_book_storage')).toBe(false);
+    expect(res.crateSync).toBeNull();
+  });
+});

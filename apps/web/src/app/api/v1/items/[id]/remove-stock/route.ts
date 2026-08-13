@@ -108,7 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
 
-    await svc.removeStockFromLocation({
+    const { crateSync, crateSyncUpdated } = await svc.removeStockFromLocation({
       itemId: id,
       locationId: body.locationId,
       quantity,
@@ -118,7 +118,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // A write-off re-slices this item's placement holdings shown in the cached
     // Items/Books views (and drops the on-hand total) — refresh the org cache.
     revalidateInventoryList(ctx.organizationId);
-    return NextResponse.json({ ok: true });
+    // The crate reconciliation runs inside the service, so the phone already
+    // gets the FIX. These optional keys — the same four the transfer route
+    // answers with, plus the one that says the label moved — are what let it
+    // report the outcome instead of showing a bare success; an older build that
+    // ignores them is unaffected.
+    return NextResponse.json({
+      ok: true,
+      ...(crateSync && crateSync.failedItemIds.length > 0 ? { crateSyncFailed: true } : {}),
+      ...(crateSync && crateSync.skippedItemIds.length > 0 ? { crateSyncSkipped: true } : {}),
+      ...(crateSync && crateSync.staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
+      ...(crateSync && crateSync.unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
+      ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
+    });
   } catch (e) {
     // adjust_stock raises `insufficient_stock` (P0001) if the delta would push
     // on-hand negative; the service wraps it. Map to a friendly 400 rather than
