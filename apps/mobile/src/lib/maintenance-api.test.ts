@@ -732,7 +732,13 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
   });
 
   it('(Task 9) the PHOTOS card maps ONLY requesterPhotos — never the raw `photos` array or resolutionPhotos', () => {
-    const eyebrowIdx = src.indexOf('`PHOTOS · ${requesterPhotos.length}`');
+    // Anchor re-pinned when the card gained its add-photo affordance: the
+    // eyebrow now runs the tested `requestPhotosHeading` helper (which adds
+    // web's `n/MAINTENANCE_MAX_PHOTOS` counter) instead of interpolating the
+    // count inline. Every assertion below is unchanged — this still requires
+    // that the array feeding the eyebrow AND the very next `.map((p) =>`
+    // after it are both `requesterPhotos`.
+    const eyebrowIdx = src.indexOf('requestPhotosHeading(requesterPhotos.length)');
     expect(eyebrowIdx).toBeGreaterThan(-1);
     const mapIdx = src.indexOf('requesterPhotos.map((p) =>', eyebrowIdx);
     expect(mapIdx).toBeGreaterThan(eyebrowIdx);

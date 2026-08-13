@@ -107,11 +107,22 @@ import {
 } from '@/lib/maintenance-email-actions';
 import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
 import {
+  PHOTO_UPLOAD_GENERIC_ERROR,
+  REQUEST_PHOTOS_ADD_LABEL,
+  REQUEST_PHOTOS_REFRESH_ERROR,
+  photoPermissionDenial,
+  photoUploadErrorMessage,
+  reconcileRequestPhotoQueue,
+  requestPhotoCapCheck,
+  requestPhotosEditability,
+  requestPhotosEmptyCopy,
+  requestPhotosHeading,
+  type MaintenancePhotoQueueEntry,
+} from '@/lib/maintenance-request-photos';
+import {
   checkPhotoCap,
   createPhotoAttemptGuard,
   uploadMaintenancePhoto,
-  UploadError,
-  type PhotoAttemptGuard,
 } from '@/lib/maintenance-upload';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -142,25 +153,27 @@ import { useTheme } from '@/lib/use-theme';
 const SECTION_23_NOTE =
   'Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and are not shown here.';
 
-/** Proof-photo queue entry for the Resolve section's picker (Task 10) —
- *  same shape as app/maintenance/new.tsx's own `PhotoEntry`, kept as a
- *  separate local type rather than imported from there (that file has no
- *  exports; it is a screen, not a module). */
-interface ResolvePhotoEntry {
-  key: string;
-  uri: string;
-  fileName?: string;
-  status: 'uploading' | 'done' | 'error';
-  progress: number;
-  message?: string;
-}
-
 function localPhotoKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function ResolvePhotoRow({ entry, onRetry }: { entry: ResolvePhotoEntry; onRetry: () => void }) {
+/**
+ * One row of a photo-upload queue. Shared verbatim by BOTH queues on this
+ * screen — the request-photo card (`kind: 'requester'`) and the close-out
+ * card's proof picker (`kind: 'resolution'`) — so honest progress and honest
+ * failure cannot drift apart between them. The queue entry shape it renders
+ * is `MaintenancePhotoQueueEntry` (maintenance-request-photos.ts), for the
+ * same reason.
+ */
+function PhotoQueueRow({
+  entry,
+  onRetry,
+}: {
+  entry: MaintenancePhotoQueueEntry;
+  onRetry: () => void;
+}) {
   const { c } = useTheme();
+  const label = entry.fileName ?? 'photo';
   return (
     <Card padding={10} style={{ marginTop: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -186,10 +199,19 @@ function ResolvePhotoRow({ entry, onRetry }: { entry: ResolvePhotoEntry; onRetry
             </Body>
           ) : (
             <>
+              {/* The failure reason is rendered IN PLACE, next to the photo it
+                  belongs to — never only as a transient toast, which would
+                  leave a failed photo on screen with nothing saying why. */}
               <Body size={12.5} color={ACCENT.crit}>
-                {entry.message ?? 'Upload failed.'}
+                {entry.message ?? PHOTO_UPLOAD_GENERIC_ERROR}
               </Body>
-              <Pressable onPress={onRetry} style={{ marginTop: 6 }}>
+              <Pressable
+                onPress={onRetry}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Retry ${label}`}
+                style={{ marginTop: 6 }}
+              >
                 <Mono size={10.5} tracking={0.04} upper color={c.ink}>
                   RETRY
                 </Mono>
@@ -199,6 +221,38 @@ function ResolvePhotoRow({ entry, onRetry }: { entry: ResolvePhotoEntry; onRetry
         </View>
       </View>
     </Card>
+  );
+}
+
+/** Camera/Library pair, shared by the request-photo card and the close-out
+ *  proof picker so the two never drift in shape or reach. */
+function PhotoSourceButton({
+  icon: Icon,
+  label,
+  accessibilityLabel,
+  onPress,
+}: {
+  icon: typeof Camera;
+  label: string;
+  accessibilityLabel: string;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [
+        styles.addPhotoBtn,
+        { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
+      <Icon size={16} color={c.ink} strokeWidth={1.5} />
+      <Mono size={10} tracking={0.06} color={c.ink} style={{ marginLeft: 6 }}>
+        {label}
+      </Mono>
+    </Pressable>
   );
 }
 
@@ -230,6 +284,16 @@ export default function MaintenanceRequestDetailScreen() {
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [detail, setDetail] = React.useState<MobileMaintenanceRequestDetail | null>(null);
   const [photos, setPhotos] = React.useState<MobileMaintenancePhoto[]>([]);
+  // Request-photo queue (kind: 'requester') — the card that closes the gap
+  // this screen shipped with: a phone could attach photos only during
+  // app/maintenance/new.tsx's post-create step, and nothing routed back to
+  // it. Kept separate from `resolvePhotos` below (different kind, different
+  // per-kind cap budget, different card) but rendered by the same
+  // `PhotoQueueRow` and settled by the same guard mechanism.
+  const [requestPhotoQueue, setRequestPhotoQueue] = React.useState<MaintenancePhotoQueueEntry[]>([]);
+  // Lazy useState, not a ref: .current during render is a compiler violation.
+  const [requestPhotoGuard] = React.useState(() => createPhotoAttemptGuard());
+  const [photosRefreshError, setPhotosRefreshError] = React.useState<string | null>(null);
   const [emailInput, setEmailInput] = React.useState<MaintenanceEmailInput | null>(null);
   const [canManage, setCanManage] = React.useState(false);
   // Mig 0330: token-free status ("a link exists, expires then") from the
@@ -259,7 +323,7 @@ export default function MaintenanceRequestDetailScreen() {
   const [resolveNote, setResolveNote] = React.useState('');
   const [resolvePending, setResolvePending] = React.useState(false);
   const [resolveError, setResolveError] = React.useState<string | null>(null);
-  const [resolvePhotos, setResolvePhotos] = React.useState<ResolvePhotoEntry[]>([]);
+  const [resolvePhotos, setResolvePhotos] = React.useState<MaintenancePhotoQueueEntry[]>([]);
   // Lazy useState, not a ref: .current during render is a compiler violation.
   const [resolveGuard] = React.useState(() => createPhotoAttemptGuard());
 
@@ -378,12 +442,188 @@ export default function MaintenanceRequestDetailScreen() {
     });
   }
 
+  // ── Photo sources (shared by BOTH queues) ─────────────────────────────
+  // One camera path and one library path for the whole screen. Permission
+  // denial copy comes from `photoPermissionDenial`, which keys on
+  // `canAskAgain` for BOTH sources — the OS will not re-prompt once someone
+  // has hard-denied, so "allow it in the prompt" would point at a prompt that
+  // never appears again; only the Settings app can undo it. Returns [] for
+  // cancel AND for denial: both mean "no assets", and the denial already
+  // said its piece in the alert.
+  async function pickFromCamera(): Promise<{ uri: string; fileName?: string }[]> {
+    let perm = await ImagePicker.getCameraPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      const denial = photoPermissionDenial('camera', perm.canAskAgain);
+      Alert.alert(denial.title, denial.message);
+      return [];
+    }
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        cameraType: ImagePicker.CameraType.back,
+      });
+      if (result.canceled || !result.assets[0]) return [];
+      const a = result.assets[0];
+      return [{ uri: a.uri, fileName: a.fileName ?? undefined }];
+    } catch (e) {
+      // iOS Simulator has no real camera; launchCameraAsync rejects.
+      Alert.alert(
+        'Camera unavailable',
+        e instanceof Error
+          ? e.message
+          : 'The camera is not available on this device. Use Library instead.',
+      );
+      return [];
+    }
+  }
+
+  async function pickFromLibrary(): Promise<{ uri: string; fileName?: string }[]> {
+    let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      const denial = photoPermissionDenial('library', perm.canAskAgain);
+      Alert.alert(denial.title, denial.message);
+      return [];
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.7,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: MAINTENANCE_MAX_PHOTOS,
+    });
+    if (result.canceled) return [];
+    return result.assets.map((a) => ({ uri: a.uri, fileName: a.fileName ?? undefined }));
+  }
+
+  // ── Request photos (kind: 'requester') ────────────────────────────────
+  function patchRequestPhoto(key: string, patch: Partial<MaintenancePhotoQueueEntry>) {
+    setRequestPhotoQueue((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
+  }
+
+  /**
+   * Re-reads the request so a just-uploaded photo appears in the grid without
+   * anyone pulling to refresh or leaving the screen. Deliberately NOT
+   * `refreshDetail()`: that bumps `refreshKey`, which flips the whole screen
+   * to a full-page spinner — acceptable after a Resolve, absurd after each
+   * photo. Only `photos` is adopted here, so the share-link/open-count state
+   * this screen holds is never reset behind the user's back.
+   *
+   * A failed refresh is NOT reported as a failed upload. The bytes are on the
+   * server; only this list is stale, and the finished queue row stays visible
+   * (reconcile keeps any row the server list cannot yet show) so the photo is
+   * never silently unaccounted for.
+   */
+  async function refreshRequestPhotos() {
+    if (!id) return;
+    try {
+      const res = await getMaintenanceRequest(id);
+      setPhotos(res.photos);
+      setPhotosRefreshError(null);
+      setRequestPhotoQueue((prev) =>
+        reconcileRequestPhotoQueue(
+          prev,
+          res.photos.map((p) => p.id),
+        ),
+      );
+    } catch {
+      setPhotosRefreshError(REQUEST_PHOTOS_REFRESH_ERROR);
+    }
+  }
+
+  async function runRequestPhotoUpload(entry: MaintenancePhotoQueueEntry) {
+    if (!id) return;
+    const guard = requestPhotoGuard;
+    const token = guard.start(entry.key);
+    try {
+      // kind: 'requester' — REQUEST photos, the same kind web's
+      // MaintenancePhotosPanel uploads, NOT the 'resolution' close-out proof
+      // the Resolve card below sends. Everything else (resize/HEIC
+      // transcode, mint, native createUploadTask PUT, finalize) is the same
+      // tested orchestration from maintenance-upload.ts.
+      const { id: attachmentId } = await uploadMaintenancePhoto(
+        id,
+        { uri: entry.uri, fileName: entry.fileName },
+        (fraction) => {
+          // Stale-attempt guard: a Retry starts a NEWER attempt for this same
+          // key, and this one's late progress/result must never overwrite it
+          // — neither by claiming success for bytes that failed nor by
+          // re-failing a row a retry already saved.
+          if (guard.isCurrent(entry.key, token)) patchRequestPhoto(entry.key, { progress: fraction });
+        },
+        { kind: 'requester' },
+      );
+      if (!guard.isCurrent(entry.key, token)) return;
+      // attachmentId comes from finalize's own return value — it is what
+      // reconcile matches against the server list, so this row retires
+      // exactly when the grid can show it.
+      patchRequestPhoto(entry.key, {
+        status: 'done',
+        progress: 1,
+        message: undefined,
+        attachmentId,
+      });
+    } catch (e) {
+      if (!guard.isCurrent(entry.key, token)) return;
+      patchRequestPhoto(entry.key, { status: 'error', progress: 0, message: photoUploadErrorMessage(e) });
+      return;
+    }
+    // OUTSIDE the try on purpose. The upload is already settled 'done' above;
+    // if the follow-up read were inside it, a refresh failure would fall into
+    // that catch and re-mark a photo the server ACCEPTED as failed — telling
+    // someone to retry bytes that are already stored, and inviting a
+    // duplicate. refreshRequestPhotos owns its own failure (a notice that
+    // says the list is stale, not that the upload failed).
+    await refreshRequestPhotos();
+  }
+
+  async function addRequestPhotos(assets: { uri: string; fileName?: string }[]) {
+    if (assets.length === 0) return;
+    // Counts against the REQUESTER photos only: the server budgets
+    // MAINTENANCE_MAX_PHOTOS per kind (maintenance-attachments.ts —
+    // "applies PER KIND"), so proof photos must not eat this card's slots.
+    const cap = requestPhotoCapCheck({
+      serverPhotoCount: splitPhotosByKind(photos).requester.length,
+      entries: requestPhotoQueue,
+      incoming: assets.length,
+    });
+    if (!cap.ok) {
+      Alert.alert('Too many photos', cap.message);
+      return;
+    }
+    const entries: MaintenancePhotoQueueEntry[] = assets.map((a) => ({
+      key: localPhotoKey(),
+      uri: a.uri,
+      fileName: a.fileName,
+      status: 'uploading',
+      progress: 0,
+    }));
+    setRequestPhotoQueue((prev) => [...prev, ...entries]);
+    for (const entry of entries) {
+      await runRequestPhotoUpload(entry);
+    }
+  }
+
+  function retryRequestPhoto(key: string) {
+    const entry = requestPhotoQueue.find((e) => e.key === key);
+    if (!entry) return;
+    const next: MaintenancePhotoQueueEntry = {
+      ...entry,
+      status: 'uploading',
+      progress: 0,
+      message: undefined,
+    };
+    patchRequestPhoto(key, { status: 'uploading', progress: 0, message: undefined });
+    void runRequestPhotoUpload(next);
+  }
+
   // ── CLOSE-OUT: Resolve (Task 10) ──────────────────────────────────────
-  function patchResolvePhoto(key: string, patch: Partial<ResolvePhotoEntry>) {
+  function patchResolvePhoto(key: string, patch: Partial<MaintenancePhotoQueueEntry>) {
     setResolvePhotos((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
   }
 
-  async function runResolvePhotoUpload(entry: ResolvePhotoEntry) {
+  async function runResolvePhotoUpload(entry: MaintenancePhotoQueueEntry) {
     if (!id) return;
     const guard = resolveGuard;
     const token = guard.start(entry.key);
@@ -405,13 +645,7 @@ export default function MaintenanceRequestDetailScreen() {
       }
     } catch (e) {
       if (!guard.isCurrent(entry.key, token)) return;
-      const message =
-        e instanceof UploadError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : 'Photo upload failed. Try again.';
-      patchResolvePhoto(entry.key, { status: 'error', progress: 0, message });
+      patchResolvePhoto(entry.key, { status: 'error', progress: 0, message: photoUploadErrorMessage(e) });
     }
   }
 
@@ -430,7 +664,7 @@ export default function MaintenanceRequestDetailScreen() {
       Alert.alert('Too many photos', cap.message);
       return;
     }
-    const entries: ResolvePhotoEntry[] = assets.map((a) => ({
+    const entries: MaintenancePhotoQueueEntry[] = assets.map((a) => ({
       key: localPhotoKey(),
       uri: a.uri,
       fileName: a.fileName,
@@ -446,58 +680,14 @@ export default function MaintenanceRequestDetailScreen() {
   function retryResolvePhoto(key: string) {
     const entry = resolvePhotos.find((e) => e.key === key);
     if (!entry) return;
-    const next: ResolvePhotoEntry = { ...entry, status: 'uploading', progress: 0, message: undefined };
+    const next: MaintenancePhotoQueueEntry = {
+      ...entry,
+      status: 'uploading',
+      progress: 0,
+      message: undefined,
+    };
     patchResolvePhoto(key, { status: 'uploading', progress: 0, message: undefined });
     void runResolvePhotoUpload(next);
-  }
-
-  async function resolvePhotoFromCamera() {
-    let perm = await ImagePicker.getCameraPermissionsAsync();
-    if (!perm.granted) perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert(
-        'Camera access needed',
-        perm.canAskAgain
-          ? 'Allow camera in the prompt to take photos.'
-          : 'Camera permission is denied. Enable it in Settings → StockPilot.',
-      );
-      return;
-    }
-    try {
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.7,
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        cameraType: ImagePicker.CameraType.back,
-      });
-      if (result.canceled || !result.assets[0]) return;
-      const a = result.assets[0];
-      await addResolvePhotos([{ uri: a.uri, fileName: a.fileName ?? undefined }]);
-    } catch (e) {
-      // iOS Simulator has no real camera; launchCameraAsync rejects.
-      Alert.alert(
-        'Camera unavailable',
-        e instanceof Error
-          ? e.message
-          : 'The camera is not available on this device. Use Library instead.',
-      );
-    }
-  }
-
-  async function resolvePhotoFromLibrary() {
-    let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
-    if (!perm.granted) perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Photo access needed', 'Allow photo library to attach images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      quality: 0.7,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      selectionLimit: MAINTENANCE_MAX_PHOTOS,
-    });
-    if (result.canceled) return;
-    await addResolvePhotos(result.assets.map((a) => ({ uri: a.uri, fileName: a.fileName ?? undefined })));
   }
 
   async function doResolve() {
@@ -663,6 +853,23 @@ export default function MaintenanceRequestDetailScreen() {
   const showResolutionCard = shouldShowResolutionCard(detail);
   const { requester: requesterPhotos, resolution: resolutionPhotos } = splitPhotosByKind(photos);
 
+  // Request-photo card. The add affordance follows web's gate and ONLY web's
+  // gate — closed (archived/cancelled/resolved) hides it, nothing else. No
+  // client-side role check is invented here: the real boundary is the
+  // server's (submit + requester-owned-or-manage, re-enforced at mint AND
+  // finalize), and a refusal surfaces as the server's own message on the
+  // failed row rather than as a button that was never shown.
+  const photosEditability = requestPhotosEditability({
+    archivedAt: detail.archivedAt,
+    cancelledAt: detail.cancelledAt,
+    resolvedAt: detail.resolvedAt,
+  });
+  const photosEmptyCopy = requestPhotosEmptyCopy({
+    photoCount: requesterPhotos.length,
+    queued: requestPhotoQueue.length,
+    canAdd: photosEditability.canAdd,
+  });
+
   // Task 10 — CLOSE-OUT action visibility. `isOwnRequest` mirrors web
   // page.tsx's `isOwningRequester = detail.requesterUserId === ctx.userId`;
   // `actions.cancelNote` is computed but unused (see availableCloseoutActions'
@@ -740,9 +947,15 @@ export default function MaintenanceRequestDetailScreen() {
           <DetailRow label="ACCESS INSTRUCTIONS" value={detail.accessInstructions} />
         </Card>
 
-        {requesterPhotos.length > 0 ? (
-          <Card padding={16} style={{ marginTop: 14 }}>
-            <Eyebrow>{`PHOTOS · ${requesterPhotos.length}`}</Eyebrow>
+        {/* Request photos. Renders ALWAYS — web's own section does (page.tsx),
+            and an add affordance that appears only once a photo exists could
+            never be used to add the first one. This card IS the fix: before
+            it, a phone could attach photos only inside new.tsx's post-create
+            step, which nothing routed back to. */}
+        <Card padding={16} style={{ marginTop: 14 }}>
+          <Eyebrow>{requestPhotosHeading(requesterPhotos.length)}</Eyebrow>
+
+          {requesterPhotos.length > 0 ? (
             <View style={styles.photoGrid}>
               {requesterPhotos.map((p) => (
                 // Plain expo-image, no cacheKey/signing helper: these URLs
@@ -759,8 +972,58 @@ export default function MaintenanceRequestDetailScreen() {
                 />
               ))}
             </View>
-          </Card>
-        ) : null}
+          ) : null}
+
+          {photosEmptyCopy ? (
+            <Body size={12.5} muted style={{ marginTop: 10 }}>
+              {photosEmptyCopy}
+            </Body>
+          ) : null}
+
+          {photosEditability.canAdd ? (
+            <>
+              <Mono size={11} tracking={0.04} upper color={c.ink4} style={{ marginTop: 14 }}>
+                {REQUEST_PHOTOS_ADD_LABEL}
+              </Mono>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                <PhotoSourceButton
+                  icon={Camera}
+                  label="CAMERA"
+                  accessibilityLabel="Take a photo for this request"
+                  onPress={() => void pickFromCamera().then(addRequestPhotos)}
+                />
+                <PhotoSourceButton
+                  icon={ImageIcon}
+                  label="LIBRARY"
+                  accessibilityLabel="Choose a photo from your library for this request"
+                  onPress={() => void pickFromLibrary().then(addRequestPhotos)}
+                />
+              </View>
+            </>
+          ) : null}
+
+          {requestPhotoQueue.map((entry) => (
+            <PhotoQueueRow
+              key={entry.key}
+              entry={entry}
+              onRetry={() => retryRequestPhoto(entry.key)}
+            />
+          ))}
+
+          {/* Upload succeeded, list did not refresh. Says exactly that — the
+              finished row above stays put, so the photo is accounted for. */}
+          {photosRefreshError ? (
+            <Body size={12.5} color={ACCENT.crit} style={{ marginTop: 10 }}>
+              {photosRefreshError}
+            </Body>
+          ) : null}
+
+          {photosEditability.closedNotice ? (
+            <Body size={11.5} muted style={{ marginTop: 10 }}>
+              {photosEditability.closedNotice}
+            </Body>
+          ) : null}
+        </Card>
 
         {resolutionPhotos.length > 0 ? (
           <Card padding={16} style={{ marginTop: 14 }}>
@@ -987,34 +1250,22 @@ export default function MaintenanceRequestDetailScreen() {
                       {RESOLVE_ADD_PHOTO_LABEL}
                     </Mono>
                     <View style={{ flexDirection: 'row', gap: 10 }}>
-                      <Pressable
-                        onPress={() => void resolvePhotoFromCamera()}
-                        style={({ pressed }) => [
-                          styles.addPhotoBtn,
-                          { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
-                        ]}
-                      >
-                        <Camera size={16} color={c.ink} strokeWidth={1.5} />
-                        <Mono size={10} tracking={0.06} color={c.ink} style={{ marginLeft: 6 }}>
-                          CAMERA
-                        </Mono>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => void resolvePhotoFromLibrary()}
-                        style={({ pressed }) => [
-                          styles.addPhotoBtn,
-                          { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
-                        ]}
-                      >
-                        <ImageIcon size={16} color={c.ink} strokeWidth={1.5} />
-                        <Mono size={10} tracking={0.06} color={c.ink} style={{ marginLeft: 6 }}>
-                          LIBRARY
-                        </Mono>
-                      </Pressable>
+                      <PhotoSourceButton
+                        icon={Camera}
+                        label="CAMERA"
+                        accessibilityLabel="Take a proof photo"
+                        onPress={() => void pickFromCamera().then(addResolvePhotos)}
+                      />
+                      <PhotoSourceButton
+                        icon={ImageIcon}
+                        label="LIBRARY"
+                        accessibilityLabel="Choose a proof photo from your library"
+                        onPress={() => void pickFromLibrary().then(addResolvePhotos)}
+                      />
                     </View>
 
                     {resolvePhotos.map((entry) => (
-                      <ResolvePhotoRow
+                      <PhotoQueueRow
                         key={entry.key}
                         entry={entry}
                         onRetry={() => retryResolvePhoto(entry.key)}

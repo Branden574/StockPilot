@@ -1,5 +1,6 @@
 import { MAINTENANCE_MAX_PHOTOS } from '@stockpilot/core';
 
+import { mapActionError } from './maintenance-actions';
 import { checkPhotoCap } from './maintenance-upload';
 
 /**
@@ -57,6 +58,33 @@ export interface MaintenancePhotoQueueEntry {
  *  non-Error throw, passed to `mapActionError` (maintenance-actions.ts) so
  *  the real reason is never blurred into a generic sentence. */
 export const PHOTO_UPLOAD_GENERIC_ERROR = 'Photo upload failed. Try again.';
+
+/**
+ * The message a failed photo row shows. Both queues on the detail screen —
+ * request photos and resolution proof — go through this one function.
+ *
+ * WHY THIS IS NOT the inline `e instanceof UploadError ? e.message : e
+ * instanceof Error ? e.message : '...'` chain both screens hand-rolled:
+ * `UploadError` extends `Error`, so that chain's first branch is dead weight,
+ * and its `Error` branch forwards `e.message` UNCONDITIONALLY — including the
+ * empty string. A throw carrying no message (a rejected promise built from a
+ * bare `new Error()`, an `ApiError` whose body had no `message` field) then
+ * renders an error row with NO TEXT: a photo visibly failed and the screen
+ * cannot say why, which is the silent-failure shape this feature must never
+ * produce. `mapActionError` (maintenance-actions.ts) already draws exactly
+ * that line for the four write actions — non-empty Error message wins, the
+ * fallback covers everything else — so this reuses it rather than growing a
+ * second, subtly different rule.
+ *
+ * The server's own wording is always preferred when there is one: an
+ * `UploadError` distinguishes a dropped PUT from a refusal from a rate-limit
+ * (maintenance-upload.ts), and blurring those into one generic sentence would
+ * tell someone to retry when the real fix is to wait, or to wait when the
+ * real fix is a different photo.
+ */
+export function photoUploadErrorMessage(e: unknown): string {
+  return mapActionError(e, PHOTO_UPLOAD_GENERIC_ERROR);
+}
 
 /** Verbatim from web's detail page (page.tsx) closed-request branch. */
 export const REQUEST_PHOTOS_CLOSED_NOTICE =
