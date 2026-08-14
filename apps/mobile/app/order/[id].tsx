@@ -394,8 +394,13 @@ export default function OrderDetail() {
   );
   /**
    * Is the native Outlook app installed? Probed ONCE, held here, and fed to
-   * BOTH `prepareOrderDeliveryRequest` (which url the item-row ladder is
-   * measured against) and `openDeliveryRequestDraft` (which url is opened).
+   * `prepareOrderDeliveryRequest` — the ONLY consumer.
+   *
+   * It used to be handed to `openDeliveryRequestDraft` as well, so that the url
+   * opened matched the url the item-row ladder measured. That pairing is no
+   * longer this screen's to keep: the opener reads `transport` off the prepared
+   * draft, so the value below cannot be passed to two places and cannot
+   * disagree with itself. See `openDeliveryRequestDraft`.
    *
    * This is plumbing, not a decision: every rule about what `null` means and
    * which transport follows from it lives in `deliveryComposeTransport` in
@@ -477,12 +482,12 @@ export default function OrderDetail() {
     const platform: OutlookPlatform = Platform.OS === 'android' ? 'android' : 'ios';
     const result = await openDeliveryRequestDraft(
       'outlook',
+      // Which url opens is decided by THIS object's own `transport` field, the
+      // one core's ladder stamped when it measured the body. There is no probe
+      // answer to pass alongside it and therefore nothing here that can drift
+      // out of step with what was measured.
       deliveryPrepared,
       platform,
-      // The SAME probe answer `deliveryPrepared` was measured with. Passing it
-      // rather than re-probing is what keeps the url that opens identical to
-      // the url the item-row ladder was fitted against.
-      nativeOutlook,
       // Fires only after a real, successful open, so a blocked attempt is
       // never counted as a draft and cannot trigger the duplicate warning.
       () => setDeliveryDraftCount((n) => n + 1),

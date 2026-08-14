@@ -18,10 +18,13 @@
  * ADDRESSES ARE VALIDATED AND ENCODED HERE, not at the call sites (2026-08-13).
  * Every function below runs `assertRoutableAddress` on `to` and `cc` before it
  * builds anything, and the one raw interpolation — the `mailto:` path — goes
- * through `encodeMailtoPathAddress`. Both of those doc comments explain what
- * they are for and which of them is load-bearing; the short version is that a
- * poisoned `to` used to be able to steal the mandatory CC through the mailto
- * transport, and a guard sitting next to one of four callers is not a guard.
+ * through `mailtoPathAddress`, which validates and percent-encodes in a single
+ * call. Those doc comments explain what each layer is for, which of them is
+ * load-bearing, and why the CALL is fused rather than written as two
+ * statements; the short version is that a poisoned `to` used to be able to
+ * steal the mandatory CC through the mailto transport, a guard sitting next to
+ * one of four callers is not a guard, and a guard nothing is proven to CALL is
+ * not a guard either.
  *
  * Plain TS, no server directives — imported by web client components, web
  * server code, and the Expo app (mobile's only workspace dep is
@@ -173,6 +176,21 @@ export function assertRoutableAddress(field: 'to' | 'cc', value: string): string
  */
 const MAILTO_PATH_SAFE = /[A-Za-z0-9\-._~+@]/;
 
+declare const MAILTO_PATH_ENCODED: unique symbol;
+
+/**
+ * A mailbox that has been through `encodeMailtoPathAddress` — the ONLY thing
+ * `mailtoUrlFromPath` will splice into a `mailto:` path.
+ *
+ * The brand is module-private, so nothing outside this file can produce a value
+ * of this type: `const p: MailtoPathAddress = input.to` does not compile, and
+ * neither does `mailtoUrlFromPath(input.to, query)`. That is deliberate and it
+ * is the second half of the wiring pin described on `composeMailtoUrl` — the
+ * first half (deleting the call outright) fails a test, this half fails
+ * `tsc --noEmit`.
+ */
+export type MailtoPathAddress = string & { readonly [MAILTO_PATH_ENCODED]: true };
+
 /**
  * Percent-encode a mailbox for the `mailto:` PATH position.
  *
@@ -197,15 +215,60 @@ const MAILTO_PATH_SAFE = /[A-Za-z0-9\-._~+@]/;
  * above, so for any address that passes `assertRoutableAddress` this function
  * returns its input unchanged — the shipped, owner-tenant-verified URLs are
  * byte-for-byte what they were. Pinned by test in both directions.
+ *
+ * That identity is also why the CALL SITE needed pinning separately from the
+ * behaviour: see `mailtoPathAddress` below.
  */
-export function encodeMailtoPathAddress(address: string): string {
+export function encodeMailtoPathAddress(address: string): MailtoPathAddress {
   let out = '';
   // Iterating by code POINT, not code unit, so an astral character is handed to
   // encodeURIComponent as a whole surrogate pair rather than a lone half.
   for (const ch of address) {
     out += MAILTO_PATH_SAFE.test(ch) ? ch : encodeURIComponent(ch);
   }
-  return out;
+  return out as MailtoPathAddress;
+}
+
+/**
+ * VALIDATE AND ENCODE, IN ONE CALL — the whole of what a `mailto:` To address
+ * must survive before it can be a path, expressed as one thing that can be
+ * called or not called.
+ *
+ * WHY THIS EXISTS AS A FUNCTION (2026-08-13, second pass). The encoder's
+ * BEHAVIOUR was pinned in both directions. The fact that anything CALLED it was
+ * pinned by nothing: deleting `encodeMailtoPathAddress(...)` from
+ * `composeMailtoUrl` and going back to `` `mailto:${input.to}?...` `` passed
+ * 1330/1330 core tests, measured. It could not do otherwise — while the
+ * validator stays strict the encoder is the identity on everything that reaches
+ * it, so substituting it away is invisible to any test written against the
+ * composed URL. This is the third time this exact shape has shipped on this
+ * branch's lineage (a rack key in #129, a maintenance upload kind before that),
+ * so the answer here is structural rather than another assertion:
+ *
+ *   - the two layers now share ONE call site. Removing it removes the
+ *     VALIDATION too: the same mutation now fails twelve tests — the eleven
+ *     `mailto: refuses ... in the TO` cases and the CALL SITE test written for
+ *     it. That is the mutation that was silent before.
+ *   - the return type is branded and `mailtoUrlFromPath` accepts nothing else,
+ *     so keeping the validator and dropping the encoder
+ *     (`mailtoUrlFromPath(assertRoutableAddress('to', input.to), q)`) does not
+ *     compile.
+ *
+ * HONEST BOUNDARY: a hand-rewrite that inlines its own `` `mailto:${...}` ``
+ * template, bypassing both helpers while keeping the validator, is still
+ * invisible — no test can see a string built somewhere else. What is now
+ * impossible is the accidental version: deleting a call, or reverting a line.
+ */
+function mailtoPathAddress(value: string): MailtoPathAddress {
+  return encodeMailtoPathAddress(assertRoutableAddress('to', value));
+}
+
+/**
+ * The ONE place a `mailto:` URL is assembled. Takes only an address that has
+ * been through `mailtoPathAddress` — see `MailtoPathAddress`.
+ */
+export function mailtoUrlFromPath(path: MailtoPathAddress, query: string): string {
+  return `mailto:${path}?${query}`;
 }
 
 export interface ComposeInput {
@@ -290,21 +353,24 @@ export function composeOutlookMobileUrl(input: ComposeInput): string {
  *  is an OWA extension, unverified on desktop clients. Do not extend.
  *
  *  The To address is the only value in this module that sits in a URL PATH
- *  rather than a query parameter, which is why it needs
- *  `encodeMailtoPathAddress` rather than riding through `encodeDraftQuery` like
- *  everything else. It used to be interpolated RAW; see that function and
- *  `assertRoutableAddress` for what that cost and which of the two layers does
- *  which half of the work. */
+ *  rather than a query parameter, which is why it goes through
+ *  `mailtoPathAddress` rather than riding through `encodeDraftQuery` like
+ *  everything else. It used to be interpolated RAW; see `mailtoPathAddress`,
+ *  `encodeMailtoPathAddress` and `assertRoutableAddress` for what that cost,
+ *  which of the two layers does which half of the work, and why the CALL is
+ *  structured so that removing it cannot be silent. */
 export function composeMailtoUrl(
   input: Pick<ComposeInput, 'to' | 'cc' | 'subject' | 'body'>,
 ): string {
-  assertRoutableAddress('to', input.to);
+  // The ONLY validation of `to` in this function, deliberately: it is fused to
+  // the encoding, so a revert to a raw path drops the refusals with it.
+  const path = mailtoPathAddress(input.to);
   if (input.cc !== undefined) assertRoutableAddress('cc', input.cc);
   const query: Record<string, string> = {};
   if (input.cc) query.cc = input.cc;
   query.subject = input.subject;
   query.body = input.body;
-  return `mailto:${encodeMailtoPathAddress(input.to)}?${encodeDraftQuery(query)}`;
+  return mailtoUrlFromPath(path, encodeDraftQuery(query));
 }
 
 /** Terminal fallback: labelled blocks so the user can rebuild the message by

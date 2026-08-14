@@ -220,13 +220,11 @@ export function buildDeliveryRequestInput(order: DeliveryRequestOrderData): Deli
  *     native url is what opens.
  *   - `false` — no native app. Web budget, web url.
  *
- * The screen probes ONCE and holds the answer in state, feeding that same value
- * to `prepareOrderDeliveryRequest` and to `openDeliveryRequestDraft`. Both read
- * it through THIS function, so measurement and plan cannot disagree: to break
- * the pairing you would have to change this one predicate, which changes both
- * sides together. That is why `openDeliveryRequestDraft` no longer re-probes —
- * a second `canOpenURL` at press time could answer differently from the one the
- * ladder was fitted against, and the disagreement would be invisible.
+ * The screen probes ONCE, holds the answer in state, and hands it to
+ * `prepareOrderDeliveryRequest` — and to NOTHING ELSE. `openDeliveryRequestDraft`
+ * does not take a probe answer at all: it reads `transport` off the prepared
+ * draft, which is the field the ladder stamped when it measured. See that
+ * function for why the pairing is a signature rather than a convention.
  */
 export function deliveryComposeTransport(
   nativeOutlook: boolean | null,
@@ -265,19 +263,45 @@ export interface DeliveryOpenResult {
 }
 
 /**
+ * A prepared draft, as the OPENER needs it: the three composed urls, whether
+ * any of them may be opened, and — the point of this type — WHICH ONE THE
+ * LADDER MEASURED.
+ *
+ * `PreparedDeliveryRequest` satisfies this structurally; the opener takes the
+ * narrower shape for the same reason `planOutlookOpen` does, so it never sees
+ * the body.
+ */
+export interface DeliveryDraftToOpen extends OutlookTransportUrls {
+  /** Stamped by core's ladder when it fitted the rows. Not a second opinion —
+   *  the record of the budget the body was actually measured against. */
+  transport: DeliveryComposeTransport;
+}
+
+/**
  * Open the draft. Same planner and same one-open-per-tap rule as the
  * maintenance path — literally the same functions, from `./outlook-transport`,
  * so the CC-safety remediation lever (`NATIVE_OUTLOOK_CC_TRUSTED`) covers both
  * features at once.
  *
- * `nativeOutlook` IS THE PROBE ANSWER, PASSED IN — it is not re-probed here.
- * That is deliberate and it is the point of this change: the same value must
- * decide which url the ladder was MEASURED against and which url is OPENED, or
- * the phone can fit rows for one transport and then send another. Both sides
- * read it through `deliveryComposeTransport`. `null` (not yet probed) behaves
- * exactly as `false`: the web url, which is the one the worst-case budget
- * measured. The probe itself is `nativeOutlookAvailable` in
- * `./outlook-transport`, called once by the screen.
+ * THERE IS NO PROBE ARGUMENT, and that is the whole design (2026-08-13, second
+ * pass). The url this opens must be the url the item-row ladder was MEASURED
+ * against; if the two ever diverge the phone opens a body nothing measured and
+ * the mail truncates in transit, silently — worse than the dropped rows this
+ * wave set out to fix. That used to be a CONVENTION: the screen held one
+ * `nativeOutlook` state and was trusted to pass the same value to
+ * `prepareOrderDeliveryRequest` and to this function. Two arguments in two
+ * places, in a `.tsx` under `app/` that this repo's vitest cannot reach — the
+ * one decision on the screen worth guarding, guarded by a comment.
+ *
+ * So the argument is gone. `transport` is read off the prepared draft itself,
+ * where core's ladder stamped it while fitting the rows. Measurement and plan
+ * are now the same object, and there is no second value to disagree with: to
+ * open an unmeasured url a caller would have to prepare a whole second draft
+ * and open THAT — which is still self-consistent, because its urls and its
+ * `transport` came from one measurement too.
+ *
+ * `deliveryComposeTransport` still owns the probe-answer rule (`null` means
+ * worst case); it is now called in exactly one place, `prepareOrderDeliveryRequest`.
  *
  * Refuses everything when `!prepared.linkFits`: past roughly 2,000 characters
  * both transports truncate SILENTLY, so opening would hand DC4 a delivery
@@ -294,9 +318,8 @@ export interface DeliveryOpenResult {
  */
 export async function openDeliveryRequestDraft(
   button: DeliveryEmailTransport,
-  prepared: OutlookTransportUrls,
+  prepared: DeliveryDraftToOpen,
   platform: OutlookPlatform,
-  nativeOutlook: boolean | null,
   onOpened: () => void,
   ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<DeliveryOpenResult> {
@@ -306,10 +329,11 @@ export async function openDeliveryRequestDraft(
       ? planOutlookOpen(
           prepared,
           {
-            // Through the SAME predicate the measurement used. Not
-            // `nativeOutlook === true` written out again: a second copy of the
-            // rule is a second thing to forget to change (pattern #26).
-            nativeOutlookAvailable: deliveryComposeTransport(nativeOutlook) === 'outlook-native',
+            // Straight off the draft that was measured. Never re-derived from a
+            // probe here: a second `canOpenURL` at press time could answer
+            // differently from the one the ladder was fitted against, and the
+            // disagreement would be invisible.
+            nativeOutlookAvailable: prepared.transport === 'outlook-native',
             platform,
           },
           ccTrusted,

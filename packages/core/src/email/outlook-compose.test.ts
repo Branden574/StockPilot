@@ -13,6 +13,7 @@ import {
   assertSafeDisplayName,
   assertRoutableAddress,
   encodeMailtoPathAddress,
+  mailtoUrlFromPath,
 } from './outlook-compose';
 
 /** Reference two-step decode. mailto: is an opaque-path scheme — slice at the
@@ -439,21 +440,77 @@ describe('a poisoned recipient cannot inject a second recipient or subject, on a
   });
 
   /**
+   * THE CALL SITE, not the helper.
+   *
+   * WHAT THIS REPLACES. This block used to carry a comment conceding that
+   * "SUBSTITUTING the encoder for a raw interpolation at that one call site is
+   * not detectable by any test". That was measured and true: reverting
+   * `composeMailtoUrl` to `` `mailto:${input.to}?...` `` passed 1330/1330 core
+   * tests. The concession was honest but it was still an untested wire, and an
+   * untested wire is what shipped a rack key in #129 and a maintenance upload
+   * kind before that. So the CODE changed rather than the comment: the To path
+   * now goes through `mailtoPathAddress`, which validates AND encodes in one
+   * call, and this test drives that call site through the public function.
+   *
+   * WHY IT FAILS ON THE MUTATION. `composeMailtoUrl` no longer validates `to`
+   * anywhere else. Delete the call and the poisoned addresses below stop
+   * throwing — they compose a URL whose cc belongs to the attacker.
+   */
+  it('CALL SITE: composeMailtoUrl runs the path through validate-and-encode — remove the call and the refusals go with it', () => {
+    for (const poison of [
+      'a?cc=attacker@evil.test',
+      'a&cc=attacker@evil.test',
+      'a#x@evil.test',
+      'first@evil.test,attacker@evil.test',
+      'x@y.test\nCC: attacker@evil.test',
+    ]) {
+      expect(() =>
+        composeMailtoUrl({ to: poison, cc: 'arosas@example.test', subject: 'S', body: 'B' }),
+      ).toThrow(/recipient "to" must be exactly one plain email address/);
+    }
+    // And the well-formed pair still composes, byte-for-byte as the owner
+    // tenant-verified it — so the refusals above mean something and the fusion
+    // changed no output.
+    expect(
+      composeMailtoUrl({ to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org', subject: 'S', body: 'B' }),
+    ).toBe('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=S&body=B');
+  });
+
+  /**
+   * The other half of the same pin, at the type level: keeping the validator
+   * and dropping only the encoder. That mutation composes an identical string
+   * today (the encoder is the identity on everything the validator admits), so
+   * no runtime assertion can see it — but `mailtoUrlFromPath` takes a branded
+   * type that only `encodeMailtoPathAddress` produces, so it does not compile.
+   *
+   * If the brand were removed, this `@ts-expect-error` becomes an unused
+   * directive and `pnpm typecheck` fails with TS2578.
+   */
+  it('TYPE-LEVEL PIN: an unencoded address cannot be spliced into the mailto path', () => {
+    const build = () =>
+      // @ts-expect-error a raw string has not been through encodeMailtoPathAddress
+      mailtoUrlFromPath('a?cc=attacker@evil.test', 'cc=arosas%40example.test');
+    // Never invoked: the point is that this line does not typecheck.
+    expect(typeof build).toBe('function');
+    expect(mailtoUrlFromPath(encodeMailtoPathAddress('a?cc=attacker@evil.test'), 'cc=x%40y.test')).toBe(
+      'mailto:a%3Fcc%3Dattacker@evil.test?cc=x%40y.test',
+    );
+  });
+
+  /**
    * THE TWO LAYERS' RELATIONSHIP, pinned as an invariant rather than assumed.
    *
-   * Honest statement of what is and is not covered: while the validator stays
-   * strict, the encoder can never actually fire inside `composeMailtoUrl` —
-   * nothing poisoned reaches it — so SUBSTITUTING the encoder for a raw
-   * interpolation at that one call site is not detectable by any test, because
-   * it is the identity on every input that gets that far. That is what defense
-   * in depth means here, not a gap being papered over.
+   * While the validator stays strict the encoder never actually fires inside
+   * `composeMailtoUrl` — nothing poisoned reaches it. That is what defense in
+   * depth means here, and it is why the two tests above pin the WIRING by other
+   * means than the composed output.
    *
-   * What IS detectable, and what this test is for, is the relationship going
-   * out of alignment. If the validator is ever widened past the encoder's safe
-   * set — which is exactly how the shipped defect arose, a negative-space regex
-   * quietly admitting `?` — this fails and says so, which is the moment the
-   * encoder stops being belt-and-braces and becomes the only thing standing
-   * between a poisoned address and the mandatory CC.
+   * What this one is for is the relationship going out of alignment. If the
+   * validator is ever widened past the encoder's safe set — which is exactly
+   * how the shipped defect arose, a negative-space regex quietly admitting `?`
+   * — this fails and says so, which is the moment the encoder stops being
+   * belt-and-braces and becomes the only thing standing between a poisoned
+   * address and the mandatory CC.
    */
   it('INVARIANT: every character the validator ADMITS is one the encoder leaves alone', () => {
     const admitted = new Set<string>();
