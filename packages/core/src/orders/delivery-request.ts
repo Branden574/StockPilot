@@ -765,10 +765,58 @@ export function buildDeliveryRequestClipboardText(draft: DeliveryRequestDraft): 
   });
 }
 
+/**
+ * WHICH COMPOSE URL THE CALLING SURFACE WILL ACTUALLY HAND TO THE OS.
+ *
+ * This is a MEASUREMENT input, not a rendering option: the ladder in
+ * `prepareDeliveryRequest` fits item rows against the url that will really be
+ * opened, and the two transports have very different budgets for the same body.
+ *
+ *  - `outlook-web` — the https OWA deep link. Its body rides inside a
+ *    `?mailtouri=` wrapper and is therefore percent-encoded TWICE (a space
+ *    costs `%2520`, an em-dash `%25E2%2580%2594`), on top of a 52-character
+ *    base. This is the expensive one.
+ *  - `outlook-native` — `ms-outlook://compose`. A 20-character scheme and ONE
+ *    encoding layer. Measured on a realistic 25-line order, the same chosen
+ *    draft is 1303 characters here against 1776 on the web url.
+ *
+ * WHY THIS PARAMETER EXISTS (2026-08-13). It did not, and the phone paid for
+ * it. `prepareDeliveryRequest` fitted every rung against the WEB url, but a
+ * phone with Outlook installed opens `ms-outlook://` — so on that 25-line order
+ * the ladder stopped at 7 rows with 497 characters of native headroom left
+ * unused, and DC4 received a delivery request naming 7 items when 15 would have
+ * fitted. That is the same complaint that started this work (SO-000080), one
+ * layer down: rows dropped because nothing measured the transport that opens.
+ *
+ * DEFAULT IS `outlook-web`, and that is the SAFE default rather than merely the
+ * incumbent one. It is the longest url any surface opens, so a draft fitted for
+ * it fits every transport; fitting for `outlook-native` and then opening the web
+ * url would silently truncate, which is strictly worse than dropping a row. A
+ * caller may only ask for `outlook-native` when it KNOWS the native app is the
+ * one that will open — see `deliveryComposeTransport` in
+ * apps/mobile/src/lib/delivery-request-actions.ts, which derives this and the
+ * open plan from one probe answer so the two cannot disagree.
+ */
+export type DeliveryComposeTransport = 'outlook-web' | 'outlook-native';
+
+export interface PrepareDeliveryRequestOptions {
+  /** The compose url this surface will open. Defaults to the longest one,
+   *  `outlook-web`. See `DeliveryComposeTransport`. */
+  transport?: DeliveryComposeTransport;
+}
+
 export interface PreparedDeliveryRequest {
   draft: DeliveryRequestDraft;
-  /** OWA WEB compose deep link (https). What the web app opens in a new tab,
-   *  and what mobile falls back to when the native app is not installed. */
+  /**
+   * OWA WEB compose deep link (https). What the web app opens in a new tab,
+   * and what mobile falls back to when the native app is not installed.
+   *
+   * MEASURED ONLY UNDER `transport: 'outlook-web'` (the default). A caller that
+   * asked for `outlook-native` has declared that this url is not the one it
+   * opens, and this field may then exceed `DRAFT_URL_LIMIT` even while
+   * `linkFits` is true — opening it anyway would truncate the body silently.
+   * `transport` below records which url the ladder actually fitted.
+   */
   outlookUrl: string;
   /**
    * NATIVE Outlook app deep link (`ms-outlook://compose`) for the SAME chosen
@@ -776,20 +824,28 @@ export interface PreparedDeliveryRequest {
    * ladder. Built here rather than by each surface so that no caller can
    * assemble a native url from a body the limit check never saw.
    *
-   * Deliberately NOT part of the `linkFits` measurement below: it is shorter
-   * than `outlookUrl` for identical input by construction (a 20-character
-   * scheme and one encoding layer, against a 52-character https base and a
-   * double-encoded inner mailto), so a draft that fits the web url transitively
-   * fits this one. Pinned by test in `../email/outlook-compose.test.ts` — if
-   * that inequality ever inverts, this comparison has to grow a third term.
+   * MEASURED ONLY UNDER `transport: 'outlook-native'`. Under the web default it
+   * is still safe to open unmeasured, because it is shorter than `outlookUrl`
+   * for identical input by construction (a 20-character scheme and one encoding
+   * layer, against a 52-character https base and a double-encoded inner
+   * mailto), so a draft that fits the web url transitively fits this one. That
+   * inequality is pinned by test in `../email/outlook-compose.test.ts`; the
+   * reverse direction is NOT true, which is why `outlookUrl` above carries the
+   * opposite warning.
    */
   outlookMobileUrl: string;
+  /** RFC 6068 `mailto:`. Measured under BOTH transports — every surface offers
+   *  it, either as its own button or as the cc-untrusted reroute. */
   mailtoUrl: string;
+  /** Which url the ladder was fitted against. Echoed back so a caller can
+   *  assert that what it opens is what was measured. */
+  transport: DeliveryComposeTransport;
   /** ALWAYS the full body — the clipboard has no URL-length limit. */
   clipboardText: string;
   /**
    * True when the CHOSEN urls — full when they fit, else condensed — both
-   * measure at or under `DRAFT_URL_LIMIT`.
+   * measure at or under `DRAFT_URL_LIMIT`. "The chosen urls" means the
+   * `transport` url above and `mailtoUrl`, not all three: see `outlookUrl`.
    *
    * Site, warehouse and requester names are unbounded database strings.
    * Condensing drops the per-line list, the street address and the order
@@ -824,20 +880,47 @@ export interface PreparedDeliveryRequest {
  *   3. else the heading-only body, which is rung 2 with zero rows;
  *   4. else `linkFits: false` — nothing is prefilled, unchanged.
  *
- * BOTH TRANSPORTS ARE MEASURED and the longer one binds. The Outlook url wraps
- * an inner mailto in `?mailtouri=` and encodeURIComponent's the whole thing, so
- * the body is url-encoded TWICE: a space costs `%2520` — five characters, not
- * one — and an em-dash `%25E2%2580%2594`, fifteen. On the SO-000080 shape the
- * Outlook url runs 41% longer than the mailto (2232 vs 1580 for the full
- * body), and the mailto alone WOULD have fitted. Never fit rows against a
- * plain-character estimate, and never measure only the cheaper transport.
+ * THE OPENED TRANSPORT IS THE ONE MEASURED, plus the mailto, and the longer of
+ * the pair binds. Which "opened transport" that is comes from
+ * `opts.transport` — see `DeliveryComposeTransport` for why the caller has to
+ * declare it and why the default is the expensive web url.
  *
- * The native `ms-outlook://` url is deliberately NOT measured here: it is
- * shorter than the web url for identical input by construction (a 20-character
- * scheme and one encoding layer, against a 52-character https base and a
- * double-encoded inner mailto), so a draft that fits the web url transitively
- * fits the native one. That relationship is pinned by a test in
- * `../email/outlook-compose.test.ts`; do not replace it with an assumption.
+ * The Outlook WEB url wraps an inner mailto in `?mailtouri=` and
+ * encodeURIComponent's the whole thing, so its body is url-encoded TWICE: a
+ * space costs `%2520` — five characters, not one — and an em-dash
+ * `%25E2%2580%2594`, fifteen. On the SO-000080 shape it runs 41% longer than
+ * the mailto (2232 vs 1580 for the full body), and the mailto alone WOULD have
+ * fitted. Never fit rows against a plain-character estimate, and never measure
+ * only the cheaper transport.
+ *
+ * The mailto is measured under BOTH transports because every surface can open
+ * it — web as the popup-blocked fallback, mobile as its own button and as the
+ * `NATIVE_OUTLOOK_CC_TRUSTED` reroute. It is always shorter than the native
+ * url for identical input (`mailto:` + a bare address, against
+ * `ms-outlook://compose?to=` + a percent-encoded one), so under
+ * `outlook-native` it never binds — but it is measured rather than reasoned
+ * about, because that inequality is not the one the tests pin.
+ *
+ * WHAT THIS DOES NOT MEASURE, per rung: the transport the caller did NOT
+ * declare. Under `outlook-web` the native url is safe unmeasured (strictly
+ * shorter, pinned by test). Under `outlook-native` the WEB url is not — it can
+ * and does exceed the limit — so a caller asking for `outlook-native` is
+ * asserting it will not open `outlookUrl`. Mobile discharges that by deriving
+ * the transport and the open plan from one probe answer.
+ *
+ * ONE ENGINE'S BYTES ARE NOT ANOTHER'S. The body is measured, never estimated,
+ * which is what makes this correct on Hermes: `formatOrgDateTime` renders the
+ * needed-by line as "Aug 18, 2026 at 9:00 AM" there and "Aug 18, 2026, 9:00 AM"
+ * under node and Chromium, and the wider form costs more once percent-encoded.
+ * A device can therefore land one row lower than a node-run test predicts on a
+ * borderline order, and that is correct behaviour rather than drift — each
+ * engine fits what it can actually send. Do not hand-roll the date format to
+ * chase byte equality between engines: three renderings already reach
+ * production today (the web body is built client-side, and Safari's
+ * JavaScriptCore already disagrees with Chrome), so there is no single web
+ * byte-string to preserve. Tests must pin the RELATIONSHIP (the measured url
+ * fits; the native budget yields at least as many rows as the web one), never
+ * an absolute row count that only holds on one engine.
  *
  * BINARY SEARCH is sound because body length — and therefore url length — is
  * non-decreasing in `maxRows`: each extra row adds its own text, and the only
@@ -850,37 +933,60 @@ export interface PreparedDeliveryRequest {
  * truncate silently past roughly 2,000 characters, and a silently truncated
  * delivery request is worse than an honestly shortened one.
  */
-export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
-  const full = buildDeliveryRequestDraft(input);
-  const fullUrl = buildDeliveryRequestOutlookUrl(full);
-  const fullMailto = buildDeliveryRequestMailtoUrl(full);
-  const fits = fullUrl.length <= DRAFT_URL_LIMIT && fullMailto.length <= DRAFT_URL_LIMIT;
+export function prepareDeliveryRequest(
+  input: DeliveryRequestInput,
+  opts: PrepareDeliveryRequestOptions = {},
+): PreparedDeliveryRequest {
+  const transport = opts.transport ?? 'outlook-web';
 
-  if (fits) {
+  /**
+   * Compose ONE candidate draft into all three transports and rule on it.
+   *
+   * All three are built on every rung — not only the chosen one — so that the
+   * native url can never be composed from a different rung than the one the
+   * limit check saw. That was the shape of the last bug in this function's
+   * ancestry, and building three short strings a handful of times is nothing
+   * against a silent mismatch between what was measured and what is sent.
+   *
+   * `composeUrl` is the url this SURFACE will hand to the OS. Measuring it (and
+   * not, say, always the longest of the three) is the whole point of
+   * `transport`: fitting rows against a url nobody opens throws away real
+   * headroom, and the phone was doing exactly that.
+   */
+  const measure = (draft: DeliveryRequestDraft) => {
+    const outlookUrl = buildDeliveryRequestOutlookUrl(draft);
+    const outlookMobileUrl = buildDeliveryRequestOutlookMobileUrl(draft);
+    const mailtoUrl = buildDeliveryRequestMailtoUrl(draft);
+    const composeUrl = transport === 'outlook-native' ? outlookMobileUrl : outlookUrl;
     return {
-      draft: full,
-      outlookUrl: fullUrl,
-      // From `full` — the same draft the two measured urls above carry. The
-      // native url is composed from the CHOSEN draft on every return path, so
-      // the three transports can never disagree about what the recipient reads.
-      outlookMobileUrl: buildDeliveryRequestOutlookMobileUrl(full),
-      mailtoUrl: fullMailto,
-      clipboardText: buildDeliveryRequestClipboardText(full),
+      draft,
+      outlookUrl,
+      outlookMobileUrl,
+      mailtoUrl,
+      fits: composeUrl.length <= DRAFT_URL_LIMIT && mailtoUrl.length <= DRAFT_URL_LIMIT,
+    };
+  };
+
+  const full = measure(buildDeliveryRequestDraft(input));
+  // ALWAYS the full, uncondensed body. The clipboard has no URL-length limit
+  // and is the escape hatch — degrading it too would lose detail for no
+  // reason. Computed once here, from `full`, and returned on BOTH paths.
+  const clipboardText = buildDeliveryRequestClipboardText(full.draft);
+
+  if (full.fits) {
+    return {
+      draft: full.draft,
+      outlookUrl: full.outlookUrl,
+      outlookMobileUrl: full.outlookMobileUrl,
+      mailtoUrl: full.mailtoUrl,
+      transport,
+      clipboardText,
       linkFits: true,
     };
   }
 
-  const attempt = (maxRows: number) => {
-    const draft = buildDeliveryRequestDraft(input, { condensed: true, maxRows });
-    const outlookUrl = buildDeliveryRequestOutlookUrl(draft);
-    const mailtoUrl = buildDeliveryRequestMailtoUrl(draft);
-    return {
-      draft,
-      outlookUrl,
-      mailtoUrl,
-      fits: outlookUrl.length <= DRAFT_URL_LIMIT && mailtoUrl.length <= DRAFT_URL_LIMIT,
-    };
-  };
+  const attempt = (maxRows: number) =>
+    measure(buildDeliveryRequestDraft(input, { condensed: true, maxRows }));
 
   // Rung 3 first: it is both the floor of the search and the answer when even
   // it does not fit (rung 4). Searching upward from a known-good floor is what
@@ -889,7 +995,7 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
 
   if (best.fits) {
     let lo = 1;
-    let hi = full.lineCount;
+    let hi = full.draft.lineCount;
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
       const candidate = attempt(mid);
@@ -905,16 +1011,14 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
   return {
     draft: best.draft,
     outlookUrl: best.outlookUrl,
-    // `best.draft`, never `full` — a native url carrying the FULL body while
-    // the web url carried a shortened one would send two different messages
-    // depending on which app the phone happened to have installed, and the
-    // long one would be the silently truncated one.
-    outlookMobileUrl: buildDeliveryRequestOutlookMobileUrl(best.draft),
+    // `best`, never `full` — a native url carrying the FULL body while the web
+    // url carried a shortened one would send two different messages depending
+    // on which app the phone happened to have installed, and the long one would
+    // be the silently truncated one.
+    outlookMobileUrl: best.outlookMobileUrl,
     mailtoUrl: best.mailtoUrl,
-    // ALWAYS the full, uncondensed body. The clipboard has no URL-length limit
-    // and is the escape hatch — degrading it too would lose detail for no
-    // reason. Note this is `full`, never `best.draft`.
-    clipboardText: buildDeliveryRequestClipboardText(full),
+    transport,
+    clipboardText,
     linkFits: best.fits,
   };
 }

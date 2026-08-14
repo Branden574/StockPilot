@@ -352,7 +352,19 @@ export function buildDeliveryRequestDraft(
   return coreBuildDeliveryRequestDraft({ ...input, recipients: WEB_DELIVERY_RECIPIENTS }, opts);
 }
 
-/** Build every transport, choosing how much of the item list fits. See core. */
+/**
+ * Build every transport, choosing how much of the item list fits. See core.
+ *
+ * NO `transport` OPTION, deliberately. Web opens the https OWA url
+ * (`window.open` on `prepared.outlookUrl`), so it must keep fitting rows
+ * against that url — which is core's default, `outlook-web`. Mobile passes
+ * `outlook-native` when it has PROVED the native app will take the link; a
+ * browser can never prove that, and asking for the shorter budget here would
+ * fit rows against a url this surface does not open and truncate the body
+ * silently in the one it does. Byte-identical output to before the option
+ * existed, pinned by `prepareDeliveryRequest — the ladder, measured end to end`
+ * in storefront-logic.test.ts.
+ */
 export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
   return corePrepareDeliveryRequest({ ...input, recipients: WEB_DELIVERY_RECIPIENTS });
 }

@@ -85,7 +85,7 @@ import {
   type DeliveryOpenResult,
   type DeliveryRequestOrderData,
 } from '@/lib/delivery-request-actions';
-import type { OutlookPlatform } from '@/lib/outlook-transport';
+import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import {
   availableOrderActions,
   can,
@@ -392,14 +392,44 @@ export default function OrderDetail() {
         : null,
     [order],
   );
+  /**
+   * Is the native Outlook app installed? Probed ONCE, held here, and fed to
+   * BOTH `prepareOrderDeliveryRequest` (which url the item-row ladder is
+   * measured against) and `openDeliveryRequestDraft` (which url is opened).
+   *
+   * This is plumbing, not a decision: every rule about what `null` means and
+   * which transport follows from it lives in `deliveryComposeTransport` in
+   * lib/delivery-request-actions, where vitest can reach it. All this does is
+   * turn one async answer into state.
+   *
+   * `null` until the probe resolves, which is the WORST-CASE budget (the long
+   * https url) and also the url that would open during that window — so a tap
+   * before it settles is consistent, merely carrying fewer item rows. The probe
+   * opens nothing and costs no compose screen, but it is still gated on the
+   * action being visible so ordinary order screens do not ask at all.
+   */
+  const [nativeOutlook, setNativeOutlook] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!showDeliveryRequest) return;
+    let alive = true;
+    void nativeOutlookAvailable().then((available) => {
+      if (alive) setNativeOutlook(available);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [showDeliveryRequest]);
+
   // Pure and deterministic (no clock, no DOM), so it is safe in a memo — the
-  // same shape the maintenance screen uses for its own prepared draft.
+  // same shape the maintenance screen uses for its own prepared draft. It
+  // re-runs when the probe settles, which is what lets the phone carry the
+  // extra rows the native url has room for.
   const deliveryPrepared = React.useMemo(
     () =>
       deliveryOrderData && showDeliveryRequest
-        ? prepareOrderDeliveryRequest(deliveryOrderData)
+        ? prepareOrderDeliveryRequest(deliveryOrderData, nativeOutlook)
         : null,
-    [deliveryOrderData, showDeliveryRequest],
+    [deliveryOrderData, showDeliveryRequest, nativeOutlook],
   );
   const [deliveryDraftCount, setDeliveryDraftCount] = React.useState(0);
   const [deliveryResult, setDeliveryResult] = React.useState<DeliveryOpenResult | null>(null);
@@ -449,6 +479,10 @@ export default function OrderDetail() {
       'outlook',
       deliveryPrepared,
       platform,
+      // The SAME probe answer `deliveryPrepared` was measured with. Passing it
+      // rather than re-probing is what keeps the url that opens identical to
+      // the url the item-row ladder was fitted against.
+      nativeOutlook,
       // Fires only after a real, successful open, so a blocked attempt is
       // never counted as a draft and cannot trigger the duplicate warning.
       () => setDeliveryDraftCount((n) => n + 1),

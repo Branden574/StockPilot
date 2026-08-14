@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
 
-import { DELIVERY_REQUEST_EMAIL, condensedNoticeText } from '@stockpilot/core';
+import { DELIVERY_REQUEST_EMAIL, DRAFT_URL_LIMIT, condensedNoticeText } from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
@@ -16,6 +16,7 @@ import {
   SUCCESS_MESSAGE,
   buildDeliveryRequestInput,
   canRequestDelivery,
+  deliveryComposeTransport,
   deliverySuccessMessageFor,
   needsDeliveryRequestData,
   openDeliveryRequestDraft,
@@ -24,6 +25,7 @@ import {
   shouldShowCondensedNotice,
   type DeliveryRequestOrderData,
 } from './delivery-request-actions';
+import { nativeOutlookAvailable } from './outlook-transport';
 
 // Same mock, same reasoning, as maintenance-email-actions.test.ts: expo-linking
 // is a real installed dependency (~7.1.7); vi.mock is hoisted above the imports
@@ -182,8 +184,10 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
 
 describe('CC GATE at the actual openURL call site (not merely in the composer)', () => {
   it('THE FIX: opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
-    const prepared = prepareOrderDeliveryRequest(order());
-    await expect(openDeliveryRequestDraft('outlook', prepared, 'ios', () => {})).resolves.toEqual({
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', true, () => {}),
+    ).resolves.toEqual({
       outcome: 'opened',
       used: 'outlook-native',
     });
@@ -194,17 +198,16 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('CONDENSED draft still opens the native link WITH the cc', async () => {
-    const prepared = prepareOrderDeliveryRequest(bigOrder());
-    await openDeliveryRequestDraft('outlook', prepared, 'android', () => {});
+    const prepared = prepareOrderDeliveryRequest(bigOrder(), true);
+    await openDeliveryRequestDraft('outlook', prepared, 'android', true, () => {});
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
     expect(ccOf(url)).toBe('arosas@cvwest.org');
   });
 
   it('no native Outlook installed: falls back to the tenant-verified WEB url, cc intact', async () => {
-    vi.mocked(Linking.canOpenURL).mockResolvedValueOnce(false);
-    const prepared = prepareOrderDeliveryRequest(order());
-    const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
+    const prepared = prepareOrderDeliveryRequest(order(), false);
+    const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', false, () => {});
     expect(res).toEqual({ outcome: 'opened', used: 'outlook-web' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(
@@ -213,19 +216,29 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
-  it('a canOpenURL rejection is treated as "not installed", never a crash', async () => {
-    vi.mocked(Linking.canOpenURL).mockRejectedValueOnce(new Error('scheme not declared'));
-    const prepared = prepareOrderDeliveryRequest(order());
-    await expect(openDeliveryRequestDraft('outlook', prepared, 'android', () => {})).resolves.toEqual(
-      { outcome: 'opened', used: 'outlook-web' },
-    );
+  it('the probe has not answered yet (null): opens the WEB url, which is what the worst-case budget measured', async () => {
+    const prepared = prepareOrderDeliveryRequest(order(), null);
+    const res = await openDeliveryRequestDraft('outlook', prepared, 'android', null, () => {});
+    expect(res).toEqual({ outcome: 'opened', used: 'outlook-web' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/')).toBe(true);
+    expect(url).toBe(prepared.outlookUrl);
+  });
+
+  it('a canOpenURL rejection is read as "not installed", so the probe can never hand this feature a false true', async () => {
+    // The probe now runs at the SCREEN, once, and its answer is passed in — so
+    // what this feature depends on is that a throwing canOpenURL resolves to
+    // `false`, never to a truthy value that would select the unmeasured native
+    // budget.
+    vi.mocked(Linking.canOpenURL).mockRejectedValueOnce(new Error('scheme not declared'));
+    const probed = await nativeOutlookAvailable();
+    expect(probed).toBe(false);
+    expect(deliveryComposeTransport(probed)).toBe('outlook-web');
   });
 
   it('cc-untrusted platform reroutes to mailto rather than keeping the Outlook brand', async () => {
-    const prepared = prepareOrderDeliveryRequest(order());
-    const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}, {
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', true, () => {}, {
       ios: false,
       android: true,
     });
@@ -235,50 +248,227 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('exactly ONE openURL per tap — never auto-retried into a duplicate request to DC4', async () => {
-    const prepared = prepareOrderDeliveryRequest(order());
-    await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    await openDeliveryRequestDraft('outlook', prepared, 'ios', true, () => {});
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
 
   it('an openURL rejection reports blocked and does NOT silently open something else', async () => {
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
-    const prepared = prepareOrderDeliveryRequest(order());
-    await expect(openDeliveryRequestDraft('outlook', prepared, 'ios', () => {})).resolves.toEqual({
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', true, () => {}),
+    ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
     });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
 
-  it('linkFits=false opens NOTHING and never even probes for Outlook', async () => {
-    const prepared = prepareOrderDeliveryRequest(oversizedOrder());
-    await expect(openDeliveryRequestDraft('outlook', prepared, 'ios', () => {})).resolves.toEqual({
+  it('linkFits=false opens NOTHING', async () => {
+    const prepared = prepareOrderDeliveryRequest(oversizedOrder(), true);
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', true, () => {}),
+    ).resolves.toEqual({
       outcome: 'blocked',
       used: null,
     });
     expect(Linking.openURL).not.toHaveBeenCalled();
-    expect(Linking.canOpenURL).not.toHaveBeenCalled();
   });
 
   it('onOpened fires only after a REAL open, never on a blocked one', async () => {
-    const prepared = prepareOrderDeliveryRequest(order());
+    const prepared = prepareOrderDeliveryRequest(order(), true);
     const onOpened = vi.fn();
-    await openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
+    await openDeliveryRequestDraft('outlook', prepared, 'ios', true, onOpened);
     expect(onOpened).toHaveBeenCalledTimes(1);
 
     onOpened.mockClear();
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
-    await openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
+    await openDeliveryRequestDraft('outlook', prepared, 'ios', true, onOpened);
     expect(onOpened).not.toHaveBeenCalled();
 
     onOpened.mockClear();
     await openDeliveryRequestDraft(
       'outlook',
-      prepareOrderDeliveryRequest(oversizedOrder()),
+      prepareOrderDeliveryRequest(oversizedOrder(), true),
       'ios',
+      true,
       onOpened,
     );
     expect(onOpened).not.toHaveBeenCalled();
+  });
+});
+
+// =========================================================================
+// THE LADDER MEASURES THE TRANSPORT THAT ACTUALLY OPENS.
+//
+// The defect this block exists for: core fitted every item row against the
+// https OWA url because that is what WEB opens, while a phone with Outlook
+// installed opens `ms-outlook://compose` — roughly 25-30% shorter for the same
+// body. The phone therefore dropped item rows it had room for, which is the
+// exact complaint that started this feature.
+//
+// These are RELATIONSHIP assertions, never absolute row counts. The needed-by
+// line renders wider under Hermes than under node ("Aug 18, 2026 at 9:00 AM"
+// versus "Aug 18, 2026, 9:00 AM", and U+202F costs more percent-encoded), so a
+// device can legitimately land one row below whatever a node-run test would
+// predict. Pinning a literal count here would pin node's bytes to a device.
+// =========================================================================
+
+describe('the ladder is fitted against the url this phone will open', () => {
+  /** A realistic 25-line school-supply order: long enough that the ladder runs,
+   *  ordinary enough that the numbers mean something. */
+  function order25(): DeliveryRequestOrderData {
+    const names = [
+      'Composition Notebook Wide Rule 100 Sheet',
+      'Ticonderoga No 2 Pencil 12 Pack',
+      'Elmers Washable School Glue 4oz',
+      'Crayola Crayons 24 Count',
+      'Fiskars Blunt Tip Kids Scissors',
+      'Expo Low Odor Dry Erase Marker Black',
+      'Post-it Notes 3x3 Yellow 12 Pad',
+      'Clorox Disinfecting Wipes 75 Count',
+      'Kleenex Facial Tissue 160 Count',
+      'Purell Hand Sanitizer 8oz Pump',
+      'Sharpie Permanent Marker Fine Black',
+      'Two Pocket Folder Assorted Colors',
+      'Wide Ruled Filler Paper 200 Sheet',
+      'Highlighter Chisel Tip Assorted 6 Pack',
+      'Index Cards 3x5 Ruled White 100',
+      'Manila File Folder Letter Size 100',
+      'Copy Paper 8.5x11 20lb Ream',
+      'Binder Clips Medium 12 Count',
+      'Stapler Full Strip Black',
+      'Staples Standard 5000 Count Box',
+      'Scotch Magic Tape 3/4 Inch',
+      'Rubber Bands Size 33 1lb Bag',
+      'Dry Erase Board Eraser Felt',
+      'Whiteboard Cleaner Spray 8oz',
+      'Trash Can Liner 33 Gallon 100 Count',
+    ];
+    return order({
+      lines: names.map((name, i) => ({
+        itemId: `i-${i}`,
+        name,
+        sku: `SP-KIT-${1000 + i}`,
+        requested: (i % 9) + 2,
+      })),
+    });
+  }
+
+  it('THE DEFECT: a phone with Outlook installed carries MORE rows than the web budget allows', () => {
+    const web = prepareOrderDeliveryRequest(order25(), false);
+    const native = prepareOrderDeliveryRequest(order25(), true);
+
+    // Both really are on the ladder — otherwise this passes with it deleted.
+    expect(web.draft.condensed).toBe(true);
+    expect(native.draft.condensed).toBe(true);
+    expect(web.draft.lineCount).toBe(25);
+
+    // The claim itself. Strictly more, not "at least as many": on this order
+    // the difference is the whole point.
+    expect(native.draft.listedLineCount).toBeGreaterThan(web.draft.listedLineCount);
+    // And the extra rows are really in the message, not just in a counter.
+    expect(native.draft.body.length).toBeGreaterThan(web.draft.body.length);
+  });
+
+  it('THE HEADROOM, numerically: the web-fitted draft leaves the native url hundreds of characters short of the limit', () => {
+    // The pre-fix behaviour, quantified. This is what "measured the wrong
+    // transport" cost: the url the phone opens sat far under the ceiling while
+    // rows were being dropped to satisfy a url it never opens.
+    const web = prepareOrderDeliveryRequest(order25(), false);
+    const wasted = DRAFT_URL_LIMIT - web.outlookMobileUrl.length;
+    expect(wasted).toBeGreaterThan(300);
+    // For scale: that unused headroom is worth several more item rows, and
+    // fitting against the native url actually claims them.
+    const native = prepareOrderDeliveryRequest(order25(), true);
+    expect(native.draft.listedLineCount - web.draft.listedLineCount).toBeGreaterThanOrEqual(4);
+    // The native fit uses the headroom without exceeding it.
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(DRAFT_URL_LIMIT - native.outlookMobileUrl.length).toBeLessThan(wasted);
+  });
+
+  it('whatever the planner opens is a url that was MEASURED — across every probe answer and platform', async () => {
+    // The invariant that makes the whole change safe: fitting for the shorter
+    // native budget and then opening the longer web url would truncate the body
+    // silently, which is worse than dropping a row. So for every combination
+    // the phone can be in, the url handed to the OS is at or under the limit.
+    for (const nativeOutlook of [true, false, null] as const) {
+      for (const platform of ['ios', 'android'] as const) {
+        for (const o of [order(), bigOrder(), order25()]) {
+          vi.mocked(Linking.openURL).mockClear();
+          const prepared = prepareOrderDeliveryRequest(o, nativeOutlook);
+          expect(prepared.linkFits).toBe(true);
+          await openDeliveryRequestDraft('outlook', prepared, platform, nativeOutlook, () => {});
+          const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+          expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+          // ...and it is the transport the ladder declared it was fitting.
+          expect(url).toBe(
+            prepared.transport === 'outlook-native' ? prepared.outlookMobileUrl : prepared.outlookUrl,
+          );
+        }
+      }
+    }
+  });
+
+  it('the native budget genuinely leaves the WEB url unmeasured — which is why the pairing is not optional', () => {
+    // The teeth behind the invariant above. Under `outlook-native` the web url
+    // is allowed to blow past the limit, so a phone that measured native and
+    // then opened web would hand the OS a body that truncates in transit with
+    // no signal to anyone.
+    const native = prepareOrderDeliveryRequest(order25(), true);
+    expect(native.linkFits).toBe(true);
+    expect(native.transport).toBe('outlook-native');
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(native.outlookUrl.length).toBeGreaterThan(DRAFT_URL_LIMIT);
+  });
+
+  it('the mailto reroute is safe under BOTH budgets: core measures it either way', async () => {
+    // planOutlookOpen sends a cc-untrusted platform to mailto. That url is not
+    // the one `transport` names, so it is only safe because core measures the
+    // mailto on every rung regardless of transport.
+    const native = prepareOrderDeliveryRequest(order25(), true);
+    expect(native.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    const res = await openDeliveryRequestDraft('outlook', native, 'ios', true, () => {}, {
+      ios: false,
+      android: true,
+    });
+    expect(res).toEqual({ outcome: 'opened', used: 'default-mail' });
+    const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+    expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(ccOf(url)).toBe(DELIVERY_REQUEST_EMAIL.cc);
+  });
+
+  it('the shortened draft still discloses the shortfall honestly at BOTH budgets', () => {
+    // More rows must not mean a quieter message. The disclosure names the split
+    // either way, and it names the RIGHT split for the rows actually carried.
+    for (const nativeOutlook of [false, true] as const) {
+      const p = prepareOrderDeliveryRequest(order25(), nativeOutlook);
+      expect(p.draft.body).toContain('This message was shortened');
+      expect(p.draft.body).toContain(
+        `Lines 1-${p.draft.listedLineCount} of ${p.draft.lineCount} are listed above`,
+      );
+      expect(condensedNoticeText(p.draft)).toContain(
+        `first ${p.draft.listedLineCount} of ${p.draft.lineCount}`,
+      );
+    }
+  });
+
+  it('deliveryComposeTransport: only a PROVED native app selects the shorter budget', () => {
+    // The one predicate both the measurement and the plan read. `null` is the
+    // not-yet-probed state and must fall to the worst case, not to the fast one.
+    expect(deliveryComposeTransport(true)).toBe('outlook-native');
+    expect(deliveryComposeTransport(false)).toBe('outlook-web');
+    expect(deliveryComposeTransport(null)).toBe('outlook-web');
+  });
+
+  it('the prepared draft records which transport it was fitted for', () => {
+    expect(prepareOrderDeliveryRequest(order(), true).transport).toBe('outlook-native');
+    expect(prepareOrderDeliveryRequest(order(), false).transport).toBe('outlook-web');
+    expect(prepareOrderDeliveryRequest(order(), null).transport).toBe('outlook-web');
+    // The default is the WORST case, so a caller that forgets to pass the probe
+    // answer under-fills rather than truncating.
+    expect(prepareOrderDeliveryRequest(order()).transport).toBe('outlook-web');
   });
 });
 

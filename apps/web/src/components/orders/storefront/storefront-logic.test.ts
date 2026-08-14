@@ -1434,6 +1434,30 @@ describe('prepareDeliveryRequest — the ladder, measured end to end', () => {
     expect(prepared.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
   });
 
+  it('WEB IS FITTED AGAINST THE WEB URL — the transport a browser actually opens', () => {
+    /*
+     * Core gained a `transport` option on 2026-08-13 so the PHONE could fit
+     * rows against `ms-outlook://compose`, which is roughly 25-30% shorter for
+     * the same body. Web must not inherit that shorter budget: a browser opens
+     * `prepared.outlookUrl`, and fitting rows against a url this surface never
+     * opens would truncate the body silently in the one it does.
+     *
+     * The discriminating assertion is not "the web url fits" — a native-fitted
+     * draft might also fit on a small order. It is that the native url is left
+     * with REAL unspent headroom here, which is exactly what a web surface is
+     * supposed to do, and that the chosen count is maximal for the WEB url
+     * (pinned by 'that row count is MAXIMAL' above).
+     */
+    const prepared = prepareDeliveryRequest(order80());
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    // Unspent native headroom: deliberate on this surface, and the measure of
+    // what the phone was previously throwing away.
+    expect(DRAFT_URL_LIMIT - prepared.outlookMobileUrl.length).toBeGreaterThan(300);
+    // And the shim passes no transport at all, so core's safe default (web) is
+    // what applies.
+    expect(prepared.transport).toBe('outlook-web');
+  });
+
   it('DRAFT_URL_LIMIT was not raised to buy rows', () => {
     // Both transports truncate SILENTLY past roughly 2,000 characters, so
     // buying rows by raising the ceiling would trade an honestly shortened

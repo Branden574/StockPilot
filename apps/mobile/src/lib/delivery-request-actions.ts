@@ -3,6 +3,7 @@ import {
   DELIVERY_REQUEST_EMAIL_NAMES,
   ORG_TIMEZONE_DEFAULT,
   prepareDeliveryRequest,
+  type DeliveryComposeTransport,
   type DeliveryRequestAddress,
   type DeliveryRequestInput,
   type DeliveryRequestSite,
@@ -11,7 +12,6 @@ import {
 
 import {
   mailtoPlan,
-  nativeOutlookAvailable,
   planOutlookOpen,
   runPlan,
   type OpenedTransport,
@@ -237,12 +237,65 @@ export function buildDeliveryRequestInput(order: DeliveryRequestOrderData): Deli
   };
 }
 
-/** The whole draft, prepared by the SHARED core builder. Pure and
- *  deterministic — safe to call from a render memo, which is where it runs. */
+// ── Which compose url this phone will actually open ──────────────────────
+
+/**
+ * THE ONE ANSWER that decides BOTH which url the item-row ladder is measured
+ * against and which url `openDeliveryRequestDraft` hands to the OS.
+ *
+ * THE DEFECT THIS CLOSES (2026-08-13). Core's ladder fitted every rung against
+ * the https OWA url, because that is what web opens. A phone with Outlook
+ * installed opens `ms-outlook://compose`, which for the same body is roughly
+ * 25-30% shorter — one encoding layer onto a 20-character scheme, against a
+ * double-encoded inner mailto onto a 52-character https base. Measured on a
+ * realistic 25-line order, the web-fitted ladder stopped at 7 rows and left the
+ * native url at 1303 of 1800 characters: 497 characters of headroom, about
+ * eight item rows, thrown away. DC4 got a delivery request naming 7 items when
+ * 15 fitted. That is the same complaint that started this feature — rows
+ * dropped that did not need to be — one layer down.
+ *
+ * THE ORDERING PROBLEM, AND HOW IT IS RESOLVED. Whether Outlook is installed is
+ * a runtime question (`Linking.canOpenURL`), and the draft is prepared in a
+ * render memo — before any tap, and initially before the probe has resolved.
+ * Preparing against the SHORTER native budget and then opening the WEB url
+ * would silently truncate the body, which is worse than dropping a row. So:
+ *
+ *   - `null` — not probed yet, or the probe threw — means WORST CASE. The web
+ *     budget is measured AND the web url is what opens, because that is what
+ *     `planOutlookOpen` does with `nativeOutlookAvailable: false`. A tap during
+ *     that window is fully consistent; it just carries fewer rows.
+ *   - `true` — the probe answered yes. The native budget is measured and the
+ *     native url is what opens.
+ *   - `false` — no native app. Web budget, web url.
+ *
+ * The screen probes ONCE and holds the answer in state, feeding that same value
+ * to `prepareOrderDeliveryRequest` and to `openDeliveryRequestDraft`. Both read
+ * it through THIS function, so measurement and plan cannot disagree: to break
+ * the pairing you would have to change this one predicate, which changes both
+ * sides together. That is why `openDeliveryRequestDraft` no longer re-probes —
+ * a second `canOpenURL` at press time could answer differently from the one the
+ * ladder was fitted against, and the disagreement would be invisible.
+ */
+export function deliveryComposeTransport(
+  nativeOutlook: boolean | null,
+): DeliveryComposeTransport {
+  return nativeOutlook === true ? 'outlook-native' : 'outlook-web';
+}
+
+/**
+ * The whole draft, prepared by the SHARED core builder. Pure and deterministic
+ * — safe to call from a render memo, which is where it runs.
+ *
+ * `nativeOutlook` is the screen's probe answer; see `deliveryComposeTransport`
+ * for why it defaults to `null` (worst case) rather than to `true`.
+ */
 export function prepareOrderDeliveryRequest(
   order: DeliveryRequestOrderData,
+  nativeOutlook: boolean | null = null,
 ): PreparedDeliveryRequest {
-  return prepareDeliveryRequest(buildDeliveryRequestInput(order));
+  return prepareDeliveryRequest(buildDeliveryRequestInput(order), {
+    transport: deliveryComposeTransport(nativeOutlook),
+  });
 }
 
 // ── The transport ────────────────────────────────────────────────────────
@@ -260,10 +313,19 @@ export interface DeliveryOpenResult {
 }
 
 /**
- * Open the draft. Same planner, same probe, same one-open-per-tap rule as the
+ * Open the draft. Same planner and same one-open-per-tap rule as the
  * maintenance path — literally the same functions, from `./outlook-transport`,
  * so the CC-safety remediation lever (`NATIVE_OUTLOOK_CC_TRUSTED`) covers both
  * features at once.
+ *
+ * `nativeOutlook` IS THE PROBE ANSWER, PASSED IN — it is not re-probed here.
+ * That is deliberate and it is the point of this change: the same value must
+ * decide which url the ladder was MEASURED against and which url is OPENED, or
+ * the phone can fit rows for one transport and then send another. Both sides
+ * read it through `deliveryComposeTransport`. `null` (not yet probed) behaves
+ * exactly as `false`: the web url, which is the one the worst-case budget
+ * measured. The probe itself is `nativeOutlookAvailable` in
+ * `./outlook-transport`, called once by the screen.
  *
  * Refuses everything when `!prepared.linkFits`: past roughly 2,000 characters
  * both transports truncate SILENTLY, so opening would hand DC4 a delivery
@@ -275,21 +337,29 @@ export interface DeliveryOpenResult {
  * or announced as a draft.
  *
  * `ccTrusted` is injectable for tests only; production always uses the
- * shared default.
+ * shared default. Its reroute lands on `mailtoUrl`, which core measures under
+ * BOTH budgets, so that branch is safe whichever transport was fitted.
  */
 export async function openDeliveryRequestDraft(
-  transport: DeliveryEmailTransport,
+  button: DeliveryEmailTransport,
   prepared: OutlookTransportUrls,
   platform: OutlookPlatform,
+  nativeOutlook: boolean | null,
   onOpened: () => void,
   ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<DeliveryOpenResult> {
   if (!prepared.linkFits) return { outcome: 'blocked', used: null };
   const plan =
-    transport === 'outlook'
+    button === 'outlook'
       ? planOutlookOpen(
           prepared,
-          { nativeOutlookAvailable: await nativeOutlookAvailable(), platform },
+          {
+            // Through the SAME predicate the measurement used. Not
+            // `nativeOutlook === true` written out again: a second copy of the
+            // rule is a second thing to forget to change (pattern #26).
+            nativeOutlookAvailable: deliveryComposeTransport(nativeOutlook) === 'outlook-native',
+            platform,
+          },
           ccTrusted,
         )
       : mailtoPlan(prepared);
