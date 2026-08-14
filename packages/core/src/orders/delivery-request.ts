@@ -32,7 +32,7 @@ import {
   composeOutlookMobileUrl,
   composeOutlookWebUrl,
 } from '../email/outlook-compose';
-import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '../time/org-timezone';
+import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
 
 import { cartTotals, type OrderLineQuantity } from './cart-totals';
 import { formatOrderNumber } from './order-number';
@@ -486,15 +486,19 @@ function neededByLine(neededByLocal: string, tz: string): string | null {
   if (!raw) return null;
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return null;
-  const formatted = formatOrgDateTime(
-    d,
-    { dateStyle: 'medium', timeStyle: 'short' },
-    tz || ORG_TIMEZONE_DEFAULT,
-  );
+  // Resolved ONCE and used for BOTH the arithmetic and the label. A stored
+  // `organizations.timezone` this runtime does not recognise degrades to the
+  // default rather than throwing out of the caller's render — but the label
+  // then has to say the zone that was actually used. Formatting in Pacific
+  // while printing "(America/Fresno)" beside it would state a specific,
+  // checkable falsehood in mail to a warehouse, which is worse than either
+  // failing or falling back honestly.
+  const zone = resolveOrgTimezone(tz);
+  const formatted = formatOrgDateTime(d, { dateStyle: 'medium', timeStyle: 'short' }, zone);
   // formatOrgDateTime only returns '—' when its Date is NaN, and the
   // Number.isNaN guard above already excludes that input — this branch was
   // provably unreachable.
-  return `${formatted} (${tz || ORG_TIMEZONE_DEFAULT})`;
+  return `${formatted} (${zone})`;
 }
 
 /**

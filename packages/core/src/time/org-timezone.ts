@@ -70,9 +70,43 @@ export const ORG_TIMEZONE_DEFAULT = 'America/Los_Angeles';
  * Whitespace is treated as absent: a `'   '` timezone would make
  * `toLocaleString` throw a RangeError, which is a worse outcome than the
  * documented default.
+ *
+ * AND SO WOULD A NON-EMPTY STRING THIS RUNTIME DOES NOT RECOGNISE (added
+ * 2026-08-13). The whitespace note above had the right instinct and too narrow
+ * a rule: `'America/Fresno'` is not blank, and it throws exactly the same
+ * RangeError. That matters more than a mis-formatted date, because these
+ * formatters are called inside React render paths — including a `useMemo` on
+ * the native order screen — so one bad `organizations.timezone` row would not
+ * mis-render a line, it would throw during render and take the whole screen
+ * white. A stored value must never be able to do that.
+ *
+ * So the check is now what the runtime itself says, not a shape test: if
+ * `Intl.DateTimeFormat` accepts the zone, it is usable. That is deliberately
+ * runtime-specific — Hermes ships a reduced ICU, so which zones resolve is a
+ * property of the engine, not something decidable from a list at build time.
+ *
+ * IT RETURNS THE ZONE RATHER THAN FORMATTING, so callers can label output with
+ * the zone actually USED. Formatting in Pacific while printing
+ * "(America/Fresno)" beside it would state a specific, checkable falsehood in
+ * mail to a warehouse — a quieter failure than the crash it replaces.
  */
+const VALID_TIMEZONES = new Map<string, boolean>();
+
 export function resolveOrgTimezone(raw: string | null | undefined): string {
-  return (typeof raw === 'string' ? raw.trim() : '') || ORG_TIMEZONE_DEFAULT;
+  const candidate = (typeof raw === 'string' ? raw.trim() : '') || '';
+  if (!candidate) return ORG_TIMEZONE_DEFAULT;
+  const cached = VALID_TIMEZONES.get(candidate);
+  if (cached !== undefined) return cached ? candidate : ORG_TIMEZONE_DEFAULT;
+  try {
+    // Constructing the formatter is what validates the zone; formatting adds
+    // nothing and the result would be discarded.
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate });
+    VALID_TIMEZONES.set(candidate, true);
+    return candidate;
+  } catch {
+    VALID_TIMEZONES.set(candidate, false);
+    return ORG_TIMEZONE_DEFAULT;
+  }
 }
 
 /** Locale-aware date formatter. Pass the org's tz explicitly via
@@ -84,7 +118,9 @@ export function formatOrgDate(
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('en-US', { timeZone: tz, ...opts });
+  // Resolved for the same reason as its two siblings below: an unrecognised
+  // stored zone must degrade, never throw out of a render.
+  return d.toLocaleDateString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
 }
 
 /** Locale-aware time formatter. */
@@ -95,7 +131,7 @@ export function formatOrgTime(
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('en-US', { timeZone: tz, ...opts });
+  return d.toLocaleTimeString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
 }
 
 /** Combined date + time, locale-aware. */
@@ -106,5 +142,7 @@ export function formatOrgDateTime(
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-US', { timeZone: tz, ...opts });
+  // Resolved, not passed through: an unrecognised stored zone degrades to the
+  // default instead of throwing out of a render.
+  return d.toLocaleString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
 }

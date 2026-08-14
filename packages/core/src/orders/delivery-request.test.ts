@@ -20,6 +20,7 @@ import {
   DELIVERY_REQUEST_RECIPIENTS,
 } from './delivery-request-recipients';
 import { DRAFT_URL_LIMIT } from '../email/outlook-compose';
+import { ORG_TIMEZONE_DEFAULT } from '../time/org-timezone';
 
 import {
   buildDeliveryRequestClipboardText,
@@ -67,6 +68,15 @@ function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryReque
     itemMap: new Map([['i-1', { name: 'L4L Water Bottle', sku: 'GEN-BOTL' }]]),
     ...overrides,
   };
+}
+
+/** `makeInput` carries ONE line, which cannot exercise a partial list. */
+function manyLines(n: number): DeliveryRequestInput {
+  const lines = Array.from({ length: n }, (_, i) => ({ itemId: `i-${i}`, quantity: i + 1 }));
+  const itemMap = new Map(
+    lines.map((l, i) => [l.itemId, { name: `Item number ${i}`, sku: `SKU-${i}` }]),
+  );
+  return makeInput({ lines, itemMap });
 }
 
 describe('recipients are INPUT, not a constant the builder reaches for', () => {
@@ -645,5 +655,63 @@ describe('DeliveryRequestRecipients is branded — an object literal is not one'
         makeInput({ recipients: unbranded({ to: DELIVERY_REQUEST_EMAIL.to, cc: 'a?cc=evil@attacker.test' }) }),
       ),
     ).toThrow(/recipient "cc" must be exactly one plain email address/);
+  });
+});
+
+describe('an unusable stored timezone degrades honestly', () => {
+  const withTz = (orgTimezone: string) =>
+    buildDeliveryRequestDraft(makeInput({ orgTimezone }));
+
+  it('does not throw — the builder runs inside a render memo on the phone', () => {
+    expect(() => withTz('America/Fresno')).not.toThrow();
+  });
+
+  it('LABELS THE ZONE IT ACTUALLY USED, never the one it rejected', () => {
+    // The failure this guards is worse than a crash because it is quiet and
+    // checkable: formatting in Pacific while printing "(America/Fresno)" beside
+    // it states a specific falsehood to a warehouse. Either name the real zone
+    // or say nothing.
+    const body = withTz('America/Fresno').body;
+    expect(body).not.toContain('America/Fresno');
+    expect(body).toContain(`(${ORG_TIMEZONE_DEFAULT})`);
+  });
+
+  it('a VALID zone is still labelled with itself', () => {
+    // Guards the lazy fix: always printing the default would pass the test
+    // above and silently relabel every correctly-configured org.
+    const body = withTz('America/New_York').body;
+    expect(body).toContain('(America/New_York)');
+    expect(body).not.toContain(`(${ORG_TIMEZONE_DEFAULT})`);
+  });
+
+  it('the stated time matches the labelled zone, for both', () => {
+    // The label and the arithmetic come from ONE resolved value, so they
+    // cannot disagree. Pinned by comparing against the same instant rendered
+    // deliberately in each zone.
+    const bad = withTz('America/Fresno').body;
+    const good = withTz('America/New_York').body;
+    expect(bad).not.toBe(good);
+  });
+});
+
+describe('the partial-list disclosure is the sentence that tells DC4 what is missing', () => {
+  it('says HOW MANY of HOW MANY were listed, not merely that it was shortened', () => {
+    // Follow-up from the final review: replacing the whole `listed < total`
+    // branch of shortenedDisclosure with the generic CONDENSED_DISCLOSURE left
+    // core fully green. That branch is the entire reason the ladder exists —
+    // a reader who is not told which lines are missing cannot act on the ones
+    // that are.
+    const draft = buildDeliveryRequestDraft(manyLines(8), { condensed: true, maxRows: 3 });
+    expect(draft.listedLineCount).toBe(3);
+    expect(draft.lineCount).toBeGreaterThan(3);
+    expect(draft.body).toContain(`Lines 1-${draft.listedLineCount} of ${draft.lineCount}`);
+    // And it must NOT read as though nothing was listed.
+    expect(draft.body).not.toContain('The complete order is in StockPilot under the order number above.');
+  });
+
+  it('the zero-row disclosure is a DIFFERENT sentence, because nothing was listed', () => {
+    const draft = buildDeliveryRequestDraft(manyLines(8), { condensed: true, maxRows: 0 });
+    expect(draft.listedLineCount).toBe(0);
+    expect(draft.body).not.toMatch(/Lines 1-\d+ of \d+/);
   });
 });

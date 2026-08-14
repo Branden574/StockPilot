@@ -69,3 +69,46 @@ describe('resolveOrgTimezone', () => {
     }
   });
 });
+
+describe('resolveOrgTimezone — a stored zone must never take a screen down', () => {
+  it('passes through a zone this runtime recognises', () => {
+    expect(resolveOrgTimezone('America/New_York')).toBe('America/New_York');
+    expect(resolveOrgTimezone('UTC')).toBe('UTC');
+  });
+
+  it('falls back for a zone that does not exist, instead of throwing', () => {
+    // 'America/Fresno' is the real shape of this bug: a plausible-looking
+    // string a human would type into a settings field. Before this, it threw
+    // RangeError out of formatOrgDateTime — and that call sits inside a
+    // React.useMemo on the native order screen, so one bad organizations row
+    // took the whole screen white rather than mis-formatting one line.
+    expect(resolveOrgTimezone('America/Fresno')).toBe(ORG_TIMEZONE_DEFAULT);
+    expect(resolveOrgTimezone('Not/AZone')).toBe(ORG_TIMEZONE_DEFAULT);
+    expect(resolveOrgTimezone('')).toBe(ORG_TIMEZONE_DEFAULT);
+    expect(resolveOrgTimezone(null)).toBe(ORG_TIMEZONE_DEFAULT);
+    expect(resolveOrgTimezone(undefined)).toBe(ORG_TIMEZONE_DEFAULT);
+  });
+
+  it('formatOrgDateTime does not throw on any of them', () => {
+    for (const tz of ['America/Fresno', 'Not/AZone', '', 'Etc/Nope']) {
+      expect(() =>
+        formatOrgDateTime('2026-08-18T09:00', { dateStyle: 'medium' }, tz),
+      ).not.toThrow();
+    }
+  });
+
+  it('the fallback formats in the DEFAULT zone, not in the rejected one', () => {
+    // Proof the fallback is real arithmetic rather than a swallowed error: the
+    // bad-zone result must equal the default-zone result for the same instant.
+    const instant = '2026-08-18T16:00:00.000Z';
+    const opts = { dateStyle: 'medium', timeStyle: 'short' } as const;
+    expect(formatOrgDateTime(instant, opts, 'America/Fresno')).toBe(
+      formatOrgDateTime(instant, opts, ORG_TIMEZONE_DEFAULT),
+    );
+    // ...and is genuinely different from another real zone, so the assertion
+    // above is not passing because everything renders the same.
+    expect(formatOrgDateTime(instant, opts, 'America/New_York')).not.toBe(
+      formatOrgDateTime(instant, opts, ORG_TIMEZONE_DEFAULT),
+    );
+  });
+});
