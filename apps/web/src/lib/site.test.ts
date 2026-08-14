@@ -77,4 +77,28 @@ describe('DELIVERY_REQUEST_CC_NOTICE', () => {
       expect(copy).not.toContain(claim);
     }
   });
+
+  /**
+   * The address was hand-typed into this sentence until 2026-08-13, which made
+   * the notice a silent SECOND definition of where the copy goes: changing
+   * DELIVERY_REQUEST_EMAIL.cc would have left every screen showing this notice
+   * naming the old mailbox while the mail went to the new one — telling the
+   * employee in writing that a copy was sent somewhere it was not.
+   *
+   * This assertion catches that by MUTATION OF THE ADDRESS rather than of the
+   * sentence: change the constant and a hand-typed notice fails here, because
+   * the address it names is no longer the CC. The literal pin above is the
+   * other half — it catches an unintended change to the WORDING.
+   *
+   * Same defect, same shape, in the maintenance twin
+   * (packages/core/src/maintenance/constants.ts), pinned the same way there.
+   */
+  it('names the CC by INTERPOLATION — exactly one address appears, and it is the constant', () => {
+    expect(DELIVERY_REQUEST_CC_NOTICE.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)).toEqual([
+      DELIVERY_REQUEST_EMAIL.cc,
+    ]);
+    // Never the intake address: this sentence is about the copy, and naming
+    // both would tell the employee the copy went to the ticket queue.
+    expect(DELIVERY_REQUEST_CC_NOTICE).not.toContain(DELIVERY_REQUEST_EMAIL.to);
+  });
 });

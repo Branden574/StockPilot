@@ -15,6 +15,17 @@
  *  - display names are an OWA-only parser extension in the mailto PATH
  *    position; composeMailtoUrl and composeClipboardText stay BARE-ADDRESS.
  *
+ * ADDRESSES ARE VALIDATED AND ENCODED HERE, not at the call sites (2026-08-13).
+ * Every function below runs `assertRoutableAddress` on `to` and `cc` before it
+ * builds anything, and the one raw interpolation — the `mailto:` path — goes
+ * through `mailtoPathAddress`, which validates and percent-encodes in a single
+ * call. Those doc comments explain what each layer is for, which of them is
+ * load-bearing, and why the CALL is fused rather than written as two
+ * statements; the short version is that a poisoned `to` used to be able to
+ * steal the mandatory CC through the mailto transport, a guard sitting next to
+ * one of four callers is not a guard, and a guard nothing is proven to CALL is
+ * not a guard either.
+ *
  * Plain TS, no server directives — imported by web client components, web
  * server code, and the Expo app (mobile's only workspace dep is
  * @stockpilot/core).
@@ -88,6 +99,178 @@ export function assertSafeDisplayName(name: string): string {
   return name;
 }
 
+/**
+ * ONE plain mailbox, nothing else — the grammar, and why it is deliberately
+ * NARROWER than RFC 5322.
+ *
+ * MOVED HERE 2026-08-13 from `../orders/delivery-request.ts`, where it guarded
+ * exactly one of the four transports' callers. This module composes all four
+ * (OWA web, native `ms-outlook:`, `mailto:`, clipboard) and has a second caller
+ * — the maintenance builder — which had NO address validation at all. A check
+ * that lives beside one caller is recurring pattern #26 waiting to happen; a
+ * check that lives beside the STRING CONSTRUCTION cannot be bypassed by adding
+ * a caller. Every compose function below runs it on `to` and on `cc`.
+ *
+ * WHAT THE OLD SPELLING LET THROUGH (measured 2026-08-13). It was a
+ * negative-space regex — "anything but whitespace, `<>`, `,`, `;`, `:` and
+ * `"`" — which ACCEPTS `? & = % / + # ! $ ' ( ) * | \ ^ { } [ ] ~` and
+ * backtick. `a?cc=attacker@evil.test` therefore validated clean, and
+ * `composeMailtoUrl` interpolated it into the URL PATH raw. A URL parser then
+ * reads that as `to = a`, `cc = attacker@evil.test?cc=arosas@cvwest.org` — the
+ * attacker gets the copy and THE MANDATORY CC IS SWALLOWED INTO THEIR VALUE.
+ * Not "a second recipient appears"; the acceptance gate silently disappears.
+ *
+ * WHY A GRAMMAR ALONE CANNOT BE THE FIX, stated plainly so nobody removes the
+ * encoder below thinking this covers it: `a?cc=attacker` is a VALID RFC 5322
+ * dot-atom local part — `?` and `=` are both `atext`. Any validator faithful to
+ * the RFC would admit the injection string. So the grammar below is
+ * deliberately narrower than the RFC: the local part is restricted to
+ * `A-Za-z0-9._+-`, the practical mailbox set, which keeps plus-addressing
+ * (`user+tag@org`) and rejects every character that means something to a URL or
+ * to a mail-header parser. Zero of this tenant's addresses use anything else,
+ * and the only way a non-literal address ever arrives is the per-org
+ * configuration `../orders/delivery-request-recipients.ts` flags as deferred.
+ *
+ * The domain requires at least one dot, and no label may start or end with a
+ * hyphen. The 254-character ceiling is RFC 5321's maximum path length — an
+ * address longer than that is not deliverable, and it would eat the compose
+ * link's row budget on its way to not being deliverable.
+ */
+const ROUTABLE_ADDRESS =
+  /^[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+
+const MAX_ADDRESS_LENGTH = 254;
+
+/**
+ * Refuse to compose rather than misroute.
+ *
+ * Every failure mode this rejects is SILENT if allowed through: a comma splits
+ * the recipient list, a `?` opens a query string inside the path, an empty
+ * string composes mail to nowhere, a name-addr in the address position confuses
+ * a parser into dropping the rest. A throw happens before any compose window
+ * opens — before the employee can believe a message went out — which is the
+ * only point at which the failure is still visible to anybody.
+ *
+ * The message keeps the wording the delivery builder threw with, because that
+ * is what its callers and tests already match on.
+ */
+export function assertRoutableAddress(field: 'to' | 'cc', value: string): string {
+  if (value.length > MAX_ADDRESS_LENGTH || !ROUTABLE_ADDRESS.test(value)) {
+    throw new Error(
+      `Email recipient "${field}" must be exactly one plain email address ` +
+        'with no display name, separator or whitespace.',
+    );
+  }
+  return value;
+}
+
+/**
+ * Characters that may stand for themselves in a `mailto:` PATH.
+ *
+ * Unreserved (RFC 3986) plus `@` — the `addr-spec` separator, which RFC 6068
+ * puts in the path literally — plus `+`, which is `atext` in RFC 5322 and a
+ * `some-delims` in RFC 6068's `qchar`, so plus-addressing survives unmangled.
+ * Everything else is percent-encoded, INCLUDING `?` (starts the hfields), `#`
+ * (starts a fragment), `,` (RFC 6068 `to = addr-spec *("," addr-spec)` — a
+ * literal comma adds a recipient), `%` (double-decoding) and `&`.
+ */
+const MAILTO_PATH_SAFE = /[A-Za-z0-9\-._~+@]/;
+
+declare const MAILTO_PATH_ENCODED: unique symbol;
+
+/**
+ * A mailbox that has been through `encodeMailtoPathAddress` — the ONLY thing
+ * `mailtoUrlFromPath` will splice into a `mailto:` path.
+ *
+ * The brand is module-private, so nothing outside this file can produce a value
+ * of this type: `const p: MailtoPathAddress = input.to` does not compile, and
+ * neither does `mailtoUrlFromPath(input.to, query)`. That is deliberate and it
+ * is the second half of the wiring pin described on `composeMailtoUrl` — the
+ * first half (deleting the call outright) fails a test, this half fails
+ * `tsc --noEmit`.
+ */
+export type MailtoPathAddress = string & { readonly [MAILTO_PATH_ENCODED]: true };
+
+/**
+ * Percent-encode a mailbox for the `mailto:` PATH position.
+ *
+ * THIS IS THE LAYER THAT MAKES THE INJECTION IMPOSSIBLE, as distinct from
+ * `assertRoutableAddress`, which makes it unreachable. The distinction matters
+ * because the two fail differently and one of them already failed once: the
+ * validator is a regex that a future edit can loosen — that is exactly how the
+ * negative-space spelling came to accept `?` — whereas this removes the
+ * MECHANISM. A `?` here becomes `%3F` and cannot start a query string no matter
+ * what any validator upstream believes.
+ *
+ * The other three transports already had this property and were measured to
+ * have it: `composeOutlookMobileUrl` and the `cc` of every URL go through
+ * `encodeDraftQuery` -> `encodeURIComponent`, and `composeOutlookWebUrl`
+ * encodes its path value once and then the whole inner mailto again. The
+ * `mailto:` path was the ONE raw interpolation in the module. This closes it at
+ * the same layer the others are closed at rather than at the call site that
+ * happens to be safe today.
+ *
+ * IDENTITY ON EVERY ADDRESS THE VALIDATOR ADMITS. The accepted grammar
+ * (`A-Za-z0-9._+-` @ `A-Za-z0-9-` and dots) is a strict subset of the safe set
+ * above, so for any address that passes `assertRoutableAddress` this function
+ * returns its input unchanged — the shipped, owner-tenant-verified URLs are
+ * byte-for-byte what they were. Pinned by test in both directions.
+ *
+ * That identity is also why the CALL SITE needed pinning separately from the
+ * behaviour: see `mailtoPathAddress` below.
+ */
+export function encodeMailtoPathAddress(address: string): MailtoPathAddress {
+  let out = '';
+  // Iterating by code POINT, not code unit, so an astral character is handed to
+  // encodeURIComponent as a whole surrogate pair rather than a lone half.
+  for (const ch of address) {
+    out += MAILTO_PATH_SAFE.test(ch) ? ch : encodeURIComponent(ch);
+  }
+  return out as MailtoPathAddress;
+}
+
+/**
+ * VALIDATE AND ENCODE, IN ONE CALL — the whole of what a `mailto:` To address
+ * must survive before it can be a path, expressed as one thing that can be
+ * called or not called.
+ *
+ * WHY THIS EXISTS AS A FUNCTION (2026-08-13, second pass). The encoder's
+ * BEHAVIOUR was pinned in both directions. The fact that anything CALLED it was
+ * pinned by nothing: deleting `encodeMailtoPathAddress(...)` from
+ * `composeMailtoUrl` and going back to `` `mailto:${input.to}?...` `` passed
+ * 1330/1330 core tests, measured. It could not do otherwise — while the
+ * validator stays strict the encoder is the identity on everything that reaches
+ * it, so substituting it away is invisible to any test written against the
+ * composed URL. This is the third time this exact shape has shipped on this
+ * branch's lineage (a rack key in #129, a maintenance upload kind before that),
+ * so the answer here is structural rather than another assertion:
+ *
+ *   - the two layers now share ONE call site. Removing it removes the
+ *     VALIDATION too: the same mutation now fails twelve tests — the eleven
+ *     `mailto: refuses ... in the TO` cases and the CALL SITE test written for
+ *     it. That is the mutation that was silent before.
+ *   - the return type is branded and `mailtoUrlFromPath` accepts nothing else,
+ *     so keeping the validator and dropping the encoder
+ *     (`mailtoUrlFromPath(assertRoutableAddress('to', input.to), q)`) does not
+ *     compile.
+ *
+ * HONEST BOUNDARY: a hand-rewrite that inlines its own `` `mailto:${...}` ``
+ * template, bypassing both helpers while keeping the validator, is still
+ * invisible — no test can see a string built somewhere else. What is now
+ * impossible is the accidental version: deleting a call, or reverting a line.
+ */
+function mailtoPathAddress(value: string): MailtoPathAddress {
+  return encodeMailtoPathAddress(assertRoutableAddress('to', value));
+}
+
+/**
+ * The ONE place a `mailto:` URL is assembled. Takes only an address that has
+ * been through `mailtoPathAddress` — see `MailtoPathAddress`.
+ */
+export function mailtoUrlFromPath(path: MailtoPathAddress, query: string): string {
+  return `mailto:${path}?${query}`;
+}
+
 export interface ComposeInput {
   to: string;
   cc?: string;
@@ -111,6 +294,8 @@ export interface ComposedEmail {
 /** OWA deep link: `?mailtouri=<encoded inner mailto URI>`. Two encoding
  *  layers exactly — one building the inner URI, one wrapping it. */
 export function composeOutlookWebUrl(input: ComposeInput): string {
+  assertRoutableAddress('to', input.to);
+  if (input.cc !== undefined) assertRoutableAddress('cc', input.cc);
   const toValue = input.toName
     ? `${assertSafeDisplayName(input.toName)} <${input.to}>`
     : input.to;
@@ -153,6 +338,8 @@ export function composeOutlookWebUrl(input: ComposeInput): string {
  * against DRAFT_URL_LIMIT are transitively measuring this one. Pinned by test.
  */
 export function composeOutlookMobileUrl(input: ComposeInput): string {
+  assertRoutableAddress('to', input.to);
+  if (input.cc !== undefined) assertRoutableAddress('cc', input.cc);
   if (input.toName) assertSafeDisplayName(input.toName);
   if (input.ccName) assertSafeDisplayName(input.ccName);
   const query: Record<string, string> = { to: input.to };
@@ -163,22 +350,43 @@ export function composeOutlookMobileUrl(input: ComposeInput): string {
 }
 
 /** RFC 6068 mailto fallback. BARE addresses only — the name-addr path trick
- *  is an OWA extension, unverified on desktop clients. Do not extend. */
+ *  is an OWA extension, unverified on desktop clients. Do not extend.
+ *
+ *  The To address is the only value in this module that sits in a URL PATH
+ *  rather than a query parameter, which is why it goes through
+ *  `mailtoPathAddress` rather than riding through `encodeDraftQuery` like
+ *  everything else. It used to be interpolated RAW; see `mailtoPathAddress`,
+ *  `encodeMailtoPathAddress` and `assertRoutableAddress` for what that cost,
+ *  which of the two layers does which half of the work, and why the CALL is
+ *  structured so that removing it cannot be silent. */
 export function composeMailtoUrl(
   input: Pick<ComposeInput, 'to' | 'cc' | 'subject' | 'body'>,
 ): string {
+  // The ONLY validation of `to` in this function, deliberately: it is fused to
+  // the encoding, so a revert to a raw path drops the refusals with it.
+  const path = mailtoPathAddress(input.to);
+  if (input.cc !== undefined) assertRoutableAddress('cc', input.cc);
   const query: Record<string, string> = {};
   if (input.cc) query.cc = input.cc;
   query.subject = input.subject;
   query.body = input.body;
-  return `mailto:${input.to}?${encodeDraftQuery(query)}`;
+  return mailtoUrlFromPath(path, encodeDraftQuery(query));
 }
 
 /** Terminal fallback: labelled blocks so the user can rebuild the message by
- *  hand INCLUDING the CC. No URL-length limit — always the full body. */
+ *  hand INCLUDING the CC. No URL-length limit — always the full body.
+ *
+ *  VALIDATED TOO, even though nothing here is a URL. This block is LABELLED
+ *  LINES, and a line break inside an address forges one: a `to` of
+ *  `x@y.test\nCC: attacker@evil.test` renders a second CC line above the real
+ *  one, and the human retyping it into their mail client has no way to know
+ *  which line the system meant. Same injection, different grammar — so the same
+ *  guard, at the same layer, rather than on three of the four transports. */
 export function composeClipboardText(
   input: Pick<ComposeInput, 'to' | 'cc' | 'subject' | 'body'>,
 ): string {
+  assertRoutableAddress('to', input.to);
+  if (input.cc !== undefined) assertRoutableAddress('cc', input.cc);
   const lines = [`TO: ${input.to}`];
   if (input.cc) lines.push(`CC: ${input.cc}`);
   lines.push(`SUBJECT: ${input.subject}`, '', 'MESSAGE:', input.body);

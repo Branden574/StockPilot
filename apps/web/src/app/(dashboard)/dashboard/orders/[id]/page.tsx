@@ -36,6 +36,7 @@ import {
   describeUnpickedShortfall,
   formatOrderNumber,
   isManagerOrAbove,
+  resolveOrgTimezone,
   UNPICKED_SHORTFALL_TITLE,
   type Role,
 } from '@stockpilot/core';
@@ -685,7 +686,12 @@ export default async function OrderDetailPage({
                 requestedFor={detail.requesterName ?? requesterDisplay}
                 requesterEmail={detail.requesterEmail}
                 neededBy={(request as { needed_by?: string | null }).needed_by ?? ''}
-                orgTimezone={deliveryRequestTimezone ?? 'UTC'}
+                // Through the shared resolver, never a second hardcoded zone.
+                // This slot is null only when showDeliveryRequest is false (so
+                // this button is not rendered at all), but a literal here was
+                // one of the two copies of "the default org timezone" that let
+                // web and mobile state different needed-by times for one order.
+                orgTimezone={resolveOrgTimezone(deliveryRequestTimezone)}
                 notes={request.notes ?? ''}
                 lines={deliveryRequestLines}
               />

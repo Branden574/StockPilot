@@ -79,6 +79,27 @@ describe('maintenance recipient constants', () => {
       expect(MAINTENANCE_CC_NOTICE).not.toContain(banned);
     }
   });
+
+  /**
+   * The notice used to hand-type the CC address a second time, which made this
+   * sentence a silent SECOND definition of where the copy goes: changing
+   * L4L_MAINTENANCE_EMAIL.cc would have left every screen showing this notice
+   * naming the old mailbox while the mail went to the new one — telling the
+   * requester in writing that a copy was sent somewhere it was not.
+   *
+   * This is the assertion that catches that, and it catches it by MUTATION of
+   * the address rather than of the sentence: change the constant above and a
+   * hand-typed notice fails here (it still names the old address, and the new
+   * one is absent), while the interpolated one follows it.
+   */
+  it('names the CC by INTERPOLATION — exactly one address appears, and it is the constant', () => {
+    expect(MAINTENANCE_CC_NOTICE.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)).toEqual([
+      L4L_MAINTENANCE_EMAIL.cc,
+    ]);
+    // Never the intake address: this sentence is about the copy, and naming
+    // both would tell the requester the copy went to the ticket queue.
+    expect(MAINTENANCE_CC_NOTICE).not.toContain(L4L_MAINTENANCE_EMAIL.to);
+  });
 });
 
 describe('status labels — the ONLY five states (Maintenance Resolved spec §1.1/§11)', () => {

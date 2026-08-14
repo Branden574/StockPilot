@@ -8,6 +8,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -66,8 +67,31 @@ import {
 import { extractApiErrorMessage } from '@/lib/po-import-approve';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
+  BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
+  BLOCKED_RETRY_MESSAGE as DR_BLOCKED_RETRY,
+  COPY_HELPER_TEXT as DR_COPY_HELPER,
+  DUPLICATE_WARNING as DR_DUPLICATE_WARNING,
+  HONESTY_NOTICE as DR_HONESTY_NOTICE,
+  OVERSIZED_MESSAGE as DR_OVERSIZED,
+  RECIPIENTS_HELPER_TEXT as DR_RECIPIENTS,
+  canRequestDelivery,
+  deliverySuccessMessageFor,
+  needsDeliveryRequestData,
+  openDeliveryRequestDraft,
+  parseCharterAddress,
+  prepareOrderDeliveryRequest,
+  shouldConfirmBeforeOpening,
+  shouldShowBlockedNotice,
+  shouldShowCondensedNotice,
+  shouldWarnDuplicateDrafts,
+  type DeliveryOpenResult,
+  type DeliveryRequestOrderData,
+} from '@/lib/delivery-request-actions';
+import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
+import {
   availableOrderActions,
   can,
+  condensedNoticeText,
   formatOrderNumber,
   derivePickingStatus,
   UNPICKED_SHORTFALL_TITLE,
@@ -157,6 +181,24 @@ interface OrderHeader {
   pickerName: string | null;
   fulfillmentType: string | null;
   signatureToken: string | null;
+  /** The joined `user_profiles.email`. Kept ALONGSIDE the denormalized
+   *  `requester_email` rather than folded into the display label, because the
+   *  delivery request needs a real reply-to address and internal self-submits
+   *  leave the denormalized column NULL — this is the only contact DC4 gets
+   *  on those orders. Previously fetched and thrown away. */
+  requesterProfileEmail: string | null;
+  /** `order_requests.needed_by` (timestamptz ISO instant). Fed to the shared
+   *  delivery-request builder, which localises it to the org zone. */
+  neededBy: string | null;
+  /** `order_requests.notes` — the requester-facing message, included in a
+   *  full-size delivery request draft (the condensed rungs drop it). */
+  notes: string | null;
+  /** The delivery site (charters row), resolved for the delivery request.
+   *  Null for pickup orders and for the legacy delivery rows with no charter. */
+  destination: { id: string; name: string; code: string | null; address: ReturnType<typeof parseCharterAddress> } | null;
+  /** `organizations.timezone`, or null when unread/unset — the builder then
+   *  falls back to the documented default rather than printing a bare time. */
+  orgTimezone: string | null;
   /** Line roll-ups for the backorder progress card. requested = ordered,
    *  fulfilled = provided to the customer (shipped at hand-over). */
   totalRequested: number;
@@ -312,6 +354,94 @@ export default function OrderDetail() {
   const showCreateReturn =
     canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
 
+  // ── Delivery request ────────────────────────────────────────────────────
+  // Mobile parity with the web order page's SendDeliveryRequestButton. Opens a
+  // prefilled draft in the employee's mail app; sends nothing, creates nothing.
+  //
+  // Every decision below is imported from lib/delivery-request-actions — the
+  // gate, the input mapping, the transport and every word of copy — because
+  // this file is a .tsx under app/ and this repo's mobile vitest can reach
+  // neither. A decision written inline here would be untestable.
+  const showDeliveryRequest = canRequestDelivery({
+    status: order?.status ?? null,
+    fulfillmentType: order?.fulfillmentType ?? null,
+    requesterUserId: order?.requesterUserId ?? null,
+    viewerUserId: user?.id ?? null,
+    ordersModuleEnabled: enabledModules.has('orders'),
+  });
+  const deliveryOrderData = React.useMemo<DeliveryRequestOrderData | null>(
+    () =>
+      order
+        ? {
+            id: order.id,
+            orderNumber: order.orderNumber,
+            warehouseName: order.warehouseName,
+            requesterName: order.requesterName,
+            requesterLabel: order.requester,
+            requesterEmail: order.requesterEmail,
+            requesterProfileEmail: order.requesterProfileEmail,
+            neededBy: order.neededBy,
+            notes: order.notes,
+            destination: order.destination,
+            orgTimezone: order.orgTimezone,
+            lines: order.lines.map((l) => ({
+              itemId: l.itemId,
+              name: l.name,
+              sku: l.sku,
+              requested: l.requested,
+            })),
+          }
+        : null,
+    [order],
+  );
+  /**
+   * Is the native Outlook app installed? Probed ONCE, held here, and fed to
+   * `prepareOrderDeliveryRequest` — the ONLY consumer.
+   *
+   * It used to be handed to `openDeliveryRequestDraft` as well, so that the url
+   * opened matched the url the item-row ladder measured. That pairing is no
+   * longer this screen's to keep: the opener reads `transport` off the prepared
+   * draft, so the value below cannot be passed to two places and cannot
+   * disagree with itself. See `openDeliveryRequestDraft`.
+   *
+   * This is plumbing, not a decision: every rule about what `null` means and
+   * which transport follows from it lives in `deliveryComposeTransport` in
+   * lib/delivery-request-actions, where vitest can reach it. All this does is
+   * turn one async answer into state.
+   *
+   * `null` until the probe resolves, which is the WORST-CASE budget (the long
+   * https url) and also the url that would open during that window — so a tap
+   * before it settles is consistent, merely carrying fewer item rows. The probe
+   * opens nothing and costs no compose screen, but it is still gated on the
+   * action being visible so ordinary order screens do not ask at all.
+   */
+  const [nativeOutlook, setNativeOutlook] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!showDeliveryRequest) return;
+    let alive = true;
+    void nativeOutlookAvailable().then((available) => {
+      if (alive) setNativeOutlook(available);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [showDeliveryRequest]);
+
+  // Pure and deterministic (no clock, no DOM), so it is safe in a memo — the
+  // same shape the maintenance screen uses for its own prepared draft. It
+  // re-runs when the probe settles, which is what lets the phone carry the
+  // extra rows the native url has room for.
+  const deliveryPrepared = React.useMemo(
+    () =>
+      deliveryOrderData && showDeliveryRequest
+        ? prepareOrderDeliveryRequest(deliveryOrderData, nativeOutlook)
+        : null,
+    [deliveryOrderData, showDeliveryRequest, nativeOutlook],
+  );
+  const [deliveryDraftCount, setDeliveryDraftCount] = React.useState(0);
+  const [deliveryResult, setDeliveryResult] = React.useState<DeliveryOpenResult | null>(null);
+  const [deliveryCopyOpen, setDeliveryCopyOpen] = React.useState(false);
+
   // Add items to an EXISTING order (owner request 2026-07-22) — cosmetic mirror
   // of OrderRequestsService.addLines: orders module on, the order has not
   // shipped or died, and the viewer is its requester or holds orders:approve.
@@ -335,6 +465,58 @@ export default function OrderDetail() {
     () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
     [order],
   );
+
+  /**
+   * Open the delivery-request draft.
+   *
+   * `Platform.OS` is read HERE and nowhere in src/lib — the transport decision
+   * stays a pure, node-testable function that takes the platform as data
+   * (react-native cannot be imported under this repo's vitest).
+   *
+   * `result.used` is the transport that ACTUALLY carried the draft, and it is
+   * what the confirmation below is worded from — never the button that was
+   * pressed, so the screen can never say "Outlook opened" about the default
+   * mail app.
+   */
+  async function runDeliveryOpen() {
+    if (!deliveryPrepared) return;
+    setActing('delivery-request');
+    const platform: OutlookPlatform = Platform.OS === 'android' ? 'android' : 'ios';
+    const result = await openDeliveryRequestDraft(
+      'outlook',
+      // Which url opens is decided by THIS object's own `transport` field, the
+      // one core's ladder stamped when it measured the body. There is no probe
+      // answer to pass alongside it and therefore nothing here that can drift
+      // out of step with what was measured.
+      deliveryPrepared,
+      platform,
+      // Fires only after a real, successful open, so a blocked attempt is
+      // never counted as a draft and cannot trigger the duplicate warning.
+      () => setDeliveryDraftCount((n) => n + 1),
+    );
+    setActing(null);
+    setDeliveryResult(result);
+    // A blocked open surfaces the copy panel, which always carries the
+    // complete uncondensed message — the one honest transport left.
+    if (result.outcome === 'blocked') setDeliveryCopyOpen(true);
+  }
+
+  function handleDeliveryRequestPress() {
+    // The draft is too long for any compose link. Nothing is opened — a mail
+    // client would truncate it silently — so go straight to the copy panel.
+    if (deliveryPrepared && !deliveryPrepared.linkFits) {
+      setDeliveryCopyOpen(true);
+      return;
+    }
+    if (shouldConfirmBeforeOpening(deliveryDraftCount)) {
+      Alert.alert('Open another draft?', DR_DUPLICATE_WARNING, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Another Draft', onPress: () => void runDeliveryOpen() },
+      ]);
+      return;
+    }
+    void runDeliveryOpen();
+  }
 
   /** Post-add: refresh the pick workspace, confirm what changed, then reload. */
   async function handleItemsAdded(res: AddLinesResult) {
@@ -500,9 +682,16 @@ export default function OrderDetail() {
         // `picker:user_profiles!assigned_picker_id` resolves the claimant's name
         // for the picker chip (assigned_picker_id FK → user_profiles.id, mig
         // 0109). RLS lets org members read each other, same as the requester join.
+        // `needed_by`, `notes` and `delivery_charter_id` are FREE here — three
+        // more columns on a row this screen already fetches — and they are what
+        // let the delivery request draft say when the order is needed, carry the
+        // requester's message, and name the destination site. Without them the
+        // phone would compose a visibly thinner email than the web page does for
+        // the same order.
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
+         needed_by, notes, delivery_charter_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          picker:user_profiles!assigned_picker_id (full_name, email)`,
@@ -595,6 +784,58 @@ export default function OrderDetail() {
         }
       }
     }
+    // Delivery-request inputs: the destination site and the org's timezone.
+    //
+    // Gated on ROW-DERIVED facts only — is this a live delivery order — and
+    // never on the viewer, so `load` keeps its existing deps and does not
+    // re-run when auth or module state settles. A pickup order, or a
+    // completed/denied/cancelled one, pays nothing. The two reads share one
+    // round trip.
+    //
+    // The org timezone cannot come from the workspace boot query the way web
+    // gets it from an admin-client cache: mobile reads `organizations`
+    // directly, which RLS permits for any org member (organizations_select →
+    // is_org_member(id)). A null result is left null and the builder falls
+    // back to the documented default rather than printing a time in no zone.
+    let destination: OrderHeader['destination'] = null;
+    let orgTimezone: string | null = null;
+    const headerRow = data as Record<string, unknown> | null;
+    // The SAME predicate the display gate is built from (see
+    // needsDeliveryRequestData) — never a status list retyped here, which is how
+    // a fetch gate ends up narrower than the button that depends on it.
+    const isLiveDelivery =
+      headerRow != null &&
+      needsDeliveryRequestData({
+        status: (headerRow.status as string | null) ?? null,
+        fulfillmentType: (headerRow.fulfillment_type as string | null) ?? null,
+      });
+    if (isLiveDelivery) {
+      const charterId = (headerRow.delivery_charter_id as string | null) ?? null;
+      const [charterRes, orgRes] = await Promise.all([
+        charterId
+          ? supabase
+              .from('charters')
+              .select('id, name, code, address')
+              .eq('organization_id', orgId)
+              .eq('id', charterId)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+        supabase.from('organizations').select('timezone').eq('id', orgId).maybeSingle(),
+      ]);
+      const ch = charterRes.data as Record<string, unknown> | null;
+      if (ch && typeof ch.id === 'string') {
+        destination = {
+          id: ch.id,
+          name: (ch.name as string | null) ?? '',
+          code: (ch.code as string | null) ?? null,
+          // charters.address is jsonb — anything at all can be in there, so it
+          // goes through the same defensive parse the web page uses.
+          address: parseCharterAddress(ch.address),
+        };
+      }
+      orgTimezone = ((orgRes.data as Record<string, unknown> | null)?.timezone as string | null) ?? null;
+    }
+
     if (data) {
       const r = data as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
@@ -639,6 +880,13 @@ export default function OrderDetail() {
         pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
         signatureToken: (r.signature_token as string | null) ?? null,
+        // The joined profile email, kept as its own field. `profileFromEmbed`
+        // already normalises the array-or-object embed shape PostgREST returns.
+        requesterProfileEmail: profileFromEmbed(r.requester)?.email?.trim() || null,
+        neededBy: (r.needed_by as string | null) ?? null,
+        notes: (r.notes as string | null) ?? null,
+        destination,
+        orgTimezone,
         totalRequested,
         totalFulfilled,
         isShortStock,
@@ -1575,6 +1823,89 @@ export default function OrderDetail() {
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>
+            </View>
+          ) : null}
+
+          {showDeliveryRequest && deliveryPrepared ? (
+            <View style={{ gap: 8 }}>
+              <Eyebrow>DELIVERY REQUEST</Eyebrow>
+              {actionBtn('Email delivery request', 'delivery-request', handleDeliveryRequestPress)}
+              <Mono size={10.5} color={c.ink4}>
+                {DR_RECIPIENTS}
+              </Mono>
+              <Mono size={10.5} color={c.ink4}>
+                {DR_HONESTY_NOTICE}
+              </Mono>
+
+              {/* Two mutually exclusive length states, both sourced from the
+                  shared builder so the phone and the web page describe the
+                  same draft in the same words. */}
+              {shouldShowCondensedNotice(deliveryPrepared) ? (
+                <Mono size={10.5} color={c.ink4}>
+                  {condensedNoticeText(deliveryPrepared.draft)}
+                </Mono>
+              ) : null}
+              {!deliveryPrepared.linkFits ? (
+                <Mono size={10.5} color={c.ink4}>
+                  {DR_OVERSIZED}
+                </Mono>
+              ) : null}
+
+              {/* Deliberately one behind the confirm dialog's threshold, which
+                  is why it is a named function and not a `> 1` typed here: the
+                  two thresholds are unreadable side by side from this file, and
+                  an off-by-one between them is invisible on screen until
+                  someone mails DC4 twice. Both live in the tested module. */}
+              {shouldWarnDuplicateDrafts(deliveryDraftCount) ? (
+                <Mono size={10.5} color={c.ink4}>
+                  {DR_DUPLICATE_WARNING}
+                </Mono>
+              ) : null}
+
+              {deliveryResult?.outcome === 'opened' ? (
+                <Mono size={10.5} color={c.ink4}>
+                  {deliverySuccessMessageFor(deliveryResult.used)}
+                </Mono>
+              ) : null}
+              {/* A blocked open and an oversized draft are different failures
+                  with different remedies — the retry this card offers is
+                  useless advice for a draft no link can carry. The AND that
+                  keeps them apart lives in the tested module, not here. */}
+              {shouldShowBlockedNotice(deliveryPrepared, deliveryResult) ? (
+                <>
+                  <Mono size={10.5} color={c.ink4}>
+                    {DR_BLOCKED_HEADLINE}
+                  </Mono>
+                  <Mono size={10.5} color={c.ink4}>
+                    {DR_BLOCKED_RETRY}
+                  </Mono>
+                </>
+              ) : null}
+
+              {deliveryCopyOpen ? (
+                <>
+                  {/* The terminal transport. ALWAYS the full, uncondensed
+                      message including both recipients, so the employee can
+                      complete the task by hand no matter what failed. There is
+                      no clipboard module in this binary, so the selectable box
+                      IS the copy affordance. */}
+                  <Mono size={10.5} color={c.ink4}>
+                    {DR_COPY_HELPER}
+                  </Mono>
+                  <Card padding={14}>
+                    <Body size={12} color={c.ink} selectable>
+                      {deliveryPrepared.clipboardText}
+                    </Body>
+                  </Card>
+                </>
+              ) : (
+                actionBtn(
+                  'Copy details',
+                  'delivery-copy',
+                  () => setDeliveryCopyOpen(true),
+                  'default',
+                )
+              )}
             </View>
           ) : null}
 

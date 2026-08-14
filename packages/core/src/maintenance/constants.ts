@@ -23,9 +23,21 @@ export const L4L_MAINTENANCE_EMAIL_NAMES = Object.freeze({
   cc: 'Andrew Rosas',
 } as const);
 
-/** Accuracy, not optimism: no "assigned", no "ticket created", no "notified". */
+/**
+ * Accuracy, not optimism: no "assigned", no "ticket created", no "notified".
+ *
+ * The address is INTERPOLATED, not retyped. It was hand-typed here until
+ * 2026-08-13 — the same defect, in the same shape, as the delivery twin in
+ * `../orders/delivery-request-recipients.ts`, and fixed in the same commit
+ * because fixing one copy of a duplicated behaviour is not a fix (recurring
+ * pattern #26). A hand-typed copy makes this sentence a second, silent
+ * definition of the CC: change `L4L_MAINTENANCE_EMAIL.cc` and every screen
+ * showing this notice keeps naming the old mailbox while the mail goes to the
+ * new one, telling the requester in writing that a copy went somewhere it did
+ * not.
+ */
 export const MAINTENANCE_CC_NOTICE =
-  'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to arosas@cvwest.org.';
+  `The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to ${L4L_MAINTENANCE_EMAIL.cc}.`;
 
 export const MAINTENANCE_CATEGORIES = [
   'Facilities',

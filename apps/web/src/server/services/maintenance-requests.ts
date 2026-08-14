@@ -16,7 +16,8 @@ import {
 import { maybeSendMaintenanceResolvedEmail } from '@/server/email/maintenance-resolved';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
+import { resolveOrgTimezone } from '@stockpilot/core';
+import { formatOrgDateTime } from '@/lib/timezone';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -1251,7 +1252,9 @@ export class MaintenanceRequestsService {
       .select('timezone')
       .eq('id', this.ctx.organizationId)
       .maybeSingle();
-    const tz = (org?.timezone as string | null) || ORG_TIMEZONE_DEFAULT;
+    // Through the ONE resolver, so no surface carries a private copy of the
+    // org-timezone default. See resolveOrgTimezone in @stockpilot/core.
+    const tz = resolveOrgTimezone(org?.timezone as string | null);
     const submittedAtDisplay = formatOrgDateTime(detail.createdAt, { dateStyle: 'long', timeStyle: 'short' }, tz);
 
     return {

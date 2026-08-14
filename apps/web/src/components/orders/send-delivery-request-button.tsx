@@ -64,6 +64,45 @@ export interface SendDeliveryRequestButtonProps {
  * the wrapper div scopes the assistant's sf-* styles, which storefront.css
  * defines under that ancestor only.
  */
+/**
+ * WEB'S HALF of the order-row -> draft-input mapping, as a pure function.
+ *
+ * Extracted from the memo below on 2026-08-13 so that the cross-surface parity
+ * test can drive it. `delivery-request-parity.test.tsx` renders the real order
+ * page, captures the props it derives, runs them through THIS, and compares the
+ * result field by field against core's `buildDeliveryRequestInput` — the
+ * mapping the phone runs — for the same database row. That comparison is only
+ * possible because both halves are callable outside React; while this lived
+ * inside a `useMemo`, the only test that claimed to check parity was in the
+ * mobile suite comparing core against core, and it could not see either of the
+ * two divergences that had already reached the branch.
+ *
+ * The mapping is unchanged by the extraction; it is the same expression the
+ * memo evaluated.
+ */
+export function deliveryRequestInputFromProps(
+  props: SendDeliveryRequestButtonProps,
+): DeliveryRequestInput {
+  const { lines } = props;
+  return {
+    orderId: props.orderId,
+    orderNumber: props.orderNumber,
+    // The page only renders this button for delivery orders; the literal
+    // (rather than a prop) keeps a future pickup caller from quietly
+    // producing a destination-less "delivery" draft.
+    fulfillmentType: 'delivery',
+    warehouseName: props.warehouseName,
+    destination: props.destination,
+    requestedFor: props.requestedFor,
+    requesterEmail: props.requesterEmail,
+    neededByLocal: props.neededBy,
+    orgTimezone: props.orgTimezone,
+    notes: props.notes,
+    lines: lines.map(({ itemId, quantity }) => ({ itemId, quantity })),
+    itemMap: new Map(lines.map((l) => [l.itemId, { name: l.name, sku: l.sku }])),
+  };
+}
+
 export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps) {
   const {
     orderId,
@@ -79,23 +118,19 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
   } = props;
 
   const input = React.useMemo<DeliveryRequestInput>(
-    () => ({
-      orderId,
-      orderNumber,
-      // The page only renders this button for delivery orders; the literal
-      // (rather than a prop) keeps a future pickup caller from quietly
-      // producing a destination-less "delivery" draft.
-      fulfillmentType: 'delivery',
-      warehouseName,
-      destination,
-      requestedFor,
-      requesterEmail,
-      neededByLocal: neededBy,
-      orgTimezone,
-      notes,
-      lines: lines.map(({ itemId, quantity }) => ({ itemId, quantity })),
-      itemMap: new Map(lines.map((l) => [l.itemId, { name: l.name, sku: l.sku }])),
-    }),
+    () =>
+      deliveryRequestInputFromProps({
+        orderId,
+        orderNumber,
+        warehouseName,
+        destination,
+        requestedFor,
+        requesterEmail,
+        neededBy,
+        orgTimezone,
+        notes,
+        lines,
+      }),
     [
       orderId,
       orderNumber,

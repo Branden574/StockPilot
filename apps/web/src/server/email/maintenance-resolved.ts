@@ -11,7 +11,8 @@ import {
 } from '@/lib/email/es/families/maintenance';
 import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
-import { formatOrgDateTime, ORG_TIMEZONE_DEFAULT } from '@/lib/timezone';
+import { resolveOrgTimezone } from '@stockpilot/core';
+import { formatOrgDateTime } from '@/lib/timezone';
 import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-share-links';
 
 /**
@@ -185,7 +186,8 @@ export async function maybeSendMaintenanceResolvedEmail(
         .select('timezone')
         .eq('id', request.organization_id)
         .maybeSingle();
-      const tz = (org as { timezone?: string | null } | null)?.timezone || ORG_TIMEZONE_DEFAULT;
+      // Through the ONE resolver — see resolveOrgTimezone in @stockpilot/core.
+      const tz = resolveOrgTimezone((org as { timezone?: string | null } | null)?.timezone);
       const resolvedOnDisplay = formatOrgDateTime(
         request.resolved_at ?? new Date().toISOString(),
         {
