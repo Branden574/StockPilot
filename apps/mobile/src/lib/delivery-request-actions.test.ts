@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
 
-import { DELIVERY_REQUEST_EMAIL, DRAFT_URL_LIMIT, condensedNoticeText } from '@stockpilot/core';
+import {
+  DELIVERY_REQUEST_EMAIL,
+  DRAFT_URL_LIMIT,
+  condensedNoticeText,
+  type DeliveryRequestRecipients,
+} from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
@@ -786,33 +791,19 @@ describe('copy', () => {
 
 describe('the phone adds only its recipients to the shared mapping', () => {
   it('buildDeliveryRequestInput is core\'s mapping plus the tenant recipients — nothing else', async () => {
-    const {
-      buildDeliveryRequestInput: coreMapping,
-      DELIVERY_REQUEST_EMAIL_NAMES,
-    } = await import('@stockpilot/core');
+    const { buildDeliveryRequestInput: coreMapping, DELIVERY_REQUEST_RECIPIENTS } =
+      await import('@stockpilot/core');
     const o = order();
-    const recipients = {
-      to: DELIVERY_REQUEST_EMAIL.to,
-      cc: DELIVERY_REQUEST_EMAIL.cc,
-      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-    };
+    const recipients = DELIVERY_REQUEST_RECIPIENTS;
     // Not "produces the same VALUES" — literally the same function's output.
     // A field the phone re-derived on its own would fail here.
     expect(buildDeliveryRequestInput(o)).toEqual(coreMapping(o, recipients));
   });
 
   it('holds across every row shape the fallbacks care about, so the delegation is not fixture-deep', async () => {
-    const {
-      buildDeliveryRequestInput: coreMapping,
-      DELIVERY_REQUEST_EMAIL_NAMES,
-    } = await import('@stockpilot/core');
-    const recipients = {
-      to: DELIVERY_REQUEST_EMAIL.to,
-      cc: DELIVERY_REQUEST_EMAIL.cc,
-      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-    };
+    const { buildDeliveryRequestInput: coreMapping, DELIVERY_REQUEST_RECIPIENTS } =
+      await import('@stockpilot/core');
+    const recipients = DELIVERY_REQUEST_RECIPIENTS;
     let checked = 0;
     for (const requesterEmail of [null, '', 'onbehalf@site.org']) {
       for (const orgTimezone of [null, '', 'UTC', 'America/New_York']) {
@@ -825,6 +816,28 @@ describe('the phone adds only its recipients to the shared mapping', () => {
       }
     }
     expect(checked).toBe(36);
+  });
+
+  /**
+   * THE BRAND HOLDS ACROSS THE WORKSPACE BOUNDARY, which is where the risk
+   * actually lives: a new call site would be written in an app, importing the
+   * type through the `@stockpilot/core` barrel, not inside core beside the
+   * private symbol. If the brand were removed, this @ts-expect-error becomes an
+   * unused directive and `pnpm typecheck` fails with TS2578 — in the mobile
+   * app, not only in core.
+   *
+   * This is DEFECT 5 stated concretely: `cc: 'ops@somewhere.test'` is routable,
+   * so every runtime guard in the feature accepts it by design. Only the type
+   * system can refuse a wrong-but-well-formed address, and only before it is
+   * written.
+   */
+  it('TYPE-LEVEL PIN: a third call site cannot hand-type its own recipients', () => {
+    // @ts-expect-error a raw literal is missing core's module-private brand
+    const forged: DeliveryRequestRecipients = {
+      to: DELIVERY_REQUEST_EMAIL.to,
+      cc: 'ops@somewhere.test',
+    };
+    expect(forged.cc).toBe('ops@somewhere.test');
   });
 
   it('the mandatory CC comes from the ONE core constant and survives onto the draft', async () => {

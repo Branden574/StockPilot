@@ -308,7 +308,7 @@ async function webInputFor(f: RowFixture) {
 // ── The PHONE side: core's mapping, which apps/mobile re-exports verbatim. ─
 
 async function phoneInputFor(f: RowFixture, requesterLabel: string | null) {
-  const { buildDeliveryRequestInput, DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } =
+  const { buildDeliveryRequestInput, DELIVERY_REQUEST_RECIPIENTS } =
     await import('@stockpilot/core');
   return buildDeliveryRequestInput(
     {
@@ -326,12 +326,9 @@ async function phoneInputFor(f: RowFixture, requesterLabel: string | null) {
       orgTimezone: f.orgTimezone,
       lines: [{ itemId: 'i1', name: 'Google Chrome Book', sku: 'SP-BVK31-LH9', requested: 3 }],
     },
-    {
-      to: DELIVERY_REQUEST_EMAIL.to,
-      cc: DELIVERY_REQUEST_EMAIL.cc,
-      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-    },
+    // The ONE branded value both surfaces import. It used to be an object
+    // literal here as well as at each surface; the type no longer admits one.
+    DELIVERY_REQUEST_RECIPIENTS,
   );
 }
 

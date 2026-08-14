@@ -11,6 +11,8 @@ import {
   composeClipboardText,
   createOutlookComposeEmail,
   assertSafeDisplayName,
+  assertRoutableAddress,
+  encodeMailtoPathAddress,
 } from './outlook-compose';
 
 /** Reference two-step decode. mailto: is an opaque-path scheme — slice at the
@@ -295,6 +297,205 @@ describe('composeOutlookMobileUrl — native ms-outlook: transport (CC regressio
       { ...BASE_INPUT, body: 'line\nline '.repeat(120) },
     ]) {
       expect(composeOutlookMobileUrl(input).length).toBeLessThan(composeOutlookWebUrl(input).length);
+    }
+  });
+});
+
+/**
+ * ADDRESS INJECTION — one poisoned recipient must not become two recipients,
+ * or a second subject, on ANY transport.
+ *
+ * THE DEFECT (measured 2026-08-13, before this block existed). The delivery
+ * builder's address validator was a negative-space regex — everything except
+ * whitespace, `<>`, `,`, `;`, `:` and `"` — which ACCEPTED `? & = % / + # ! $ '
+ * ( ) * | \ ^ { } [ ] ~` and backtick. `composeMailtoUrl` then interpolated the
+ * To address into the URL PATH raw:
+ *
+ *   to = 'a?cc=attacker@evil.test'
+ *     -> mailto:a?cc=attacker@evil.test?cc=arosas%40cvwest.org&subject=S&body=B
+ *
+ * A URL parser reads that as To `a`, cc `attacker@evil.test?cc=arosas@cvwest.org`
+ * — one cc, belonging to the attacker, with the MANDATORY CC swallowed into
+ * their value. Not "an extra recipient appears": the acceptance gate silently
+ * disappears, which is the exact failure this whole feature is built around.
+ *
+ * The other three transports were already safe, and are asserted here anyway
+ * rather than reasoned about — a fix applied to one of four copies of a
+ * behaviour is recurring pattern #26, and "the other three encode" is precisely
+ * the kind of claim that stops being true when someone adds a fifth.
+ */
+describe('a poisoned recipient cannot inject a second recipient or subject, on any transport', () => {
+  const POISONED = [
+    ['a query-string cc injection', 'a?cc=attacker@evil.test'],
+    ['a query-string subject injection', 'a?subject=Approved@evil.test'],
+    ['a fragment', 'a#x@evil.test'],
+    ['an ampersand', 'a&cc=attacker@evil.test'],
+    ['a comma-joined second address', 'first@evil.test,attacker@evil.test'],
+    ['a semicolon-joined second address', 'first@evil.test;attacker@evil.test'],
+    ['a percent-encoded question mark', 'a%3Fcc=attacker@evil.test'],
+    ['a newline forging a header line', 'x@y.test\nCC: attacker@evil.test'],
+    ['a name-addr', 'Attacker <attacker@evil.test>'],
+    ['empty', ''],
+    ['whitespace only', '   '],
+  ] as const;
+
+  const GOOD = { to: 'dc4@example.test', cc: 'arosas@example.test', subject: 'S', body: 'B' };
+
+  const TRANSPORTS = [
+    ['outlook web', composeOutlookWebUrl],
+    ['ms-outlook native', composeOutlookMobileUrl],
+    ['mailto', composeMailtoUrl],
+    ['clipboard', composeClipboardText],
+  ] as const;
+
+  for (const [transportLabel, compose] of TRANSPORTS) {
+    for (const [label, poison] of POISONED) {
+      it(`${transportLabel}: refuses ${label} in the TO`, () => {
+        expect(() => compose({ ...GOOD, to: poison })).toThrow(
+          /recipient "to" must be exactly one plain email address/,
+        );
+      });
+
+      it(`${transportLabel}: refuses ${label} in the CC`, () => {
+        expect(() => compose({ ...GOOD, cc: poison })).toThrow(
+          /recipient "cc" must be exactly one plain email address/,
+        );
+      });
+    }
+
+    it(`${transportLabel}: still composes the well-formed pair, so the refusals above mean something`, () => {
+      // Without this every test above is satisfied by a function that throws
+      // unconditionally.
+      const out = compose(GOOD);
+      expect(out).toContain('dc4');
+      expect(out).toContain('arosas');
+    });
+  }
+
+  it('THE GRAMMAR IS NARROWER THAN RFC 5322, deliberately — `a?cc=x` is a legal dot-atom', () => {
+    // Stated as a test because it is the reason the encoder below exists and
+    // must not be deleted as redundant. `?` and `=` are RFC 5322 `atext`, so a
+    // validator faithful to the RFC would admit the injection string. The
+    // accepted local-part set is the practical mailbox one instead.
+    for (const ch of ['?', '&', '=', '%', '/', '#', '!', '$', "'", '(', ')', '*', '|', '\\', '^', '{', '}', '[', ']', '`', '~']) {
+      expect(() => assertRoutableAddress('to', `a${ch}b@evil.test`)).toThrow();
+    }
+    // and the practical set it keeps, so this is a narrowing and not a ban
+    for (const ok of [
+      'dc4@learn4life.org',
+      'arosas@cvwest.org',
+      'user+tag@learn4life.org',
+      'first.last@sub.domain.example',
+      'a_b-c@x-y.co.uk',
+    ]) {
+      expect(assertRoutableAddress('to', ok)).toBe(ok);
+    }
+  });
+
+  it('rejects an address past the RFC 5321 254-character ceiling', () => {
+    const long = `${'a'.repeat(250)}@evil.test`;
+    expect(long.length).toBeGreaterThan(254);
+    expect(() => assertRoutableAddress('to', long)).toThrow();
+  });
+
+  /**
+   * THE SECOND LAYER, tested WITHOUT the first.
+   *
+   * `assertRoutableAddress` makes the injection unreachable; the encoder makes
+   * it impossible. That distinction is not academic — the validator is a regex,
+   * and a regex is what got loosened last time. These two assertions are what
+   * would still hold if the grammar were widened back to something that admits
+   * `?`, so they are written against the encoder directly rather than through a
+   * compose function that refuses before reaching it.
+   */
+  it('ENCODER: a poisoned address in the mailto PATH still yields exactly one cc — the real one', () => {
+    const poisoned = 'a?cc=attacker@evil.test';
+    const url = `mailto:${encodeMailtoPathAddress(poisoned)}?cc=${encodeURIComponent('arosas@example.test')}&subject=S`;
+
+    expect(encodeMailtoPathAddress(poisoned)).toBe('a%3Fcc%3Dattacker@evil.test');
+    const parsed = new URLSearchParams(new URL(url).search);
+    expect(parsed.getAll('cc')).toEqual(['arosas@example.test']);
+    expect(parsed.getAll('subject')).toEqual(['S']);
+  });
+
+  it('ENCODER: is the IDENTITY on every address the validator admits, so the shipped URLs are byte-for-byte unchanged', () => {
+    // The owner tenant-verified these URLs against live Microsoft 365. If
+    // encoding changed their bytes, that verification would no longer apply to
+    // what ships. It does not: the accepted grammar is a strict subset of the
+    // path-safe set.
+    for (const address of [
+      'dc4@learn4life.org',
+      'arosas@cvwest.org',
+      'user+tag@learn4life.org',
+      'first.last@sub.domain.example',
+      'a_b-c@x-y.co.uk',
+    ]) {
+      expect(encodeMailtoPathAddress(assertRoutableAddress('to', address))).toBe(address);
+    }
+
+    expect(composeMailtoUrl({ to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org', subject: 'S', body: 'B' })).toBe(
+      'mailto:dc4@learn4life.org?cc=arosas%40cvwest.org&subject=S&body=B',
+    );
+  });
+
+  /**
+   * THE TWO LAYERS' RELATIONSHIP, pinned as an invariant rather than assumed.
+   *
+   * Honest statement of what is and is not covered: while the validator stays
+   * strict, the encoder can never actually fire inside `composeMailtoUrl` —
+   * nothing poisoned reaches it — so SUBSTITUTING the encoder for a raw
+   * interpolation at that one call site is not detectable by any test, because
+   * it is the identity on every input that gets that far. That is what defense
+   * in depth means here, not a gap being papered over.
+   *
+   * What IS detectable, and what this test is for, is the relationship going
+   * out of alignment. If the validator is ever widened past the encoder's safe
+   * set — which is exactly how the shipped defect arose, a negative-space regex
+   * quietly admitting `?` — this fails and says so, which is the moment the
+   * encoder stops being belt-and-braces and becomes the only thing standing
+   * between a poisoned address and the mandatory CC.
+   */
+  it('INVARIANT: every character the validator ADMITS is one the encoder leaves alone', () => {
+    const admitted = new Set<string>();
+    for (let code = 0x20; code < 0x7f; code += 1) {
+      const ch = String.fromCharCode(code);
+      // Try the character in the local part and in a domain label; if either
+      // placement validates, the encoder has to be able to carry it verbatim.
+      for (const candidate of [`a${ch}b@example.test`, `ab@ex${ch}ample.test`]) {
+        try {
+          assertRoutableAddress('to', candidate);
+          admitted.add(ch);
+        } catch {
+          /* rejected: the encoder never sees it through a compose function */
+        }
+      }
+    }
+
+    // Non-empty, or the assertion below is vacuous.
+    expect(admitted.size).toBeGreaterThan(30);
+    for (const ch of admitted) {
+      expect(encodeMailtoPathAddress(`a${ch}b`)).toBe(`a${ch}b`);
+    }
+    // And the specific characters that carry URL meaning are NOT in that set.
+    for (const ch of ['?', '#', ',', '&', '=', '%', '/', ';', ':', ' ']) {
+      expect(admitted.has(ch)).toBe(false);
+    }
+  });
+
+  it('ENCODER: percent-encodes every character that means something to a URL parser', () => {
+    for (const [raw, encoded] of [
+      ['?', '%3F'],
+      ['#', '%23'],
+      [',', '%2C'],
+      ['&', '%26'],
+      ['=', '%3D'],
+      ['%', '%25'],
+      ['/', '%2F'],
+      [';', '%3B'],
+      [' ', '%20'],
+      ['\n', '%0A'],
+    ] as const) {
+      expect(encodeMailtoPathAddress(`a${raw}b`)).toBe(`a${encoded}b`);
     }
   });
 });

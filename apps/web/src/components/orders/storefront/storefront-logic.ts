@@ -5,7 +5,7 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } from '@/lib/site';
+import { DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
 
 import type { CartLineState, CatalogItem } from '../v2/types';
 
@@ -315,26 +315,26 @@ export {
  * WEB'S RECIPIENTS, SUPPLIED EXPLICITLY AT ONE BOUNDARY.
  *
  * The core builder is tenant-neutral: it takes recipients as input and reads no
- * constant. This is web's single supply point, and mobile has its own. Both
- * read the SAME frozen literals — there is still exactly one definition of the
- * addresses in the codebase (`@stockpilot/core`, re-exported by `@/lib/site`),
- * so the two surfaces cannot mail different mailboxes.
+ * constant. This is web's single supply point, and mobile has its own. Both now
+ * import the SAME frozen, validated VALUE (`DELIVERY_REQUEST_RECIPIENTS`), so
+ * the two surfaces cannot mail different mailboxes.
+ *
+ * WAS AN OBJECT LITERAL until 2026-08-13. It agreed with mobile's literal and
+ * both were pinned by their own suites, but the shape invited a third literal
+ * at a new call site that could name a routable-but-wrong cc, compile clean and
+ * pass the whole repo's tests while composing a genuinely misrouted URL.
+ * `DeliveryRequestRecipients` is branded now — an object literal does not
+ * typecheck anywhere, and there is one value to import.
  *
  * THE CC IS THE ACCEPTANCE GATE and this is where web guarantees it. It is
  * deliberately a module constant rather than a parameter of the exported
  * wrappers: nothing a caller passes — a URL parameter, a stored value, an order
  * note, a site name — can reach the recipient fields, which preserves the
  * property the old builder had when it read the constant directly. Core
- * additionally validates both addresses at draft time and throws on anything
- * that is not exactly one plain mailbox, which is a runtime check the old
- * design did not have at all.
+ * additionally validates both addresses, at construction and again at draft
+ * time, and throws on anything that is not exactly one plain mailbox.
  */
-const WEB_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = {
-  to: DELIVERY_REQUEST_EMAIL.to,
-  cc: DELIVERY_REQUEST_EMAIL.cc,
-  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-};
+const WEB_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = DELIVERY_REQUEST_RECIPIENTS;
 
 /**
  * Everything the draft builder is allowed to see, MINUS the recipients — those

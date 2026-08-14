@@ -1,3 +1,5 @@
+import { deliveryRequestRecipients, type DeliveryRequestRecipients } from './delivery-request';
+
 /**
  * Delivery-request recipients — ONE TENANT'S MAILBOXES, IN A SHARED PACKAGE.
  *
@@ -91,6 +93,47 @@ export const DELIVERY_REQUEST_EMAIL_NAMES = Object.freeze({
   cc: 'Andrew Rosas',
 } as const);
 
-/** Helper text shown wherever the recipients are displayed. Accuracy, not optimism. */
+/**
+ * THE VALUE BOTH SURFACES PASS TO THE BUILDER — built once, here, through the
+ * only constructor there is.
+ *
+ * Added 2026-08-13. Web and mobile each used to assemble their own
+ * `DeliveryRequestRecipients` object literal out of the two constants above.
+ * Those two literals agreed, and each was pinned by its own suite, but the
+ * shape invited a third: a new call site could type a routable-but-wrong `cc`,
+ * compile clean, pass every test in the repo, and open a real misrouted compose
+ * window. `DeliveryRequestRecipients` is now branded, so an object literal no
+ * longer typechecks anywhere, and this is the one value that exists — a new
+ * call site imports it or it does not build.
+ *
+ * DIVERGENCE FROM THE BRIEF, recorded deliberately: the instruction was to
+ * export a factory from this file as the only way to produce a recipients
+ * value. The factory exists and is exported (`deliveryRequestRecipients` in
+ * `./delivery-request.ts`), but it lives beside the type, the brand symbol and
+ * the address validator rather than here, because those three are
+ * tenant-NEUTRAL and this file is the one place in core that is not. Exporting
+ * a built VALUE from here is also strictly stronger than exporting a factory
+ * from here: a call site that imports a value has no argument to get wrong.
+ * The factory remains the seam for the deferred per-org work, which will call
+ * it with values read from the org row — the exact path its validation is for.
+ */
+export const DELIVERY_REQUEST_RECIPIENTS: DeliveryRequestRecipients = deliveryRequestRecipients({
+  to: DELIVERY_REQUEST_EMAIL.to,
+  cc: DELIVERY_REQUEST_EMAIL.cc,
+  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
+});
+
+/**
+ * Helper text shown wherever the recipients are displayed. Accuracy, not
+ * optimism — and the address is INTERPOLATED, not retyped.
+ *
+ * It was hand-typed here until 2026-08-13, which made this sentence a second,
+ * silent definition of the CC: changing `DELIVERY_REQUEST_EMAIL.cc` above would
+ * have left every screen that shows this notice naming the old mailbox, while
+ * the mail itself went to the new one. The employee would have been told, in
+ * writing, that a copy was going somewhere it was not. Same defect, same shape,
+ * in `../maintenance/constants.ts` — fixed in the same commit.
+ */
 export const DELIVERY_REQUEST_CC_NOTICE =
-  'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.';
+  `The DC4 address creates the delivery-request ticket. A copy will also be sent to ${DELIVERY_REQUEST_EMAIL.cc}.`;

@@ -25,6 +25,8 @@
 
 import {
   DRAFT_URL_LIMIT,
+  assertRoutableAddress,
+  assertSafeDisplayName,
   composeClipboardText,
   composeMailtoUrl,
   composeOutlookMobileUrl,
@@ -141,20 +143,76 @@ export interface DeliveryRequestItemRef {
  * must be a single, plain, unadorned mailbox, or the builder refuses to build.
  * That is a real runtime check where the old design had none — safety there
  * rested entirely on the values happening to be literals.
+ *
+ * THE TYPE IS BRANDED, AND THAT IS THE OTHER HALF OF THE ANSWER (2026-08-13).
+ * A value-level check cannot see a call site that does not exist yet. Both
+ * shipped call sites are pinned hard — a wrong cc fails 11 mobile and 29 web
+ * tests, an omitted one is a type error, an empty one throws — but a THIRD call
+ * site writing `{ to: DELIVERY_REQUEST_EMAIL.to, cc: 'ops@somewhere.test' }`
+ * would have compiled clean, passed the whole suite, and composed a real
+ * misrouted URL, because a routable-but-wrong address is exactly what every
+ * runtime guard here is designed to accept. The no-parameter design this
+ * replaced gave that guarantee structurally, by having nothing to pass.
+ *
+ * The brand restores it at the type level: `DELIVERY_RECIPIENTS_BRAND` is a
+ * module-private `unique symbol`, so no other file can even NAME the key, and
+ * a raw object literal therefore stops typechecking. `deliveryRequestRecipients`
+ * below is the only constructor, and it validates. The seam the deferred
+ * per-org work needs is untouched — that work calls the factory with values
+ * read from the org row, which is precisely the path the validation is for.
  */
 export interface DeliveryRequestRecipients {
   /** The intake mailbox. Exactly one plain address. */
-  to: string;
+  readonly to: string;
   /**
    * The mandatory copy. Required, and required to be non-empty: this
    * workflow's acceptance gate is that this address receives a copy, so
    * "no cc" is not an expressible state.
    */
-  cc: string;
+  readonly cc: string;
   /** Cosmetic OWA compose-chip name for `to`. Literals only; validated. */
-  toName?: string;
+  readonly toName?: string;
   /** Cosmetic OWA compose-chip name for `cc`. Literals only; validated. */
+  readonly ccName?: string;
+  /**
+   * NOMINAL BRAND. Never present at runtime — `declare const` emits nothing —
+   * and unnameable outside this module, which is the entire mechanism: an
+   * object literal cannot satisfy this property, so `deliveryRequestRecipients`
+   * is the only way to obtain the type without an `as unknown as` cast that
+   * announces itself in review.
+   */
+  readonly [DELIVERY_RECIPIENTS_BRAND]: true;
+}
+
+declare const DELIVERY_RECIPIENTS_BRAND: unique symbol;
+
+/**
+ * THE ONLY CONSTRUCTOR for `DeliveryRequestRecipients`.
+ *
+ * Validates before it brands, so the brand is not merely nominal: a value of
+ * this type is a value whose addresses were checked and whose display names
+ * were checked. Callers that bypass it with a cast still meet
+ * `assertRoutableAddress` inside `buildDeliveryRequestDraft` — the runtime
+ * guard is not removed, it is doubled, because the two catch different things.
+ * The type catches the wrong-but-well-formed address a new call site types by
+ * hand; the runtime catches the malformed one that arrives as data.
+ *
+ * Frozen for the same reason the recipient constants are: a stray assignment
+ * throws in strict mode instead of silently redirecting warehouse mail.
+ */
+export function deliveryRequestRecipients(input: {
+  to: string;
+  cc: string;
+  toName?: string;
   ccName?: string;
+}): DeliveryRequestRecipients {
+  const value: Record<string, string> = {
+    to: assertRoutableAddress('to', input.to),
+    cc: assertRoutableAddress('cc', input.cc),
+  };
+  if (input.toName !== undefined) value.toName = assertSafeDisplayName(input.toName);
+  if (input.ccName !== undefined) value.ccName = assertSafeDisplayName(input.ccName);
+  return Object.freeze(value) as unknown as DeliveryRequestRecipients;
 }
 
 /**
@@ -236,44 +294,6 @@ export interface DeliveryRequestDraft {
    * read this, not `condensed`.
    */
   listedLineCount: number;
-}
-
-/**
- * ONE plain mailbox, nothing else.
- *
- * No whitespace (a space would let a second address ride along after
- * percent-encoding survives the transport), no `<>` (name-addr syntax, which
- * belongs only in the cosmetic display-name half), no `,` or `;` (the RFC 5322
- * recipient separators — the characters that split one recipient into two and
- * silently drop the mandatory CC), no `"` (quoted-string escaping), and exactly
- * one `@` with a dot-bearing domain.
- */
-const ROUTABLE_ADDRESS = /^[^\s<>,;:"@]+@[^\s<>,;:"@]+\.[^\s<>,;:"@]+$/;
-
-/**
- * Refuse to build rather than misroute.
- *
- * The delivery workflow's acceptance gate is that a fixed CC receives a copy.
- * Every failure mode this rejects is SILENT if allowed through: a comma splits
- * the recipient list, an empty string composes mail to nowhere, a name-addr in
- * the address position confuses a parser into dropping the rest. A throw
- * happens at draft time — before any compose window opens, before the employee
- * can believe a message went out — which is the only point where the failure
- * is still visible.
- *
- * With compile-time literals (every caller today) this can never fire. It is
- * here for the per-org configuration that `delivery-request-recipients.ts`
- * flags as deferred: on the day an address becomes data, this is what stands
- * between a bad row and warehouse mail going somewhere nobody checks.
- */
-function assertRoutableAddress(field: 'to' | 'cc', value: string): string {
-  if (!ROUTABLE_ADDRESS.test(value)) {
-    throw new Error(
-      `Delivery-request recipient "${field}" must be exactly one plain email address ` +
-        'with no display name, separator or whitespace.',
-    );
-  }
-  return value;
 }
 
 /**

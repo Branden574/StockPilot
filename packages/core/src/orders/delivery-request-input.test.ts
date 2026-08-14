@@ -2,20 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { ORG_TIMEZONE_DEFAULT } from '../time/org-timezone';
 
-import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_EMAIL_NAMES } from './delivery-request-recipients';
+import { DELIVERY_REQUEST_RECIPIENTS } from './delivery-request-recipients';
 import {
   buildDeliveryRequestInput,
   type DeliveryRequestOrderData,
 } from './delivery-request-input';
-import { buildDeliveryRequestDraft } from './delivery-request';
+import { buildDeliveryRequestDraft, deliveryRequestRecipients } from './delivery-request';
 import { resolveRequesterIdentity } from './requester-identity';
 
-const RECIPIENTS = {
-  to: DELIVERY_REQUEST_EMAIL.to,
-  cc: DELIVERY_REQUEST_EMAIL.cc,
-  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-};
+const RECIPIENTS = DELIVERY_REQUEST_RECIPIENTS;
 
 function order(over: Partial<DeliveryRequestOrderData> = {}): DeliveryRequestOrderData {
   return {
@@ -50,11 +45,13 @@ describe('buildDeliveryRequestInput', () => {
     expect(input.recipients).toEqual(RECIPIENTS);
 
     // A different tenant gets its own routing, with no edit to this module.
-    const other = buildDeliveryRequestInput(order(), {
-      to: 'intake@other.example',
-      cc: 'ops@other.example',
-    });
-    expect(other.recipients).toEqual({ to: 'intake@other.example', cc: 'ops@other.example' });
+    // Through the factory — which is the seam the deferred per-org work uses,
+    // and the only way to obtain the branded type.
+    const other = buildDeliveryRequestInput(
+      order(),
+      deliveryRequestRecipients({ to: 'intake@other.example', cc: 'ops@other.example' }),
+    );
+    expect({ ...other.recipients }).toEqual({ to: 'intake@other.example', cc: 'ops@other.example' });
   });
 
   it('always declares delivery, so a pickup order can never produce a destination-less delivery draft', () => {

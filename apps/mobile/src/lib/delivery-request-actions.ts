@@ -1,6 +1,6 @@
 import {
   DELIVERY_REQUEST_EMAIL,
-  DELIVERY_REQUEST_EMAIL_NAMES,
+  DELIVERY_REQUEST_RECIPIENTS,
   buildDeliveryRequestInput as coreBuildDeliveryRequestInput,
   prepareDeliveryRequest,
   type DeliveryComposeTransport,
@@ -161,20 +161,19 @@ export function parseCharterAddress(raw: unknown): DeliveryRequestAddress | null
 }
 
 /**
- * WHERE THIS TENANT'S DELIVERY MAIL GOES. From the ONE core constant, never
- * from anything on the order row, a route parameter or a server payload —
- * nothing a user typed can redirect this mail or split off the mandatory CC.
+ * WHERE THIS TENANT'S DELIVERY MAIL GOES. From the ONE core VALUE, never from
+ * anything on the order row, a route parameter or a server payload — nothing a
+ * user typed can redirect this mail or split off the mandatory CC.
  *
- * Supplied HERE rather than read inside the core mapping, matching what
- * `buildDeliveryRequestDraft` already does with its own recipients: core stays
+ * This was an object literal assembled here from the two address constants
+ * until 2026-08-13. It agreed with web's literal, and both were pinned — but
+ * the SHAPE invited a third literal that would have compiled clean with a wrong
+ * cc. `DeliveryRequestRecipients` is branded now, so a literal no longer
+ * typechecks anywhere and there is exactly one value to import. Supplying it
+ * HERE rather than reading it inside the core mapping is unchanged: core stays
  * tenant-neutral, and `dc4@learn4life.org` stays a call-site fact.
  */
-const MOBILE_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = {
-  to: DELIVERY_REQUEST_EMAIL.to,
-  cc: DELIVERY_REQUEST_EMAIL.cc,
-  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-};
+const MOBILE_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = DELIVERY_REQUEST_RECIPIENTS;
 
 /**
  * Map the order row onto the shared builder's input.

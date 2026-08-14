@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_REQUEST_EMAIL,
   DELIVERY_REQUEST_EMAIL_NAMES,
+  DELIVERY_REQUEST_RECIPIENTS,
 } from './delivery-request-recipients';
 import { DRAFT_URL_LIMIT } from '../email/outlook-compose';
 
@@ -26,17 +27,28 @@ import {
   buildDeliveryRequestMailtoUrl,
   buildDeliveryRequestOutlookMobileUrl,
   buildDeliveryRequestOutlookUrl,
+  deliveryRequestRecipients,
   prepareDeliveryRequest,
   type DeliveryRequestInput,
   type DeliveryRequestRecipients,
 } from './delivery-request';
 
-const L4L: DeliveryRequestRecipients = {
-  to: DELIVERY_REQUEST_EMAIL.to,
-  cc: DELIVERY_REQUEST_EMAIL.cc,
-  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-};
+const L4L: DeliveryRequestRecipients = DELIVERY_REQUEST_RECIPIENTS;
+
+/**
+ * A recipients value that DID NOT come from `deliveryRequestRecipients`.
+ *
+ * `DeliveryRequestRecipients` is branded, so this cast is the only way to get a
+ * raw shape past the type checker — which is exactly why the tests below still
+ * matter. The brand stops a NEW CALL SITE from typing a wrong address by hand;
+ * it cannot stop a cast, and it says nothing about an address that arrives as
+ * data. `buildDeliveryRequestDraft` therefore keeps its own runtime guard, and
+ * these cases prove it by coming in through the one door the brand does not
+ * cover.
+ */
+function unbranded(value: { to: string; cc: string }): DeliveryRequestRecipients {
+  return value as unknown as DeliveryRequestRecipients;
+}
 
 function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryRequestInput {
   return {
@@ -67,7 +79,10 @@ describe('recipients are INPUT, not a constant the builder reaches for', () => {
      */
     const draft = buildDeliveryRequestDraft(
       makeInput({
-        recipients: { to: 'intake@othercorp.test', cc: 'ops@othercorp.test' },
+        recipients: deliveryRequestRecipients({
+          to: 'intake@othercorp.test',
+          cc: 'ops@othercorp.test',
+        }),
         // Neutral requester too: the L4L address must be absent because
         // nothing ROUTES there, not merely because no field mentions it. A
         // requester email is legitimate body content and would mask the point.
@@ -122,7 +137,12 @@ describe('recipients are INPUT, not a constant the builder reaches for', () => {
     // Chips are cosmetic; routing is not. Omitting them must cost the chip and
     // nothing else.
     const draft = buildDeliveryRequestDraft(
-      makeInput({ recipients: { to: DELIVERY_REQUEST_EMAIL.to, cc: DELIVERY_REQUEST_EMAIL.cc } }),
+      makeInput({
+        recipients: deliveryRequestRecipients({
+          to: DELIVERY_REQUEST_EMAIL.to,
+          cc: DELIVERY_REQUEST_EMAIL.cc,
+        }),
+      }),
     );
     const url = buildDeliveryRequestOutlookUrl(draft);
 
@@ -163,7 +183,7 @@ describe('the builder REFUSES a recipient it cannot route', () => {
     it(`throws when the CC is ${label}`, () => {
       expect(() =>
         buildDeliveryRequestDraft(
-          makeInput({ recipients: { to: DELIVERY_REQUEST_EMAIL.to, cc: value } }),
+          makeInput({ recipients: unbranded({ to: DELIVERY_REQUEST_EMAIL.to, cc: value }) }),
         ),
       ).toThrow(/recipient "cc" must be exactly one plain email address/);
     });
@@ -171,7 +191,7 @@ describe('the builder REFUSES a recipient it cannot route', () => {
     it(`throws when the TO is ${label}`, () => {
       expect(() =>
         buildDeliveryRequestDraft(
-          makeInput({ recipients: { to: value, cc: DELIVERY_REQUEST_EMAIL.cc } }),
+          makeInput({ recipients: unbranded({ to: value, cc: DELIVERY_REQUEST_EMAIL.cc }) }),
         ),
       ).toThrow(/recipient "to" must be exactly one plain email address/);
     });
@@ -184,7 +204,10 @@ describe('the builder REFUSES a recipient it cannot route', () => {
     expect(() =>
       prepareDeliveryRequest(
         makeInput({
-          recipients: { to: DELIVERY_REQUEST_EMAIL.to, cc: 'arosas@cvwest.org,evil@attacker.test' },
+          recipients: unbranded({
+            to: DELIVERY_REQUEST_EMAIL.to,
+            cc: 'arosas@cvwest.org,evil@attacker.test',
+          }),
         }),
       ),
     ).toThrow(/recipient "cc" must be exactly one plain email address/);
@@ -461,5 +484,110 @@ describe('the transport option: fit against the url the caller will open', () =>
       expect(p.outlookUrl).toContain(encodeURIComponent(encodeURIComponent(last)));
       expect(p.outlookUrl).not.toContain(encodeURIComponent(encodeURIComponent(beyond)));
     }
+  });
+});
+
+/**
+ * THE RECIPIENTS TYPE IS BRANDED — a wrong address is no longer TYPEABLE at a
+ * call site that does not exist yet.
+ *
+ * WHAT WAS STILL OPEN before this block (2026-08-13). Both shipped call sites
+ * are pinned hard: a wrong cc fails 11 mobile and 29 web tests, an omitted cc is
+ * a type error, an empty cc throws. But a THIRD call site writing
+ * `{ to: DELIVERY_REQUEST_EMAIL.to, cc: 'ops@somewhere.test' }` compiled clean
+ * and passed the entire repo's suites while composing a genuinely misrouted
+ * compose URL — because a routable-but-wrong address is exactly what every
+ * runtime guard in this file is built to ACCEPT. No value-level test can see a
+ * call site nobody has written yet; only the type system can.
+ *
+ * The brand is what the original no-parameter design gave structurally, by
+ * having nothing to pass. It is restored here without giving up the parameter
+ * the per-org work needs.
+ */
+describe('DeliveryRequestRecipients is branded — an object literal is not one', () => {
+  it('TYPE-LEVEL PIN: a raw object literal does not typecheck as recipients', () => {
+    // If the brand is ever removed, this @ts-expect-error becomes an UNUSED
+    // directive and `pnpm typecheck` fails with TS2578 — which is the point.
+    // The runtime assertion below is deliberately trivial; the assertion this
+    // test really makes is made by the compiler.
+    // @ts-expect-error a raw literal is missing the module-private brand
+    const forged: DeliveryRequestRecipients = {
+      to: DELIVERY_REQUEST_EMAIL.to,
+      cc: 'ops@somewhere.test',
+    };
+    expect(forged.cc).toBe('ops@somewhere.test');
+  });
+
+  it('the factory is the only constructor, and it VALIDATES before it brands', () => {
+    const made = deliveryRequestRecipients({
+      to: 'intake@othercorp.test',
+      cc: 'ops@othercorp.test',
+      toName: 'Other Intake',
+      ccName: 'Other Ops',
+    });
+    expect({ ...made }).toEqual({
+      to: 'intake@othercorp.test',
+      cc: 'ops@othercorp.test',
+      toName: 'Other Intake',
+      ccName: 'Other Ops',
+    });
+
+    // The same refusals the builder makes, one step earlier — at the moment the
+    // value is created rather than the moment it is used, which is where a
+    // per-org row will fail.
+    for (const bad of ['', '   ', 'a?cc=attacker@evil.test', 'a@b,c@d.test', 'no-at-sign']) {
+      expect(() => deliveryRequestRecipients({ to: bad, cc: 'ops@othercorp.test' })).toThrow(
+        /recipient "to" must be exactly one plain email address/,
+      );
+      expect(() => deliveryRequestRecipients({ to: 'intake@othercorp.test', cc: bad })).toThrow(
+        /recipient "cc" must be exactly one plain email address/,
+      );
+    }
+
+    // And the display names go through the SAME guard the transports use: a
+    // comma in an unquoted name-addr splits it into two recipients and the
+    // mandatory CC is the half that disappears.
+    expect(() =>
+      deliveryRequestRecipients({
+        to: 'intake@othercorp.test',
+        cc: 'ops@othercorp.test',
+        ccName: 'Rosas, Andrew',
+      }),
+    ).toThrow(/Display name contains RFC 5322 specials/);
+  });
+
+  it('the value it returns is frozen, so a stray assignment cannot redirect warehouse mail', () => {
+    const made = deliveryRequestRecipients({ to: 'intake@othercorp.test', cc: 'ops@othercorp.test' });
+    expect(Object.isFrozen(made)).toBe(true);
+    try {
+      (made as unknown as Record<string, string>).cc = 'attacker@evil.test';
+    } catch {
+      /* strict mode throws; either way the value must not move */
+    }
+    expect(made.cc).toBe('ops@othercorp.test');
+  });
+
+  it('DELIVERY_REQUEST_RECIPIENTS is that factory output, carrying both addresses and both chips', () => {
+    // The one value both surfaces import. If it ever stopped being built from
+    // the frozen constants, the two surfaces could mail different mailboxes —
+    // which is the drift the whole extraction exists to prevent.
+    expect({ ...DELIVERY_REQUEST_RECIPIENTS }).toEqual({
+      to: DELIVERY_REQUEST_EMAIL.to,
+      cc: DELIVERY_REQUEST_EMAIL.cc,
+      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
+    });
+    expect(Object.isFrozen(DELIVERY_REQUEST_RECIPIENTS)).toBe(true);
+  });
+
+  it('the RUNTIME guard survives a cast — the brand and the validator catch different things', () => {
+    // The brand cannot stop `as unknown as`, and it says nothing at all about
+    // an address that arrives as data at runtime. That is why
+    // buildDeliveryRequestDraft keeps validating rather than trusting the type.
+    expect(() =>
+      buildDeliveryRequestDraft(
+        makeInput({ recipients: unbranded({ to: DELIVERY_REQUEST_EMAIL.to, cc: 'a?cc=evil@attacker.test' }) }),
+      ),
+    ).toThrow(/recipient "cc" must be exactly one plain email address/);
   });
 });
