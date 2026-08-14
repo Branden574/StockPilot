@@ -196,3 +196,89 @@ describe('the builder REFUSES a recipient it cannot route', () => {
     expect(draft.cc).toBe('arosas@cvwest.org');
   });
 });
+
+/**
+ * THE NATIVE TRANSPORT, added for the phone.
+ *
+ * `outlookMobileUrl` is a THIRD composition of the same prepared draft. The web
+ * suites cannot cover it — they never read the field — and the two things that
+ * can go wrong with it are both silent: composing it from a different rung of
+ * the ladder than the one that was measured, and dropping the CC that the whole
+ * workflow depends on.
+ */
+describe('outlookMobileUrl: the native transport composes the CHOSEN draft', () => {
+  /** Decodes an opaque-scheme deep link down to one query parameter. */
+  function paramOf(url: string, key: string): string | undefined {
+    const q = url.indexOf('?');
+    if (q === -1) return undefined;
+    for (const pair of url.slice(q + 1).split('&')) {
+      const eq = pair.indexOf('=');
+      if (pair.slice(0, eq) === key) return decodeURIComponent(pair.slice(eq + 1));
+    }
+    return undefined;
+  }
+
+  /** Enough item rows that the full body cannot fit a compose link, so
+   *  prepareDeliveryRequest walks its ladder and returns a condensed draft. */
+  function laddered(): DeliveryRequestInput {
+    const lines = Array.from({ length: 11 }, (_, i) => ({ itemId: `i-${i}`, quantity: (i + 1) * 3 }));
+    return makeInput({
+      lines,
+      itemMap: new Map(
+        lines.map((l, i) => [
+          l.itemId,
+          { name: `Classroom Supply Kit ${i + 1} — Grade ${i + 1} Standard Issue`, sku: `KIT-${i}` },
+        ]),
+      ),
+    });
+  }
+
+  it('uses the ms-outlook: scheme, not the https URL a phone would hand to a browser', () => {
+    const prepared = prepareDeliveryRequest(makeInput());
+    expect(prepared.outlookMobileUrl.startsWith('ms-outlook://compose?')).toBe(true);
+    expect(prepared.outlookMobileUrl.startsWith('http')).toBe(false);
+    // And it is genuinely a THIRD url, not an alias of the web one.
+    expect(prepared.outlookMobileUrl).not.toBe(prepared.outlookUrl);
+  });
+
+  it('carries the mandatory CC as a bare address on both the full and condensed rungs', () => {
+    for (const input of [makeInput(), laddered()]) {
+      const prepared = prepareDeliveryRequest(input);
+      expect(paramOf(prepared.outlookMobileUrl, 'cc')).toBe(DELIVERY_REQUEST_EMAIL.cc);
+      expect(paramOf(prepared.outlookMobileUrl, 'to')).toBe(DELIVERY_REQUEST_EMAIL.to);
+    }
+    // Bare, not the name-addr chip the verified OWA parser gets — the native
+    // parser is unverified, and a mis-split name-addr costs the CC.
+    expect(paramOf(prepareDeliveryRequest(makeInput()).outlookMobileUrl, 'cc')).not.toContain('<');
+  });
+
+  it('THE LADDER: the native url carries the SHORTENED body, never the full one', () => {
+    // The failure this exists for: composing the native url from `full` while
+    // the measured web url carried `best.draft` would send two different
+    // messages depending on which app the phone happens to have installed —
+    // and the native one would be the one silently truncated in transit.
+    const prepared = prepareDeliveryRequest(laddered());
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.listedLineCount).toBeLessThan(prepared.draft.lineCount);
+
+    const body = paramOf(prepared.outlookMobileUrl, 'body');
+    expect(body).toBe(prepared.draft.body);
+
+    // The hard version of the same claim, independent of `draft`: the full
+    // body is strictly longer, and it is NOT what went on the wire.
+    const full = buildDeliveryRequestDraft(laddered());
+    expect(full.body.length).toBeGreaterThan(prepared.draft.body.length);
+    expect(body).not.toBe(full.body);
+    expect(paramOf(prepared.outlookMobileUrl, 'subject')).toBe(prepared.draft.subject);
+  });
+
+  it('is shorter than the measured web url for identical input, which is why it is exempt from linkFits', () => {
+    // prepareDeliveryRequest measures only outlookUrl and mailtoUrl. That is
+    // sound ONLY while this inequality holds; if it ever inverts, a draft could
+    // pass linkFits and still truncate on the native transport.
+    for (const input of [makeInput(), laddered()]) {
+      const prepared = prepareDeliveryRequest(input);
+      expect(prepared.outlookMobileUrl.length).toBeLessThan(prepared.outlookUrl.length);
+    }
+  });
+});

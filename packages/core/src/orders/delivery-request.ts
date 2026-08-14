@@ -27,6 +27,7 @@ import {
   DRAFT_URL_LIMIT,
   composeClipboardText,
   composeMailtoUrl,
+  composeOutlookMobileUrl,
   composeOutlookWebUrl,
 } from '../email/outlook-compose';
 import { ORG_TIMEZONE_DEFAULT, formatOrgDateTime } from '../time/org-timezone';
@@ -706,6 +707,35 @@ export function buildDeliveryRequestOutlookUrl(draft: DeliveryRequestDraft): str
 }
 
 /**
+ * NATIVE Outlook app deep link (`ms-outlook://compose`) for the same draft.
+ *
+ * ADDED alongside `buildDeliveryRequestOutlookUrl`, never instead of it. On a
+ * phone, handing the https OWA url to `Linking.openURL` opens a BROWSER on
+ * Outlook Web — correct on desktop, wrong on a device where the Outlook app is
+ * installed and already signed in. Same draft, same subject, same body, same
+ * mandatory CC, same `%20` encoder: only the transport differs.
+ *
+ * BARE ADDRESSES, deliberately. The name-addr compose chips
+ * (`Fresno Warehouse DC4 <dc4@learn4life.org>`) are a VERIFIED OWA-Web
+ * `mailtouri` parser extension and stop at that boundary — the native app is a
+ * different, unverified parser, and a name-addr it mis-splits costs exactly the
+ * silent CC drop this whole feature is built around. `composeOutlookMobileUrl`
+ * still runs `assertSafeDisplayName` over the names before dropping them, so an
+ * unsafe name is a hard throw on BOTH transports rather than a quiet difference
+ * between them. A missing chip is cosmetic; a missing CC breaks the workflow.
+ */
+export function buildDeliveryRequestOutlookMobileUrl(draft: DeliveryRequestDraft): string {
+  return composeOutlookMobileUrl({
+    to: draft.to,
+    cc: draft.cc,
+    subject: draft.subject,
+    body: draft.body,
+    toName: draft.toName,
+    ccName: draft.ccName,
+  });
+}
+
+/**
  * mailto: fallback for when the popup is blocked or OWA is not the user's
  * client. The To address is the PATH; cc, subject and body are query
  * parameters, built with %20-not-`+` encoding — RFC 6068 gives '+' no space
@@ -737,7 +767,23 @@ export function buildDeliveryRequestClipboardText(draft: DeliveryRequestDraft): 
 
 export interface PreparedDeliveryRequest {
   draft: DeliveryRequestDraft;
+  /** OWA WEB compose deep link (https). What the web app opens in a new tab,
+   *  and what mobile falls back to when the native app is not installed. */
   outlookUrl: string;
+  /**
+   * NATIVE Outlook app deep link (`ms-outlook://compose`) for the SAME chosen
+   * draft — the one whose length was measured, never a different rung of the
+   * ladder. Built here rather than by each surface so that no caller can
+   * assemble a native url from a body the limit check never saw.
+   *
+   * Deliberately NOT part of the `linkFits` measurement below: it is shorter
+   * than `outlookUrl` for identical input by construction (a 20-character
+   * scheme and one encoding layer, against a 52-character https base and a
+   * double-encoded inner mailto), so a draft that fits the web url transitively
+   * fits this one. Pinned by test in `../email/outlook-compose.test.ts` — if
+   * that inequality ever inverts, this comparison has to grow a third term.
+   */
+  outlookMobileUrl: string;
   mailtoUrl: string;
   /** ALWAYS the full body — the clipboard has no URL-length limit. */
   clipboardText: string;
@@ -814,6 +860,10 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
     return {
       draft: full,
       outlookUrl: fullUrl,
+      // From `full` — the same draft the two measured urls above carry. The
+      // native url is composed from the CHOSEN draft on every return path, so
+      // the three transports can never disagree about what the recipient reads.
+      outlookMobileUrl: buildDeliveryRequestOutlookMobileUrl(full),
       mailtoUrl: fullMailto,
       clipboardText: buildDeliveryRequestClipboardText(full),
       linkFits: true,
@@ -855,6 +905,11 @@ export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDel
   return {
     draft: best.draft,
     outlookUrl: best.outlookUrl,
+    // `best.draft`, never `full` — a native url carrying the FULL body while
+    // the web url carried a shortened one would send two different messages
+    // depending on which app the phone happened to have installed, and the
+    // long one would be the silently truncated one.
+    outlookMobileUrl: buildDeliveryRequestOutlookMobileUrl(best.draft),
     mailtoUrl: best.mailtoUrl,
     // ALWAYS the full, uncondensed body. The clipboard has no URL-length limit
     // and is the escape hatch — degrading it too would lose detail for no
