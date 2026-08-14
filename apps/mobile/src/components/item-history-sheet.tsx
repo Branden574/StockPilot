@@ -85,13 +85,24 @@ export function ItemHistorySheet({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <Pressable
-        style={[
-          styles.scrim,
-          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
-        ]}
-        onPress={onClose}
-      >
+      {/*
+       * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+       * ancestor claims the touch on press-down and beats the scrollable's pan
+       * recogniser, so the movement list would not scroll until something else
+       * took the responder first. Note this sandwich spanned a COMPONENT
+       * BOUNDARY — the scrim lived here and the inner swallow-the-tap wrapper
+       * lived in ItemHistorySheetContent — so neither file looked wrong on its
+       * own. Do not re-nest the content inside the scrim. See
+       * add-order-items-sheet.tsx for the measured detail.
+       */}
+      <View style={styles.scrim}>
+        <Pressable
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+          onPress={onClose}
+        />
         {/* key: remount the content per open/close transition AND per item, so
             every session starts from the empty `loading: true` initial state —
             reset-by-remount instead of a reset-on-open effect. */}
@@ -103,7 +114,7 @@ export function ItemHistorySheet({
           itemSku={itemSku}
           onClose={onClose}
         />
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -191,8 +202,11 @@ function ItemHistorySheetContent({
   }
 
   return (
-    <Pressable
-      onPress={() => undefined}
+    // Plain View on purpose: this was a Pressable whose only job was to swallow
+    // backdrop taps, and being a touch responder it beat the FlatList's pan
+    // recogniser. The scrim now sits behind as a sibling, so taps outside still
+    // close and this claims no responder. See add-order-items-sheet.tsx.
+    <View
       style={[
         styles.sheet,
             {
@@ -315,7 +329,7 @@ function ItemHistorySheetContent({
               </Button>
             </View>
           ) : null}
-    </Pressable>
+    </View>
   );
 }
 

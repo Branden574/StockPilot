@@ -294,16 +294,35 @@ export function AddOrderItemsSheet({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={requestClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
+        {/*
+         * THE BACKDROP IS A SIBLING BEHIND THE SHEET, NEVER ITS PARENT.
+         *
+         * This card used to be wrapped in a `Pressable onPress={() => undefined}`
+         * whose only job was to swallow taps so they did not reach the scrim and
+         * close the sheet. A Pressable ancestor claims the touch responder on
+         * press-DOWN, which beats the ScrollView's pan recogniser, so the item
+         * list below could not be dragged at all.
+         *
+         * The symptom was memorable and is worth recording: the list only began
+         * scrolling AFTER the user tapped the search field, because focusing the
+         * TextInput handed the responder over. Reported from the floor as "it
+         * doesn't let me scroll until I click on the search bar" (2026-08-14).
+         *
+         * Absolute-filling the scrim keeps tap-outside-to-close working while
+         * leaving the content free of any responder above it. Do NOT re-nest the
+         * card inside the scrim to "simplify" this.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           <Pressable
-            onPress={() => undefined}
+            onPress={requestClose}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+              },
+            ]}
+          />
+          <View
             style={{
               backgroundColor: c.card,
               borderTopLeftRadius: 18,
@@ -491,8 +510,8 @@ export function AddOrderItemsSheet({
                 </Pressable>
               </>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </Modal>
   );
