@@ -49,12 +49,14 @@ export default async function NewOrderPage({
     getWarehousesForRequest(ctx.organizationId),
     getCachedOrgTimezone(ctx.organizationId),
   ]);
-  // getCachedOrgTimezone already falls back to 'UTC' internally and never
-  // returns '' — `|| ORG_TIMEZONE_DEFAULT` here was dead code (it can never
-  // fire) and, worse, would have silently swapped a legitimate 'UTC' org for
-  // 'America/Los_Angeles' had the helper ever returned it. Use the cached
-  // value as-is: the delivery-request draft's needed-by line must print the
-  // SAME zone the rest of the app already uses for this org.
+  // Used as-is. getCachedOrgTimezone resolves its own fallback through core's
+  // `resolveOrgTimezone` and never returns null or '', so a second
+  // `|| ORG_TIMEZONE_DEFAULT` here would be dead code — and, worse, would
+  // silently swap a legitimately STORED 'UTC' org (the column's DB default) for
+  // America/Los_Angeles. Re-defaulting an already-defaulted value is precisely
+  // how web and mobile ended up naming two different needed-by times for one
+  // order: the surface that substitutes first destroys the information the
+  // shared resolver needs.
   const orgTimezone = orgTimezoneRaw;
   const warehouses = warehouseRows.map((w) => ({
     id: w.id,

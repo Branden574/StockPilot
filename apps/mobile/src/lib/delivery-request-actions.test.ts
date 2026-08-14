@@ -762,41 +762,76 @@ describe('copy', () => {
 });
 
 // =========================================================================
-// Parity with web: the phone must produce the SAME message, not a similar one.
+// What this module ADDS to the shared mapping — which is only the recipients.
+//
+// THIS BLOCK USED TO BE CALLED "parity with the web surface", and its one test
+// claimed a body "byte-identical to what the shared core builder produces".
+// It imported no web code. It hand-assembled a web-SHAPED input right here in
+// the mobile suite, reading the fixture's already-populated fields, and then
+// compared core against core in one process — so it could not observe either of
+// the two mappings that had actually drifted (the org-timezone default and the
+// requester-email fallback operator), and both sat in the branch passing it.
+//
+// The real cross-surface test is
+// apps/web/src/components/orders/delivery-request-parity.test.tsx, where web's
+// service, web's order page and web's button mapping can all be driven for real
+// and compared against core's mapping — the one this file re-exports — from a
+// single database row. Mobile's vitest cannot reach apps/web at all, so no test
+// in THIS suite can honestly make that claim.
+//
+// What this suite can still prove, and what these tests are named for, is the
+// narrower fact the phone is responsible for: that it delegates, and adds
+// exactly one thing.
 // =========================================================================
 
-describe('parity with the web surface', () => {
-  it('the body is byte-identical to what the shared core builder produces for the same order', async () => {
-    const { prepareDeliveryRequest, DELIVERY_REQUEST_EMAIL_NAMES } = await import('@stockpilot/core');
+describe('the phone adds only its recipients to the shared mapping', () => {
+  it('buildDeliveryRequestInput is core\'s mapping plus the tenant recipients — nothing else', async () => {
+    const {
+      buildDeliveryRequestInput: coreMapping,
+      DELIVERY_REQUEST_EMAIL_NAMES,
+    } = await import('@stockpilot/core');
     const o = order();
-    // Assembled the way web's SendDeliveryRequestButton assembles it.
-    const webInput = {
-      recipients: {
-        to: DELIVERY_REQUEST_EMAIL.to,
-        cc: DELIVERY_REQUEST_EMAIL.cc,
-        toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-        ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-      },
-      orderId: o.id,
-      orderNumber: o.orderNumber,
-      fulfillmentType: 'delivery' as const,
-      warehouseName: o.warehouseName!,
-      destination: o.destination,
-      requestedFor: o.requesterName!,
-      requesterEmail: o.requesterEmail,
-      neededByLocal: o.neededBy!,
-      orgTimezone: o.orgTimezone!,
-      notes: o.notes!,
-      lines: o.lines.map((l) => ({ itemId: l.itemId!, quantity: l.requested })),
-      itemMap: new Map(o.lines.map((l) => [l.itemId!, { name: l.name, sku: l.sku ?? '' }])),
+    const recipients = {
+      to: DELIVERY_REQUEST_EMAIL.to,
+      cc: DELIVERY_REQUEST_EMAIL.cc,
+      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
     };
-    const web = prepareDeliveryRequest(webInput);
-    const mobile = prepareOrderDeliveryRequest(o);
-    expect(mobile.draft.body).toBe(web.draft.body);
-    expect(mobile.draft.subject).toBe(web.draft.subject);
-    expect(mobile.draft.to).toBe(web.draft.to);
-    expect(mobile.draft.cc).toBe(web.draft.cc);
-    // Same web transport too — the phone only ADDS the native one.
-    expect(mobile.outlookUrl).toBe(web.outlookUrl);
+    // Not "produces the same VALUES" — literally the same function's output.
+    // A field the phone re-derived on its own would fail here.
+    expect(buildDeliveryRequestInput(o)).toEqual(coreMapping(o, recipients));
+  });
+
+  it('holds across every row shape the fallbacks care about, so the delegation is not fixture-deep', async () => {
+    const {
+      buildDeliveryRequestInput: coreMapping,
+      DELIVERY_REQUEST_EMAIL_NAMES,
+    } = await import('@stockpilot/core');
+    const recipients = {
+      to: DELIVERY_REQUEST_EMAIL.to,
+      cc: DELIVERY_REQUEST_EMAIL.cc,
+      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
+    };
+    let checked = 0;
+    for (const requesterEmail of [null, '', 'onbehalf@site.org']) {
+      for (const orgTimezone of [null, '', 'UTC', 'America/New_York']) {
+        for (const requesterName of [null, '', 'Jane Smith']) {
+          const o = order({ requesterEmail, orgTimezone, requesterName });
+          expect({ requesterEmail, orgTimezone, requesterName, input: buildDeliveryRequestInput(o) })
+            .toEqual({ requesterEmail, orgTimezone, requesterName, input: coreMapping(o, recipients) });
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(36);
+  });
+
+  it('the mandatory CC comes from the ONE core constant and survives onto the draft', async () => {
+    const { DELIVERY_REQUEST_EMAIL_NAMES } = await import('@stockpilot/core');
+    const prepared = prepareOrderDeliveryRequest(order());
+    expect(prepared.draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
+    expect(prepared.draft.cc).toBe('arosas@cvwest.org');
+    expect(prepared.draft.ccName).toBe(DELIVERY_REQUEST_EMAIL_NAMES.cc);
   });
 });

@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { can, formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
+import {
+  can,
+  formatOrderNumber,
+  isManagerOrAbove,
+  resolveRequesterIdentity,
+} from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
@@ -783,11 +788,23 @@ export class OrderRequestsService {
 
     // Resolved name/email safe for a name cell — SAME fallback the list()
     // path uses: free-text column wins, else the joined profile, else null.
-    // `||` (not `??`) so an empty-string column also falls through.
-    const requesterName =
-      ((h.requester_name as string | null) ?? null) || profile?.fullName?.trim() || null;
-    const requesterEmail =
-      ((h.requester_email as string | null) ?? null) || profile?.email?.trim() || null;
+    //
+    // Through core's `resolveRequesterIdentity` rather than spelled out here,
+    // because mobile's delivery-request mapping had to make the same choice and
+    // spelled it `??`, where an EMPTY-STRING column counts as present and wins.
+    // The same order then named a reachable contact in web's delivery request
+    // and no contact at all in the phone's. One function, one operator, both
+    // surfaces. (Core additionally trims the column side, which web did not;
+    // 0 of 103 prod rows are affected, and the draft builder already collapsed
+    // whitespace downstream.)
+    const requesterName = resolveRequesterIdentity(
+      h.requester_name as string | null,
+      profile?.fullName,
+    );
+    const requesterEmail = resolveRequesterIdentity(
+      h.requester_email as string | null,
+      profile?.email,
+    );
 
     // requesterDisplay is the on-screen label WITH the " · org_label"
     // suffix for external requesters — unchanged behavior, just now

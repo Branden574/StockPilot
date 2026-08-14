@@ -42,6 +42,8 @@ export * from './orders/pick-shortfall';
 export * from './orders/cart-totals';
 export * from './orders/delivery-request-recipients';
 export * from './orders/delivery-request';
+export * from './orders/delivery-request-input';
+export * from './orders/requester-identity';
 export * from './time/org-timezone';
 export * from './b2b/pricing-mode';
 export * from './auth/account-status';

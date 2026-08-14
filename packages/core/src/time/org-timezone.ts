@@ -39,6 +39,42 @@
  */
 export const ORG_TIMEZONE_DEFAULT = 'America/Los_Angeles';
 
+/**
+ * THE ONE EXPRESSION of "what zone do we print when the org's zone did not
+ * arrive". Every surface that renders an org-local time must resolve its raw
+ * `organizations.timezone` read through THIS, never through a fallback of its
+ * own.
+ *
+ * THE DEFECT THIS CLOSES (2026-08-13). There were two fallbacks, and they
+ * disagreed. Web's `getCachedOrgTimezone` returned `row?.timezone || 'UTC'`;
+ * mobile's delivery-request mapping used `|| ORG_TIMEZONE_DEFAULT`. The same
+ * order therefore stated a different needed-by time on each surface — a Pacific
+ * time on the phone and a UTC time on the web — in mail to the same warehouse.
+ * Both bodies name their zone, so neither is a lie, but they are 7-8 hours
+ * apart and, for any needed-by after 16:00 Pacific, they name a DIFFERENT
+ * CALENDAR DAY. Two dates for one delivery is the failure mode, not the
+ * cosmetic difference.
+ *
+ * WHY PACIFIC AND NOT UTC. This is the fallback for a MISSING READ, not for an
+ * unconfigured org: `organizations.timezone` is NOT NULL DEFAULT 'UTC', so an
+ * org that never touched the setting has a real stored 'UTC' that both surfaces
+ * read and agree on, and this function never sees it. What reaches here is the
+ * degraded case — the org row missing, an RLS denial, a failed query. Guessing
+ * UTC there prints a warehouse delivery time nobody operates on; guessing the
+ * documented default prints the zone every org in the database actually uses
+ * (all 3, measured 2026-08-13). It is also the value this module has documented
+ * as the fallback since it was written, and having a SECOND, quieter answer
+ * living in a web helper is exactly the duplicated-decision shape that let the
+ * two surfaces drift in the first place.
+ *
+ * Whitespace is treated as absent: a `'   '` timezone would make
+ * `toLocaleString` throw a RangeError, which is a worse outcome than the
+ * documented default.
+ */
+export function resolveOrgTimezone(raw: string | null | undefined): string {
+  return (typeof raw === 'string' ? raw.trim() : '') || ORG_TIMEZONE_DEFAULT;
+}
+
 /** Locale-aware date formatter. Pass the org's tz explicitly via
  *  the third argument when available; falls back to the default. */
 export function formatOrgDate(

@@ -1,12 +1,13 @@
 import {
   DELIVERY_REQUEST_EMAIL,
   DELIVERY_REQUEST_EMAIL_NAMES,
-  ORG_TIMEZONE_DEFAULT,
+  buildDeliveryRequestInput as coreBuildDeliveryRequestInput,
   prepareDeliveryRequest,
   type DeliveryComposeTransport,
   type DeliveryRequestAddress,
   type DeliveryRequestInput,
-  type DeliveryRequestSite,
+  type DeliveryRequestOrderData,
+  type DeliveryRequestRecipients,
   type PreparedDeliveryRequest,
 } from '@stockpilot/core';
 
@@ -127,42 +128,25 @@ export function needsDeliveryRequestData(
 
 // ── The input mapping ────────────────────────────────────────────────────
 
-export interface DeliveryRequestOrderLine {
-  /** `order_request_lines.item_id`. Null rows are dropped — see below. */
-  itemId: string | null;
-  name: string;
-  sku: string | null;
-  requested: number;
-}
-
 /**
- * Exactly the fields the screen already holds (or is about to fetch), in the
- * nullability the database hands them over in. Mapping happens in one place so
- * a missing column is a type error rather than a blank line in an email nobody
- * reads until DC4 asks what happened.
+ * The row shape and the mapping BOTH live in core now (2026-08-13) — see
+ * `packages/core/src/orders/delivery-request-input.ts`. Re-exported here so the
+ * screen and this module's tests keep their existing imports, and so the phone
+ * cannot acquire a second opinion about what a row means.
+ *
+ * The move was not tidying. Web's mapping and this one had drifted on two
+ * fields — the org timezone default (UTC vs Pacific: two different needed-by
+ * times, and two different DATES after 16:00 Pacific, for one order) and the
+ * requester-email fallback operator (`??` vs `||`) — and no test in either
+ * suite could see it, because neither app can import the other. With one
+ * mapping there is nothing left to drift, and the web suite drives THIS code
+ * against web's own resolution path in
+ * `apps/web/src/components/orders/delivery-request-parity.test.tsx`.
  */
-export interface DeliveryRequestOrderData {
-  id: string;
-  orderNumber: number | null;
-  warehouseName: string | null;
-  /** `order_requests.requester_name` — the on-behalf-of name when present. */
-  requesterName: string | null;
-  /** The screen's already-resolved display label, used when the denormalized
-   *  name is null. Mirrors web's `detail.requesterName ?? requesterDisplay`. */
-  requesterLabel: string | null;
-  /** `order_requests.requester_email`; NULL on internal self-submits. */
-  requesterEmail: string | null;
-  /** The joined `user_profiles.email`, which is what makes internal orders
-   *  reachable at all. See `buildDeliveryRequestInput`. */
-  requesterProfileEmail: string | null;
-  /** `order_requests.needed_by` — a timestamptz ISO instant, or null. */
-  neededBy: string | null;
-  notes: string | null;
-  destination: DeliveryRequestSite | null;
-  /** `organizations.timezone`; null falls back to the documented default. */
-  orgTimezone: string | null;
-  lines: DeliveryRequestOrderLine[];
-}
+export type {
+  DeliveryRequestOrderData,
+  DeliveryRequestOrderLine,
+} from '@stockpilot/core';
 
 /**
  * `charters.address` is jsonb, so the value can be anything at all — null for
@@ -177,64 +161,33 @@ export function parseCharterAddress(raw: unknown): DeliveryRequestAddress | null
 }
 
 /**
+ * WHERE THIS TENANT'S DELIVERY MAIL GOES. From the ONE core constant, never
+ * from anything on the order row, a route parameter or a server payload —
+ * nothing a user typed can redirect this mail or split off the mandatory CC.
+ *
+ * Supplied HERE rather than read inside the core mapping, matching what
+ * `buildDeliveryRequestDraft` already does with its own recipients: core stays
+ * tenant-neutral, and `dc4@learn4life.org` stays a call-site fact.
+ */
+const MOBILE_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = {
+  to: DELIVERY_REQUEST_EMAIL.to,
+  cc: DELIVERY_REQUEST_EMAIL.cc,
+  toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
+  ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
+};
+
+/**
  * Map the order row onto the shared builder's input.
  *
- * ABSENT DATA IS REPRESENTED AS ABSENT. Every blank here is an empty string or
- * a null, never a stand-in that reads like real data — the builder owns the
- * honest admissions ("(warehouse not recorded)", "(requester not recorded)")
- * and states them in one voice across both surfaces. Inventing a value here
- * would launder a gap into something DC4 would act on.
- *
- * The one field with a real default is `orgTimezone`: a delivery time printed
- * in no zone at all is worse than one printed in the documented fallback,
- * which is also exactly what the builder would substitute anyway.
+ * THE MAPPING ITSELF IS NOT DEFINED HERE any more (2026-08-13). It is core's
+ * `buildDeliveryRequestInput`, which web's parity test drives directly; this
+ * adds only the recipients. Every rule the mapping applies — absent data stays
+ * absent, the timezone resolves through `resolveOrgTimezone`, the requester
+ * fields through `resolveRequesterIdentity`, null-item lines are dropped, and
+ * `fulfillmentType` is a literal — is documented on the core function.
  */
 export function buildDeliveryRequestInput(order: DeliveryRequestOrderData): DeliveryRequestInput {
-  // Lines with no item id are dropped, exactly as the web page's
-  // `l.item ? [...] : []` flatMap does — a line with no item cannot be named
-  // in the body and would otherwise inflate the counts the disclosure quotes.
-  const lines = order.lines.filter(
-    (l): l is DeliveryRequestOrderLine & { itemId: string } => l.itemId !== null,
-  );
-
-  return {
-    // From the ONE core constant, never from anything on the order row, a
-    // route parameter or a server payload. Nothing a user typed can redirect
-    // this mail or split off the mandatory CC.
-    recipients: {
-      to: DELIVERY_REQUEST_EMAIL.to,
-      cc: DELIVERY_REQUEST_EMAIL.cc,
-      toName: DELIVERY_REQUEST_EMAIL_NAMES.to,
-      ccName: DELIVERY_REQUEST_EMAIL_NAMES.cc,
-    },
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    // A literal, not `order.fulfillmentType`. The gate above only shows this
-    // action for delivery orders, and a literal keeps a future caller from
-    // quietly producing a destination-less "delivery" draft — the same
-    // reasoning web's SendDeliveryRequestButton records for its own literal.
-    fulfillmentType: 'delivery',
-    warehouseName: order.warehouseName ?? '',
-    destination: order.destination,
-    requestedFor: order.requesterName ?? order.requesterLabel ?? '',
-    // THE CONTACT DC4 CAN ACTUALLY REACH. `requester_email` is NULL on
-    // internal self-submitted orders — most of them — while the joined
-    // `user_profiles.email` is populated and was already being fetched and
-    // discarded. Without this fallback the common case drafts with no
-    // requester email at all, and the recipient has no way to reply.
-    requesterEmail: order.requesterEmail ?? order.requesterProfileEmail ?? null,
-    // Passed through untouched: the builder runs it through `new Date(...)`
-    // and prints it in the org zone with the zone named. An ISO instant is as
-    // valid here as the storefront's datetime-local value — same as web.
-    neededByLocal: order.neededBy ?? '',
-    orgTimezone: order.orgTimezone || ORG_TIMEZONE_DEFAULT,
-    notes: order.notes ?? '',
-    lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.requested })),
-    // Only name and sku ever cross into the builder — `DeliveryRequestItemRef`
-    // is closed at the type level so no staff-only field (cost, price) can
-    // reach a message that leaves the building.
-    itemMap: new Map(lines.map((l) => [l.itemId, { name: l.name, sku: l.sku ?? '' }])),
-  };
+  return coreBuildDeliveryRequestInput(order, MOBILE_DELIVERY_RECIPIENTS);
 }
 
 // ── Which compose url this phone will actually open ──────────────────────
