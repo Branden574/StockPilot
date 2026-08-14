@@ -368,6 +368,13 @@ export function shouldShowCondensedNotice(prepared: PreparedDeliveryRequest): bo
  * comparison in a `.tsx` under `app/` is unreachable by this repo's mobile
  * vitest — and an off-by-one between these two thresholds is invisible on
  * screen until someone mails DC4 twice.
+ *
+ * CALLED BY `app/order/[id].tsx`, and it must stay that way. Until 2026-08-13
+ * this was exported, documented exactly as above, and imported by nothing,
+ * while the screen wrote the `> 1` inline — the duplication this comment
+ * argues against, in the module that argues against it (recurring pattern
+ * #26). If it ever shows up as an unused export again, the fix is to restore
+ * the call, not to delete the function.
  */
 export function shouldWarnDuplicateDrafts(openCount: number): boolean {
   return openCount > 1;
@@ -380,6 +387,12 @@ export function shouldWarnDuplicateDrafts(openCount: number): boolean {
  * copy and different remedies — `BLOCKED_HEADLINE` invites a retry, which is
  * useless advice for a draft no link can ever carry, and `OVERSIZED_MESSAGE`
  * owns that case. Showing both at once would offer a retry that cannot work.
+ *
+ * CALLED BY `app/order/[id].tsx`. Same history as `shouldWarnDuplicateDrafts`
+ * above: exported, unused, and restated inline in the screen until 2026-08-13.
+ * The `linkFits` term is the whole content of the function — a copy of this
+ * condition that loses it looks identical in review and is only visible on a
+ * device, on the one order whose draft nothing can carry.
  */
 export function shouldShowBlockedNotice(
   prepared: PreparedDeliveryRequest,

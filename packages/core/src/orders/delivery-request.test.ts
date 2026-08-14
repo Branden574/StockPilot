@@ -518,6 +518,62 @@ describe('DeliveryRequestRecipients is branded — an object literal is not one'
     expect(forged.cc).toBe('ops@somewhere.test');
   });
 
+  /**
+   * THE SPREAD IS THE ONE THAT MATTERED. Nobody hand-types four fields to get a
+   * wrong cc; they start from the value that already works and change the field
+   * they mean to change. Under the previous `unique symbol` brand this line
+   * compiled with ZERO errors and no cast, because an object spread reproduces
+   * symbol-keyed properties in the spread type — so the brand stopped the form
+   * of the mistake nobody makes and allowed the form everybody makes.
+   *
+   * The brand is a private class member now, which is the one property kind
+   * TypeScript's spread does not carry over. Removing it makes this directive
+   * unused and `pnpm typecheck` fails with TS2578.
+   */
+  it('TYPE-LEVEL PIN: the working value cannot be SPREAD into a wrong one', () => {
+    // @ts-expect-error the spread drops the private brand: TS2741
+    const forged: DeliveryRequestRecipients = {
+      ...DELIVERY_REQUEST_RECIPIENTS,
+      cc: 'ops@somewhere.test',
+    };
+    expect(forged.cc).toBe('ops@somewhere.test');
+  });
+
+  /**
+   * THE RESIDUAL, STATED RATHER THAN IMPLIED.
+   *
+   * `Object.assign` is NOT closed, at the type level or at runtime, and no
+   * brand can close it: its lib signature returns `T & U & V`, an intersection
+   * that already contains `DeliveryRequestRecipients`, so whatever the brand is
+   * — symbol key, private member, branded `cc` string — the return type
+   * re-supplies it by construction. The runtime does not catch it either,
+   * because `ops@somewhere.test` is a perfectly routable address and refusing
+   * routable addresses is not something this validator can do.
+   *
+   * This test asserts the hole, on purpose. It exists so that a reader of the
+   * brand's doc comment cannot come away believing more than is true, and so
+   * that if someone later closes this path the test fails and forces the
+   * comment to be corrected with it. No `@ts-expect-error` appears below, and
+   * its absence IS the assertion: the line typechecks.
+   */
+  it('THE RESIDUAL: Object.assign still typechecks, and is still accepted at runtime', () => {
+    const forged: DeliveryRequestRecipients = Object.assign({}, DELIVERY_REQUEST_RECIPIENTS, {
+      cc: 'ops@somewhere.test',
+    });
+
+    const draft = buildDeliveryRequestDraft(makeInput({ recipients: forged }));
+    // Not refused, and not silently corrected either — the forged address is
+    // what would reach a real compose window. Review is the only thing standing
+    // between this line and a misrouted delivery request.
+    expect(draft.cc).toBe('ops@somewhere.test');
+    expect(buildDeliveryRequestOutlookUrl(draft)).toContain(
+      encodeURIComponent(encodeURIComponent('ops@somewhere.test')),
+    );
+    // What the brand DOES buy, in the same breath: the accidental spelling of
+    // the same mistake is a compile error (the test above), so this one has to
+    // be written deliberately.
+  });
+
   it('the factory is the only constructor, and it VALIDATES before it brands', () => {
     const made = deliveryRequestRecipients({
       to: 'intake@othercorp.test',

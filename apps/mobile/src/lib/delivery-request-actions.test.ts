@@ -4,6 +4,7 @@ import * as Linking from 'expo-linking';
 
 import {
   DELIVERY_REQUEST_EMAIL,
+  DELIVERY_REQUEST_RECIPIENTS,
   DRAFT_URL_LIMIT,
   ORDER_STATUS_KEYS,
   condensedNoticeText,
@@ -30,10 +31,13 @@ import {
   openDeliveryRequestDraft,
   parseCharterAddress,
   prepareOrderDeliveryRequest,
+  shouldShowBlockedNotice,
   shouldShowCondensedNotice,
+  shouldWarnDuplicateDrafts,
+  type DeliveryOpenResult,
   type DeliveryRequestOrderData,
 } from './delivery-request-actions';
-import { nativeOutlookAvailable } from './outlook-transport';
+import { nativeOutlookAvailable, shouldConfirmBeforeOpening } from './outlook-transport';
 
 // Same mock, same reasoning, as maintenance-email-actions.test.ts: expo-linking
 // is a real installed dependency (~7.1.7); vi.mock is hoisted above the imports
@@ -988,6 +992,124 @@ describe('copy', () => {
 });
 
 // =========================================================================
+// THE TWO NOTICE GATES THE SCREEN USED TO RESTATE INLINE.
+//
+// `shouldWarnDuplicateDrafts` and `shouldShowBlockedNotice` were exported from
+// this module, documented as living here BECAUSE the screen cannot be tested,
+// and then imported by nothing: app/order/[id].tsx wrote `deliveryDraftCount >
+// 1` and `deliveryResult?.outcome === 'blocked' && deliveryPrepared.linkFits`
+// in its own JSX. One behaviour, two copies, and the copy that shipped was the
+// one no test in this repo can reach — recurring pattern #26, in the exact
+// module whose header says decisions live here so they can be tested.
+//
+// The two copies AGREED, character for character, so nothing was wrong on
+// screen; what was wrong was that nothing would have noticed if they stopped
+// agreeing. The screen calls these now, and the tests below are what makes the
+// call worth something.
+// =========================================================================
+
+describe('the on-screen notice gates', () => {
+  /**
+   * The dialog and the standing line are DELIBERATELY off by one, and that is
+   * the whole reason this is a named function rather than a numeral in the JSX:
+   * `shouldConfirmBeforeOpening` asks before the second open (count 0 is the
+   * first open and never asks), while this line only appears once a second
+   * draft actually EXISTS. Warning about duplicates while exactly one draft
+   * exists would be false, and the dialog has already done the asking.
+   *
+   * Asserted as a RELATIONSHIP over the whole range rather than at one point,
+   * because the failure mode is not "wrong at 1" — it is the two thresholds
+   * drifting into the same value, at which point the phone both asks and
+   * accuses on the very first duplicate, or does neither.
+   */
+  it('the duplicate warning stays exactly one open behind the confirm dialog', () => {
+    // No drafts, one draft: nothing to warn about yet.
+    expect(shouldWarnDuplicateDrafts(0)).toBe(false);
+    expect(shouldWarnDuplicateDrafts(1)).toBe(false);
+    // A second draft exists. It is now a fact, not a risk.
+    expect(shouldWarnDuplicateDrafts(2)).toBe(true);
+
+    let confirmedOnly = 0;
+    for (let n = 0; n <= 10; n += 1) {
+      // The warning is exactly the dialog's own predicate, one open later.
+      expect(shouldWarnDuplicateDrafts(n)).toBe(shouldConfirmBeforeOpening(n - 1));
+      // Never the reverse: a count that warns must also have confirmed.
+      if (shouldWarnDuplicateDrafts(n)) expect(shouldConfirmBeforeOpening(n)).toBe(true);
+      if (shouldConfirmBeforeOpening(n) && !shouldWarnDuplicateDrafts(n)) confirmedOnly += 1;
+    }
+    // Exactly ONE count sits between the two thresholds — openCount 1, the
+    // window where the dialog asks and the standing line is still silent. Zero
+    // would mean they had collapsed onto the same number; two would mean the
+    // line lags an extra open and a real duplicate goes unstated.
+    expect(confirmedOnly).toBe(1);
+  });
+
+  /**
+   * The blocked notice invites a retry. That is the right advice for an open
+   * the OS refused and useless advice for a draft no link can ever carry, which
+   * `OVERSIZED_MESSAGE` owns — so the AND is the point of the function, not
+   * decoration. Driven over the full 2x3 space rather than at the true corner.
+   */
+  it('the blocked notice needs BOTH a refused open and a draft a link could have carried', () => {
+    const fits = prepareOrderDeliveryRequest(order());
+    const oversized = prepareOrderDeliveryRequest(oversizedOrder());
+    expect(fits.linkFits).toBe(true);
+    expect(oversized.linkFits).toBe(false);
+
+    const results: [string, DeliveryOpenResult | null][] = [
+      ['nothing attempted yet', null],
+      ['opened natively', { outcome: 'opened', used: 'outlook-native' }],
+      ['opened in the default mail app', { outcome: 'opened', used: 'default-mail' }],
+      ['refused by the OS', { outcome: 'blocked', used: null }],
+    ];
+
+    const seen: [string, string, boolean][] = [];
+    for (const [draftLabel, prepared] of [
+      ['a draft that fits', fits],
+      ['a draft too long for any link', oversized],
+    ] as const) {
+      for (const [resultLabel, result] of results) {
+        seen.push([draftLabel, resultLabel, shouldShowBlockedNotice(prepared, result)]);
+      }
+    }
+
+    // Hand-written, one row per combination: the expectation is stated here
+    // rather than recomputed from the same expression the function uses.
+    expect(seen).toEqual([
+      ['a draft that fits', 'nothing attempted yet', false],
+      ['a draft that fits', 'opened natively', false],
+      ['a draft that fits', 'opened in the default mail app', false],
+      ['a draft that fits', 'refused by the OS', true],
+      ['a draft too long for any link', 'nothing attempted yet', false],
+      ['a draft too long for any link', 'opened natively', false],
+      ['a draft too long for any link', 'opened in the default mail app', false],
+      // The one row that is easy to get wrong: nothing was opened because
+      // nothing was offered, and telling this employee to try again would be a
+      // retry that cannot work.
+      ['a draft too long for any link', 'refused by the OS', false],
+    ]);
+  });
+
+  /**
+   * The two failure copies are mutually exclusive BY VALUE, not by luck of
+   * layout: the oversized line renders on `!linkFits` and the blocked card on
+   * this gate, so if this gate ever dropped its `linkFits` term the phone would
+   * show "nothing can open this" and "try again" one under the other.
+   */
+  it('the blocked notice and the oversized message can never appear together', () => {
+    const blocked: DeliveryOpenResult = { outcome: 'blocked', used: null };
+    for (const prepared of [
+      prepareOrderDeliveryRequest(order()),
+      prepareOrderDeliveryRequest(bigOrder()),
+      prepareOrderDeliveryRequest(oversizedOrder()),
+    ]) {
+      const showsOversized = !prepared.linkFits;
+      expect(shouldShowBlockedNotice(prepared, blocked) && showsOversized).toBe(false);
+    }
+  });
+});
+
+// =========================================================================
 // What this module ADDS to the shared mapping — which is only the recipients.
 //
 // THIS BLOCK USED TO BE CALLED "parity with the web surface", and its one test
@@ -1056,6 +1178,27 @@ describe('the phone adds only its recipients to the shared mapping', () => {
     // @ts-expect-error a raw literal is missing core's module-private brand
     const forged: DeliveryRequestRecipients = {
       to: DELIVERY_REQUEST_EMAIL.to,
+      cc: 'ops@somewhere.test',
+    };
+    expect(forged.cc).toBe('ops@somewhere.test');
+  });
+
+  /**
+   * AND IT CANNOT SPREAD ONE EITHER — the form the mistake would actually take.
+   * Nobody types four fields to misroute warehouse mail; they start from the
+   * value that works and change the one field they mean to change. Under the
+   * `unique symbol` brand this compiled clean here, in the app, with no cast:
+   * spread reproduces symbol-keyed properties. Core's brand is a private class
+   * member now, which spread cannot reproduce.
+   *
+   * Pinned in the MOBILE suite as well as core's because this is the workspace
+   * where a third call site would be written — importing the type through the
+   * `@stockpilot/core` barrel, nowhere near the brand's declaration.
+   */
+  it('TYPE-LEVEL PIN: nor SPREAD the working value into a wrong one', () => {
+    // @ts-expect-error the spread drops core's private brand: TS2741
+    const forged: DeliveryRequestRecipients = {
+      ...DELIVERY_REQUEST_RECIPIENTS,
       cc: 'ops@somewhere.test',
     };
     expect(forged.cc).toBe('ops@somewhere.test');

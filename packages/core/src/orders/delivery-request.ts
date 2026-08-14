@@ -154,14 +154,45 @@ export interface DeliveryRequestItemRef {
  * runtime guard here is designed to accept. The no-parameter design this
  * replaced gave that guarantee structurally, by having nothing to pass.
  *
- * The brand restores it at the type level: `DELIVERY_RECIPIENTS_BRAND` is a
- * module-private `unique symbol`, so no other file can even NAME the key, and
- * a raw object literal therefore stops typechecking. `deliveryRequestRecipients`
- * below is the only constructor, and it validates. The seam the deferred
- * per-org work needs is untouched — that work calls the factory with values
- * read from the org row, which is precisely the path the validation is for.
+ * The brand restores it at the type level, and `deliveryRequestRecipients`
+ * below is the only constructor, which validates. The seam the deferred per-org
+ * work needs is untouched — that work calls the factory with values read from
+ * the org row, which is precisely the path the validation is for.
+ *
+ * WHY THE BRAND IS A PRIVATE CLASS MEMBER AND NOT A `unique symbol` KEY
+ * (2026-08-13, third pass). It was a module-private `unique symbol` property
+ * first. That stopped a bare object literal, and stopped nothing else, because
+ * an object SPREAD reproduces symbol-keyed properties in the resulting type:
+ *
+ *     const r: DeliveryRequestRecipients = {
+ *       ...DELIVERY_REQUEST_RECIPIENTS, cc: 'ops@somewhere.test' };
+ *
+ * typechecked clean, with no cast, and is far and away the most natural way
+ * someone would actually write a wrong recipient — you start from the value
+ * that works and change the field you mean to change. Verified: that line
+ * compiled with zero errors under the symbol brand.
+ *
+ * A private class member is the one thing TypeScript's spread does NOT carry
+ * over (`isSpreadableProperty` skips private and protected members), so the
+ * spread now fails with TS2741 — `Property '__deliveryRecipientsBrand' is
+ * missing`. The class is `declare`d, so it emits nothing and exists only in the
+ * type space; the interface extends it, so every existing type position,
+ * import and cast is unchanged.
+ *
+ * WHAT IS STILL OPEN, MEASURED, NOT ASSUMED. `Object.assign({},
+ * DELIVERY_REQUEST_RECIPIENTS, { cc: 'ops@somewhere.test' })` still typechecks,
+ * and NO brand of any shape can stop it: `Object.assign`'s own lib signature
+ * returns `T & U & V`, an intersection that includes `DeliveryRequestRecipients`
+ * itself, so the brand is re-supplied by the return type by construction —
+ * whether the brand is a symbol key, a private member, or a branded `cc` string.
+ * That path is not refused at runtime either, because a wrong-but-routable
+ * address is exactly what `assertRoutableAddress` is designed to accept. Both
+ * facts are pinned as tests below, deliberately including the one that fails to
+ * refuse, so nobody reads this brand as stronger than it is. What the brand
+ * gives is this: the accidental version is impossible, and the remaining
+ * version has to be written on purpose.
  */
-export interface DeliveryRequestRecipients {
+export interface DeliveryRequestRecipients extends DeliveryRecipientsBrand {
   /** The intake mailbox. Exactly one plain address. */
   readonly to: string;
   /**
@@ -174,17 +205,20 @@ export interface DeliveryRequestRecipients {
   readonly toName?: string;
   /** Cosmetic OWA compose-chip name for `cc`. Literals only; validated. */
   readonly ccName?: string;
-  /**
-   * NOMINAL BRAND. Never present at runtime — `declare const` emits nothing —
-   * and unnameable outside this module, which is the entire mechanism: an
-   * object literal cannot satisfy this property, so `deliveryRequestRecipients`
-   * is the only way to obtain the type without an `as unknown as` cast that
-   * announces itself in review.
-   */
-  readonly [DELIVERY_RECIPIENTS_BRAND]: true;
 }
 
-declare const DELIVERY_RECIPIENTS_BRAND: unique symbol;
+/**
+ * NOMINAL BRAND, and nothing else. `declare class` is ambient — it emits no
+ * runtime code and no value is ever constructed from it — so this costs nothing
+ * at run time and cannot be imported, named or forged by any other module.
+ *
+ * A private member rather than a symbol-keyed property because that is the only
+ * kind of property TypeScript refuses to reproduce through an object spread;
+ * see the long note on `DeliveryRequestRecipients` for the measurement.
+ */
+declare class DeliveryRecipientsBrand {
+  private readonly __deliveryRecipientsBrand: true;
+}
 
 /**
  * THE ONLY CONSTRUCTOR for `DeliveryRequestRecipients`.

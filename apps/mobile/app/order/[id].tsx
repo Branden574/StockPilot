@@ -81,7 +81,9 @@ import {
   parseCharterAddress,
   prepareOrderDeliveryRequest,
   shouldConfirmBeforeOpening,
+  shouldShowBlockedNotice,
   shouldShowCondensedNotice,
+  shouldWarnDuplicateDrafts,
   type DeliveryOpenResult,
   type DeliveryRequestOrderData,
 } from '@/lib/delivery-request-actions';
@@ -1849,7 +1851,12 @@ export default function OrderDetail() {
                 </Mono>
               ) : null}
 
-              {deliveryDraftCount > 1 ? (
+              {/* Deliberately one behind the confirm dialog's threshold, which
+                  is why it is a named function and not a `> 1` typed here: the
+                  two thresholds are unreadable side by side from this file, and
+                  an off-by-one between them is invisible on screen until
+                  someone mails DC4 twice. Both live in the tested module. */}
+              {shouldWarnDuplicateDrafts(deliveryDraftCount) ? (
                 <Mono size={10.5} color={c.ink4}>
                   {DR_DUPLICATE_WARNING}
                 </Mono>
@@ -1860,7 +1867,11 @@ export default function OrderDetail() {
                   {deliverySuccessMessageFor(deliveryResult.used)}
                 </Mono>
               ) : null}
-              {deliveryResult?.outcome === 'blocked' && deliveryPrepared.linkFits ? (
+              {/* A blocked open and an oversized draft are different failures
+                  with different remedies — the retry this card offers is
+                  useless advice for a draft no link can carry. The AND that
+                  keeps them apart lives in the tested module, not here. */}
+              {shouldShowBlockedNotice(deliveryPrepared, deliveryResult) ? (
                 <>
                   <Mono size={10.5} color={c.ink4}>
                     {DR_BLOCKED_HEADLINE}
