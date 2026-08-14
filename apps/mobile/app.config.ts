@@ -15,7 +15,19 @@ const config: ExpoConfig = {
   // published from a commit before this bump.
   // History: 1.0.3 = first universal (iPhone+iPad+Mac) build, LIVE on the App
   // Store; 1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.
-  version: '1.2.0',
+  //
+  // 1.3.0 (2026-08-14) carries the NATIVE Outlook transport. It is the first
+  // build to declare `ms-outlook` in LSApplicationQueriesSchemes below, which
+  // is what lets `canOpenURL` answer truthfully — 1.2.0 and earlier return
+  // false even when Outlook is installed, so those builds hand the draft to
+  // the browser. That declaration is native config and CANNOT be delivered by
+  // an OTA, which is the whole reason this version exists.
+  //
+  // BUMPING THIS SPLITS THE OTA AUDIENCE. runtimeVersion.policy is
+  // 'appVersion', so an update published from this commit reaches 1.3.0
+  // installs ONLY. Users still on 1.2.0 keep receiving 1.2.0 updates and must
+  // be served from a pre-bump commit until they upgrade.
+  version: '1.3.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   // `newArchEnabled` used to live here. Expo SDK 55 REMOVED it from the app
