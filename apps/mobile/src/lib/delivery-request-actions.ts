@@ -259,9 +259,12 @@ export type DeliveryEmailTransport = 'outlook' | 'mailto';
 
 /** `used` is the transport that ACTUALLY carried the draft, and is null for
  *  anything that did not open — so no caller can report a blocked attempt as
- *  a particular app having opened. */
+ *  a particular app having opened. `in_flight` is the double-tap swallow —
+ *  a call that arrived while an earlier open was unresolved fired no openURL
+ *  and no `onOpened` (so no counted draft, and no second request to DC4);
+ *  see `composeOpenInFlight` in ./outlook-transport. */
 export interface DeliveryOpenResult {
-  outcome: 'opened' | 'blocked';
+  outcome: 'opened' | 'blocked' | 'in_flight';
   used: OpenedTransport | null;
 }
 

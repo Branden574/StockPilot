@@ -128,9 +128,13 @@ export async function openMaintenanceDraft(
 
 /** `used` is the transport that actually carried the draft, and is null for
  *  anything that did not open — so no caller can report a blocked attempt as
- *  a particular app having opened. */
+ *  a particular app having opened. `in_flight` is the double-tap swallow —
+ *  a call that arrived while an earlier open was unresolved fired no openURL
+ *  and no `onOpened` (so no counted draft, no `recordDraftOpened`, and no
+ *  duplicate Zendesk ticket); see `composeOpenInFlight` in
+ *  ./outlook-transport. */
 export interface MaintenanceOpenResult {
-  outcome: 'opened' | 'blocked';
+  outcome: 'opened' | 'blocked' | 'in_flight';
   used: OpenedTransport | null;
 }
 

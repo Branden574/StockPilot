@@ -104,7 +104,7 @@ import {
   successMessageFor,
   withShareUrl,
   type EmailTransport,
-  type OpenedTransport,
+  type MaintenanceOpenResult,
   type OutlookPlatform,
 } from '@/lib/maintenance-email-actions';
 import { nativeOutlookAvailable } from '@/lib/outlook-transport';
@@ -309,10 +309,11 @@ export default function MaintenanceRequestDetailScreen() {
   const [sharePending, setSharePending] = React.useState(false);
   const [openCount, setOpenCount] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
-  const [lastResult, setLastResult] = React.useState<{
-    used: OpenedTransport | null;
-    outcome: 'opened' | 'blocked';
-  } | null>(null);
+  // The lib's own result type, not an inline restatement of it — the union
+  // grew an `in_flight` outcome (double-tap swallow) and a retyped shape here
+  // is exactly how the two would drift (pattern #26). `in_flight` renders
+  // nothing below: both cards key on 'opened' / 'blocked'.
+  const [lastResult, setLastResult] = React.useState<MaintenanceOpenResult | null>(null);
   const [copyOpen, setCopyOpen] = React.useState(false);
 
   // Task 10 — CLOSE-OUT card state. Bumping `refreshKey` re-fires the load

@@ -157,11 +157,38 @@ export interface MeasuredDraftToOpen extends OutlookTransportUrls {
 
 /** `used` is the transport that ACTUALLY carried the draft, and is null for
  *  anything that did not open — so no caller can report a blocked attempt as
- *  a particular app having opened. */
+ *  a particular app having opened.
+ *
+ *  `in_flight` is the double-tap swallow: a call that arrived while an
+ *  earlier open was still unresolved. It fired NO openURL and NO `onOpened`,
+ *  so it is never counted as a draft, never confirmed as opened, and never
+ *  reported as blocked (which would surface retry copy for a tap that needs
+ *  none — the first tap is still doing the work). */
 export interface MeasuredOpenResult {
-  outcome: 'opened' | 'blocked';
+  outcome: 'opened' | 'blocked' | 'in_flight';
   used: OpenedTransport | null;
 }
+
+/**
+ * THE DOUBLE-TAP LATCH, shared by both compose features because they share
+ * the one opener below.
+ *
+ * Measured before this existed: two `openDeliveryRequestDraft` calls fired in
+ * the same frame BOTH opened — two openURL invocations, two counted drafts,
+ * and for DC4 two real delivery requests. The screens' `disabled` props
+ * demonstrably do not close that window (React state has not flushed within
+ * the frame), so the guard lives HERE, in the tested module, on the only
+ * path that reaches openURL.
+ *
+ * Module-level on purpose: one phone has one screen and can be mid-open on at
+ * most one compose draft, so a single latch across both features is exactly
+ * as wide as the resource it guards. It is held only while `runPlan`'s
+ * `openURL` is unresolved and is released in `finally` — on success AND on a
+ * rejected open — because a stuck latch that permanently bricks the button
+ * would be a worse defect than the double-open it prevents. The refusal paths
+ * that never reach openURL (`linkFits: false`) neither take nor need it.
+ */
+let composeOpenInFlight = false;
 
 /**
  * ONE opener for both compose features (extracted 2026-08-16 from
@@ -189,24 +216,37 @@ export async function openMeasuredDraft(
   ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<MeasuredOpenResult> {
   if (!prepared.linkFits) return { outcome: 'blocked', used: null };
-  const plan =
-    button === 'outlook'
-      ? planOutlookOpen(
-          prepared,
-          {
-            // Straight off the draft that was measured. Never re-derived from
-            // a probe here: a second `canOpenURL` at press time could answer
-            // differently from the one the body was fitted against, and the
-            // disagreement would be invisible.
-            nativeOutlookAvailable: prepared.transport === 'outlook-native',
-            platform,
-          },
-          ccTrusted,
-        )
-      : mailtoPlan(prepared);
-  const outcome = await runPlan(plan);
-  if (outcome === 'opened') onOpened();
-  return { outcome, used: outcome === 'opened' ? plan.transport : null };
+  // The double-tap swallow (see `composeOpenInFlight`): while one open is
+  // unresolved a second call opens nothing, counts nothing (`onOpened` is
+  // never invoked on this path, so the screens' draft counts cannot
+  // double-increment), and reports the distinct `in_flight` outcome so it
+  // can never be mistaken for a blocked open that owes retry copy.
+  if (composeOpenInFlight) return { outcome: 'in_flight', used: null };
+  composeOpenInFlight = true;
+  try {
+    const plan =
+      button === 'outlook'
+        ? planOutlookOpen(
+            prepared,
+            {
+              // Straight off the draft that was measured. Never re-derived from
+              // a probe here: a second `canOpenURL` at press time could answer
+              // differently from the one the body was fitted against, and the
+              // disagreement would be invisible.
+              nativeOutlookAvailable: prepared.transport === 'outlook-native',
+              platform,
+            },
+            ccTrusted,
+          )
+        : mailtoPlan(prepared);
+    const outcome = await runPlan(plan);
+    if (outcome === 'opened') onOpened();
+    return { outcome, used: outcome === 'opened' ? plan.transport : null };
+  } finally {
+    // Released on success AND failure — a rejected open must re-arm the
+    // button, never brick it.
+    composeOpenInFlight = false;
+  }
 }
 
 /**

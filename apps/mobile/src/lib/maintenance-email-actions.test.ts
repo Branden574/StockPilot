@@ -169,6 +169,76 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
   });
 });
 
+// =========================================================================
+// THE DOUBLE-TAP LATCH (shared `composeOpenInFlight` in ./outlook-transport,
+// pinned per-feature here AND in delivery-request-actions.test.ts so a
+// future de-share of the opener cannot silently drop it from either — the
+// screen's `disabled={busy}` demonstrably does not close the same-frame
+// window: state has not flushed within the frame, and two opens are two
+// compose screens and potentially two Zendesk tickets).
+// =========================================================================
+
+describe('the double-tap latch — one unresolved open swallows every call behind it', () => {
+  it('two synchronous taps: exactly ONE openURL and ONE onOpened (so ONE counted draft and ONE recordDraftOpened); the second reports in_flight, never blocked', async () => {
+    let release!: () => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        // expo-linking types a successful openURL as Promise<true>.
+        new Promise<true>((resolve) => {
+          release = () => resolve(true);
+        }),
+    );
+    const onOpened = vi.fn();
+    const first = openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    const second = openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    // The swallow settles immediately: no openURL, no counted draft, and the
+    // DISTINCT outcome — `blocked` here would surface retry copy for a tap
+    // that needs none.
+    await expect(second).resolves.toEqual({ outcome: 'in_flight', used: null });
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    expect(onOpened).not.toHaveBeenCalled();
+    release();
+    await expect(first).resolves.toEqual({ outcome: 'opened', used: 'outlook-native' });
+    // The count feed (`onOpened`) fired exactly once for the two taps.
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('the latch RELEASES after a resolved open — a deliberate reopen after settle opens again', async () => {
+    const onOpened = vi.fn();
+    await openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+    expect(onOpened).toHaveBeenCalledTimes(2);
+  });
+
+  it('the latch RELEASES after a REJECTED open — a stuck latch would brick the button, which is worse than the double-open', async () => {
+    let rejectOpen!: (e: Error) => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        new Promise<true>((_resolve, reject) => {
+          rejectOpen = reject;
+        }),
+    );
+    const first = openMaintenanceDraft('outlook', PREPARED, 'ios', () => {});
+    // While the doomed open is still unresolved, a tap is swallowed...
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'in_flight',
+      used: null,
+    });
+    rejectOpen(new Error('no handler'));
+    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    // ...and after the rejection settles, the button works again.
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('planOutlookOpen — transport decision (CC beats the Outlook brand)', () => {
   it('native Outlook present on a cc-trusted platform: the ms-outlook deep link', () => {
     for (const platform of ['ios', 'android'] as const) {
