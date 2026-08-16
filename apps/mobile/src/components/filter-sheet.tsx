@@ -111,15 +111,24 @@ export function FilterSheet({
       onRequestClose={onDismiss}
       statusBarTranslucent
     >
-      <Pressable
-        style={[
-          styles.scrim,
-          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
-        ]}
-        onPress={onDismiss}
-      >
+      {/*
+       * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+       * ancestor claims the touch on press-down and beats the ScrollView's pan
+       * recogniser, so the filter list would not scroll until something else
+       * took the responder first. This sheet has NO text input, so the "tap
+       * the search box first" workaround that masks the bug elsewhere does not
+       * exist here — a stuck list is the only symptom. Do not re-nest this
+       * card inside the scrim. See add-order-items-sheet.tsx.
+       */}
+      <View style={styles.scrim}>
         <Pressable
-          onPress={() => undefined}
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+          onPress={onDismiss}
+        />
+        <View
           style={[
             styles.sheet,
             {
@@ -273,8 +282,8 @@ export function FilterSheet({
               Apply
             </Button>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

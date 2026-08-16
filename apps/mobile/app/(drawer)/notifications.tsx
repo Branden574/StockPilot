@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { BellOff, CheckCheck, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
@@ -186,16 +186,33 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
   const { c } = useTheme();
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        style={{
-          flex: 1,
-          justifyContent: 'center',
-          padding: 24,
-          backgroundColor: 'rgba(0,0,0,0.55)',
-        }}
-        onPress={onClose}
-      >
-        <Pressable>
+      {/*
+       * Backdrop is a SIBLING behind the card, not its parent. This was a
+       * scrim Pressable wrapping a BARE <Pressable> (no onPress) whose only
+       * job was to swallow backdrop taps — a bare Pressable still installs the
+       * responder handlers, so it blocked identically to the
+       * onPress={() => undefined} spelling used in the sibling sheets, and a
+       * grep for that literal could not see this file. Being touch responders,
+       * both beat the ScrollView's pan recogniser, so a long notification body
+       * would not scroll until something else took the responder first.
+       *
+       * The scrim must paint the FULL screen, so it cannot live inside a
+       * padded parent: Yoga insets an absolutely-positioned child by the
+       * parent's padding, which would leave a 24pt undimmed band. Hence the
+       * padding moves to a `pointerEvents="box-none"` layer above the scrim —
+       * that layer is not itself a touch target, so taps beside the card fall
+       * through to the scrim and close, while the card's own subtree keeps its
+       * touches. See add-order-items-sheet.tsx for the measured detail.
+       */}
+      <View style={{ flex: 1 }}>
+        <Pressable
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)' }]}
+          onPress={onClose}
+        />
+        <View
+          style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+          pointerEvents="box-none"
+        >
           <Card padding={18}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -224,8 +241,8 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
               </ScrollView>
             ) : null}
           </Card>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

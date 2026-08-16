@@ -2310,18 +2310,26 @@ export default function OrderDetail() {
           if (!returnSubmitting) setReturnOpen(false);
         }}
       >
-        <Pressable
-          onPress={() => {
-            if (!returnSubmitting) setReturnOpen(false);
-          }}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
+        {/*
+         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+         * ancestor claims the touch on press-down and beats the ScrollView's
+         * pan recogniser, so the return-lines list would not scroll until
+         * something else took the responder first. Do not re-nest this card
+         * inside the scrim. See add-order-items-sheet.tsx.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           <Pressable
-            onPress={() => undefined}
+            onPress={() => {
+              if (!returnSubmitting) setReturnOpen(false);
+            }}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+              },
+            ]}
+          />
+          <View
             style={{
               backgroundColor: c.card,
               borderTopLeftRadius: 18,
@@ -2486,8 +2494,8 @@ export default function OrderDetail() {
                 <Mono size={13} color={c.paper}>Submit return</Mono>
               )}
             </Pressable>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       {/* Add-items sheet (parity with the web add-items dialog): warehouse-
@@ -2539,16 +2547,24 @@ export default function OrderDetail() {
 
       {/* Driver picker for assign / reassign delivery. */}
       <Modal visible={driverOpen} transparent animationType="slide" onRequestClose={() => setDriverOpen(false)}>
-        <Pressable
-          onPress={() => setDriverOpen(false)}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
+        {/*
+         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+         * ancestor claims the touch on press-down and beats the ScrollView's
+         * pan recogniser, so the driver list would not scroll until something
+         * else took the responder first. Do not re-nest this card inside the
+         * scrim. See add-order-items-sheet.tsx.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           <Pressable
-            onPress={() => undefined}
+            onPress={() => setDriverOpen(false)}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+              },
+            ]}
+          />
+          <View
             style={{ backgroundColor: c.card, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, gap: 10 }}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2584,8 +2600,8 @@ export default function OrderDetail() {
                 })}
               </ScrollView>
             )}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );

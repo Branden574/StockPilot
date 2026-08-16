@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -161,16 +162,20 @@ function ReassignSheetContent({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1 }}
     >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: 'rgba(14,15,13,0.45)',
-          }}
-        >
+        {/*
+         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+         * ancestor claims the touch on press-down and beats the ScrollView's
+         * pan recogniser, so the assignee list would not scroll until
+         * something else took the responder first. Do not re-nest this card
+         * inside the scrim — taps outside still close because the scrim fills
+         * the screen behind it. See add-order-items-sheet.tsx.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(14,15,13,0.45)' }]}
+          />
+          <View
             style={{
               backgroundColor: theme.card,
               borderTopLeftRadius: 24,
@@ -302,8 +307,8 @@ function ReassignSheetContent({
                 )}
               </Pressable>
             </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </KeyboardAvoidingView>
   );
 }

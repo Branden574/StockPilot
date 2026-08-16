@@ -436,8 +436,19 @@ export default function TrainingCaptureScreen() {
 
       {/* Label picker for imported photos */}
       <Modal visible={importUris.length > 0} transparent animationType="fade" onRequestClose={() => setImportUris([])}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setImportUris([])}>
-          <Pressable style={styles.sheet} onPress={() => undefined}>
+        {/*
+         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+         * ancestor claims the touch on press-down and beats the ScrollView's
+         * pan recogniser, so the chip grid below would not scroll until
+         * something else took the responder first — a second way for this grid
+         * to dead-end, on top of the contentContainerStyle trap described
+         * below. The scrim colour stays on this View; the Pressable over it is
+         * transparent and only catches taps. Do not re-nest the sheet inside
+         * it. See add-order-items-sheet.tsx for the measured detail.
+         */}
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setImportUris([])} />
+          <View style={styles.sheet}>
             <Text style={styles.sheetTitle}>Label {importUris.length} photo{importUris.length === 1 ? '' : 's'}</Text>
             <Text style={styles.sheetBody}>What size are these? They&apos;ll all upload with this label.</Text>
             {/* The 35-chip shoe set does not fit, so the chips scroll while the
@@ -469,8 +480,8 @@ export default function TrainingCaptureScreen() {
             <Pressable onPress={() => setImportUris([])} style={styles.sheetCancel}>
               <Text style={styles.sheetCancelText}>Cancel</Text>
             </Pressable>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );

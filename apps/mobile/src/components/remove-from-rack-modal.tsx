@@ -7,6 +7,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   TextInput,
   View,
 } from 'react-native';
@@ -228,16 +229,25 @@ function RemoveFromRackContent({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1 }}
     >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          }}
-        >
+        {/*
+         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+         * ancestor claims the touch on press-down and beats the ScrollView's
+         * pan recogniser, so the body would not scroll until something else
+         * took the responder first (focusing a text field). Do not re-nest
+         * this card inside the scrim — taps outside still close because the
+         * scrim fills the screen behind it. See add-order-items-sheet.tsx.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+              },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -392,8 +402,8 @@ function RemoveFromRackContent({
                 </Button>
               </View>
             </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </KeyboardAvoidingView>
   );
 }
