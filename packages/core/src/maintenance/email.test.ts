@@ -892,7 +892,17 @@ describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GAT
       expect(prepared.outlookMobileUrl).not.toContain('+');
     });
 
-    it(`${name}: the native URL never exceeds the web URL, so the existing DRAFT_URL_LIMIT guard covers it`, () => {
+    it(`${name}: the native URL never exceeds the web URL, so the DEFAULT web-fitted guard covers it unmeasured`, () => {
+      // These fixtures all run the DEFAULT transport (outlook-web), under
+      // which the native url is deliberately not part of the fit decision.
+      // This inequality is what makes that safe: a draft fitted for the web
+      // url transitively fits the strictly-shorter native one. It is NO
+      // LONGER the reason the native url goes unmeasured everywhere — a
+      // caller that declares `transport: 'outlook-native'` now has the fit
+      // run against the native url itself (see the transport-option
+      // describe below); the inequality only justifies the default's
+      // direction, and the reverse direction is false, which that describe
+      // pins.
       const prepared = prepareMaintenanceEmail(input);
       expect(prepared.outlookMobileUrl.length).toBeLessThan(prepared.outlookUrl.length);
       if (prepared.linkFits) {
@@ -923,5 +933,146 @@ describe('prepareMaintenanceEmail — native mobile transport (CC ACCEPTANCE GAT
     expect(recipients).toBe('ms-outlook://compose?to=dc4%40learn4life.org&cc=arosas%40cvwest.org');
     expect(recipients).not.toContain('injected');
     expect(prepared.draft.body).toContain(`Name: ${unsafe}`);
+  });
+});
+
+// =========================================================================
+// THE TRANSPORT OPTION: fit against the url the caller will open — the
+// delivery ladder's 2026-08-13 fix, mirrored here 2026-08-16.
+//
+// The defect: this builder condensed against the double-encoded https OWA
+// url unconditionally, while a phone with Outlook installed opens
+// `ms-outlook://compose`, roughly 25-30% shorter for the same body. On the
+// fixture below the phone's own url sat 567 characters under the limit
+// while the description was truncated at 400 characters and the category/
+// priority/submitted/contact/location blocks were dropped — a body the
+// native url carries WHOLE.
+// =========================================================================
+
+describe('prepareMaintenanceEmail — the transport option: fit against the url the caller will open', () => {
+  /**
+   * A realistic, ordinary maintenance request whose only excess is a long
+   * (465-char) description — the class of input the native budget recovers.
+   * Measured 2026-08-16: the FULL draft's web url is 2199 (over the 1800
+   * limit — condenses under the default), while its native url is 1646 and
+   * its mailto 1627 (both under — the full body fits a phone).
+   */
+  const REALISTIC_LONG: MaintenanceEmailInput = {
+    ...MODERATE_INPUT,
+    requestNumber: 'MR-2026-000456',
+    subject: 'Hallway heater grinding and overheating near Room 118',
+    description: [
+      'The heating unit in the main hallway outside Room 118 has been making a loud grinding noise since Monday morning.',
+      'It runs for about ten minutes, shuts off with a bang, and then restarts on its own a few minutes later.',
+      'The thermostat on the wall reads 81 degrees even though it is set to 72, and the air coming out of the vent is cold.',
+      'Two staff members have reported headaches from the noise, and the afternoon study group has been moved to the library as a result.',
+    ].join(' '),
+  };
+
+  it('THE DEFAULT IS THE WEB URL, and it is fitted against the WEB url — flipping the default fails here', () => {
+    const prepared = prepareMaintenanceEmail(REALISTIC_LONG);
+    expect(prepared.transport).toBe('outlook-web');
+    // Under the web budget this input condenses, and the fitted url is the
+    // web one. A default flipped to 'outlook-native' would leave the full
+    // draft in place with outlookUrl over the limit — both lines below fail.
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    // And the no-options call is byte-identical to an explicit web request:
+    const explicit = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-web' });
+    expect(explicit.draft.body).toBe(prepared.draft.body);
+    expect(explicit.outlookUrl).toBe(prepared.outlookUrl);
+    expect(explicit.transport).toBe('outlook-web');
+  });
+
+  it('THE FIX: a declared native transport is fitted against the NATIVE url — forcing the fit back onto the web url fails this test', () => {
+    const web = prepareMaintenanceEmail(REALISTIC_LONG);
+    const native = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-native' });
+
+    // The defect this option closes, stated as the difference it makes: the
+    // same input condenses under the web budget and rides WHOLE under the
+    // native one. An implementation that measured outlookUrl despite the
+    // declared native transport would condense here too.
+    expect(web.draft.condensed).toBe(true);
+    expect(native.draft.condensed).toBe(false);
+    expect(native.linkFits).toBe(true);
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(native.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+
+    // What the phone recovers, named: the FULL description (the web budget
+    // truncates it at the 400-char word boundary)...
+    expect(native.draft.body).toContain(REALISTIC_LONG.description);
+    expect(web.draft.body).not.toContain(REALISTIC_LONG.description);
+    // ...and the blocks the condensed shape drops entirely.
+    for (const line of [
+      'Category: Heating or air conditioning',
+      'Priority: High',
+      'Email: jane.smith@learn4life.org',
+      'Building: Main Building',
+    ]) {
+      expect(native.draft.body).toContain(line);
+      expect(web.draft.body).not.toContain(line);
+    }
+  });
+
+  it('THE HEADROOM the old behaviour threw away, in characters', () => {
+    const web = prepareMaintenanceEmail(REALISTIC_LONG);
+    // The url the phone actually opens, under the old web-only fit, sat
+    // hundreds of characters short of the ceiling while real content was
+    // being dropped. (Relationship assertion, not an exact byte count —
+    // the exact figure was 567 when measured under node 2026-08-16.)
+    const wasted = DRAFT_URL_LIMIT - web.outlookMobileUrl.length;
+    expect(wasted).toBeGreaterThan(400);
+    // The native fit claims that headroom without exceeding the limit.
+    const native = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-native' });
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(DRAFT_URL_LIMIT - native.outlookMobileUrl.length).toBeLessThan(wasted);
+    expect(native.draft.body.length).toBeGreaterThan(web.draft.body.length);
+  });
+
+  it('under the native budget the WEB url is genuinely unmeasured — which is why the default is web', () => {
+    // The teeth behind the stamp: a caller that declared native and then
+    // opened outlookUrl anyway would hand the OS a url past the limit with
+    // linkFits still true. The mobile opener follows `transport` to make
+    // that structurally impossible.
+    const native = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-native' });
+    expect(native.linkFits).toBe(true);
+    expect(native.outlookUrl.length).toBeGreaterThan(DRAFT_URL_LIMIT);
+  });
+
+  it('the prepared email records which transport it was fitted for', () => {
+    expect(prepareMaintenanceEmail(MODERATE_INPUT).transport).toBe('outlook-web');
+    expect(prepareMaintenanceEmail(MODERATE_INPUT, { transport: 'outlook-web' }).transport).toBe('outlook-web');
+    expect(prepareMaintenanceEmail(MODERATE_INPUT, { transport: 'outlook-native' }).transport).toBe('outlook-native');
+  });
+
+  it('a draft that fits WHOLE is unaffected by the transport — same bytes either way', () => {
+    const web = prepareMaintenanceEmail(MODERATE_INPUT);
+    const native = prepareMaintenanceEmail(MODERATE_INPUT, { transport: 'outlook-native' });
+    expect(web.draft.condensed).toBe(false);
+    expect(native.draft.condensed).toBe(false);
+    expect(native.draft.body).toBe(web.draft.body);
+    expect(native.outlookUrl).toBe(web.outlookUrl);
+    expect(native.outlookMobileUrl).toBe(web.outlookMobileUrl);
+    expect(native.mailtoUrl).toBe(web.mailtoUrl);
+    expect(native.clipboardText).toBe(web.clipboardText);
+  });
+
+  it('the oversized floor is still reachable on the native budget: nothing may be opened when even the condensed pair overflows', () => {
+    const pathological = {
+      ...FULL_INPUT,
+      description: 'Detail line. '.repeat(400),
+      requesterName: 'X'.repeat(2000),
+    };
+    const native = prepareMaintenanceEmail(pathological, { transport: 'outlook-native' });
+    expect(native.linkFits).toBe(false);
+    expect(native.transport).toBe('outlook-native');
+  });
+
+  it('the mandatory CC survives the native-fitted draft on every transport it could open', () => {
+    const native = prepareMaintenanceEmail(REALISTIC_LONG, { transport: 'outlook-native' });
+    expect(decodeMobileCompose(native.outlookMobileUrl).cc).toBe('arosas@cvwest.org');
+    expect(native.mailtoUrl.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
+    expect(decodeCompose(native.outlookUrl).params.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+    expect(native.clipboardText).toContain('CC: arosas@cvwest.org');
   });
 });

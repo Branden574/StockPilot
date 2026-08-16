@@ -1,6 +1,6 @@
 import * as Linking from 'expo-linking';
 
-import { OUTLOOK_MOBILE_COMPOSE_BASE } from '@stockpilot/core';
+import { OUTLOOK_MOBILE_COMPOSE_BASE, type ComposeTransport } from '@stockpilot/core';
 
 /**
  * ONE Outlook transport decision for every mobile compose feature.
@@ -113,6 +113,100 @@ export function planOutlookOpen(
 
 export function mailtoPlan(prepared: OutlookTransportUrls): OutlookOpenPlan {
   return { transport: 'default-mail', url: prepared.mailtoUrl };
+}
+
+/**
+ * THE ONE PROBE-ANSWER RULE, for both compose features: which budget core's
+ * prepare* call fits the body against, given what the screen's single
+ * `canOpenURL` probe has answered so far.
+ *
+ *  - `null` — not probed yet, or the probe threw — means WORST CASE. The web
+ *    budget is measured AND the web url is what would open (that is what
+ *    `planOutlookOpen` does with `nativeOutlookAvailable: false`), so a tap
+ *    during that window is fully consistent; it just carries less body.
+ *  - `true` — the probe answered yes. Native budget, native url.
+ *  - `false` — no native app. Web budget, web url.
+ *
+ * Extracted from `deliveryComposeTransport` (2026-08-16) when the maintenance
+ * email gained the same declared-transport fit — one rule, shared, because a
+ * probe-answer interpretation that differed between the two features would be
+ * recurring pattern #26 with a silent-truncation cost.
+ */
+export function composeTransportForProbe(nativeOutlook: boolean | null): ComposeTransport {
+  return nativeOutlook === true ? 'outlook-native' : 'outlook-web';
+}
+
+/** Which BUTTON the employee pressed. Not the same thing as the transport
+ *  that ends up carrying the draft — see `OpenedTransport`. */
+export type ComposeButton = 'outlook' | 'mailto';
+
+/**
+ * A prepared draft, as the OPENER needs it: the three composed urls, whether
+ * any of them may be opened, and — the point of this type — WHICH ONE THE
+ * PREPARE PASS MEASURED. Both core prepared shapes
+ * (`PreparedDeliveryRequest`, `PreparedMaintenanceEmail`) satisfy it
+ * structurally; the opener takes the narrower shape for the same reason
+ * `planOutlookOpen` does, so it never sees the body.
+ */
+export interface MeasuredDraftToOpen extends OutlookTransportUrls {
+  /** Stamped by core's prepare pass when it fitted the body. Not a second
+   *  opinion — the record of the budget the body was actually measured
+   *  against. */
+  transport: ComposeTransport;
+}
+
+/** `used` is the transport that ACTUALLY carried the draft, and is null for
+ *  anything that did not open — so no caller can report a blocked attempt as
+ *  a particular app having opened. */
+export interface MeasuredOpenResult {
+  outcome: 'opened' | 'blocked';
+  used: OpenedTransport | null;
+}
+
+/**
+ * ONE opener for both compose features (extracted 2026-08-16 from
+ * `openDeliveryRequestDraft`, unchanged, when the maintenance opener adopted
+ * the same stamp-following shape — the two bodies were about to be
+ * byte-identical, which is recurring pattern #26).
+ *
+ * THERE IS NO PROBE ARGUMENT, and that is the whole design. The url this
+ * opens must be the url the prepare pass MEASURED; if the two ever diverge
+ * the phone opens a body nothing measured and the mail truncates in transit,
+ * silently. So `transport` is read off the prepared draft itself, where
+ * core stamped it while fitting the body. Measurement and plan are the same
+ * object, and there is no second value to disagree with.
+ *
+ * Refuses everything when `!prepared.linkFits`; `onOpened` fires only after
+ * a real, successful open; `ccTrusted` is injectable for tests only, and its
+ * reroute lands on `mailtoUrl`, which core measures under BOTH budgets, so
+ * that branch is safe whichever transport was fitted.
+ */
+export async function openMeasuredDraft(
+  button: ComposeButton,
+  prepared: MeasuredDraftToOpen,
+  platform: OutlookPlatform,
+  onOpened: () => void,
+  ccTrusted?: Record<OutlookPlatform, boolean>,
+): Promise<MeasuredOpenResult> {
+  if (!prepared.linkFits) return { outcome: 'blocked', used: null };
+  const plan =
+    button === 'outlook'
+      ? planOutlookOpen(
+          prepared,
+          {
+            // Straight off the draft that was measured. Never re-derived from
+            // a probe here: a second `canOpenURL` at press time could answer
+            // differently from the one the body was fitted against, and the
+            // disagreement would be invisible.
+            nativeOutlookAvailable: prepared.transport === 'outlook-native',
+            platform,
+          },
+          ccTrusted,
+        )
+      : mailtoPlan(prepared);
+  const outcome = await runPlan(plan);
+  if (outcome === 'opened') onOpened();
+  return { outcome, used: outcome === 'opened' ? plan.transport : null };
 }
 
 /**

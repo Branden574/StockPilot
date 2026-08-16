@@ -1,4 +1,8 @@
-import { type PreparedMaintenanceEmail } from '@stockpilot/core';
+import {
+  prepareMaintenanceEmail,
+  type MaintenanceEmailInput,
+  type PreparedMaintenanceEmail,
+} from '@stockpilot/core';
 
 // `OpenedTransport` and `OutlookPlatform` are IMPORTED as well as re-exported
 // below: a bare `export { type X } from './y'` forwards the name to this
@@ -6,10 +10,10 @@ import { type PreparedMaintenanceEmail } from '@stockpilot/core';
 // this file's own signatures (`MaintenanceOpenResult.used`, every `platform`
 // parameter).
 import {
-  mailtoPlan,
-  nativeOutlookAvailable,
-  planOutlookOpen,
-  runPlan,
+  composeTransportForProbe,
+  openMeasuredDraft,
+  type ComposeButton,
+  type MeasuredDraftToOpen,
   type OpenedTransport,
   type OutlookPlatform,
 } from './outlook-transport';
@@ -37,8 +41,9 @@ import {
  */
 
 /** Which BUTTON the employee pressed. Not the same thing as the transport
- *  that ends up carrying the draft — see `OpenedTransport`. */
-export type EmailTransport = 'outlook' | 'mailto';
+ *  that ends up carrying the draft — see `OpenedTransport`. The union is the
+ *  shared `ComposeButton`; this is its maintenance-facing name. */
+export type EmailTransport = ComposeButton;
 
 /**
  * The transport decision itself now lives in `./outlook-transport`, shared
@@ -58,25 +63,36 @@ export {
   type OutlookPlatform,
 } from './outlook-transport';
 
-/** Both refuse to open ANYTHING when linkFits is false — silent mail-client
- *  truncation is the failure these guards exist for. The selectable-text
- *  copy panel (screen-side) is the honest transport in that case. */
-export async function openOutlookDraft(
-  prepared: PreparedMaintenanceEmail,
-  platform: OutlookPlatform,
-): Promise<'opened' | 'blocked'> {
-  if (!prepared.linkFits) return 'blocked';
-  const plan = planOutlookOpen(prepared, {
-    nativeOutlookAvailable: await nativeOutlookAvailable(),
-    platform,
+/**
+ * The whole prepared email, fitted by the SHARED core builder against the
+ * url THIS phone will open. Pure and deterministic — safe to call from a
+ * render memo, which is where it runs.
+ *
+ * `nativeOutlook` is the screen's single `canOpenURL` probe answer; see
+ * `composeTransportForProbe` for why it defaults to `null` (worst case:
+ * the web budget) rather than to `true`. Mirrors
+ * `prepareOrderDeliveryRequest` in ./delivery-request-actions exactly —
+ * before 2026-08-16 the maintenance email skipped this step, so a phone
+ * with Outlook installed had its body condensed to fit the long https url
+ * it never opens, truncating long descriptions the native url carries
+ * whole.
+ */
+export function prepareMobileMaintenanceEmail(
+  emailInput: MaintenanceEmailInput,
+  nativeOutlook: boolean | null = null,
+): PreparedMaintenanceEmail {
+  return prepareMaintenanceEmail(emailInput, {
+    transport: composeTransportForProbe(nativeOutlook),
   });
-  return runPlan(plan);
 }
 
-export async function openMailtoDraft(prepared: PreparedMaintenanceEmail): Promise<'opened' | 'blocked'> {
-  if (!prepared.linkFits) return 'blocked';
-  return runPlan(mailtoPlan(prepared));
-}
+/**
+ * A prepared maintenance email, as the OPENER needs it — the three composed
+ * urls, the fits flag, and the transport STAMP core fitted the body against.
+ * `PreparedMaintenanceEmail` satisfies this structurally; the opener takes
+ * the narrower shape so it never sees the body.
+ */
+export type MaintenanceDraftToOpen = MeasuredDraftToOpen;
 
 /**
  * Orchestration seam the detail screen calls into: picks the transport,
@@ -90,24 +106,24 @@ export async function openMailtoDraft(prepared: PreparedMaintenanceEmail): Promi
  * .catch(...)` precedent). A blocked/failed open — whether from
  * `linkFits: false` or a rejected `Linking.openURL` — calls `onOpened` zero
  * times, so a failed open is never recorded as one.
+ *
+ * THERE IS NO PROBE ARGUMENT ANY MORE (2026-08-16). This used to call
+ * `nativeOutlookAvailable()` itself at press time, which was survivable only
+ * while the body was always fitted to the worst-case web url. Now that the
+ * prepare pass fits the body against the transport the phone declares, the
+ * url opened MUST be the url that was measured — so, exactly as
+ * `openDeliveryRequestDraft` already does, the transport is read off the
+ * prepared draft's own stamp via the shared `openMeasuredDraft`, and there
+ * is no second probe answer for a press-time race to disagree with.
  */
 export async function openMaintenanceDraft(
-  transport: EmailTransport,
-  prepared: PreparedMaintenanceEmail,
+  button: EmailTransport,
+  prepared: MaintenanceDraftToOpen,
   platform: OutlookPlatform,
   onOpened: () => void,
+  ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<MaintenanceOpenResult> {
-  if (!prepared.linkFits) return { outcome: 'blocked', used: null };
-  const plan =
-    transport === 'outlook'
-      ? planOutlookOpen(prepared, {
-          nativeOutlookAvailable: await nativeOutlookAvailable(),
-          platform,
-        })
-      : mailtoPlan(prepared);
-  const outcome = await runPlan(plan);
-  if (outcome === 'opened') onOpened();
-  return { outcome, used: outcome === 'opened' ? plan.transport : null };
+  return openMeasuredDraft(button, prepared, platform, onOpened, ccTrusted);
 }
 
 /** `used` is the transport that actually carried the draft, and is null for
