@@ -1,13 +1,14 @@
 import {
-  DELIVERY_REQUEST_EMAIL,
-  DELIVERY_REQUEST_RECIPIENTS,
   buildDeliveryRequestInput as coreBuildDeliveryRequestInput,
+  deliveryRecipientsForRouting,
+  parseOrgEmailRouting,
   prepareDeliveryRequest,
   type DeliveryComposeTransport,
   type DeliveryRequestAddress,
   type DeliveryRequestInput,
   type DeliveryRequestOrderData,
   type DeliveryRequestRecipients,
+  type OrgEmailRoutingReadState,
   type PreparedDeliveryRequest,
 } from '@stockpilot/core';
 
@@ -48,6 +49,51 @@ export { shouldConfirmBeforeOpening } from './outlook-transport';
  * or without the mandatory CC — still looks delivered to whoever sent it.
  */
 
+// ── The org's routing (per-org email routing, migration 0337) ────────────
+
+/**
+ * Is this Supabase/PostgREST error the MISSING-COLUMN error (Postgres 42703,
+ * undefined_column)?
+ *
+ * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature behavior
+ * during the code-before-migration window. An OTA'd binary selecting
+ * `email_routing` against a database where migration 0337 has not landed
+ * errors the WHOLE select with 42703 — and ONLY that error may be read as
+ * "retry without the column and use the compiled constants" (the screen
+ * retries with `'timezone'` alone and records routing as `{ state:
+ * 'fallback' }`, which `deliveryRecipientsForRouting` maps to the compiled
+ * L4L pair, byte-identical to what shipped before the feature). Once the
+ * column exists this predicate is never true; any OTHER error means the org
+ * row could not be read at all, and the routing stays 'unset' — the action
+ * hides rather than composing mail against recipients nothing validated.
+ * Mirrors web's `getOrgEmailRouting` (cached-org.ts) exactly.
+ */
+export function isMissingEmailRoutingColumn(
+  error: { code?: string | null | undefined } | null | undefined,
+): boolean {
+  return error?.code === '42703';
+}
+
+/**
+ * Resolve the DELIVERY routing off the org row the screen already reads
+ * (`organizations.timezone, email_routing` — an RLS member read; the TO/CC
+ * are printed in the email UI, so they are not secrets).
+ *
+ * The parse IS core's one parser (`parseOrgEmailRouting`), which runs the
+ * stored value through the branded `deliveryRequestRecipients` factory — a
+ * stored value is client-influenced data, and an org admin can write
+ * anything through PostgREST, which is exactly what the factory exists for.
+ * A missing row (RLS refused, transient failure) is 'unset': the action
+ * hides, fail closed, never the compiled constants — those would silently
+ * mail another tenant's warehouse.
+ */
+export function deliveryRoutingFromOrgRow(
+  row: { email_routing?: unknown } | null | undefined,
+): OrgEmailRoutingReadState {
+  if (!row) return { state: 'unset' };
+  return parseOrgEmailRouting(row.email_routing, 'delivery_request');
+}
+
 // ── The gate ─────────────────────────────────────────────────────────────
 
 /**
@@ -68,6 +114,17 @@ export interface DeliveryRequestGateInput {
   requesterUserId: string | null;
   viewerUserId: string | null;
   ordersModuleEnabled: boolean;
+  /**
+   * The org's resolved delivery-request routing (see
+   * `deliveryRoutingFromOrgRow`). The action renders ONLY when this maps to
+   * a routable pair — 'valid' (the stored, factory-validated recipients) or
+   * 'fallback' (the pre-migration deploy window, compiled constants).
+   * 'unset' and 'invalid' HIDE the action, exactly as the web order page
+   * does (`showDeliveryRequest && deliveryRequestRecipientsDto`): an
+   * unconfigured org gets no button, and an invalid stored value fails
+   * CLOSED rather than silently mailing another tenant's warehouse.
+   */
+  routing: OrgEmailRoutingReadState;
 }
 
 /**
@@ -94,6 +151,13 @@ export interface DeliveryRequestGateInput {
 export function canRequestDelivery(gate: DeliveryRequestGateInput): boolean {
   if (!needsDeliveryRequestData(gate)) return false;
   if (!gate.ordersModuleEnabled) return false;
+  // The routing gate (per-org email routing, migration 0337): the WHOLE
+  // fallback matrix is core's `deliveryRecipientsForRouting` — compiled
+  // constants only for the pre-migration 'fallback' state, the stored pair
+  // for 'valid', null (hidden) for 'unset'/'invalid'. Deciding through the
+  // same mapping the compose path uses means the gate and the draft can
+  // never disagree about whether a routable pair exists.
+  if (deliveryRecipientsForRouting(gate.routing) === null) return false;
   // A null requester matches no viewer — never `null === null`, which would
   // hand the action to every viewer of an unowned order.
   return gate.requesterUserId !== null && gate.requesterUserId === gate.viewerUserId;
@@ -160,21 +224,6 @@ export function parseCharterAddress(raw: unknown): DeliveryRequestAddress | null
 }
 
 /**
- * WHERE THIS TENANT'S DELIVERY MAIL GOES. From the ONE core VALUE, never from
- * anything on the order row, a route parameter or a server payload — nothing a
- * user typed can redirect this mail or split off the mandatory CC.
- *
- * This was an object literal assembled here from the two address constants
- * until 2026-08-13. It agreed with web's literal, and both were pinned — but
- * the SHAPE invited a third literal that would have compiled clean with a wrong
- * cc. `DeliveryRequestRecipients` is branded now, so a literal no longer
- * typechecks anywhere and there is exactly one value to import. Supplying it
- * HERE rather than reading it inside the core mapping is unchanged: core stays
- * tenant-neutral, and `dc4@learn4life.org` stays a call-site fact.
- */
-const MOBILE_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = DELIVERY_REQUEST_RECIPIENTS;
-
-/**
  * Map the order row onto the shared builder's input.
  *
  * THE MAPPING ITSELF IS NOT DEFINED HERE any more (2026-08-13). It is core's
@@ -183,9 +232,25 @@ const MOBILE_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = DELIVERY_REQUEST_R
  * absent, the timezone resolves through `resolveOrgTimezone`, the requester
  * fields through `resolveRequesterIdentity`, null-item lines are dropped, and
  * `fulfillmentType` is a literal — is documented on the core function.
+ *
+ * WHERE THE RECIPIENTS COME FROM (per-org email routing, migration 0337).
+ * Until 2026-08-16 this module pinned the ONE compiled core value
+ * (`DELIVERY_REQUEST_RECIPIENTS` — L4L's mailboxes) here, which was the
+ * multi-tenant leak: every org's phones composed mail to one tenant's live
+ * intake. `recipients` is now an explicit parameter, and the only value the
+ * screen can hold is one that came out of `deliveryRecipientsForRouting(
+ * deliveryRoutingFromOrgRow(row))` — the org's stored pair, run through the
+ * branded factory (or, ONLY in the pre-migration deploy window, the compiled
+ * fallback). The brand is what keeps this honest: a raw literal, a value off
+ * the order row, a route parameter or a server payload does not typecheck,
+ * so nothing a user typed can redirect this mail or split off the mandatory
+ * CC.
  */
-export function buildDeliveryRequestInput(order: DeliveryRequestOrderData): DeliveryRequestInput {
-  return coreBuildDeliveryRequestInput(order, MOBILE_DELIVERY_RECIPIENTS);
+export function buildDeliveryRequestInput(
+  order: DeliveryRequestOrderData,
+  recipients: DeliveryRequestRecipients,
+): DeliveryRequestInput {
+  return coreBuildDeliveryRequestInput(order, recipients);
 }
 
 // ── Which compose url this phone will actually open ──────────────────────
@@ -244,9 +309,10 @@ export function deliveryComposeTransport(
  */
 export function prepareOrderDeliveryRequest(
   order: DeliveryRequestOrderData,
+  recipients: DeliveryRequestRecipients,
   nativeOutlook: boolean | null = null,
 ): PreparedDeliveryRequest {
-  return prepareDeliveryRequest(buildDeliveryRequestInput(order), {
+  return prepareDeliveryRequest(buildDeliveryRequestInput(order, recipients), {
     transport: deliveryComposeTransport(nativeOutlook),
   });
 }
@@ -427,10 +493,13 @@ export function deliverySuccessMessageFor(used: OpenedTransport | null): string 
 export const HONESTY_NOTICE =
   'This opens a draft email. StockPilot does not send it. Review the message and press Send in your mail app.';
 
-/** Web's own repeat-draft wording, kept in step: a second draft to DC4 is a
- *  second real request, and nothing here can detect that the first was sent. */
+/** Web's own repeat-draft wording, kept in step: a second draft is a second
+ *  real request, and nothing here can detect that the first was sent.
+ *  "the warehouse", not a tenant's warehouse name — recipients are per-org
+ *  data now (migration 0337), so naming one org's intake here would state a
+ *  falsehood on every other org's screens (same genericization web made). */
 export const DUPLICATE_WARNING =
-  'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.';
+  'You have already opened a draft for this order. Sending more than one creates duplicate requests for the warehouse.';
 
 /** The ONLY headline for a blocked open. Never blames link length for a
  *  genuinely refused open — that is what OVERSIZED_MESSAGE is for. */
@@ -450,6 +519,16 @@ export const OVERSIZED_MESSAGE =
  *  copy affordance rather than a fallback for a failed programmatic copy. */
 export const COPY_HELPER_TEXT = 'Press and hold inside the box to select and copy.';
 
-/** Helper line under the action, naming both recipients. Accuracy, not
- *  optimism: the CC is stated as a copy, never as an assignment or a ticket. */
-export const RECIPIENTS_HELPER_TEXT = `Opens a draft to ${DELIVERY_REQUEST_EMAIL.to}, copying ${DELIVERY_REQUEST_EMAIL.cc}.`;
+/**
+ * Helper line under the action, naming both recipients. Accuracy, not
+ * optimism: the CC is stated as a copy, never as an assignment or a ticket.
+ *
+ * A PURE FUNCTION of the recipients since 2026-08-16 (per-org email routing):
+ * a fixed sentence naming one tenant's mailboxes would state a checkable
+ * falsehood on every other org's screens. The screen calls this with the
+ * SAME resolved value it composes with, so the sentence and the draft can
+ * never name different mailboxes.
+ */
+export function recipientsHelperText(recipients: { to: string; cc: string }): string {
+  return `Opens a draft to ${recipients.to}, copying ${recipients.cc}.`;
+}

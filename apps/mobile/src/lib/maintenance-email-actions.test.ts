@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
 
-import { DRAFT_URL_LIMIT, L4L_MAINTENANCE_RECIPIENTS, type MaintenanceEmailInput } from '@stockpilot/core';
+import {
+  DRAFT_URL_LIMIT,
+  L4L_MAINTENANCE_RECIPIENTS,
+  maintenanceRecipientsForRouting,
+  type MaintenanceEmailInput,
+} from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
@@ -14,11 +19,15 @@ import {
   NATIVE_OUTLOOK_CC_TRUSTED,
   OVERSIZED_MESSAGE,
   SUCCESS_MESSAGE,
+  maintenanceEmailInputForRouting,
+  maintenanceRoutingFromResponse,
   openMaintenanceDraft,
   planOutlookOpen,
   prepareMobileMaintenanceEmail,
+  routingAdminNotice,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  shouldShowRoutingAdminNotice,
   successMessageFor,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
@@ -642,5 +651,152 @@ describe('withShareUrl — mig 0330 show-once merge (the ONLY way a share URL re
     expect(SHARE_LINK_EXISTS_NOTICE).toBe(
       'An active share link exists, but its URL cannot be shown again. Generate a new link to get one — the current link stops working.',
     );
+  });
+});
+
+// =========================================================================
+// Per-org email routing (migration 0337) — the phone's maintenance matrix
+// cells, pinned in the tested lib because the screen (app/maintenance/
+// [id].tsx) is unreachable by this repo's vitest.
+// =========================================================================
+
+const ROUTED_DTO = {
+  to: 'facilities-intake@acme-tenant.invalid',
+  cc: 'facilities-copy@acme-tenant.invalid',
+  toName: 'Acme Facilities',
+  ccName: 'Acme Facilities Manager',
+};
+
+// The CONTENT half of the REST payload — INPUT without recipients, exactly
+// what GET /api/v1/maintenance-requests/[id] sends as `emailInput` now.
+const { recipients: _dropped, ...CONTENT } = INPUT;
+
+describe('maintenanceRoutingFromResponse (the REST payload parser + the deploy-window rule)', () => {
+  it('an ABSENT field (a pre-feature server) is the ONE fail-open state: fallback', () => {
+    // DEPLOY-ORDER SAFETY: this is byte-identical pre-feature behavior — the
+    // compiled constants — and nothing else may ever produce it.
+    expect(maintenanceRoutingFromResponse(undefined)).toEqual({ state: 'fallback' });
+  });
+
+  it("the server's three states round-trip", () => {
+    expect(maintenanceRoutingFromResponse({ state: 'unset' })).toEqual({ state: 'unset' });
+    expect(maintenanceRoutingFromResponse({ state: 'invalid', reason: 'why' })).toEqual({
+      state: 'invalid',
+      reason: 'why',
+    });
+    expect(maintenanceRoutingFromResponse({ state: 'valid', recipients: ROUTED_DTO })).toEqual({
+      state: 'valid',
+      recipients: ROUTED_DTO,
+    });
+  });
+
+  it('optional chip names survive only as strings; extra junk is dropped', () => {
+    expect(
+      maintenanceRoutingFromResponse({
+        state: 'valid',
+        recipients: { to: 'a@b.invalid', cc: 'c@d.invalid', toName: 42, extra: 'x' },
+      }),
+    ).toEqual({ state: 'valid', recipients: { to: 'a@b.invalid', cc: 'c@d.invalid' } });
+  });
+
+  it('a PRESENT-but-malformed payload fails CLOSED as invalid — null, arrays, missing cc, unknown states', () => {
+    for (const raw of [
+      null,
+      [],
+      'valid',
+      { state: 'weird' },
+      { state: 'valid' },
+      { state: 'valid', recipients: { to: 'a@b.invalid' } },
+      { state: 'valid', recipients: 'not-an-object' },
+    ]) {
+      const parsed = maintenanceRoutingFromResponse(raw);
+      expect(parsed.state).toBe('invalid');
+      // ...and an invalid parse maps to NO recipients downstream.
+      expect(maintenanceRecipientsForRouting(parsed)).toBeNull();
+    }
+  });
+
+  it('an invalid state without a string reason still carries A reason (the admin card renders it)', () => {
+    const parsed = maintenanceRoutingFromResponse({ state: 'invalid' });
+    expect(parsed).toEqual({ state: 'invalid', reason: 'Stored recipients failed validation.' });
+  });
+});
+
+describe('maintenanceEmailInputForRouting (THE matrix cell: compose input or nothing)', () => {
+  it("'valid' composes with the org's stored pair — re-branded through the validating factory", () => {
+    const input = maintenanceEmailInputForRouting(CONTENT, {
+      state: 'valid',
+      recipients: ROUTED_DTO,
+    });
+    expect(input).not.toBeNull();
+    expect(input!.recipients.to).toBe('facilities-intake@acme-tenant.invalid');
+    expect(input!.recipients.cc).toBe('facilities-copy@acme-tenant.invalid');
+    // The content rides through untouched.
+    expect(input!.requestNumber).toBe(CONTENT.requestNumber);
+    // And the composed URL actually carries the configured cc — through the
+    // full builder, not just the input shape.
+    const prepared = prepareMobileMaintenanceEmail(input!, true);
+    expect(ccOf(prepared.outlookMobileUrl)).toBe('facilities-copy@acme-tenant.invalid');
+    expect(prepared.draft.to).toBe('facilities-intake@acme-tenant.invalid');
+  });
+
+  it("'fallback' (pre-feature server ONLY) composes with the compiled pair — byte-identical to pre-feature behavior", () => {
+    const input = maintenanceEmailInputForRouting(CONTENT, { state: 'fallback' });
+    expect(input).not.toBeNull();
+    expect(input!.recipients).toBe(L4L_MAINTENANCE_RECIPIENTS);
+  });
+
+  it("MUTATION PIN: 'unset' and 'invalid' return NULL — the compose actions hide, and NOTHING substitutes the compiled constants", () => {
+    expect(maintenanceEmailInputForRouting(CONTENT, { state: 'unset' })).toBeNull();
+    expect(
+      maintenanceEmailInputForRouting(CONTENT, { state: 'invalid', reason: 'bad' }),
+    ).toBeNull();
+  });
+
+  it('a tampered "valid" payload whose recipients the factory refuses fails CLOSED at the brand seam', () => {
+    // The server never sends this (it validates before responding), but the
+    // payload is client-received data: the re-brand inside
+    // maintenanceRecipientsForRouting is the seam that refuses it.
+    const input = maintenanceEmailInputForRouting(CONTENT, {
+      state: 'valid',
+      recipients: { to: 'intake@ok.invalid', cc: 'a?cc=attacker@evil.test' },
+    });
+    expect(input).toBeNull();
+  });
+});
+
+describe('the unconfigured-admin experience (parity with the web maintenance surfaces)', () => {
+  it('members see NOTHING: the notice gate requires organization:update', () => {
+    expect(shouldShowRoutingAdminNotice({ state: 'unset' }, false)).toBe(false);
+    expect(shouldShowRoutingAdminNotice({ state: 'invalid', reason: 'r' }, false)).toBe(false);
+  });
+
+  it('admins see the notice exactly when the action is hidden for routing reasons', () => {
+    expect(shouldShowRoutingAdminNotice({ state: 'unset' }, true)).toBe(true);
+    expect(shouldShowRoutingAdminNotice({ state: 'invalid', reason: 'r' }, true)).toBe(true);
+    // Never over a working action, and never over the pre-feature fallback.
+    expect(
+      shouldShowRoutingAdminNotice({ state: 'valid', recipients: ROUTED_DTO }, true),
+    ).toBe(false);
+    expect(shouldShowRoutingAdminNotice({ state: 'fallback' }, true)).toBe(false);
+  });
+
+  it("the unset notice matches web's wording and points at the web settings page", () => {
+    expect(routingAdminNotice({ state: 'unset' })).toBe(
+      'Email routing is not configured for this organization, so the email action is hidden. Set it in Settings → Email routing on the web dashboard.',
+    );
+  });
+
+  it('the invalid notice carries the guard reason VERBATIM (web posture: admins see the same words the read path logs)', () => {
+    const reason =
+      'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.';
+    expect(routingAdminNotice({ state: 'invalid', reason })).toBe(
+      `Email routing for maintenance requests is invalid: ${reason} The email action is hidden until this is fixed in Settings → Email routing on the web dashboard.`,
+    );
+  });
+
+  it('routable states produce NO notice text at all', () => {
+    expect(routingAdminNotice({ state: 'valid', recipients: ROUTED_DTO })).toBeNull();
+    expect(routingAdminNotice({ state: 'fallback' })).toBeNull();
   });
 });

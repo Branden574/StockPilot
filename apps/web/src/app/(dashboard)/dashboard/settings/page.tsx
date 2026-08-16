@@ -111,6 +111,22 @@ const INTEGRATIONS_SECTIONS = [
   { href: '/dashboard/settings/integrations', title: 'Integrations', description: 'Connect QuickBooks Online and other tools to export your data.' },
 ];
 
+// Email routing — where the delivery-request and maintenance-request compose
+// emails are addressed, per organization (organizations.email_routing,
+// migration 0337). Same `organization:update` gate as Modules / Navigation
+// (it matches the RLS floor: organizations_update = admin); the underlying
+// page redirects anyone without that permission. NOT gated on any module:
+// delivery requests belong to the core `orders` module, and an unconfigured
+// org's admins need this tile to discover WHY their email actions are hidden.
+const EMAIL_ROUTING_SECTIONS = [
+  {
+    href: '/dashboard/settings/email-routing',
+    title: 'Email routing',
+    description:
+      'Where delivery and maintenance request emails are addressed for your organization.',
+  },
+];
+
 // Maintenance requests — owner-only configuration (categories, notification
 // audience, photo-link-in-email toggle; the fixed recipients display
 // read-only). Per-user read_all/manage GRANTS route entirely through Roles
@@ -147,6 +163,7 @@ export default async function SettingsPage() {
     ...(can(ctx, 'organization:update') ? DASHBOARD_SECTIONS : []),
     ...(can(ctx, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
     ...(can(ctx, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? EMAIL_ROUTING_SECTIONS : []),
     ...(can(ctx, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
     ...(maintenanceAccess.enabled && can(ctx, 'maintenance_requests:configure')
       ? MAINTENANCE_SECTIONS

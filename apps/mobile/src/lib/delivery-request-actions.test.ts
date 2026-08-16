@@ -8,8 +8,11 @@ import {
   DRAFT_URL_LIMIT,
   ORDER_STATUS_KEYS,
   condensedNoticeText,
+  deliveryRecipientsForRouting,
+  deliveryRequestRecipients,
   type DeliveryRequestRecipients,
   type OrderStatusKey,
+  type OrgEmailRoutingReadState,
 } from '@stockpilot/core';
 
 import {
@@ -21,16 +24,18 @@ import {
   HONESTY_NOTICE,
   MAIL_APP_SUCCESS_MESSAGE,
   OVERSIZED_MESSAGE,
-  RECIPIENTS_HELPER_TEXT,
   SUCCESS_MESSAGE,
   buildDeliveryRequestInput,
   canRequestDelivery,
   deliveryComposeTransport,
+  deliveryRoutingFromOrgRow,
   deliverySuccessMessageFor,
+  isMissingEmailRoutingColumn,
   needsDeliveryRequestData,
   openDeliveryRequestDraft,
   parseCharterAddress,
   prepareOrderDeliveryRequest,
+  recipientsHelperText,
   shouldShowBlockedNotice,
   shouldShowCondensedNotice,
   shouldWarnDuplicateDrafts,
@@ -49,6 +54,30 @@ vi.mock('expo-linking', () => ({
 }));
 
 beforeEach(() => vi.clearAllMocks());
+
+// The COMPILED pair (L4L's mailboxes) — what the pre-migration 'fallback'
+// state resolves to, and therefore what the transport/CC-gate blocks below
+// compose with: those tests pin CC mechanics, not tenancy, so they use the
+// value whose addresses the assertions already name.
+const RECIPIENTS = DELIVERY_REQUEST_RECIPIENTS;
+
+// A CONFIGURED, non-L4L pair (per-org email routing, migration 0337) built
+// through the only constructor there is — used by the routing tests to prove
+// the org's stored value actually reaches the composed URL, and that nothing
+// silently substitutes the compiled constants for it.
+const CONFIGURED = deliveryRequestRecipients({
+  to: 'warehouse-intake@acme-tenant.invalid',
+  cc: 'ops-copy@acme-tenant.invalid',
+  toName: 'Acme Warehouse',
+  ccName: 'Acme Ops',
+});
+const CONFIGURED_DTO = {
+  to: 'warehouse-intake@acme-tenant.invalid',
+  cc: 'ops-copy@acme-tenant.invalid',
+  toName: 'Acme Warehouse',
+  ccName: 'Acme Ops',
+};
+const ROUTED_VALID: OrgEmailRoutingReadState = { state: 'valid', recipients: CONFIGURED_DTO };
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 // Shaped exactly like what app/order/[id].tsx holds after load(): nullable
@@ -138,7 +167,7 @@ const toOf = (url: string) => paramOf(url, 'to');
 
 describe('CC GATE: the mandatory CC survives every draft size and every transport', () => {
   it('FULL body: the native mobile URL cc equals the prepared draft cc', () => {
-    const prepared = prepareOrderDeliveryRequest(order());
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS);
     expect(prepared.draft.condensed).toBe(false);
     expect(prepared.linkFits).toBe(true);
     expect(ccOf(prepared.outlookMobileUrl)).toBe(prepared.draft.cc);
@@ -147,7 +176,7 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
   });
 
   it('CONDENSED body: the ladder shortens the item rows, and the cc is NOT one of the things dropped', () => {
-    const prepared = prepareOrderDeliveryRequest(bigOrder());
+    const prepared = prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS);
     // FIXTURE CHECK, not a ladder check. These two lines prove `bigOrder()` is
     // genuinely big enough to reach a condensed rung, so the cc assertions
     // below are reading a SHORTENED body rather than silently re-testing the
@@ -167,7 +196,7 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
   });
 
   it('OVERSIZED: even the draft that is too long to open still carries to and cc', () => {
-    const prepared = prepareOrderDeliveryRequest(oversizedOrder());
+    const prepared = prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS);
     expect(prepared.linkFits).toBe(false);
     expect(ccOf(prepared.outlookMobileUrl)).toBe(DELIVERY_REQUEST_EMAIL.cc);
     expect(toOf(prepared.outlookMobileUrl)).toBe(DELIVERY_REQUEST_EMAIL.to);
@@ -179,7 +208,7 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
     // tail-truncated URL cannot lose the routing: to= and cc= are emitted
     // BEFORE subject= and body=, and the body is the only unbounded term.
     for (const o of [order(), bigOrder(), oversizedOrder()]) {
-      const url = prepareOrderDeliveryRequest(o).outlookMobileUrl;
+      const url = prepareOrderDeliveryRequest(o, RECIPIENTS).outlookMobileUrl;
       expect(url.indexOf('to=')).toBeGreaterThan(-1);
       expect(url.indexOf('cc=')).toBeGreaterThan(url.indexOf('to='));
       expect(url.indexOf('body=')).toBeGreaterThan(url.indexOf('cc='));
@@ -192,7 +221,7 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
   });
 
   it('every transport the planner can choose carries the cc — native, web fallback, and mailto', () => {
-    const prepared = prepareOrderDeliveryRequest(order());
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS);
     expect(ccOf(prepared.outlookMobileUrl)).toBe('arosas@cvwest.org');
     // The OWA web url carries it as the tenant-verified name-addr chip.
     expect(ccOf(prepared.outlookUrl)).toBe('Andrew Rosas <arosas@cvwest.org>');
@@ -204,7 +233,7 @@ describe('CC GATE: the mandatory CC survives every draft size and every transpor
 
 describe('CC GATE at the actual openURL call site (not merely in the composer)', () => {
   it('THE FIX: opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
     ).resolves.toEqual({
@@ -218,7 +247,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('CONDENSED draft still opens the native link WITH the cc', async () => {
-    const prepared = prepareOrderDeliveryRequest(bigOrder(), true);
+    const prepared = prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS, true);
     await openDeliveryRequestDraft('outlook', prepared, 'android', () => {});
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
@@ -226,7 +255,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('no native Outlook installed: falls back to the tenant-verified WEB url, cc intact', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), false);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, false);
     const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
     expect(res).toEqual({ outcome: 'opened', used: 'outlook-web' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
@@ -237,7 +266,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('the probe has not answered yet (null): opens the WEB url, which is what the worst-case budget measured', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), null);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, null);
     const res = await openDeliveryRequestDraft('outlook', prepared, 'android', () => {});
     expect(res).toEqual({ outcome: 'opened', used: 'outlook-web' });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
@@ -257,7 +286,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('cc-untrusted platform reroutes to mailto rather than keeping the Outlook brand', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     const res = await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}, {
       ios: false,
       android: true,
@@ -268,14 +297,14 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('exactly ONE openURL per tap — never auto-retried into a duplicate request to DC4', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
 
   it('an openURL rejection reports blocked and does NOT silently open something else', async () => {
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
     ).resolves.toEqual({
@@ -286,7 +315,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('linkFits=false opens NOTHING', async () => {
-    const prepared = prepareOrderDeliveryRequest(oversizedOrder(), true);
+    const prepared = prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS, true);
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
     ).resolves.toEqual({
@@ -297,7 +326,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
   });
 
   it('onOpened fires only after a REAL open, never on a blocked one', async () => {
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     const onOpened = vi.fn();
     await openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
     expect(onOpened).toHaveBeenCalledTimes(1);
@@ -310,7 +339,7 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
     onOpened.mockClear();
     await openDeliveryRequestDraft(
       'outlook',
-      prepareOrderDeliveryRequest(oversizedOrder(), true),
+      prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS, true),
       'ios',
       onOpened,
     );
@@ -338,7 +367,7 @@ describe('the double-tap latch — one unresolved open swallows every call behin
         }),
     );
     const onOpened = vi.fn();
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     const first = openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
     const second = openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
     // The swallow settles immediately: no openURL, no counted draft, and the
@@ -355,7 +384,7 @@ describe('the double-tap latch — one unresolved open swallows every call behin
 
   it('the latch RELEASES after a resolved open — a deliberate reopen after settle opens again', async () => {
     const onOpened = vi.fn();
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     await openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
     await expect(
       openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened),
@@ -372,7 +401,7 @@ describe('the double-tap latch — one unresolved open swallows every call behin
           rejectOpen = reject;
         }),
     );
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     const first = openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
     // While the doomed open is still unresolved, a tap is swallowed...
     await expect(
@@ -446,8 +475,8 @@ describe('the ladder is fitted against the url this phone will open', () => {
   }
 
   it('THE DEFECT: a phone with Outlook installed carries MORE rows than the web budget allows', () => {
-    const web = prepareOrderDeliveryRequest(order25(), false);
-    const native = prepareOrderDeliveryRequest(order25(), true);
+    const web = prepareOrderDeliveryRequest(order25(), RECIPIENTS, false);
+    const native = prepareOrderDeliveryRequest(order25(), RECIPIENTS, true);
 
     // Both really are on the ladder — otherwise this passes with it deleted.
     expect(web.draft.condensed).toBe(true);
@@ -465,12 +494,12 @@ describe('the ladder is fitted against the url this phone will open', () => {
     // The pre-fix behaviour, quantified. This is what "measured the wrong
     // transport" cost: the url the phone opens sat far under the ceiling while
     // rows were being dropped to satisfy a url it never opens.
-    const web = prepareOrderDeliveryRequest(order25(), false);
+    const web = prepareOrderDeliveryRequest(order25(), RECIPIENTS, false);
     const wasted = DRAFT_URL_LIMIT - web.outlookMobileUrl.length;
     expect(wasted).toBeGreaterThan(300);
     // For scale: that unused headroom is worth several more item rows, and
     // fitting against the native url actually claims them.
-    const native = prepareOrderDeliveryRequest(order25(), true);
+    const native = prepareOrderDeliveryRequest(order25(), RECIPIENTS, true);
     expect(native.draft.listedLineCount - web.draft.listedLineCount).toBeGreaterThanOrEqual(4);
     // The native fit uses the headroom without exceeding it.
     expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
@@ -486,7 +515,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
       for (const platform of ['ios', 'android'] as const) {
         for (const o of [order(), bigOrder(), order25()]) {
           vi.mocked(Linking.openURL).mockClear();
-          const prepared = prepareOrderDeliveryRequest(o, nativeOutlook);
+          const prepared = prepareOrderDeliveryRequest(o, RECIPIENTS, nativeOutlook);
           expect(prepared.linkFits).toBe(true);
           await openDeliveryRequestDraft('outlook', prepared, platform, () => {});
           const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
@@ -505,7 +534,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
     // is allowed to blow past the limit, so a phone that measured native and
     // then opened web would hand the OS a body that truncates in transit with
     // no signal to anyone.
-    const native = prepareOrderDeliveryRequest(order25(), true);
+    const native = prepareOrderDeliveryRequest(order25(), RECIPIENTS, true);
     expect(native.linkFits).toBe(true);
     expect(native.transport).toBe('outlook-native');
     expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
@@ -545,7 +574,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
       [null, 'outlook-web', 'outlookUrl'],
     ] as const) {
       vi.mocked(Linking.openURL).mockClear();
-      const prepared = prepareOrderDeliveryRequest(order25(), nativeOutlook);
+      const prepared = prepareOrderDeliveryRequest(order25(), RECIPIENTS, nativeOutlook);
       expect(prepared.transport).toBe(expectedTransport);
       await openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
       expect(vi.mocked(Linking.openURL).mock.calls[0]![0]).toBe(prepared[expectedUrlKey]);
@@ -555,7 +584,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
     // measured for the web budget opens the WEB url even though this device's
     // native app is available, because the web url is the one that was fitted.
     vi.mocked(Linking.openURL).mockClear();
-    const webFitted = prepareOrderDeliveryRequest(order25(), false);
+    const webFitted = prepareOrderDeliveryRequest(order25(), RECIPIENTS, false);
     await openDeliveryRequestDraft('outlook', webFitted, 'ios', () => {});
     expect(vi.mocked(Linking.openURL).mock.calls[0]![0]).toBe(webFitted.outlookUrl);
     // Proving that mattered: the native url of a web-fitted draft is a
@@ -564,7 +593,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
   });
 
   it('TYPE-LEVEL PIN: the opener takes no probe answer, so the screen cannot pass one that disagrees', () => {
-    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS, true);
     const call = () =>
       // @ts-expect-error `nativeOutlook` is not a parameter: the transport comes
       // from `prepared`. If this argument is ever reinstated, the directive
@@ -579,7 +608,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
     // planOutlookOpen sends a cc-untrusted platform to mailto. That url is not
     // the one `transport` names, so it is only safe because core measures the
     // mailto on every rung regardless of transport.
-    const native = prepareOrderDeliveryRequest(order25(), true);
+    const native = prepareOrderDeliveryRequest(order25(), RECIPIENTS, true);
     expect(native.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
     const res = await openDeliveryRequestDraft('outlook', native, 'ios', () => {}, {
       ios: false,
@@ -595,7 +624,7 @@ describe('the ladder is fitted against the url this phone will open', () => {
     // More rows must not mean a quieter message. The disclosure names the split
     // either way, and it names the RIGHT split for the rows actually carried.
     for (const nativeOutlook of [false, true] as const) {
-      const p = prepareOrderDeliveryRequest(order25(), nativeOutlook);
+      const p = prepareOrderDeliveryRequest(order25(), RECIPIENTS, nativeOutlook);
       expect(p.draft.body).toContain('This message was shortened');
       expect(p.draft.body).toContain(
         `Lines 1-${p.draft.listedLineCount} of ${p.draft.lineCount} are listed above`,
@@ -615,12 +644,12 @@ describe('the ladder is fitted against the url this phone will open', () => {
   });
 
   it('the prepared draft records which transport it was fitted for', () => {
-    expect(prepareOrderDeliveryRequest(order(), true).transport).toBe('outlook-native');
-    expect(prepareOrderDeliveryRequest(order(), false).transport).toBe('outlook-web');
-    expect(prepareOrderDeliveryRequest(order(), null).transport).toBe('outlook-web');
+    expect(prepareOrderDeliveryRequest(order(), RECIPIENTS, true).transport).toBe('outlook-native');
+    expect(prepareOrderDeliveryRequest(order(), RECIPIENTS, false).transport).toBe('outlook-web');
+    expect(prepareOrderDeliveryRequest(order(), RECIPIENTS, null).transport).toBe('outlook-web');
     // The default is the WORST case, so a caller that forgets to pass the probe
     // answer under-fills rather than truncating.
-    expect(prepareOrderDeliveryRequest(order()).transport).toBe('outlook-web');
+    expect(prepareOrderDeliveryRequest(order(), RECIPIENTS).transport).toBe('outlook-web');
   });
 });
 
@@ -635,6 +664,7 @@ describe('canRequestDelivery', () => {
     requesterUserId: 'u1',
     viewerUserId: 'u1',
     ordersModuleEnabled: true,
+    routing: ROUTED_VALID,
   };
 
   it('shows for the requester of a live delivery order', () => {
@@ -662,6 +692,37 @@ describe('canRequestDelivery', () => {
 
   it('hides when the orders module is off', () => {
     expect(canRequestDelivery({ ...base, ordersModuleEnabled: false })).toBe(false);
+  });
+
+  /**
+   * THE ROUTING MATRIX CELL, pinned per state — the mobile parity of web's
+   * order page (`showDeliveryRequest && deliveryRequestRecipientsDto`):
+   * unset and invalid HIDE, valid and (pre-migration) fallback SHOW. The
+   * table is written by hand from the fallback matrix, not derived from
+   * `deliveryRecipientsForRouting`, so a mutant that widens the mapping
+   * (e.g. constants for 'unset') disagrees with a row here by name.
+   */
+  const ROUTING_MATRIX: [OrgEmailRoutingReadState, boolean][] = [
+    [ROUTED_VALID, true],
+    [{ state: 'fallback' }, true],
+    [{ state: 'unset' }, false],
+    [{ state: 'invalid', reason: 'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.' }, false],
+  ];
+
+  it.each(ROUTING_MATRIX)('routing %j -> shown: %s (matrix parity with the web order page)', (routing, shown) => {
+    expect(canRequestDelivery({ ...base, routing })).toBe(shown);
+  });
+
+  it('an INVALID stored value fails CLOSED — hidden, never the compiled constants', () => {
+    const invalid: OrgEmailRoutingReadState = {
+      state: 'invalid',
+      reason: 'Stored recipients failed validation.',
+    };
+    expect(canRequestDelivery({ ...base, routing: invalid })).toBe(false);
+    // And the mapping the gate consults agrees: no recipients exist to
+    // compose with, so no code path can even build a draft for this org.
+    expect(deliveryRecipientsForRouting(invalid)).toBeNull();
+    expect(deliveryRecipientsForRouting({ state: 'unset' })).toBeNull();
   });
 });
 
@@ -727,17 +788,24 @@ describe('needsDeliveryRequestData (the load-time fetch gate)', () => {
   }
 
   /** And the display gate, from the web page's rule: the viewer must BE the
-   *  requester, on a row this gate would load for, with the module on. */
+   *  requester, on a row this gate would load for, with the module on, in an
+   *  org whose routing resolves to a routable pair. The routing half is
+   *  written BY HAND from the fallback matrix ('valid' and the pre-migration
+   *  'fallback' show; 'unset' and 'invalid' hide) — deliberately not derived
+   *  from `deliveryRecipientsForRouting`, so the sweep can catch that
+   *  mapping widening. */
   function expectedShow(gate: {
     status: string | null;
     fulfillmentType: string | null;
     requesterUserId: string | null;
     viewerUserId: string | null;
     ordersModuleEnabled: boolean;
+    routing: OrgEmailRoutingReadState;
   }): boolean {
     return (
       expectedLoad(gate) &&
       gate.ordersModuleEnabled &&
+      (gate.routing.state === 'valid' || gate.routing.state === 'fallback') &&
       gate.requesterUserId !== null &&
       gate.viewerUserId !== null &&
       gate.requesterUserId === gate.viewerUserId
@@ -803,6 +871,12 @@ describe('needsDeliveryRequestData (the load-time fetch gate)', () => {
    * gets a chance to be.
    */
   it('THE INVARIANT: over the whole input space, both gates match the hand-written expectation and show implies load', () => {
+    const ROUTINGS: OrgEmailRoutingReadState[] = [
+      ROUTED_VALID,
+      { state: 'fallback' },
+      { state: 'unset' },
+      { state: 'invalid', reason: 'bad stored value' },
+    ];
     let showed = 0;
     let loaded = 0;
     let checked = 0;
@@ -811,34 +885,40 @@ describe('needsDeliveryRequestData (the load-time fetch gate)', () => {
         for (const requesterUserId of ['u1', null]) {
           for (const viewerUserId of ['u1', 'u2', null]) {
             for (const ordersModuleEnabled of [true, false]) {
-              const gate = {
-                status,
-                fulfillmentType,
-                requesterUserId,
-                viewerUserId,
-                ordersModuleEnabled,
-              };
-              const show = expectedShow(gate);
-              const load = expectedLoad(gate);
-              // Stated on the EXPECTATIONS, where it is a real claim about the
-              // requirement rather than a restatement of the call graph.
-              if (show) expect(load).toBe(true);
+              for (const routing of ROUTINGS) {
+                const gate = {
+                  status,
+                  fulfillmentType,
+                  requesterUserId,
+                  viewerUserId,
+                  ordersModuleEnabled,
+                  routing,
+                };
+                const show = expectedShow(gate);
+                const load = expectedLoad(gate);
+                // Stated on the EXPECTATIONS, where it is a real claim about the
+                // requirement rather than a restatement of the call graph.
+                if (show) expect(load).toBe(true);
 
-              expect({ gate, show: canRequestDelivery(gate) }).toEqual({ gate, show });
-              expect({ gate, load: needsDeliveryRequestData(gate) }).toEqual({ gate, load });
-              checked += 1;
-              if (show) showed += 1;
-              if (load) loaded += 1;
+                expect({ gate, show: canRequestDelivery(gate) }).toEqual({ gate, show });
+                expect({ gate, load: needsDeliveryRequestData(gate) }).toEqual({ gate, load });
+                checked += 1;
+                if (show) showed += 1;
+                if (load) loaded += 1;
+              }
             }
           }
         }
       }
     }
     // The sweep must actually reach both answers, or it proves nothing.
-    expect(checked).toBe(576);
+    expect(checked).toBe(2304);
     expect(showed).toBeGreaterThan(0);
     // And the fetch gate must be strictly WIDER than the display gate — if
     // these were equal, the "deliberately wider" design below would be fiction.
+    // (The routing dimension alone guarantees it now — a row loads under all
+    // four routing states but shows under only two — and the pre-routing
+    // requester/viewer asymmetry still contributes as before.)
     expect(loaded).toBeGreaterThan(showed);
   });
 
@@ -851,8 +931,110 @@ describe('needsDeliveryRequestData (the load-time fetch gate)', () => {
         requesterUserId: 'u1',
         viewerUserId: 'someone-else',
         ordersModuleEnabled: true,
+        routing: ROUTED_VALID,
       }),
     ).toBe(false);
+  });
+});
+
+// =========================================================================
+// The org's routing read (per-org email routing, migration 0337) — what the
+// screen resolves off the organizations row, and the deploy-window decision.
+// =========================================================================
+
+describe('deliveryRoutingFromOrgRow', () => {
+  it('a stored, factory-passing value resolves VALID with the exact stored strings', () => {
+    const routing = deliveryRoutingFromOrgRow({
+      email_routing: { delivery_request: CONFIGURED_DTO },
+    });
+    expect(routing).toEqual({ state: 'valid', recipients: CONFIGURED_DTO });
+  });
+
+  it('a NULL column, an absent key, and a missing row are all UNSET — the action hides', () => {
+    expect(deliveryRoutingFromOrgRow({ email_routing: null })).toEqual({ state: 'unset' });
+    expect(deliveryRoutingFromOrgRow({})).toEqual({ state: 'unset' });
+    expect(deliveryRoutingFromOrgRow(null)).toEqual({ state: 'unset' });
+    // The maintenance twin's key alone configures NOTHING for delivery.
+    expect(
+      deliveryRoutingFromOrgRow({ email_routing: { maintenance_request: CONFIGURED_DTO } }),
+    ).toEqual({ state: 'unset' });
+  });
+
+  it('a stored value the factory refuses is INVALID with the guard reason — and maps to NO recipients', () => {
+    const routing = deliveryRoutingFromOrgRow({
+      email_routing: {
+        delivery_request: { to: 'intake@ok.invalid', cc: 'a?cc=attacker@evil.test' },
+      },
+    });
+    expect(routing.state).toBe('invalid');
+    if (routing.state === 'invalid') {
+      expect(routing.reason).toBe(
+        'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.',
+      );
+    }
+    // FAIL CLOSED: the mapping refuses too — never the compiled constants.
+    expect(deliveryRecipientsForRouting(routing)).toBeNull();
+  });
+
+  it('MUTATION PIN: unset/invalid resolve to NULL recipients, never the compiled L4L pair', () => {
+    // A mutant that maps 'unset' or 'invalid' to the compiled constants —
+    // silently mailing another tenant's warehouse — fails here by name.
+    for (const routing of [
+      deliveryRoutingFromOrgRow(null),
+      deliveryRoutingFromOrgRow({ email_routing: { delivery_request: { to: 'x', cc: 'y' } } }),
+    ]) {
+      expect(deliveryRecipientsForRouting(routing)).toBeNull();
+    }
+    // While the two states that SHOULD resolve, do — to exactly the right pair.
+    expect(deliveryRecipientsForRouting({ state: 'fallback' })?.cc).toBe(
+      DELIVERY_REQUEST_EMAIL.cc,
+    );
+    expect(deliveryRecipientsForRouting(ROUTED_VALID)?.cc).toBe(CONFIGURED_DTO.cc);
+  });
+});
+
+describe('isMissingEmailRoutingColumn (the 42703 fail-open retry decision)', () => {
+  it('ONLY Postgres 42703 (undefined_column) selects the fallback retry', () => {
+    expect(isMissingEmailRoutingColumn({ code: '42703' })).toBe(true);
+  });
+
+  it.each([
+    ['another Postgres code', { code: '42501' }],
+    ['a PostgREST error with no code', { code: undefined }],
+    ['a null code', { code: null }],
+    ['no error at all', null],
+    ['undefined', undefined],
+  ])('%s is NOT the deploy window — the routing must fail closed instead', (_label, error) => {
+    expect(isMissingEmailRoutingColumn(error)).toBe(false);
+  });
+});
+
+describe('the CONFIGURED recipients actually reach the composed URL', () => {
+  it('the native deep link carries the org\'s stored to/cc — not the compiled constants', () => {
+    const prepared = prepareOrderDeliveryRequest(order(), CONFIGURED, true);
+    expect(toOf(prepared.outlookMobileUrl)).toBe('warehouse-intake@acme-tenant.invalid');
+    expect(ccOf(prepared.outlookMobileUrl)).toBe('ops-copy@acme-tenant.invalid');
+    // The ROUTING params carry nothing of the compiled pair. (The body may
+    // legitimately mention a requester's own @cvwest.org reply-to — routing
+    // is what this feature moves, not the order's facts.)
+    expect(toOf(prepared.outlookMobileUrl)).not.toBe(DELIVERY_REQUEST_EMAIL.to);
+    expect(ccOf(prepared.outlookMobileUrl)).not.toBe(DELIVERY_REQUEST_EMAIL.cc);
+  });
+
+  it('every transport and the clipboard carry the configured pair', () => {
+    const prepared = prepareOrderDeliveryRequest(order(), CONFIGURED, true);
+    expect(ccOf(prepared.mailtoUrl)).toBe('ops-copy@acme-tenant.invalid');
+    // The OWA url carries the configured chip name, validated by the factory.
+    expect(ccOf(prepared.outlookUrl)).toBe('Acme Ops <ops-copy@acme-tenant.invalid>');
+    expect(prepared.clipboardText).toContain('CC: ops-copy@acme-tenant.invalid');
+    expect(prepared.clipboardText).not.toContain('arosas@cvwest.org');
+  });
+
+  it('the helper sentence under the button names the SAME configured mailboxes', () => {
+    const branded = deliveryRecipientsForRouting(ROUTED_VALID)!;
+    expect(recipientsHelperText(branded)).toBe(
+      'Opens a draft to warehouse-intake@acme-tenant.invalid, copying ops-copy@acme-tenant.invalid.',
+    );
   });
 });
 // =========================================================================
@@ -860,14 +1042,21 @@ describe('needsDeliveryRequestData (the load-time fetch gate)', () => {
 // =========================================================================
 
 describe('buildDeliveryRequestInput', () => {
-  it('recipients come from the ONE core constant, never from anything on the order', () => {
-    const input = buildDeliveryRequestInput(order());
+  it('recipients are exactly the RESOLVED, branded value passed in — never anything on the order', () => {
+    // Per-org email routing: the value can only have come from the branded
+    // factory (compiled fallback or the org's validated stored pair). The
+    // mapping copies it verbatim and reads nothing recipient-shaped off the
+    // order row.
+    const input = buildDeliveryRequestInput(order(), RECIPIENTS);
     expect(input.recipients.to).toBe('dc4@learn4life.org');
     expect(input.recipients.cc).toBe('arosas@cvwest.org');
+    const configured = buildDeliveryRequestInput(order(), CONFIGURED);
+    expect(configured.recipients.to).toBe('warehouse-intake@acme-tenant.invalid');
+    expect(configured.recipients.cc).toBe('ops-copy@acme-tenant.invalid');
   });
 
   it('always declares delivery, so a pickup order can never produce a destination-less delivery draft', () => {
-    expect(buildDeliveryRequestInput(order()).fulfillmentType).toBe('delivery');
+    expect(buildDeliveryRequestInput(order(), RECIPIENTS).fulfillmentType).toBe('delivery');
   });
 
   it('falls back to the JOINED profile email when the denormalized column is null (internal self-submits)', () => {
@@ -875,15 +1064,13 @@ describe('buildDeliveryRequestInput', () => {
     // and the profile email was already fetched but thrown away — so most
     // internal orders would have drafted with no contact for DC4 at all.
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: null, requesterProfileEmail: 'jane@cvwest.org' }),
-    );
+      order({ requesterEmail: null, requesterProfileEmail: 'jane@cvwest.org' }), RECIPIENTS);
     expect(input.requesterEmail).toBe('jane@cvwest.org');
   });
 
   it('prefers the denormalized on-behalf-of email over the profile email', () => {
     const input = buildDeliveryRequestInput(
-      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@cvwest.org' }),
-    );
+      order({ requesterEmail: 'onbehalf@site.org', requesterProfileEmail: 'staff@cvwest.org' }), RECIPIENTS);
     expect(input.requesterEmail).toBe('onbehalf@site.org');
   });
 
@@ -899,8 +1086,7 @@ describe('buildDeliveryRequestInput', () => {
         notes: null,
         destination: null,
         orgTimezone: null,
-      }),
-    );
+      }), RECIPIENTS);
     expect(input.warehouseName).toBe('');
     expect(input.requestedFor).toBe('');
     expect(input.requesterEmail).toBeNull();
@@ -922,8 +1108,7 @@ describe('buildDeliveryRequestInput', () => {
         requesterEmail: null,
         requesterProfileEmail: null,
         destination: null,
-      }),
-    ).draft.body;
+      }), RECIPIENTS).draft.body;
     expect(body).toContain('(warehouse not recorded)');
     expect(body).toContain('(requester not recorded)');
   });
@@ -935,8 +1120,7 @@ describe('buildDeliveryRequestInput', () => {
           { itemId: 'i1', name: 'Real', sku: 'R-1', requested: 2 },
           { itemId: null, name: 'Orphaned', sku: null, requested: 5 },
         ],
-      }),
-    );
+      }), RECIPIENTS);
     expect(input.lines).toHaveLength(1);
     expect(input.itemMap.size).toBe(1);
     expect(input.itemMap.get('i1')).toEqual({ name: 'Real', sku: 'R-1' });
@@ -944,17 +1128,16 @@ describe('buildDeliveryRequestInput', () => {
 
   it('a null sku becomes an empty string, never the text "null"', () => {
     const input = buildDeliveryRequestInput(
-      order({ lines: [{ itemId: 'i1', name: 'No SKU item', sku: null, requested: 1 }] }),
-    );
+      order({ lines: [{ itemId: 'i1', name: 'No SKU item', sku: null, requested: 1 }] }), RECIPIENTS);
     expect(input.itemMap.get('i1')).toEqual({ name: 'No SKU item', sku: '' });
-    expect(prepareOrderDeliveryRequest(order({ lines: [{ itemId: 'i1', name: 'No SKU item', sku: null, requested: 1 }] })).draft.body).not.toContain('null');
+    expect(prepareOrderDeliveryRequest(order({ lines: [{ itemId: 'i1', name: 'No SKU item', sku: null, requested: 1 }] }), RECIPIENTS).draft.body).not.toContain('null');
   });
 
   it('passes the needed-by instant through untouched for the builder to localise', () => {
-    const input = buildDeliveryRequestInput(order({ neededBy: '2026-08-20T17:00:00.000Z' }));
+    const input = buildDeliveryRequestInput(order({ neededBy: '2026-08-20T17:00:00.000Z' }), RECIPIENTS);
     expect(input.neededByLocal).toBe('2026-08-20T17:00:00.000Z');
     // And it really is rendered in the org zone, with the zone named.
-    expect(prepareOrderDeliveryRequest(order()).draft.body).toContain('America/Los_Angeles');
+    expect(prepareOrderDeliveryRequest(order(), RECIPIENTS).draft.body).toContain('America/Los_Angeles');
   });
 });
 
@@ -1008,43 +1191,55 @@ describe('copy', () => {
     expect(COPY_HELPER_TEXT).toMatch(/press and hold/i);
   });
 
-  it('the duplicate warning names DC4, because a second draft is a second real request', () => {
-    expect(DUPLICATE_WARNING).toMatch(/DC4/);
+  it('the duplicate warning is TENANT-NEUTRAL — a second draft is a second real request, to whichever warehouse is configured', () => {
+    // Web's exact genericized sentence (delivery-request-action.tsx). Naming
+    // one tenant's warehouse here would state a falsehood on every other
+    // org's screens now that recipients are per-org data (migration 0337).
+    expect(DUPLICATE_WARNING).toBe(
+      'You have already opened a draft for this order. Sending more than one creates duplicate requests for the warehouse.',
+    );
+    expect(DUPLICATE_WARNING).not.toMatch(/DC4/);
   });
 
   /**
    * THE MOBILE TWIN OF THE CC-NOTICE DEFECT, pinned the same way core's
-   * `DELIVERY_REQUEST_CC_NOTICE` is (apps/web/src/lib/site.test.ts).
+   * `deliveryRequestCcNotice` is (apps/web/src/lib/site.test.ts).
    *
    * This line is the only place on the phone where the employee is told, in
-   * writing, which two mailboxes the draft goes to. Both addresses are
-   * INTERPOLATED from `DELIVERY_REQUEST_EMAIL` — if they were hand-typed,
-   * changing that constant would leave this sentence naming the old mailbox
-   * while the mail went to the new one, telling the employee a copy was sent
-   * somewhere it was not. The assertion catches that by MUTATION OF THE
-   * ADDRESS, not of the sentence: change the constant and a hand-typed line
-   * fails here.
+   * writing, which two mailboxes the draft goes to. It is a PURE FUNCTION of
+   * the recipients since per-org routing — a fixed sentence would name the
+   * old mailboxes while the mail went to the configured ones, telling the
+   * employee a copy was sent somewhere it was not. The assertion catches a
+   * hand-typed sentence by MUTATION OF THE INPUT, not of the sentence:
+   * change the recipients and a hand-typed line fails here.
    */
   it('the recipients helper names BOTH mailboxes by interpolation, and promises nothing extra', () => {
-    // Exactly two addresses appear, and they are the two constants — in that
+    const text = recipientsHelperText(DELIVERY_REQUEST_EMAIL);
+    // Exactly two addresses appear, and they are the two inputs — in that
     // order, so the To is not described as the copy.
-    expect(
-      RECIPIENTS_HELPER_TEXT.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g),
-    ).toEqual([DELIVERY_REQUEST_EMAIL.to, DELIVERY_REQUEST_EMAIL.cc]);
+    expect(text.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)).toEqual([
+      DELIVERY_REQUEST_EMAIL.to,
+      DELIVERY_REQUEST_EMAIL.cc,
+    ]);
     // The wording itself, pinned so an unintended edit fails by name.
-    expect(RECIPIENTS_HELPER_TEXT).toBe(
+    expect(text).toBe(
       `Opens a draft to ${DELIVERY_REQUEST_EMAIL.to}, copying ${DELIVERY_REQUEST_EMAIL.cc}.`,
     );
+    // And it really is interpolation, not a memorized sentence: different
+    // recipients, different sentence.
+    expect(recipientsHelperText(CONFIGURED_DTO)).toBe(
+      'Opens a draft to warehouse-intake@acme-tenant.invalid, copying ops-copy@acme-tenant.invalid.',
+    );
     // The CC is stated as a COPY. Never as an assignment, a ticket or a send —
-    // Zendesk rules may route on the cc, but nothing here can observe that.
-    const copy = RECIPIENTS_HELPER_TEXT.toLowerCase();
+    // intake-side rules may route on the cc, but nothing here can observe that.
+    const copy = text.toLowerCase();
     for (const claim of ['assign', 'ticket', 'sent', 'submitted', 'will be created']) {
       expect(copy).not.toContain(claim);
     }
   });
 
   it('the condensed notice comes from the SHARED core builder, so both surfaces say the same thing', () => {
-    const prepared = prepareOrderDeliveryRequest(bigOrder());
+    const prepared = prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS);
     expect(shouldShowCondensedNotice(prepared)).toBe(true);
     // Not a re-typed sentence: the exact string web renders for this draft.
     expect(condensedNoticeText(prepared.draft)).toContain(
@@ -1053,11 +1248,11 @@ describe('copy', () => {
   });
 
   it('the condensed notice is NOT shown for a draft that fits whole, nor for an oversized one', () => {
-    expect(shouldShowCondensedNotice(prepareOrderDeliveryRequest(order()))).toBe(false);
+    expect(shouldShowCondensedNotice(prepareOrderDeliveryRequest(order(), RECIPIENTS))).toBe(false);
     // Oversized is the blocked state and OVERSIZED_MESSAGE owns that copy —
     // showing "this will open shortened" alongside "nothing can open" would
     // promise a link that is not offered.
-    expect(shouldShowCondensedNotice(prepareOrderDeliveryRequest(oversizedOrder()))).toBe(false);
+    expect(shouldShowCondensedNotice(prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS))).toBe(false);
   });
 });
 
@@ -1121,8 +1316,8 @@ describe('the on-screen notice gates', () => {
    * decoration. Driven over the full 2x3 space rather than at the true corner.
    */
   it('the blocked notice needs BOTH a refused open and a draft a link could have carried', () => {
-    const fits = prepareOrderDeliveryRequest(order());
-    const oversized = prepareOrderDeliveryRequest(oversizedOrder());
+    const fits = prepareOrderDeliveryRequest(order(), RECIPIENTS);
+    const oversized = prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS);
     expect(fits.linkFits).toBe(true);
     expect(oversized.linkFits).toBe(false);
 
@@ -1176,9 +1371,9 @@ describe('the on-screen notice gates', () => {
   it('the blocked notice and the oversized message can never appear together', () => {
     const blocked: DeliveryOpenResult = { outcome: 'blocked', used: null };
     for (const prepared of [
-      prepareOrderDeliveryRequest(order()),
-      prepareOrderDeliveryRequest(bigOrder()),
-      prepareOrderDeliveryRequest(oversizedOrder()),
+      prepareOrderDeliveryRequest(order(), RECIPIENTS),
+      prepareOrderDeliveryRequest(bigOrder(), RECIPIENTS),
+      prepareOrderDeliveryRequest(oversizedOrder(), RECIPIENTS),
     ]) {
       const showsOversized = !prepared.linkFits;
       expect(shouldShowBlockedNotice(prepared, blocked) && showsOversized).toBe(false);
@@ -1217,7 +1412,7 @@ describe('the phone adds only its recipients to the shared mapping', () => {
     const recipients = DELIVERY_REQUEST_RECIPIENTS;
     // Not "produces the same VALUES" — literally the same function's output.
     // A field the phone re-derived on its own would fail here.
-    expect(buildDeliveryRequestInput(o)).toEqual(coreMapping(o, recipients));
+    expect(buildDeliveryRequestInput(o, RECIPIENTS)).toEqual(coreMapping(o, recipients));
   });
 
   it('holds across every row shape the fallbacks care about, so the delegation is not fixture-deep', async () => {
@@ -1229,7 +1424,7 @@ describe('the phone adds only its recipients to the shared mapping', () => {
       for (const orgTimezone of [null, '', 'UTC', 'America/New_York']) {
         for (const requesterName of [null, '', 'Jane Smith']) {
           const o = order({ requesterEmail, orgTimezone, requesterName });
-          expect({ requesterEmail, orgTimezone, requesterName, input: buildDeliveryRequestInput(o) })
+          expect({ requesterEmail, orgTimezone, requesterName, input: buildDeliveryRequestInput(o, RECIPIENTS) })
             .toEqual({ requesterEmail, orgTimezone, requesterName, input: coreMapping(o, recipients) });
           checked += 1;
         }
@@ -1283,7 +1478,7 @@ describe('the phone adds only its recipients to the shared mapping', () => {
 
   it('the mandatory CC comes from the ONE core constant and survives onto the draft', async () => {
     const { DELIVERY_REQUEST_EMAIL_NAMES } = await import('@stockpilot/core');
-    const prepared = prepareOrderDeliveryRequest(order());
+    const prepared = prepareOrderDeliveryRequest(order(), RECIPIENTS);
     expect(prepared.draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
     expect(prepared.draft.cc).toBe('arosas@cvwest.org');
     expect(prepared.draft.ccName).toBe(DELIVERY_REQUEST_EMAIL_NAMES.cc);

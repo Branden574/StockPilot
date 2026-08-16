@@ -1,6 +1,10 @@
 import {
+  maintenanceRecipientsForRouting,
   prepareMaintenanceEmail,
+  type MaintenanceEmailContent,
   type MaintenanceEmailInput,
+  type OrgEmailRoutingReadState,
+  type OrgEmailRoutingRecipientsDto,
   type PreparedMaintenanceEmail,
 } from '@stockpilot/core';
 
@@ -62,6 +66,110 @@ export {
   type OutlookOpenPlan,
   type OutlookPlatform,
 } from './outlook-transport';
+
+// ── The org's routing (per-org email routing, migration 0337) ────────────
+
+/**
+ * Parse the `emailRouting` field off GET /api/v1/maintenance-requests/[id]
+ * into the read state core's fallback mapping consumes.
+ *
+ * The server resolves the org's routing itself (MaintenanceRequestsService.
+ * emailInput) and sends `{ state: 'unset' | 'valid' | 'invalid', ... }`; the
+ * phone still re-validates rather than trusting the payload — the 'valid'
+ * recipients go back through the branded factory inside
+ * `maintenanceRecipientsForRouting`, so a tampered or malformed payload
+ * fails CLOSED (action hidden), never composes.
+ *
+ * DEPLOY-ORDER SAFETY — the ONE fail-open arm: a MISSING field (undefined)
+ * means the server predates the per-org routing feature entirely, the exact
+ * code-before-migration window this feature must fail OPEN through. That —
+ * and only that — maps to `{ state: 'fallback' }`, which
+ * `maintenanceRecipientsForRouting` resolves to the compiled L4L constants,
+ * byte-identical to what shipped before the feature. A PRESENT-but-malformed
+ * field is the opposite case: something is actively wrong, and it fails
+ * CLOSED as 'invalid' rather than silently mailing another tenant's
+ * warehouse.
+ */
+export function maintenanceRoutingFromResponse(raw: unknown): OrgEmailRoutingReadState {
+  if (raw === undefined) return { state: 'fallback' };
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const { state } = raw as { state?: unknown };
+    if (state === 'unset') return { state: 'unset' };
+    if (state === 'invalid') {
+      const { reason } = raw as { reason?: unknown };
+      return {
+        state: 'invalid',
+        reason: typeof reason === 'string' ? reason : 'Stored recipients failed validation.',
+      };
+    }
+    if (state === 'valid') {
+      const { recipients } = raw as { recipients?: unknown };
+      if (recipients !== null && typeof recipients === 'object' && !Array.isArray(recipients)) {
+        const r = recipients as Record<string, unknown>;
+        if (typeof r.to === 'string' && typeof r.cc === 'string') {
+          const dto: OrgEmailRoutingRecipientsDto = { to: r.to, cc: r.cc };
+          if (typeof r.toName === 'string') dto.toName = r.toName;
+          if (typeof r.ccName === 'string') dto.ccName = r.ccName;
+          return { state: 'valid', recipients: dto };
+        }
+      }
+    }
+  }
+  return { state: 'invalid', reason: 'The server sent an unreadable email-routing payload.' };
+}
+
+/**
+ * Combine the always-present email CONTENT with the org's resolved routing
+ * into the builder's input — or nothing.
+ *
+ * THIS IS THE MATRIX CELL for the maintenance email on the phone, stated
+ * once where vitest can reach it instead of as a screen conditional:
+ * 'valid' composes with the stored pair (re-branded through the validating
+ * factory), 'fallback' with the compiled pair (pre-feature server only),
+ * and 'unset'/'invalid' return null — the compose actions do not render,
+ * exactly as web's maintenance detail page hides `MaintenanceEmailAction`.
+ * Null is the ONLY failure shape: no throw reaches the screen, and no
+ * constant ever substitutes for a value the factory refused.
+ */
+export function maintenanceEmailInputForRouting(
+  content: MaintenanceEmailContent,
+  routing: OrgEmailRoutingReadState,
+): MaintenanceEmailInput | null {
+  const recipients = maintenanceRecipientsForRouting(routing);
+  return recipients ? { ...content, recipients } : null;
+}
+
+/**
+ * Should the unconfigured/invalid state explain itself to THIS viewer?
+ * Members see nothing (the card simply is not there); holders of
+ * `organization:update` — the same permission that can fix it on
+ * /dashboard/settings/email-routing — see the notice from
+ * `routingAdminNotice` below. Mirrors web's maintenance detail page, which
+ * gates its inline pointer on the same permission.
+ */
+export function shouldShowRoutingAdminNotice(
+  routing: OrgEmailRoutingReadState,
+  canConfigureOrg: boolean,
+): boolean {
+  return canConfigureOrg && (routing.state === 'unset' || routing.state === 'invalid');
+}
+
+/**
+ * The admin-facing explanation for a hidden email action. The 'invalid' arm
+ * carries the guard's reason VERBATIM (same posture as web's inline card);
+ * the routing is fixed on the web dashboard — there is no mobile editor, by
+ * design (mobile reads org config, never writes it) — so the pointer names
+ * where the fix lives.
+ */
+export function routingAdminNotice(routing: OrgEmailRoutingReadState): string | null {
+  if (routing.state === 'invalid') {
+    return `Email routing for maintenance requests is invalid: ${routing.reason} The email action is hidden until this is fixed in Settings → Email routing on the web dashboard.`;
+  }
+  if (routing.state === 'unset') {
+    return 'Email routing is not configured for this organization, so the email action is hidden. Set it in Settings → Email routing on the web dashboard.';
+  }
+  return null;
+}
 
 /**
  * The whole prepared email, fitted by the SHARED core builder against the

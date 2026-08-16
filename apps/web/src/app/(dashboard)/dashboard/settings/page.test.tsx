@@ -80,3 +80,29 @@ describe('Maintenance requests hub tile', () => {
     expect(screen.getByRole('link', { name: /Maintenance requests/ })).toBeInTheDocument();
   });
 });
+
+describe('Email routing hub tile (per-org email routing, migration 0337)', () => {
+  it('is visible to roles holding organization:update, with the exact href/title/description', async () => {
+    setCtx('admin');
+    render(await SettingsPage());
+    const link = screen.getByRole('link', { name: /Email routing/ });
+    expect(link).toHaveAttribute('href', '/dashboard/settings/email-routing');
+    expect(
+      screen.getByText(
+        'Where delivery and maintenance request emails are addressed for your organization.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('is hidden from a manager — the tile gate matches the RLS floor (organizations_update = admin)', async () => {
+    setCtx('manager');
+    render(await SettingsPage());
+    expect(screen.queryByText('Email routing')).not.toBeInTheDocument();
+  });
+
+  it('does NOT depend on the maintenance module: delivery requests are core, and admins of an unconfigured org need the tile to learn why the action is hidden', async () => {
+    moduleAccess.current = { enabled: false, canManage: false };
+    render(await SettingsPage());
+    expect(screen.getByRole('link', { name: /Email routing/ })).toBeInTheDocument();
+  });
+});

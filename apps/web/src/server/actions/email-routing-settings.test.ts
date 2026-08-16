@@ -8,6 +8,7 @@ const sessionState = {
   role: 'admin' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
   mfaRequired: false,
   mfaSatisfied: true,
+  mfaEnrolled: false,
 };
 
 const dbState: {
@@ -73,6 +74,7 @@ vi.mock('@/server/services/context', async () => {
       supabase: makeClient(),
       mfaRequired: sessionState.mfaRequired,
       mfaSatisfied: sessionState.mfaSatisfied,
+      mfaEnrolled: sessionState.mfaEnrolled,
       enabledModules: new Set(['orders']),
     })),
   };
@@ -85,6 +87,7 @@ beforeEach(() => {
   sessionState.role = 'admin';
   sessionState.mfaRequired = false;
   sessionState.mfaSatisfied = true;
+  sessionState.mfaEnrolled = false;
   dbState.existingRouting = null;
   dbState.updatePayload = undefined;
   dbState.updateRowExists = true;
@@ -187,6 +190,21 @@ describe('setOrgEmailRoutingAction — gates fail closed', () => {
       recipients: VALID_RECIPIENTS,
     });
     expect(res).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("an ENROLLED user at AAL1 gets details.reason 'aal2_required' — the shape the panel's step-up modal retries on", async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+    sessionState.mfaEnrolled = true;
+    const res = await setOrgEmailRoutingAction({
+      feature: 'delivery_request',
+      recipients: VALID_RECIPIENTS,
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+    });
     expect(updateSpy).not.toHaveBeenCalled();
   });
 

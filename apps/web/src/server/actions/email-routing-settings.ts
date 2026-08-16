@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 
 import {
   brandDeliveryRecipients,
@@ -105,10 +105,13 @@ export async function setOrgEmailRoutingAction(
   try {
     const ctx = await withContext();
     if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-      return err(
-        'forbidden',
-        'Multi-factor authentication required. Enroll in MFA before performing this action.',
-      );
+      // Shape chosen by enrollment (mfaGateError, the profile.ts precedent):
+      // an ENROLLED user gets details.reason 'aal2_required', which is what
+      // lets the panel's useStepUp() modal challenge the code in place and
+      // retry — telling someone who already has a factor to "enroll" would
+      // be a dead end. Unenrolled users keep the enroll-first message. Both
+      // shapes are the same fail-closed refusal.
+      throw mfaGateError(ctx);
     }
     // organization:update mirrors the RLS floor exactly (organizations_update
     // = admin role); no new permission and no 0207 pgTAP count bump.
@@ -167,7 +170,16 @@ export async function setOrgEmailRoutingAction(
     revalidatePath('/dashboard/settings/email-routing');
     return ok({ feature: input.feature, recipients });
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
+    if (e instanceof ServiceError) {
+      // Surface details.reason (aal2_required / mfa_required) so the panel's
+      // step-up modal can distinguish "challenge in place" from a hard
+      // refusal — the restore-points action's exact idiom.
+      const reason =
+        e.details && typeof e.details === 'object'
+          ? (e.details as { reason?: string }).reason
+          : undefined;
+      return err(e.code, e.message, reason ? { reason } : undefined);
+    }
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
