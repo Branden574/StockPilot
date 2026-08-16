@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  EXAMPLE launchd job for the nightly simulator smoke run. NOT installed by
+  the repo; installing it is the owner's call:
+
+    cp apps/mobile/scripts/smoke/com.stockpilot.smoke.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.stockpilot.smoke.plist
+
+  Caveats (see README.md): a lid-closed/sleeping laptop will not run this;
+  Metro (:8081) and the web server (:3000) must already be up or the run
+  fails fast with a clear message in the log. The CI-grade home for this
+  suite is a macOS runner building a simulator app via EAS.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stockpilot.smoke</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd /Users/brandenvincent-walker/Developer/InventorySystem/apps/mobile &amp;&amp; python3 scripts/smoke/smoke.py</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/brandenvincent-walker/Developer/InventorySystem/apps/mobile/scripts/smoke/artifacts/nightly.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/brandenvincent-walker/Developer/InventorySystem/apps/mobile/scripts/smoke/artifacts/nightly.err.log</string>
+</dict>
+</plist>
