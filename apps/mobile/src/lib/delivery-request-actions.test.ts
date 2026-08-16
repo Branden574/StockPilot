@@ -1131,6 +1131,11 @@ describe('the on-screen notice gates', () => {
       ['opened natively', { outcome: 'opened', used: 'outlook-native' }],
       ['opened in the default mail app', { outcome: 'opened', used: 'default-mail' }],
       ['refused by the OS', { outcome: 'blocked', used: null }],
+      // A swallowed double-tap. NOT a refusal: the first tap's open is still
+      // in flight and will surface its own outcome, so showing retry copy for
+      // the second tap would tell the user the send failed while it is
+      // actually succeeding.
+      ['swallowed while an open was in flight', { outcome: 'in_flight', used: null }],
     ];
 
     const seen: [string, string, boolean][] = [];
@@ -1150,6 +1155,7 @@ describe('the on-screen notice gates', () => {
       ['a draft that fits', 'opened natively', false],
       ['a draft that fits', 'opened in the default mail app', false],
       ['a draft that fits', 'refused by the OS', true],
+      ['a draft that fits', 'swallowed while an open was in flight', false],
       ['a draft too long for any link', 'nothing attempted yet', false],
       ['a draft too long for any link', 'opened natively', false],
       ['a draft too long for any link', 'opened in the default mail app', false],
@@ -1157,6 +1163,7 @@ describe('the on-screen notice gates', () => {
       // nothing was offered, and telling this employee to try again would be a
       // retry that cannot work.
       ['a draft too long for any link', 'refused by the OS', false],
+      ['a draft too long for any link', 'swallowed while an open was in flight', false],
     ]);
   });
 

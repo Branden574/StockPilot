@@ -1076,3 +1076,54 @@ describe('prepareMaintenanceEmail — the transport option: fit against the url 
     expect(native.clipboardText).toContain('CC: arosas@cvwest.org');
   });
 });
+
+describe('the mailto is strictly inside whichever compose url was measured', () => {
+  // WHY THIS EXISTS — an equivalent-mutant finding, made explicit rather than
+  // left as folklore. The fit decision checks `mailtoUrl.length` alongside the
+  // declared transport's compose url, but for this body shape that term NEVER
+  // BINDS: the web url double-encodes the body (a space costs 6 chars), and
+  // the native url carries more base overhead than `mailto:` plus a path
+  // address, so the mailto is strictly the shortest of the three on every
+  // rung. Deleting the term from the fit changes no observable output today —
+  // a mutation run proved it survives both full suites.
+  //
+  // The cc-untrusted reroute (NATIVE_OUTLOOK_CC_TRUSTED -> mailto) is
+  // therefore safe because of THIS measured inequality, not because of the
+  // decorative term. This test is the load-bearing pin: if a future body or
+  // transport shape ever makes the mailto the longest url, the inequality
+  // breaks HERE, loudly, and the belt-and-braces term in `measure()` starts
+  // to matter — see the comment on the fit line in email.ts.
+  const CASES: Array<[string, MaintenanceEmailInput]> = [
+    ['full', FULL_INPUT],
+    ['minimal', MINIMAL_INPUT],
+    ['moderate', MODERATE_INPUT],
+  ];
+
+  for (const [name, input] of CASES) {
+    for (const transport of ['outlook-web', 'outlook-native'] as const) {
+      it(`${name} / ${transport}: mailto < the measured compose url, on the CHOSEN rung`, () => {
+        const p = prepareMaintenanceEmail(input, { transport });
+        const measured = transport === 'outlook-native' ? p.outlookMobileUrl : p.outlookUrl;
+        expect(p.mailtoUrl.length).toBeLessThan(measured.length);
+      });
+    }
+  }
+
+  it('holds on the condensed rung too, where the margin is tightest', () => {
+    // The realistic long description condenses under the web budget — the
+    // inequality must survive the rung the ladder actually lands on, not just
+    // the roomy full drafts above.
+    const long: MaintenanceEmailInput = {
+      ...FULL_INPUT,
+      description: 'The HVAC unit in the west wing has been intermittently failing. '.repeat(12),
+    };
+    for (const transport of ['outlook-web', 'outlook-native'] as const) {
+      const p = prepareMaintenanceEmail(long, { transport });
+      const measured = transport === 'outlook-native' ? p.outlookMobileUrl : p.outlookUrl;
+      expect(p.mailtoUrl.length).toBeLessThan(measured.length);
+      // And the consequence the reroute relies on: whenever the chosen rung
+      // fits its declared transport, the mailto fits too.
+      if (p.linkFits) expect(p.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    }
+  });
+});

@@ -502,6 +502,16 @@ export function prepareMaintenanceEmail(
     return {
       draft,
       ...urls,
+      // The mailto term is BELT-AND-BRACES, and it is honest to say so: for
+      // this body shape the mailto is strictly shorter than either compose
+      // url (the web url double-encodes the body; the native url carries
+      // ~16 chars more base than `mailto:` + a path address), so the term
+      // never binds and deleting it changes no observable output today. The
+      // cc-untrusted reroute's safety therefore rests on that measured
+      // inequality — pinned in email.test.ts as "the mailto is strictly
+      // inside whichever compose url was measured" — with this term kept so
+      // a future transport whose mailto is NOT shortest fails closed here
+      // rather than truncating silently.
       fits: composeUrl.length <= DRAFT_URL_LIMIT && urls.mailtoUrl.length <= DRAFT_URL_LIMIT,
     };
   };
