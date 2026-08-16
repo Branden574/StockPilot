@@ -225,13 +225,27 @@ def screenshot(name):
     return path
 
 
-def moved(anchor_label, before_y):
-    """True when the labelled element left its y position (or the screen)."""
+def moved(anchor_label, before_y, sibling_pattern=None):
+    """True when the labelled element left its y position or scrolled off.
+
+    THE FAIL-OPEN THIS CLOSES (verifier finding, 2026-08-16): the original
+    version returned True whenever the anchor was simply ABSENT, so a sheet
+    that failed to render at all -- or an accessibility tree that came back
+    empty -- counted as "it scrolled". An anchor that vanished only proves
+    movement if the LIST it lived in is still there (virtualization recycles
+    off-screen rows; the list itself never disappears). So absence counts as
+    moved ONLY when `sibling_pattern` still matches something on screen;
+    otherwise it is a failure the caller reports as "anchor and its list both
+    gone", which is a render problem, not a scroll.
+    """
     hits = find_all(anchor_label, visible=False)
-    if not hits:
-        return True
-    fr = frame_of(hits[0])
-    return fr is None or abs(fr[1] - before_y) > MOVE_EPSILON
+    if hits:
+        fr = frame_of(hits[0])
+        return fr is not None and abs(fr[1] - before_y) > MOVE_EPSILON
+    if sibling_pattern is None:
+        return False
+    els = describe_all()
+    return any(re.search(sibling_pattern, label_of(e) or "") for e in els)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +300,26 @@ def dismiss_overlays():
         time.sleep(1.2)
 
 
+def reset_state():
+    """Return the app to a known screen after a failed flow.
+
+    Order matters: the Add-items sheet has no Close labelled 'close' (it
+    dismisses on scrim tap), so close IT first if its landmark is visible,
+    then sweep labelled overlays, then deep-link home so the next flow's own
+    deep link starts from the same place a clean run would.
+    """
+    try:
+        if find_all(SHEET_LANDMARK):
+            tap(SCREEN_W / 2, 200)  # scrim tap, well above the sheet's top
+            wait_gone(SHEET_LANDMARK, timeout=8)
+        dismiss_overlays()
+        open_url("stockpilot://")
+        time.sleep(1.5)
+        dismiss_overlays()
+    except Exception as e:  # noqa: BLE001 - never let cleanup mask the real failure
+        print(f"(reset_state: best-effort cleanup hit {e!r}; continuing)")
+
+
 # ---------------------------------------------------------------------------
 # Gesture self-validation: prove the harness can scroll before trusting any
 # scroll assertion. A suite that can blame the app for its own broken
@@ -303,7 +337,7 @@ def validate_gesture():
     label, before = label_of(anchor), frame_of(anchor)
     swipe(SCREEN_W / 2, SCREEN_H * 0.65, SCREEN_W / 2, SCREEN_H * 0.30)
     time.sleep(1.0)
-    ok = moved(label, before[1])
+    ok = moved(label, before[1], sibling_pattern=r"SO-\d+")
     # Restore the list position for the flows that follow.
     swipe(SCREEN_W / 2, SCREEN_H * 0.30, SCREEN_W / 2, SCREEN_H * 0.65)
     time.sleep(0.8)
@@ -435,7 +469,7 @@ def flow_sheet_scroll():
     # touch primed the sheet. Swipe INSIDE the sheet, with --duration.
     swipe(SCREEN_W / 2, SCREEN_H * 0.75, SCREEN_W / 2, SCREEN_H * 0.48)
     time.sleep(1.0)
-    if not moved(label, before[1]):
+    if not moved(label, before[1], sibling_pattern=r"on hand"):
         return False, f"sheet did not scroll: row {label!r} stayed at y={before[1]}"
     # Scrim tap closes the sheet (tap well above the sheet's top edge).
     tap(SCREEN_W / 2, 200)
@@ -552,6 +586,14 @@ def main():
         shot = screenshot(f"FAIL-{name}") if not passed else None
         results.append((name, passed, reason, shot))
         print(f"{'PASS' if passed else 'FAIL'}: {reason}")
+        if not passed:
+            # FLOW ISOLATION (verifier finding, 2026-08-16): a failed flow can
+            # bail with a modal still open — the Add-items sheet, an alert —
+            # and the NEXT flow's deep link renders BEHIND it, so one real
+            # regression read as two failures and the second one lied about
+            # where the problem was. Screenshot first (above) so the evidence
+            # shows the abandoned state, then reset to a known screen.
+            reset_state()
 
     print("\n" + "=" * 76)
     print(f"{'flow':<20} {'result':<8} reason")

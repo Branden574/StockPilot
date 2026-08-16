@@ -22,12 +22,19 @@ screenshot under `scripts/smoke/artifacts/` (gitignored) and prints its path.
 
 ## What it covers
 
-| flow | surface | the regression it guards |
-| --- | --- | --- |
-| `login-shell` | app reaches the signed-in shell; tabs render | blank/stuck shell on boot |
-| `sheet-scroll` | orders -> first order -> Add items sheet: a row must MOVE under a swipe, and a scrim tap must close the sheet | d8e9669f: sheets could not be scrolled until something else took the touch |
-| `delivery-section` | deep link to SO-000021 (fulfillment=delivery): delivery-request section renders with its action button and the recipients line naming dc4@learn4life.org | #132: the native compose surface |
-| `maintenance` | maintenance list -> first request detail -> email action area (Open in Outlook / Copy Email Details) renders | #127/#136: compose-link fit, copy, double-tap guard |
+| flow | kind | surface | the regression it guards |
+| --- | --- | --- | --- |
+| `login-shell` | render-only | app reaches the signed-in shell; tabs render | blank/stuck shell on boot |
+| `sheet-scroll` | **behavioural** | orders -> first order -> Add items sheet: a row must MOVE under a swipe, and a scrim tap must close the sheet | d8e9669f: sheets could not be scrolled until something else took the touch |
+| `delivery-section` | render-only | deep link to SO-000021 (fulfillment=delivery): delivery-request section renders with its action button and the recipients line naming dc4@learn4life.org | #132's SCREEN renders and does not crash. It does NOT verify the compose url or transport — those are unit-pinned; the url handed to the OS is only observable on a tap this read-only suite must not make |
+| `maintenance` | render-only | maintenance list -> first request detail -> the email action area's controls (Open in Outlook / Copy Email Details) exist | the #127/#136 SCREEN renders. It does NOT exercise compose-link fit, one-tap copy, or the double-tap guard — those behaviours are unit-pinned in src/lib; this flow only proves the screen offering them still stands up |
+
+Be precise about what "render-only" buys: those three flows catch a crash, a
+blank screen, a module gate wrongly hiding a section, or a deep link that
+stopped resolving. They would NOT catch a frozen, untappable UI — only
+`sheet-scroll` and the gesture self-validation are behavioural. When adding a
+flow, prefer asserting something MOVED or CHANGED over asserting a label
+exists, and label the row honestly either way.
 
 Before any flow runs, the driver self-validates the swipe gesture against
 the orders list (known to scroll). If the gesture itself is broken the run
