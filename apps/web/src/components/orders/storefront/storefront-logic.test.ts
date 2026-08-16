@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { deliveryRequestRecipients } from '@stockpilot/core';
+
+import { DELIVERY_REQUEST_EMAIL, DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
 
 import type { CatalogItem } from '../v2/types';
 
@@ -8,7 +10,7 @@ import {
   availabilityLabel,
   availableOf,
   buildClipboardText,
-  buildDeliveryRequestDraft,
+  buildDeliveryRequestDraft as buildDraftWithRecipients,
   buildMailtoUrl,
   buildOutlookComposeUrl,
   buildQtyMap,
@@ -21,7 +23,7 @@ import {
   fullKitLines,
   glyphFor,
   isBrowsingAll,
-  prepareDeliveryRequest,
+  prepareDeliveryRequest as prepareWithRecipients,
   successRefLine,
   sortCatalog,
   statusOf,
@@ -29,6 +31,21 @@ import {
 } from './storefront-logic';
 
 import type { DeliveryRequestInput } from './storefront-logic';
+
+// The wrappers take the org's resolved recipients explicitly since the
+// per-org routing feature (migration 0337). This suite's delivery pins all
+// run the COMPILED pair — the exact value every org received before the
+// feature and the value L4L's seed preserves — so every byte-level
+// assertion below still pins "output is unchanged for the compiled
+// recipients". The recipients-FLOW pins (a different pair reaches the urls)
+// live in the dedicated per-org describe block at the end of this file and
+// in core's org-email-routing suite.
+const buildDeliveryRequestDraft = (
+  input: DeliveryRequestInput,
+  opts: { condensed?: boolean; maxRows?: number } = {},
+) => buildDraftWithRecipients(input, DELIVERY_REQUEST_RECIPIENTS, opts);
+const prepareDeliveryRequest = (input: DeliveryRequestInput) =>
+  prepareWithRecipients(input, DELIVERY_REQUEST_RECIPIENTS);
 
 let seq = 0;
 function makeItem(overrides: Partial<CatalogItem> = {}): CatalogItem {
@@ -1969,5 +1986,44 @@ describe('prepareDeliveryRequest', () => {
     const decoded = decodeCompose(prepared.outlookUrl);
     expect(decoded.to).toBe('Fresno Warehouse DC4 <dc4@learn4life.org>');
     expect(decoded.cc).toBe('Andrew Rosas <arosas@cvwest.org>');
+  });
+});
+
+/**
+ * PER-ORG ROUTING FLOW (2026-08-16): the web wrappers thread the recipients
+ * they are HANDED into every transport. This is the web-layer mutation kill
+ * for "the wrapper quietly keeps using the compiled constant": an org whose
+ * stored routing names a different pair must reach compose urls naming that
+ * pair, and the compiled addresses must appear nowhere in them.
+ */
+describe('per-org recipients thread through the web wrappers', () => {
+  const OTHER = deliveryRequestRecipients({
+    to: 'intake@other-tenant.invalid',
+    cc: 'copy@other-tenant.invalid',
+  });
+
+  it('a configured pair reaches the draft and every transport; the compiled pair does not', () => {
+    const prepared = prepareWithRecipients(makeDraftInput(), OTHER);
+    expect(prepared.draft.to).toBe('intake@other-tenant.invalid');
+    expect(prepared.draft.cc).toBe('copy@other-tenant.invalid');
+    // The compiled RECIPIENT addresses appear nowhere. (The fixture's
+    // requester email is a cvwest.org address and legitimately rides in the
+    // BODY — the assertion is about the routing, so it names the compiled
+    // mailboxes themselves.)
+    for (const text of [prepared.outlookUrl, prepared.mailtoUrl, prepared.clipboardText]) {
+      expect(text).not.toContain('learn4life');
+      expect(text).not.toContain('arosas');
+    }
+    expect(prepared.mailtoUrl).toContain('copy%40other-tenant.invalid');
+  });
+
+  it('the condensed ladder runs under configured recipients too', () => {
+    const draft = buildDraftWithRecipients(makeDraftInput(), OTHER, {
+      condensed: true,
+      maxRows: 0,
+    });
+    expect(draft.condensed).toBe(true);
+    expect(draft.to).toBe('intake@other-tenant.invalid');
+    expect(draft.cc).toBe('copy@other-tenant.invalid');
   });
 });

@@ -16,6 +16,19 @@ vi.mock('./storefront-cards', () => ({
 
 import { ReviewModal } from './storefront-overlays';
 
+import { DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
+
+// The routing DTO the server resolves for an org whose stored routing is
+// the compiled pair (L4L's seed) — keeps every pin below byte-identical to
+// pre-feature behavior. The hidden state (deliveryRecipients: null) gets
+// its own test at the end of this file.
+const TEST_ROUTING = {
+  to: DELIVERY_REQUEST_RECIPIENTS.to,
+  cc: DELIVERY_REQUEST_RECIPIENTS.cc,
+  toName: DELIVERY_REQUEST_RECIPIENTS.toName,
+  ccName: DELIVERY_REQUEST_RECIPIENTS.ccName,
+};
+
 const ITEM: CatalogItem = {
   id: 'i-1',
   sku: 'APP-POLO-W',
@@ -57,6 +70,7 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
       code: 'CVW-CLO',
       address: { line1: '1295 Shaw Ave', city: 'Fresno', region: 'California', postalCode: '93612' },
     },
+    deliveryRecipients: TEST_ROUTING,
     submitting: false,
     submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
     onClose: vi.fn(),
@@ -137,6 +151,7 @@ describe('ReviewModal success stage', () => {
         }}
         neededBy=""
         destination={null}
+        deliveryRecipients={TEST_ROUTING}
         submitting={false}
         submitted={null}
         onClose={vi.fn()}
@@ -208,6 +223,7 @@ describe('ReviewModal accessibility', () => {
       },
       neededBy: '',
       destination: null,
+      deliveryRecipients: TEST_ROUTING,
       submitting: false,
       submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
       onClose: vi.fn(),
@@ -278,6 +294,7 @@ describe('ReviewModal accessibility', () => {
       },
       neededBy: '',
       destination: null,
+      deliveryRecipients: TEST_ROUTING,
       submitting: false,
       submitted: null,
       onClose: vi.fn(),
@@ -367,5 +384,29 @@ describe('ReviewModal accessibility', () => {
     }
 
     expect(reached).toEqual({ copy: true, open: true, textarea: true });
+  });
+});
+
+/**
+ * Per-org email routing (migration 0337), fallback matrix state B/D on the
+ * storefront success overlay: an org with no resolved delivery routing gets
+ * the SAME success screen minus the email action — nothing else about the
+ * overlay changes, and no compiled recipient address appears anywhere.
+ */
+describe('success overlay without delivery routing', () => {
+  it('renders no email action and no recipient address when deliveryRecipients is null', () => {
+    const { container } = renderSuccess({ deliveryRecipients: null });
+    expect(screen.queryByRole('button', { name: /Email delivery request/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Preview/i })).toBeNull();
+    // The rest of the success screen is unchanged.
+    expect(screen.getByRole('button', { name: /View order/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Done$/i })).toBeInTheDocument();
+    expect(container.textContent).not.toContain('learn4life');
+    expect(container.textContent).not.toContain('cvwest');
+  });
+
+  it('still renders the email action when routing resolved (control)', () => {
+    renderSuccess();
+    expect(screen.getByRole('button', { name: /Email delivery request/i })).toBeInTheDocument();
   });
 });

@@ -7,6 +7,8 @@
 import { Check, ClipboardList, Loader2, X } from 'lucide-react';
 import * as React from 'react';
 
+import type { OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
+
 import type { CartLineState, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import { CharterTag, SfAddControl, SfPhoto } from './storefront-cards';
@@ -213,6 +215,15 @@ interface ReviewModalProps {
    * draft must then print no destination at all rather than an empty block.
    */
   destination: StorefrontCharter | null;
+  /**
+   * The org's delivery-request email routing (per-org, migration 0337),
+   * resolved server-side; null = no valid routing, so the success screen
+   * renders NO email action. Fail closed by construction: with no
+   * recipients there is nothing to compose against, and the compiled L4L
+   * constants are reachable only through the server's own
+   * code-before-migration fallback, never from here.
+   */
+  deliveryRecipients: OrgEmailRoutingRecipientsDto | null;
   submitting: boolean;
   /** Set once the order is created — drives the success reference line. */
   submitted: { id: string; orderNumber: number | null; unitCount: number } | null;
@@ -230,6 +241,7 @@ export function ReviewModal({
   summary,
   neededBy,
   destination,
+  deliveryRecipients,
   submitting,
   submitted,
   onClose,
@@ -490,8 +502,13 @@ export function ReviewModal({
               {summary.method === 'pickup' ? 'pickup' : 'delivery'}.
             </p>
             <div className="acts">
-              {submitted && (
+              {/* The email action renders ONLY when the org has resolved
+                  delivery routing — an unconfigured or invalid org gets the
+                  success screen with no compose action at all (fallback
+                  matrix state B/D). */}
+              {submitted && deliveryRecipients && (
                 <DeliveryRequestAction
+                  recipients={deliveryRecipients}
                   input={{
                     orderId: submitted.id,
                     orderNumber: submitted.orderNumber,

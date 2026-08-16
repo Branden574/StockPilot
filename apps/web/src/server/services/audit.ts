@@ -279,6 +279,11 @@ export type AuditEvent =
   // Archived-item auto-cleanup settings — an admin toggled auto-delete /
   // retention days, stored in organization_modules.settings for 'inventory'.
   | 'archive_cleanup_settings.updated'
+  // Per-org compose-email routing — an admin set or cleared where the
+  // delivery-request / maintenance email actions address their mail
+  // (organizations.email_routing, migration 0337). Forensic-relevant: this
+  // row is what makes a silent warehouse-mail reroute reconstructable.
+  | 'email_routing.updated'
   // Auto-archive-on-zero-stock settings — an admin toggled auto-archive /
   // dwell days, stored in organization_modules.settings for 'inventory'.
   | 'auto_archive_settings.updated'

@@ -1,10 +1,27 @@
+import { ccNotice } from '../email/cc-notice';
+import type { OrgEmailRoutingReadState } from '../email/org-email-routing';
+import { maintenanceEmailRecipients, type MaintenanceEmailRecipients } from './recipients';
+
 /**
- * Maintenance-request constants. The recipients are COMPILE-TIME LITERALS on
- * purpose (the delivery-request security posture, lib/site.ts:33-46): never
- * read from URL params, localStorage, form fields, request descriptions,
- * related-item data, or client API values. The email builder takes NO
- * recipient argument — it reads this object — so there is no parameter for a
- * caller to poison. Frozen so a stray assignment throws in strict mode.
+ * Maintenance-request constants.
+ *
+ * THE RECIPIENTS BELOW ARE L4L'S MAILBOXES, and since 2026-08-16 (per-org
+ * email routing, migration 0337) they are NOT what the surfaces read. The
+ * email builder now takes recipients as INPUT (`MaintenanceEmailInput.
+ * recipients`, constructed only by `maintenanceEmailRecipients` in
+ * `./recipients.ts`), and surfaces resolve them from
+ * `organizations.email_routing`. These constants keep exactly two roles:
+ *
+ *  1. THE CODE-BEFORE-MIGRATION FALLBACK. Deploy-order safety is FAIL OPEN
+ *     to pre-feature behavior: a reader that finds no `email_routing` column
+ *     (Postgres 42703) degrades to these values — the only path that ever
+ *     returns them; once the column exists it is never taken. See
+ *     `maintenanceRecipientsForRouting` below.
+ *  2. THE SEED'S SOURCE OF TRUTH: migration 0337 seeds L4L's org row with
+ *     these exact values, so nothing changes for that tenant.
+ *
+ * An unconfigured org gets NEITHER — its email action hides — and an invalid
+ * stored value fails CLOSED the same way, never back to these constants.
  *
  * These are REAL addresses: dc4@learn4life.org feeds a live Zendesk email
  * intake and arosas@cvwest.org is a real person. No test, tool, or
@@ -24,20 +41,73 @@ export const L4L_MAINTENANCE_EMAIL_NAMES = Object.freeze({
 } as const);
 
 /**
- * Accuracy, not optimism: no "assigned", no "ticket created", no "notified".
- *
- * The address is INTERPOLATED, not retyped. It was hand-typed here until
- * 2026-08-13 — the same defect, in the same shape, as the delivery twin in
- * `../orders/delivery-request-recipients.ts`, and fixed in the same commit
- * because fixing one copy of a duplicated behaviour is not a fix (recurring
- * pattern #26). A hand-typed copy makes this sentence a second, silent
- * definition of the CC: change `L4L_MAINTENANCE_EMAIL.cc` and every screen
- * showing this notice keeps naming the old mailbox while the mail goes to the
- * new one, telling the requester in writing that a copy went somewhere it did
- * not.
+ * THE COMPILED VALUE, built through the only constructor there is — the
+ * maintenance twin of `DELIVERY_REQUEST_RECIPIENTS`. The fallback mapping
+ * below and the tests share this one already-validated instance; no surface
+ * imports it as "the recipients" any more.
  */
-export const MAINTENANCE_CC_NOTICE =
-  `The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to ${L4L_MAINTENANCE_EMAIL.cc}.`;
+export const L4L_MAINTENANCE_RECIPIENTS: MaintenanceEmailRecipients = maintenanceEmailRecipients({
+  to: L4L_MAINTENANCE_EMAIL.to,
+  cc: L4L_MAINTENANCE_EMAIL.cc,
+  toName: L4L_MAINTENANCE_EMAIL_NAMES.to,
+  ccName: L4L_MAINTENANCE_EMAIL_NAMES.cc,
+});
+
+/**
+ * The recipients notice as a PURE FUNCTION of the recipients — required now
+ * that recipients are per-org data. Accuracy, not optimism, unchanged: the
+ * sentence claims only where the mail is addressed — no "assigned", no
+ * "ticket created", no "notified". The previous fixed notice's "The DC4
+ * address creates the maintenance ticket in the email system" sentence was
+ * L4L-Zendesk-specific knowledge the platform cannot truthfully claim for an
+ * arbitrary org's configured mailbox, so it is gone everywhere, L4L's
+ * screens included (deliberate copy change, per-org routing design).
+ */
+export function maintenanceCcNotice(recipients: { to: string; cc: string }): string {
+  return ccNotice(recipients);
+}
+
+/**
+ * The notice for the COMPILED pair — kept under its shipped name for the
+ * fallback path and the tests, redefined as the function applied to the
+ * compiled values so it can never drift from the addresses the way a
+ * hand-typed sentence once could (recurring pattern #26; the delivery twin
+ * is redefined identically).
+ */
+export const MAINTENANCE_CC_NOTICE = maintenanceCcNotice(L4L_MAINTENANCE_EMAIL);
+
+/**
+ * Map a routing READ to the recipients a maintenance surface may compose
+ * with — the same matrix as the delivery twin (`deliveryRecipientsForRouting`),
+ * against the maintenance brand:
+ *
+ *   'fallback' -> the COMPILED constants. DEPLOY-ORDER SAFETY: only the
+ *                 missing-column window (42703) produces this state, so
+ *                 code-before-migration is byte-identical to pre-feature
+ *                 behavior; once the column exists this arm is never taken.
+ *   'valid'    -> the stored recipients, re-branded through the factory
+ *                 (cannot throw for parser-produced values; belt-and-braces
+ *                 catch fails CLOSED).
+ *   'unset'    -> null: the email action is HIDDEN for this org.
+ *   'invalid'  -> null: FAIL CLOSED. Never the constants — that would
+ *                 silently mail another tenant's warehouse.
+ */
+export function maintenanceRecipientsForRouting(
+  read: OrgEmailRoutingReadState,
+): MaintenanceEmailRecipients | null {
+  switch (read.state) {
+    case 'fallback':
+      return L4L_MAINTENANCE_RECIPIENTS;
+    case 'valid':
+      try {
+        return maintenanceEmailRecipients(read.recipients);
+      } catch {
+        return null;
+      }
+    default:
+      return null;
+  }
+}
 
 export const MAINTENANCE_CATEGORIES = [
   'Facilities',

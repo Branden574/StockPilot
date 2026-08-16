@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
 
-import { DRAFT_URL_LIMIT, type MaintenanceEmailInput } from '@stockpilot/core';
+import { DRAFT_URL_LIMIT, L4L_MAINTENANCE_RECIPIENTS, type MaintenanceEmailInput } from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
@@ -36,6 +36,10 @@ import { composeTransportForProbe, nativeOutlookAvailable } from './outlook-tran
 vi.mock('expo-linking', () => ({ openURL: vi.fn(async () => undefined), canOpenURL: vi.fn(async () => true) }));
 
 const INPUT: MaintenanceEmailInput = {
+  // Per-org email routing (migration 0337): recipients are builder INPUT.
+  // The compiled pair keeps every pin below on pre-feature behavior until
+  // the mobile routing wiring lands.
+  recipients: L4L_MAINTENANCE_RECIPIENTS,
   requestNumber: 'MR-2026-000123',
   subject: 'AC broken',
   description: 'Warm air.',

@@ -61,12 +61,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         if (!(shareErr instanceof ServiceError)) throw shareErr;
       }
     }
-    const emailInput = await svc.emailInput(id, { shareUrl: null });
+    const { content: emailInput, emailRouting } = await svc.emailInput(id, { shareUrl: null });
 
+    // `emailInput` stays the CONTENT under its shipped key: binaries older
+    // than the per-org routing OTA never read `recipients` off it (their
+    // compiled core reads the old constants), so they keep today's behavior
+    // untouched, while updated clients combine `emailInput` with
+    // `emailRouting.recipients` (present only when state === 'valid') and
+    // hide the compose actions otherwise.
     return NextResponse.json({
       request,
       photos,
       emailInput,
+      emailRouting,
       shareLink,
       canManage: can(ctx, 'maintenance_requests:manage'),
     });

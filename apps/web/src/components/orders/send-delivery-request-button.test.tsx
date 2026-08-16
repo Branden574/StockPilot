@@ -11,17 +11,29 @@ import { describe, expect, it, vi } from 'vitest';
  * flattened RSC-serializable props the order detail page can actually send.
  */
 const actionSpy = vi.hoisted(() => vi.fn());
+const actionRecipientsSpy = vi.hoisted(() => vi.fn());
 vi.mock('@/components/orders/storefront/delivery-request-action', () => ({
   __esModule: true,
-  default: ({ input }: { input: unknown }) => {
+  default: ({ input, recipients }: { input: unknown; recipients: unknown }) => {
     actionSpy(input);
+    actionRecipientsSpy(recipients);
     return null;
   },
 }));
 
 import { SendDeliveryRequestButton } from './send-delivery-request-button';
 
+// Per-org routing (migration 0337): the page resolves the recipients and this
+// wrapper only threads them through. A deliberately NON-compiled pair proves
+// the pass-through is the value handed in, not a constant.
+const TEST_ROUTING = {
+  to: 'intake@other-tenant.invalid',
+  cc: 'copy@other-tenant.invalid',
+  toName: 'Other Intake',
+};
+
 const baseProps = {
+  recipients: TEST_ROUTING,
   orderId: 'f3d77cda-68aa-43a3-bb6b-09fce21291e4',
   orderNumber: 61,
   warehouseName: 'DC4',
@@ -81,6 +93,9 @@ describe('SendDeliveryRequestButton', () => {
         ['i2', { name: 'Charger', sku: 'SP-CHRG-1' }],
       ]),
     });
+    // The routing rides through UNCHANGED — the wrapper never substitutes a
+    // constant for the value the page resolved.
+    expect(actionRecipientsSpy).toHaveBeenCalledWith(TEST_ROUTING);
   });
 
   it('scopes the assistant under .sp-storefront so its sf-* classes resolve', () => {

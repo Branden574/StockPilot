@@ -34,7 +34,7 @@ import { toast } from 'sonner';
 
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
-import { isManagerOrAbove } from '@stockpilot/core';
+import { isManagerOrAbove, type OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
 
 import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '../v2/types';
@@ -96,6 +96,15 @@ export interface OrdersStorefrontProps {
    * it, and a blank value would render an empty "()" after the date.
    */
   orgTimezone: string;
+  /**
+   * The org's delivery-request email routing, resolved server-side
+   * (`getOrgEmailRouting` + core's fallback matrix) as plain strings, or
+   * null when the org has no valid routing — the success overlay then
+   * renders NO email action (fail closed; never another tenant's
+   * mailboxes). The client re-brands through the validating factory at its
+   * own seam.
+   */
+  deliveryRecipients: OrgEmailRoutingRecipientsDto | null;
 }
 
 type ReviewStage = null | 'review' | 'success';
@@ -203,6 +212,7 @@ function StorefrontShell({
   viewerName,
   viewerEmail,
   orgTimezone,
+  deliveryRecipients,
 }: OrdersStorefrontProps) {
   const router = useRouter();
   const { state, dispatch } = useCart();
@@ -563,6 +573,7 @@ function StorefrontShell({
             submitted={submitted}
             setSubmitted={setSubmitted}
             orgTimezone={orgTimezone}
+            deliveryRecipients={deliveryRecipients}
           />
         </React.Suspense>
       </div>
@@ -585,6 +596,8 @@ interface StorefrontCatalogProps {
   submitted: SubmittedOrder;
   setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
   orgTimezone: string;
+  /** See OrdersStorefrontProps.deliveryRecipients. */
+  deliveryRecipients: OrgEmailRoutingRecipientsDto | null;
 }
 
 function StorefrontCatalog({
@@ -599,6 +612,7 @@ function StorefrontCatalog({
   submitted,
   setSubmitted,
   orgTimezone,
+  deliveryRecipients,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
@@ -1182,6 +1196,7 @@ function StorefrontCatalog({
         }}
         neededBy={state.neededBy}
         destination={state.fulfillmentType === 'delivery' ? charter : null}
+        deliveryRecipients={deliveryRecipients}
         submitting={isPending}
         submitted={submitted}
         onClose={handleReviewClose}

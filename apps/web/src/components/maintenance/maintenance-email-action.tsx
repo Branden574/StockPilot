@@ -4,7 +4,14 @@ import { Copy, Download, Mail, MailOpen } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { prepareMaintenanceEmail, type MaintenanceEmailInput } from '@stockpilot/core';
+import {
+  brandMaintenanceRecipients,
+  prepareMaintenanceEmail,
+  type MaintenanceEmailContent,
+  type MaintenanceEmailInput,
+  type MaintenanceEmailRecipients,
+  type OrgEmailRoutingRecipientsDto,
+} from '@stockpilot/core';
 
 import {
   Dialog,
@@ -23,8 +30,9 @@ import { useMaintenanceShareLink } from './share-link-context';
 
 /**
  * The heart of the maintenance-request feature: turns a SAVED request into a
- * prefilled Outlook draft addressed to real people (dc4@learn4life.org,
- * CC arosas@cvwest.org — see packages/core/src/maintenance/constants.ts).
+ * prefilled Outlook draft addressed to the ORG'S CONFIGURED recipients
+ * (per-org email routing, `organizations.email_routing`, migration 0337 —
+ * resolved server-side, re-branded through the validating factory here).
  *
  * What it does: opens a draft. What it NEVER does: send anything, create a
  * ticket, or claim StockPilot can observe either happening. Every string
@@ -47,7 +55,17 @@ export interface MaintenancePhotoDownload {
 
 interface Props {
   requestId: string;
-  emailInput: MaintenanceEmailInput;
+  /** The email CONTENT — recipients travel separately as the org's resolved
+   *  routing, and the two meet in this component's memo. */
+  emailInput: MaintenanceEmailContent;
+  /**
+   * The org's resolved maintenance-request routing (per-org email routing,
+   * migration 0337) as plain strings. The page renders this component ONLY
+   * when routing resolved to a routable pair; this component re-brands
+   * through the validating factory at its own seam and renders nothing on a
+   * value the factory refuses (fail closed, never a compiled constant).
+   */
+  recipients: OrgEmailRoutingRecipientsDto;
   initialOpenCount: number;
   /** Signed download links for the request's uploaded photos — Outlook
    *  cannot pre-attach them (brief section 10), so this is the manual
@@ -69,7 +87,47 @@ const OVERSIZED_MESSAGE =
 
 const COPY_FAILURE_MESSAGE = 'Could not copy the request automatically. Select the text below and copy it manually.';
 
-export function MaintenanceEmailAction({ requestId, emailInput, initialOpenCount, photoDownloads }: Props) {
+export function MaintenanceEmailAction({
+  requestId,
+  emailInput,
+  recipients,
+  initialOpenCount,
+  photoDownloads,
+}: Props) {
+  // THE SEAM: re-brand (and thereby re-validate) the server-resolved
+  // routing DTO. Fail CLOSED on a value the factory refuses — render
+  // nothing, report the defect — never fall back to a compiled constant.
+  // The gate is its own component so the inner one works with a NON-NULL
+  // branded value throughout (TypeScript does not narrow a nullable const
+  // across hoisted handler declarations).
+  const branded = React.useMemo<MaintenanceEmailRecipients | null>(() => {
+    try {
+      return brandMaintenanceRecipients(recipients);
+    } catch (e) {
+      void reportError(e, { tag: 'maintenance.email-routing.brand' });
+      return null;
+    }
+  }, [recipients]);
+
+  if (!branded) return null;
+  return (
+    <MaintenanceEmailActionInner
+      requestId={requestId}
+      emailInput={emailInput}
+      branded={branded}
+      initialOpenCount={initialOpenCount}
+      photoDownloads={photoDownloads}
+    />
+  );
+}
+
+function MaintenanceEmailActionInner({
+  requestId,
+  emailInput,
+  branded,
+  initialOpenCount,
+  photoDownloads,
+}: Omit<Props, 'recipients'> & { branded: MaintenanceEmailRecipients }) {
   // Mig 0330: the share-link token is hashed at rest, so the server can no
   // longer fold an existing link's URL into emailInput at render time. If
   // the user generated a link THIS session (ShareLinkPanel, via the shared
@@ -78,9 +136,13 @@ export function MaintenanceEmailAction({ requestId, emailInput, initialOpenCount
   // links disabled. Without the provider (post-create review screen) the
   // context defaults to null and this is a no-op.
   const { generatedUrl } = useMaintenanceShareLink();
-  const effectiveEmailInput = React.useMemo(
-    () => (generatedUrl ? { ...emailInput, shareUrl: generatedUrl } : emailInput),
-    [emailInput, generatedUrl],
+  const effectiveEmailInput = React.useMemo<MaintenanceEmailInput>(
+    () => ({
+      ...emailInput,
+      shareUrl: generatedUrl ?? emailInput.shareUrl,
+      recipients: branded,
+    }),
+    [emailInput, generatedUrl, branded],
   );
 
   // Prepared once per render — a pure, deterministic function of emailInput

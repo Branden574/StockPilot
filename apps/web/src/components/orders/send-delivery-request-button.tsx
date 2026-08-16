@@ -3,6 +3,8 @@
 import { Mail } from 'lucide-react';
 import * as React from 'react';
 
+import type { OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
+
 import DeliveryRequestAction from '@/components/orders/storefront/delivery-request-action';
 import type { DeliveryRequestInput } from '@/components/orders/storefront/storefront-logic';
 import type { StorefrontCharter } from '@/components/orders/v2/types';
@@ -30,6 +32,13 @@ export interface DeliveryRequestLine {
 }
 
 export interface SendDeliveryRequestButtonProps {
+  /**
+   * The org's resolved delivery-request routing (per-org email routing,
+   * migration 0337) as plain strings — the page only renders this button
+   * when a routable pair exists, and `DeliveryRequestAction` re-brands
+   * through the validating factory at its own seam.
+   */
+  recipients: OrgEmailRoutingRecipientsDto;
   orderId: string;
   orderNumber: number | null;
   warehouseName: string;
@@ -105,6 +114,7 @@ export function deliveryRequestInputFromProps(
 
 export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps) {
   const {
+    recipients,
     orderId,
     orderNumber,
     warehouseName,
@@ -120,6 +130,7 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
   const input = React.useMemo<DeliveryRequestInput>(
     () =>
       deliveryRequestInputFromProps({
+        recipients,
         orderId,
         orderNumber,
         warehouseName,
@@ -132,6 +143,7 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
         lines,
       }),
     [
+      recipients,
       orderId,
       orderNumber,
       warehouseName,
@@ -167,7 +179,7 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
             paragraphs (flex-basis: 100%) each take their own line, matching
             how the success screen's `.acts` flex row lays them out. */}
         <div className="sp-storefront flex flex-wrap items-center gap-2">
-          <DeliveryRequestAction input={input} />
+          <DeliveryRequestAction input={input} recipients={recipients} />
         </div>
       </DialogContent>
     </Dialog>

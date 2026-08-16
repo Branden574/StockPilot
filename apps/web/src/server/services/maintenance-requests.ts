@@ -4,13 +4,18 @@ import {
   can,
   formatMaintenanceRequestNumber,
   formatOrderNumber,
+  maintenanceRecipientsForRouting,
   maintenanceRequestFormSchema,
   maintenanceResolveSchema,
   parseMaintenanceRequestNumber,
+  parseOrgEmailRouting,
   uuidSchema,
+  type MaintenanceEmailContent,
   type MaintenanceEmailInput,
   type MaintenancePriority,
   type MaintenanceStatus,
+  type OrgEmailRoutingReadState,
+  type OrgEmailRoutingState,
 } from '@stockpilot/core';
 
 import { maybeSendMaintenanceResolvedEmail } from '@/server/email/maintenance-resolved';
@@ -1122,12 +1127,27 @@ export class MaintenanceRequestsService {
    *  use the APP_URL convention (never window.location — there is no window
    *  here). Read-only: never writes, never audits.
    *
+   *  RETURNS CONTENT AND ROUTING SEPARATELY (per-org email routing,
+   *  migration 0337). `content` is always built — the detail page renders
+   *  related-record panels from it regardless of routing — while
+   *  `emailRouting` says whether a compose action may exist at all:
+   *  'valid' carries the org's resolved recipients as plain strings (the
+   *  surfaces re-brand through the validating factory at their own seam),
+   *  'unset' means the action is HIDDEN, 'invalid' means the stored value
+   *  failed the factory and the action is hidden with the reason surfaced
+   *  to admins only. The compiled L4L constants appear ONLY when the
+   *  `email_routing` column does not exist yet (the code-before-migration
+   *  window; see the routing read below).
+   *
    *  NOT module-gated (0314 Q3, by extension of get()): this only renders
    *  text off data get() already exposes post-disable, and the requester
    *  could copy the same content straight off the detail page — gating the
    *  render would just be theater on top of an already-readable read. Do
    *  not add an assertModuleEnabled call here. */
-  async emailInput(id: string, opts: { shareUrl: string | null }): Promise<MaintenanceEmailInput> {
+  async emailInput(
+    id: string,
+    opts: { shareUrl: string | null },
+  ): Promise<{ content: MaintenanceEmailContent; emailRouting: OrgEmailRoutingState }> {
     const detail = await this.get(id);
     const requestNumber =
       formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
@@ -1242,22 +1262,67 @@ export class MaintenanceRequestsService {
       }
     }
 
-    // Org timezone display for the Submitted line. Read via ctx.supabase
-    // (user-authed, RLS-scoped to the caller's own org) rather than the
-    // admin-client-backed getCachedOrgTimezone() dashboard-layout helper —
-    // a service has no reason to escalate for a column any org member can
-    // already read about their own org.
-    const { data: org } = await this.db
+    // Org timezone display for the Submitted line, PLUS the per-org email
+    // routing — one row, one read. Via ctx.supabase (user-authed,
+    // RLS-scoped to the caller's own org): every member may read both
+    // columns (organizations_select), and the TO/CC are printed in the
+    // email UI, so they are not secrets.
+    //
+    // DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature
+    // behavior while the `email_routing` column does not exist (code
+    // deployed before migration 0337). That window errors the WHOLE select
+    // with Postgres 42703, so the read retries with 'timezone' alone and
+    // records routing as 'fallback' — which `maintenanceRecipientsForRouting`
+    // maps to the compiled L4L constants, byte-identical to what shipped.
+    // Once the column exists this branch is never taken; an unset org is
+    // 'unset' (action hidden) and an invalid value fails CLOSED.
+    let orgRow: { timezone?: string | null; email_routing?: unknown } | null = null;
+    let routingRead: OrgEmailRoutingReadState;
+    const firstTry = await this.db
       .from('organizations')
-      .select('timezone')
+      .select('timezone, email_routing')
       .eq('id', this.ctx.organizationId)
       .maybeSingle();
+    if (firstTry.error) {
+      if (firstTry.error.code !== '42703') {
+        throw new ServiceError('internal_error', firstTry.error.message);
+      }
+      const retry = await this.db
+        .from('organizations')
+        .select('timezone')
+        .eq('id', this.ctx.organizationId)
+        .maybeSingle();
+      orgRow = (retry.data as { timezone?: string | null } | null) ?? null;
+      routingRead = { state: 'fallback' };
+    } else {
+      orgRow = (firstTry.data as { timezone?: string | null; email_routing?: unknown } | null) ?? null;
+      routingRead = parseOrgEmailRouting(orgRow?.email_routing, 'maintenance_request');
+    }
+
+    // Fold the read into the resolution the surfaces consume: 'valid' with
+    // plain-string recipients (fallback included — the compiled pair is a
+    // routable pair), else the hidden/invalid state as-is.
+    const recipients = maintenanceRecipientsForRouting(routingRead);
+    const emailRouting: OrgEmailRoutingState = recipients
+      ? {
+          state: 'valid',
+          recipients: {
+            to: recipients.to,
+            cc: recipients.cc,
+            ...(recipients.toName !== undefined ? { toName: recipients.toName } : {}),
+            ...(recipients.ccName !== undefined ? { ccName: recipients.ccName } : {}),
+          },
+        }
+      : routingRead.state === 'invalid'
+        ? { state: 'invalid', reason: routingRead.reason }
+        : { state: 'unset' };
+
     // Through the ONE resolver, so no surface carries a private copy of the
     // org-timezone default. See resolveOrgTimezone in @stockpilot/core.
-    const tz = resolveOrgTimezone(org?.timezone as string | null);
+    const tz = resolveOrgTimezone(orgRow?.timezone as string | null);
     const submittedAtDisplay = formatOrgDateTime(detail.createdAt, { dateStyle: 'long', timeStyle: 'short' }, tz);
 
-    return {
+    const content: MaintenanceEmailContent = {
       requestNumber,
       subject: detail.subject,
       description: detail.description,
@@ -1278,6 +1343,7 @@ export class MaintenanceRequestsService {
       photoCount: detail.photoCount,
       shareUrl: opts.shareUrl,
     };
+    return { content, emailRouting };
   }
 
   /**

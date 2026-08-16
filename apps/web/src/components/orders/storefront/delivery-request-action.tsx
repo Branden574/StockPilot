@@ -11,8 +11,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  brandDeliveryRecipients,
+  deliveryRequestCcNotice,
+  type DeliveryRequestRecipients,
+  type OrgEmailRoutingRecipientsDto,
+} from '@stockpilot/core';
+
 import { capture } from '@/lib/analytics';
-import { DELIVERY_REQUEST_CC_NOTICE, DELIVERY_REQUEST_EMAIL } from '@/lib/site';
+import { reportError } from '@/lib/error-reporter';
 import { recordDeliveryRequestDraftedAction } from '@/server/actions/delivery-request';
 
 import {
@@ -53,14 +60,52 @@ import {
  *      failure detection we cannot perform would strand the employee.
  *   4. A selectable textarea — when the clipboard API is absent or denied.
  *
- * Recipients are never props and never state. They come from
- * DELIVERY_REQUEST_EMAIL via the pure builder, so nothing a user typed can
- * redirect them.
+ * Recipients arrive as the ORG'S RESOLVED ROUTING (per-org email routing,
+ * migration 0337): the server read the org row, ran it through core's
+ * parser, and only rendered this component at all when a routable pair
+ * exists. They cross the RSC boundary as plain strings, so the FIRST thing
+ * this component does is re-run the branded factory on them — an invalid
+ * value (impossible for a server-produced DTO; conceivable for a hand-built
+ * one) renders NOTHING rather than composing, and nothing a user typed into
+ * the order can reach the recipient fields because only the factory
+ * produces the branded value the builder accepts.
  */
-export default function DeliveryRequestAction({ input }: { input: DeliveryRequestInput }) {
+export default function DeliveryRequestAction({
+  input,
+  recipients,
+}: {
+  input: DeliveryRequestInput;
+  recipients: OrgEmailRoutingRecipientsDto;
+}) {
+  // THE SEAM: re-brand (and thereby re-validate) the server-resolved DTO.
+  // Fail CLOSED on a value the factory refuses — hide the action, report the
+  // defect — never fall back to any compiled constant. The gate is its own
+  // component so the inner one works with a NON-NULL branded value
+  // throughout (TypeScript does not narrow a nullable const across hoisted
+  // handler declarations).
+  const branded = React.useMemo<DeliveryRequestRecipients | null>(() => {
+    try {
+      return brandDeliveryRecipients(recipients);
+    } catch (e) {
+      reportError(e, { tag: 'orders.delivery-request.email-routing.brand' });
+      return null;
+    }
+  }, [recipients]);
+
+  if (!branded) return null;
+  return <DeliveryRequestActionInner input={input} branded={branded} />;
+}
+
+function DeliveryRequestActionInner({
+  input,
+  branded,
+}: {
+  input: DeliveryRequestInput;
+  branded: DeliveryRequestRecipients;
+}) {
   // Prepared once per render of the success screen. Doing this in a memo rather
   // than inside the handler keeps the handler's first statement the open call.
-  const prepared = React.useMemo(() => prepareDeliveryRequest(input), [input]);
+  const prepared = React.useMemo(() => prepareDeliveryRequest(input, branded), [input, branded]);
 
   // null = panel hidden. 'oversized' = the linkFits guard tripped (a
   // measured length problem, no popup was ever attempted). 'blocked' = the
@@ -129,7 +174,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
   React.useEffect(() => {
     if (draftCount === 2) {
       setAnnouncement(
-        'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+        'You have already opened a draft for this order. Sending more than one creates duplicate requests for the warehouse.',
       );
     }
   }, [draftCount]);
@@ -238,7 +283,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(text);
       setManualText(null);
-      const message = `Delivery request copied. Create a new email to ${DELIVERY_REQUEST_EMAIL.to}, CC ${DELIVERY_REQUEST_EMAIL.cc}, and paste the copied details.`;
+      const message = `Delivery request copied. Create a new email to ${branded.to}, CC ${branded.cc}, and paste the copied details.`;
       toast.success(message);
       setAnnouncement(message);
     } catch {
@@ -295,7 +340,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
             unchanged.
           */}
           You have already opened a draft for this order. Sending more than one creates duplicate
-          requests for DC4.
+          requests for the warehouse.
         </p>
       )}
 
@@ -356,8 +401,7 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
             {fallbackReason === 'oversized'
               ? "This order's details are too long to prefill into a mail link safely."
               : 'Outlook did not open — your browser may have blocked the popup.'}{' '}
-            Copy the details and create the email yourself: To {DELIVERY_REQUEST_EMAIL.to}, CC{' '}
-            {DELIVERY_REQUEST_EMAIL.cc}.
+            Copy the details and create the email yourself: To {branded.to}, CC {branded.cc}.
           </p>
           <button type="button" className="sf-btn-ghost" onClick={handleCopy}>
             <Copy size={14} aria-hidden="true" />
@@ -431,14 +475,17 @@ export default function DeliveryRequestAction({ input }: { input: DeliveryReques
             <dl>
               <div>
                 <dt>To</dt>
-                <dd>{DELIVERY_REQUEST_EMAIL.to}</dd>
+                <dd>{branded.to}</dd>
               </div>
               <div>
                 <dt>CC</dt>
-                <dd>{DELIVERY_REQUEST_EMAIL.cc}</dd>
+                <dd>{branded.cc}</dd>
               </div>
             </dl>
-            <p className="sf-recip-note">{DELIVERY_REQUEST_CC_NOTICE}</p>
+            {/* A pure function of the SAME recipients the compose urls carry,
+                so the on-screen claim can never name a mailbox the mail does
+                not go to. */}
+            <p className="sf-recip-note">{deliveryRequestCcNotice(branded)}</p>
           </div>
 
           <div className="sf-recip">

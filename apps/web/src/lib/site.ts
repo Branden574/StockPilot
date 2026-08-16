@@ -33,13 +33,12 @@ export const SITE_URL = 'https://stockpilotusa.com';
  * Its doc comment also states plainly that one tenant's mailboxes in a shared
  * platform package is a smell, and why it is still the smaller wrong.
  *
- * ONE CHANGE IN BEHAVIOUR, recorded here because this file used to claim the
- * opposite: the builder no longer READS these constants. It takes recipients as
- * an argument, and `storefront-logic.ts` supplies these at web's single call
- * boundary. The old guarantee ("no parameter for a caller to poison") is
- * replaced by a stronger one — core validates both addresses at draft time and
- * throws on anything that is not exactly one plain mailbox, where before there
- * was no runtime check at all.
+ * SINCE 2026-08-16 (per-org email routing, migration 0337) NO web surface
+ * reads these as "the recipients": routing is resolved per org from
+ * `organizations.email_routing` (`getOrgEmailRouting` +
+ * `deliveryRecipientsForRouting`), and the constants remain only as the
+ * compiled code-before-migration fallback and the migration seed's source of
+ * truth — the full record is on the core module.
  *
  * Re-exported rather than re-declared so `Object.freeze` identity, this file's
  * importers, and `site.test.ts` all keep working untouched.

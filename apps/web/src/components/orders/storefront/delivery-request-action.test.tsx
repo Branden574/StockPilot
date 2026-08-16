@@ -26,6 +26,23 @@ vi.mock('@/lib/analytics', () => ({ capture: (...a: unknown[]) => captureSpy(...
 
 import DeliveryRequestAction from './delivery-request-action';
 
+import { DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
+
+/**
+ * The routing DTO every render below hands the component — the COMPILED
+ * pair, i.e. exactly what the server resolves for L4L (whose migration seed
+ * preserves today's values), so every byte-level pin in this file still
+ * asserts "unchanged behavior for the compiled recipients". The per-org
+ * flow (a different pair, the hidden states) is pinned in
+ * storefront-logic.test.ts and core's org-email-routing suite.
+ */
+const TEST_ROUTING = {
+  to: DELIVERY_REQUEST_RECIPIENTS.to,
+  cc: DELIVERY_REQUEST_RECIPIENTS.cc,
+  toName: DELIVERY_REQUEST_RECIPIENTS.toName,
+  ccName: DELIVERY_REQUEST_RECIPIENTS.ccName,
+};
+
 function makeInput(overrides: Partial<DeliveryRequestInput> = {}): DeliveryRequestInput {
   return {
     orderId: 'b3f1c2d4-1111-2222-3333-444455556666',
@@ -170,7 +187,7 @@ beforeEach(() => {
 
 describe('DeliveryRequestAction — the primary Outlook path', () => {
   it('renders a button that says what it does without claiming a ticket', () => {
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     expect(btn).toBeInTheDocument();
     expect(btn.textContent?.toLowerCase()).not.toContain('ticket');
@@ -181,7 +198,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const user = userEvent.setup();
     const open = stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     expect(open).toHaveBeenCalledTimes(1);
@@ -210,7 +227,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const handle: { focus: () => void; opener: unknown } = { focus: vi.fn(), opener: {} };
     const open = stubOpen(handle);
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     expect(open.mock.calls[0]![1]).toBe('_blank');
@@ -223,7 +240,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     stubOpen();
     const assign = stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
@@ -235,7 +252,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     const user = userEvent.setup();
     stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
@@ -258,7 +275,7 @@ describe('DeliveryRequestAction — the primary Outlook path', () => {
     });
     vi.stubGlobal('open', open);
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     expect(open).toHaveBeenCalledTimes(1);
@@ -273,7 +290,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', open);
     const assign = stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
@@ -288,7 +305,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', vi.fn(() => null));
     stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     const fallback = await screen.findByTestId('delivery-request-fallback');
@@ -310,7 +327,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     }));
     const assign = stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
@@ -322,7 +339,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', vi.fn(() => null));
     const assign = stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     await user.click(btn);
     await user.click(btn);
@@ -339,7 +356,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', vi.fn(() => null));
     const assign = stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     await user.click(btn);
     await user.click(btn);
@@ -355,7 +372,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', open);
     stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     await user.click(btn);
     expect(await screen.findByTestId('delivery-request-fallback')).toBeInTheDocument();
@@ -376,7 +393,7 @@ describe('DeliveryRequestAction — popup blocked', () => {
     vi.stubGlobal('open', open);
     stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     await user.click(btn);
     expect(await screen.findByTestId('delivery-request-fallback')).toBeInTheDocument();
@@ -396,7 +413,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     stubLocationAssign();
     const writeText = stubClipboard();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
@@ -415,7 +432,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     stubLocationAssign();
     stubClipboard();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
@@ -432,7 +449,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
     stubLocationAssign();
     stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
@@ -452,7 +469,7 @@ describe('DeliveryRequestAction — clipboard fallback', () => {
       writable: true,
     });
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
@@ -468,6 +485,7 @@ describe('DeliveryRequestAction — link too long even condensed (linkFits=false
 
     render(
       <DeliveryRequestAction
+        recipients={TEST_ROUTING}
         input={makeInput({ warehouseName: 'W'.repeat(3000), destination: null })}
       />,
     );
@@ -492,7 +510,7 @@ describe('DeliveryRequestAction — link too long even condensed (linkFits=false
 
 describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
   it('renders for pickup orders too', () => {
-    render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
     expect(screen.getByRole('button', { name: /Email delivery request/i })).toBeInTheDocument();
   });
 
@@ -500,7 +518,7 @@ describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
     const user = userEvent.setup();
     const open = stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     const body = decodeCompose(open.mock.calls[0]![0] as string).body;
@@ -518,7 +536,7 @@ describe('DeliveryRequestAction — no duplicate order, ever', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
     await user.click(btn);
     await user.click(btn);
@@ -548,7 +566,7 @@ describe('DeliveryRequestAction — test isolation (no stub leakage across descr
 describe('DeliveryRequestAction — preview dialog', () => {
   it('opens from a Preview control and shows the subject and body', async () => {
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
 
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
@@ -568,7 +586,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
   it('shows BOTH recipients under an EMAIL RECIPIENTS heading', async () => {
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
@@ -579,19 +597,22 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
   it('carries the exact CC helper text and never claims assignment', async () => {
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
+    // The notice is a pure function of the recipients since per-org routing
+    // (deliveryRequestCcNotice) — generic wording, no tenant-specific
+    // Zendesk claims, both addresses interpolated from the routing in use.
     expect(dialog).toHaveTextContent(
-      'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
     );
     expect(dialog.textContent?.toLowerCase()).not.toContain('assigned to');
   });
 
   it('renders the recipients as TEXT — no input, no editable field, no way to change them', async () => {
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
@@ -607,7 +628,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     const user = userEvent.setup();
     const open = stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
     await screen.findByRole('dialog');
     await user.click(screen.getByRole('button', { name: /Open in Outlook/i }));
@@ -621,7 +642,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     const user = userEvent.setup();
     const writeText = stubClipboard();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
     await screen.findByRole('dialog');
     await user.click(screen.getByRole('button', { name: /Copy the details/i }));
@@ -640,7 +661,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
     const user = userEvent.setup();
     stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
@@ -658,7 +679,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
 
   it('shows the pickup body for a pickup order, with no destination', async () => {
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
@@ -676,7 +697,7 @@ describe('DeliveryRequestAction — preview dialog', () => {
       ]),
     );
 
-    render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ lines, itemMap })} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
@@ -699,7 +720,7 @@ describe('DeliveryRequestAction — preview dialog stacking (Bug 1)', () => {
     // carries a z-index utility high enough to clear 90, protecting against a
     // regression to the bare "sp-storefront max-w-2xl" className.
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
 
     const dialog = await screen.findByRole('dialog');
@@ -717,7 +738,7 @@ describe('DeliveryRequestAction — preview dialog focus restore on Escape (Bug 
     // populated — the restore target Radix would normally use does not exist,
     // so the call is a no-op and focus falls through to <body>.
     const user = userEvent.setup();
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
 
     const previewButton = screen.getByRole('button', { name: /Preview/i });
     await user.click(previewButton);
@@ -732,7 +753,7 @@ describe('DeliveryRequestAction — preview dialog focus restore on Escape (Bug 
 
 describe('DeliveryRequestAction — honesty', () => {
   it('states plainly that this does not create a ticket, before any click', () => {
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const notice = screen.getByTestId('delivery-request-notice');
     expect(notice).toHaveTextContent(
       'This opens a draft email. StockPilot does not send it and does not create a ticket. Review the message and press Send in your mail app. If Outlook opens without the draft, sign in and press the button again.',
@@ -740,7 +761,7 @@ describe('DeliveryRequestAction — honesty', () => {
   });
 
   it('never uses ticket-created language anywhere in the rendered surface', () => {
-    const { container } = render(<DeliveryRequestAction input={makeInput()} />);
+    const { container } = render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const text = (container.textContent ?? '').toLowerCase();
     for (const claim of [
       'ticket created',
@@ -759,7 +780,7 @@ describe('DeliveryRequestAction — honesty', () => {
     const user = userEvent.setup();
     stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
 
     await user.click(btn);
@@ -768,7 +789,7 @@ describe('DeliveryRequestAction — honesty', () => {
     await user.click(btn);
     const repeat = await screen.findByTestId('delivery-request-repeat');
     expect(repeat).toHaveTextContent(
-      'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+      'You have already opened a draft for this order. Sending more than one creates duplicate requests for the warehouse.',
     );
     // Still allowed — the first draft may have been closed by accident.
     expect(btn).toBeEnabled();
@@ -778,7 +799,7 @@ describe('DeliveryRequestAction — honesty', () => {
     const user = userEvent.setup();
     stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(screen.getByRole('button', { name: /Preview/i }));
     await screen.findByRole('dialog');
@@ -802,7 +823,7 @@ describe('DeliveryRequestAction — honesty', () => {
       lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
     );
 
-    render(<DeliveryRequestAction input={makeInput({ lines, itemMap })} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ lines, itemMap })} />);
     expect(screen.getByTestId('delivery-request-condensed')).toHaveTextContent(
       'This order is too large to fit in a compose link, so the draft lists the first 13 of 100 lines and says the rest are on the order in StockPilot. Copy the details to put every line in the message itself.',
     );
@@ -818,7 +839,7 @@ describe('DeliveryRequestAction — honesty', () => {
     const itemMap = new Map(
       lines.map((l, i) => [l.itemId, { ...base, id: l.itemId, sku: `SKU-${i}`, name: `Bulk Item ${i}` }]),
     );
-    const prepared = prepareDeliveryRequest(makeInput({ lines, itemMap }));
+    const prepared = prepareDeliveryRequest(makeInput({ lines, itemMap }), DELIVERY_REQUEST_RECIPIENTS);
 
     expect(prepared.draft.condensed).toBe(true);
     expect(prepared.draft.listedLineCount).toBe(13);
@@ -828,7 +849,7 @@ describe('DeliveryRequestAction — honesty', () => {
   });
 
   it('shows no truncation disclosure for a normal order', () => {
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     expect(screen.queryByTestId('delivery-request-condensed')).toBeNull();
   });
 
@@ -836,10 +857,10 @@ describe('DeliveryRequestAction — honesty', () => {
     const user = userEvent.setup();
     stubOpen();
 
-    const { rerender } = render(<DeliveryRequestAction input={makeInput()} />);
+    const { rerender } = render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
-    rerender(<DeliveryRequestAction input={makeInput()} />);
+    rerender(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
 
     expect(await screen.findByTestId('delivery-request-repeat')).toBeInTheDocument();
   });
@@ -853,6 +874,7 @@ describe('DeliveryRequestAction — preview honesty (Task 7 review rider)', () =
 
     render(
       <DeliveryRequestAction
+        recipients={TEST_ROUTING}
         input={makeInput({ warehouseName: 'W'.repeat(3000), destination: null })}
       />,
     );
@@ -881,6 +903,7 @@ describe('DeliveryRequestAction — preview honesty (Task 7 review rider)', () =
 
     render(
       <DeliveryRequestAction
+        recipients={TEST_ROUTING}
         input={makeInput({ warehouseName: 'W'.repeat(3000), destination: null })}
       />,
     );
@@ -909,7 +932,7 @@ describe('DeliveryRequestAction accessibility', () => {
     stubLocationAssign();
     stubClipboard();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
     await user.click(await screen.findByRole('button', { name: /Copy the details/i }));
 
@@ -934,7 +957,7 @@ describe('DeliveryRequestAction accessibility', () => {
     const user = userEvent.setup();
     const writeText = stubClipboard();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Preview/i }));
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
@@ -954,7 +977,7 @@ describe('DeliveryRequestAction accessibility', () => {
     const user = userEvent.setup();
     const open = stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     screen.getByRole('button', { name: /Email delivery request/i }).focus();
     await user.keyboard('{Enter}');
 
@@ -971,7 +994,7 @@ describe('DeliveryRequestAction accessibility', () => {
     vi.stubGlobal('open', vi.fn(() => null));
     stubLocationAssign();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
 
     // The blocked path — puts the fallback panel's Copy icon in the DOM.
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
@@ -1008,7 +1031,7 @@ describe('DeliveryRequestAction accessibility', () => {
     const user = userEvent.setup();
     stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     const btn = screen.getByRole('button', { name: /Email delivery request/i });
 
     await user.click(btn);
@@ -1017,7 +1040,7 @@ describe('DeliveryRequestAction accessibility', () => {
     const live = await screen.findByTestId('delivery-request-live');
     await waitFor(() =>
       expect(live).toHaveTextContent(
-        'You have already opened a draft for this order. Sending more than one creates duplicate requests for DC4.',
+        'You have already opened a draft for this order. Sending more than one creates duplicate requests for the warehouse.',
       ),
     );
   });
@@ -1036,7 +1059,7 @@ describe('DeliveryRequestAction — bookkeeping never precedes the open', () => 
       order.push('record');
     });
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(recordDraftedSpy).toHaveBeenCalledTimes(1));
@@ -1047,7 +1070,7 @@ describe('DeliveryRequestAction — bookkeeping never precedes the open', () => 
     const user = userEvent.setup();
     stubOpen();
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     await waitFor(() => expect(recordDraftedSpy).toHaveBeenCalledTimes(1));
@@ -1077,7 +1100,7 @@ describe('DeliveryRequestAction — bookkeeping never precedes the open', () => 
     };
     process.on('unhandledRejection', onUnhandledRejection);
 
-    render(<DeliveryRequestAction input={makeInput()} />);
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput()} />);
     await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
 
     // Flush microtasks so a same-tick 'unhandledRejection' has a chance to

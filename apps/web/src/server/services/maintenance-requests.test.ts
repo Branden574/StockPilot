@@ -2126,7 +2126,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: 'America/Los_Angeles' }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.requestNumber).toBe('MR-2026-000042');
     // Master brief §8's full item field list (audit Q6: NO asset tag — no
     // such column/key exists anywhere in this object).
@@ -2160,7 +2160,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedItem).toEqual({
       name: 'Loose HVAC unit',
       sku: null,
@@ -2190,7 +2190,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedOrder).toEqual({
       handle: 'SO-000049',
       requestedFor: 'Ms. Rivera',
@@ -2214,7 +2214,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedOrder).toEqual({
       handle: 'SO-000049',
       requestedFor: 'Ms. Rivera',
@@ -2240,7 +2240,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedOrder?.itemNames).toEqual(['Copy paper']);
   });
 
@@ -2261,7 +2261,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedOrder?.itemNames).toHaveLength(10);
     expect(input.relatedOrder?.itemNames).toEqual(Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`));
   });
@@ -2279,7 +2279,7 @@ describe('emailInput', () => {
       },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(input.relatedRental).toEqual({
       itemNames: ['Pop-up canopy'],
       borrowerName: 'Coach Alvarez',
@@ -2292,7 +2292,7 @@ describe('emailInput', () => {
       'maintenance_requests.select': { data: BASE_ROW, error: null },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
     expect(typeof input.submittedAtDisplay).toBe('string');
     expect(input.submittedAtDisplay.length).toBeGreaterThan(0);
   });
@@ -2302,7 +2302,7 @@ describe('emailInput', () => {
       'maintenance_requests.select': { data: BASE_ROW, error: null },
       'organizations.select': { data: { timezone: null }, error: null },
     });
-    const input = await new MaintenanceRequestsService(ctx).emailInput('r1', {
+    const { content: input } = await new MaintenanceRequestsService(ctx).emailInput('r1', {
       shareUrl: 'https://stockpilotusa.com/r/abc',
     });
     expect(input.shareUrl).toBe('https://stockpilotusa.com/r/abc');
@@ -2317,7 +2317,105 @@ describe('emailInput', () => {
       { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) },
     );
     await expect(new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null })).resolves.toMatchObject({
-      requestNumber: expect.any(String),
+      content: { requestNumber: expect.any(String) },
+    });
+  });
+
+  // ── Per-org email routing (migration 0337) — the fallback matrix at the
+  //    service boundary. The stored value is client-influenced data, so the
+  //    resolution must run core's parser + branded factory and fail CLOSED
+  //    on anything the factory refuses.
+  describe('emailRouting resolution', () => {
+    it('VALID: a stored routing value resolves to state=valid with the STORED pair, never the compiled one', async () => {
+      const { ctx } = build({
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': {
+          data: {
+            timezone: 'America/Los_Angeles',
+            email_routing: {
+              maintenance_request: {
+                to: 'intake@other-tenant.invalid',
+                cc: 'copy@other-tenant.invalid',
+                toName: 'Other Intake',
+              },
+            },
+          },
+          error: null,
+        },
+      });
+      const { emailRouting } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+      expect(emailRouting).toEqual({
+        state: 'valid',
+        recipients: {
+          to: 'intake@other-tenant.invalid',
+          cc: 'copy@other-tenant.invalid',
+          toName: 'Other Intake',
+        },
+      });
+    });
+
+    it('MUTATION KILL — UNSET: no stored routing yields state=unset, NOT the compiled L4L pair', async () => {
+      const { ctx } = build({
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': { data: { timezone: null, email_routing: null }, error: null },
+      });
+      const { emailRouting } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+      // The mutant under test resolves an unconfigured org to the compiled
+      // constants — which would wire this org's maintenance mail to another
+      // tenant's real intake.
+      expect(emailRouting).toEqual({ state: 'unset' });
+      expect(JSON.stringify(emailRouting)).not.toContain('learn4life');
+    });
+
+    it('MUTATION KILL — INVALID: a malformed stored cc fails CLOSED with the guard reason; no recipients escape', async () => {
+      const { ctx } = build({
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': {
+          data: {
+            timezone: null,
+            email_routing: {
+              maintenance_request: { to: 'intake@ok.invalid', cc: 'a?cc=attacker@evil.test' },
+            },
+          },
+          error: null,
+        },
+      });
+      const { emailRouting } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+      expect(emailRouting.state).toBe('invalid');
+      if (emailRouting.state !== 'invalid') throw new Error('expected invalid');
+      expect(emailRouting.reason).toMatch(/must be exactly one plain email address/);
+      expect(JSON.stringify(emailRouting)).not.toContain('attacker');
+      expect(JSON.stringify(emailRouting)).not.toContain('learn4life');
+    });
+
+    it('DEPLOY WINDOW (42703): a missing column fails OPEN to the compiled pair — the only path that ever returns it', async () => {
+      const { ctx } = build({
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': {
+          data: null,
+          error: { code: '42703', message: 'column organizations.email_routing does not exist' },
+        },
+      });
+      const { emailRouting } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+      expect(emailRouting).toEqual({
+        state: 'valid',
+        recipients: {
+          to: 'dc4@learn4life.org',
+          cc: 'arosas@cvwest.org',
+          toName: 'Fresno Warehouse DC4',
+          ccName: 'Andrew Rosas',
+        },
+      });
+    });
+
+    it('any OTHER org-read error is NOT the deploy window: it throws instead of quietly mailing L4L', async () => {
+      const { ctx } = build({
+        'maintenance_requests.select': { data: BASE_ROW, error: null },
+        'organizations.select': { data: null, error: { code: 'XX000', message: 'boom' } },
+      });
+      await expect(
+        new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null }),
+      ).rejects.toMatchObject({ code: 'internal_error' });
     });
   });
 });

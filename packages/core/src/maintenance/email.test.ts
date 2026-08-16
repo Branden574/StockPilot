@@ -7,6 +7,8 @@ import {
   type MaintenanceEmailInput,
 } from './email';
 import { OUTLOOK_COMPOSE_BASE, DRAFT_URL_LIMIT } from '../email/outlook-compose';
+import { L4L_MAINTENANCE_RECIPIENTS } from './constants';
+import { maintenanceEmailRecipients } from './recipients';
 
 function decodeCompose(url: string): { to: string; params: Record<string, string> } {
   const outer = url.slice(url.indexOf('?') + 1);
@@ -28,6 +30,11 @@ function decodeCompose(url: string): { to: string; params: Record<string, string
 }
 
 const FULL_INPUT: MaintenanceEmailInput = {
+  // The COMPILED pair — recipients are builder INPUT since the per-org
+  // routing feature; these fixtures pin that the compiled value still
+  // produces byte-identical output to the pre-feature constants-reading
+  // builder.
+  recipients: L4L_MAINTENANCE_RECIPIENTS,
   requestNumber: 'MR-2026-000123',
   subject: 'Air conditioner is not working in Room 204',
   description:
@@ -59,6 +66,7 @@ const FULL_INPUT: MaintenanceEmailInput = {
 };
 
 const MINIMAL_INPUT: MaintenanceEmailInput = {
+  recipients: L4L_MAINTENANCE_RECIPIENTS,
   requestNumber: 'MR-2026-000007',
   subject: 'Door hinge squeaks badly',
   description: 'The front door hinge squeaks loudly.',
@@ -1125,5 +1133,79 @@ describe('the mailto is strictly inside whichever compose url was measured', () 
       // fits its declared transport, the mailto fits too.
       if (p.linkFits) expect(p.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
     }
+  });
+});
+
+describe('per-org recipients — the builder composes with what it is HANDED', () => {
+  // Factory-passing but deliberately unresolvable (.invalid is RFC 2606
+  // reserved): these tests prove the recipients travel end to end without
+  // ever composing against a real mailbox.
+  const OTHER = maintenanceEmailRecipients({
+    to: 'intake@other-tenant.invalid',
+    cc: 'copy@other-tenant.invalid',
+    toName: 'Other Intake',
+    ccName: 'Other Copy',
+  });
+
+  it('MUTATION PROOF: flipping the cc changes the draft, the composed URLs and nothing else', () => {
+    const base = prepareMaintenanceEmail(FULL_INPUT);
+    const flipped = prepareMaintenanceEmail({
+      ...FULL_INPUT,
+      recipients: maintenanceEmailRecipients({
+        to: L4L_MAINTENANCE_RECIPIENTS.to,
+        cc: 'copy@other-tenant.invalid',
+        toName: L4L_MAINTENANCE_RECIPIENTS.toName,
+        ccName: L4L_MAINTENANCE_RECIPIENTS.ccName,
+      }),
+    });
+    // The cc follows the input — a builder still reading the constant would
+    // return 'arosas@cvwest.org' here and this kills that mutant.
+    expect(base.draft.cc).toBe('arosas@cvwest.org');
+    expect(flipped.draft.cc).toBe('copy@other-tenant.invalid');
+    // Every transport carries the flipped cc; none carries the constant one.
+    expect(flipped.outlookUrl).toContain(encodeURIComponent(encodeURIComponent('copy@other-tenant.invalid')));
+    expect(flipped.outlookUrl).not.toContain(encodeURIComponent(encodeURIComponent('arosas@cvwest.org')));
+    expect(flipped.mailtoUrl).toContain('copy%40other-tenant.invalid');
+    expect(flipped.mailtoUrl).not.toContain('arosas');
+    expect(flipped.clipboardText).toContain('copy@other-tenant.invalid');
+    expect(flipped.clipboardText).not.toContain('arosas@cvwest.org');
+    // The body is recipient-independent — only the routing moved.
+    expect(flipped.draft.body).toBe(base.draft.body);
+    expect(flipped.draft.subject).toBe(base.draft.subject);
+  });
+
+  it('display names ride the draft and reach ONLY the OWA chip slots', () => {
+    const p = prepareMaintenanceEmail({ ...MINIMAL_INPUT, recipients: OTHER });
+    expect(p.draft.toName).toBe('Other Intake');
+    expect(p.draft.ccName).toBe('Other Copy');
+    const { to } = decodeCompose(p.outlookUrl);
+    expect(to).toBe('Other Intake <intake@other-tenant.invalid>');
+    // The native and mailto transports stay bare-address (the OWA boundary).
+    expect(p.outlookMobileUrl).not.toContain(encodeURIComponent('Other Intake'));
+    expect(p.mailtoUrl).not.toContain(encodeURIComponent('Other Intake'));
+  });
+
+  it('a recipients value without names composes chip-less, not with L4L names', () => {
+    const bare = maintenanceEmailRecipients({
+      to: 'intake@other-tenant.invalid',
+      cc: 'copy@other-tenant.invalid',
+    });
+    const p = prepareMaintenanceEmail({ ...MINIMAL_INPUT, recipients: bare });
+    expect(p.draft.toName).toBeUndefined();
+    const { to } = decodeCompose(p.outlookUrl);
+    // A builder that still read L4L_MAINTENANCE_EMAIL_NAMES would produce
+    // 'Fresno Warehouse DC4 <...>' here.
+    expect(to).toBe('intake@other-tenant.invalid');
+    expect(p.outlookUrl).not.toContain(encodeURIComponent(encodeURIComponent('Fresno Warehouse DC4')));
+  });
+
+  it('a malformed recipients value smuggled past the brand throws at draft time', () => {
+    const poisoned = {
+      to: 'a?cc=attacker@evil.test',
+      cc: 'copy@other-tenant.invalid',
+    } as unknown as MaintenanceEmailInput['recipients'];
+    expect(() => buildMaintenanceEmailDraft({ ...MINIMAL_INPUT, recipients: poisoned })).toThrow(
+      /must be exactly one plain email address/,
+    );
   });
 });

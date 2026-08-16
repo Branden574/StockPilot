@@ -87,8 +87,21 @@ vi.mock('@/components/orders/send-delivery-request-button', () => ({
 }));
 
 const getCachedOrgTimezoneMock = vi.fn(async (_orgId: string) => 'America/Chicago');
+// Per-org email routing (migration 0337): resolves 'valid' with the compiled
+// pair by default (the L4L seed's state); individual tests override to pin
+// the hidden states.
+const getOrgEmailRoutingMock = vi.fn(async (_orgId: string, _feature: string) => ({
+  state: 'valid' as const,
+  recipients: {
+    to: 'dc4@learn4life.org',
+    cc: 'arosas@cvwest.org',
+    toName: 'Fresno Warehouse DC4',
+    ccName: 'Andrew Rosas',
+  },
+}));
 vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: (orgId: string) => getCachedOrgTimezoneMock(orgId),
+  getOrgEmailRouting: (orgId: string, feature: string) => getOrgEmailRoutingMock(orgId, feature),
 }));
 
 const ctxHolder = vi.hoisted(() => ({
@@ -338,6 +351,14 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
     await renderPage();
     expect(sendDeliveryRequestProps).toHaveBeenCalledTimes(1);
     expect(sendDeliveryRequestProps).toHaveBeenCalledWith({
+      // The org's resolved routing (per-org email routing, migration 0337),
+      // flattened to plain strings for the RSC boundary.
+      recipients: {
+        to: 'dc4@learn4life.org',
+        cc: 'arosas@cvwest.org',
+        toName: 'Fresno Warehouse DC4',
+        ccName: 'Andrew Rosas',
+      },
       orderId: ORDER_ID,
       orderNumber: 42,
       warehouseName: 'Main DC',
@@ -352,6 +373,34 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
       ],
     });
     expect(getCachedOrgTimezoneMock).toHaveBeenCalledWith('org-1');
+    expect(getOrgEmailRoutingMock).toHaveBeenCalledWith('org-1', 'delivery_request');
+  });
+
+  it("UNSET routing hides the button even on the requester's own active delivery order (fallback matrix state B)", async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail());
+    getOrgEmailRoutingMock.mockResolvedValueOnce({ state: 'unset' } as never);
+    await renderPage();
+    expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
+  });
+
+  it('INVALID routing fails CLOSED — button hidden, never the compiled constants (state D)', async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail());
+    getOrgEmailRoutingMock.mockResolvedValueOnce({
+      state: 'invalid',
+      reason: 'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.',
+    } as never);
+    await renderPage();
+    expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
+  });
+
+  it("FALLBACK (pre-migration deploy window) keeps today's behavior — the compiled pair reaches the button", async () => {
+    orderGet.mockResolvedValue(ownDeliveryDetail());
+    getOrgEmailRoutingMock.mockResolvedValueOnce({ state: 'fallback' } as never);
+    await renderPage();
+    expect(sendDeliveryRequestProps).toHaveBeenCalledTimes(1);
+    expect(sendDeliveryRequestProps.mock.calls[0]![0]).toMatchObject({
+      recipients: { to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org' },
+    });
   });
 
   it('a PICKUP order never shows the action, even for its own requester in an active state', async () => {

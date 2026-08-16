@@ -12,8 +12,6 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { updateMaintenanceSettingsAction } from '@/server/actions/maintenance-settings';
 
-import { L4L_MAINTENANCE_EMAIL } from '@stockpilot/core';
-
 export type MaintenanceNotifyMode = 'all' | 'urgent_only' | 'none';
 
 export interface MaintenanceSettingsMember {
@@ -45,8 +43,10 @@ const NOTIFY_OPTIONS: Array<{ value: MaintenanceNotifyMode; label: string }> = [
  * permissions UI: granting read_all/manage to an individual (Andrew's real
  * grant path) happens entirely on /dashboard/settings/roles's existing
  * per-user-exceptions matrix (role-permission-matrix.tsx); this panel only
- * links there. Recipients (L4L_MAINTENANCE_EMAIL) are rendered read-only —
- * there is no input for them anywhere in this component, on purpose.
+ * links there. Recipients are configured per org on
+ * /dashboard/settings/email-routing (per-org email routing, migration 0337) —
+ * the Recipients card here only links across, and there is no recipient
+ * input anywhere in this component, on purpose.
  */
 export function MaintenanceSettingsPanel({
   initialCategories,
@@ -233,19 +233,22 @@ export function MaintenanceSettingsPanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Recipients</CardTitle>
+          <CardDescription>
+            Where maintenance-request emails are addressed is configured per organization on the
+            Email routing page.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-1 text-sm">
-          <p>
-            <span className="text-muted-foreground">To: </span>
-            {L4L_MAINTENANCE_EMAIL.to}
-          </p>
-          <p>
-            <span className="text-muted-foreground">CC: </span>
-            {L4L_MAINTENANCE_EMAIL.cc}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Recipients are fixed in this release. Contact support to change them.
-          </p>
+        <CardContent>
+          {/* This card used to print one tenant's compiled mailboxes to every
+              org's admins with "Recipients are fixed in this release. Contact
+              support to change them." — per-org email routing (migration
+              0337) IS that support path, so the fixed display is gone. */}
+          <Link
+            href="/dashboard/settings/email-routing"
+            className="text-sm font-medium text-[hsl(var(--accent))] hover:underline"
+          >
+            Configure email routing
+          </Link>
         </CardContent>
       </Card>
 

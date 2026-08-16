@@ -119,27 +119,35 @@ beforeEach(() => {
   get.mockResolvedValue(DETAIL);
   // Mirrors the real emailInput() shape closely enough for these tests: the
   // one field the route/tests care about (shareUrl) passes through exactly
-  // what the route computed and handed in.
+  // what the route computed and handed in. Since per-org email routing
+  // (migration 0337) the real method returns { content, emailRouting }; the
+  // route re-serializes content under the shipped `emailInput` key.
   emailInput.mockImplementation(async (_id: string, opts: { shareUrl: string | null }) => ({
-    requestNumber: 'MR-42',
-    subject: DETAIL.subject,
-    description: DETAIL.description,
-    category: DETAIL.category,
-    priority: DETAIL.priority,
-    submittedAtDisplay: 'Aug 1, 2026',
-    requesterName: DETAIL.requesterName,
-    requesterEmail: DETAIL.requesterEmail,
-    requesterPhone: DETAIL.requesterPhone,
-    siteName: DETAIL.siteName,
-    department: DETAIL.department,
-    building: DETAIL.building,
-    roomOrArea: DETAIL.roomOrArea,
-    accessInstructions: DETAIL.accessInstructions,
-    relatedItem: null,
-    relatedOrder: null,
-    relatedRental: null,
-    photoCount: DETAIL.photoCount,
-    shareUrl: opts.shareUrl,
+    content: {
+      requestNumber: 'MR-42',
+      subject: DETAIL.subject,
+      description: DETAIL.description,
+      category: DETAIL.category,
+      priority: DETAIL.priority,
+      submittedAtDisplay: 'Aug 1, 2026',
+      requesterName: DETAIL.requesterName,
+      requesterEmail: DETAIL.requesterEmail,
+      requesterPhone: DETAIL.requesterPhone,
+      siteName: DETAIL.siteName,
+      department: DETAIL.department,
+      building: DETAIL.building,
+      roomOrArea: DETAIL.roomOrArea,
+      accessInstructions: DETAIL.accessInstructions,
+      relatedItem: null,
+      relatedOrder: null,
+      relatedRental: null,
+      photoCount: DETAIL.photoCount,
+      shareUrl: opts.shareUrl,
+    },
+    emailRouting: {
+      state: 'valid',
+      recipients: { to: 'dc4@learn4life.org', cc: 'arosas@cvwest.org' },
+    },
   }));
   signedViewUrls.mockResolvedValue([
     {
