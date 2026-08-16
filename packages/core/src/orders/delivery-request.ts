@@ -557,7 +557,22 @@ export function buildDeliveryRequestDraft(
 
   const siteName = site ? toPlainTextLine(site.name) : '';
   const subjectLocation = siteName || warehouseLabel;
-  const subject = toPlainTextLine(`Delivery Request — ${subjectLocation}`);
+  // TWO subject formats since 2026-08-16 (owner decision). Both methods shared
+  // one "Delivery Request — <location>" shape before that, deliberately, so
+  // Zendesk email-intake routing keyed on one literal; the owner has now ruled
+  // that a pickup order's mail must announce itself as a pickup. The pickup
+  // location is ALWAYS the origin warehouse (a pickup order's charter is NULL
+  // by CHECK constraint — see `site` above), so the subject names where the
+  // requester will collect from. Anyone changing either literal first reads
+  // docs/integrations/zendesk-dc4-intake.md: a Zendesk-side trigger matching
+  // the old wording is unobservable from here, and the pickup rewording is
+  // flagged there as needing confirmation with the Zendesk administrator.
+  // Composed ONCE, here, for every rung of the condense ladder and every
+  // transport — the clipboard text and all three compose URLs read
+  // `draft.subject`, so there is no second copy to drift.
+  const subject = toPlainTextLine(
+    isPickup ? `Pickup Request — ${warehouseLabel}` : `Delivery Request — ${subjectLocation}`,
+  );
 
   // Blocks are assembled as an array and joined with a blank line, so an
   // omitted block leaves no trace — no heading, no stray blank line, and never

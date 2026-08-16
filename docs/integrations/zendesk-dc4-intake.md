@@ -117,18 +117,28 @@ tests, running against the web re-export shim), plus
 
 ### Subject
 
-One format, exact bytes (em-dash, not hyphen):
+Two formats since 2026-08-16 (owner decision; one shared format before that),
+exact bytes (em-dash, not hyphen):
 
 ```
-Delivery Request — <location>
+Delivery Request — <location>     (delivery orders)
+Pickup Request — <warehouse>      (pickup orders)
 ```
 
 - Delivery order with a site: `Delivery Request — CVW Clovis`
-  (pinned `storefront-logic.test.ts:559-564`).
-- Pickup order, and the legacy delivery rows with no charter: the warehouse
-  name — `Delivery Request — DC4` (pinned `storefront-logic.test.ts:566-585`).
-- Unusable warehouse name: `Delivery Request — (warehouse not recorded)`
-  (pinned `storefront-logic.test.ts:898-902`).
+  (pinned `storefront-logic.test.ts`, "carries just the destination for
+  delivery").
+- Legacy delivery rows with no charter: the warehouse name —
+  `Delivery Request — DC4`.
+- Pickup order: `Pickup Request — DC4` — the origin warehouse; a pickup order
+  has no destination site by CHECK constraint (pinned `storefront-logic.test.ts`,
+  "uses a PICKUP-specific format").
+- Unusable warehouse name: `Delivery Request — (warehouse not recorded)` /
+  `Pickup Request — (warehouse not recorded)`.
+
+Consequence for Zendesk: any trigger matching the literal `Delivery Request`
+no longer sees pickup mail. Whether such a trigger exists is unverified
+assumption 2 below — confirm it with the Zendesk administrator.
 
 The subject deliberately carries **no order number** (owner decision
 2026-08-02; pinned `storefront-logic.test.ts:587-603`) and is guaranteed a
@@ -270,13 +280,13 @@ Needs a Zendesk-side check (or an owner decision accepting the risk) first:
 - **The CC address or its removal.** The copy to Andrew is the workflow's
   acceptance gate, and any Zendesk routing rules that DO reference the CC are
   invisible to us.
-- **Subject wording** — the literal `Delivery Request` text, the
-  `[StockPilot Maintenance ...]` bracket tag, or the em-dash separator. A
-  trigger or view keyed on any of these would silently stop matching. (Note:
-  an owner decision to give pickup orders a `Pickup Request — <warehouse>`
-  subject is queued; when it lands, any Zendesk rule matching `Delivery
-  Request` will no longer see pickup mail. Confirm with the Zendesk owner
-  before or promptly after that ships.)
+- **Subject wording** — the literal `Delivery Request` / `Pickup Request`
+  text, the `[StockPilot Maintenance ...]` bracket tag, or the em-dash
+  separator. A trigger or view keyed on any of these would silently stop
+  matching. (The pickup-specific `Pickup Request — <warehouse>` subject is an
+  owner decision that shipped 2026-08-16; any Zendesk rule matching `Delivery
+  Request` no longer sees pickup mail. Confirm with the Zendesk owner
+  promptly.)
 - **The `Order:` / `StockPilot Request:` line format** — the only correlation
   handles a Zendesk macro or human search can rely on.
 - **Anything that changes who the sender is** — e.g., ever moving from
@@ -294,7 +304,8 @@ is assumed but has never been verified from this side:
    trap that a first-time sender (a new employee's address) could fall into.
 2. No trigger, automation, view or SLA rule matches on the subject literals
    `Delivery Request` or `[StockPilot Maintenance`. If any does, subject
-   changes (including the queued pickup-subject change) need coordination.
+   changes (including the pickup-subject change shipped 2026-08-16) need
+   coordination.
 3. The CC to `arosas@cvwest.org` is a courtesy copy only, and no Zendesk rule
    routes or assigns based on it. If a rule exists, changing the CC (including
    the per-org routing work in flight) needs coordination.

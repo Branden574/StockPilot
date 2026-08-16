@@ -556,22 +556,50 @@ describe('buildDeliveryRequestDraft — recipients', () => {
 });
 
 describe('buildDeliveryRequestDraft — subject', () => {
-  it('is ONE format carrying just the destination — owner decision 2026-08-02 dropped the order number from the subject', () => {
+  it('carries just the destination for delivery — owner decision 2026-08-02 dropped the order number from the subject', () => {
     expect(buildDeliveryRequestDraft(makeDraftInput()).subject).toBe(
       'Delivery Request — CVW Clovis',
     );
     expect(buildDeliveryRequestDraft(makeDraftInput()).subject).not.toContain('StockPilot Order');
   });
 
-  it('uses the SAME format for pickup, with the warehouse as the location', () => {
-    // Brief section 10 wants one subject shape so Zendesk routing stays
-    // uniform; the body's Fulfillment Method line carries the distinction.
-    // A pickup-specific subject would be a second format and needs owner
-    // sign-off (see the plan's open questions).
+  it('uses a PICKUP-specific format, with the warehouse as the location — owner decision 2026-08-16', () => {
+    // Brief section 10 originally wanted ONE subject shape so Zendesk routing
+    // stayed uniform, and the plan's open questions flagged a pickup-specific
+    // subject as needing owner sign-off. The owner has now signed off: a
+    // pickup order's mail announces itself as a pickup. The location is the
+    // origin warehouse — a pickup order has no destination site by CHECK
+    // constraint. The Zendesk-side risk of the rewording is recorded in
+    // docs/integrations/zendesk-dc4-intake.md (unverified assumption 2).
     const draft = buildDeliveryRequestDraft(
       makeDraftInput({ fulfillmentType: 'pickup', destination: null }),
     );
-    expect(draft.subject).toBe('Delivery Request — DC4');
+    expect(draft.subject).toBe('Pickup Request — DC4');
+    // The old shared wording must be GONE for pickup — a subject saying
+    // "Delivery Request" over a will-call body was the misstatement the owner
+    // is correcting.
+    expect(draft.subject).not.toContain('Delivery');
+  });
+
+  it('the pickup subject is composed ONCE — the clipboard text and every condense rung carry it', () => {
+    // The subject is built by buildDeliveryRequestDraft before the condense
+    // branch and every transport reads draft.subject, so a rung or transport
+    // with its own subject copy would be a regression. Asserted against the
+    // clipboard (the one transport whose output embeds the subject as plain
+    // text) and against the zero-row condensed rung.
+    const input = makeDraftInput({ fulfillmentType: 'pickup', destination: null });
+    expect(buildClipboardText(buildDeliveryRequestDraft(input))).toContain(
+      'SUBJECT: Pickup Request — DC4',
+    );
+    const condensed = buildDeliveryRequestDraft(input, { condensed: true, maxRows: 0 });
+    expect(condensed.subject).toBe('Pickup Request — DC4');
+  });
+
+  it('pickup falls back to the same honest warehouse placeholder as delivery', () => {
+    const draft = buildDeliveryRequestDraft(
+      makeDraftInput({ fulfillmentType: 'pickup', destination: null, warehouseName: '   ' }),
+    );
+    expect(draft.subject).toBe('Pickup Request — (warehouse not recorded)');
   });
 
   it('falls back to the warehouse when a delivery order somehow has no site', () => {
