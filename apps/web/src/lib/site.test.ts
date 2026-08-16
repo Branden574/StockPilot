@@ -65,15 +65,22 @@ describe('DELIVERY_REQUEST_EMAIL_NAMES', () => {
 });
 
 describe('DELIVERY_REQUEST_CC_NOTICE', () => {
-  it('states what the CC does WITHOUT claiming Zendesk assignment', () => {
+  it('states where the mail goes WITHOUT claiming Zendesk assignment', () => {
+    // REWORDED 2026-08-16 (per-org email routing): the previous "The DC4
+    // address creates the delivery-request ticket" sentence was
+    // L4L-Zendesk-specific knowledge the platform cannot truthfully claim
+    // for an arbitrary org's configured mailbox, so the notice is now a
+    // pure function of the recipients (`deliveryRequestCcNotice` in core)
+    // claiming only where the mail is addressed — L4L's screens
+    // deliberately lose that one sentence.
     expect(DELIVERY_REQUEST_CC_NOTICE).toBe(
-      'The DC4 address creates the delivery-request ticket. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
     );
   });
 
   it('never claims a ticket was created, routed or assigned', () => {
     const copy = DELIVERY_REQUEST_CC_NOTICE.toLowerCase();
-    for (const claim of ['assigned', 'has been created', 'was created', 'ticket #', 'submitted']) {
+    for (const claim of ['assigned', 'has been created', 'was created', 'ticket', 'submitted']) {
       expect(copy).not.toContain(claim);
     }
   });
@@ -85,20 +92,20 @@ describe('DELIVERY_REQUEST_CC_NOTICE', () => {
    * naming the old mailbox while the mail went to the new one — telling the
    * employee in writing that a copy was sent somewhere it was not.
    *
-   * This assertion catches that by MUTATION OF THE ADDRESS rather than of the
-   * sentence: change the constant and a hand-typed notice fails here, because
-   * the address it names is no longer the CC. The literal pin above is the
-   * other half — it catches an unintended change to the WORDING.
+   * Still pinned by MUTATION OF THE ADDRESS rather than of the sentence —
+   * now through the notice FUNCTION: both addresses appear by
+   * interpolation, in to-then-cc order, each labelled by its role. A
+   * hand-typed copy that stops following the constants fails here. The
+   * literal pin above is the other half — it catches an unintended change
+   * to the WORDING.
    *
-   * Same defect, same shape, in the maintenance twin
+   * Same shape in the maintenance twin
    * (packages/core/src/maintenance/constants.ts), pinned the same way there.
    */
-  it('names the CC by INTERPOLATION — exactly one address appears, and it is the constant', () => {
+  it('names BOTH recipients by INTERPOLATION — to then cc, nothing else', () => {
     expect(DELIVERY_REQUEST_CC_NOTICE.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)).toEqual([
+      DELIVERY_REQUEST_EMAIL.to,
       DELIVERY_REQUEST_EMAIL.cc,
     ]);
-    // Never the intake address: this sentence is about the copy, and naming
-    // both would tell the employee the copy went to the ticket queue.
-    expect(DELIVERY_REQUEST_CC_NOTICE).not.toContain(DELIVERY_REQUEST_EMAIL.to);
   });
 });

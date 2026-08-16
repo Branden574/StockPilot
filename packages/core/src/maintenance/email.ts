@@ -1,8 +1,16 @@
 /**
  * Pure maintenance email builder. No React, no DOM, no network, no clock.
- * Takes NO recipient argument — it reads L4L_MAINTENANCE_EMAIL — so there is
- * no parameter through which client data could redirect the mail (the
- * delivery-request invariant, storefront-logic.ts:421-428).
+ *
+ * TENANT-NEUTRAL SINCE 2026-08-16 (per-org email routing): recipients arrive
+ * on `input.recipients` — a branded `MaintenanceEmailRecipients`, producible
+ * only by the validating factory in `./recipients.ts` — and are re-validated
+ * by `assertRoutableAddress` at draft time, exactly the delivery builder's
+ * posture (`../orders/delivery-request.ts`). The old shape ("takes NO
+ * recipient argument — it reads L4L_MAINTENANCE_EMAIL") hardwired one
+ * tenant's mailboxes into every org's maintenance mail; the poisoning
+ * concern that shape answered is now answered the way delivery answers it:
+ * the brand makes an unvalidated value untypeable, and the runtime guard
+ * makes a malformed one throw before anything is composed.
  *
  * `submittedAtDisplay` arrives PRE-FORMATTED by the caller (server side,
  * likely via formatOrgDateTime — apps/web/src/lib/timezone.ts). This module
@@ -55,6 +63,7 @@
  * always carries the full, uncondensed body.
  */
 import {
+  assertRoutableAddress,
   composeOutlookWebUrl,
   composeOutlookMobileUrl,
   composeMailtoUrl,
@@ -62,14 +71,20 @@ import {
   DRAFT_URL_LIMIT,
   type ComposeTransport,
 } from '../email/outlook-compose';
-import {
-  L4L_MAINTENANCE_EMAIL,
-  L4L_MAINTENANCE_EMAIL_NAMES,
-  type MaintenancePriority,
-} from './constants';
+import { type MaintenancePriority } from './constants';
+import { type MaintenanceEmailRecipients } from './recipients';
 import { sanitizeSubjectLine, sanitizeDescriptionBlock } from './text';
 
 export interface MaintenanceEmailInput {
+  /**
+   * Where the mail goes — supplied by the SURFACE from the org's resolved
+   * routing, never read from a constant in here. Branded: only
+   * `maintenanceEmailRecipients` (which validates) can produce one, so a
+   * caller cannot type a wrong-but-routable pair by hand, and a DELIVERY
+   * recipients value does not typecheck here (the two features route
+   * independently per org).
+   */
+  recipients: MaintenanceEmailRecipients;
   requestNumber: string;
   subject: string;
   description: string;
@@ -114,9 +129,27 @@ export interface MaintenanceEmailInput {
   shareUrl: string | null;
 }
 
+/**
+ * The email CONTENT — everything the builder needs except where the mail
+ * goes. This is the shape the web service assembles from the database and
+ * the REST route serializes: content is always buildable and always shown
+ * (the request detail page renders related-record panels from it), while
+ * recipients exist only for orgs whose routing resolved 'valid'. A surface
+ * combines the two at its own seam: `{ ...content, recipients }`.
+ */
+export type MaintenanceEmailContent = Omit<MaintenanceEmailInput, 'recipients'>;
+
 export interface MaintenanceEmailDraft {
   to: string;
   cc: string;
+  /**
+   * Cosmetic display names, carried through from the recipients so `urlsFor`
+   * needs no constant of its own — the delivery draft's shape exactly.
+   * Routing truth is `to`/`cc` above; these are OWA compose-chip decoration
+   * and are dropped by every other transport.
+   */
+  toName?: string;
+  ccName?: string;
   subject: string;
   body: string;
   condensed: boolean;
@@ -272,6 +305,12 @@ export function buildMaintenanceEmailDraft(
   input: MaintenanceEmailInput,
   opts: { condensed?: boolean } = {},
 ): MaintenanceEmailDraft {
+  // Validated at draft time even though the brand already implies it — the
+  // type catches the wrong-but-well-formed value a new call site types by
+  // hand; the runtime catches the malformed one that arrives as data (a
+  // cast, a stale serialized payload). The delivery builder's exact posture.
+  const to = assertRoutableAddress('to', input.recipients.to);
+  const cc = assertRoutableAddress('cc', input.recipients.cc);
   const condensed = opts.condensed === true;
   const cleanSubject = stripSubjectPrefix(sanitizeSubjectLine(input.subject));
   // Same guard as every other field (`cleanValue`/`line`): a blank
@@ -419,8 +458,10 @@ export function buildMaintenanceEmailDraft(
   const body = blocks.filter((b): b is string => Boolean(b)).join('\n\n');
 
   return {
-    to: L4L_MAINTENANCE_EMAIL.to,
-    cc: L4L_MAINTENANCE_EMAIL.cc,
+    to,
+    cc,
+    toName: input.recipients.toName,
+    ccName: input.recipients.ccName,
     subject,
     body,
     condensed,
@@ -438,11 +479,14 @@ function urlsFor(draft: MaintenanceEmailDraft): {
       cc: draft.cc,
       subject: draft.subject,
       body: draft.body,
-      // ONLY the frozen L4L_MAINTENANCE_EMAIL_NAMES constants ever reach a
-      // display-name slot — requester/site strings are BODY content only
-      // (Task 4 forward-note: composeOutlookWebUrl throws on unsafe names).
-      toName: L4L_MAINTENANCE_EMAIL_NAMES.to,
-      ccName: L4L_MAINTENANCE_EMAIL_NAMES.cc,
+      // ONLY factory-validated recipient names ever reach a display-name
+      // slot — requester/site strings are BODY content only. Read OFF THE
+      // DRAFT (the delivery shape): a draft is self-contained, so a URL can
+      // never be built against different recipients than the ones whose
+      // draft the caller measured. composeOutlookWebUrl re-runs
+      // assertSafeDisplayName regardless.
+      toName: draft.toName,
+      ccName: draft.ccName,
     }),
     // Same draft object — the mobile app NEVER rebuilds maintenance email
     // content of its own. The native composer takes bare addresses (its own

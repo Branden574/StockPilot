@@ -22,12 +22,15 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  MAINTENANCE_CC_NOTICE,
   MAINTENANCE_MAX_PHOTOS,
   MAINTENANCE_RESOLUTION_NOTE_MAX,
   MAINTENANCE_STATUS_LABELS,
+  can,
   formatMaintenanceRequestNumber,
-  type MaintenanceEmailInput,
+  maintenanceCcNotice,
+  type MaintenanceEmailContent,
+  type OrgEmailRoutingReadState,
+  type Role,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -38,6 +41,8 @@ import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { formatRelativeTime } from '@/lib/item-activity';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useWorkspace } from '@/lib/use-workspace';
 import {
   ARCHIVE_BUTTON_LABEL,
   ARCHIVE_CANCEL_LABEL,
@@ -97,10 +102,14 @@ import {
   OVERSIZED_MESSAGE,
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
+  maintenanceEmailInputForRouting,
+  maintenanceRoutingFromResponse,
   openMaintenanceDraft,
   prepareMobileMaintenanceEmail,
+  routingAdminNotice,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
+  shouldShowRoutingAdminNotice,
   successMessageFor,
   withShareUrl,
   type EmailTransport,
@@ -135,7 +144,10 @@ import { useTheme } from '@/lib/use-theme';
 /**
  * Maintenance request detail — mobile twin of the web
  * `/dashboard/maintenance/[id]` page: status, subject/description, photos,
- * To/CC + `MAINTENANCE_CC_NOTICE`, the email-action block (Task 20), and
+ * To/CC + `maintenanceCcNotice(...)` (per-org email routing — the compose
+ * block renders only for orgs whose routing resolved to a routable pair,
+ * via `maintenanceEmailInputForRouting`), the email-action block (Task 20),
+ * and
  * (Task 10) the CLOSE-OUT card — Resolve with note + proof photos, Archive,
  * Assign owner, Internal notes, manage-gated via `availableCloseoutActions`.
  * The full StockPilot-activity TIMELINE (the chronological event list web's
@@ -284,6 +296,14 @@ export default function MaintenanceRequestDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const enabledModules = useEnabledModules();
   const enabled = enabledModules.has('maintenance_requests');
+  // Whether THIS viewer could fix a missing/invalid email routing —
+  // `organization:update`, the exact permission the web settings page gates
+  // on. Cosmetic only (decides whether the hidden email action explains
+  // itself); there is no mobile write path for routing, by design.
+  const { activeRole: role } = useWorkspace();
+  const permissions = useEffectivePermissions();
+  const canConfigureOrg =
+    role !== null && can({ role: role as Role, permissions }, 'organization:update');
 
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
@@ -299,7 +319,15 @@ export default function MaintenanceRequestDetailScreen() {
   // Lazy useState, not a ref: .current during render is a compiler violation.
   const [requestPhotoGuard] = React.useState(() => createPhotoAttemptGuard());
   const [photosRefreshError, setPhotosRefreshError] = React.useState<string | null>(null);
-  const [emailInput, setEmailInput] = React.useState<MaintenanceEmailInput | null>(null);
+  // The email CONTENT (no recipients) and the org's resolved ROUTING, held
+  // separately exactly as the REST response carries them (per-org email
+  // routing, migration 0337). They meet in `maintenanceEmailInputForRouting`
+  // below — the tested lib decision that hides the compose actions for an
+  // unconfigured or invalid org instead of composing against a constant.
+  const [emailContent, setEmailContent] = React.useState<MaintenanceEmailContent | null>(null);
+  const [emailRouting, setEmailRouting] = React.useState<OrgEmailRoutingReadState>({
+    state: 'unset',
+  });
   const [canManage, setCanManage] = React.useState(false);
   // Mig 0330: token-free status ("a link exists, expires then") from the
   // GET; the URL itself only ever exists in `generatedShareUrl`, set by an
@@ -363,7 +391,11 @@ export default function MaintenanceRequestDetailScreen() {
         if (cancelled) return;
         setDetail(res.request);
         setPhotos(res.photos);
-        setEmailInput(res.emailInput);
+        setEmailContent(res.emailInput);
+        // The ONE parser for the routing payload — an ABSENT field (a
+        // pre-feature server) fails OPEN to the compiled constants; anything
+        // else re-validates through the branded factory and fails CLOSED.
+        setEmailRouting(maintenanceRoutingFromResponse(res.emailRouting));
         setShareLink(res.shareLink);
         setOpenCount(res.request.outlookDraftOpenCount);
         setCanManage(res.canManage);
@@ -409,13 +441,18 @@ export default function MaintenanceRequestDetailScreen() {
   // answer changes, matching web's identical useMemo (there the merge
   // happens via the share-link context, and there is no probe: web always
   // opens the worst-case url the default transport measures).
-  const prepared = React.useMemo(
-    () =>
-      emailInput
-        ? prepareMobileMaintenanceEmail(withShareUrl(emailInput, generatedShareUrl), nativeOutlook)
-        : null,
-    [emailInput, generatedShareUrl, nativeOutlook],
-  );
+  //
+  // `maintenanceEmailInputForRouting` is the per-org routing gate (migration
+  // 0337): it returns null for an unconfigured or invalid org, so `prepared`
+  // is null and the EMAIL card's compose actions do not render — the same
+  // hide web's maintenance detail page performs. The compiled constants are
+  // reachable ONLY through the 'fallback' state (a pre-feature server).
+  const prepared = React.useMemo(() => {
+    if (!emailContent) return null;
+    const emailInput = maintenanceEmailInputForRouting(emailContent, emailRouting);
+    if (!emailInput) return null;
+    return prepareMobileMaintenanceEmail(withShareUrl(emailInput, generatedShareUrl), nativeOutlook);
+  }, [emailContent, emailRouting, generatedShareUrl, nativeOutlook]);
 
   // Explicit Generate/Regenerate (mig 0330): the ONLY way to obtain a URL.
   // Rotates server-side, so any previously shared URL stops working.
@@ -882,7 +919,11 @@ export default function MaintenanceRequestDetailScreen() {
     );
   }
 
-  if (loadError || !detail || !prepared) {
+  // `prepared` is deliberately NOT part of this gate any more (per-org email
+  // routing): a null `prepared` now also means "this org has no routable
+  // email recipients", and the request detail — description, photos,
+  // close-out — must still render; only the EMAIL card changes shape.
+  if (loadError || !detail) {
     return (
       <GateScreen c={c} onBack={goBack}>
         {loadError ?? "Couldn't load this request."}
@@ -892,7 +933,10 @@ export default function MaintenanceRequestDetailScreen() {
 
   const handle = formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? `#${detail.requestNumber}`;
   const pillStatus = statusPillTone(detail.status);
-  const showCondensedNotice = shouldShowCondensedNotice(prepared);
+  const showCondensedNotice = prepared ? shouldShowCondensedNotice(prepared) : false;
+  const routingNotice = shouldShowRoutingAdminNotice(emailRouting, canConfigureOrg)
+    ? routingAdminNotice(emailRouting)
+    : null;
   const showResolutionCard = shouldShowResolutionCard(detail);
   const { requester: requesterPhotos, resolution: resolutionPhotos } = splitPhotosByKind(photos);
 
@@ -1096,48 +1140,66 @@ export default function MaintenanceRequestDetailScreen() {
           </Card>
         ) : null}
 
+        {/* Per-org email routing (migration 0337): a null `prepared` here
+            means the org has no routable recipients — 'unset' or 'invalid'
+            — and the compose affordances are HIDDEN, exactly as web hides
+            MaintenanceEmailAction. Members see nothing about why; holders
+            of organization:update see the tested lib's explanation. The
+            photo share-link affordances stay: the maintenance RECORD flow
+            is untouched by routing, only the email action changes. When
+            NONE of that applies (member, unrouted org, no photos) the card
+            itself disappears rather than rendering an empty EMAIL heading. */}
+        {prepared || routingNotice || photos.length > 0 || generatedShareUrl || shareLink ? (
         <Card padding={16} style={{ marginTop: 14 }}>
           <Eyebrow>EMAIL</Eyebrow>
-          <View style={{ marginTop: 10, gap: 4 }}>
-            <View style={{ flexDirection: 'row', gap: 6 }}>
-              <Mono size={11} tracking={0.04} upper color={c.ink4}>
-                To
-              </Mono>
-              <Body size={13} color={c.ink}>
-                {prepared.draft.to}
+          {prepared ? (
+            <>
+              <View style={{ marginTop: 10, gap: 4 }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                    To
+                  </Mono>
+                  <Body size={13} color={c.ink}>
+                    {prepared.draft.to}
+                  </Body>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                    CC
+                  </Mono>
+                  <Body size={13} color={c.ink}>
+                    {prepared.draft.cc}
+                  </Body>
+                </View>
+              </View>
+              <Body size={12.5} muted style={{ marginTop: 8 }}>
+                {maintenanceCcNotice(prepared.draft)}
               </Body>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 6 }}>
-              <Mono size={11} tracking={0.04} upper color={c.ink4}>
-                CC
-              </Mono>
-              <Body size={13} color={c.ink}>
-                {prepared.draft.cc}
-              </Body>
-            </View>
-          </View>
-          <Body size={12.5} muted style={{ marginTop: 8 }}>
-            {MAINTENANCE_CC_NOTICE}
-          </Body>
 
-          {showCondensedNotice ? (
-            <Card padding={10} style={{ marginTop: 12 }}>
-              <Body size={12.5} muted>
-                {CONDENSED_NOTICE}
-              </Body>
-            </Card>
-          ) : null}
+              {showCondensedNotice ? (
+                <Card padding={10} style={{ marginTop: 12 }}>
+                  <Body size={12.5} muted>
+                    {CONDENSED_NOTICE}
+                  </Body>
+                </Card>
+              ) : null}
 
-          {!prepared.linkFits ? (
-            <Card padding={10} style={{ marginTop: 12 }}>
-              <Body size={12.5} muted>
-                {OVERSIZED_MESSAGE}
-              </Body>
-            </Card>
+              {!prepared.linkFits ? (
+                <Card padding={10} style={{ marginTop: 12 }}>
+                  <Body size={12.5} muted>
+                    {OVERSIZED_MESSAGE}
+                  </Body>
+                </Card>
+              ) : null}
+            </>
+          ) : routingNotice ? (
+            <Body size={12.5} muted style={{ marginTop: 10 }}>
+              {routingNotice}
+            </Body>
           ) : null}
 
           <View style={{ marginTop: 14, gap: 10 }}>
-            {prepared.linkFits ? (
+            {prepared && prepared.linkFits ? (
               <Button
                 block
                 onPress={() => handleOpenPress('outlook')}
@@ -1147,7 +1209,7 @@ export default function MaintenanceRequestDetailScreen() {
                 Open in Outlook
               </Button>
             ) : null}
-            {prepared.linkFits ? (
+            {prepared && prepared.linkFits ? (
               <Button
                 block
                 variant="outline"
@@ -1158,14 +1220,16 @@ export default function MaintenanceRequestDetailScreen() {
                 Open in Default Email App
               </Button>
             ) : null}
-            <Button
-              block
-              variant="outline"
-              onPress={() => setCopyOpen((v) => !v)}
-              leading={<Copy size={16} color={c.ink} strokeWidth={1.5} />}
-            >
-              Copy Email Details
-            </Button>
+            {prepared ? (
+              <Button
+                block
+                variant="outline"
+                onPress={() => setCopyOpen((v) => !v)}
+                leading={<Copy size={16} color={c.ink} strokeWidth={1.5} />}
+              >
+                Copy Email Details
+              </Button>
+            ) : null}
             {photos.length > 0 ? (
               <Button
                 block
@@ -1235,7 +1299,7 @@ export default function MaintenanceRequestDetailScreen() {
             </Card>
           ) : null}
 
-          {copyOpen ? (
+          {copyOpen && prepared ? (
             <View style={{ marginTop: 12 }}>
               {/* No clipboard module exists in the 1.1.0 binary (audit Q9) —
                   this selectable, read-only textarea IS the copy affordance,
@@ -1254,6 +1318,7 @@ export default function MaintenanceRequestDetailScreen() {
             </View>
           ) : null}
         </Card>
+        ) : null}
 
         {showCloseout ? (
           <Card padding={16} style={{ marginTop: 14 }}>

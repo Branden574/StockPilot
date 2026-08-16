@@ -25,9 +25,25 @@ vi.mock('@/lib/error-reporter', () => ({
 }));
 
 import { MaintenanceEmailAction } from './maintenance-email-action';
-import { DRAFT_URL_LIMIT, prepareMaintenanceEmail, type MaintenanceEmailInput } from '@stockpilot/core';
+import {
+  DRAFT_URL_LIMIT,
+  L4L_MAINTENANCE_RECIPIENTS,
+  prepareMaintenanceEmail,
+  type MaintenanceEmailContent,
+  type MaintenanceEmailInput,
+} from '@stockpilot/core';
 
-const INPUT: MaintenanceEmailInput = {
+/** The routing DTO every render below hands the component — the compiled
+ *  pair (what the server resolves for L4L, whose seed preserves today's
+ *  values), so every existing pin stays on pre-feature behavior. */
+const TEST_ROUTING = {
+  to: L4L_MAINTENANCE_RECIPIENTS.to,
+  cc: L4L_MAINTENANCE_RECIPIENTS.cc,
+  toName: L4L_MAINTENANCE_RECIPIENTS.toName,
+  ccName: L4L_MAINTENANCE_RECIPIENTS.ccName,
+};
+
+const INPUT: MaintenanceEmailContent = {
   requestNumber: 'MR-2026-000123',
   subject: 'AC broken in Room 204',
   description: 'Warm air only.',
@@ -58,7 +74,7 @@ const INPUT: MaintenanceEmailInput = {
  * need. Copied here rather than imported: the fixture is a private const in
  * that test file, not an exported one.
  */
-const CONDENSED_BUT_FITS_INPUT: MaintenanceEmailInput = {
+const CONDENSED_BUT_FITS_INPUT: MaintenanceEmailContent = {
   requestNumber: 'MR-2026-000123',
   subject: 'Air conditioner is not working in Room 204',
   description:
@@ -121,7 +137,13 @@ afterEach(() => {
 
 function renderAction(overrides: Partial<Parameters<typeof MaintenanceEmailAction>[0]> = {}) {
   return render(
-    <MaintenanceEmailAction requestId="r1" emailInput={INPUT} initialOpenCount={0} {...overrides} />,
+    <MaintenanceEmailAction
+      requestId="r1"
+      emailInput={INPUT}
+      recipients={TEST_ROUTING}
+      initialOpenCount={0}
+      {...overrides}
+    />,
   );
 }
 
@@ -136,7 +158,7 @@ describe('WEB DEFAULT PIN: the no-options prepare this component performs is fit
   // linkFits stays true, and the url this component would open exceeds the
   // limit: both assertions below fail, naming the silent truncation that
   // flip would ship.
-  const LONG_DESCRIPTION_INPUT: MaintenanceEmailInput = {
+  const LONG_DESCRIPTION_CONTENT: MaintenanceEmailContent = {
     ...CONDENSED_BUT_FITS_INPUT,
     requestNumber: 'MR-2026-000456',
     subject: 'Hallway heater grinding and overheating near Room 118',
@@ -152,6 +174,13 @@ describe('WEB DEFAULT PIN: the no-options prepare this component performs is fit
     shareUrl: null,
   };
 
+  // The full input the component assembles at its seam: content plus the
+  // branded recipients built from the routing DTO it was handed.
+  const LONG_DESCRIPTION_INPUT: MaintenanceEmailInput = {
+    ...LONG_DESCRIPTION_CONTENT,
+    recipients: L4L_MAINTENANCE_RECIPIENTS,
+  };
+
   it('an undeclared transport is fitted against the web url this component opens, and stays within the limit', () => {
     const prepared = prepareMaintenanceEmail(LONG_DESCRIPTION_INPUT);
     expect(prepared.transport).toBe('outlook-web');
@@ -161,7 +190,7 @@ describe('WEB DEFAULT PIN: the no-options prepare this component performs is fit
 
   it('the component really opens the url the default measured (window.open receives outlookUrl)', async () => {
     const prepared = prepareMaintenanceEmail(LONG_DESCRIPTION_INPUT);
-    renderAction({ emailInput: LONG_DESCRIPTION_INPUT });
+    renderAction({ emailInput: LONG_DESCRIPTION_CONTENT });
     await userEvent.click(screen.getByRole('button', { name: /open in outlook/i }));
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(openSpy.mock.calls[0]![0]).toBe(prepared.outlookUrl);
@@ -489,7 +518,14 @@ describe('photo-driven behavior (photo test 11; component test 10)', () => {
     expect(vi.mocked(navigator.clipboard.writeText).mock.calls[0]![0] as string).toContain(
       '3 photos were uploaded',
     );
-    rerender(<MaintenanceEmailAction requestId="r1" emailInput={{ ...INPUT, photoCount: 0, shareUrl: null }} initialOpenCount={0} />);
+    rerender(
+      <MaintenanceEmailAction
+        requestId="r1"
+        emailInput={{ ...INPUT, photoCount: 0, shareUrl: null }}
+        recipients={TEST_ROUTING}
+        initialOpenCount={0}
+      />,
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Copy Email Details' }));
     expect(vi.mocked(navigator.clipboard.writeText).mock.calls[1]![0] as string).not.toContain(
       'photos were uploaded',

@@ -73,13 +73,15 @@ import {
   DUPLICATE_WARNING as DR_DUPLICATE_WARNING,
   HONESTY_NOTICE as DR_HONESTY_NOTICE,
   OVERSIZED_MESSAGE as DR_OVERSIZED,
-  RECIPIENTS_HELPER_TEXT as DR_RECIPIENTS,
   canRequestDelivery,
+  deliveryRoutingFromOrgRow,
   deliverySuccessMessageFor,
+  isMissingEmailRoutingColumn,
   needsDeliveryRequestData,
   openDeliveryRequestDraft,
   parseCharterAddress,
   prepareOrderDeliveryRequest,
+  recipientsHelperText,
   shouldConfirmBeforeOpening,
   shouldShowBlockedNotice,
   shouldShowCondensedNotice,
@@ -92,11 +94,13 @@ import {
   availableOrderActions,
   can,
   condensedNoticeText,
+  deliveryRecipientsForRouting,
   formatOrderNumber,
   derivePickingStatus,
   UNPICKED_SHORTFALL_TITLE,
   type FulfillmentType,
   type OrderStatus,
+  type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
@@ -199,6 +203,15 @@ interface OrderHeader {
   /** `organizations.timezone`, or null when unread/unset — the builder then
    *  falls back to the documented default rather than printing a bare time. */
   orgTimezone: string | null;
+  /**
+   * The org's resolved delivery-request email routing (per-org email
+   * routing, migration 0337), read off the same `organizations` row as the
+   * timezone. `{ state: 'unset' }` when the row was never read (pickup /
+   * terminal orders) — the gate is already false there. 'fallback' ONLY when
+   * the `email_routing` column does not exist yet (pre-migration deploy
+   * window: compiled constants, byte-identical to pre-feature behavior).
+   */
+  deliveryRouting: OrgEmailRoutingReadState;
   /** Line roll-ups for the backorder progress card. requested = ordered,
    *  fulfilled = provided to the customer (shipped at hand-over). */
   totalRequested: number;
@@ -368,7 +381,18 @@ export default function OrderDetail() {
     requesterUserId: order?.requesterUserId ?? null,
     viewerUserId: user?.id ?? null,
     ordersModuleEnabled: enabledModules.has('orders'),
+    // Per-org email routing (migration 0337): unset/invalid routing hides
+    // the action entirely — same cell of the fallback matrix as the web
+    // order page, decided in the tested lib, not here.
+    routing: order?.deliveryRouting ?? { state: 'unset' },
   });
+  // The branded recipients the draft will compose with — null exactly when
+  // the gate above refuses for routing reasons. The compiled constants are
+  // reachable ONLY through the pre-migration 'fallback' state.
+  const deliveryRecipients = React.useMemo(
+    () => (order ? deliveryRecipientsForRouting(order.deliveryRouting) : null),
+    [order],
+  );
   const deliveryOrderData = React.useMemo<DeliveryRequestOrderData | null>(
     () =>
       order
@@ -433,10 +457,10 @@ export default function OrderDetail() {
   // extra rows the native url has room for.
   const deliveryPrepared = React.useMemo(
     () =>
-      deliveryOrderData && showDeliveryRequest
-        ? prepareOrderDeliveryRequest(deliveryOrderData, nativeOutlook)
+      deliveryOrderData && showDeliveryRequest && deliveryRecipients
+        ? prepareOrderDeliveryRequest(deliveryOrderData, deliveryRecipients, nativeOutlook)
         : null,
-    [deliveryOrderData, showDeliveryRequest, nativeOutlook],
+    [deliveryOrderData, showDeliveryRequest, deliveryRecipients, nativeOutlook],
   );
   const [deliveryDraftCount, setDeliveryDraftCount] = React.useState(0);
   const [deliveryResult, setDeliveryResult] = React.useState<DeliveryOpenResult | null>(null);
@@ -799,6 +823,10 @@ export default function OrderDetail() {
     // back to the documented default rather than printing a time in no zone.
     let destination: OrderHeader['destination'] = null;
     let orgTimezone: string | null = null;
+    // Never read -> 'unset': the display gate is false for these rows anyway
+    // (needsDeliveryRequestData is the first check), so no compose surface
+    // ever consumes this default.
+    let deliveryRouting: OrgEmailRoutingReadState = { state: 'unset' };
     const headerRow = data as Record<string, unknown> | null;
     // The SAME predicate the display gate is built from (see
     // needsDeliveryRequestData) — never a status list retyped here, which is how
@@ -811,7 +839,7 @@ export default function OrderDetail() {
       });
     if (isLiveDelivery) {
       const charterId = (headerRow.delivery_charter_id as string | null) ?? null;
-      const [charterRes, orgRes] = await Promise.all([
+      const [charterRes, orgResFirst] = await Promise.all([
         charterId
           ? supabase
               .from('charters')
@@ -820,7 +848,10 @@ export default function OrderDetail() {
               .eq('id', charterId)
               .maybeSingle()
           : Promise.resolve({ data: null }),
-        supabase.from('organizations').select('timezone').eq('id', orgId).maybeSingle(),
+        // Per-org email routing (migration 0337) rides the same org-row read
+        // as the timezone — one more column, zero extra round trips, RLS
+        // member read (the TO/CC are printed in the email UI; not secrets).
+        supabase.from('organizations').select('timezone, email_routing').eq('id', orgId).maybeSingle(),
       ]);
       const ch = charterRes.data as Record<string, unknown> | null;
       if (ch && typeof ch.id === 'string') {
@@ -833,7 +864,32 @@ export default function OrderDetail() {
           address: parseCharterAddress(ch.address),
         };
       }
-      orgTimezone = ((orgRes.data as Record<string, unknown> | null)?.timezone as string | null) ?? null;
+      let orgRow = (orgResFirst.data as Record<string, unknown> | null) ?? null;
+      if (orgResFirst.error && isMissingEmailRoutingColumn(orgResFirst.error)) {
+        // DEPLOY-ORDER SAFETY: the `email_routing` column does not exist yet
+        // (this OTA reached the phone before migration 0337 reached the
+        // database). FAIL OPEN to pre-feature behavior — retry the read
+        // without the column and record 'fallback', which
+        // deliveryRecipientsForRouting maps to the compiled constants,
+        // byte-identical to what shipped before the feature. This is the
+        // ONLY path that ever selects them; the 42703 decision itself lives
+        // in the tested lib (isMissingEmailRoutingColumn).
+        const retry = await supabase
+          .from('organizations')
+          .select('timezone')
+          .eq('id', orgId)
+          .maybeSingle();
+        orgRow = (retry.data as Record<string, unknown> | null) ?? null;
+        deliveryRouting = { state: 'fallback' };
+      } else {
+        // Any other read failure leaves a null row, which the tested parser
+        // resolves to 'unset' — the action hides rather than composing mail
+        // against recipients nothing validated (never the constants).
+        deliveryRouting = deliveryRoutingFromOrgRow(
+          orgRow as { email_routing?: unknown } | null,
+        );
+      }
+      orgTimezone = (orgRow?.timezone as string | null) ?? null;
     }
 
     if (data) {
@@ -887,6 +943,7 @@ export default function OrderDetail() {
         notes: (r.notes as string | null) ?? null,
         destination,
         orgTimezone,
+        deliveryRouting,
         totalRequested,
         totalFulfilled,
         isShortStock,
@@ -1826,12 +1883,15 @@ export default function OrderDetail() {
             </View>
           ) : null}
 
-          {showDeliveryRequest && deliveryPrepared ? (
+          {showDeliveryRequest && deliveryPrepared && deliveryRecipients ? (
             <View style={{ gap: 8 }}>
               <Eyebrow>DELIVERY REQUEST</Eyebrow>
               {actionBtn('Email delivery request', 'delivery-request', handleDeliveryRequestPress)}
+              {/* Interpolated from the SAME resolved recipients the draft was
+                  composed with (per-org email routing), so this sentence can
+                  never name mailboxes the mail does not go to. */}
               <Mono size={10.5} color={c.ink4}>
-                {DR_RECIPIENTS}
+                {recipientsHelperText(deliveryRecipients)}
               </Mono>
               <Mono size={10.5} color={c.ink4}>
                 {DR_HONESTY_NOTICE}

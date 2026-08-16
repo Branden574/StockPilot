@@ -173,26 +173,41 @@ beforeEach(() => {
   listNotes.mockResolvedValue([]);
   signedViewUrls.mockResolvedValue([]);
   listTimelineEvents.mockResolvedValue([]);
+  // The real emailInput() returns { content, emailRouting } since per-org
+  // email routing (migration 0337); routing resolves 'valid' with the
+  // compiled pair — the state the L4L seed produces — so every existing pin
+  // stays on pre-feature behavior.
   emailInput.mockImplementation(async (_id: string, opts: { shareUrl: string | null }) => ({
-    requestNumber: 'MR-2026-000042',
-    subject: 'AC not working in Room 204',
-    description: 'Warm air only.',
-    category: 'Heating or air conditioning',
-    priority: 'high',
-    submittedAtDisplay: 'Aug 1, 2026',
-    requesterName: 'Jane Smith',
-    requesterEmail: 'jane@example.com',
-    requesterPhone: null,
-    siteName: 'Fresno Warehouse DC4',
-    department: null,
-    building: null,
-    roomOrArea: null,
-    accessInstructions: null,
-    relatedItem: null,
-    relatedOrder: null,
-    relatedRental: null,
-    photoCount: 0,
-    shareUrl: opts.shareUrl,
+    content: {
+      requestNumber: 'MR-2026-000042',
+      subject: 'AC not working in Room 204',
+      description: 'Warm air only.',
+      category: 'Heating or air conditioning',
+      priority: 'high',
+      submittedAtDisplay: 'Aug 1, 2026',
+      requesterName: 'Jane Smith',
+      requesterEmail: 'jane@example.com',
+      requesterPhone: null,
+      siteName: 'Fresno Warehouse DC4',
+      department: null,
+      building: null,
+      roomOrArea: null,
+      accessInstructions: null,
+      relatedItem: null,
+      relatedOrder: null,
+      relatedRental: null,
+      photoCount: 0,
+      shareUrl: opts.shareUrl,
+    },
+    emailRouting: {
+      state: 'valid',
+      recipients: {
+        to: 'dc4@learn4life.org',
+        cc: 'arosas@cvwest.org',
+        toName: 'Fresno Warehouse DC4',
+        ccName: 'Andrew Rosas',
+      },
+    },
   }));
 
   vi.mocked(MaintenanceRequestsService).mockImplementation(

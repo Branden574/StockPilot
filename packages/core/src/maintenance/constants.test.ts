@@ -4,6 +4,7 @@ import {
   L4L_MAINTENANCE_EMAIL,
   L4L_MAINTENANCE_EMAIL_NAMES,
   MAINTENANCE_CC_NOTICE,
+  maintenanceCcNotice,
   MAINTENANCE_CATEGORIES,
   MAINTENANCE_PRIORITIES,
   MAINTENANCE_STATUS_LABELS,
@@ -72,10 +73,17 @@ describe('maintenance recipient constants', () => {
   });
 
   it('CC notice promises only what StockPilot can observe', () => {
+    // REWORDED 2026-08-16 (per-org email routing): the previous "The DC4
+    // address creates the maintenance ticket in the email system" sentence
+    // was L4L-Zendesk-specific knowledge the platform cannot truthfully
+    // claim for an arbitrary org's configured mailbox, so the notice is now
+    // a pure function of the recipients (`maintenanceCcNotice`) claiming
+    // only where the mail is addressed — L4L's screens deliberately lose
+    // that one sentence.
     expect(MAINTENANCE_CC_NOTICE).toBe(
-      'The DC4 address creates the maintenance ticket in the email system. A copy will also be sent to arosas@cvwest.org.',
+      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
     );
-    for (const banned of ['assigned', 'Ticket created', 'notified']) {
+    for (const banned of ['assigned', 'Ticket created', 'notified', 'ticket']) {
       expect(MAINTENANCE_CC_NOTICE).not.toContain(banned);
     }
   });
@@ -87,18 +95,29 @@ describe('maintenance recipient constants', () => {
    * naming the old mailbox while the mail went to the new one — telling the
    * requester in writing that a copy was sent somewhere it was not.
    *
-   * This is the assertion that catches that, and it catches it by MUTATION of
-   * the address rather than of the sentence: change the constant above and a
-   * hand-typed notice fails here (it still names the old address, and the new
-   * one is absent), while the interpolated one follows it.
+   * Still pinned by MUTATION of the address rather than of the sentence —
+   * now through the notice FUNCTION: both addresses appear by interpolation,
+   * in to-then-cc order, and each is labelled by its role, so a hand-typed
+   * copy that stops following the constants fails here.
    */
-  it('names the CC by INTERPOLATION — exactly one address appears, and it is the constant', () => {
+  it('names BOTH recipients by INTERPOLATION — to then cc, nothing else', () => {
     expect(MAINTENANCE_CC_NOTICE.match(/[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)).toEqual([
+      L4L_MAINTENANCE_EMAIL.to,
       L4L_MAINTENANCE_EMAIL.cc,
     ]);
-    // Never the intake address: this sentence is about the copy, and naming
-    // both would tell the requester the copy went to the ticket queue.
-    expect(MAINTENANCE_CC_NOTICE).not.toContain(L4L_MAINTENANCE_EMAIL.to);
+  });
+
+  it('maintenanceCcNotice follows ANY recipients it is handed (the per-org path)', () => {
+    const notice = maintenanceCcNotice({
+      to: 'intake@other-tenant.invalid',
+      cc: 'copy@other-tenant.invalid',
+    });
+    expect(notice).toBe(
+      'This request will be emailed to intake@other-tenant.invalid. A copy will also be sent to copy@other-tenant.invalid.',
+    );
+    // A notice hand-wired to the constants would name L4L here.
+    expect(notice).not.toContain('learn4life');
+    expect(notice).not.toContain('cvwest');
   });
 });
 

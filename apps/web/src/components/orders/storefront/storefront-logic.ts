@@ -5,8 +5,6 @@
 
 import { formatOrderNumber } from '@stockpilot/core';
 
-import { DELIVERY_REQUEST_RECIPIENTS } from '@/lib/site';
-
 import type { CartLineState, CatalogItem } from '../v2/types';
 
 /** Derived stock status per item (README state model). */
@@ -312,33 +310,26 @@ export {
 } from '@stockpilot/core';
 
 /**
- * WEB'S RECIPIENTS, SUPPLIED EXPLICITLY AT ONE BOUNDARY.
+ * WEB'S RECIPIENTS ARE NOW AN EXPLICIT PARAMETER — the per-org routing seam
+ * (2026-08-16), replacing the module constant `WEB_DELIVERY_RECIPIENTS` that
+ * pinned every org's delivery mail to the compiled L4L pair.
  *
- * The core builder is tenant-neutral: it takes recipients as input and reads no
- * constant. This is web's single supply point, and mobile has its own. Both now
- * import the SAME frozen, validated VALUE (`DELIVERY_REQUEST_RECIPIENTS`), so
- * the two surfaces cannot mail different mailboxes.
- *
- * WAS AN OBJECT LITERAL until 2026-08-13. It agreed with mobile's literal and
- * both were pinned by their own suites, but the shape invited a third literal
- * at a new call site that could name a routable-but-wrong cc, compile clean and
- * pass the whole repo's tests while composing a genuinely misrouted URL.
- * `DeliveryRequestRecipients` is branded now — an object literal does not
- * typecheck anywhere, and there is one value to import.
- *
- * THE CC IS THE ACCEPTANCE GATE and this is where web guarantees it. It is
- * deliberately a module constant rather than a parameter of the exported
- * wrappers: nothing a caller passes — a URL parameter, a stored value, an order
- * note, a site name — can reach the recipient fields, which preserves the
- * property the old builder had when it read the constant directly. Core
- * additionally validates both addresses, at construction and again at draft
- * time, and throws on anything that is not exactly one plain mailbox.
+ * THE CC IS STILL THE ACCEPTANCE GATE, guaranteed one level up now: the
+ * parameter's type is the BRANDED `DeliveryRequestRecipients`, producible
+ * only by core's validating factory — so the value that arrives here came
+ * from either the org row (parsed by `parseOrgEmailRouting`, re-branded at
+ * the surface's seam) or the compiled constant (the code-before-migration
+ * fallback). A caller cannot type an object literal, spread-modify a copy,
+ * or pass a maintenance recipients value; core additionally re-validates
+ * both addresses at draft time and throws on anything that is not exactly
+ * one plain mailbox. Untyped client data (URL params, order notes, site
+ * names) still cannot reach the recipient fields — they do not construct
+ * branded values.
  */
-const WEB_DELIVERY_RECIPIENTS: DeliveryRequestRecipients = DELIVERY_REQUEST_RECIPIENTS;
 
 /**
  * Everything the draft builder is allowed to see, MINUS the recipients — those
- * are web's to supply, not its callers'. Keeping them off this type is what
+ * travel as their own branded argument. Keeping them off this type is what
  * lets `storefront-overlays.tsx`, `send-delivery-request-button.tsx` and both
  * test suites construct an input exactly as they did before the move.
  */
@@ -347,9 +338,10 @@ export type DeliveryRequestInput = Omit<CoreDeliveryRequestInput, 'recipients'>;
 /** Build the delivery-request draft. The full contract is on the core module. */
 export function buildDeliveryRequestDraft(
   input: DeliveryRequestInput,
+  recipients: DeliveryRequestRecipients,
   opts: { condensed?: boolean; maxRows?: number } = {},
 ) {
-  return coreBuildDeliveryRequestDraft({ ...input, recipients: WEB_DELIVERY_RECIPIENTS }, opts);
+  return coreBuildDeliveryRequestDraft({ ...input, recipients }, opts);
 }
 
 /**
@@ -361,10 +353,14 @@ export function buildDeliveryRequestDraft(
  * `outlook-native` when it has PROVED the native app will take the link; a
  * browser can never prove that, and asking for the shorter budget here would
  * fit rows against a url this surface does not open and truncate the body
- * silently in the one it does. Byte-identical output to before the option
- * existed, pinned by `prepareDeliveryRequest — the ladder, measured end to end`
- * in storefront-logic.test.ts.
+ * silently in the one it does. Output for the compiled recipients is
+ * byte-identical to before the recipients parameter existed, pinned by
+ * `prepareDeliveryRequest — the ladder, measured end to end` in
+ * storefront-logic.test.ts.
  */
-export function prepareDeliveryRequest(input: DeliveryRequestInput): PreparedDeliveryRequest {
-  return corePrepareDeliveryRequest({ ...input, recipients: WEB_DELIVERY_RECIPIENTS });
+export function prepareDeliveryRequest(
+  input: DeliveryRequestInput,
+  recipients: DeliveryRequestRecipients,
+): PreparedDeliveryRequest {
+  return corePrepareDeliveryRequest({ ...input, recipients });
 }

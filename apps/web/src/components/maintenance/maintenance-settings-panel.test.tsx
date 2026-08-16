@@ -144,13 +144,17 @@ describe('MaintenanceSettingsPanel — notification audience', () => {
 });
 
 describe('MaintenanceSettingsPanel — recipients pin (mutation self-check 3)', () => {
-  it('shows the fixed To/CC values as plain text with the exact fixed-in-this-release note', () => {
-    renderPanel();
-    expect(screen.getByText('dc4@learn4life.org')).toBeInTheDocument();
-    expect(screen.getByText('arosas@cvwest.org')).toBeInTheDocument();
-    expect(
-      screen.getByText('Recipients are fixed in this release. Contact support to change them.'),
-    ).toBeInTheDocument();
+  it('no compiled tenant mailbox is printed; the card links to the per-org Email routing page instead', () => {
+    // Per-org email routing (migration 0337): this card used to print
+    // L4L's compiled mailboxes to EVERY org's admins with "Recipients are
+    // fixed in this release. Contact support to change them." — that
+    // support path now exists, so the fixed display is gone.
+    const { container } = renderPanel();
+    expect(container.textContent).not.toContain('dc4@learn4life.org');
+    expect(container.textContent).not.toContain('arosas@cvwest.org');
+    expect(container.textContent).not.toContain('fixed in this release');
+    const link = screen.getByRole('link', { name: /Configure email routing/i });
+    expect(link).toHaveAttribute('href', '/dashboard/settings/email-routing');
   });
 
   it('PIN: no textbox/input anywhere in the panel carries a recipient email — recipients are never editable client input', () => {

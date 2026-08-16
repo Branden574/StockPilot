@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MaintenanceEmailInput } from '@stockpilot/core';
+import type { MaintenanceEmailContent } from '@stockpilot/core';
 
 import {
   addMaintenanceNote,
@@ -180,7 +180,11 @@ describe('getMaintenanceRequest — detail/photo field mirror (typecheck-forced,
     const payload = {
       request,
       photos,
-      emailInput: {} as MaintenanceEmailInput,
+      // Per-org email routing (migration 0337): `emailInput` is CONTENT only
+      // — recipients ride the separate `emailRouting` field, parsed by
+      // maintenanceRoutingFromResponse (maintenance-email-actions.ts).
+      emailInput: {} as MaintenanceEmailContent,
+      emailRouting: { state: 'unset' as const },
       canManage: true,
     };
     apiMock.api.mockResolvedValueOnce(payload);
@@ -656,14 +660,45 @@ describe('app/maintenance/[id].tsx is wired to the tested email-action helpers +
   });
 
   it('neither email button renders when `prepared.linkFits` is false — the oversized state is copy-only', () => {
-    expect(src).toMatch(/\{prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Outlook/);
-    expect(src).toMatch(/\{prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Default Email App/);
+    // `prepared && prepared.linkFits` since per-org email routing: `prepared`
+    // is null for an org with no routable recipients, and the buttons must
+    // hide for BOTH reasons through the same conditional.
+    expect(src).toMatch(/\{prepared && prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Outlook/);
+    expect(src).toMatch(
+      /\{prepared && prepared\.linkFits \? \(\s*<Button[\s\S]{0,400}Open in Default Email App/,
+    );
     expect(src).toMatch(/\{!prepared\.linkFits \? \(\s*<Card[\s\S]{0,150}OVERSIZED_MESSAGE/);
   });
 
   it('the condensed notice is gated by the tested `shouldShowCondensedNotice` helper, actually assigned to a variable used in the render', () => {
-    expect(src).toMatch(/const\s+showCondensedNotice\s*=\s*shouldShowCondensedNotice\(prepared\)\s*;/);
+    // Null-guarded since per-org email routing (prepared is null when the
+    // org has no routable recipients); the DECISION is still the tested
+    // helper, never re-derived inline.
+    expect(src).toMatch(
+      /const\s+showCondensedNotice\s*=\s*prepared \? shouldShowCondensedNotice\(prepared\) : false\s*;/,
+    );
     expect(src).toMatch(/\{showCondensedNotice \? \(/);
+  });
+
+  it('per-org email routing: the load effect parses `emailRouting` through the ONE tested parser, and the compose block is gated on `prepared`', () => {
+    // The parse — never a hand-rolled shape check in the screen.
+    expect(src).toContain('setEmailRouting(maintenanceRoutingFromResponse(res.emailRouting));');
+    // The combine — content + routing meet in the tested lib decision.
+    expect(src).toContain('maintenanceEmailInputForRouting(emailContent, emailRouting)');
+    // The compose block renders only when a routable pair produced a draft.
+    expect(src).toMatch(/\{prepared \? \(/);
+    // The CC notice is the pure function of the draft's recipients — a fixed
+    // sentence would name mailboxes the mail does not go to.
+    expect(src).toContain('{maintenanceCcNotice(prepared.draft)}');
+    expect(src).not.toContain('MAINTENANCE_CC_NOTICE');
+  });
+
+  it('per-org email routing: the unconfigured/invalid explanation is the tested lib decision + copy, gated on organization:update', () => {
+    expect(src).toMatch(
+      /const\s+routingNotice\s*=\s*shouldShowRoutingAdminNotice\(emailRouting,\s*canConfigureOrg\)\s*\n?\s*\? routingAdminNotice\(emailRouting\)\s*\n?\s*: null\s*;/,
+    );
+    expect(src).toContain("can({ role: role as Role, permissions }, 'organization:update')");
+    expect(src).toMatch(/\{routingNotice\}/);
   });
 
   it('the copy fallback is a SELECTABLE, non-editable TextInput (audit Q9 — no clipboard module in the binary)', () => {

@@ -112,7 +112,14 @@ export default async function MaintenanceRequestDetailPage({
   // shareUrl is null at render — the plaintext URL only exists in the
   // moment ShareLinkPanel generates one; MaintenanceEmailAction folds that
   // fresh URL in client-side through MaintenanceShareLinkProvider.
-  const emailInput = await svc.emailInput(id, { shareUrl: null });
+  //
+  // `emailInput` is the CONTENT (always built — the related-record panels
+  // below render from it); `emailRouting` is the org's per-feature routing
+  // resolution (migration 0337) and decides whether any compose action
+  // exists: members simply see no email action on 'unset'/'invalid', while
+  // holders of organization:update see an inline pointer to Settings.
+  const { content: emailInput, emailRouting } = await svc.emailInput(id, { shareUrl: null });
+  const canConfigureRouting = can(ctx, 'organization:update');
 
   const sp = await searchParams;
   if (sp.review === '1') {
@@ -128,6 +135,8 @@ export default async function MaintenanceRequestDetailPage({
           detail={detail}
           photos={photos}
           emailInput={emailInput}
+          emailRouting={emailRouting}
+          canConfigureRouting={canConfigureRouting}
           initialOpenCount={detail.outlookDraftOpenCount}
         />
       </div>
@@ -285,15 +294,35 @@ export default async function MaintenanceRequestDetailPage({
             </section>
           ) : null}
 
-          <section className="bg-card rounded-xl border p-4">
-            <h2 className="mb-3 text-sm font-medium">Email</h2>
-            <MaintenanceEmailAction
-              requestId={detail.id}
-              emailInput={emailInput}
-              initialOpenCount={detail.outlookDraftOpenCount}
-              photoDownloads={requesterPhotos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
-            />
-          </section>
+          {emailRouting.state === 'valid' ? (
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="mb-3 text-sm font-medium">Email</h2>
+              <MaintenanceEmailAction
+                requestId={detail.id}
+                emailInput={emailInput}
+                recipients={emailRouting.recipients}
+                initialOpenCount={detail.outlookDraftOpenCount}
+                photoDownloads={requesterPhotos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
+              />
+            </section>
+          ) : canConfigureRouting ? (
+            // Admin-only hint (fallback matrix states B/D): an admin who
+            // just enabled the module would otherwise wonder where the
+            // email action went. Members see nothing — the record flow
+            // (save, photos, share link, resolve) is untouched.
+            <section className="bg-card rounded-xl border p-4">
+              <h2 className="mb-3 text-sm font-medium">Email</h2>
+              <p className="text-sm text-muted-foreground" data-testid="maintenance-routing-hint">
+                {emailRouting.state === 'invalid'
+                  ? `Email routing for maintenance requests is invalid: ${emailRouting.reason} The email action is hidden until this is fixed in `
+                  : 'Email routing is not configured for this organization, so the email action is hidden. Set it in '}
+                <Link href="/dashboard/settings/email-routing" className="underline underline-offset-2">
+                  Settings &rarr; Email routing
+                </Link>
+                .
+              </p>
+            </section>
+          ) : null}
         </div>
 
         <aside className="space-y-4">

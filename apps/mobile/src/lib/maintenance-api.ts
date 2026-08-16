@@ -1,6 +1,6 @@
 import type {
   MaintenanceAttachmentKind,
-  MaintenanceEmailInput,
+  MaintenanceEmailContent,
   MaintenancePriority,
   MaintenanceRequestFormValues,
   MaintenanceStatus,
@@ -140,11 +140,21 @@ export async function listMaintenanceRequests(args: {
 /** Full detail read — the Bearer parity for the web detail page's server
  *  load. Since mig 0330 (share tokens hashed at rest) `emailInput.shareUrl`
  *  is always null here and `shareLink` carries token-free STATUS only —
- *  a URL exists solely in the moment `issueMaintenanceShareLink` mints one. */
+ *  a URL exists solely in the moment `issueMaintenanceShareLink` mints one.
+ *
+ *  Per-org email routing (migration 0337): `emailInput` is the email
+ *  CONTENT — it carries no recipients. The org's resolved routing rides the
+ *  separate `emailRouting` field, typed `unknown` ON PURPOSE: the ONE
+ *  parser for it is `maintenanceRoutingFromResponse` (maintenance-email-
+ *  actions.ts), which also owns the deploy-order rule — the field ABSENT
+ *  (a pre-feature server) fails OPEN to the compiled constants, anything
+ *  else resolves through the branded factory and fails CLOSED. A typed
+ *  mirror here would be a second opinion about that payload (pattern #26). */
 export async function getMaintenanceRequest(id: string): Promise<{
   request: MobileMaintenanceRequestDetail;
   photos: MobileMaintenancePhoto[];
-  emailInput: MaintenanceEmailInput;
+  emailInput: MaintenanceEmailContent;
+  emailRouting?: unknown;
   shareLink: { expiresAt: string } | null;
   canManage: boolean;
 }> {

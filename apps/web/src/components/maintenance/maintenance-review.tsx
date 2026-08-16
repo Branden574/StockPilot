@@ -1,10 +1,13 @@
 import Link from 'next/link';
 
 import {
+  brandMaintenanceRecipients,
   formatMaintenanceRequestNumber,
-  MAINTENANCE_CC_NOTICE,
+  maintenanceCcNotice,
   prepareMaintenanceEmail,
-  type MaintenanceEmailInput,
+  type MaintenanceEmailContent,
+  type OrgEmailRoutingState,
+  type PreparedMaintenanceEmail,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -55,11 +58,22 @@ export function MaintenanceReview({
   detail,
   photos,
   emailInput,
+  emailRouting,
+  canConfigureRouting,
   initialOpenCount,
 }: {
   detail: MaintenanceRequestDetail;
   photos: PanelPhoto[];
-  emailInput: MaintenanceEmailInput;
+  /** The email CONTENT — recipients arrive separately on `emailRouting`. */
+  emailInput: MaintenanceEmailContent;
+  /**
+   * The org's maintenance-request routing resolution (per-org email
+   * routing, migration 0337). Only 'valid' renders the email preview and
+   * the compose actions; 'unset'/'invalid' hide them — members see nothing,
+   * `canConfigureRouting` holders see a pointer to Settings.
+   */
+  emailRouting: OrgEmailRoutingState;
+  canConfigureRouting: boolean;
   initialOpenCount: number;
 }) {
   // Minor 7 fix: `detail.id` IS the request id — there is no second value
@@ -67,7 +81,18 @@ export function MaintenanceReview({
   // prop was just a second source of truth a caller could pass out of sync
   // with `detail`. Every consumer below reads `detail.id`.
   const requestId = detail.id;
-  const prepared = prepareMaintenanceEmail(emailInput);
+  // THE SEAM: re-brand (re-validate) the resolved routing; fail CLOSED to
+  // "no email UI" on anything the factory refuses — never a compiled
+  // constant. Server components have no memo; this is a cheap pure call.
+  let prepared: PreparedMaintenanceEmail | null = null;
+  if (emailRouting.state === 'valid') {
+    try {
+      const recipients = brandMaintenanceRecipients(emailRouting.recipients);
+      prepared = prepareMaintenanceEmail({ ...emailInput, recipients });
+    } catch {
+      prepared = null;
+    }
+  }
   const requestNumber =
     formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
 
@@ -84,10 +109,14 @@ export function MaintenanceReview({
       </div>
 
       {/* Spec line 8's exact helper sentence — the honesty anchor for this
-          whole screen: saved, but not sent, and never automatically. */}
+          whole screen: saved, but not sent, and never automatically. The
+          Outlook half of the sentence only renders when a compose action
+          actually exists (routing 'valid'); an unconfigured org must not be
+          promised an Outlook window that will never open. */}
       <p className="rounded-md border border-dashed p-3 text-sm">
-        Your request has been saved in StockPilot. Outlook will open with the email details filled in, but the
-        email will not be sent automatically.
+        {emailRouting.state === 'valid'
+          ? 'Your request has been saved in StockPilot. Outlook will open with the email details filled in, but the email will not be sent automatically.'
+          : 'Your request has been saved in StockPilot.'}
       </p>
 
       <Card>
@@ -202,35 +231,59 @@ export function MaintenanceReview({
         </Card>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Email preview</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <dl className="text-sm">
-            <div>
-              <dt className="inline text-muted-foreground">To </dt>
-              <dd className="inline">{prepared.draft.to}</dd>
-            </div>
-            <div>
-              <dt className="inline text-muted-foreground">CC </dt>
-              <dd className="inline">{prepared.draft.cc}</dd>
-            </div>
-          </dl>
-          <p className="text-sm text-muted-foreground">{MAINTENANCE_CC_NOTICE}</p>
+      {prepared && emailRouting.state === 'valid' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Email preview</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <dl className="text-sm">
+              <div>
+                <dt className="inline text-muted-foreground">To </dt>
+                <dd className="inline">{prepared.draft.to}</dd>
+              </div>
+              <div>
+                <dt className="inline text-muted-foreground">CC </dt>
+                <dd className="inline">{prepared.draft.cc}</dd>
+              </div>
+            </dl>
+            {/* A pure function of the SAME recipients the compose urls
+                carry, so this sentence can never name a mailbox the mail
+                does not go to. */}
+            <p className="text-sm text-muted-foreground">{maintenanceCcNotice(prepared.draft)}</p>
 
-          <div>
-            <p className="text-xs font-medium text-muted-foreground">Subject</p>
-            <p className="mt-1 text-sm">{prepared.draft.subject}</p>
-          </div>
-          <div>
-            <p className="text-xs font-medium text-muted-foreground">Body</p>
-            <pre className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm">
-              {prepared.draft.body}
-            </pre>
-          </div>
-        </CardContent>
-      </Card>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Subject</p>
+              <p className="mt-1 text-sm">{prepared.draft.subject}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Body</p>
+              <pre className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm">
+                {prepared.draft.body}
+              </pre>
+            </div>
+          </CardContent>
+        </Card>
+      ) : canConfigureRouting ? (
+        // Admin-only hint (fallback matrix states B/D). Members see no email
+        // UI at all — the saved request itself is unaffected.
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Email preview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground" data-testid="maintenance-routing-hint">
+              {emailRouting.state === 'invalid'
+                ? `Email routing for maintenance requests is invalid: ${emailRouting.reason} The email action is hidden until this is fixed in `
+                : 'Email routing is not configured for this organization, so the email action is hidden. Set it in '}
+              <Link href="/dashboard/settings/email-routing" className="underline underline-offset-2">
+                Settings &rarr; Email routing
+              </Link>
+              .
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Minor 6 fix: deliberately NOT passing `photoDownloads` here. The
@@ -243,11 +296,16 @@ export function MaintenanceReview({
             stays in the component for contexts that render it WITHOUT an
             adjacent Photos card (there are none yet, but the prop exists for
             exactly that future reuse — see its own doc comment). */}
-        <MaintenanceEmailAction
-          requestId={requestId}
-          emailInput={emailInput}
-          initialOpenCount={initialOpenCount}
-        />
+        {emailRouting.state === 'valid' ? (
+          <MaintenanceEmailAction
+            requestId={requestId}
+            emailInput={emailInput}
+            recipients={emailRouting.recipients}
+            initialOpenCount={initialOpenCount}
+          />
+        ) : (
+          <span />
+        )}
         {/* Editing happens on the detail page itself — this is a saved
             request, not a draft form, so "Edit Request" is a plain link back
             to the same page with the review query param dropped, not a

@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { resolveOrgTimezone } from '@stockpilot/core';
+import {
+  parseOrgEmailRouting,
+  resolveOrgTimezone,
+  type OrgEmailRoutingFeature,
+  type OrgEmailRoutingReadState,
+} from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -73,4 +78,46 @@ export async function getCachedOrgWarehouses(organizationId: string) {
 export async function getCachedOrgTimezone(organizationId: string): Promise<string> {
   const row = await getCachedOrgDashboardRow(organizationId);
   return resolveOrgTimezone(row?.timezone);
+}
+
+/**
+ * The org's per-feature compose-email routing (`organizations.email_routing`,
+ * migration 0337), resolved through core's ONE parser.
+ *
+ * DIRECT query, not unstable_cache — this file's header note applies, and
+ * freshness matters here specifically: an admin's routing edit must be
+ * visible on the next page load, because the value decides where warehouse
+ * mail is addressed.
+ *
+ * DEPLOY-ORDER SAFETY: this feature must FAIL OPEN to pre-feature behavior
+ * during the code-before-migration window. A read of the not-yet-existing
+ * column errors with Postgres 42703 (undefined_column, surfaced verbatim by
+ * PostgREST), and ONLY that error maps to `{ state: 'fallback' }` — which
+ * readers resolve to the compiled L4L constants, byte-identical to what
+ * shipped before this feature. Once the column exists, that arm is never
+ * taken: an org with no stored value is 'unset' and its email action is
+ * HIDDEN, and an org with an invalid stored value is 'invalid' and fails
+ * CLOSED (never silently re-routed to another tenant's mailboxes).
+ *
+ * Any OTHER read failure (row missing, transient query error) resolves to
+ * 'unset' — the action hides for a beat rather than composing mail against
+ * recipients we could not read.
+ */
+export async function getOrgEmailRouting(
+  organizationId: string,
+  feature: OrgEmailRoutingFeature,
+): Promise<OrgEmailRoutingReadState> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('organizations')
+    .select('email_routing')
+    .eq('id', organizationId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '42703') return { state: 'fallback' };
+    console.error('[email-routing] read failed', error.code, error.message);
+    return { state: 'unset' };
+  }
+  if (!data) return { state: 'unset' };
+  return parseOrgEmailRouting((data as { email_routing?: unknown }).email_routing, feature);
 }

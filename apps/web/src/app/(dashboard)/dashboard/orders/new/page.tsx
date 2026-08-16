@@ -2,9 +2,9 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
-import { can } from '@stockpilot/core';
+import { can, deliveryRecipientsForRouting } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
-import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
+import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import {
   loadCatalogBundle,
@@ -44,10 +44,15 @@ export default async function NewOrderPage({
   // Anything only the CATALOG needs (items, media map, and the
   // access-key queries that build the catalog cache key) runs inside
   // catalogPromise, which is never awaited here.
-  const [params, warehouseRows, orgTimezoneRaw] = await Promise.all([
+  const [params, warehouseRows, orgTimezoneRaw, deliveryRouting] = await Promise.all([
     searchParams,
     getWarehousesForRequest(ctx.organizationId),
     getCachedOrgTimezone(ctx.organizationId),
+    // Per-org delivery-request email routing (migration 0337): decides
+    // whether the success overlay offers the compose action at all, and to
+    // which mailboxes. One cheap single-row read, batched with the rest of
+    // the shell path.
+    getOrgEmailRouting(ctx.organizationId, 'delivery_request'),
   ]);
   // Used as-is. getCachedOrgTimezone resolves its own fallback through core's
   // `resolveOrgTimezone` and never returns null or '', so a second
@@ -58,6 +63,19 @@ export default async function NewOrderPage({
   // order: the surface that substitutes first destroys the information the
   // shared resolver needs.
   const orgTimezone = orgTimezoneRaw;
+  // The whole fallback matrix lives in core: compiled constants ONLY for the
+  // pre-migration 'fallback' state, the stored pair for 'valid', null
+  // (action hidden, fail closed) for 'unset'/'invalid'. Flattened to plain
+  // strings for the RSC boundary; the client re-brands at its seam.
+  const deliveryRecipientsValue = deliveryRecipientsForRouting(deliveryRouting);
+  const deliveryRecipients = deliveryRecipientsValue
+    ? {
+        to: deliveryRecipientsValue.to,
+        cc: deliveryRecipientsValue.cc,
+        toName: deliveryRecipientsValue.toName,
+        ccName: deliveryRecipientsValue.ccName,
+      }
+    : null;
   const warehouses = warehouseRows.map((w) => ({
     id: w.id,
     name: w.name,
@@ -117,6 +135,7 @@ export default async function NewOrderPage({
       viewerName={ctx.fullName}
       viewerEmail={ctx.email}
       orgTimezone={orgTimezone}
+      deliveryRecipients={deliveryRecipients}
     />
   );
 }

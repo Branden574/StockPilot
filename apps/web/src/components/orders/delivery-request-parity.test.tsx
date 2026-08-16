@@ -116,6 +116,18 @@ vi.mock('@/components/orders/send-delivery-request-button', async (importOrigina
 
 vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: (orgId: string) => cachedOrgTimezone(orgId),
+  // Per-org routing resolves 'valid' with the compiled pair — the state the
+  // L4L seed produces, so the page renders the button exactly as before the
+  // feature. The hidden states are covered by the overlays/order-page suites.
+  getOrgEmailRouting: async () => ({
+    state: 'valid',
+    recipients: {
+      to: 'dc4@learn4life.org',
+      cc: 'arosas@cvwest.org',
+      toName: 'Fresno Warehouse DC4',
+      ccName: 'Andrew Rosas',
+    },
+  }),
 }));
 
 vi.mock('@/lib/auth/session', () => ({
@@ -410,10 +422,16 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
     const { prepareDeliveryRequest: webPrepare } = await import(
       '@/components/orders/storefront/storefront-logic'
     );
-    const { prepareDeliveryRequest: corePrepare } = await import('@stockpilot/core');
+    const { prepareDeliveryRequest: corePrepare, DELIVERY_REQUEST_RECIPIENTS } = await import(
+      '@stockpilot/core'
+    );
 
     const { web, phone } = await bothInputsFor(fixture());
-    const webDraft = webPrepare(web).draft;
+    // Since per-org routing the web wrapper takes the resolved recipients
+    // explicitly; the compiled pair here mirrors what the server resolves
+    // for L4L (whose seed preserves today's values), which is also what
+    // mobile's mapping attaches.
+    const webDraft = webPrepare(web, DELIVERY_REQUEST_RECIPIENTS).draft;
     const phoneDraft = corePrepare(phone).draft;
 
     expect(webDraft.body).toBe(phoneDraft.body);
@@ -443,14 +461,16 @@ describe('delivery request — web and the phone map the SAME row to the SAME bu
     const { prepareDeliveryRequest: webPrepare } = await import(
       '@/components/orders/storefront/storefront-logic'
     );
-    const { prepareDeliveryRequest: corePrepare } = await import('@stockpilot/core');
+    const { prepareDeliveryRequest: corePrepare, DELIVERY_REQUEST_RECIPIENTS } = await import(
+      '@stockpilot/core'
+    );
     // 6pm Pacific = 1am UTC the NEXT DAY. This instant is why the divergence
     // was not merely cosmetic: the two surfaces dated one delivery differently.
     const f = fixture({ orgTimezone: null, neededBy: '2026-08-19T01:00:00Z' });
     const { web, phone } = await bothInputsFor(f);
 
     const neededLine = (body: string) => body.split('\n\n').find((b) => b.startsWith('NEEDED BY'));
-    const webLine = neededLine(webPrepare(web).draft.body);
+    const webLine = neededLine(webPrepare(web, DELIVERY_REQUEST_RECIPIENTS).draft.body);
     const phoneLine = neededLine(corePrepare(phone).draft.body);
 
     expect(webLine).toBe(phoneLine);

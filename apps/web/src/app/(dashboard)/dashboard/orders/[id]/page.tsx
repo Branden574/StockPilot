@@ -33,16 +33,18 @@ import {
 } from '@/components/ui/table';
 import {
   can,
+  deliveryRecipientsForRouting,
   describeUnpickedShortfall,
   formatOrderNumber,
   isManagerOrAbove,
   resolveOrgTimezone,
   UNPICKED_SHORTFALL_TITLE,
+  type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
+import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -273,6 +275,7 @@ export default async function OrderDetailPage({
     maintenanceAccess,
     deliveryRequestCharter,
     deliveryRequestTimezone,
+    deliveryRequestRouting,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -494,6 +497,14 @@ export default async function OrderDetailPage({
     showDeliveryRequest
       ? getCachedOrgTimezone(ctx.organizationId)
       : Promise.resolve<string | null>(null),
+
+    // Per-org delivery-request email routing (migration 0337). The compose
+    // button renders only when this resolves to a routable pair — unset or
+    // invalid routing HIDES it (fail closed; never the compiled L4L
+    // constants, which only the pre-migration 'fallback' state may supply).
+    showDeliveryRequest
+      ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
+      : Promise.resolve<OrgEmailRoutingReadState | null>(null),
   ]);
 
   let viewerCanPick = true;
@@ -509,6 +520,24 @@ export default async function OrderDetailPage({
     viewerCanPick =
       (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
   }
+  // Fold the routing read into the delivery-request gate: the button needs a
+  // routable pair, and `deliveryRecipientsForRouting` is the whole fallback
+  // matrix — compiled constants ONLY for the pre-migration 'fallback' state,
+  // the stored pair for 'valid', null (button hidden) for 'unset'/'invalid'.
+  // The branded value is flattened to plain strings for the RSC boundary;
+  // the client re-brands at its own seam.
+  const deliveryRequestRecipientsValue = deliveryRequestRouting
+    ? deliveryRecipientsForRouting(deliveryRequestRouting)
+    : null;
+  const deliveryRequestRecipientsDto = deliveryRequestRecipientsValue
+    ? {
+        to: deliveryRequestRecipientsValue.to,
+        cc: deliveryRequestRecipientsValue.cc,
+        toName: deliveryRequestRecipientsValue.toName,
+        ccName: deliveryRequestRecipientsValue.ccName,
+      }
+    : null;
+
   const isShortStock = stockCheck?.isShortStock ?? false;
   const hasFulfillableStock = stockCheck?.hasFulfillableStock ?? false;
   const showLiveTrackingShare = liveTrackingGate && (liveTrackingAccess?.enabled ?? false);
@@ -675,8 +704,9 @@ export default async function OrderDetailPage({
                 <a href={requesterReturnPath}>Request a return</a>
               </Button>
             )}
-            {showDeliveryRequest && (
+            {showDeliveryRequest && deliveryRequestRecipientsDto && (
               <SendDeliveryRequestButton
+                recipients={deliveryRequestRecipientsDto}
                 orderId={id}
                 orderNumber={
                   (request as { order_number?: number | null }).order_number ?? null
