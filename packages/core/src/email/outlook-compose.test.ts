@@ -286,12 +286,19 @@ describe('composeOutlookMobileUrl — native ms-outlook: transport (CC regressio
     expect(decodeMobileCompose(url).params).not.toHaveProperty('cc');
   });
 
-  it('never longer than the web compose URL, so the shared DRAFT_URL_LIMIT guard already covers it', () => {
+  it('never longer than the web compose URL, so a WEB-FITTED draft covers it unmeasured', () => {
     // The web URL double-encodes an inner mailto: URI (every %xx becomes
     // %25xx) on top of a 52-char https base; this one encodes once onto a
-    // 20-char scheme. That is why callers can keep measuring the web URL as
-    // the binding constraint. If this ever inverts, the length guard has to
-    // be revisited — hence the pin.
+    // 20-char scheme. That is why the DEFAULT `outlook-web` fit (delivery's
+    // `prepareDeliveryRequest` and maintenance's `prepareMaintenanceEmail`
+    // alike) may leave this url unmeasured: whatever fits the web url
+    // transitively fits this one. It is NOT a licence to skip measuring
+    // this url everywhere — since the `transport` option (delivery
+    // 2026-08-13, maintenance 2026-08-16) a caller that declares
+    // `outlook-native` has THIS url measured directly, because the reverse
+    // inequality does not hold and the web url may then exceed the limit
+    // unmeasured. If this pin ever inverts, the default's exemption is what
+    // has to be revisited.
     for (const input of [
       BASE_INPUT,
       { ...BASE_INPUT, body: 'x'.repeat(1200) },

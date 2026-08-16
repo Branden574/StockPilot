@@ -12,9 +12,8 @@ import {
 } from '@stockpilot/core';
 
 import {
-  mailtoPlan,
-  planOutlookOpen,
-  runPlan,
+  composeTransportForProbe,
+  openMeasuredDraft,
   type OpenedTransport,
   type OutlookPlatform,
   type OutlookTransportUrls,
@@ -229,7 +228,11 @@ export function buildDeliveryRequestInput(order: DeliveryRequestOrderData): Deli
 export function deliveryComposeTransport(
   nativeOutlook: boolean | null,
 ): DeliveryComposeTransport {
-  return nativeOutlook === true ? 'outlook-native' : 'outlook-web';
+  // The rule itself is shared with the maintenance email (2026-08-16) — see
+  // `composeTransportForProbe`. This export stays because it is this
+  // feature's documented name for it, and because the doc above is the
+  // delivery-specific record of WHY null must mean worst case.
+  return composeTransportForProbe(nativeOutlook);
 }
 
 /**
@@ -256,9 +259,12 @@ export type DeliveryEmailTransport = 'outlook' | 'mailto';
 
 /** `used` is the transport that ACTUALLY carried the draft, and is null for
  *  anything that did not open — so no caller can report a blocked attempt as
- *  a particular app having opened. */
+ *  a particular app having opened. `in_flight` is the double-tap swallow —
+ *  a call that arrived while an earlier open was unresolved fired no openURL
+ *  and no `onOpened` (so no counted draft, and no second request to DC4);
+ *  see `composeOpenInFlight` in ./outlook-transport. */
 export interface DeliveryOpenResult {
-  outcome: 'opened' | 'blocked';
+  outcome: 'opened' | 'blocked' | 'in_flight';
   used: OpenedTransport | null;
 }
 
@@ -323,25 +329,12 @@ export async function openDeliveryRequestDraft(
   onOpened: () => void,
   ccTrusted?: Record<OutlookPlatform, boolean>,
 ): Promise<DeliveryOpenResult> {
-  if (!prepared.linkFits) return { outcome: 'blocked', used: null };
-  const plan =
-    button === 'outlook'
-      ? planOutlookOpen(
-          prepared,
-          {
-            // Straight off the draft that was measured. Never re-derived from a
-            // probe here: a second `canOpenURL` at press time could answer
-            // differently from the one the ladder was fitted against, and the
-            // disagreement would be invisible.
-            nativeOutlookAvailable: prepared.transport === 'outlook-native',
-            platform,
-          },
-          ccTrusted,
-        )
-      : mailtoPlan(prepared);
-  const outcome = await runPlan(plan);
-  if (outcome === 'opened') onOpened();
-  return { outcome, used: outcome === 'opened' ? plan.transport : null };
+  // The stamp-following open lives in `openMeasuredDraft` since 2026-08-16,
+  // when the maintenance opener adopted the identical shape — one body, two
+  // feature-named entry points, so the linkFits refusal, the
+  // no-probe-at-press-time rule and the onOpened-after-real-open ordering
+  // cannot drift between the two features.
+  return openMeasuredDraft(button, prepared, platform, onOpened, ccTrusted);
 }
 
 /**

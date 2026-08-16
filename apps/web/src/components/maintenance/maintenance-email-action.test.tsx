@@ -25,7 +25,7 @@ vi.mock('@/lib/error-reporter', () => ({
 }));
 
 import { MaintenanceEmailAction } from './maintenance-email-action';
-import type { MaintenanceEmailInput } from '@stockpilot/core';
+import { DRAFT_URL_LIMIT, prepareMaintenanceEmail, type MaintenanceEmailInput } from '@stockpilot/core';
 
 const INPUT: MaintenanceEmailInput = {
   requestNumber: 'MR-2026-000123',
@@ -124,6 +124,49 @@ function renderAction(overrides: Partial<Parameters<typeof MaintenanceEmailActio
     <MaintenanceEmailAction requestId="r1" emailInput={INPUT} initialOpenCount={0} {...overrides} />,
   );
 }
+
+describe('WEB DEFAULT PIN: the no-options prepare this component performs is fitted against the WEB url it opens', () => {
+  // This component calls `prepareMaintenanceEmail(emailInput)` with no
+  // transport option and opens `outlookUrl` (window.open below). Since
+  // 2026-08-16 the core builder also accepts `transport: 'outlook-native'`
+  // for the phone; the DEFAULT must remain 'outlook-web', because that is
+  // the url THIS surface hands to the browser. The fixture's full draft
+  // measures over DRAFT_URL_LIMIT on the web url but under it on the native
+  // url — so if the default ever flips, the prepared draft stops condensing,
+  // linkFits stays true, and the url this component would open exceeds the
+  // limit: both assertions below fail, naming the silent truncation that
+  // flip would ship.
+  const LONG_DESCRIPTION_INPUT: MaintenanceEmailInput = {
+    ...CONDENSED_BUT_FITS_INPUT,
+    requestNumber: 'MR-2026-000456',
+    subject: 'Hallway heater grinding and overheating near Room 118',
+    description: [
+      'The heating unit in the main hallway outside Room 118 has been making a loud grinding noise since Monday morning.',
+      'It runs for about ten minutes, shuts off with a bang, and then restarts on its own a few minutes later.',
+      'The thermostat on the wall reads 81 degrees even though it is set to 72, and the air coming out of the vent is cold.',
+      'Two staff members have reported headaches from the noise, and the afternoon study group has been moved to the library as a result.',
+    ].join(' '),
+    accessInstructions: null,
+    relatedItem: null,
+    photoCount: 0,
+    shareUrl: null,
+  };
+
+  it('an undeclared transport is fitted against the web url this component opens, and stays within the limit', () => {
+    const prepared = prepareMaintenanceEmail(LONG_DESCRIPTION_INPUT);
+    expect(prepared.transport).toBe('outlook-web');
+    expect(prepared.linkFits).toBe(true);
+    expect(prepared.outlookUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+  });
+
+  it('the component really opens the url the default measured (window.open receives outlookUrl)', async () => {
+    const prepared = prepareMaintenanceEmail(LONG_DESCRIPTION_INPUT);
+    renderAction({ emailInput: LONG_DESCRIPTION_INPUT });
+    await userEvent.click(screen.getByRole('button', { name: /open in outlook/i }));
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy.mock.calls[0]![0]).toBe(prepared.outlookUrl);
+  });
+});
 
 describe('Open in Outlook (component tests 7, 14)', () => {
   it('opens the compose URL with NO features string and severs the opener', async () => {

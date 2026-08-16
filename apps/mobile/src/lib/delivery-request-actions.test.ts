@@ -319,6 +319,76 @@ describe('CC GATE at the actual openURL call site (not merely in the composer)',
 });
 
 // =========================================================================
+// THE DOUBLE-TAP LATCH (shared `composeOpenInFlight` in ./outlook-transport,
+// pinned per-feature here AND in maintenance-email-actions.test.ts so a
+// future de-share of the opener cannot silently drop it from either — the
+// screens' `disabled` props demonstrably do not close the same-frame window;
+// two calls in one frame both opened before this existed, and for DC4 two
+// compose screens are two real delivery requests).
+// =========================================================================
+
+describe('the double-tap latch — one unresolved open swallows every call behind it', () => {
+  it('two synchronous taps: exactly ONE openURL and ONE counted draft; the second reports in_flight, never blocked', async () => {
+    let release!: () => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        // expo-linking types a successful openURL as Promise<true>.
+        new Promise<true>((resolve) => {
+          release = () => resolve(true);
+        }),
+    );
+    const onOpened = vi.fn();
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const first = openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
+    const second = openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
+    // The swallow settles immediately: no openURL, no counted draft, and the
+    // DISTINCT outcome — `blocked` here would surface retry copy for a tap
+    // that needs none.
+    await expect(second).resolves.toEqual({ outcome: 'in_flight', used: null });
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    expect(onOpened).not.toHaveBeenCalled();
+    release();
+    await expect(first).resolves.toEqual({ outcome: 'opened', used: 'outlook-native' });
+    // The count feed (`onOpened`) fired exactly once for the two taps.
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('the latch RELEASES after a resolved open — a deliberate reopen after settle opens again', async () => {
+    const onOpened = vi.fn();
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    await openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened);
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', onOpened),
+    ).resolves.toEqual({ outcome: 'opened', used: 'outlook-native' });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+    expect(onOpened).toHaveBeenCalledTimes(2);
+  });
+
+  it('the latch RELEASES after a REJECTED open — a stuck latch would brick the button, which is worse than the double-open', async () => {
+    let rejectOpen!: (e: Error) => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        new Promise<true>((_resolve, reject) => {
+          rejectOpen = reject;
+        }),
+    );
+    const prepared = prepareOrderDeliveryRequest(order(), true);
+    const first = openDeliveryRequestDraft('outlook', prepared, 'ios', () => {});
+    // While the doomed open is still unresolved, a tap is swallowed...
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
+    ).resolves.toEqual({ outcome: 'in_flight', used: null });
+    rejectOpen(new Error('no handler'));
+    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    // ...and after the rejection settles, the button works again.
+    await expect(
+      openDeliveryRequestDraft('outlook', prepared, 'ios', () => {}),
+    ).resolves.toEqual({ outcome: 'opened', used: 'outlook-native' });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+  });
+});
+
+// =========================================================================
 // THE LADDER MEASURES THE TRANSPORT THAT ACTUALLY OPENS.
 //
 // The defect this block exists for: core fitted every item row against the
@@ -1061,6 +1131,11 @@ describe('the on-screen notice gates', () => {
       ['opened natively', { outcome: 'opened', used: 'outlook-native' }],
       ['opened in the default mail app', { outcome: 'opened', used: 'default-mail' }],
       ['refused by the OS', { outcome: 'blocked', used: null }],
+      // A swallowed double-tap. NOT a refusal: the first tap's open is still
+      // in flight and will surface its own outcome, so showing retry copy for
+      // the second tap would tell the user the send failed while it is
+      // actually succeeding.
+      ['swallowed while an open was in flight', { outcome: 'in_flight', used: null }],
     ];
 
     const seen: [string, string, boolean][] = [];
@@ -1080,6 +1155,7 @@ describe('the on-screen notice gates', () => {
       ['a draft that fits', 'opened natively', false],
       ['a draft that fits', 'opened in the default mail app', false],
       ['a draft that fits', 'refused by the OS', true],
+      ['a draft that fits', 'swallowed while an open was in flight', false],
       ['a draft too long for any link', 'nothing attempted yet', false],
       ['a draft too long for any link', 'opened natively', false],
       ['a draft too long for any link', 'opened in the default mail app', false],
@@ -1087,6 +1163,7 @@ describe('the on-screen notice gates', () => {
       // nothing was offered, and telling this employee to try again would be a
       // retry that cannot work.
       ['a draft too long for any link', 'refused by the OS', false],
+      ['a draft too long for any link', 'swallowed while an open was in flight', false],
     ]);
   });
 

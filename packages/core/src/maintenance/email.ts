@@ -36,11 +36,18 @@
  * is the condense mechanism doing exactly its job, not a bug.
  *
  * Condense policy (audit Q13, mirrors prepareDeliveryRequest verbatim —
- * storefront-logic.ts:759-799): measure BOTH the Outlook URL and the mailto
- * URL against DRAFT_URL_LIMIT; if either overflows, rebuild with `condensed:
- * true` and re-measure. Audit Q13's preserve list is deliberately narrow —
- * request number, requester name + site, truncated description, one photo
- * link — everything else (category/priority/submitted timestamp, requester
+ * storefront-logic.ts:759-799): measure BOTH the declared transport's compose
+ * URL and the mailto URL against DRAFT_URL_LIMIT; if either overflows,
+ * rebuild with `condensed: true` and re-measure. Which compose URL is "the
+ * declared transport's" comes from the `transport` option (2026-08-16,
+ * mirroring `prepareDeliveryRequest`): the default — and the only thing any
+ * web caller ever measures — is the expensive, double-encoded Outlook WEB
+ * URL, so the default output is byte-identical to what shipped; a mobile
+ * caller that has PROVED the native app will open may declare
+ * `outlook-native` and fit against the shorter `ms-outlook://` budget
+ * instead. Audit Q13's preserve list is deliberately narrow — request
+ * number, requester name + site, truncated description, one photo link —
+ * everything else (category/priority/submitted timestamp, requester
  * email/phone/department, location detail, the related-record block,
  * access instructions, the reply-thread sentence) drops first. If the
  * condensed pair STILL overflows, `linkFits` is false and the caller must
@@ -53,6 +60,7 @@ import {
   composeMailtoUrl,
   composeClipboardText,
   DRAFT_URL_LIMIT,
+  type ComposeTransport,
 } from '../email/outlook-compose';
 import {
   L4L_MAINTENANCE_EMAIL,
@@ -117,19 +125,47 @@ export interface MaintenanceEmailDraft {
 export interface PreparedMaintenanceEmail {
   draft: MaintenanceEmailDraft;
   /** OWA WEB compose deep link (https). What the web app opens in a new tab.
-   *  Unchanged, byte-for-byte — do NOT repoint this at the native scheme. */
+   *  Unchanged, byte-for-byte — do NOT repoint this at the native scheme.
+   *
+   *  MEASURED ONLY UNDER `transport: 'outlook-web'` (the default). A caller
+   *  that asked for `outlook-native` has declared that this url is not the
+   *  one it opens, and this field may then exceed `DRAFT_URL_LIMIT` even
+   *  while `linkFits` is true — opening it anyway would truncate the body
+   *  silently. `transport` below records which url the condense pass
+   *  actually fitted. */
   outlookUrl: string;
   /** NATIVE Outlook app deep link (ms-outlook://compose). ADDED alongside
    *  `outlookUrl`, never instead of it: handing the https URL to
    *  Linking.openURL lands the employee in a browser on Outlook Web, which is
    *  correct on desktop and wrong on a phone. Same draft, same CC, same
-   *  encoder — only the transport differs. */
+   *  encoder — only the transport differs.
+   *
+   *  MEASURED ONLY UNDER `transport: 'outlook-native'`. Under the web default
+   *  it is still safe to open unmeasured, because it is shorter than
+   *  `outlookUrl` for identical input by construction (one encoding layer on
+   *  a 20-character scheme, against a double-encoded inner mailto on a
+   *  52-character https base) — that inequality is pinned per fixture below
+   *  and in ../email/outlook-compose.test.ts. The reverse direction is NOT
+   *  true, which is why `outlookUrl` above carries the opposite warning. */
   outlookMobileUrl: string;
+  /** RFC 6068 `mailto:`. Measured under BOTH transports — every surface
+   *  offers it, either as its own button or as the cc-untrusted reroute. */
   mailtoUrl: string;
+  /** Which url the condense pass was fitted against. Echoed back so a caller
+   *  can assert that what it opens is what was measured — the mobile opener
+   *  follows this stamp rather than taking a second probe argument. */
+  transport: ComposeTransport;
   /** ALWAYS the full draft — the clipboard has no URL-length limit. */
   clipboardText: string;
   /** False means NEITHER link may be opened (silent truncation). */
   linkFits: boolean;
+}
+
+export interface PrepareMaintenanceEmailOptions {
+  /** The compose url this surface will open. Defaults to the longest one,
+   *  `outlook-web`, so an undeclared transport under-fills rather than
+   *  truncating. See `ComposeTransport`. */
+  transport?: ComposeTransport;
 }
 
 export const MAINTENANCE_CONDENSED_DISCLOSURE =
@@ -423,36 +459,89 @@ function urlsFor(draft: MaintenanceEmailDraft): {
 }
 
 /** Measure-then-degrade, the prepareDeliveryRequest pattern verbatim
- *  (storefront-logic.ts:770-799). */
-export function prepareMaintenanceEmail(input: MaintenanceEmailInput): PreparedMaintenanceEmail {
-  const full = buildMaintenanceEmailDraft(input);
-  const fullUrls = urlsFor(full);
+ *  (now packages/core/src/orders/delivery-request.ts — the ancestry is
+ *  storefront-logic.ts:770-799).
+ *
+ *  THE MEASURED PAIR IS THE DECLARED TRANSPORT'S URL AND THE MAILTO
+ *  (2026-08-16, mirroring the delivery ladder's own fix of 2026-08-13).
+ *  It used to be hard-wired to the web URL + the mailto, with the native
+ *  url exempt on the grounds that it is structurally shorter than the web
+ *  url for identical input — true, and still pinned per fixture in
+ *  email.test.ts and outlook-compose.test.ts, but that inequality only
+ *  justifies leaving the native url UNMEASURED UNDER THE WEB DEFAULT. A
+ *  phone that opens `ms-outlook://` was having its body condensed to fit a
+ *  url it never opens, throwing away hundreds of characters of native
+ *  headroom — long descriptions truncated at 400 chars, and the category/
+ *  priority/location/contact blocks dropped, on a body the native url
+ *  carries whole. Exactly the delivery defect, one feature over (recurring
+ *  pattern #26), so it takes exactly the delivery fix: the caller declares
+ *  the transport it will open, the condense decision measures THAT url
+ *  (plus the mailto, which every surface can open as the cc-untrusted
+ *  reroute), and the result is stamped with what was fitted.
+ *
+ *  The default is `outlook-web` — the WORST case, byte-identical to what
+ *  shipped — so both web call sites, which pass no options, are unchanged,
+ *  and an unknown or unprobed transport under-fills rather than silently
+ *  truncating. Under `outlook-native` the WEB url is genuinely unmeasured
+ *  and may exceed `DRAFT_URL_LIMIT` while `linkFits` is true; a caller
+ *  declaring native is asserting it will not open `outlookUrl`, which the
+ *  mobile opener discharges by following the stamp on this result. */
+export function prepareMaintenanceEmail(
+  input: MaintenanceEmailInput,
+  opts: PrepareMaintenanceEmailOptions = {},
+): PreparedMaintenanceEmail {
+  const transport = opts.transport ?? 'outlook-web';
+
+  // Compose ONE candidate draft into all three transports and rule on it.
+  // All three are built on both rungs — not only the chosen one — so the
+  // native url can never be composed from a different rung than the one the
+  // limit check saw (the delivery ladder's own invariant, kept here).
+  const measure = (draft: MaintenanceEmailDraft) => {
+    const urls = urlsFor(draft);
+    const composeUrl = transport === 'outlook-native' ? urls.outlookMobileUrl : urls.outlookUrl;
+    return {
+      draft,
+      ...urls,
+      // The mailto term is BELT-AND-BRACES, and it is honest to say so: for
+      // this body shape the mailto is strictly shorter than either compose
+      // url (the web url double-encodes the body; the native url carries
+      // ~16 chars more base than `mailto:` + a path address), so the term
+      // never binds and deleting it changes no observable output today. The
+      // cc-untrusted reroute's safety therefore rests on that measured
+      // inequality — pinned in email.test.ts as "the mailto is strictly
+      // inside whichever compose url was measured" — with this term kept so
+      // a future transport whose mailto is NOT shortest fails closed here
+      // rather than truncating silently.
+      fits: composeUrl.length <= DRAFT_URL_LIMIT && urls.mailtoUrl.length <= DRAFT_URL_LIMIT,
+    };
+  };
+
+  const full = measure(buildMaintenanceEmailDraft(input));
   // ALWAYS the full draft — the clipboard has no URL-length limit, so this
   // is computed once, before any condensing decision, and reused verbatim
   // in both return paths below.
-  const clipboardText = composeClipboardText(full);
+  const clipboardText = composeClipboardText(full.draft);
 
-  // The measured pair stays EXACTLY the web URL and the mailto URL — the
-  // condense decision (and therefore the body every platform sends) is
-  // byte-identical to what shipped. `outlookMobileUrl` is deliberately NOT
-  // added to this comparison: it is structurally shorter than `outlookUrl`
-  // for identical input (one encoding layer onto a 20-char scheme, versus a
-  // double-encoded inner mailto onto a 52-char https base), so the existing
-  // guard already covers it. Pinned by test in BOTH email.test.ts and
-  // outlook-compose.test.ts — if that inequality ever inverts, those tests
-  // fail and this comparison has to grow a third term.
-  if (fullUrls.outlookUrl.length <= DRAFT_URL_LIMIT && fullUrls.mailtoUrl.length <= DRAFT_URL_LIMIT) {
-    return { draft: full, ...fullUrls, clipboardText, linkFits: true };
+  if (full.fits) {
+    return {
+      draft: full.draft,
+      outlookUrl: full.outlookUrl,
+      outlookMobileUrl: full.outlookMobileUrl,
+      mailtoUrl: full.mailtoUrl,
+      transport,
+      clipboardText,
+      linkFits: true,
+    };
   }
 
-  const condensed = buildMaintenanceEmailDraft(input, { condensed: true });
-  const condensedUrls = urlsFor(condensed);
+  const condensed = measure(buildMaintenanceEmailDraft(input, { condensed: true }));
   return {
-    draft: condensed,
-    ...condensedUrls,
+    draft: condensed.draft,
+    outlookUrl: condensed.outlookUrl,
+    outlookMobileUrl: condensed.outlookMobileUrl,
+    mailtoUrl: condensed.mailtoUrl,
+    transport,
     clipboardText,
-    linkFits:
-      condensedUrls.outlookUrl.length <= DRAFT_URL_LIMIT &&
-      condensedUrls.mailtoUrl.length <= DRAFT_URL_LIMIT,
+    linkFits: condensed.fits,
   };
 }

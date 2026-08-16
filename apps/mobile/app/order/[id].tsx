@@ -1887,16 +1887,23 @@ export default function OrderDetail() {
                   {/* The terminal transport. ALWAYS the full, uncondensed
                       message including both recipients, so the employee can
                       complete the task by hand no matter what failed. There is
-                      no clipboard module in this binary, so the selectable box
-                      IS the copy affordance. */}
-                  <Mono size={10.5} color={c.ink4}>
+                      no clipboard module in this binary, so this selectable,
+                      read-only textarea IS the copy affordance — and ONE TAP
+                      selects the whole message (selectTextOnFocus), matching
+                      the maintenance twin (app/maintenance/[id].tsx) verbatim
+                      rather than the long-press-and-drag a plain Body text
+                      demanded here before. */}
+                  <TextInput
+                    multiline
+                    editable={false}
+                    selectTextOnFocus
+                    value={deliveryPrepared.clipboardText}
+                    style={[styles.copyBox, { color: c.ink, borderColor: c.hair }]}
+                    accessibilityLabel="Delivery request text to copy manually"
+                  />
+                  <Body size={11.5} muted style={{ marginTop: 6 }}>
                     {DR_COPY_HELPER}
-                  </Mono>
-                  <Card padding={14}>
-                    <Body size={12} color={c.ink} selectable>
-                      {deliveryPrepared.clipboardText}
-                    </Body>
-                  </Card>
+                  </Body>
                 </>
               ) : (
                 actionBtn(
@@ -2621,6 +2628,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  // Copied VERBATIM from app/maintenance/[id].tsx `copyBox` — the two copy
+  // affordances are twins, and mobile vitest cannot reach either .tsx, so
+  // byte-for-byte parity with the hand-tested twin is the enforcement.
+  copyBox: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 12.5,
+    fontFamily: FONT.mono,
+    minHeight: 140,
+    textAlignVertical: 'top',
+  },
   tile: { width: '31%', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
   tileImg: { width: '100%', height: 90 },
   tileFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 6 },

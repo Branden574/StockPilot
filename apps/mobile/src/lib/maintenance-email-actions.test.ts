@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
 
-import { prepareMaintenanceEmail } from '@stockpilot/core';
+import { DRAFT_URL_LIMIT, type MaintenanceEmailInput } from '@stockpilot/core';
 
 import {
   BLOCKED_HEADLINE,
@@ -14,10 +14,9 @@ import {
   NATIVE_OUTLOOK_CC_TRUSTED,
   OVERSIZED_MESSAGE,
   SUCCESS_MESSAGE,
-  openMailtoDraft,
   openMaintenanceDraft,
-  openOutlookDraft,
   planOutlookOpen,
+  prepareMobileMaintenanceEmail,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
   successMessageFor,
@@ -25,6 +24,7 @@ import {
   SHARE_LINK_SHOW_ONCE_NOTICE,
   withShareUrl,
 } from './maintenance-email-actions';
+import { composeTransportForProbe, nativeOutlookAvailable } from './outlook-transport';
 
 // expo-linking is a real, already-installed dependency (~7.1.7 —
 // apps/mobile/package.json), never a new native module. vi.mock calls are
@@ -35,7 +35,7 @@ import {
 // idiom Task 19's fix-wave established for this exact class of warning.
 vi.mock('expo-linking', () => ({ openURL: vi.fn(async () => undefined), canOpenURL: vi.fn(async () => true) }));
 
-const PREPARED = prepareMaintenanceEmail({
+const INPUT: MaintenanceEmailInput = {
   requestNumber: 'MR-2026-000123',
   subject: 'AC broken',
   description: 'Warm air.',
@@ -55,7 +55,15 @@ const PREPARED = prepareMaintenanceEmail({
   relatedRental: null,
   photoCount: 0,
   shareUrl: null,
-});
+};
+
+/** Fitted for a phone whose probe PROVED the native app — stamped
+ *  `outlook-native`, so the opener's outlook button takes the deep link. */
+const PREPARED = prepareMobileMaintenanceEmail(INPUT, true);
+/** Fitted worst-case — no native app (or the probe has not answered).
+ *  Stamped `outlook-web`; identical body on this small input, different
+ *  stamp, different opened url. */
+const PREPARED_WEB = prepareMobileMaintenanceEmail(INPUT, false);
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -82,8 +90,11 @@ function ccOf(url: string): string | undefined {
 const ACCEPTED_CC_FORMS = ['arosas@cvwest.org', 'Andrew Rosas <arosas@cvwest.org>'];
 
 describe('mobile email actions (string assertions ONLY — never a real open in tests)', () => {
-  it('THE FIX: the outlook action opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
-    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('opened');
+  it('THE FIX: on a native-stamped draft the outlook button opens the NATIVE ms-outlook: deep link, never an https URL a browser would take', async () => {
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('ms-outlook://compose?')).toBe(true);
     expect(url.startsWith('http')).toBe(false);
@@ -92,45 +103,139 @@ describe('mobile email actions (string assertions ONLY — never a real open in 
   });
 
   it('CC GATE: exactly ONE openURL invocation per tap — the deep link is never auto-retried (duplicate compose screens)', async () => {
-    await openOutlookDraft(PREPARED, 'ios');
+    await openMaintenanceDraft('outlook', PREPARED, 'ios', () => {});
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
 
-  it('no native Outlook installed: falls back to the tenant-verified web compose URL, CC still intact', async () => {
-    vi.mocked(Linking.canOpenURL).mockResolvedValueOnce(false);
-    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('opened');
+  it('no native Outlook installed (web-stamped draft): falls back to the tenant-verified web compose URL, CC still intact', async () => {
+    await expect(openMaintenanceDraft('outlook', PREPARED_WEB, 'ios', () => {})).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-web',
+    });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=')).toBe(true);
     expect(ccOf(url)).toBe('Andrew Rosas <arosas@cvwest.org>');
   });
 
-  it('a canOpenURL rejection is treated as "not installed", never as a crash — one open, web transport', async () => {
+  it('a canOpenURL rejection is read as "not installed", so the probe can never hand this feature a false true', async () => {
+    // The probe runs at the SCREEN, once, and its answer feeds the prepare
+    // call — so what this feature depends on is that a throwing canOpenURL
+    // resolves to `false`, never to a truthy value that would select the
+    // unmeasured native budget.
     vi.mocked(Linking.canOpenURL).mockRejectedValueOnce(new Error('scheme not declared'));
-    await expect(openOutlookDraft(PREPARED, 'android')).resolves.toBe('opened');
-    expect(Linking.openURL).toHaveBeenCalledTimes(1);
-    const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
-    expect(url.startsWith('https://outlook.cloud.microsoft/')).toBe(true);
+    const probed = await nativeOutlookAvailable();
+    expect(probed).toBe(false);
+    expect(composeTransportForProbe(probed)).toBe('outlook-web');
   });
 
   it('mailto action opens the RFC 6068 URL with the CC intact', async () => {
-    await expect(openMailtoDraft(PREPARED)).resolves.toBe('opened');
+    await expect(openMaintenanceDraft('mailto', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'opened',
+      used: 'default-mail',
+    });
     const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
     expect(url.startsWith('mailto:dc4@learn4life.org?cc=arosas%40cvwest.org')).toBe(true);
   });
 
-  it('linkFits=false refuses to open either transport (and never even probes for Outlook)', async () => {
+  it('linkFits=false refuses to open either transport', async () => {
     const oversized = { ...PREPARED, linkFits: false };
-    await expect(openOutlookDraft(oversized, 'ios')).resolves.toBe('blocked');
-    await expect(openMailtoDraft(oversized)).resolves.toBe('blocked');
+    await expect(openMaintenanceDraft('outlook', oversized, 'ios', () => {})).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+    });
+    await expect(openMaintenanceDraft('mailto', oversized, 'ios', () => {})).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+    });
     expect(Linking.openURL).not.toHaveBeenCalled();
+  });
+
+  it('the opener NEVER probes: canOpenURL is not called at press time, on any path — the stamp is the only transport authority', async () => {
+    await openMaintenanceDraft('outlook', PREPARED, 'ios', () => {});
+    await openMaintenanceDraft('outlook', PREPARED_WEB, 'android', () => {});
+    await openMaintenanceDraft('mailto', PREPARED, 'ios', () => {});
+    await openMaintenanceDraft('outlook', { ...PREPARED, linkFits: false }, 'ios', () => {});
     expect(Linking.canOpenURL).not.toHaveBeenCalled();
   });
 
   it('an openURL rejection reports blocked instead of throwing — and does NOT silently open something else', async () => {
     vi.mocked(Linking.openURL).mockRejectedValueOnce(new Error('no handler'));
-    await expect(openOutlookDraft(PREPARED, 'ios')).resolves.toBe('blocked');
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'blocked',
+      used: null,
+    });
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =========================================================================
+// THE DOUBLE-TAP LATCH (shared `composeOpenInFlight` in ./outlook-transport,
+// pinned per-feature here AND in delivery-request-actions.test.ts so a
+// future de-share of the opener cannot silently drop it from either — the
+// screen's `disabled={busy}` demonstrably does not close the same-frame
+// window: state has not flushed within the frame, and two opens are two
+// compose screens and potentially two Zendesk tickets).
+// =========================================================================
+
+describe('the double-tap latch — one unresolved open swallows every call behind it', () => {
+  it('two synchronous taps: exactly ONE openURL and ONE onOpened (so ONE counted draft and ONE recordDraftOpened); the second reports in_flight, never blocked', async () => {
+    let release!: () => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        // expo-linking types a successful openURL as Promise<true>.
+        new Promise<true>((resolve) => {
+          release = () => resolve(true);
+        }),
+    );
+    const onOpened = vi.fn();
+    const first = openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    const second = openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    // The swallow settles immediately: no openURL, no counted draft, and the
+    // DISTINCT outcome — `blocked` here would surface retry copy for a tap
+    // that needs none.
+    await expect(second).resolves.toEqual({ outcome: 'in_flight', used: null });
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    expect(onOpened).not.toHaveBeenCalled();
+    release();
+    await expect(first).resolves.toEqual({ outcome: 'opened', used: 'outlook-native' });
+    // The count feed (`onOpened`) fired exactly once for the two taps.
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('the latch RELEASES after a resolved open — a deliberate reopen after settle opens again', async () => {
+    const onOpened = vi.fn();
+    await openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened);
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', onOpened)).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+    expect(onOpened).toHaveBeenCalledTimes(2);
+  });
+
+  it('the latch RELEASES after a REJECTED open — a stuck latch would brick the button, which is worse than the double-open', async () => {
+    let rejectOpen!: (e: Error) => void;
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () =>
+        new Promise<true>((_resolve, reject) => {
+          rejectOpen = reject;
+        }),
+    );
+    const first = openMaintenanceDraft('outlook', PREPARED, 'ios', () => {});
+    // While the doomed open is still unresolved, a tap is swallowed...
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'in_flight',
+      used: null,
+    });
+    rejectOpen(new Error('no handler'));
+    await expect(first).resolves.toEqual({ outcome: 'blocked', used: null });
+    // ...and after the rejection settles, the button works again.
+    await expect(openMaintenanceDraft('outlook', PREPARED, 'ios', () => {})).resolves.toEqual({
+      outcome: 'opened',
+      used: 'outlook-native',
+    });
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -202,9 +307,8 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
   });
 
   it('reports which transport ACTUALLY ran, so the screen never claims Outlook opened when it did not', async () => {
-    vi.mocked(Linking.canOpenURL).mockResolvedValueOnce(false);
     const onOpened = vi.fn();
-    await expect(openMaintenanceDraft('outlook', PREPARED, 'android', onOpened)).resolves.toEqual({
+    await expect(openMaintenanceDraft('outlook', PREPARED_WEB, 'android', onOpened)).resolves.toEqual({
       outcome: 'opened',
       used: 'outlook-web',
     });
@@ -231,6 +335,162 @@ describe('openMaintenanceDraft — R3 ordering (open first, record ONLY after a 
     // One tap, one invocation — no automatic second attempt down another
     // transport, which is how duplicate compose screens got created before.
     expect(Linking.openURL).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =========================================================================
+// THE BODY IS FITTED AGAINST THE URL THIS PHONE WILL OPEN — the delivery
+// fix (2026-08-13), mirrored for maintenance (2026-08-16). Before this, the
+// maintenance email was always condensed against the double-encoded https
+// OWA url, so a phone with Outlook installed truncated long descriptions
+// and dropped the category/priority/contact/location blocks while its own
+// `ms-outlook://` url sat hundreds of characters under the limit.
+// =========================================================================
+
+describe('the maintenance email is fitted against the url this phone will open', () => {
+  /** A realistic request whose only excess is a long (465-char) description
+   *  — the class of input the native budget recovers. Same fixture the core
+   *  suite measures: full-draft web url 2199 (over), native 1646 and mailto
+   *  1627 (both under). */
+  const REALISTIC_LONG: MaintenanceEmailInput = {
+    ...INPUT,
+    requestNumber: 'MR-2026-000456',
+    subject: 'Hallway heater grinding and overheating near Room 118',
+    description: [
+      'The heating unit in the main hallway outside Room 118 has been making a loud grinding noise since Monday morning.',
+      'It runs for about ten minutes, shuts off with a bang, and then restarts on its own a few minutes later.',
+      'The thermostat on the wall reads 81 degrees even though it is set to 72, and the air coming out of the vent is cold.',
+      'Two staff members have reported headaches from the noise, and the afternoon study group has been moved to the library as a result.',
+    ].join(' '),
+    category: 'Heating or air conditioning',
+    requesterEmail: 'jane.smith@learn4life.org',
+    requesterPhone: '(555) 555-0199',
+    siteName: 'Fresno Learning Center',
+    department: 'Operations',
+    building: 'Main Building',
+    roomOrArea: 'Room 204',
+  };
+
+  it('THE DEFECT: a phone with Outlook installed carries the FULL body where the web budget truncated it', () => {
+    const web = prepareMobileMaintenanceEmail(REALISTIC_LONG, false);
+    const native = prepareMobileMaintenanceEmail(REALISTIC_LONG, true);
+
+    // Both really run the condense decision — the web one condenses, the
+    // native one keeps the whole draft.
+    expect(web.draft.condensed).toBe(true);
+    expect(native.draft.condensed).toBe(false);
+    expect(native.linkFits).toBe(true);
+
+    // The recovered content, named: the full description and the blocks the
+    // condensed shape drops.
+    expect(native.draft.body).toContain(REALISTIC_LONG.description);
+    expect(web.draft.body).not.toContain(REALISTIC_LONG.description);
+    expect(native.draft.body).toContain('Category: Heating or air conditioning');
+    expect(web.draft.body).not.toContain('Category:');
+    expect(native.draft.body.length).toBeGreaterThan(web.draft.body.length);
+  });
+
+  it('THE HEADROOM, numerically: the web-fitted draft leaves the native url hundreds of characters short of the limit', () => {
+    const web = prepareMobileMaintenanceEmail(REALISTIC_LONG, false);
+    const wasted = DRAFT_URL_LIMIT - web.outlookMobileUrl.length;
+    expect(wasted).toBeGreaterThan(400);
+    const native = prepareMobileMaintenanceEmail(REALISTIC_LONG, true);
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(DRAFT_URL_LIMIT - native.outlookMobileUrl.length).toBeLessThan(wasted);
+  });
+
+  it('whatever the opener opens is a url that was MEASURED — across every probe answer and platform', async () => {
+    for (const nativeOutlook of [true, false, null] as const) {
+      for (const platform of ['ios', 'android'] as const) {
+        vi.mocked(Linking.openURL).mockClear();
+        const prepared = prepareMobileMaintenanceEmail(REALISTIC_LONG, nativeOutlook);
+        expect(prepared.linkFits).toBe(true);
+        await openMaintenanceDraft('outlook', prepared, platform, () => {});
+        const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+        expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+        // ...and it is the transport the prepare pass declared it was fitting.
+        expect(url).toBe(
+          prepared.transport === 'outlook-native' ? prepared.outlookMobileUrl : prepared.outlookUrl,
+        );
+      }
+    }
+  });
+
+  it('the native budget genuinely leaves the WEB url unmeasured — which is why the stamp pairing is not optional', () => {
+    const native = prepareMobileMaintenanceEmail(REALISTIC_LONG, true);
+    expect(native.linkFits).toBe(true);
+    expect(native.transport).toBe('outlook-native');
+    expect(native.outlookMobileUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(native.outlookUrl.length).toBeGreaterThan(DRAFT_URL_LIMIT);
+  });
+
+  it("STRUCTURAL: the opener follows the DRAFT'S OWN stamp, so a mismatched pair cannot be constructed", async () => {
+    for (const [nativeOutlook, expectedTransport, expectedUrlKey] of [
+      [true, 'outlook-native', 'outlookMobileUrl'],
+      [false, 'outlook-web', 'outlookUrl'],
+      [null, 'outlook-web', 'outlookUrl'],
+    ] as const) {
+      vi.mocked(Linking.openURL).mockClear();
+      const prepared = prepareMobileMaintenanceEmail(REALISTIC_LONG, nativeOutlook);
+      expect(prepared.transport).toBe(expectedTransport);
+      await openMaintenanceDraft('outlook', prepared, 'ios', () => {});
+      expect(vi.mocked(Linking.openURL).mock.calls[0]![0]).toBe(prepared[expectedUrlKey]);
+    }
+
+    // And the stamp is what is read — not a probe, not a default. A draft
+    // measured for the web budget opens the WEB url even on a device whose
+    // native app is available, because the web url is the one that was
+    // fitted. Proving that mattered: on this fixture the two urls carry
+    // DIFFERENT bodies (condensed vs full), so "either would have passed"
+    // is not true here.
+    vi.mocked(Linking.openURL).mockClear();
+    const webFitted = prepareMobileMaintenanceEmail(REALISTIC_LONG, false);
+    await openMaintenanceDraft('outlook', webFitted, 'ios', () => {});
+    expect(vi.mocked(Linking.openURL).mock.calls[0]![0]).toBe(webFitted.outlookUrl);
+    expect(webFitted.outlookMobileUrl).not.toBe(webFitted.outlookUrl);
+  });
+
+  it('TYPE-LEVEL PIN: the opener takes no probe answer, so the screen cannot pass one that disagrees', () => {
+    const call = () =>
+      // @ts-expect-error `nativeOutlook` is not a parameter: the transport
+      // comes from `prepared`. If this argument is ever reinstated, the
+      // directive becomes unused and `pnpm typecheck` fails with TS2578 —
+      // which is the point, because reinstating it reintroduces the
+      // divergence between what was measured and what opens.
+      openMaintenanceDraft('outlook', PREPARED, 'ios', false, () => {});
+    // Never invoked: the assertion is that the line above does not typecheck.
+    expect(typeof call).toBe('function');
+  });
+
+  it('the mailto reroute is safe under BOTH budgets: core measures it either way', async () => {
+    // planOutlookOpen sends a cc-untrusted platform to mailto. That url is
+    // not the one `transport` names, so it is only safe because core
+    // measures the mailto on both rungs regardless of transport.
+    const native = prepareMobileMaintenanceEmail(REALISTIC_LONG, true);
+    expect(native.mailtoUrl.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    const res = await openMaintenanceDraft('outlook', native, 'ios', () => {}, {
+      ios: false,
+      android: true,
+    });
+    expect(res).toEqual({ outcome: 'opened', used: 'default-mail' });
+    const url = vi.mocked(Linking.openURL).mock.calls[0]![0] as string;
+    expect(url.length).toBeLessThanOrEqual(DRAFT_URL_LIMIT);
+    expect(ccOf(url)).toBe('arosas@cvwest.org');
+  });
+
+  it('composeTransportForProbe: only a PROVED native app selects the shorter budget', () => {
+    expect(composeTransportForProbe(true)).toBe('outlook-native');
+    expect(composeTransportForProbe(false)).toBe('outlook-web');
+    expect(composeTransportForProbe(null)).toBe('outlook-web');
+  });
+
+  it('the prepared email records which transport it was fitted for, and the default is the WORST case', () => {
+    expect(prepareMobileMaintenanceEmail(INPUT, true).transport).toBe('outlook-native');
+    expect(prepareMobileMaintenanceEmail(INPUT, false).transport).toBe('outlook-web');
+    expect(prepareMobileMaintenanceEmail(INPUT, null).transport).toBe('outlook-web');
+    // A caller that forgets the probe answer under-fills rather than
+    // truncating:
+    expect(prepareMobileMaintenanceEmail(INPUT).transport).toBe('outlook-web');
   });
 });
 

@@ -68,6 +68,33 @@ export const OUTLOOK_MOBILE_COMPOSE_BASE = 'ms-outlook://compose';
  *  ~2,000 chars. 1,800 leaves headroom for tenant redirect wrappers. */
 export const DRAFT_URL_LIMIT = 1800;
 
+/**
+ * WHICH COMPOSE URL THE CALLING SURFACE WILL ACTUALLY HAND TO THE OS.
+ *
+ * A MEASUREMENT input, not a rendering option: every prepare* builder that
+ * degrades a body to fit `DRAFT_URL_LIMIT` (delivery's row ladder, the
+ * maintenance condense pass) fits it against the url the caller declares it
+ * will open, and the two transports have very different budgets for the same
+ * body.
+ *
+ *  - `outlook-web` — the https OWA deep link. Its body rides inside a
+ *    `?mailtouri=` wrapper and is therefore percent-encoded TWICE (a space
+ *    costs `%2520`, an em-dash `%25E2%2580%2594`), on top of a 52-character
+ *    base. This is the expensive one, and the DEFAULT: it is the longest url
+ *    any surface opens, so a body fitted for it fits every transport, and an
+ *    undeclared or unknown transport can never cause silent truncation.
+ *  - `outlook-native` — `ms-outlook://compose`. A 20-character scheme and ONE
+ *    encoding layer, roughly 25-30% shorter for the same body.
+ *
+ * A caller may only declare `outlook-native` when it KNOWS the native app is
+ * the one that will open. On mobile that answer comes from ONE `canOpenURL`
+ * probe whose value feeds the prepare call and nothing else; the opener then
+ * follows the transport STAMPED on the prepared result, so measure and open
+ * cannot diverge. See `deliveryComposeTransport` / `composeTransportForProbe`
+ * in apps/mobile/src/lib for the probe rule (`null` = worst case).
+ */
+export type ComposeTransport = 'outlook-web' | 'outlook-native';
+
 /** %20 for spaces, never '+'. See module doc. */
 export function encodeDraftQuery(params: Record<string, string>): string {
   return Object.entries(params)

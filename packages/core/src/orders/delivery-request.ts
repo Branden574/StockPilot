@@ -31,6 +31,7 @@ import {
   composeMailtoUrl,
   composeOutlookMobileUrl,
   composeOutlookWebUrl,
+  type ComposeTransport,
 } from '../email/outlook-compose';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
 
@@ -854,8 +855,13 @@ export function buildDeliveryRequestClipboardText(draft: DeliveryRequestDraft): 
  * one that will open — see `deliveryComposeTransport` in
  * apps/mobile/src/lib/delivery-request-actions.ts, which derives this and the
  * open plan from one probe answer so the two cannot disagree.
+ *
+ * The union itself is the SHARED `ComposeTransport` (../email/outlook-compose)
+ * since 2026-08-16, when the maintenance twin gained the same option — one
+ * definition, two feature-named views, so the two ladders cannot drift apart
+ * on what a transport even is.
  */
-export type DeliveryComposeTransport = 'outlook-web' | 'outlook-native';
+export type DeliveryComposeTransport = ComposeTransport;
 
 export interface PrepareDeliveryRequestOptions {
   /** The compose url this surface will open. Defaults to the longest one,

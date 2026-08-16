@@ -27,7 +27,6 @@ import {
   MAINTENANCE_RESOLUTION_NOTE_MAX,
   MAINTENANCE_STATUS_LABELS,
   formatMaintenanceRequestNumber,
-  prepareMaintenanceEmail,
   type MaintenanceEmailInput,
 } from '@stockpilot/core';
 
@@ -99,14 +98,16 @@ import {
   SHARE_LINK_EXISTS_NOTICE,
   SHARE_LINK_SHOW_ONCE_NOTICE,
   openMaintenanceDraft,
+  prepareMobileMaintenanceEmail,
   shouldConfirmBeforeOpening,
   shouldShowCondensedNotice,
   successMessageFor,
   withShareUrl,
   type EmailTransport,
-  type OpenedTransport,
+  type MaintenanceOpenResult,
   type OutlookPlatform,
 } from '@/lib/maintenance-email-actions';
+import { nativeOutlookAvailable } from '@/lib/outlook-transport';
 import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
 import {
   PHOTO_UPLOAD_GENERIC_ERROR,
@@ -308,10 +309,11 @@ export default function MaintenanceRequestDetailScreen() {
   const [sharePending, setSharePending] = React.useState(false);
   const [openCount, setOpenCount] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
-  const [lastResult, setLastResult] = React.useState<{
-    used: OpenedTransport | null;
-    outcome: 'opened' | 'blocked';
-  } | null>(null);
+  // The lib's own result type, not an inline restatement of it — the union
+  // grew an `in_flight` outcome (double-tap swallow) and a retyped shape here
+  // is exactly how the two would drift (pattern #26). `in_flight` renders
+  // nothing below: both cards key on 'opened' / 'blocked'.
+  const [lastResult, setLastResult] = React.useState<MaintenanceOpenResult | null>(null);
   const [copyOpen, setCopyOpen] = React.useState(false);
 
   // Task 10 — CLOSE-OUT card state. Bumping `refreshKey` re-fires the load
@@ -377,12 +379,42 @@ export default function MaintenanceRequestDetailScreen() {
     };
   }, [enabled, id, refreshKey]);
 
+  /**
+   * Is the native Outlook app installed? Probed ONCE, held here, and fed to
+   * `prepareMobileMaintenanceEmail` — the ONLY consumer. The opener never
+   * sees this value: it reads `transport` off the prepared draft, the field
+   * core stamped when it measured the body, so measure and open cannot
+   * disagree. Same shape (and same reasoning) as the order screen's probe.
+   *
+   * This is plumbing, not a decision: every rule about what `null` means and
+   * which transport follows from it lives in `composeTransportForProbe` in
+   * lib/outlook-transport, where vitest can reach it. `null` until the probe
+   * resolves, which is the WORST-CASE budget (the long https url) and also
+   * the url that would open during that window — so a tap before it settles
+   * is consistent, merely carrying a shorter body.
+   */
+  const [nativeOutlook, setNativeOutlook] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    void nativeOutlookAvailable().then((available) => {
+      if (alive) setNativeOutlook(available);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Pure, deterministic (no clock, no DOM) — recomputed only when the
-  // server payload or a freshly-generated share URL changes, matching web's
-  // identical useMemo (there the merge happens via the share-link context).
+  // server payload, a freshly-generated share URL or the settled probe
+  // answer changes, matching web's identical useMemo (there the merge
+  // happens via the share-link context, and there is no probe: web always
+  // opens the worst-case url the default transport measures).
   const prepared = React.useMemo(
-    () => (emailInput ? prepareMaintenanceEmail(withShareUrl(emailInput, generatedShareUrl)) : null),
-    [emailInput, generatedShareUrl],
+    () =>
+      emailInput
+        ? prepareMobileMaintenanceEmail(withShareUrl(emailInput, generatedShareUrl), nativeOutlook)
+        : null,
+    [emailInput, generatedShareUrl, nativeOutlook],
   );
 
   // Explicit Generate/Regenerate (mig 0330): the ONLY way to obtain a URL.
