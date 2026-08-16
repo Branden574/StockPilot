@@ -2,7 +2,9 @@
 
 Status: contract documentation, written 2026-08-16. No code was changed for this
 document; every claim cites the file and, where one exists, the pinning test
-that enforces it. Line numbers are as of this commit.
+that enforces it. Same-file citations use TEST NAMES rather than line
+numbers — line numbers drift the moment a neighbouring test is added, and
+this document has already outlived one such drift.
 
 ## Why this document exists
 
@@ -111,8 +113,8 @@ All shapes below are produced by `buildDeliveryRequestDraft` in
 `apps/web/src/components/orders/storefront/storefront-logic.test.ts` (153
 tests, running against the web re-export shim), plus
 `delivery-request-action.test.tsx` (51), the cross-surface parity suite
-`delivery-request-parity.test.tsx` (12), the mobile suite
-`apps/mobile/src/lib/delivery-request-actions.test.ts` (66), and core's own
+`delivery-request-parity.test.tsx` (11), the mobile suite
+`apps/mobile/src/lib/delivery-request-actions.test.ts` (66 authored blocks, 84 at runtime via it.each), and core's own
 `delivery-request.test.ts` / `outlook-compose.test.ts`.
 
 ### Subject
@@ -141,8 +143,8 @@ no longer sees pickup mail. Whether such a trigger exists is unverified
 assumption 2 below — confirm it with the Zendesk administrator.
 
 The subject deliberately carries **no order number** (owner decision
-2026-08-02; pinned `storefront-logic.test.ts:587-603`) and is guaranteed a
-single line (`storefront-logic.test.ts:605-613`). Any Zendesk trigger keyed on
+2026-08-02; pinned in `storefront-logic.test.ts` ("no order number in the subject" pins)) and is guaranteed a
+single line (the "subject is a single line" pin in `storefront-logic.test.ts`). Any Zendesk trigger keyed on
 subject text can only be matching the literal words `Delivery Request` and the
 location — nothing else is there.
 
@@ -150,8 +152,8 @@ location — nothing else is there.
 
 Plain text. Blocks joined by one blank line; an inapplicable block is omitted
 entirely, never printed empty. Block order is a truncation contract — identity
-and routing before the item list (`delivery-request.ts:568-576`, pinned
-`storefront-logic.test.ts:742-787`).
+and routing before the item list (the block-order comment above the body composer in `delivery-request.ts`,
+pinned by the block-order describe in `storefront-logic.test.ts`).
 
 Header block, exact shape (pinned `storefront-logic.test.ts:619,729,793-794`):
 
@@ -192,7 +194,7 @@ not; site-data typos are reproduced verbatim. A delivery order with no charter
 gets an honest "Not recorded on this order..." destination block,
 `delivery-request.ts:598-606`.)
 
-For pickup (pinned `storefront-logic.test.ts:789-818`):
+For pickup (pinned by the pickup-body tests in `storefront-logic.test.ts`):
 
 ```
 PICKUP FROM
@@ -269,7 +271,7 @@ Safe without a Zendesk-side check:
   partial and heading-only variants; the employee can edit the body anyway.
 - **Adding body content below the header block** — subject to the existing
   allow-list rules (no staff-only figures, no invented fields:
-  `storefront-logic.test.ts:820-857`).
+  the allow-list describe in `storefront-logic.test.ts`).
 - **UI copy around the feature** — provided it keeps the accuracy rules: never
   claim a ticket exists, never promise CC-based routing.
 
