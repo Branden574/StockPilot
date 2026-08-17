@@ -140,6 +140,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       ...(crateSync && crateSync.rackPreservedItemIds.length > 0
         ? { crateSyncRackPreserved: true }
         : {}),
+      ...(crateSync && crateSync.cratePreservedItemIds.length > 0
+        ? { crateSyncCratePreserved: true }
+        : {}),
     });
   } catch (e) {
     // adjust_stock raises `insufficient_stock` (P0001) if the delta would push

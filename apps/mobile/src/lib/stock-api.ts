@@ -94,6 +94,15 @@ export interface TransferStockResult {
    * one, minus the audit row.
    */
   crateSyncRackPreserved?: boolean;
+  /**
+   * Its twin for the CRATE label (Maus I, 2026-08-17). The destination is a
+   * plain rack, the book records a crate, and this body carried no
+   * acknowledgement of that crate being CLEARED — so the server KEPT the label
+   * instead of erasing it. Most crates in the warehouse are label-only (no
+   * location row), so the label is the crate. The sheet must say it may now be
+   * stale.
+   */
+  crateSyncCratePreserved?: boolean;
 }
 
 /**
@@ -153,6 +162,12 @@ export interface RemoveStockResult {
    * Correct, and worth saying: the label may now name a rack this stock has left.
    */
   crateSyncRackPreserved?: boolean;
+  /**
+   * The CRATE label was kept rather than cleared: draining the crate holding
+   * left the book on a plain rack, and a write-off has no gate to ask about
+   * clearing the crate (Maus I, 2026-08-17). It may now be stale.
+   */
+  crateSyncCratePreserved?: boolean;
 }
 
 /**

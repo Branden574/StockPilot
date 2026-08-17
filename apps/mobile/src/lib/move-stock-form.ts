@@ -562,6 +562,9 @@ interface CrateSyncFlags {
   /** The RACK label was kept rather than erased, because nobody was shown the
    *  erasure. The crate half is unaffected — this is the other label. */
   crateSyncRackPreserved?: boolean;
+  /** The CRATE label was kept rather than cleared, because nobody was shown
+   *  the clear (Maus I, 2026-08-17). The rack half followed the stock. */
+  crateSyncCratePreserved?: boolean;
   crateSyncUpdated?: boolean;
 }
 
@@ -571,6 +574,7 @@ type CrateSyncBucket =
   | 'unplaced'
   | 'stale'
   | 'skipped'
+  | 'cratePreserved'
   | 'rackPreserved'
   | 'updated';
 
@@ -587,13 +591,22 @@ type CrateSyncBucket =
  *   1. failed        — the write itself errored. The most actionable, so it wins.
  *   2. unplaced      — nothing is left in a rack or crate for the label to follow.
  *   3. stale         — someone else re-recorded the crate mid-write; theirs stands.
- *   4. skipped       — stock now sits in several places, so there is no one crate.
- *   5. rackPreserved — the CRATE half is fine; the RACK label was kept, unasked.
- *   6. updated       — the label was rewritten, and its value really did change.
+ *   4. skipped        — stock now sits in several places, so there is no one crate.
+ *   5. cratePreserved — the CRATE label was kept, unasked (Maus I): a plain-rack
+ *                       destination for a crated book, with no acknowledged clear.
+ *   6. rackPreserved  — the CRATE half is fine; the RACK label was kept, unasked.
+ *   7. updated        — the label was rewritten, and its value really did change.
  *
- * The first four are mutually exclusive with the last two by construction (a
+ * The first four are mutually exclusive with the last three by construction (a
  * book lands in exactly one server-side bucket), so the tail positions cost
  * nothing and keep "we changed something" from ever hiding "we could not".
+ *
+ * `cratePreserved` sits ABOVE `rackPreserved` because it is about the CRATE
+ * label — the thing this whole vocabulary is named for — and a kept crate label
+ * on a book that just moved onto a bare rack is the more likely thing to be
+ * wrong (the crate is where a picker looks first). The two cannot both be true
+ * of one plain-rack move: that move DERIVES the rack pair, so nothing is
+ * withheld on the rack side.
  *
  * `rackPreserved` sits BELOW the four crate outcomes and above `updated` for the
  * same reason web puts it last in its chain: it is the only one of the six that
@@ -608,6 +621,7 @@ function crateSyncBucket(res: CrateSyncFlags): CrateSyncBucket | null {
   if (res.crateSyncUnplaced) return 'unplaced';
   if (res.crateSyncStale) return 'stale';
   if (res.crateSyncSkipped) return 'skipped';
+  if (res.crateSyncCratePreserved) return 'cratePreserved';
   if (res.crateSyncRackPreserved) return 'rackPreserved';
   if (res.crateSyncUpdated) return 'updated';
   return null;
@@ -661,6 +675,15 @@ export function crateSyncWarning(
       return {
         title: 'Moved — rack label may now be wrong',
         message: `${itemName} was moved, but its rack label was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
+      };
+    // The CRATE label, kept for want of an answer (Maus I, 2026-08-17). With
+    // the sheet pre-filled from the book's current storage the ordinary
+    // put-away places INTO the recorded crate and never reaches this; a stale
+    // snapshot, a race, or a body that omitted the acknowledgement can.
+    case 'cratePreserved':
+      return {
+        title: 'Moved — crate label was kept',
+        message: `${itemName} was placed. The crate label was kept — nobody was asked about clearing it — so it may now name a crate this stock has left. Check the book's details.`,
       };
     default:
       return null;
@@ -726,6 +749,14 @@ export function removeStockCrateWarning(
       return {
         title: 'Removed — rack label may now be wrong',
         message: `The rack label on ${itemName} was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
+      };
+    // The CRATE label, kept because a write-off cannot ask (Maus I): draining
+    // the crate holding left the book on a plain rack, and clearing the label
+    // unasked would have wiped a crate that exists only as that label.
+    case 'cratePreserved':
+      return {
+        title: 'Removed — crate label was kept',
+        message: `The crate label on ${itemName} was left as it was — nobody was asked about clearing it, so it may now name a crate this stock has left.`,
       };
     default:
       return null;

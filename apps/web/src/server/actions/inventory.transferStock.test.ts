@@ -50,6 +50,7 @@ const {
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
     rackPreservedItemIds: [] as string[],
+    cratePreservedItemIds: [] as string[],
   })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -151,6 +152,7 @@ beforeEach(() => {
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   });
   installContext();
 });
@@ -402,6 +404,7 @@ describe('transferStockAction (destination union)', () => {
       staleItemIds: [],
       unplacedItemIds: [ITEM_ID],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
 
     const result = await transferStockAction({

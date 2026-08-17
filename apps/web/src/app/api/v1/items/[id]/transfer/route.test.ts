@@ -235,6 +235,131 @@ describe('POST /api/v1/items/[id]/transfer — the book-crate summary', () => {
     ).toMatchObject({ p_crate_color: 'green', p_crate_number: '2' });
   });
 
+  // ═══ MAUS I, 2026-08-17 — a plain-RACK put-away for a crated book ═══
+  const RACK_38B = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+  const RACK_38B_ROW = {
+    id: RACK_38B,
+    warehouse_id: WAREHOUSE,
+    kind: 'rack',
+    rack_number: '38',
+    rack_row: 'B',
+    crate_color: null,
+    crate_number: null,
+    name: '38-B',
+  };
+  const RACK_38B_HOLDING = {
+    item_id: ITEM,
+    location_id: RACK_38B,
+    quantity: 10,
+    locations: {
+      id: RACK_38B,
+      kind: 'rack',
+      type: 'shelf',
+      crate_color: null,
+      crate_number: null,
+      rack_number: '38',
+      rack_row: 'B',
+    },
+  };
+  const MAUS = { book_crate_color: 'yellow', book_crate_number: '6', book_rack_number: '38', book_rack_row: 'B' };
+
+  it('the phone answering "Continue" on a crate CLEAR still clears — that is the operator choosing no crate', async () => {
+    const stub = install({
+      locationRows: [STAGING_ROW, RACK_38B_ROW],
+      itemRows: [book(MAUS)],
+      holdingRows: [RACK_38B_HOLDING],
+    });
+    const res = await POST(
+      request({
+        fromLocationId: STAGING,
+        quantity: 10,
+        toLocationId: RACK_38B,
+        // The OLD-STYLE fingerprint, spelled as a literal: every shipped OTA
+        // computes exactly this from the crate pair. Unchanged by this fix.
+        acknowledgedCrateChanges: [{ itemId: ITEM, currentFingerprint: '["yellow","6"]' }],
+      }),
+      { params },
+    );
+    expect(res.status).toBe(200);
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual({
+      p_item_ids: [ITEM],
+      p_crate_color: null,
+      p_crate_number: null,
+      p_rack_number: '38',
+      p_rack_row: 'B',
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('crateSyncCratePreserved');
+  });
+
+  it('a clear the gate never SHOWED keeps the crate label and reports crateSyncCratePreserved', async () => {
+    // The race: at gate time a rival crate holding makes the sync look like a
+    // no-op (split → nothing asked); by the sync's read the rival is gone. On
+    // main this wrote NULL over yellow 6 — the Maus row in prod audit_logs.
+    let reads = 0;
+    const queue: unknown[] = [STAGING_ROW, RACK_38B_ROW];
+    const stub = makeSupabaseStub({
+      'locations.select': () => ({
+        data: (queue.length > 1 ? queue.shift() : queue[0]) as never,
+        error: null,
+      }),
+      'inventory_items.select': { data: [book(MAUS)], error: null },
+      'item_stock_levels.select': () => {
+        reads += 1;
+        return {
+          data:
+            reads === 1
+              ? [
+                  RACK_38B_HOLDING,
+                  {
+                    item_id: ITEM,
+                    location_id: 'rival',
+                    quantity: 2,
+                    locations: {
+                      id: 'rival',
+                      kind: 'crate',
+                      type: 'bin',
+                      crate_color: 'yellow',
+                      crate_number: '6',
+                      rack_number: null,
+                      rack_row: null,
+                    },
+                  },
+                ]
+              : [RACK_38B_HOLDING],
+          error: null,
+        };
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'u-1',
+      role: 'manager' as const,
+      supabase: stub.client as never,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set<ModuleId>(),
+    } as never);
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 10, toLocationId: RACK_38B }),
+      { params },
+    );
+    expect(res.status).toBe(200);
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual({
+      p_item_ids: [ITEM],
+      p_crate_color: 'yellow',
+      p_crate_number: '6',
+      p_rack_number: '38',
+      p_rack_row: 'B',
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.crateSyncCratePreserved).toBe(true);
+    expect(body).not.toHaveProperty('crateSyncRackPreserved');
+  });
+
   it('a STALE acknowledgement is refused and the refusal names the CURRENT crate', async () => {
     install({
       locationRows: [STAGING_ROW, GREEN_CRATE_ROW],

@@ -379,6 +379,13 @@ export function StockTransferDialog({
       toast.warning(
         `${itemName} was moved, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
+    } else if (res.data?.crateSyncCratePreserved) {
+      // Its twin for the CRATE label (Maus I, 2026-08-17): a plain-rack
+      // destination for a book that records a crate, with no acknowledged
+      // clear — kept, not wiped, and said out loud.
+      toast.warning(
+        `${itemName} was moved, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.`,
+      );
     }
     setPendingConfirm(null);
     setOpen(false);

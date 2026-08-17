@@ -378,6 +378,15 @@ export function PlaceFromStagingDialog({
       toast.warning(
         `${itemName} was placed, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
+    } else if (res.data.crateSyncCratePreserved) {
+      // Its twin for the CRATE label (Maus I, 2026-08-17). A plain-rack
+      // put-away for a book that records a crate, with no acknowledged clear —
+      // the label was KEPT rather than erased. With the fields pre-filled from
+      // current storage this dialog places INTO the recorded crate, so the
+      // ordinary path never reaches here; an old snapshot or a race can.
+      toast.warning(
+        `${itemName} was placed, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.`,
+      );
     }
     setPendingConfirm(null);
     setOpen(false);

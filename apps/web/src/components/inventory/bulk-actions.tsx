@@ -285,10 +285,14 @@ export function BulkActions({
     const cleared = r.data.crateCleared ?? 0;
     const unchanged = r.data.crateUnchanged ?? 0;
     const changed = r.data.crateChanged ?? 0;
+    const preserved = r.data.cratePreserved ?? 0;
     const parts = [`Updated ${r.data.ok} item${r.data.ok === 1 ? '' : 's'}.`];
     if (r.data.skipped > 0) {
       parts.push(`Skipped ${r.data.skipped} you don't have write access to.`);
     }
+    // `cleared` is now reachable only when a clear was actually performed —
+    // which this op, having no way to ask, never does. Kept so a count that
+    // does arrive is still spoken rather than dropped.
     if (cleared > 0) {
       parts.push(
         `Cleared the crate label on ${cleared} book${cleared === 1 ? '' : 's'} now on the rack.`,
@@ -314,6 +318,18 @@ export function BulkActions({
         changed === 1
           ? 'One book’s stock did not reach the rack, so its crate label now names the crate that holds it — check that book’s details.'
           : `${changed} books’ stock did not reach the rack, so their crate labels now name the crates that hold them — check those books’ details.`,
+      );
+    }
+    // ═══ AND THE CRATE LABELS IT DELIBERATELY DID NOT CLEAR ═══
+    // Set rack has no per-book confirmation, so it never clears a crate label
+    // (Maus I, 2026-08-17 — most crates here are label-only, and wiping the
+    // label wiped the crate). The stock is on the rack; the label may now be
+    // stale, and the operator is told rather than left to find out.
+    if (preserved > 0) {
+      toast.warning(
+        preserved === 1
+          ? 'Kept the crate label on one book — Set rack was not asked to clear it, so it may now be wrong. Check that book’s details or place it into its crate.'
+          : `Kept the crate label on ${preserved} books — Set rack was not asked to clear them, so they may now be wrong. Check those books’ details or place them into their crates.`,
       );
     }
     setDialog(null);

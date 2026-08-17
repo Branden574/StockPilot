@@ -48,6 +48,7 @@ const {
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
     rackPreservedItemIds: [] as string[],
+    cratePreservedItemIds: [] as string[],
   })),
   mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   mockFindRackOrCrate: vi.fn(async () => null as { id: string } | null),
@@ -136,6 +137,7 @@ beforeEach(() => {
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();

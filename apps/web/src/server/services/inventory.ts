@@ -48,6 +48,7 @@ import {
   rackOutcomeBasis,
   isBookCrateChangeAcknowledged,
   isBookRackChangeAcknowledged,
+  isCrateDestination,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
@@ -635,6 +636,30 @@ export interface BookPlacementVerdict extends BookCrateSummary {
    * because a stale rack label is recoverable and a wiped one is not.
    */
   rackClearAcknowledged: boolean;
+  /**
+   * The operator was SHOWN this book's CRATE pair being CLEARED by this
+   * placement — a rack-only destination for a book that records a crate — and
+   * agreed to it. Its twin above; same FALSE default, same reason.
+   *
+   * ═══ WHY THE CRATE HALF NEEDS THIS TOO — MAUS I, 2026-08-17 ═══
+   *
+   * The reconciliation derives the crate half from the destination row. A plain
+   * rack row has no crate columns, so a put-away onto a bare rack derives
+   * (null, null) — and for a book whose crate is LABEL-ONLY (113 of L4L's 124
+   * books: the crate exists as the item's summary and has no locations row at
+   * all) writing that null pair destroys the only record of the crate there is.
+   * Maus I went from {yellow, 6, 38, B} to {NULL, NULL, 38, B} on a ten-unit
+   * put-away and had to be re-typed by hand. The rack half already refused to
+   * do this unasked; the crate half had no twin, so it did.
+   *
+   * GRANTED by the gate only for a conflict that IS a clear (`nextLabel` null —
+   * the destination names no crate) and that the caller acknowledged with the
+   * matching crate fingerprint. An acknowledged crate CHANGE (Blue 4 → Green 2)
+   * grants nothing here: that write replaces a value with a true value and no
+   * clear was ever shown. Fingerprint shapes are unchanged — the existing
+   * acknowledgement channel already carries "the operator chose no crate".
+   */
+  crateClearAcknowledged: boolean;
 }
 
 /**
@@ -728,6 +753,30 @@ export interface BookCrateSyncResult {
    * the write happened and only the rack half was held back.
    */
   rackPreservedItemIds: string[];
+  /**
+   * The rack half was written and the CRATE half was deliberately NOT — the
+   * derivation would have CLEARED a crate a human recorded, and nobody was
+   * shown that erasure, so the recorded pair was kept exactly as it stood.
+   *
+   * ═══ THE OTHER FAIL-SAFE BUCKET — MAUS I, 2026-08-17 ═══
+   *
+   * Reached by every caller that cannot put the crate question in front of a
+   * human — bulk Set rack, a write-off drain, an old client, a forged body —
+   * and by a race where the gate predicted a split (and so asked nothing) and
+   * the stock then resolved to one plain rack anyway. For a label-only crate
+   * (the common case in this warehouse: 113 of 124 books, one crate row) the
+   * label IS the crate, so clearing it unasked is not tidying, it is data loss.
+   *
+   * WHICH MEANS THE LABEL MAY NOW BE STALE, and every caller must say so —
+   * the same trade as `rackPreservedItemIds`, for the same reason. A caller
+   * that CAN ask (the placement dialogs, the mobile sheet) will have asked, the
+   * gate will have granted `crateClearAcknowledged`, and the clear happens; this
+   * bucket is for everyone else.
+   *
+   * NOT mutually exclusive with `syncedItemIds`, and never for a book that
+   * recorded no crate (nothing was withheld).
+   */
+  cratePreservedItemIds: string[];
 }
 
 export class InventoryService {
@@ -4008,6 +4057,18 @@ export class InventoryService {
      * not ask for, which is neither a clear nor a no-op.
      */
     crateChanged?: number;
+    /**
+     * Set rack only: books whose crate label was deliberately KEPT because this
+     * op moved their stock onto a plain rack and nobody was asked about
+     * clearing the crate — bulk Set rack has no per-book confirmation channel,
+     * so it can never grant `crateClearAcknowledged`. Most crates here are
+     * label-only, so the label is the only record of the crate; wiping it under
+     * a "Set rack" nobody read as "and forget the crate" is the Maus I incident.
+     * The label may now be stale and the toast must say so. This is where
+     * `crateCleared` used to land for those books; `crateCleared` now counts
+     * only a clear that was actually performed.
+     */
+    cratePreserved?: number;
   }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
@@ -4135,6 +4196,7 @@ export class InventoryService {
       let crateCleared = 0;
       let crateUnchanged = 0;
       let crateChanged = 0;
+      let cratePreserved = 0;
       if (composedBin) {
         // The crate summary as it stands BEFORE the stock moves. Read here for
         // two reasons: it is the `verified` freshness proof syncBookCratePlacement
@@ -4172,12 +4234,20 @@ export class InventoryService {
         // wiring it here would newly reject a shipped flow for the 114 books
         // that carry book_crate_*, with no way for the operator to answer. The
         // trade is bounded and defensible: the physical move is the operator's
-        // own explicit instruction (they typed the rack), the summary is a
-        // DERIVED label whose only true value afterwards is "no crate", the
-        // sync still refuses to touch a split or concurrently-edited book, every
-        // write is audited before→after, and the count comes back so the toast
-        // can say how many labels changed. Leaving a label pointing at an empty
-        // crate is the strictly worse failure.
+        // own explicit instruction (they typed the rack), the sync still
+        // refuses to touch a split or concurrently-edited book, every write is
+        // audited before→after, and the counts come back so the toast can say
+        // what happened to each label.
+        //
+        // WHAT "NOT GATED" NOW MEANS FOR THE CRATE (Maus I, 2026-08-17): because
+        // this op can never put the crate question in front of a human, it can
+        // never grant `crateClearAcknowledged`, so for a book that RECORDS a
+        // crate the reconciliation KEEPS that label and reports it
+        // (`cratePreserved`). The old rationale — "the summary's only true value
+        // afterwards is no crate" — assumed the crate was a derived label; in
+        // this warehouse most crates are label-only (no locations row), so the
+        // label IS the crate and wiping it under "Set rack" is data loss. The
+        // rack pair the operator typed is written exactly as before.
         if (before) {
           // NO `audit.toLocationId`: this op resolves a rack PER WAREHOUSE, so
           // there is no single destination id to record, and stamping the rack
@@ -4226,6 +4296,7 @@ export class InventoryService {
           // same proof `removeStockFromLocation` uses for `crateSyncUpdated`.
           // One read for the whole batch, only when something was written.
           const written = sync.syncedItemIds;
+          const preserved = new Set(sync.cratePreservedItemIds);
           const after =
             written.length > 0
               ? await this.readBookCrateSummaries(written).catch((e: unknown) => {
@@ -4246,10 +4317,19 @@ export class InventoryService {
               bookCrateFingerprint(was.crateColor, was.crateNumber) !==
               bookCrateFingerprint(now.crateColor, now.crateNumber);
             if (!moved) {
-              // Rewritten to the value it already held. Invisible to anyone —
-              // and if it HAD a crate, that crate is still on the label, which
-              // is exactly what the "left unchanged" warning is for.
-              if (hadCrate(id)) crateUnchanged += 1;
+              // Rewritten to the value it already held. Two distinct reasons,
+              // and the operator is owed the difference:
+              //   • PRESERVED — the stock reached the plain rack and the sync
+              //     would have cleared the crate, but this op has no way to ask
+              //     and so the label was KEPT (Maus I). It is now probably
+              //     stale, and that is a different sentence from "could not be
+              //     reconciled".
+              //   • otherwise — the write ran and changed nothing visible (the
+              //     stock never left its crate, say); if it HAD a crate, that
+              //     crate is still on the label, which is what the "left
+              //     unchanged" warning is for.
+              if (preserved.has(id)) cratePreserved += 1;
+              else if (hadCrate(id)) crateUnchanged += 1;
             } else if (now.crateColor === null && now.crateNumber === null) {
               // Cleared: the label named a crate and now names none, which on
               // this path means the stock reached the rack.
@@ -4285,6 +4365,7 @@ export class InventoryService {
         ...(crateCleared > 0 ? { crateCleared } : {}),
         ...(crateUnchanged > 0 ? { crateUnchanged } : {}),
         ...(crateChanged > 0 ? { crateChanged } : {}),
+        ...(cratePreserved > 0 ? { cratePreserved } : {}),
       };
     }
 
@@ -5065,7 +5146,7 @@ export class InventoryService {
     // an authorisation nobody granted must never be inferred from silence.
     const verdicts = new Map<string, BookPlacementVerdict>();
     for (const [itemId, s] of summaries) {
-      verdicts.set(itemId, { ...s, rackClearAcknowledged: false });
+      verdicts.set(itemId, { ...s, rackClearAcknowledged: false, crateClearAcknowledged: false });
     }
     if (summaries.size === 0) return verdicts;
 
@@ -5189,6 +5270,32 @@ export class InventoryService {
     //    OWN fingerprint.
     const ackIndex = bookCrateAcknowledgementIndex(opts.acknowledged);
     const unacknowledged = real.filter((c) => !isBookCrateChangeAcknowledged(ackIndex, c));
+
+    // ═══ GRANT THE CRATE CLEAR — FOR EXACTLY THE BOOKS SHOWN ONE ═══
+    //
+    // A `real` conflict whose destination names NO crate is a CLEAR: the sync
+    // will derive (null, null) from that rack row and, absent this grant, will
+    // now KEEP the recorded pair instead (see `cratePreservedItemIds`). The
+    // grant is the operator's answer to "Crate color Red will be cleared. Crate
+    // number 4 will be cleared. [Continue placement]" — the acknowledgement
+    // fingerprint-matched against the crate pair the row holds NOW, exactly as
+    // the waiver above. A conflict that is a CHANGE (Green 2 → Blue 4) grants
+    // nothing: no clear was shown, and the write that follows is a replacement.
+    //
+    // Deliberately keyed off the DESTINATION's crate pair rather than the
+    // conflict's `nextLabel` string: the label is presentation (it can carry the
+    // rack position and a field breakdown), the pair is the fact the sync writes.
+    const destClearsCrate = !isCrateDestination({
+      crateColor: dest.crateColor ?? null,
+      crateNumber: dest.crateNumber ?? null,
+    });
+    if (destClearsCrate) {
+      for (const c of real) {
+        if (!isBookCrateChangeAcknowledged(ackIndex, c)) continue;
+        const verdict = verdicts.get(c.itemId);
+        if (verdict) verdict.crateClearAcknowledged = true;
+      }
+    }
 
     // CAPABILITY IS INFERRED FROM THE REQUEST. A caller that sent the list —
     // even an empty one — understands the rack question; one that sent nothing
@@ -5373,7 +5480,20 @@ export class InventoryService {
    * agreed (`BookPlacementVerdict.rackClearAcknowledged`). Absent that, the
    * recorded pair is kept VERBATIM and the item is reported in
    * `rackPreservedItemIds` — a stale rack label is recoverable and a wiped one
-   * is not. The crate half is unaffected either way.
+   * is not.
+   *
+   * ═══ …AND SO DOES THE CRATE CLEAR (MAUS I, 2026-08-17) ═══
+   *
+   * The same rule now governs the crate half, for a stronger reason: most
+   * crates in this warehouse are LABEL-ONLY (no locations row), so the item
+   * summary is the only place they exist. A put-away onto a plain rack derives
+   * "no crate" from a row that never said anything about crates, and writing
+   * that null pair over a label-only crate erased Maus I's yellow 6 and The Joy
+   * Luck Club's red 4 in prod. The clear is performed only for a book whose
+   * clear the gate says was shown and agreed
+   * (`BookPlacementVerdict.crateClearAcknowledged`); otherwise the recorded
+   * pair is kept VERBATIM and reported in `cratePreservedItemIds`. A different
+   * crate is not an erasure and is written as before.
    *
    * ═══ THE SECOND READ IS THE FRESHNESS PROOF, NOT A FORMALITY ═══
    *
@@ -5433,8 +5553,15 @@ export class InventoryService {
        * valid without claiming an authorisation nobody gave. Absent reads as
        * FALSE, which keeps the recorded rack; that is the safe direction, and the
        * only one that can be a default.
+       *
+       * `crateClearAcknowledged` is its twin for the crate pair, optional for the
+       * same reason and defaulting the same way: absent, a recorded crate is
+       * KEPT rather than cleared (see `cratePreservedItemIds`).
        */
-      verified: ReadonlyMap<string, BookCrateSummary & { rackClearAcknowledged?: boolean }>;
+      verified: ReadonlyMap<
+        string,
+        BookCrateSummary & { rackClearAcknowledged?: boolean; crateClearAcknowledged?: boolean }
+      >;
       audit?: {
         toLocationId: string;
         /** Units placed per item; omitted keys simply record no quantity. */
@@ -5495,6 +5622,7 @@ export class InventoryService {
         staleItemIds: [],
         unplacedItemIds: [],
         rackPreservedItemIds: [],
+        cratePreservedItemIds: [],
       };
     }
   }
@@ -5502,7 +5630,10 @@ export class InventoryService {
   private async syncBookCratePlacementInner(
     itemIds: string[],
     opts: {
-      verified: ReadonlyMap<string, BookCrateSummary & { rackClearAcknowledged?: boolean }>;
+      verified: ReadonlyMap<
+        string,
+        BookCrateSummary & { rackClearAcknowledged?: boolean; crateClearAcknowledged?: boolean }
+      >;
       audit?: {
         toLocationId: string;
         quantityByItemId?: Map<string, number>;
@@ -5518,6 +5649,7 @@ export class InventoryService {
         staleItemIds: [],
         unplacedItemIds: [],
         rackPreservedItemIds: [],
+        cratePreservedItemIds: [],
       };
     // The operator's own typed rack, decomposed and upper-cased with the SAME
     // helper every other writer of these keys uses — so the pair this statement
@@ -5553,6 +5685,7 @@ export class InventoryService {
         staleItemIds,
         unplacedItemIds: [],
         rackPreservedItemIds: [],
+        cratePreservedItemIds: [],
       };
 
     // ONE bounded read of every positive holding for these books. No kind
@@ -5576,6 +5709,7 @@ export class InventoryService {
         staleItemIds,
         unplacedItemIds: [],
         rackPreservedItemIds: [],
+        cratePreservedItemIds: [],
       };
 
     type HoldingRow = {
@@ -5623,6 +5757,7 @@ export class InventoryService {
     const skippedItemIds: string[] = [];
     const unplacedItemIds: string[] = [];
     const rackPreservedItemIds: string[] = [];
+    const cratePreservedItemIds: string[] = [];
     for (const itemId of bookIds) {
       const placed = placedByItem.get(itemId);
       // ═══ NO PLACED HOLDING — LEFT ALONE, BUT NEVER SILENTLY ═══
@@ -5656,8 +5791,8 @@ export class InventoryService {
       // it is compared against the destination's crate on the next placement.
       // Copying a legacy "Blue" through verbatim would seed the item with a
       // spelling the write path no longer produces.
-      const color = normalizeCrateColorForWrite(loc!.crate_color);
-      const number = loc!.crate_number?.trim() || null;
+      let color = normalizeCrateColorForWrite(loc!.crate_color);
+      let number = loc!.crate_number?.trim() || null;
 
       // ═══ THE RACK PAIR IS DERIVED FROM THE SAME HOLDING — DEFECT: TWO
       //     UNCONDITIONAL ANSWERS TO A CONDITIONAL QUESTION ═══
@@ -5719,9 +5854,10 @@ export class InventoryService {
       // operator had just set — silently, under an "Updated 1" toast, on a row
       // whose `bin_location` still read "28-A". See `rackWrittenByCaller`.
       //
-      // The crate half is NOT overridden. Nobody typed a crate here; that half
-      // is the derived label whose only job is to stop sending a picker to an
-      // empty crate, and it stays derived on every path.
+      // The crate half is NOT overridden by the typed rack. Nobody typed a crate
+      // here; that half is derived — and then, like the rack half, its CLEAR is
+      // withheld unless the operator was shown it (see the crate guard below;
+      // bulk Set rack cannot ask, so for a crated book it preserves).
       let rackNumber = typedRack ? typedRack.number : derivedRackNumber;
       let rackRow = typedRack ? typedRack.row : derivedRackRow;
 
@@ -5801,6 +5937,49 @@ export class InventoryService {
         rackNumber = fresh.rackNumber ?? null;
         rackRow = fresh.rackRow ?? null;
         rackPreservedItemIds.push(itemId);
+      }
+
+      // ═══ AND NEITHER IS A CRATE ERASURE — MAUS I, 2026-08-17 17:50:52 ═══
+      //
+      // THE DEFECT: Maus I recorded {yellow 6, rack 38-B}. Ten units put away
+      // from Staging onto the plain rack "38-B" — its ONLY holding afterwards.
+      // `loc` was that rack row, which has no crate columns, so `color`/`number`
+      // derived (null, null) and the statement below wrote them: the prod audit
+      // row reads before {yellow,6,38,B} → after {NULL,NULL,38,B}. The owner
+      // re-typed it 36 seconds later. Then The Joy Luck Club, red 4, the same
+      // way. The rack guard just above could not help: the rack half derived
+      // 38/B correctly. The crate half simply had no such guard — the comment
+      // that used to sit on `rackNumber` said "the crate half stays derived on
+      // every path", and that sentence was the bug.
+      //
+      // WHY "DERIVED FROM THE HOLDING" IS NOT ENOUGH HERE. For a crate that has
+      // a locations row, the holding IS the crate and the derivation is exact.
+      // But most crates in this warehouse have NO row — 113 of L4L's 124 books
+      // carry a crate label and the org has exactly one crate row — so the item
+      // summary is the only place the crate exists. A rack holding says "the
+      // stock is on 38-B"; it does not say "and in no crate". Reading "no crate"
+      // off it and writing that over the label destroys the only record.
+      //
+      // THE RULE, the rack rule's exact twin: the CLEAR of a recorded crate is
+      // performed only for a book whose clear the gate says was SHOWN and agreed
+      // (`crateClearAcknowledged` — the operator chose a rack-only destination
+      // and pressed Continue on "crate Red 4 will be cleared"). Absent that, the
+      // recorded pair is kept VERBATIM and reported in `cratePreservedItemIds`.
+      // A DIFFERENT crate is not an erasure and is written as before: that is a
+      // true value the gate already asked about. A book that records no crate
+      // has nothing to preserve and is written as before.
+      //
+      // Reached by bulk Set rack and the write-off drain (neither can ask), by
+      // an old client, by a forged body, and by the race where the gate predicted
+      // a split and the stock resolved to one plain rack anyway. All answered
+      // the same way, because in all of them nobody was shown a clear.
+      const erasesRecordedCrate =
+        color === null && number === null && (fresh.crateColor !== null || fresh.crateNumber !== null);
+      const mayEraseCrate = opts.verified.get(itemId)?.crateClearAcknowledged === true;
+      if (erasesRecordedCrate && !mayEraseCrate) {
+        color = fresh.crateColor;
+        number = fresh.crateNumber;
+        cratePreservedItemIds.push(itemId);
       }
 
       // JSON, not a space-joined string. `crate_number` is FREE TEXT and
@@ -5923,6 +6102,7 @@ export class InventoryService {
       staleItemIds,
       unplacedItemIds,
       rackPreservedItemIds: rackPreservedItemIds.filter((id) => synced.has(id)),
+      cratePreservedItemIds: cratePreservedItemIds.filter((id) => synced.has(id)),
     };
   }
 

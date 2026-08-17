@@ -697,6 +697,117 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     });
   });
 
+  // ═══ MAUS I, 2026-08-17 — THE CRATE CLEAR NEEDS PERMISSION, END TO END ═══
+  //
+  // The test above is the CONSENTED half: the operator was shown "Blue 4 will
+  // be cleared", pressed Continue, and the ack fingerprint reached the gate, so
+  // the gate granted `crateClearAcknowledged` and the sync wrote NULL. That is
+  // the "transfer OUT of a real crate onto a bare shelf, gate answered, still
+  // clears" pin the owner asked for.
+  //
+  // The other half: a request that reaches the sync WITHOUT the gate having
+  // shown a clear. At this boundary an unacknowledged rack move for a crated
+  // book is REFUSED outright (first test in this block), so the only way in is
+  // the RACE the gate documents — at gate time a rival placed holding made the
+  // sync look like a no-op (split → no question asked); by the time the sync
+  // reads, the rival is gone and the destination is the only holding. Before
+  // this fix that path wrote NULL over a crate nobody was asked about.
+  it('a clear the gate never SHOWED is not performed — the label is KEPT and reported', async () => {
+    let holdingsReads = 0;
+    const stub = makeSupabaseStub({
+      'locations.select': { data: RACK_ROW_28A, error: null },
+      'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
+      'inventory_items.select': {
+        data: [
+          {
+            id: BOOK_ID,
+            name: 'Maus I',
+            item_type: 'book',
+            custom_fields: {
+              book_crate_color: 'yellow',
+              book_crate_number: '6',
+              book_rack_number: '28',
+              book_rack_row: 'A',
+            },
+          },
+        ],
+        error: null,
+      },
+      // T0 (the gate's prediction): the destination rack AND a rival crate
+      // holding — split, so the gate asks nothing. T2 (the sync): the rival has
+      // been picked; only the destination is left.
+      'item_stock_levels.select': () => {
+        holdingsReads += 1;
+        return {
+          data:
+            holdingsReads === 1
+              ? [
+                  rackHolding(),
+                  {
+                    item_id: BOOK_ID,
+                    location_id: 'rival-crate',
+                    quantity: 3,
+                    locations: {
+                      id: 'rival-crate',
+                      kind: 'crate',
+                      type: 'bin',
+                      crate_color: 'yellow',
+                      crate_number: '6',
+                      rack_number: null,
+                      rack_row: null,
+                    },
+                  },
+                ]
+              : [rackHolding()],
+          error: null,
+        };
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+    ctxRef.ctx = {
+      organizationId: ORG_ID,
+      userId: 'user-test',
+      role: 'admin',
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set(),
+      supabase: stub.client,
+    };
+
+    // NO acknowledgement of any kind — and none is demanded, because the gate
+    // predicted a split.
+    const res = await transferToRack();
+
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // The rack half follows the stock; the crate half is the recorded yellow 6,
+    // verbatim — never NULL without a human's say-so.
+    expect(call.args).toEqual({
+      p_item_ids: [BOOK_ID],
+      p_crate_color: 'yellow',
+      p_crate_number: '6',
+      p_rack_number: '28',
+      p_rack_row: 'A',
+    });
+    // …and the client is TOLD, on the flag the dialogs render.
+    if (res.ok) {
+      expect(res.data.crateSyncCratePreserved).toBe(true);
+      expect(res.data.crateSyncRackPreserved).toBeUndefined();
+    }
+  });
+
+  it('a clean acknowledged rack move does NOT set crateSyncCratePreserved', async () => {
+    installContext({
+      locationRow: RACK_ROW_28A,
+      itemRows: [blueFourBook()],
+      holdingRows: [rackHolding()],
+    });
+    const res = await transferToRack({ acknowledgedCrateChanges: ACK_BLUE_4 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncCratePreserved).toBeUndefined();
+  });
+
   it('a transfer INTO a crate records that crate on the book', async () => {
     const stub = installContext({
       itemRows: [blueFourBook()],
@@ -1344,6 +1455,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
     staleItemIds: string[];
     unplacedItemIds: string[];
     rackPreservedItemIds: string[];
+    cratePreservedItemIds: string[];
   } = {
     syncedItemIds: [],
     failedItemIds: [],
@@ -1351,6 +1463,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   };
 
   type SyncBuckets = typeof EMPTY_SYNC;
@@ -1398,6 +1511,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
       ['staleItemIds', 'crateSyncStale'],
       ['unplacedItemIds', 'crateSyncUnplaced'],
       ['rackPreservedItemIds', 'crateSyncRackPreserved'],
+      ['cratePreservedItemIds', 'crateSyncCratePreserved'],
     ] as const;
     for (const [bucket, flag] of cases) {
       const only: Partial<SyncBuckets> = {};

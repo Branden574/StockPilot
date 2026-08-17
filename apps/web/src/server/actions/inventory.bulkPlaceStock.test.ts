@@ -39,6 +39,7 @@ const {
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
     rackPreservedItemIds: [] as string[],
+    cratePreservedItemIds: [] as string[],
   })),
   // Returns a `locations` ROW (the real method does select('*')), so tests can
   // hand back the crate/rack columns the placement label is derived from.
@@ -126,6 +127,7 @@ beforeEach(() => {
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();

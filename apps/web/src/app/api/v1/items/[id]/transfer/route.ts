@@ -53,9 +53,17 @@ export const dynamic = 'force-dynamic';
  *     keeps the shipped OTA working, since it has no rack channel at all.
  *
  * Answers { ok, toLocationId, crateSyncFailed?, crateSyncSkipped?,
- * crateSyncStale?, crateSyncUnplaced?, crateSyncRackPreserved? }. The stock
- * moved in every one of those cases; the flags say whether the book's crate and
- * rack LABELS followed it.
+ * crateSyncStale?, crateSyncUnplaced?, crateSyncRackPreserved?,
+ * crateSyncCratePreserved? }. The stock moved in every one of those cases; the
+ * flags say whether the book's crate and rack LABELS followed it.
+ *
+ *   - crateSyncCratePreserved: the destination is a plain rack, the book
+ *     records a crate, and this body carried no acknowledgement of that crate
+ *     being CLEARED — so the recorded crate label was KEPT rather than erased
+ *     (Maus I, 2026-08-17: a put-away onto 38-B wiped a label-only crate). A
+ *     client that put "crate Red 4 will be cleared" in front of the operator
+ *     and echoes the crate fingerprint in acknowledgedCrateChanges gets the
+ *     clear; every other caller gets the preserve and this flag.
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -377,6 +385,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // was, because erasing it was never shown to anyone. Silence here is what
       // the whole rack channel exists to end.
       ...(crate.rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      // The rack label followed the stock but the CRATE label was left as it
+      // was: a plain-rack destination for a book that records a crate, with no
+      // acknowledgement of a clear in this body (Maus I, 2026-08-17). Most
+      // crates here are label-only, so the label is the crate. Kept, reported.
+      ...(crate.cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as

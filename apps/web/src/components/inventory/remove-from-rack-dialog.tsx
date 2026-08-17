@@ -141,6 +141,16 @@ export function RemoveFromRackDialog({
       toast.warning(
         `The rack label on ${itemName} was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
+    } else if (res.data.crateSyncCratePreserved) {
+      // Its twin for the CRATE label (Maus I, 2026-08-17). Draining the crate
+      // holding and leaving the book on a plain rack would have CLEARED the
+      // recorded crate; a write-off cannot ask, so the label is kept and the
+      // operator hears that it may now be stale. Same precedence reasoning as
+      // the rack line above: a label that may be WRONG beats one that was
+      // correctly rewritten.
+      toast.warning(
+        `The crate label on ${itemName} was left as it was and may now be wrong — nobody was asked about clearing it.`,
+      );
     } else if (res.data.crateSyncUpdated) {
       toast.warning(
         `The crate label on ${itemName} was changed to follow the stock it has left.`,

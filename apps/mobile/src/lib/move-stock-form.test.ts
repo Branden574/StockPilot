@@ -765,6 +765,39 @@ describe('crateSyncWarning — a move that succeeded is never silent about the l
     expect(crateSyncWarning({ crateSyncRackPreserved: true }, BOOK)).not.toBeNull();
   });
 
+  // ═══ crateSyncCratePreserved — the CRATE label, kept because nobody was asked ═══
+  //
+  // Maus I, 2026-08-17: a ten-unit put-away onto plain rack 38-B erased a crate
+  // label (yellow 6) that existed ONLY as that label. The server now KEEPS the
+  // crate label on a plain-rack move unless the body acknowledged the clear, and
+  // reports it. This is the phone's sentence for that report.
+  it('says the CRATE label was kept and may now be wrong', () => {
+    expect(
+      crateSyncWarning({ toLocationId: 'r-38b', crateSyncCratePreserved: true }, BOOK),
+    ).toEqual({
+      title: 'Moved — crate label was kept',
+      message:
+        "The Outsiders was placed. The crate label was kept — nobody was asked about clearing it — so it may now name a crate this stock has left. Check the book's details.",
+    });
+  });
+
+  it('a kept CRATE label outranks a kept RACK label, and both lose to a crate outcome', () => {
+    expect(
+      crateSyncWarning({ crateSyncCratePreserved: true, crateSyncRackPreserved: true }, BOOK)
+        ?.title,
+    ).toBe('Moved — crate label was kept');
+    expect(
+      crateSyncWarning({ crateSyncSkipped: true, crateSyncCratePreserved: true }, BOOK)?.title,
+    ).toBe('Moved — crate label left unchanged');
+    // Distinct from `skipped` (split) and from `rackPreserved` (other label).
+    const kept = crateSyncWarning({ crateSyncCratePreserved: true }, BOOK)!;
+    expect(kept.message).not.toBe(crateSyncWarning({ crateSyncSkipped: true }, BOOK)!.message);
+    expect(kept.message).not.toBe(
+      crateSyncWarning({ crateSyncRackPreserved: true }, BOOK)!.message,
+    );
+    expect(kept.message).toContain('crate label');
+  });
+
   it('leaves NO flag the transfer route can emit without a sentence', () => {
     // THE MATRIX PIN. A flag no client surfaces is a silent failure by
     // construction, and this feature has shipped that shape more than once. The
@@ -777,6 +810,7 @@ describe('crateSyncWarning — a move that succeeded is never silent about the l
       'crateSyncStale',
       'crateSyncUnplaced',
       'crateSyncRackPreserved',
+      'crateSyncCratePreserved',
     ] as const;
     for (const flag of emitted) {
       const said = crateSyncWarning({ [flag]: true }, BOOK);
@@ -1117,6 +1151,27 @@ describe('removeStockCrateWarning — the RACK label a write-off keeps', () => {
     expect(removeStockCrateWarning({ crateSyncRackPreserved: true }, BOOK)).not.toBeNull();
   });
 
+  it('says the CRATE label was kept when the write-off drained the crate holding', () => {
+    // Draining Blue 4 and leaving the book on plain rack 22-B would have CLEARED
+    // the crate label; a write-off has no gate to ask, so the server keeps it
+    // (Maus I) and this is what the operator hears.
+    expect(removeStockCrateWarning({ crateSyncCratePreserved: true }, BOOK)).toEqual({
+      title: 'Removed — crate label was kept',
+      message:
+        'The crate label on The Outsiders was left as it was — nobody was asked about clearing it, so it may now name a crate this stock has left.',
+    });
+    // Outranks `updated` (a kept-and-maybe-wrong label beats a correctly
+    // rewritten one) and loses to the four crate outcomes above it.
+    expect(
+      removeStockCrateWarning({ crateSyncUpdated: true, crateSyncCratePreserved: true }, BOOK)
+        ?.title,
+    ).toBe('Removed — crate label was kept');
+    expect(
+      removeStockCrateWarning({ crateSyncStale: true, crateSyncCratePreserved: true }, BOOK)
+        ?.title,
+    ).toBe('Removed — someone else changed the crate');
+  });
+
   it('leaves NO flag the write-off route can emit without a sentence', () => {
     // THE MATRIX PIN for this route. The list is exactly what
     // apps/web/src/app/api/v1/items/[id]/remove-stock/route.ts spreads onto its
@@ -1128,6 +1183,7 @@ describe('removeStockCrateWarning — the RACK label a write-off keeps', () => {
       'crateSyncUnplaced',
       'crateSyncUpdated',
       'crateSyncRackPreserved',
+      'crateSyncCratePreserved',
     ] as const;
     for (const flag of emitted) {
       const said = removeStockCrateWarning({ [flag]: true }, BOOK);

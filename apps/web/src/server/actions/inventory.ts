@@ -174,6 +174,19 @@ export async function removeStockFromLocationAction(
      * operator was told nothing while the rack label went stale.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = removeStockFromLocationSchema.safeParse(input);
@@ -199,6 +212,9 @@ export async function removeStockFromLocationAction(
       ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
       ...(crateSync && crateSync.rackPreservedItemIds.length > 0
         ? { crateSyncRackPreserved: true }
+        : {}),
+      ...(crateSync && crateSync.cratePreservedItemIds.length > 0
+        ? { crateSyncCratePreserved: true }
         : {}),
     });
   } catch (e) {
@@ -365,6 +381,15 @@ export async function bulkUpdateInventoryAction(input: {
      * operator typed a rack number, and a value a human recorded changed.
      */
     crateChanged?: number;
+    /**
+     * Set rack only: books whose crate label was KEPT because their stock
+     * reached the plain rack and this op — which has no per-book confirmation
+     * channel — could not ask about clearing it (Maus I, 2026-08-17: most
+     * crates here are label-only, so the label IS the crate). The label may
+     * now be stale; the toast must say so. Where `crateCleared` used to land
+     * for these books.
+     */
+    cratePreserved?: number;
   }>
 > {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
@@ -693,6 +718,19 @@ export async function transferStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = transferStockActionSchema.safeParse(input);
@@ -838,7 +876,14 @@ export async function transferStockAction(
     if (isPositionedCrate(dest)) {
       await svc.stampPlacementBin([data.itemId], dest);
     }
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await svc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -856,6 +901,7 @@ export async function transferStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // Same insufficient_stock → friendly-message mapping as placeStockAction
@@ -931,6 +977,19 @@ export async function placeStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = placeStockSchema.safeParse(input);
@@ -1039,7 +1098,14 @@ export async function placeStockAction(
     // gate's own pre-move read: the sync re-reads and writes only where the two
     // agree, so a crate edited while the stock was moving is left alone rather
     // than overwritten by an acknowledgement that named a different crate.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await invSvc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -1058,6 +1124,7 @@ export async function placeStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -1140,6 +1207,19 @@ export async function bulkPlaceStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -1258,7 +1338,14 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await invSvc.syncBookCratePlacement(placedItemIds, {
         verified,
         audit: {
@@ -1283,6 +1370,7 @@ export async function bulkPlaceStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     return toResult(e);

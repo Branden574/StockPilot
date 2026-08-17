@@ -508,6 +508,11 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       toast.warning(
         'Some titles kept a rack label this placement would have cleared — nobody was asked, so it was left as it was and may now be wrong.',
       );
+    } else if (res.data.crateSyncCratePreserved) {
+      // Its twin for the CRATE label (Maus I, 2026-08-17).
+      toast.warning(
+        'Some titles kept a crate label this placement would have cleared — nobody was asked, so it was left as it was and may now be wrong.',
+      );
     }
     setPendingConfirm(null);
     setOpen(false);
