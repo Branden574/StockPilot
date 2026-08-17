@@ -107,6 +107,21 @@ function DeliveryRequestActionInner({
   // than inside the handler keeps the handler's first statement the open call.
   const prepared = React.useMemo(() => prepareDeliveryRequest(input, branded), [input, branded]);
 
+  // THE COMPOSED MAIL ALREADY FOLLOWS THE FULFILLMENT TYPE (core's builder
+  // subjects a pickup order 'Pickup Request — <warehouse>' since 2026-08-16,
+  // owner decision). Every user-facing string in THIS component that names the
+  // thing being drafted has to follow the same authority, or the button says
+  // "Email delivery request" about a mail whose own subject says pickup.
+  // `fulfillment_type` is the authority (a pickup order's charter is NULL by
+  // CHECK constraint) — the same predicate the builder branches on. The
+  // recipients notice (`deliveryRequestCcNotice`) deliberately stays as-is:
+  // it names mailboxes, not the request kind.
+  const isPickup = input.fulfillmentType === 'pickup';
+  /** Sentence-initial form: 'Pickup request' / 'Delivery request'. */
+  const requestNoun = isPickup ? 'Pickup request' : 'Delivery request';
+  /** Mid-sentence form, for the button label. */
+  const requestNounLower = isPickup ? 'pickup request' : 'delivery request';
+
   // null = panel hidden. 'oversized' = the linkFits guard tripped (a
   // measured length problem, no popup was ever attempted). 'blocked' = the
   // window.open attempt itself came back empty-handed. The panel looks
@@ -247,7 +262,7 @@ function DeliveryRequestActionInner({
       // open attempt, never before it. Only real, countable draft attempts
       // are recorded, matching draftCount's own gating.
       recordDraft();
-      const message = 'Delivery request draft opened in Outlook. Review it and press Send yourself.';
+      const message = `${requestNoun} draft opened in Outlook. Review it and press Send yourself.`;
       toast.success(message);
       setAnnouncement(message);
       return;
@@ -283,7 +298,7 @@ function DeliveryRequestActionInner({
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(text);
       setManualText(null);
-      const message = `Delivery request copied. Create a new email to ${branded.to}, CC ${branded.cc}, and paste the copied details.`;
+      const message = `${requestNoun} copied. Create a new email to ${branded.to}, CC ${branded.cc}, and paste the copied details.`;
       toast.success(message);
       setAnnouncement(message);
     } catch {
@@ -300,7 +315,7 @@ function DeliveryRequestActionInner({
     <>
       <button type="button" className="sf-btn-ghost" onClick={handleOpen}>
         <Mail size={14} aria-hidden="true" />
-        Email delivery request
+        Email {requestNounLower}
       </button>
 
       <button
@@ -413,7 +428,7 @@ function DeliveryRequestActionInner({
               readOnly
               rows={8}
               value={manualText}
-              aria-label="Delivery request text to copy manually"
+              aria-label={`${requestNoun} text to copy manually`}
               onFocus={(e) => e.currentTarget.select()}
             />
           )}
@@ -463,7 +478,7 @@ function DeliveryRequestActionInner({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Delivery request preview</DialogTitle>
+            <DialogTitle>{requestNoun} preview</DialogTitle>
             <DialogDescription>
               StockPilot will open this as a draft in your mail client. Nothing is sent until you
               press Send yourself, and no ticket exists yet.
@@ -498,7 +513,7 @@ function DeliveryRequestActionInner({
             readOnly
             rows={14}
             value={prepared.draft.body}
-            aria-label="Delivery request message preview"
+            aria-label={`${requestNoun} message preview`}
           />
 
           {/*
@@ -519,7 +534,7 @@ function DeliveryRequestActionInner({
               readOnly
               rows={8}
               value={manualText}
-              aria-label="Delivery request text to copy manually"
+              aria-label={`${requestNoun} text to copy manually`}
               onFocus={(e) => e.currentTarget.select()}
             />
           )}

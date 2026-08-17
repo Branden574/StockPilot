@@ -509,9 +509,13 @@ describe('DeliveryRequestAction — link too long even condensed (linkFits=false
 });
 
 describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
-  it('renders for pickup orders too', () => {
+  it('renders for pickup orders too — with PICKUP copy, matching the composed subject', () => {
     render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
-    expect(screen.getByRole('button', { name: /Email delivery request/i })).toBeInTheDocument();
+    // The composed mail says 'Pickup Request — ...' (core's builder); a button
+    // still reading "Email delivery request" would name a different request
+    // than the one it drafts.
+    expect(screen.getByRole('button', { name: /Email pickup request/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Email delivery request/i })).toBeNull();
   });
 
   it('opens a body with the pickup handoff and NO destination block', async () => {
@@ -519,13 +523,63 @@ describe('DeliveryRequestAction — pickup orders (owner decision D1)', () => {
     const open = stubOpen();
 
     render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
-    await user.click(screen.getByRole('button', { name: /Email delivery request/i }));
+    await user.click(screen.getByRole('button', { name: /Email pickup request/i }));
 
     const body = decodeCompose(open.mock.calls[0]![0] as string).body;
     expect(body).toContain('Pickup / will-call');
     expect(body).toContain('PICKUP FROM');
     expect(body).toContain('COLLECTED BY');
     expect(body).not.toContain('DELIVERY DESTINATION');
+  });
+
+  it('the SUBJECT the pickup button composes really is the Pickup Request form', async () => {
+    const user = userEvent.setup();
+    const open = stubOpen();
+
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    await user.click(screen.getByRole('button', { name: /Email pickup request/i }));
+
+    expect(decodeCompose(open.mock.calls[0]![0] as string).subject).toBe('Pickup Request — DC4');
+  });
+
+  it('every surface string follows the pickup noun: success toast, preview title, copy toast', async () => {
+    const user = userEvent.setup();
+    stubOpen();
+    stubClipboard();
+
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+
+    // The success toast names a pickup request, never a delivery one.
+    await user.click(screen.getByRole('button', { name: /Email pickup request/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(String(toastSuccess.mock.calls[0]![0])).toBe(
+      'Pickup request draft opened in Outlook. Review it and press Send yourself.',
+    );
+
+    // The preview dialog's title follows too.
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Pickup request preview')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Delivery request preview')).toBeNull();
+
+    // And the copy toast.
+    await user.click(within(dialog).getByRole('button', { name: /Copy the details/i }));
+    await waitFor(() =>
+      expect(String(toastSuccess.mock.calls.at(-1)![0])).toBe(
+        'Pickup request copied. Create a new email to dc4@learn4life.org, CC arosas@cvwest.org, and paste the copied details.',
+      ),
+    );
+  });
+
+  it('the recipients notice is deliberately fulfillment-neutral and stays as-is', async () => {
+    const user = userEvent.setup();
+    render(<DeliveryRequestAction recipients={TEST_ROUTING} input={makeInput({ fulfillmentType: 'pickup', destination: null })} />);
+    await user.click(screen.getByRole('button', { name: /Preview/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(
+      'This request will be emailed to dc4@learn4life.org. A copy will also be sent to arosas@cvwest.org.',
+    );
   });
 });
 

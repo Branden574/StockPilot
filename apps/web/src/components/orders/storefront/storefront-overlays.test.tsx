@@ -100,7 +100,7 @@ describe('ReviewModal success stage', () => {
     expect(screen.getByRole('button', { name: /^Done$/i })).toBeInTheDocument();
   });
 
-  it('renders the action for a PICKUP order too (owner decision D1)', () => {
+  it('renders the action for a PICKUP order too (owner decision D1) — with the PICKUP button copy', () => {
     renderSuccess({
       summary: {
         warehouseName: 'DC4',
@@ -112,7 +112,10 @@ describe('ReviewModal success stage', () => {
       },
       destination: null,
     });
-    expect(screen.getByRole('button', { name: /Email delivery request/i })).toBeInTheDocument();
+    // The composed mail's subject is 'Pickup Request — ...' for this order, so
+    // the action's own copy follows the fulfillment type end to end.
+    expect(screen.getByRole('button', { name: /Email pickup request/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Email delivery request/i })).toBeNull();
   });
 
   it('never claims a ticket was created anywhere on the success screen', () => {
