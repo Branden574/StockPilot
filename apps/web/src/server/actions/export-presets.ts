@@ -31,13 +31,21 @@ import { can, err, ok, type ActionResult } from '@stockpilot/core';
 // the request's `fields` array straight into it. Filtering at load would be
 // a second gate that drifts from the real one.
 //
-// DEPLOY-ORDER SAFETY (code before migration 0338): a missing table is
-// Postgres 42P01 through PostgREST. list maps it to { available: false } —
-// the dialog simply doesn't grow the presets UI — and save/delete surface a
-// humane "not available yet" error. Today's export behaviour is untouched.
+// DEPLOY-ORDER SAFETY (code before migration 0338): a missing table
+// surfaces as PGRST205, NOT 42P01 — PostgREST refuses at its own schema
+// cache before Postgres can raise undefined_table. MEASURED against the
+// real local stack with both raw REST and supabase-js; an earlier version
+// of this file checked 42P01 alone, and its tests fed a mock the same
+// wrong code, so the deploy window would have shown an error instead of
+// hiding the presets UI. Both codes are accepted: PGRST205 is the real
+// one; 42P01 is kept for any path that bypasses the schema cache (direct
+// RPC, a stale cache racing a dropped table). list maps it to
+// { available: false } — the dialog simply doesn't grow the presets UI —
+// and save/delete surface a humane "not available yet" error. Today's
+// export behaviour is untouched.
 // ---------------------------------------------------------------------------
 
-const MISSING_TABLE = '42P01';
+const MISSING_TABLE_CODES = new Set(['PGRST205', '42P01']);
 const UNIQUE_VIOLATION = '23505';
 
 const DUPLICATE_NAME_MESSAGE =
@@ -76,7 +84,7 @@ interface PresetRow {
 }
 
 function isMissingTable(error: { code?: string | null } | null): boolean {
-  return error?.code === MISSING_TABLE;
+  return MISSING_TABLE_CODES.has(error?.code ?? '');
 }
 
 export async function listSharedExportPresetsAction(): Promise<

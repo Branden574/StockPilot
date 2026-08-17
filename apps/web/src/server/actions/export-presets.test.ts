@@ -170,7 +170,23 @@ describe('listSharedExportPresetsAction', () => {
     expect(res.data.presets[0]!.canDelete).toBe(true);
   });
 
-  it('maps a missing table (42P01, code before migration) to available:false — never an error', async () => {
+  it('maps a missing table (PGRST205 — the code PostgREST REALLY returns) to available:false', async () => {
+    // MEASURED, not assumed: PostgREST refuses a missing table at its own
+    // schema cache with PGRST205 before Postgres can raise 42P01. The first
+    // version of this test fed the mock 42P01 — the code the implementation
+    // happened to check — and thereby certified a wrong premise instead of
+    // testing it. The real deploy-window code is pinned first; the 42P01
+    // variant below stays as the belt-and-braces path.
+    dbState.listRows = null;
+    dbState.listError = { code: 'PGRST205', message: "Could not find the table 'public.export_presets' in the schema cache" };
+    const res = await listSharedExportPresetsAction();
+    expect(res).toEqual({ ok: true, data: { available: false, presets: [] } });
+  });
+
+  it('still maps raw-Postgres 42P01 to available:false — the belt-and-braces path', async () => {
+    // Reachable only when something bypasses the PostgREST schema cache
+    // (direct RPC, or a stale cache racing a dropped table). Kept so the
+    // fallback never narrows to a single transport's spelling of "missing".
     dbState.listRows = null;
     dbState.listError = { code: '42P01', message: 'relation "export_presets" does not exist' };
     const res = await listSharedExportPresetsAction();
@@ -270,7 +286,7 @@ describe('saveSharedExportPresetAction', () => {
   });
 
   it('maps a missing table to the humane not-available message', async () => {
-    dbState.insertError = { code: '42P01', message: 'relation does not exist' };
+    dbState.insertError = { code: 'PGRST205', message: "Could not find the table 'public.export_presets' in the schema cache" };
     const res = await saveSharedExportPresetAction({ name: 'Early', config: GOOD_CONFIG });
     expect(res.ok).toBe(false);
     if (res.ok) return;

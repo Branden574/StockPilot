@@ -17,7 +17,14 @@
 -- bypass. A second SQL definition of "valid config" would drift from the
 -- registry the moment a field is added or retired.
 --
--- Presets are IMMUTABLE by design: no UPDATE grant and no UPDATE policy.
+-- Presets are IMMUTABLE by design. Precision matters here, because the
+-- first draft of this comment was wrong: Supabase's DEFAULT PRIVILEGES
+-- grant ALL (UPDATE and TRUNCATE included) on new public tables to the
+-- authenticated role, so "no UPDATE grant" was false as written --
+-- immutability actually held only because RLS has no UPDATE policy
+-- (0 rows affected, fail closed). Both layers are now explicit: the
+-- REVOKE below makes the grant story true, and the absent policy remains
+-- the second wall.
 -- "Save" is INSERT-only, and UNIQUE (org, lower(name)) makes a duplicate
 -- name a loud 23505 instead of a silent shadow — replacing a preset is an
 -- explicit delete + re-save. updated_at exists (with the tg_set_updated_at
@@ -101,3 +108,8 @@ create policy export_presets_delete on public.export_presets
       or (select public.has_org_role(organization_id, 'admin'))
     )
   );
+
+-- Defense in depth: make the immutability claim true at the grant layer
+-- too, not only at the policy layer (default privileges grant ALL on new
+-- public tables to authenticated/anon).
+revoke update, truncate on public.export_presets from authenticated, anon;
