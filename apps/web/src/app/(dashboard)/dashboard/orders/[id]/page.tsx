@@ -11,6 +11,7 @@ import { OrderLineActions } from '@/components/orders/order-line-actions';
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
+import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
@@ -34,11 +35,20 @@ import {
 import {
   can,
   deliveryRecipientsForRouting,
+  describeLineReturnRefs,
+  describeReturnLine,
   describeUnpickedShortfall,
   formatOrderNumber,
+  formatOrderReturnSummary,
   isManagerOrAbove,
+  ORDER_RETURN_SUMMARY_NOTE,
+  orderReturnSummary,
   resolveOrgTimezone,
+  returnedFragment,
+  returnHandle,
+  returnRefsByLine,
   UNPICKED_SHORTFALL_TITLE,
+  type OrderReturnView,
   type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
@@ -56,7 +66,12 @@ import {
   type OrderRequestRow,
   type OrderRequestStatus,
 } from '@/server/services/order-requests';
-import { RMAService, type ReturnableLine } from '@/server/services/returns';
+import {
+  loadOrderReturns,
+  RMAService,
+  type ReturnableLine,
+  type ReturnStatus,
+} from '@/server/services/returns';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -218,11 +233,17 @@ export default async function OrderDetailPage({
   // it's no longer in the OrderRequestStatus union). The off-by-default
   // `returns` module is only checked for a viewer who could act on it either
   // way — staff with returns:manage (the CreateReturnDialog) or the requester
-  // themselves (the self-service return-portal link).
+  // themselves (the self-service return-portal link) — or who could OPEN a
+  // return (returns:read): the returns panel below links each RMA to its
+  // detail page, and that page redirects unless the module is on and the
+  // viewer holds read or manage, so the link renders only when both are
+  // known true. Cancel refuses completed orders (0155), so a return can only
+  // ever exist against a returnable order — `orderIsReturnable` is therefore
+  // also the gate for READING the order's returns at all.
   const orderIsReturnable =
     request.status === 'completed' || (request.status as string) === 'delivered';
-  const returnsModuleGate =
-    orderIsReturnable && (can(ctx, 'returns:manage') || isOwnRequest);
+  const canReadReturns = can(ctx, 'returns:read') || can(ctx, 'returns:manage');
+  const returnsModuleGate = orderIsReturnable && (canReadReturns || isOwnRequest);
 
   // "Report a problem" launch point (Task 17, master brief §8) — always
   // available regardless of order status; the module RPC is only paid for a
@@ -276,6 +297,7 @@ export default async function OrderDetailPage({
     deliveryRequestCharter,
     deliveryRequestTimezone,
     deliveryRequestRouting,
+    orderReturns,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -505,6 +527,28 @@ export default async function OrderDetailPage({
     showDeliveryRequest
       ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
       : Promise.resolve<OrgEmailRoutingReadState | null>(null),
+
+    // The order's RETURNS — the reverse of the returns page's "Against order
+    // SO-…" link (owner report, SO-000085: a delivered order with a closed
+    // RMA read as a clean 1/1/1 with nothing about the return). One RLS-scoped
+    // read of `returns` + embedded `return_lines`, fired only on a returnable
+    // order (nothing else can carry one) and for EVERY viewer — a return that
+    // happened is part of the order's history, and RLS (is_org_member) is
+    // the authority on who reads it, not the returns module switch or the
+    // returns:read permission (those only decide whether the RMA number is a
+    // LINK). Ungated helper on purpose: RMAService.gateRead would hide the
+    // history whenever the module is off. Degrades to [] on any error so a
+    // returns hiccup never takes the order page down.
+    orderIsReturnable
+      ? (async (): Promise<OrderReturnView[]> => {
+          try {
+            const supabase = await createClient();
+            return await loadOrderReturns(supabase, ctx.organizationId, id);
+          } catch {
+            return [];
+          }
+        })()
+      : Promise.resolve<OrderReturnView[]>([]),
   ]);
 
   let viewerCanPick = true;
@@ -545,6 +589,20 @@ export default async function OrderDetailPage({
   const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
   const returnsModuleEnabled = returnsModuleGate && (returnsAccess?.enabled ?? false);
   const maintenanceModuleEnabled = maintenanceAccess?.enabled ?? false;
+  // The RMA number links to /dashboard/returns/[id] only when that page will
+  // actually open for this viewer (module on + returns:read or manage); for
+  // everyone else it is plain text — the panel itself renders regardless.
+  const returnsLinkable = returnsModuleEnabled && canReadReturns;
+  // Per-line WHICH-RMA join and the order-level roll-up. The returned NUMBER
+  // per line is `returned_quantity` (0153, bumped only at apply-time in the
+  // same transaction that latches return_lines.applied); the join supplies
+  // the RMA numbers for the hover/aria text. Null summary = no returned units
+  // = nothing extra renders, so an order with no returns is unchanged.
+  const returnRefs = returnRefsByLine(orderReturns);
+  const returnSummary = orderReturnSummary(
+    lines.map((l) => ({ fulfilled: l.quantity_fulfilled, returned: l.returned_quantity })),
+  );
+  const lineById = new Map(lines.map((l) => [l.id, l] as const));
 
   // Tier 3 — the returnable-lines read genuinely depends on the Tier-2
   // module check above (returnsModuleEnabled), so it can't join that batch:
@@ -860,6 +918,39 @@ export default async function OrderDetailPage({
                 )}
               </div>
             )}
+            {/* Returned units, stated as a LATER event beside the shipped
+                total (SO-000085). Neutral tone, not amber — nothing needs
+                attention, the order is simply not the clean "everything
+                delivered and kept" it would otherwise read as. The net figure
+                is arithmetic on records (provided − returned across closed
+                returns); its caveat rides in the title/aria because it can be
+                wrong for an in-person swap recorded only in a return's notes,
+                and the returns panel with those notes sits directly beneath. */}
+            {returnSummary && (
+              <div
+                className="border-b border-border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground"
+                data-testid="order-return-summary"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="font-medium">Returns</span>
+                  <span
+                    className="tabular-nums"
+                    title={ORDER_RETURN_SUMMARY_NOTE}
+                    aria-label={`${formatOrderReturnSummary(returnSummary)}. ${ORDER_RETURN_SUMMARY_NOTE}`}
+                  >
+                    {formatOrderReturnSummary(returnSummary)}
+                    {orderReturns.length > 0 && (
+                      <>
+                        {' · '}
+                        <a href="#order-returns" className="underline-offset-2 hover:underline">
+                          See returns
+                        </a>
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -874,6 +965,11 @@ export default async function OrderDetailPage({
                           pickup/delivery — picked or staged units are not fulfilled
                           yet. Owed is requested minus fulfilled; a backordered order
                           stays live until owed reaches zero or a manager closes it.
+                        </p>
+                        <p>
+                          Returned units are shown under Fulfilled; the shipped
+                          count is never rewritten — a return is a later event,
+                          listed under Returns below.
                         </p>
                       </HelpTip>
                     </span>
@@ -946,6 +1042,22 @@ export default async function OrderDetailPage({
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {formatNumber(l.quantity_fulfilled)}
+                        {/* The shipped number stays the number. A return is
+                            appended BENEATH it as its own labelled figure —
+                            "1 / 1 returned" — never subtracted; the hover/aria
+                            names the RMA(s) it came back on. Renders nothing
+                            when nothing was returned, so a plain delivered
+                            order's cell is byte-identical to before. */}
+                        {returnedFragment(l.returned_quantity) && (
+                          <div
+                            className="text-[10.5px]"
+                            data-testid="line-returned"
+                            title={describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ?? undefined}
+                            aria-label={describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ?? undefined}
+                          >
+                            {returnedFragment(l.returned_quantity)}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell
                         className={`text-right tabular-nums ${owed > 0 ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}
@@ -978,6 +1090,68 @@ export default async function OrderDetailPage({
               </TableBody>
             </Table>
           </section>
+
+          {/* The order's returns — number, status, what came back and how it
+              was dispositioned, and the NOTES. The notes are where an
+              in-person swap is recorded today (SO-000085: "Size S … swapped
+              out for Ladies size M" — the replacement is on no order line),
+              so they must be readable where a human looks at the order.
+              Rendered for every viewer (RLS decided what came back); the RMA
+              number is a link only when the returns page would open for this
+              viewer. Nothing renders when the order has no returns. */}
+          {orderReturns.length > 0 && (
+            <section id="order-returns" className="bg-card rounded-xl border" data-testid="order-returns">
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <h2 className="text-sm font-medium">Returns ({orderReturns.length})</h2>
+                <p className="text-muted-foreground text-xs">
+                  A return is a later event — the shipped count above is never rewritten.
+                </p>
+              </div>
+              <ul className="divide-y divide-border">
+                {orderReturns.map((r) => (
+                  <li key={r.id} className="px-4 py-3" data-testid="order-return">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      {returnsLinkable ? (
+                        <Link
+                          href={`/dashboard/returns/${r.id}`}
+                          className="font-mono font-medium tabular-nums hover:underline"
+                        >
+                          {returnHandle(r)}
+                        </Link>
+                      ) : (
+                        <span className="font-mono font-medium tabular-nums">{returnHandle(r)}</span>
+                      )}
+                      <ReturnStatusBadge status={r.status as ReturnStatus} />
+                      <span className="text-muted-foreground text-xs">
+                        {returnReasonLabel(r.reasonCode)} · {formatRelative(r.closedAt ?? r.createdAt)}
+                      </span>
+                    </div>
+                    {r.lines.length > 0 && (
+                      <ul className="text-muted-foreground mt-1.5 space-y-0.5 text-xs tabular-nums">
+                        {r.lines.map((rl, i) => (
+                          <li key={`${r.id}-${rl.orderRequestLineId}-${i}`}>
+                            {describeReturnLine({
+                              quantity: rl.quantity,
+                              itemName:
+                                lineById.get(rl.orderRequestLineId)?.item?.name ??
+                                (rl.itemId ? `Item ${rl.itemId.slice(0, 8)}` : null),
+                              disposition: rl.disposition,
+                              applied: rl.applied,
+                            })}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {r.notes && (
+                      <p className="mt-1.5 whitespace-pre-wrap text-sm" data-testid="order-return-notes">
+                        {r.notes}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {reservations.length > 0 && (
             <section className="bg-card rounded-xl border p-4 text-xs">

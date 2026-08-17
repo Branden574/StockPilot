@@ -128,6 +128,13 @@ export interface OrderRequestLineRow {
   /** Migration 0109: per-line picked qty, populated by partial_pick_line
    * RPC during the digital pick flow. Null = not yet touched. */
   quantity_picked: number | null;
+  /** Migration 0153: units applied against CLOSED returns on this line — the
+   * durable per-line returned budget, bumped only inside
+   * process_return_disposition in the same transaction that latches
+   * return_lines.applied. Read-side only here: rendered BESIDE
+   * quantity_fulfilled ("1 / 1 returned"), never subtracted from it — the
+   * shipped count is history and a return is a later event. */
+  returned_quantity: number;
   unit_cost_at_request: number;
   notes: string | null;
 }
@@ -700,7 +707,7 @@ export class OrderRequestsService {
         .from('order_request_lines')
         .select(
           `id, order_request_id, item_id, quantity_requested,
-           quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
+           quantity_fulfilled, quantity_picked, returned_quantity, unit_cost_at_request, notes,
            item:inventory_items!item_id (
              id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields, tracking_type,
              charter_id, charter:charters!charter_id ( name, code )
@@ -762,6 +769,7 @@ export class OrderRequestsService {
         quantity_requested: Number(r.quantity_requested) || 0,
         quantity_fulfilled: Number(r.quantity_fulfilled) || 0,
         quantity_picked: rawPicked === null || rawPicked === undefined ? null : Number(rawPicked),
+        returned_quantity: Number(r.returned_quantity) || 0,
         unit_cost_at_request: Number(r.unit_cost_at_request) || 0,
         notes: (r.notes as string | null) ?? null,
         item,

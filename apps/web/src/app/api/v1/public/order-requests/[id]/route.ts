@@ -170,7 +170,7 @@ export async function GET(
     admin
       .from('order_request_lines')
       .select(
-        `id, quantity_requested, quantity_fulfilled,
+        `id, quantity_requested, quantity_fulfilled, returned_quantity,
          item:inventory_items!item_id (name)`,
       )
       .eq('order_request_id', id),
@@ -185,6 +185,8 @@ export async function GET(
     id: string;
     quantity_requested: number | string;
     quantity_fulfilled: number | string;
+    /** 0153: units applied against closed returns (the requester made them). */
+    returned_quantity: number | string | null;
     item:
       | { name?: string }
       | { name?: string }[]
@@ -197,6 +199,9 @@ export async function GET(
       itemName: item?.name ?? 'Item',
       quantityRequested: Number(row.quantity_requested) || 0,
       quantityFulfilled: Number(row.quantity_fulfilled) || 0,
+      // Rendered BESIDE fulfilled ("1 / 1 · 1 returned"), never subtracted:
+      // the shipped count is history, a return is a later event.
+      returnedQuantity: Number(row.returned_quantity) || 0,
     };
   });
 

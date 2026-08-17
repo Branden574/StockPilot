@@ -3,7 +3,12 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
-import { can, formatOrderNumber } from '@stockpilot/core';
+import {
+  can,
+  formatOrderNumber,
+  type OrderReturnView,
+  type ReturnStatus as CoreReturnStatus,
+} from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -57,14 +62,10 @@ import {
  * an auditor viewer) can view returns without being able to move stock.
  */
 
-/** Return lifecycle status (mirrors the 0153 returns.status CHECK). */
-export type ReturnStatus =
-  | 'requested'
-  | 'approved'
-  | 'received'
-  | 'closed'
-  | 'denied'
-  | 'cancelled';
+/** Return lifecycle status (mirrors the 0153 returns.status CHECK). The
+ *  union itself lives in core (`order-returns-view.ts`) so the order-side
+ *  view on web and the phone share it; re-exported here unchanged. */
+export type ReturnStatus = CoreReturnStatus;
 
 export type ReturnReasonCode =
   | 'damaged'
@@ -264,6 +265,95 @@ export async function pendingReturnQuantitiesByLine(
     );
   }
   return pending;
+}
+
+/**
+ * A `returns` header WITH its lines, in the neutral shape the shared
+ * order-side view (core `order-returns-view.ts`) consumes. Both the web order
+ * page and the phone's order screen build this from the same two-table read.
+ */
+export type OrderReturnWithLines = OrderReturnView;
+
+/**
+ * The order page's returns read — the REVERSE of the returns page's "Against
+ * order SO-…" link. Every return that exists against an order, with its lines,
+ * oldest first.
+ *
+ * Deliberately NOT a method on RMAService and NOT behind `gateRead()`: that
+ * gate throws when the `returns` module is off or the viewer lacks
+ * returns:read/manage, and a return that HAPPENED must stay visible on the
+ * order page — which every accepted org member can read — regardless of who is
+ * looking. RLS is the authority here: `returns_select` / `return_lines_select`
+ * are `is_org_member(organization_id)`, so a user-authed client sees exactly
+ * its own org's rows and nothing else. Same posture as
+ * `pendingReturnQuantitiesByLine` above.
+ *
+ * No status filter is applied at the query — pending, closed, denied and
+ * cancelled all come back, because a manager reading the order needs to see an
+ * in-flight return as much as a closed one, and a denied one is history the
+ * order should not hide. (Any status narrowing belongs in JS, never a
+ * PostgREST `not.in` — recurring pattern #23.) What COUNTS as returned is
+ * decided by the shared rule (`returnLineCountsAsReturned`: the 0197 `applied`
+ * latch), not by anything here.
+ *
+ * Throws on a read error; the order page catches and degrades to [] so a
+ * returns hiccup never takes the order page down.
+ */
+export async function loadOrderReturns(
+  client: SupabaseClient,
+  organizationId: string,
+  orderRequestId: string,
+): Promise<OrderReturnWithLines[]> {
+  const { data, error } = await client
+    .from('returns')
+    .select(
+      `id, return_number, status, reason_code, notes, created_at, closed_at,
+       lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied)`,
+    )
+    .eq('organization_id', organizationId)
+    .eq('order_request_id', orderRequestId)
+    .order('created_at', { ascending: true });
+  if (error) throw new ServiceError('internal_error', error.message);
+
+  type RawLine = {
+    id: string;
+    order_request_line_id: string;
+    item_id: string;
+    quantity: number | string | null;
+    disposition: string;
+    applied: boolean | null;
+  };
+  type Raw = {
+    id: string;
+    return_number: string | null;
+    status: string;
+    reason_code: string | null;
+    notes: string | null;
+    created_at: string;
+    closed_at: string | null;
+    lines: RawLine[] | RawLine | null;
+  };
+  return ((data as Raw[] | null) ?? []).map((r) => {
+    const rawLines = Array.isArray(r.lines) ? r.lines : r.lines ? [r.lines] : [];
+    return {
+      id: r.id,
+      returnNumber: r.return_number ?? null,
+      status: r.status,
+      reasonCode: r.reason_code ?? null,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      closedAt: r.closed_at ?? null,
+      lines: rawLines.map((l) => ({
+        orderRequestLineId: l.order_request_line_id,
+        itemId: l.item_id,
+        quantity: Number(l.quantity) || 0,
+        disposition: l.disposition,
+        // The 0197 latch — the ONLY thing that makes a line count as returned.
+        // Coerced with `=== true` so a null (never written) reads as not applied.
+        applied: l.applied === true,
+      })),
+    };
+  });
 }
 
 export class RMAService {

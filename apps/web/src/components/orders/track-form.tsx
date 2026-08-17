@@ -7,6 +7,7 @@ import { DeliveryMap } from '@/components/orders/delivery-map';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { returnedFragment } from '@stockpilot/core';
 import { cn } from '@/lib/utils';
 
 interface TrackResult {
@@ -19,6 +20,9 @@ interface TrackResult {
     itemName: string;
     quantityRequested: number;
     quantityFulfilled: number;
+    /** Units the requester sent back on a closed return; absent on older
+     *  responses. Shown beside fulfilled, never folded into it. */
+    returnedQuantity?: number;
   }>;
   createdAt: string;
   approvedAt: string | null;
@@ -302,6 +306,9 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
                   {l.quantityFulfilled > 0 ? (
                     <>
                       {l.quantityFulfilled} / {l.quantityRequested}
+                      {returnedFragment(l.returnedQuantity) ? (
+                        <> · {returnedFragment(l.returnedQuantity)}</>
+                      ) : null}
                     </>
                   ) : (
                     <>{l.quantityRequested} requested</>
