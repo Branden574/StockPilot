@@ -100,6 +100,27 @@ export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): numb
 }
 
 /**
+ * The searchable barcode for a staging row: `inventory_items.barcode` (where a
+ * book's ISBN is stored), falling back to the legacy isbn/isbn13/isbn10
+ * custom-field keys exactly as the inventory export does. Pure + exported for
+ * tests. Returns null when nothing is recorded.
+ */
+export function readStagingBarcode(item: {
+  barcode?: string | null;
+  custom_fields?: Record<string, unknown> | null;
+}): string | null {
+  const direct = typeof item.barcode === 'string' ? item.barcode.trim() : '';
+  if (direct) return direct;
+  const cf = item.custom_fields;
+  if (!cf || typeof cf !== 'object') return null;
+  for (const key of ['isbn', 'isbn13', 'isbn10'] as const) {
+    const v = cf[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/**
  * Builds the PostgREST predicate for the Items rack filter.
  *
  * Pure + exported so both filter call sites (list() and the expected-count
@@ -6584,6 +6605,14 @@ export class InventoryService {
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
     /**
+     * Searchable identifiers for the staging table's client-side search: the
+     * item's barcode (a book's ISBN lives here; legacy isbn/isbn13/isbn10
+     * custom-field keys are the fallback, same as the export) and its model
+     * number. Two columns on the SAME inventory_items embed — no extra query.
+     */
+    barcode: string | null;
+    modelNumber: string | null;
+    /**
      * A BOOK's current rack/crate SUMMARY (custom_fields book_* keys), so the
      * put-away dialog can show "currently in Blue 4" without a second fetch.
      * `null` for every non-book row.
@@ -6602,7 +6631,7 @@ export class InventoryService {
     // 1. Not-yet-placed levels (qty>0) joined to item + the staging/unplaced location.
     let q = this.ctx.supabase
       .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields)')
+      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
       .eq('organization_id', this.ctx.organizationId)
       .in('locations.kind', ['staging', 'unplaced'])
       .gt('quantity', 0);
@@ -6711,6 +6740,8 @@ export class InventoryService {
         warehouseId: r.locations.warehouse_id ?? null,
         sourceLocationId: r.location_id,
         sourceKind,
+        barcode: readStagingBarcode(r.inventory_items),
+        modelNumber: (r.inventory_items.model_number as string | null) ?? null,
         quantity: Number(r.quantity),
         sourceReceiptId: src?.receiptId ?? null,
         sourcePoNumber: meta?.poNumber ?? null,

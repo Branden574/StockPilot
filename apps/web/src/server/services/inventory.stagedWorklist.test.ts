@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
-import { deriveAgeDays, InventoryService } from './inventory';
+import { deriveAgeDays, InventoryService, readStagingBarcode } from './inventory';
 
 describe('deriveAgeDays', () => {
   it('returns whole days since the earliest staged movement', () => {
@@ -455,5 +455,79 @@ describe('InventoryService.stagedWorklist — bookStorage', () => {
     const projection = levelsChains[0]![0]![0] as string;
     expect(projection).toContain('inventory_items!inner(');
     expect(projection).toContain('custom_fields');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// barcode / modelNumber — searchable identifiers for the staging table's
+// client-side search box (a worker scans an ISBN into it). Same rule as
+// bookStorage: two more columns on the ONE inventory_items embed, never a
+// second query.
+// ---------------------------------------------------------------------------
+
+describe('InventoryService.stagedWorklist — searchable identifiers', () => {
+  function identifierStub(items: Array<Record<string, unknown>>) {
+    return makeSupabaseStub({
+      'item_stock_levels.select': {
+        data: items.map((inv, i) => ({
+          item_id: inv.id,
+          location_id: 'stg-loc',
+          quantity: 1 + i,
+          locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+          inventory_items: { deleted_at: null, custom_fields: null, ...inv },
+        })),
+        error: null,
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+  }
+
+  it('threads barcode and model_number onto the row', async () => {
+    const stub = identifierStub([
+      { id: BOOK_ID, name: 'Persepolis', sku: 'SP-BOOK-1', item_type: 'book', barcode: '9780375714573', model_number: null },
+      { id: WIDGET_ID, name: 'Markers', sku: 'SP-WBM-12', item_type: 'product', barcode: null, model_number: 'EXPO-86001' },
+    ]);
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const rows = await svc.stagedWorklist();
+    expect(rows.find((r) => r.itemId === BOOK_ID)).toMatchObject({ barcode: '9780375714573', modelNumber: null });
+    expect(rows.find((r) => r.itemId === WIDGET_ID)).toMatchObject({ barcode: null, modelNumber: 'EXPO-86001' });
+  });
+
+  it('asks the EXISTING embed for barcode + model_number — no inventory_items query of its own', async () => {
+    const stub = identifierStub([
+      { id: BOOK_ID, name: 'Persepolis', sku: 'SP-BOOK-1', item_type: 'book', barcode: '9780375714573', model_number: null },
+    ]);
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.stagedWorklist();
+    expect(stub.fromCalls).not.toContain('inventory_items');
+    const projection = stub.chainArgsAll.get('item_stock_levels.select')![0]![0]![0] as string;
+    const embed = projection.slice(projection.indexOf('inventory_items!inner('));
+    expect(embed).toContain('barcode');
+    expect(embed).toContain('model_number');
+  });
+
+  it('falls back to a legacy ISBN custom-field key when barcode is empty (same order as the export)', async () => {
+    const stub = identifierStub([
+      { id: BOOK_ID, name: 'Persepolis', sku: 'SP-BOOK-1', item_type: 'book', barcode: '  ', model_number: null, custom_fields: { isbn13: '9780375714573' } },
+    ]);
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const rows = await svc.stagedWorklist();
+    expect(rows[0]!.barcode).toBe('9780375714573');
+  });
+});
+
+describe('readStagingBarcode', () => {
+  it('prefers the barcode column, trimmed', () => {
+    expect(readStagingBarcode({ barcode: ' 9780375714573 ', custom_fields: { isbn: 'other' } })).toBe('9780375714573');
+  });
+  it('falls back through isbn, isbn13, isbn10 in that order', () => {
+    expect(readStagingBarcode({ barcode: null, custom_fields: { isbn13: 'B', isbn: 'A', isbn10: 'C' } })).toBe('A');
+    expect(readStagingBarcode({ barcode: '', custom_fields: { isbn13: 'B', isbn10: 'C' } })).toBe('B');
+    expect(readStagingBarcode({ barcode: undefined, custom_fields: { isbn10: 'C' } })).toBe('C');
+  });
+  it('is null when nothing is recorded, or when the ISBN key holds a non-string', () => {
+    expect(readStagingBarcode({ barcode: null, custom_fields: null })).toBeNull();
+    expect(readStagingBarcode({ barcode: null, custom_fields: { isbn: 12345 } })).toBeNull();
+    expect(readStagingBarcode({})).toBeNull();
   });
 });

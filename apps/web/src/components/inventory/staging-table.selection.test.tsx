@@ -24,6 +24,8 @@ function makeRow(itemId: string, name: string, sourceLocationId: string): Stagin
     receiptNumber: null,
     receivedAt: null,
     ageDays: null,
+    barcode: null,
+    modelNumber: null,
     bookStorage: null,
   };
 }
