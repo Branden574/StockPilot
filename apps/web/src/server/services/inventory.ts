@@ -4600,6 +4600,15 @@ export class InventoryService {
       locationId = await this.resolveAdjustLocation(input.itemId, wh);
     }
 
+    // A MANUAL removal with no location draws in mode 'any' (0341): the shelf
+    // first (racks/areas/crates, then Unplaced — exactly the 'placed' order),
+    // and only if the shelf does not cover the delta, Staging. The default
+    // 'placed' mode is the pick/ship contract (staged stock is never picked)
+    // and it refused a full write-off of an item that had one unit sitting in
+    // Staging after a return — L4L, 2026-08-17, four "internal error"s. Positive
+    // deltas and explicit locations never reach this branch of the RPC.
+    const drawMode = locationId == null && input.quantityChange < 0 ? 'any' : undefined;
+
     const { data, error } = await this.ctx.supabase.rpc('adjust_stock', {
       p_item_id: input.itemId,
       p_quantity_change: input.quantityChange,
@@ -4607,8 +4616,18 @@ export class InventoryService {
       p_location_id: locationId,
       p_reason: input.reason ?? null,
       p_notes: input.notes ?? null,
+      ...(drawMode ? { p_mode: drawMode } : {}),
     });
     if (error) {
+      // 'insufficient_placed_stock' does NOT contain the substring
+      // 'insufficient_stock', so it used to fall through to internal_error and
+      // reach the user as "Something went wrong". Match the specific class first.
+      if (error.message.includes('insufficient_placed_stock')) {
+        throw new ServiceError(
+          'validation_error',
+          "This item's stock by location does not cover that quantity. Its holdings (racks, crates, unplaced and staging) add up to less than the amount removed — run a cycle count or place the missing stock first.",
+        );
+      }
       if (error.message.includes('insufficient_stock')) {
         throw new ServiceError('validation_error', 'Insufficient stock for this adjustment');
       }
