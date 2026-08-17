@@ -287,6 +287,13 @@ export type AuditEvent =
   // Auto-archive-on-zero-stock settings — an admin toggled auto-archive /
   // dwell days, stored in organization_modules.settings for 'inventory'.
   | 'auto_archive_settings.updated'
+  // Org-shared Export Builder presets (export_presets, migration 0338).
+  // Saved carries the full stored config (name, fields, format) so a preset
+  // that later looks wrong is attributable to the exact save that wrote it;
+  // deleted carries what was removed, since delete is the only way a shared
+  // preset ever changes (rows are immutable — save is insert-only).
+  | 'export_preset.saved'
+  | 'export_preset.deleted'
   // Inventory restore points (snapshots + safe-reconcile restore).
   | 'restore_point.created'
   | 'restore_point.restored'
