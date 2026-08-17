@@ -6,11 +6,17 @@ import { describe, expect, it } from 'vitest';
 import {
   bookCrateAlertMessage,
   bookCrateRefusal,
+  bookDestination,
+  bookDestinationIsRecordedStorage,
+  bookDestinationNeedsMint,
   bookRackRefusal,
   rackAcknowledgementField,
   transferRequestBody,
   crateSyncWarning,
   decideNewRackPlacement,
+  destinationMatchesOption,
+  EMPTY_DESTINATION_FIELDS,
+  fieldsFromDestination,
   placementRefusalAlert,
   initialMoveQuantity,
   initialMoveQuantityForSource,
@@ -21,6 +27,7 @@ import {
   newRackLabel,
   removeStockCrateWarning,
   resolveMoveSource,
+  seedDestinationFromStorage,
   type MoveDestination,
   type MoveHolding,
 } from './move-stock-form';
@@ -28,7 +35,11 @@ import {
 // into the node environment. `typeof` on a type-only import is the whole point:
 // the write-off sheet can only branch on what this function RETURNS.
 import type { removeStockFromLocation } from './stock-api';
-import type { BookCrateChangeDetail, BookRackChangeDetail } from '@stockpilot/core';
+import type {
+  BookCrateChangeDetail,
+  BookRackChangeDetail,
+  BookStorageInfo,
+} from '@stockpilot/core';
 
 type WriteOffBody = Awaited<ReturnType<typeof removeStockFromLocation>>;
 
@@ -522,40 +533,52 @@ describe('the put-away modal wires the confirmation', () => {
 
 // ── The sheet asks rack-or-crate, and can answer the book-crate gate ─────────
 
-describe('the move-stock sheet expresses rack XOR crate', () => {
-  it('asks for the new location TYPE explicitly, for books', () => {
-    // It used to render "RACK NUMBER *" plus two optional crate boxes and no
-    // toggle at all, so the single field deciding locations.kind — and
-    // migration 0270's kind-scoped dedupe bucket — was never actually asked
-    // about, and rack+crate together was expressible with one tap.
-    expect(modal).toContain('NEW LOCATION TYPE');
-    expect(modal).toContain("setNewKind('rack')");
-    expect(modal).toContain("setNewKind('crate')");
+describe('the move-stock sheet: the four fields ARE the destination (books)', () => {
+  // WIRING PINS. The decisions are asserted by value in the blocks below (and
+  // in "the four fields are the destination" at the end of this file); these
+  // prove the sheet is plugged into them and did not keep a second copy.
+  it('seeds the four fields from the recorded storage, and reads it for the item screen', () => {
+    // The staging worklist hands `bookStorage` in; the item screen does not, so
+    // the sheet reads the item's custom_fields once on open through the
+    // CANONICAL reader (it feeds the acknowledgement fingerprints).
+    expect(modal).toContain('seedDestinationFromStorage(recorded)');
+    expect(modal).toContain("if (itemType === 'book')");
+    expect(modal).toContain('readBookStorage(cf ?? null)');
+    expect(modal).toContain('bookStorage !== undefined');
   });
 
-  it('the CRATE branch requires its own number and ALSO offers where it sits', () => {
-    expect(modal).toContain('CRATE NUMBER *');
-    // The rack branch's REQUIRED number box sits in the other half of the same
-    // ternary, so only one KIND is ever on screen…
-    expect(modal).toContain("!isBook || newKind === 'rack' ? (");
-    // …but the crate branch asks for the rack it sits on, because a crate sits
-    // on a rack. Without this the phone can only ever record half a location.
-    expect(modal).toContain('ON RACK (OPTIONAL)');
-    expect(modal).toContain('A crate sits on a rack.');
+  it('a chip FILLS the fields for a book, and there is no "+ New" chip or Rack|Crate toggle for one', () => {
+    expect(modal).toContain('setFields(fieldsFromDestination(d))');
+    expect(modal).toContain('{!isBook && canCreateLocation ? (');
+    expect(modal).not.toContain('NEW LOCATION TYPE');
+    expect(modal).not.toContain('setNewKind(');
+    // Both facts on screen at once — a crate SITS ON a rack.
+    expect(modal).toContain('PLACE INTO');
+    expect(modal).toContain('label="RACK NUMBER"');
+    expect(modal).toContain('label="CRATE NUMBER"');
+    expect(modal).toContain('CRATE_COLOR_OPTIONS.map');
   });
 
-  it('submit readiness and the payload both come from the shared helpers', () => {
+  it('the destination, its readiness, the recorded-storage suppression and the payload come from the shared helpers', () => {
+    expect(modal).toContain('bookDestination(fields, selectedChip)');
+    expect(modal).toContain('newLocationReady(bookDest.input)');
+    expect(modal).toContain('bookDestinationIsRecordedStorage(bookDest, storage)');
+    expect(modal).toContain('newLocationFields(bookDest.input) as NewRack');
+    expect(modal).toContain('bookDestinationNeedsMint(bookDest, existingLabels)');
     // Not `rackNumber.trim().length > 0` — that gate is what made a
     // number-only crate unreachable however the form was filled in.
-    expect(modal).toContain('newLocationReady(newLocation)');
-    expect(modal).toContain('newLocationFields(newLocation)');
     expect(modal).not.toContain('rackNumber.trim().length > 0');
   });
 
   it('the confirmation and the payload are derived from the SAME object', () => {
     // REPRO A': the sheet confirmed "Create new rack A1?" and created
-    // "Crate #9". One object now feeds decideNewRackPlacement and the body.
-    expect(modal).toContain('rack: newLocation,');
+    // "Crate #9". One object feeds decideNewRackPlacement and the body, on
+    // both the book path and the non-book "+ New rack…" path.
+    expect(modal).toContain('rack: input,');
+    expect(modal).toContain('confirmCreationThenMove(bookDest.input, newRack)');
+    expect(modal).toContain(
+      'confirmCreationThenMove(newLocation, newLocationFields(newLocation) as NewRack)',
+    );
   });
 });
 
@@ -1476,5 +1499,227 @@ describe('transferRequestBody — the two keys are asymmetric, and that is load-
     expect(body.toLocationId).toBe('loc-2');
     expect(body).not.toHaveProperty('notes');
     expect(transferRequestBody({ ...base, notes: 'why' }).notes).toBe('why');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FOUR FIELDS ARE THE DESTINATION — Maus I / The Joy Luck Club, 2026-08-17
+//
+// The web dialogs pin the same rules in
+// apps/web/src/lib/locations/placement-destination.test.ts; these are the
+// phone's copy. Same fixtures, same literals, so the two clients cannot drift.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RED_4_ON_38B: BookStorageInfo = {
+  rackNumber: '38',
+  rackRow: 'B',
+  crateColor: 'red',
+  crateNumber: '4',
+  grade: null,
+  rackLabel: '38-B',
+  crateLabel: 'Red 4',
+};
+const RACK_38B: MoveDestination = {
+  id: 'r-38b',
+  name: '38-B',
+  kind: 'rack',
+  warehouseId: 'wh-1',
+  rackNumber: '38',
+  rackRow: 'B',
+  crateColor: null,
+  crateNumber: null,
+};
+const CRATE_BLUE_0_ON_38B: MoveDestination = {
+  id: 'c-blue0',
+  name: 'Blue #0 on rack 38-B',
+  kind: 'crate',
+  warehouseId: 'wh-1',
+  rackNumber: '38',
+  rackRow: 'B',
+  crateColor: 'Blue',
+  crateNumber: '0',
+};
+
+describe('seedDestinationFromStorage — the default destination is where the book already lives', () => {
+  it('pre-fills all four boxes from the recorded storage', () => {
+    expect(seedDestinationFromStorage(RED_4_ON_38B)).toEqual({
+      fields: { rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '4' },
+      unknownCrateColor: null,
+    });
+  });
+  it('a recorded colour is seeded as its slug, whatever the stored case', () => {
+    expect(seedDestinationFromStorage({ ...RED_4_ON_38B, crateColor: ' Red ' }).fields.crateColor).toBe('red');
+  });
+  it('an UNKNOWN recorded colour leaves the box blank and hands the raw text back', () => {
+    expect(seedDestinationFromStorage({ ...RED_4_ON_38B, crateColor: 'taupe' })).toEqual({
+      fields: { rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '4' },
+      unknownCrateColor: 'taupe',
+    });
+  });
+  it('nothing recorded (or a non-book) seeds nothing', () => {
+    expect(seedDestinationFromStorage(null).fields).toEqual(EMPTY_DESTINATION_FIELDS);
+    expect(seedDestinationFromStorage(undefined).fields).toEqual(EMPTY_DESTINATION_FIELDS);
+  });
+});
+
+describe('fieldsFromDestination — a chip FILLS the boxes', () => {
+  it('a rack chip fills the rack pair and BLANKS the crate', () => {
+    expect(fieldsFromDestination(RACK_38B)).toEqual({
+      rackNumber: '38',
+      rackRow: 'B',
+      crateColor: '',
+      crateNumber: '',
+    });
+  });
+  it('a positioned crate chip fills all four (colour as its slug)', () => {
+    expect(fieldsFromDestination(CRATE_BLUE_0_ON_38B)).toEqual({
+      rackNumber: '38',
+      rackRow: 'B',
+      crateColor: 'blue',
+      crateNumber: '0',
+    });
+  });
+  it('a chip with no columns (older caller, legacy crate) fills nothing', () => {
+    expect(fieldsFromDestination({ id: 'x', name: 'Old', kind: 'crate', warehouseId: null })).toEqual(
+      EMPTY_DESTINATION_FIELDS,
+    );
+  });
+  it('destinationMatchesOption compares by fingerprint, not bytes', () => {
+    expect(
+      destinationMatchesOption(
+        { rackNumber: '38', rackRow: 'b', crateColor: 'blue', crateNumber: '0' },
+        CRATE_BLUE_0_ON_38B,
+      ),
+    ).toBe(true);
+    expect(
+      destinationMatchesOption(
+        { rackNumber: '38', rackRow: 'B', crateColor: 'blue', crateNumber: '1' },
+        CRATE_BLUE_0_ON_38B,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('bookDestination — what the four boxes describe', () => {
+  const RED_4_FIELDS = { rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '4' };
+
+  it('the seeded record, no chip → a CRATE on that rack, named as the row 0270 dedupes on', () => {
+    const dest = bookDestination(RED_4_FIELDS, null)!;
+    expect(dest).toEqual({
+      mode: 'new',
+      input: { kind: 'crate', rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '4' },
+    });
+    const input = dest.mode === 'new' ? dest.input : ({} as never);
+    expect(newRackLabel(input).label).toBe('Red #4 on rack 38-B');
+    // …and the payload the route receives is the crate WITH its position.
+    expect(newLocationFields(input)).toEqual({
+      crateNumber: '4',
+      crateColor: 'red',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+  });
+
+  it('a selected chip whose columns still equal the boxes → EXISTING by id', () => {
+    expect(bookDestination(fieldsFromDestination(RACK_38B), RACK_38B)).toEqual({
+      mode: 'existing',
+      destination: RACK_38B,
+    });
+    // Spelling and case do not un-match a chip: "Blue"/"0" vs blue/0.
+    expect(bookDestination(fieldsFromDestination(CRATE_BLUE_0_ON_38B), CRATE_BLUE_0_ON_38B)?.mode).toBe(
+      'existing',
+    );
+  });
+
+  it('typing over a selected chip demotes it to the fields — the boxes win', () => {
+    expect(bookDestination({ ...fieldsFromDestination(RACK_38B), crateNumber: '4' }, RACK_38B)).toEqual({
+      mode: 'new',
+      input: { kind: 'crate', rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '4' },
+    });
+  });
+
+  it('rack boxes only → a bare RACK (the one choice that clears a recorded crate)', () => {
+    expect(bookDestination({ rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '' }, null)).toEqual({
+      mode: 'new',
+      input: { kind: 'rack', rackNumber: '38', rackRow: 'B' },
+    });
+  });
+
+  it('a colour with no number is a crate choice the planner refuses — not ready', () => {
+    const dest = bookDestination({ rackNumber: '', rackRow: '', crateColor: 'red', crateNumber: '' }, null)!;
+    expect(dest.mode).toBe('new');
+    expect(newLocationReady(dest.mode === 'new' ? dest.input : ({} as never))).toBe(false);
+  });
+
+  it('all blank → nothing to submit', () => {
+    expect(bookDestination(EMPTY_DESTINATION_FIELDS, null)).toBeNull();
+  });
+});
+
+describe('bookDestinationIsRecordedStorage — suppress the typo guard for the recorded truth', () => {
+  it('the seeded fields ARE the recorded storage', () => {
+    const dest = bookDestination(seedDestinationFromStorage(RED_4_ON_38B).fields, null)!;
+    expect(bookDestinationIsRecordedStorage(dest, RED_4_ON_38B)).toBe(true);
+  });
+  it('a different crate, or the same crate elsewhere, or rack-only, is NOT', () => {
+    expect(
+      bookDestinationIsRecordedStorage(
+        { mode: 'new', input: { kind: 'crate', rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '5' } },
+        RED_4_ON_38B,
+      ),
+    ).toBe(false);
+    expect(
+      bookDestinationIsRecordedStorage(
+        { mode: 'new', input: { kind: 'crate', rackNumber: '40', rackRow: 'A', crateColor: 'red', crateNumber: '4' } },
+        RED_4_ON_38B,
+      ),
+    ).toBe(false);
+    expect(
+      bookDestinationIsRecordedStorage(
+        { mode: 'new', input: { kind: 'rack', rackNumber: '38', rackRow: 'B' } },
+        RED_4_ON_38B,
+      ),
+    ).toBe(false);
+  });
+  it('an existing chip equal to the record counts; nothing recorded matches nothing', () => {
+    const chip: MoveDestination = {
+      id: 'c-red4',
+      name: 'Red #4 on rack 38-B',
+      kind: 'crate',
+      warehouseId: 'wh-1',
+      rackNumber: '38',
+      rackRow: 'B',
+      crateColor: 'red',
+      crateNumber: '4',
+    };
+    expect(bookDestinationIsRecordedStorage({ mode: 'existing', destination: chip }, RED_4_ON_38B)).toBe(true);
+    expect(bookDestinationIsRecordedStorage({ mode: 'existing', destination: chip }, null)).toBe(false);
+    const blank: BookStorageInfo = {
+      rackNumber: null,
+      rackRow: null,
+      crateColor: null,
+      crateNumber: null,
+      grade: null,
+      rackLabel: null,
+      crateLabel: null,
+    };
+    expect(bookDestinationIsRecordedStorage({ mode: 'existing', destination: chip }, blank)).toBe(false);
+  });
+});
+
+describe('bookDestinationNeedsMint — said inline for a user who cannot create rows', () => {
+  it('a described destination whose planned name is not among the labels needs a mint', () => {
+    const dest = bookDestination(seedDestinationFromStorage(RED_4_ON_38B).fields, null)!;
+    expect(bookDestinationNeedsMint(dest, ['38-B', 'Blue #0 on rack 38-B'])).toBe(true);
+    expect(bookDestinationNeedsMint(dest, ['red #4 on rack 38-b'])).toBe(false);
+  });
+  it('an existing chip never needs a mint; an unnameable form does not either', () => {
+    expect(bookDestinationNeedsMint({ mode: 'existing', destination: RACK_38B }, [])).toBe(false);
+    expect(
+      bookDestinationNeedsMint(
+        { mode: 'new', input: { kind: 'crate', rackNumber: '', crateColor: 'red', crateNumber: '' } },
+        [],
+      ),
+    ).toBe(false);
   });
 });

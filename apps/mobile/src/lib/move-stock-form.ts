@@ -38,7 +38,10 @@
  */
 
 import {
+  bookCrateFingerprint,
+  bookRackFingerprint,
   describeNewRackPlacement,
+  getCrateColor,
   parseBookCrateChangeDetail,
   parseBookRackChangeDetail,
   planNewLocation,
@@ -46,6 +49,7 @@ import {
   type BookCrateChangeDetail,
   type BookRackAcknowledgedChange,
   type BookRackChangeDetail,
+  type BookStorageInfo,
   type NewRackPlacementDecision,
 } from '@stockpilot/core';
 
@@ -61,6 +65,16 @@ export interface MoveDestination {
   name: string;
   kind: string | null;
   warehouseId: string | null;
+  /**
+   * The row's own rack/crate columns (migration 0188), when the sheet read
+   * them. For a BOOK, tapping an existing chip FILLS the four destination
+   * fields from these — see `fieldsFromDestination`. Optional so callers and
+   * fixtures that predate them still type-check; absent reads as blank.
+   */
+  rackNumber?: string | null;
+  rackRow?: string | null;
+  crateColor?: string | null;
+  crateNumber?: string | null;
 }
 
 /** One location this item currently holds stock in. */
@@ -276,6 +290,21 @@ export function newLocationFields(n: NewRackInput): {
 /** Is the chosen branch complete enough to submit? A crate needs its NUMBER. */
 export function newLocationReady(n: NewRackInput): boolean {
   return planNewLocation(newLocationFields(n)).kind !== 'invalid';
+}
+
+/**
+ * The planner's OWN refusal for a half-filled form — or null when it can be
+ * named, or when nothing has been typed yet (shouting "Give the rack a number."
+ * at an untouched form is noise). Same words as web's inline message and the
+ * server's zod issue, because they are the planner's, not re-typed here.
+ */
+export function newLocationProblem(n: NewRackInput): string | null {
+  const plan = planNewLocation(newLocationFields(n));
+  if (plan.kind !== 'invalid') return null;
+  const typed = [n.rackNumber, n.rackRow, n.crateColor, n.crateNumber].some(
+    (v) => (v ?? '').trim().length > 0,
+  );
+  return typed ? plan.message : null;
 }
 
 /**
@@ -761,4 +790,187 @@ export function removeStockCrateWarning(
     default:
       return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE FOUR FIELDS ARE THE DESTINATION — books, after Maus I (2026-08-17)
+//
+// The sheet offered existing rack/crate chips plus "+ New rack / crate…" with
+// the crate boxes behind a Rack|Crate chip pair. Most crates in the L4L
+// warehouse are label-only (113 of 124 books record a crate; the org has ONE
+// crate row), so the crate a book records was never among the chips, and the
+// reachable choice was the bare rack — which clears the crate. Web fixed this
+// first (apps/web/src/lib/locations/placement-destination.ts); this is the
+// phone's copy of the SAME decisions, kept pure so it can be tested here.
+//
+// For a BOOK: rack number, row, crate colour and crate number are always
+// visible, PRE-FILLED from the recorded storage, and an existing chip FILLS
+// them. The planner decides the kind from what is filled in. Blanking the
+// crate is the explicit "no crate" choice, and that is when the gate asks.
+// ---------------------------------------------------------------------------
+
+/** The four boxes as typed. '' means blank; `crateColor` is a slug or ''. */
+export interface DestinationFields {
+  rackNumber: string;
+  rackRow: string;
+  crateColor: string;
+  crateNumber: string;
+}
+
+export const EMPTY_DESTINATION_FIELDS: DestinationFields = {
+  rackNumber: '',
+  rackRow: '',
+  crateColor: '',
+  crateNumber: '',
+};
+
+/**
+ * PRE-FILL from the book's recorded storage — "where it already lives" is the
+ * default destination. A recorded colour the registry does not know cannot be
+ * shown by the chip row, so the box stays blank and the raw text is handed
+ * back for a note (blank changes the pair, so the gate will ask; honest, not
+ * silent). Null/undefined storage seeds nothing.
+ */
+export function seedDestinationFromStorage(storage: BookStorageInfo | null | undefined): {
+  fields: DestinationFields;
+  unknownCrateColor: string | null;
+} {
+  if (!storage) return { fields: { ...EMPTY_DESTINATION_FIELDS }, unknownCrateColor: null };
+  const rawColor = storage.crateColor?.trim() || '';
+  const known = getCrateColor(rawColor);
+  return {
+    fields: {
+      rackNumber: storage.rackNumber?.trim() ?? '',
+      rackRow: storage.rackRow?.trim() ?? '',
+      crateColor: known?.slug ?? '',
+      crateNumber: storage.crateNumber?.trim() ?? '',
+    },
+    unknownCrateColor: rawColor && !known ? rawColor : null,
+  };
+}
+
+/**
+ * FILL from an existing chip — all four boxes, from the row's own columns. A
+ * rack row fills the rack pair and BLANKS the crate (tapping a bare rack IS
+ * choosing "no crate"; the gate will say so before the write). A legacy crate
+ * row with no columns blanks everything and stays placeable by id (see
+ * `bookDestination`).
+ */
+export function fieldsFromDestination(d: MoveDestination): DestinationFields {
+  const known = getCrateColor(d.crateColor ?? null);
+  return {
+    rackNumber: d.rackNumber?.trim() ?? '',
+    rackRow: d.rackRow?.trim() ?? '',
+    crateColor: known?.slug ?? '',
+    crateNumber: d.crateNumber?.trim() ?? '',
+  };
+}
+
+/** Do the boxes still say what this chip's columns say? Same fingerprints as the gate. */
+export function destinationMatchesOption(fields: DestinationFields, d: MoveDestination): boolean {
+  return (
+    bookCrateFingerprint(fields.crateColor, fields.crateNumber) ===
+      bookCrateFingerprint(d.crateColor ?? null, d.crateNumber ?? null) &&
+    bookRackFingerprint(fields.rackNumber, fields.rackRow) ===
+      bookRackFingerprint(d.rackNumber ?? null, d.rackRow ?? null)
+  );
+}
+
+/** What the four boxes describe, for a BOOK. */
+export type BookDestination =
+  | { mode: 'existing'; destination: MoveDestination }
+  | { mode: 'new'; input: NewRackInput };
+
+/**
+ * THE DESTINATION THE FOUR BOXES DESCRIBE.
+ *
+ *   • A chip is selected AND the boxes still equal its columns → that row, by
+ *     id (nothing created).
+ *   • Any crate box filled → a CRATE on the typed position (`kind: 'crate'`).
+ *   • Only rack boxes filled → a bare rack (`kind: 'rack'`).
+ *   • Nothing → null.
+ *
+ * "new" means described by fields, not "will be minted": the server's
+ * findRackOrCrate reuses an existing "Red #4 on rack 38-B" or "38-B" by name
+ * and mints only when no such row exists.
+ */
+export function bookDestination(
+  fields: DestinationFields,
+  selected: MoveDestination | null,
+): BookDestination | null {
+  if (selected && destinationMatchesOption(fields, selected)) {
+    return { mode: 'existing', destination: selected };
+  }
+  const hasCrate = fields.crateColor.trim().length > 0 || fields.crateNumber.trim().length > 0;
+  if (hasCrate) {
+    return {
+      mode: 'new',
+      input: {
+        kind: 'crate',
+        rackNumber: fields.rackNumber,
+        rackRow: fields.rackRow,
+        crateColor: fields.crateColor,
+        crateNumber: fields.crateNumber,
+      },
+    };
+  }
+  const hasRack = fields.rackNumber.trim().length > 0 || fields.rackRow.trim().length > 0;
+  if (hasRack) {
+    return {
+      mode: 'new',
+      input: { kind: 'rack', rackNumber: fields.rackNumber, rackRow: fields.rackRow },
+    };
+  }
+  return null;
+}
+
+/**
+ * IS THIS DESTINATION EXACTLY WHERE THE BOOK IS RECORDED? Same crate pair and
+ * same position, by fingerprint. Used to SUPPRESS the "Create new crate …?"
+ * typo guard on the default path: for a label-only crate no row exists yet,
+ * and the recorded truth being minted as a row is not a typo. A book with
+ * nothing recorded matches nothing.
+ */
+export function bookDestinationIsRecordedStorage(
+  dest: BookDestination,
+  storage: BookStorageInfo | null | undefined,
+): boolean {
+  if (!storage) return false;
+  const recordedCrate = bookCrateFingerprint(storage.crateColor, storage.crateNumber);
+  const recordedRack = bookRackFingerprint(storage.rackNumber, storage.rackRow);
+  if (
+    recordedCrate === bookCrateFingerprint(null, null) &&
+    recordedRack === bookRackFingerprint(null, null)
+  ) {
+    return false;
+  }
+  const crate =
+    dest.mode === 'existing'
+      ? { color: dest.destination.crateColor ?? null, number: dest.destination.crateNumber ?? null }
+      : dest.input.kind === 'crate'
+        ? { color: dest.input.crateColor ?? null, number: dest.input.crateNumber ?? null }
+        : { color: null, number: null };
+  const position =
+    dest.mode === 'existing'
+      ? { rackNumber: dest.destination.rackNumber ?? null, rackRow: dest.destination.rackRow ?? null }
+      : { rackNumber: dest.input.rackNumber, rackRow: dest.input.rackRow ?? null };
+  return (
+    bookCrateFingerprint(crate.color, crate.number) === recordedCrate &&
+    bookRackFingerprint(position.rackNumber, position.rackRow) === recordedRack
+  );
+}
+
+/**
+ * Would placing here have to MINT a row (no destination in the source
+ * warehouse carries the planned name)? A user without `locations:manage`
+ * cannot, and is told so inline rather than by a server refusal.
+ */
+export function bookDestinationNeedsMint(
+  dest: BookDestination,
+  existingLabels: readonly string[],
+): boolean {
+  if (dest.mode === 'existing') return false;
+  const { label } = newRackLabel(dest.input);
+  if (!label) return false;
+  return !existingLabels.some((l) => l.trim().toLowerCase() === label.toLowerCase());
 }

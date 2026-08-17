@@ -317,6 +317,11 @@ export default function StagingScreen() {
           // the warehouse comes off the holding itself inside the sheet, so the
           // two cannot disagree.
           putAwaySourceLocationId={placing.sourceLocationId}
+          // The book's recorded rack/crate, straight off the worklist row the
+          // endpoint sent. It SEEDS the sheet's four destination fields, so the
+          // default put-away goes INTO the crate the book already records, on
+          // the rack it records — never the bare rack that clears it (Maus I).
+          bookStorage={placing.bookStorage}
           canCreateLocation={canCreateLocation}
           onClose={() => setPlacing(null)}
           onMoved={() => {

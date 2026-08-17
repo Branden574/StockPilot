@@ -20,6 +20,8 @@
  * web table shows for an unknown value.
  */
 
+import type { BookStorageInfo } from '@stockpilot/core';
+
 // ── Row shape ──────────────────────────────────────────────────────────────
 
 /**
@@ -44,6 +46,14 @@ export interface StagingWorklistRow {
   receiptNumber: string | null;
   receivedAt: string | null;
   ageDays: number | null;
+  /**
+   * A BOOK's recorded rack/crate summary (readBookStorage on the item), or
+   * null for a non-book. The endpoint has always sent it; this parser used to
+   * DROP it, so the put-away sheet opened knowing nothing about where the book
+   * already lives — and offered the bare rack, which clears the crate (Maus I,
+   * 2026-08-17). It now seeds the sheet's four destination fields.
+   */
+  bookStorage: BookStorageInfo | null;
 }
 
 export interface StagingWorklist {
@@ -360,6 +370,27 @@ function normalizeRow(raw: unknown): StagingWorklistRow | null {
     receiptNumber: asNullableString(r.receiptNumber),
     receivedAt: asNullableString(r.receivedAt),
     ageDays: asNullableNumber(r.ageDays),
+    bookStorage: normalizeBookStorage(r.bookStorage),
+  };
+}
+
+/**
+ * The wire `bookStorage` → a BookStorageInfo, or null. Field by field through
+ * the same nullable-string reader as the rest of the row, so a malformed
+ * payload degrades to "nothing recorded" rather than seeding garbage into the
+ * destination fields.
+ */
+function normalizeBookStorage(raw: unknown): BookStorageInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = raw as Record<string, unknown>;
+  return {
+    rackNumber: asNullableString(b.rackNumber),
+    rackRow: asNullableString(b.rackRow),
+    crateColor: asNullableString(b.crateColor),
+    crateNumber: asNullableString(b.crateNumber),
+    grade: asNullableString(b.grade),
+    rackLabel: asNullableString(b.rackLabel),
+    crateLabel: asNullableString(b.crateLabel),
   };
 }
 

@@ -292,6 +292,41 @@ describe('parseStagingWorklist', () => {
     expect(row.receivedAt).toBe('2026-07-20T12:00:00.000Z');
   });
 
+  it('KEEPS a book’s recorded storage — the sheet seeds its destination from it (Maus I)', () => {
+    const out = parseStagingWorklist({
+      rows: [
+        wireRow({
+          itemType: 'book',
+          bookStorage: {
+            rackNumber: '38',
+            rackRow: 'B',
+            crateColor: 'red',
+            crateNumber: '4',
+            grade: null,
+            rackLabel: '38-B',
+            crateLabel: 'Red 4',
+          },
+        }),
+      ],
+      canPlace: true,
+    });
+    expect(out.rows[0]!.bookStorage).toEqual({
+      rackNumber: '38',
+      rackRow: 'B',
+      crateColor: 'red',
+      crateNumber: '4',
+      grade: null,
+      rackLabel: '38-B',
+      crateLabel: 'Red 4',
+    });
+    // A non-book (or a malformed payload) reads as nothing recorded.
+    expect(parseStagingWorklist({ rows: [wireRow()], canPlace: true }).rows[0]!.bookStorage).toBeNull();
+    expect(
+      parseStagingWorklist({ rows: [wireRow({ bookStorage: 'garbage' })], canPlace: true }).rows[0]!
+        .bookStorage,
+    ).toBeNull();
+  });
+
   it('keeps a non-PO row rather than dropping it, with null source fields', () => {
     const out = parseStagingWorklist({
       rows: [
