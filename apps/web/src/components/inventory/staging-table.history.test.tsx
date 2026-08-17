@@ -60,6 +60,8 @@ function makeRow(
     receiptNumber: null,
     receivedAt: null,
     ageDays: 30,
+    barcode: null,
+    modelNumber: null,
     bookStorage: null,
     ...over,
   };
