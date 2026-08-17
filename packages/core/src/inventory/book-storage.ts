@@ -258,6 +258,51 @@ function canonicalRack(label: string | null | undefined): string {
 }
 
 /**
+ * THE RACK POSITION a `locations.name` stands at — for the RACK COLUMN.
+ *
+ * ═══ THE LEAK THIS CLOSES (Hunger Games, L4L, 2026-08-17) ═══
+ *
+ * A book with 97 loose on rack "38-B" and 20 in crate "Blue #0 on rack 38-B"
+ * rendered its Rack column as "38-B, Blue #0 on rack 38-B" — two entries for
+ * ONE rack, because the holdings arm of `placementPhysicalNames` listed every
+ * holding's full name. The Rack column answers "which racks does a picker walk
+ * to"; the crate's identity ("Blue 0") is the CRATE column's job. So a crate
+ * holding contributes its POSITION here and its identity there:
+ *
+ *   • a RACK row                     → its own label, canonicalised ("38-B")
+ *   • a crate "… on rack X"          → X, canonicalised — the rack it SITS ON
+ *   • a POSITION-LESS crate          → its own name ("Blue Shelf"): it sits on
+ *                                       no rack, and its name is the only place
+ *                                       a picker can walk to
+ *
+ * Canonicalised through the same `parseRackLabel`/`formatRackLabel` pair as
+ * `locationNameSitsOnRack`, so a legacy "22 - B" and a summary "22-B" collapse
+ * to one entry — which is what lets the caller DISTINCT the result and count
+ * racks honestly. Two DIFFERENT racks stay two entries; that is the split case
+ * the books header exists to count.
+ *
+ * `kind` decides the RACK arm: only a row the caller says is a rack has its
+ * name decomposed as a rack label. A crate row, or a holding whose kind the
+ * caller did not carry, is read by its name — the "on rack" suffix if it has
+ * one, its own name otherwise. Absence of evidence resolves to the old
+ * behaviour (the full name), never to a guess.
+ */
+export function rackPositionOfLocationName(
+  locationName: string | null | undefined,
+  kind?: string | null,
+): string {
+  const name = (locationName ?? '').trim();
+  if (!name) return '';
+  if (kind === 'rack') return formatRackLabel(parseRackLabel(name)).trim() || name;
+  const idx = name.toLowerCase().lastIndexOf(`${CRATE_ON_RACK} `);
+  if (idx >= 0) {
+    const rack = formatRackLabel(parseRackLabel(name.slice(idx + CRATE_ON_RACK.length + 1))).trim();
+    if (rack) return rack;
+  }
+  return name;
+}
+
+/**
  * Reads the non-book rack number/row out of an item's custom_fields.
  * Items use the neutral rack_number / rack_row keys (vs books which
  * use book_rack_* — both are matched by InventoryService.list per
