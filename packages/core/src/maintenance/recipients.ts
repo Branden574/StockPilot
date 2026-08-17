@@ -24,7 +24,7 @@
  * TypeScript's spread does not carry over.
  */
 
-import { assertRoutableAddress, assertSafeDisplayName } from '../email/outlook-compose';
+import { assertRoutableAddress, normalizeDisplayName } from '../email/outlook-compose';
 
 /**
  * NOMINAL BRAND, and nothing else. Ambient — emits no runtime code, cannot be
@@ -74,7 +74,12 @@ export function maintenanceEmailRecipients(input: {
     to: assertRoutableAddress('to', input.to),
     cc: assertRoutableAddress('cc', input.cc),
   };
-  if (input.toName !== undefined) value.toName = assertSafeDisplayName(input.toName);
-  if (input.ccName !== undefined) value.ccName = assertSafeDisplayName(input.ccName);
+  // Empty/whitespace-only names mean ABSENT (bare address), never a chip
+  // with an invisible name — see `normalizeDisplayName`, shared with the
+  // delivery twin so the two factories cannot drift (pattern #26).
+  const toName = normalizeDisplayName(input.toName);
+  const ccName = normalizeDisplayName(input.ccName);
+  if (toName !== undefined) value.toName = toName;
+  if (ccName !== undefined) value.ccName = ccName;
   return Object.freeze(value) as unknown as MaintenanceEmailRecipients;
 }

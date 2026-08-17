@@ -26,11 +26,11 @@
 import {
   DRAFT_URL_LIMIT,
   assertRoutableAddress,
-  assertSafeDisplayName,
   composeClipboardText,
   composeMailtoUrl,
   composeOutlookMobileUrl,
   composeOutlookWebUrl,
+  normalizeDisplayName,
   type ComposeTransport,
 } from '../email/outlook-compose';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
@@ -245,8 +245,13 @@ export function deliveryRequestRecipients(input: {
     to: assertRoutableAddress('to', input.to),
     cc: assertRoutableAddress('cc', input.cc),
   };
-  if (input.toName !== undefined) value.toName = assertSafeDisplayName(input.toName);
-  if (input.ccName !== undefined) value.ccName = assertSafeDisplayName(input.ccName);
+  // Empty/whitespace-only names mean ABSENT (bare address), never a chip
+  // with an invisible name — see `normalizeDisplayName`, shared with the
+  // maintenance twin so the two factories cannot drift (pattern #26).
+  const toName = normalizeDisplayName(input.toName);
+  const ccName = normalizeDisplayName(input.ccName);
+  if (toName !== undefined) value.toName = toName;
+  if (ccName !== undefined) value.ccName = ccName;
   return Object.freeze(value) as unknown as DeliveryRequestRecipients;
 }
 

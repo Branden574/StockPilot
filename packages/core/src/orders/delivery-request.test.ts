@@ -622,6 +622,39 @@ describe('DeliveryRequestRecipients is branded — an object literal is not one'
     ).toThrow(/Display name contains RFC 5322 specials/);
   });
 
+  it('EMPTY/WHITESPACE display names mean ABSENT — never a chip with an invisible name', () => {
+    // assertSafeDisplayName accepts '' and '   ' clean (no RFC 5322 specials
+    // in either), so the factory used to store them and a whitespace toName
+    // reached the OWA mailtouri path as the chip '  <addr>' — a name-addr
+    // with an invisible name. Measured before the fix: the decoded to-part
+    // was "  <dc4@learn4life.org>". Both blank shapes now normalize to
+    // absent, so the compose urls are byte-identical to the bare-address
+    // form.
+    const blank = deliveryRequestRecipients({
+      to: 'intake@othercorp.test',
+      cc: 'ops@othercorp.test',
+      toName: ' ',
+      ccName: '',
+    });
+    expect(Object.keys(blank as unknown as Record<string, string>).sort()).toEqual(['cc', 'to']);
+
+    const bare = deliveryRequestRecipients({ to: 'intake@othercorp.test', cc: 'ops@othercorp.test' });
+    const draftOf = (recipients: DeliveryRequestRecipients) =>
+      buildDeliveryRequestDraft(makeInput({ recipients }));
+    expect(buildDeliveryRequestOutlookUrl(draftOf(blank))).toBe(
+      buildDeliveryRequestOutlookUrl(draftOf(bare)),
+    );
+
+    // NON-BLANK names are untouched — deliberately not trimmed, so every
+    // currently-valid stored value keeps composing the exact bytes it did.
+    const padded = deliveryRequestRecipients({
+      to: 'intake@othercorp.test',
+      cc: 'ops@othercorp.test',
+      toName: ' Other Intake ',
+    });
+    expect(padded.toName).toBe(' Other Intake ');
+  });
+
   it('the value it returns is frozen, so a stray assignment cannot redirect warehouse mail', () => {
     const made = deliveryRequestRecipients({ to: 'intake@othercorp.test', cc: 'ops@othercorp.test' });
     expect(Object.isFrozen(made)).toBe(true);
