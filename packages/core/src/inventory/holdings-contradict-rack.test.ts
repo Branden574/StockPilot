@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { locationNameSitsOnRack } from './book-storage';
+import { locationNameSitsOnRack, rackPositionOfLocationName } from './book-storage';
 import { holdingsContradictRack } from './placement-resolution';
 import type { RackHoldingLike } from './rack-holdings';
 
@@ -106,5 +106,33 @@ describe('locationNameSitsOnRack — the one reader of the crate name suffix', (
     expect(locationNameSitsOnRack('43-B', null)).toBe(false);
     expect(locationNameSitsOnRack(null, '43-B')).toBe(false);
     expect(locationNameSitsOnRack('  ', '43-B')).toBe(false);
+  });
+});
+
+describe('rackPositionOfLocationName — the rack a holding stands at (the Rack column)', () => {
+  it('a rack row is its own canonical label', () => {
+    expect(rackPositionOfLocationName('38-B', 'rack')).toBe('38-B');
+    // A legacy spelling collapses to the same entry as the summary's.
+    expect(rackPositionOfLocationName('22 - B', 'rack')).toBe('22-B');
+  });
+
+  it('a crate ON a rack contributes the rack it sits on — its identity is the Crate column’s job', () => {
+    // Hunger Games: 97 loose on 38-B + 20 in this crate is ONE rack.
+    expect(rackPositionOfLocationName('Blue #0 on rack 38-B', 'crate')).toBe('38-B');
+    expect(rackPositionOfLocationName('Gray #BIN on rack 43-B', 'crate')).toBe('43-B');
+    expect(rackPositionOfLocationName('Crate #on rack 9 on rack 43-B', 'crate')).toBe('43-B');
+  });
+
+  it('a POSITION-LESS crate is its own place and keeps its own name', () => {
+    expect(rackPositionOfLocationName('Blue Shelf', 'crate')).toBe('Blue Shelf');
+    expect(rackPositionOfLocationName('Gray #BIN', 'crate')).toBe('Gray #BIN');
+  });
+
+  it('a holding with no kind carried is read by its name — old behaviour, never a guess', () => {
+    expect(rackPositionOfLocationName('Blue #0 on rack 38-B')).toBe('38-B');
+    expect(rackPositionOfLocationName('Blue Shelf')).toBe('Blue Shelf');
+    expect(rackPositionOfLocationName('38-B')).toBe('38-B');
+    expect(rackPositionOfLocationName('  ')).toBe('');
+    expect(rackPositionOfLocationName(null)).toBe('');
   });
 });

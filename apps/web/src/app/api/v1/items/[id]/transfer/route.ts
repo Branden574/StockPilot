@@ -39,9 +39,14 @@ export const dynamic = 'force-dynamic';
  *     crateColor?, rackNumber?, rackRow? }) — a crate SITS ON a rack, so the
  *     rack pair alongside crate fields is that crate's POSITION and both are
  *     kept; see packages/core/src/inventory/new-location.ts. Created via
- *     LocationsService.create (asserts 'locations:manage'; racks/crates don't
- *     count against the sites plan limit) in the SOURCE location's warehouse,
- *     which is derived server-side (never trusted from the client).
+ *     LocationsService.findOrCreatePlacementDestination — the put-away's own
+ *     resolve-or-create, which proceeds under 'stock:transfer' (or
+ *     'locations:manage') through the SECURITY DEFINER mint_placement_location
+ *     (0340; owner decision D1, 2026-08-17: putting stock into the crate a
+ *     book's label names is a stock operation, and the Staff preset holds
+ *     stock:transfer only). Racks/crates don't count against the sites plan
+ *     limit. Created in the SOURCE location's warehouse, which is derived
+ *     server-side (never trusted from the client).
  *   - acknowledgedCrateChanges: the answer to a
  *     BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal — item id + the
  *     fingerprint of the crate the client displayed, never a blanket flag.
@@ -53,9 +58,17 @@ export const dynamic = 'force-dynamic';
  *     keeps the shipped OTA working, since it has no rack channel at all.
  *
  * Answers { ok, toLocationId, crateSyncFailed?, crateSyncSkipped?,
- * crateSyncStale?, crateSyncUnplaced?, crateSyncRackPreserved? }. The stock
- * moved in every one of those cases; the flags say whether the book's crate and
- * rack LABELS followed it.
+ * crateSyncStale?, crateSyncUnplaced?, crateSyncRackPreserved?,
+ * crateSyncCratePreserved? }. The stock moved in every one of those cases; the
+ * flags say whether the book's crate and rack LABELS followed it.
+ *
+ *   - crateSyncCratePreserved: the destination is a plain rack, the book
+ *     records a crate, and this body carried no acknowledgement of that crate
+ *     being CLEARED — so the recorded crate label was KEPT rather than erased
+ *     (Maus I, 2026-08-17: a put-away onto 38-B wiped a label-only crate). A
+ *     client that put "crate Red 4 will be cleared" in front of the operator
+ *     and echoes the crate fingerprint in acknowledgedCrateChanges gets the
+ *     clear; every other caller gets the preserve and this flag.
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -64,9 +77,10 @@ export const dynamic = 'force-dynamic';
  * (3) this route additionally pins the destination to THIS session's org
  * (ctx.organizationId) and rejects the staging/unplaced system buckets — which
  * also gives a clean 400 instead of a generic RPC 500. A newly created rack is
- * born in-org (LocationsService.create scopes to ctx.organizationId), and its
- * warehouse is taken from the source location's own warehouse, so it can't be
- * seeded under a foreign org.
+ * born in-org (findOrCreatePlacementDestination passes ctx.organizationId, and
+ * mint_placement_location re-checks the caller's membership of that org and
+ * that the warehouse is the org's, inside), and its warehouse is taken from the
+ * source location's own warehouse, so it can't be seeded under a foreign org.
  */
 const newRackSchema = z
   .object({
@@ -203,13 +217,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate with
-      // the same warehouse+name first — mirrors the web actions' dedup fix
-      // (migration 0270); previously this always INSERTed, minting a
-      // duplicate `locations` row every time the mobile app put away onto a
-      // rack name that already existed. Asserts 'locations:manage' and scopes
-      // the insert to ctx.organizationId on the create-fallback path only
-      // (racks/crates don't consume the sites plan limit).
+      // findOrCreatePlacementDestination reuses an existing non-deleted
+      // rack/crate with the same warehouse+name first — mirrors the web
+      // actions' dedup fix (migration 0270); previously this always INSERTed,
+      // minting a duplicate `locations` row every time the mobile app put away
+      // onto a rack name that already existed. The create-fallback proceeds
+      // under 'stock:transfer' (or 'locations:manage') and is scoped to
+      // ctx.organizationId (racks/crates don't consume the sites plan limit).
       //
       // Kind, name and columns all come out of ONE `planNewLocation` verdict,
       // so the row created is provably the row the client's confirmation named.
@@ -320,7 +334,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      const created = await new LocationsService(ctx).findOrCreateRackOrCrate(pendingNewRack);
+      const created = await new LocationsService(ctx).findOrCreatePlacementDestination(pendingNewRack);
       toLocationId = created.id as string;
       dest = toPlaceDest(created as Record<string, unknown>);
     }
@@ -377,6 +391,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // was, because erasing it was never shown to anyone. Silence here is what
       // the whole rack channel exists to end.
       ...(crate.rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      // The rack label followed the stock but the CRATE label was left as it
+      // was: a plain-rack destination for a book that records a crate, with no
+      // acknowledgement of a clear in this body (Maus I, 2026-08-17). Most
+      // crates here are label-only, so the label is the crate. Kept, reported.
+      ...(crate.cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as

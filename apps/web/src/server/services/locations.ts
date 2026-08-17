@@ -14,7 +14,14 @@ import { z } from 'zod';
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
-import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertAnyPermission,
+  assertPermission,
+  assertPlanLimit,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 export const createLocationSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -254,6 +261,108 @@ export class LocationsService {
    */
   async findOrCreateRackOrCrate(input: CreateLocationInput) {
     return (await this.findRackOrCrate(input)) ?? (await this.create(input));
+  }
+
+  /**
+   * ═══ THE PLACEMENT PATH'S RESOLVE-OR-CREATE — UNDER stock:transfer ═══
+   *
+   * `findOrCreateRackOrCrate` for a PUT-AWAY: the same find (0270's key, the
+   * same `crateAwareLocationName`), but the create half proceeds under
+   * `stock:transfer` (or `locations:manage`) instead of `locations:manage`
+   * alone, through the SECURITY DEFINER `mint_placement_location` (0340).
+   *
+   * WHY (owner decision D1, 2026-08-17). The book put-away's default
+   * destination is the crate the book's own label already names — "Yellow #6
+   * on rack 38-B" — and for 113 of L4L's 124 books that crate exists ONLY as
+   * the label, so placing into it means minting the row first. Through
+   * `create` that mint asserted `locations:manage`; the Staff preset holds
+   * `stock:transfer` only, so staff saw "needs the Manage locations
+   * permission" on every crated book and were pushed onto the bare rack — the
+   * crate-erasing path (Maus I). The owner ruled that putting stock into a
+   * crate the label (or the operator's four fields) names is a STOCK
+   * operation, not location administration, and may proceed under
+   * `stock:transfer` — but ONLY from the placement path. Ordinary location
+   * creation, `create` and every other caller of `findOrCreateRackOrCrate`
+   * (bulk Set rack's auto-place, manual item create) keep `locations:manage`.
+   *
+   * WHY A DATABASE FUNCTION. The app-layer gate alone cannot land the row:
+   * `locations_insert` (0212) is manager-or-above OR `locations:manage`, so
+   * RLS refuses a staff insert regardless of what this method asserts. A
+   * SECURITY DEFINER function bypasses that policy for exactly this insert and
+   * RE-CHECKS the caller's accepted membership of `p_org`, the permission, the
+   * warehouse and the parent INSIDE its own body — so a direct call from a
+   * client can only ever mint a rack or crate in the caller's own org's
+   * warehouse, the same row a put-away would, and a direct table insert stays
+   * refused by the unchanged policy. (Widening the policy instead would have
+   * made every staff member's raw PostgREST rack/crate insert legal, which is
+   * wider than the decision.)
+   *
+   * WHAT IS THE SAME AS `create`. Racks and crates only (the function refuses
+   * every other kind — this cannot become a site back door); the name a
+   * positioned crate is inserted with is composed by `crateAwareLocationName`;
+   * the rack pair is decomposed by `normalizeRackFields`; the crate colour is
+   * normalised by `normalizeCrateColorForWrite`. The columns that reach the
+   * table are byte-identical to what `create` would have written. Racks and
+   * crates never consumed the site plan limit, so none is asserted here either.
+   * A manager's put-away goes through the same function — one placement path,
+   * one behaviour, one dedupe (the function itself reuses a concurrent winner's
+   * row instead of surfacing 23505).
+   */
+  async findOrCreatePlacementDestination(input: CreateLocationInput) {
+    return (await this.findRackOrCrate(input)) ?? (await this.mintPlacementDestination(input));
+  }
+
+  private async mintPlacementDestination(input: CreateLocationInput) {
+    if (input.kind !== 'rack' && input.kind !== 'crate') {
+      // Fail closed. Every shipped caller comes through `planNewLocation`,
+      // whose only verdicts are rack and crate; anything else here is a
+      // caller trying to use the put-away's exception for a site.
+      throw new ServiceError(
+        'validation_error',
+        'A put-away can only place into a rack or a crate.',
+      );
+    }
+    if (!input.warehouseId) {
+      throw new ServiceError('validation_error', 'A rack or crate needs a warehouse.');
+    }
+    // THE GATE, in the app layer: the placement permission, or the wider one.
+    // The function re-checks the same three grants inside; this is the check
+    // that answers with the app's own ServiceError shape (and the MFA step-up)
+    // before a round trip is spent.
+    assertAnyPermission(this.ctx, ['stock:transfer', 'locations:manage']);
+    const name = crateAwareLocationName(input);
+    const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
+    const { data, error } = await this.ctx.supabase.rpc('mint_placement_location', {
+      p_org: this.ctx.organizationId,
+      p_warehouse_id: input.warehouseId,
+      p_kind: input.kind,
+      p_name: name,
+      p_type: input.type ?? null,
+      p_parent_id: input.parentId ?? null,
+      p_notes: input.notes ?? null,
+      p_rack_number: rack.number || null,
+      p_rack_row: rack.row,
+      p_crate_color: normalizeCrateColorForWrite(input.crateColor),
+      p_crate_number: input.crateNumber ?? null,
+    });
+    if (error) {
+      // 42501 = the function's own gate (membership, permission, warehouse,
+      // parent). Say what it means rather than "internal error": the operator
+      // can act on a permission message; nobody can act on a scrubbed one.
+      if ((error as { code?: string }).code === '42501') {
+        throw new ServiceError(
+          'forbidden',
+          'Placing stock into a new rack or crate needs the Transfer stock permission.',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+    // `returns setof ... rows 1`: PostgREST answers with a one-element array.
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      throw new ServiceError('internal_error', 'mint_placement_location returned no row');
+    }
+    return row as Record<string, unknown>;
   }
 
   /**

@@ -45,6 +45,11 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  toDestinationOption,
+  type DestinationLocationRow,
+} from '@/lib/locations/destination-option';
+import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
 import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
@@ -278,10 +283,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
   // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
   const canEditNotes = can(ctx, 'movements:edit_notes');
-  // Gates the transfer dialog's inline "New location…" destination — the
-  // server re-asserts 'locations:manage' (+ the locations plan limit) inside
-  // LocationsService.create, so this only hides the UI affordance.
-  const canManageLocations = can(ctx, 'locations:manage');
+  // Gates the transfer dialog's inline "New location…" destination and, for a
+  // book, its default path (placing into the recorded crate, minting the row
+  // when none exists). The server does that under 'stock:transfer' (or
+  // 'locations:manage') through the placement path only
+  // (mint_placement_location, 0340; owner decision D1) and re-asserts it, so
+  // this only hides the UI affordance. ONE derivation, shared with Staging.
+  const canMintDestination = canMintPlacementDestination(ctx);
   // Public-catalog visibility (P3): the row + select only render for
   // public_links:manage holders; the server action re-asserts.
   const canManagePublicVisibility = can(ctx, 'public_links:manage');
@@ -433,8 +441,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   currentQuantity={item.quantity_on_hand as number}
                   currentLocationId={(item.primary_location_id as string | null) ?? null}
                   locations={locations.map((l) => ({
-                    id: l.id as string,
-                    name: l.name as string,
+                    // Through the ONE mapper, so the row's own rack/crate
+                    // columns (0188) travel in the put-away dialogs' shape and
+                    // a BOOK's "To location" pick can FILL the four destination
+                    // fields instead of only naming a row.
+                    ...toDestinationOption(l as DestinationLocationRow),
                     kind: (l.kind as string | null) ?? null,
                     warehouse_id: (l.warehouse_id as string | null) ?? null,
                   }))}
@@ -448,7 +459,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                       ? readBookStorage(item.custom_fields as Record<string, unknown> | null)
                       : null
                   }
-                  canManageLocations={canManageLocations}
+                  canMintDestination={canMintDestination}
                 />
               )}
               <ReportProblemButton

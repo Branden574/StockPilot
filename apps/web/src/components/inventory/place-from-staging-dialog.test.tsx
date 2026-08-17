@@ -85,7 +85,11 @@ function renderDialog() {
 }
 
 function renderBookDialog(
-  opts: { bookStorage?: BookStorageInfo | null; availableQuantity?: number } = {},
+  opts: {
+    bookStorage?: BookStorageInfo | null;
+    availableQuantity?: number;
+    destinations?: typeof DESTINATIONS;
+  } = {},
 ) {
   return render(
     <PlaceFromStagingDialog
@@ -97,7 +101,7 @@ function renderBookDialog(
       warehouseId="wh-1"
       warehouseName="Main Warehouse"
       availableQuantity={opts.availableQuantity ?? 10}
-      destinations={DESTINATIONS}
+      destinations={opts.destinations ?? DESTINATIONS}
       bookStorage={opts.bookStorage === undefined ? IN_BLUE_4 : opts.bookStorage}
     />,
   );
@@ -195,8 +199,62 @@ describe('PlaceFromStagingDialog — new-rack confirmation', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BOOK CRATES
+// BOOK CRATES — THE FOUR FIELDS ARE THE DESTINATION
+//
+// Maus I / The Joy Luck Club, L4L, 2026-08-17. This dialog offered a flat list
+// of EXISTING location rows plus "+ New rack / crate", which hid the crate
+// fields behind a Rack|Crate toggle. Most crates in that warehouse are label-
+// only (113 of 124 books record a crate; the org has ONE crate row), so "Red 4
+// on rack 38-B" — the crate the dialog had just said the book was in — was not
+// in the list. The reachable choice was bare "38-B", which clears the crate;
+// the gate asked; the operator pressed Continue because there was nowhere else
+// to go; the label was gone.
+//
+// Now: for a BOOK the four fields (rack number, row, crate colour, crate
+// number) are always visible, PRE-FILLED from the recorded storage, and the
+// primary action places INTO exactly that crate on that rack — resolved or
+// created by name on the server. The dropdown fills the fields. Blanking the
+// crate is the explicit "no crate" choice, and that is when the gate asks.
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** The Joy Luck Club as the owner screenshotted it: Red 4 on rack 38-B. */
+const IN_RED_4_ON_38B: BookStorageInfo = {
+  rackNumber: '38',
+  rackRow: 'B',
+  crateColor: 'red',
+  crateNumber: '4',
+  grade: null,
+  rackLabel: '38-B',
+  crateLabel: 'Red 4',
+};
+
+/** L4L's shape: rack 38-B has a row, crate Red 4 does NOT. */
+const L4L_DESTINATIONS = [
+  ...DESTINATIONS,
+  { id: 'r-38b', name: '38-B', kind: 'rack', rackNumber: '38', rackRow: 'B', crateColor: null, crateNumber: null },
+];
+
+/** The books-only existing-location shortcut (the crate colour Select is a combobox too). */
+async function chooseExisting(user: ReturnType<typeof userEvent.setup>, name: string | RegExp) {
+  await user.click(screen.getByRole('combobox', { name: /existing rack \/ crate/i }));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
+async function chooseCrateColor(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole('combobox', { name: /^crate color$/i }));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
+/** Blank the crate boxes — the explicit "place on the bare rack" choice. */
+async function blankCrate(user: ReturnType<typeof userEvent.setup>) {
+  await chooseCrateColor(user, 'No color');
+  await user.clear(screen.getByLabelText(/crate number/i));
+}
+
+async function blankRack(user: ReturnType<typeof userEvent.setup>) {
+  await user.clear(screen.getByLabelText(/rack number/i));
+  await user.clear(screen.getByLabelText(/^row/i));
+}
 
 describe('PlaceFromStagingDialog — book crate controls', () => {
   it('a BOOK shows its current storage; a non-book shows none', async () => {
@@ -215,48 +273,186 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(screen.queryByText(/current storage/i)).not.toBeInTheDocument();
   });
 
-  it('a BOOK can choose Crate explicitly; a non-book gets the rack form only', async () => {
+  it('a BOOK opens with the four fields PRE-FILLED from its recorded storage — no toggle, nothing hidden', async () => {
     const user = userEvent.setup();
-    const { unmount } = renderBookDialog();
-    await openNewRackForm(user);
-    // Rack vs crate is an EXPLICIT choice now, not a side effect of typing a color.
-    expect(screen.getByRole('radio', { name: 'Rack' })).toHaveAttribute('aria-checked', 'true');
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    expect(screen.getByLabelText(/crate number/i)).toBeInTheDocument();
-    // The toggle picks the KIND of row, not which of two facts survives: a
-    // crate SITS ON a rack, so the crate branch still asks where it sits. This
-    // assertion used to be `queryByLabelText(/rack number/i)` →
-    // not.toBeInTheDocument(), which pinned the exclusivity misread and made a
-    // positioned crate unexpressible on this surface.
-    expect(screen.getByLabelText(/on rack/i)).toBeInTheDocument();
-    // The rack branch's own REQUIRED number box is what goes away.
-    expect(screen.queryByLabelText(/rack number/i)).not.toBeInTheDocument();
+    const { unmount } = renderBookDialog(); // Blue 4 on rack 38-A
+    await openDialog(user);
+
+    // THE PRE-FILL. "Where it already lives" is the default destination.
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('38');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('A');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('4');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent('Blue');
+    // No Rack|Crate toggle, no "+ New" entry: the fields ARE the destination.
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: /existing rack \/ crate/i }));
+    expect(screen.queryByRole('option', { name: /new rack \/ crate/i })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    // Ready to place as opened — nothing to type for the common case.
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
     unmount();
 
+    // A non-book keeps the older shape: dropdown, "+ New rack / crate", rack pair.
     renderDialog();
-    await openNewRackForm(user);
-    expect(screen.queryByRole('radio', { name: 'Crate' })).not.toBeInTheDocument();
+    await openDialog(user);
+    expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
+    await chooseDestination(user, /new rack \/ crate/i);
     expect(screen.getByLabelText(/rack number/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
   });
 
-  it('an EXISTING crate destination shows its own metadata — nothing to retype', async () => {
+  it('a book with NOTHING recorded opens blank and cannot be placed until a place is named', async () => {
     const user = userEvent.setup();
-    renderBookDialog();
+    renderBookDialog({ bookStorage: null });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('');
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeDisabled();
+    await user.type(screen.getByLabelText(/rack number/i), '22-B');
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
+  });
 
-    const dialog = screen.getByRole('dialog');
-    expect(dialog).toHaveTextContent('This crate is');
-    expect(dialog).toHaveTextContent('42');
-    // No crate inputs are rendered for an existing destination at all.
-    expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
+  it('a recorded colour the registry does not know is left blank, and said so', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: { ...IN_BLUE_4, crateColor: 'taupe', crateLabel: 'taupe 4' } });
+    await openDialog(user);
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent(/no color/i);
+    expect(screen.getByRole('dialog')).toHaveTextContent('“taupe”, is not one of the crate colors');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('4');
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE JOY LUCK CLUB — the default submit places INTO the recorded crate.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it('THE DEFAULT SUBMIT places into the exact recorded crate-on-rack: no gate, no acknowledgement, no typo guard', async () => {
+    const user = userEvent.setup();
+    // Red 4 on rack 38-B. Rack 38-B has a row; crate Red 4 does not — the L4L
+    // shape. Before this fix "Red 4 on 38-B" was unreachable from this dialog.
+    renderBookDialog({ bookStorage: IN_RED_4_ON_38B, destinations: L4L_DESTINATIONS });
+    await openDialog(user);
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // NO question of any kind — the crate pair does not change, the position
+    // does not change, and the recorded truth is not a typo to guard against.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    // THE PAYLOAD, LITERALLY: the crate ON the rack, so the server resolves or
+    // mints "Red #4 on rack 38-B" (0270's dedupe key, position embedded) once
+    // and reuses it thereafter. No acknowledgement of anything.
+    expect(mockPlaceStockAction.mock.calls[0]![0]).toEqual({
+      itemId: 'book-1',
+      fromLocationId: 'stg-1',
+      quantity: 10,
+      notes: undefined,
+      destination: {
+        newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'red', rackNumber: '38', rackRow: 'B' },
+      },
+      acknowledgedRackChanges: [],
+    });
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Placed 10 copies of The Outsiders into Red crate 4 on rack 38-B.',
+    );
+  });
+
+  it('the recorded crate is minted WITHOUT the typo guard; a DIFFERENT new crate still gets it', async () => {
+    const user = userEvent.setup();
+    renderBookDialog(); // Blue 4 on rack 38-A — no such crate row, no such rack row
+    await openDialog(user);
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    // The record is not a typo: no "Create new crate Blue #4 on rack 38-A?".
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'blue', rackNumber: '38', rackRow: 'A' },
+    });
+  });
+
+  it('typing a different crate number keeps BOTH guards — creation AND the crate change, in ONE dialog', async () => {
+    const user = userEvent.setup();
+    renderBookDialog(); // Blue 4 on rack 38-A
+    await openDialog(user);
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '7');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new crate Blue #7 on rack 38-A?');
+    expect(confirm).toHaveTextContent('Crate number will change from 4 to 7.');
+    // Same rack both sides — no rack sentence.
+    expect(confirm).not.toHaveTextContent(/rack will/i);
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockPlaceStockAction.mock.calls[0]![0]).toMatchObject({
+      destination: {
+        newRack: { warehouseId: 'wh-1', crateNumber: '7', crateColor: 'blue', rackNumber: '38', rackRow: 'A' },
+      },
+      acknowledgedCrateChanges: [
+        { itemId: 'book-1', currentFingerprint: bookCrateFingerprint('blue', '4') },
+      ],
+    });
+  });
+
+  it('picking an existing option FILLS the four fields', async () => {
+    const user = userEvent.setup();
+    renderBookDialog(); // Blue 4 on rack 38-A
+    await openDialog(user);
+    await chooseExisting(user, 'Blue #42');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('42');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent('Blue');
+    // A position-less crate row: the rack boxes go blank.
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('');
+    // An EXISTING crate already carries its metadata — shown, not retyped.
+    expect(screen.getByRole('dialog')).toHaveTextContent('This crate is');
+
+    // A bare rack row: the rack pair fills, the crate BLANKS — that is choosing
+    // "no crate", and the gate will say so before the write.
+    await chooseExisting(user, '22-B');
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('22');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('B');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent(/no color/i);
+  });
+
+  it('while the fields still equal the picked row, the request goes by id — nothing is created', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
+    await openDialog(user);
+    await chooseExisting(user, 'Blue #4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      existingLocationId: 'c-blue4',
+    });
+  });
+
+  it('typing over a picked row demotes it to the fields — the boxes win', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
+    await openDialog(user);
+    await chooseExisting(user, '22-B');
+    // The operator picked 22-B and then put the crate back in.
+    await user.type(screen.getByLabelText(/crate number/i), '4');
+    await chooseCrateColor(user, 'Blue');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    // Blue 4 on 22-B: same crate as recorded (no crate question), a new
+    // positioned row (typo guard, since 22-B is a rack row, not this crate).
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new crate Blue #4 on rack 22-B?');
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'blue', rackNumber: '22', rackRow: 'B' },
+    });
+    expect(mockPlaceStockAction.mock.calls[0]![0].acknowledgedCrateChanges).toBeUndefined();
   });
 
   it('placing into the SAME crate does NOT warn', async () => {
     const user = userEvent.setup();
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #4');
+    await chooseExisting(user, 'Blue #4');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
@@ -272,7 +468,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // as it always has been.
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     const confirm = screen.getByRole('alertdialog');
@@ -285,8 +481,59 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     await user.click(screen.getByRole('button', { name: /go back/i }));
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockPlaceStockAction).not.toHaveBeenCalled();
-    // Back on the form, with the destination still selected.
+    // Back on the form, with the destination still filled in.
     expect(screen.getByRole('button', { name: /place stock/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('42');
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // RACK-ONLY IS THE EXPLICIT "NO CRATE" CHOICE — and the one time the gate asks.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it('BLANKING the crate is the explicit no-crate choice: the gate asks, and Continue clears', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: IN_RED_4_ON_38B, destinations: L4L_DESTINATIONS });
+    await openDialog(user);
+    await blankCrate(user);
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    // Asked BEFORE the write, naming exactly what is being erased.
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Change this book’s crate?');
+    expect(confirm).toHaveTextContent('Crate color Red will be cleared.');
+    expect(confirm).toHaveTextContent('Crate number 4 will be cleared.');
+    // Same rack: no rack sentence, and no "Create new rack 38-B?" (it exists).
+    expect(confirm).not.toHaveTextContent(/rack will/i);
+    expect(confirm).not.toHaveTextContent(/create new/i);
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
+    expect(mockPlaceStockAction.mock.calls[0]![0]).toMatchObject({
+      destination: { newRack: { warehouseId: 'wh-1', rackNumber: '38', rackRow: 'B' } },
+      // The OLD-STYLE fingerprint, as a literal: this is what the server grants
+      // the crate clear on, and every shipped client computes exactly this.
+      acknowledgedCrateChanges: [{ itemId: 'book-1', currentFingerprint: '["red","4"]' }],
+    });
+  });
+
+  it('a rack destination picked from the dropdown warns that the recorded crate is CLEARED', async () => {
+    const user = userEvent.setup();
+    renderBookDialog();
+    await openDialog(user);
+    await chooseExisting(user, '22-B');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Crate color Blue will be cleared.');
+    expect(confirm).toHaveTextContent('Crate number 4 will be cleared.');
+    // The rack this ALSO changes belongs in the same dialog, not a second one.
+    expect(confirm).toHaveTextContent('Rack will change from 38-A to 22-B.');
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    // Picked from the dropdown and untouched: by id.
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      existingLocationId: 'r-22b',
+    });
   });
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -328,7 +575,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog(); // IN_BLUE_4 — rack 38-A recorded
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     // No local dialog was interposed, and the first request carries NO
@@ -357,7 +604,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // cannot happen — where the old local prediction always asked.
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
@@ -402,9 +649,12 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
       },
     });
     renderBookDialog(); // rack 38-A recorded, and Crate #7 will be position-less
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '7');
+    await openDialog(user);
+    await blankRack(user);
+    await chooseCrateColor(user, 'No color');
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '7');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     // STEP 1 — the one question only this dialog can ask. It claims nothing
@@ -466,7 +716,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     const confirm = screen.getByRole('alertdialog');
@@ -489,10 +739,10 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     const user = userEvent.setup();
     // NO recorded rack, so the local prediction still runs — this test is about
     // what the predicting path SENDS, and a book with a rack now defers to the
-    // server instead (see "defers to the server" below).
+    // server instead (see "defers to the server" above).
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -506,20 +756,6 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
   });
 
-  it('a rack destination warns that the recorded crate is CLEARED', async () => {
-    const user = userEvent.setup();
-    renderBookDialog();
-    await openDialog(user);
-    await chooseDestination(user, '22-B');
-    await user.click(screen.getByRole('button', { name: /place stock/i }));
-
-    const confirm = screen.getByRole('alertdialog');
-    expect(confirm).toHaveTextContent('Crate color Blue will be cleared.');
-    expect(confirm).toHaveTextContent('Crate number 4 will be cleared.');
-    // The rack this ALSO changes belongs in the same dialog, not a second one.
-    expect(confirm).toHaveTextContent('Rack will change from 38-A to 22-B.');
-  });
-
   it('ONE dialog asks both questions when a new crate is created over a recorded one', async () => {
     const user = userEvent.setup();
     // NO recorded rack, so there is no rack outcome to defer and the local
@@ -529,11 +765,11 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // crate half to the gate; that is "MINTING a position-less crate defers
     // too" above.)
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.click(screen.getByLabelText(/crate color/i));
-    await user.click(await screen.findByRole('option', { name: 'Green' }));
-    await user.type(screen.getByLabelText(/crate number/i), '7');
+    await openDialog(user);
+    await chooseCrateColor(user, 'Green');
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '7');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
@@ -559,10 +795,9 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // keeps the five real "gray BIN" bins five rows.
     const user = userEvent.setup();
     renderBookDialog({ bookStorage: null });
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await openDialog(user);
     await user.type(screen.getByLabelText(/crate number/i), '13');
-    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await user.type(screen.getByLabelText(/rack number/i), '38');
     await user.type(screen.getByLabelText(/^row/i), 'B');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
@@ -583,15 +818,21 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // nothing about it.
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '13');
-    await user.type(screen.getByLabelText(/on rack/i), '40');
-    await user.type(screen.getByLabelText(/^row/i), 'C');
+    await openDialog(user);
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '13');
+    const rack = screen.getByLabelText(/rack number/i);
+    await user.clear(rack);
+    await user.type(rack, '40');
+    const row = screen.getByLabelText(/^row/i);
+    await user.clear(row);
+    await user.type(row, 'C');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     const confirm = screen.getByRole('alertdialog');
-    expect(confirm).toHaveTextContent('Create new crate Crate #13 on rack 40-C?');
+    // The colour stays as seeded (Blue), so the crate is Blue #13.
+    expect(confirm).toHaveTextContent('Create new crate Blue #13 on rack 40-C?');
     expect(confirm).toHaveTextContent('Crate number will change from 4 to 13.');
     expect(confirm).toHaveTextContent('Rack will change from 38-A to 40-C.');
   });
@@ -606,22 +847,24 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // right half the time is the same class of lie as a silent overwrite.
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await openDialog(user);
+    await blankRack(user);
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '13');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     const confirm = screen.getByRole('alertdialog');
-    expect(confirm).toHaveTextContent('Create new crate Crate #13?');
+    expect(confirm).toHaveTextContent('Create new crate Blue #13?');
     expect(confirm).not.toHaveTextContent(/rack/i);
   });
 
-  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+  it('a crate whose Row has no rack number cannot be submitted, and names nothing', async () => {
     // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT.
     //
     // The gate used to be a hand-rolled field check — `crateNumber` non-empty
     // on the crate branch — and this input walked straight through it: crate 13
-    // plus a Row with no "On rack" number. `planNewLocation` refuses that pair
+    // plus a Row with no rack number. `planNewLocation` refuses that pair
     // (`rack_needs_number`: a row alone names no position), so the name derived
     // to '' and the confirmation rendered, verbatim:
     //
@@ -632,11 +875,12 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // refuses the same input — the 2026-07-23 rule (the string confirmed must be
     // the string created) failing in its emptiest possible form.
     const user = userEvent.setup();
-    renderBookDialog();
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '13');
-    await user.type(screen.getByLabelText(/^row/i), 'B');
+    renderBookDialog(); // rack 38-A, row A seeded
+    await openDialog(user);
+    await user.clear(screen.getByLabelText(/rack number/i));
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '13');
 
     // The planner's OWN words, inline — not a fourth hand-written string.
     expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
@@ -649,7 +893,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
 
     // Filling in the missing half clears the refusal and re-arms the button —
     // the message is a statement about the fields, not a dead end.
-    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await user.type(screen.getByLabelText(/rack number/i), '38');
     expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /place stock/i })).toBeEnabled();
   });
@@ -657,8 +901,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
   it('a crate identified by its NUMBER ALONE is created as a crate, with no rack number', async () => {
     const user = userEvent.setup();
     renderBookDialog({ bookStorage: null });
-    await openNewRackForm(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await openDialog(user);
     await user.type(screen.getByLabelText(/crate number/i), '9');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
@@ -679,7 +922,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // the local dialog to render at all.
     renderBookDialog({ availableQuantity: 17, bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     const qty = screen.getByLabelText(/quantity/i);
     await user.clear(qty);
     await user.type(qty, '5');
@@ -721,7 +964,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog({ availableQuantity: 18 }); // IN_BLUE_4 — rack 38-A recorded
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     const qty = screen.getByLabelText(/quantity/i);
     await user.clear(qty);
     await user.type(qty, '10');
@@ -760,7 +1003,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog({ bookStorage: null });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(mockPlaceStockAction).toHaveBeenCalledTimes(1);
@@ -793,7 +1036,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // a position-less destination the dialog defers and sends nothing to waive.
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -812,7 +1055,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // Nothing recorded, so the only question is "create rack 100-A?". Answering
     // it must not also answer a crate question the user was never asked.
     renderBookDialog({ bookStorage: null });
-    await openNewRackForm(user);
+    await openDialog(user);
     await user.type(screen.getByLabelText(/rack number/i), '100-A');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /create and place/i }));
@@ -845,7 +1088,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog(); // snapshot says Blue 4
     await openDialog(user);
-    await chooseDestination(user, '22-B');
+    await chooseExisting(user, '22-B');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     // The dialog first asks about the crate it can see.
@@ -897,7 +1140,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     // repeats back, which is the loop this pins.
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -913,7 +1156,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     mockPlaceStockAction.mockReturnValue(new Promise(() => {}));
     renderBookDialog({ bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -929,7 +1172,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     const user = userEvent.setup();
     renderBookDialog({ availableQuantity: 10, bookStorage: IN_BLUE_4_NO_RACK });
     await openDialog(user);
-    await chooseDestination(user, 'Blue #42');
+    await chooseExisting(user, 'Blue #42');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -946,7 +1189,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #4');
+    await chooseExisting(user, 'Blue #4');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(mockToast.warning).toHaveBeenCalledWith(
@@ -969,7 +1212,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #4');
+    await chooseExisting(user, 'Blue #4');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     // The green toast still fires — the stock DID move. The warning is what
@@ -997,7 +1240,7 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #4');
+    await chooseExisting(user, 'Blue #4');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     // Green first — the stock really did move — then the caveat.
@@ -1017,11 +1260,27 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     });
     renderBookDialog();
     await openDialog(user);
-    await chooseDestination(user, 'Blue #4');
+    await chooseExisting(user, 'Blue #4');
     await user.click(screen.getByRole('button', { name: /place stock/i }));
 
     expect(mockToast.warning).toHaveBeenCalledWith(
       'The Outsiders was placed, but its crate label could not be updated — check the book’s details.',
+    );
+  });
+
+  // ═══ THE KEPT CRATE — crateSyncCratePreserved (Maus I) ═══
+  it('warns when the crate label was KEPT because nobody was asked about clearing it', async () => {
+    const user = userEvent.setup();
+    mockPlaceStockAction.mockResolvedValue({
+      ok: true,
+      data: { toLocationId: 'r-38b', crateSyncCratePreserved: true },
+    });
+    renderBookDialog({ bookStorage: IN_RED_4_ON_38B, destinations: L4L_DESTINATIONS });
+    await openDialog(user);
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'The Outsiders was placed, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.',
     );
   });
 });

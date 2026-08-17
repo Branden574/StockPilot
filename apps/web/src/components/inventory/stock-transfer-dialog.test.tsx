@@ -45,7 +45,7 @@ function renderDialog() {
         [{ locationId: 'loc-a', locationName: 'Receiving Dock', quantity: 40, kind: null, warehouseId: 'wh-1' }] as never
       }
       itemType="asset"
-      canManageLocations
+      canMintDestination
     />,
   );
 }
@@ -93,41 +93,55 @@ describe('StockTransferDialog server-error surfacing', () => {
     expect(screen.queryByText('Transfer stock', { selector: 'h2' })).not.toBeInTheDocument();
   });
 });
-
 // ---------------------------------------------------------------------------
-// The "+ New location" branch — rack XOR crate, and a number-only crate.
+// The BOOK destination — the four fields, always visible, seeded from the record.
 //
 // This form used to render "Rack number *" plus an optional free-text crate
 // pair with no toggle, and always send the rack number ALONGSIDE the crate
-// fields. Two consequences, both live:
-//
-//   • a NUMBER-ONLY crate was unreachable — submit was disabled without a rack
-//     number, and one was always sent;
-//   • rack "A1" + row "Row 3" + crate "9" produced name "Crate #9", kind
-//     'crate', and DROPPED the row (REPRO B) — on a surface with no
-//     confirmation step of any kind.
-//
-// The toggle fixed the FIRST and misread the second: the row was not an
-// impossible input, it was a dropped one. A crate SITS ON a rack, so the crate
-// branch keeps its own optional rack fields and that input now creates "Crate
-// #9 on rack A1-Row 3" — one row, named for both facts.
+// fields; then a Rack|Crate toggle behind "+ New location…". Both hid the crate
+// from the operator moving a crated book — for a label-only crate (most of the
+// L4L warehouse) the crate the book records was never in the dropdown, so the
+// reachable destination was a bare rack, which clears the crate (Maus I,
+// 2026-08-17). Now the four fields ARE the destination: rack number, row,
+// crate colour, crate number — seeded from the recorded storage, filled by the
+// dropdown, and the planner decides kind by what is filled in. A crate SITS ON
+// a rack, so both facts are on screen at once and "Crate #9 on rack A1-Row 3"
+// is one row named for both (REPRO B stays fixed).
 // ---------------------------------------------------------------------------
 
 const BOOK_LOCS = [
   { id: 'loc-a', name: 'Receiving Dock', kind: null, warehouse_id: 'wh-1' },
-  { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1' },
+  { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '22', rackRow: 'B' },
 ];
 
-function renderBookDialog() {
+/** Blue 4, no rack recorded — the fixture every test in the next block seeds from. */
+const BLUE_4_NO_RACK = {
+  rackNumber: null,
+  rackRow: null,
+  crateColor: 'blue',
+  crateNumber: '4',
+  grade: null,
+  rackLabel: null,
+  crateLabel: 'Blue 4',
+};
+
+function renderBookDialog(
+  opts: {
+    bookStorage?: Record<string, unknown> | null;
+    locations?: unknown[];
+    holdings?: unknown[];
+    canMintDestination?: boolean;
+  } = {},
+) {
   return render(
     <StockTransferDialog
       itemId="item-1"
       itemName="Persepolis"
       currentQuantity={40}
       currentLocationId={null}
-      locations={BOOK_LOCS as never}
+      locations={(opts.locations ?? BOOK_LOCS) as never}
       holdings={
-        [
+        (opts.holdings ?? [
           {
             locationId: 'loc-a',
             name: 'Receiving Dock',
@@ -135,54 +149,59 @@ function renderBookDialog() {
             kind: null,
             warehouseId: 'wh-1',
           },
-        ] as never
+        ]) as never
       }
       itemType="book"
-      bookStorage={
-        {
-          rackNumber: null,
-          rackRow: null,
-          crateColor: 'blue',
-          crateNumber: '4',
-          grade: null,
-          rackLabel: null,
-          crateLabel: 'Blue 4',
-        } as never
-      }
-      canManageLocations
+      bookStorage={(opts.bookStorage === undefined ? BLUE_4_NO_RACK : opts.bookStorage) as never}
+      canMintDestination={opts.canMintDestination ?? true}
     />,
   );
 }
 
-async function openNewLocation(user: ReturnType<typeof userEvent.setup>) {
+async function openBook(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /transfer/i }));
-  const destination = screen.getAllByRole('combobox')[1]!;
-  await user.click(destination);
-  await user.click(await screen.findByRole('option', { name: /new location/i }));
 }
 
-describe('StockTransferDialog — new rack / crate', () => {
-  it('offers an EXPLICIT Rack|Crate choice for a book', async () => {
+async function chooseCrateColor(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole('combobox', { name: /^crate color$/i }));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
+async function retype(user: ReturnType<typeof userEvent.setup>, label: RegExp, value: string) {
+  const box = screen.getByLabelText(label);
+  await user.clear(box);
+  if (value) await user.type(box, value);
+}
+
+describe('StockTransferDialog — the book destination fields', () => {
+  it('a BOOK sees the four fields PRE-FILLED from its recorded storage — no toggle, no "+ New"', async () => {
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
-    expect(screen.getByRole('radio', { name: 'Rack' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Crate' })).toBeInTheDocument();
+    await openBook(user);
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('4');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent('Blue');
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('');
+    // The dropdown is a shortcut that fills the fields; no "+ New location…"
+    // entry for a book — the fields ARE the destination.
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    expect(await screen.findByRole('option', { name: '22-B' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /new location/i })).not.toBeInTheDocument();
   });
 
   it('a crate ON a rack sends BOTH, and the confirmation names both', async () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
+    await openBook(user);
 
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '13');
-    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await retype(user, /crate number/i, '13');
+    await user.type(screen.getByLabelText(/rack number/i), '38');
     await user.type(screen.getByLabelText(/^row/i), 'B');
 
     await user.click(screen.getByRole('button', { name: /transfer stock/i }));
-    expect(await screen.findByText('Create new crate Crate #13 on rack 38-B?')).toBeInTheDocument();
+    // The colour stays as seeded (Blue): Blue 13 on rack 38-B.
+    expect(await screen.findByText('Create new crate Blue #13 on rack 38-B?')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /create and transfer/i }));
 
     const arg = mockTransferStockAction.mock.calls[0]![0] as {
@@ -191,24 +210,24 @@ describe('StockTransferDialog — new rack / crate', () => {
     expect(arg.destination.newRack).toEqual({
       warehouseId: 'wh-1',
       crateNumber: '13',
+      crateColor: 'blue',
       rackNumber: '38',
       rackRow: 'B',
     });
   });
 
-  it('a crate whose Row has no "On rack" number cannot be submitted, and names nothing', async () => {
+  it('a crate whose Row has no rack number cannot be submitted, and names nothing', async () => {
     // THE READINESS GATE IS THE PLANNER, OR IT DRIFTS FROM IT. This dialog's
-    // gate checked `crateNumber` alone, so crate 13 + a Row with no "On rack"
+    // gate checked `crateNumber` alone, so crate 13 + a Row with no rack
     // number passed it; `planNewLocation` refuses that pair
     // (`rack_needs_number`), the derived name was '', and the confirmation read
     // "Create new crate ? does not exist yet." — the string confirmed naming
     // nothing at all, ahead of a server schema that refuses the same input.
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
+    await openBook(user);
 
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '13');
+    await retype(user, /crate number/i, '13');
     await user.type(screen.getByLabelText(/^row/i), 'B');
 
     expect(screen.getByText('Give the rack a number.')).toBeInTheDocument();
@@ -219,7 +238,7 @@ describe('StockTransferDialog — new rack / crate', () => {
     expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
     expect(mockTransferStockAction).not.toHaveBeenCalled();
 
-    await user.type(screen.getByLabelText(/on rack/i), '38');
+    await user.type(screen.getByLabelText(/rack number/i), '38');
     expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
   });
@@ -228,20 +247,15 @@ describe('StockTransferDialog — new rack / crate', () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
+    await openBook(user);
 
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    // The rack branch's REQUIRED "Rack number" box is gone — but the crate's
-    // OPTIONAL "On rack" is offered, because a crate sits on a rack. Leaving it
-    // blank is what makes this a position-less crate, and the payload below
-    // proves nothing is invented for it.
-    expect(screen.queryByLabelText(/rack number/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/on rack/i)).toBeInTheDocument();
-    await user.type(screen.getByLabelText(/crate number/i), '9');
+    await chooseCrateColor(user, 'No color');
+    await retype(user, /crate number/i, '9');
 
     await user.click(screen.getByRole('button', { name: /transfer stock/i }));
     // "Crate #9" does not exist in this warehouse, so it is a creation and the
-    // confirmation names EXACTLY what will be made.
+    // confirmation names EXACTLY what will be made. Rack boxes left blank make
+    // it position-less, and the payload proves nothing is invented for it.
     expect(await screen.findByText('Create new crate Crate #9?')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /create and transfer/i }));
 
@@ -252,16 +266,16 @@ describe('StockTransferDialog — new rack / crate', () => {
     expect(arg.destination.newRack).toEqual({ warehouseId: 'wh-1', crateNumber: '9' });
   });
 
-  it('the RACK branch sends no crate fields, row and all', async () => {
+  it('a bare RACK (crate blanked) sends no crate fields, row and all', async () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
+    await openBook(user);
 
+    await chooseCrateColor(user, 'No color');
+    await retype(user, /crate number/i, '');
     await user.type(screen.getByLabelText(/rack number/i), 'A1');
     await user.type(screen.getByLabelText(/^row/i), 'Row 3');
-    // …and the crate boxes are not rendered at all in this branch.
-    expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /transfer stock/i }));
     // REPRO B produced "Crate #9" for this input. The confirmation now names
@@ -282,11 +296,81 @@ describe('StockTransferDialog — new rack / crate', () => {
   it('the crate colour is the CRATE_COLORS registry, not a free-text box', async () => {
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    await openBook(user);
     // A Select trigger, not an <input>: typing "navy" used to mint a colour no
     // swatch, filter or label sheet can render.
     expect(screen.getByRole('combobox', { name: /crate color/i })).toBeInTheDocument();
+  });
+
+  // ═══ MAUS I — the repair is the default: loose stock on the rack INTO the crate ═══
+  it('for stock sitting LOOSE on the recorded rack, the default moves it INTO the recorded crate on that rack', async () => {
+    mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
+    const user = userEvent.setup();
+    // Maus after the incident: label yellow 6 on 38-B, 79 units loose on the
+    // plain rack "38-B", no crate row.
+    renderBookDialog({
+      bookStorage: { rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6', grade: null, rackLabel: '38-B', crateLabel: 'Yellow 6' },
+      locations: [
+        { id: 'loc-38b', name: '38-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '38', rackRow: 'B' },
+        { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '22', rackRow: 'B' },
+      ],
+      holdings: [{ locationId: 'loc-38b', name: '38-B', quantity: 79, kind: 'rack', warehouseId: 'wh-1' }],
+    });
+    await openBook(user);
+    // Pre-filled with the record.
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('38');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('B');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('6');
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+    // No typo guard (it is the recorded truth) — straight through, unacknowledged.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockTransferStockAction).toHaveBeenCalledOnce();
+    expect(mockTransferStockAction.mock.calls[0]![0]).toMatchObject({
+      fromLocationId: 'loc-38b',
+      destination: {
+        newRack: { warehouseId: 'wh-1', crateNumber: '6', crateColor: 'yellow', rackNumber: '38', rackRow: 'B' },
+      },
+      acknowledgedRackChanges: [],
+    });
+    expect(mockTransferStockAction.mock.calls[0]![0]).not.toHaveProperty('acknowledgedCrateChanges');
+  });
+
+  it('moving OUT of the recorded crate opens with the source as destination — and says so', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({
+      bookStorage: { rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6', grade: null, rackLabel: '38-B', crateLabel: 'Yellow 6' },
+      locations: [
+        { id: 'loc-y6', name: 'Yellow #6 on rack 38-B', kind: 'crate', warehouse_id: 'wh-1', rackNumber: '38', rackRow: 'B', crateColor: 'yellow', crateNumber: '6' },
+        { id: 'loc-b', name: '22-B', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '22', rackRow: 'B' },
+      ],
+      holdings: [{ locationId: 'loc-y6', name: 'Yellow #6 on rack 38-B', quantity: 20, kind: 'crate', warehouseId: 'wh-1' }],
+    });
+    await openBook(user);
+    expect(screen.getByText(/that is where this stock already is/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeDisabled();
+    // Picking 22-B fills the fields (rack 22-B, crate blank) and re-arms it.
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    await user.click(await screen.findByRole('option', { name: '22-B' }));
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('22');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('');
+    expect(screen.queryByText(/that is where this stock already is/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
+  });
+
+  it('without the placement gate (stock:transfer / locations:manage), a destination that would have to be CREATED is said inline, not refused on submit', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ canMintDestination: false });
+    await openBook(user);
+    // Blue 4 (position-less) has no row in this warehouse.
+    expect(screen.getByText(/needs the Transfer stock permission/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeDisabled();
+    // An existing row is still fine.
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    await user.click(await screen.findByRole('option', { name: '22-B' }));
+    expect(screen.queryByText(/needs the Transfer stock permission/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
   });
 });
 
@@ -463,7 +547,9 @@ describe('StockTransferDialog — the crate confirmation', () => {
     mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'new' } });
     const user = userEvent.setup();
     renderBookDialog();
-    await openNewLocation(user);
+    await openBook(user);
+    // Blue 4 seeded; the operator adds a brand-new rack position: Blue 4 on
+    // A1. Same crate (no crate question), a new row (creation question).
     await user.type(screen.getByLabelText(/rack number/i), 'A1');
     await user.click(screen.getByRole('button', { name: /transfer stock/i }));
     await user.click(await screen.findByRole('button', { name: /create and transfer/i }));
@@ -516,7 +602,7 @@ describe('StockTransferDialog — system buckets are not destinations', () => {
           ] as never
         }
         itemType="asset"
-        canManageLocations
+        canMintDestination
       />,
     );
 

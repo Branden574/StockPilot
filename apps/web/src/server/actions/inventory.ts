@@ -174,6 +174,19 @@ export async function removeStockFromLocationAction(
      * operator was told nothing while the rack label went stale.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = removeStockFromLocationSchema.safeParse(input);
@@ -199,6 +212,9 @@ export async function removeStockFromLocationAction(
       ...(crateSyncUpdated ? { crateSyncUpdated: true } : {}),
       ...(crateSync && crateSync.rackPreservedItemIds.length > 0
         ? { crateSyncRackPreserved: true }
+        : {}),
+      ...(crateSync && crateSync.cratePreservedItemIds.length > 0
+        ? { crateSyncCratePreserved: true }
         : {}),
     });
   } catch (e) {
@@ -365,6 +381,15 @@ export async function bulkUpdateInventoryAction(input: {
      * operator typed a rack number, and a value a human recorded changed.
      */
     crateChanged?: number;
+    /**
+     * Set rack only: books whose crate label was KEPT because their stock
+     * reached the plain rack and this op — which has no per-book confirmation
+     * channel — could not ask about clearing it (Maus I, 2026-08-17: most
+     * crates here are label-only, so the label IS the crate). The label may
+     * now be stale; the toast must say so. Where `crateCleared` used to land
+     * for these books.
+     */
+    cratePreserved?: number;
   }>
 > {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
@@ -512,7 +537,8 @@ const acknowledgedRackChangesSchema = z
   .optional();
 
 /**
- * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
+ * The inline-creation arguments for
+ * LocationsService.findOrCreatePlacementDestination.
  * ONE builder, driven by the ONE core planner, so every write path agrees on
  * what a set of fields creates AND on what it is called.
  *
@@ -576,12 +602,24 @@ async function resolveNewLocation(
  * Mint the destination the gate has now approved — or reuse whatever appeared in
  * the window since `resolveNewLocation` looked. Returns the REAL row's id and
  * columns, which is what every write below uses.
+ *
+ * UNDER stock:transfer, NOT locations:manage (owner decision D1, 2026-08-17).
+ * `findOrCreatePlacementDestination` is the put-away's own resolve-or-create:
+ * the same find, and a create that proceeds for anyone who may move stock —
+ * through the SECURITY DEFINER `mint_placement_location` (0340), which
+ * re-checks the org, the permission and the warehouse inside. Putting stock
+ * into the crate the book's label names is a stock operation; the Staff preset
+ * holds stock:transfer only, and through `create` (locations:manage) every
+ * label-only crated book was unreachable for staff, who were pushed onto the
+ * bare rack — the crate-erasing path. Ordinary location creation elsewhere
+ * keeps locations:manage; this is the ONLY place the exception applies on the
+ * web (the mobile /api/v1 transfer route is its twin).
  */
 async function commitNewLocation(
   svc: LocationsService,
   n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
 ): Promise<{ toLocationId: string; dest: PlaceDest }> {
-  const created = await svc.findOrCreateRackOrCrate(newLocationInput(n));
+  const created = await svc.findOrCreatePlacementDestination(newLocationInput(n));
   return {
     toLocationId: (created as { id: string }).id,
     dest: toPlaceDest(created as unknown as Record<string, unknown>),
@@ -638,9 +676,12 @@ async function warehouseInOrg(
 // ---------------------------------------------------------------------------
 // transferStockAction — move placed stock between locations; destination may
 // be an existing location OR a rack/crate created inline (same union as
-// placeStockAction). Creating a location goes through LocationsService.create,
-// which asserts 'locations:manage' + the 'locations' plan limit; the transfer
-// itself stays gated on 'stock:transfer' inside InventoryService.transferStock.
+// placeStockAction). Creating a location goes through
+// LocationsService.findOrCreatePlacementDestination, which proceeds under
+// 'stock:transfer' (or 'locations:manage') via the SECURITY DEFINER
+// mint_placement_location (0340) — racks/crates never consumed the site plan
+// limit; the transfer itself stays gated on 'stock:transfer' inside
+// InventoryService.transferStock.
 // ---------------------------------------------------------------------------
 
 const transferStockActionSchema = z
@@ -693,6 +734,19 @@ export async function transferStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = transferStockActionSchema.safeParse(input);
@@ -838,7 +892,14 @@ export async function transferStockAction(
     if (isPositionedCrate(dest)) {
       await svc.stampPlacementBin([data.itemId], dest);
     }
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await svc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -856,6 +917,7 @@ export async function transferStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // Same insufficient_stock → friendly-message mapping as placeStockAction
@@ -931,6 +993,19 @@ export async function placeStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = placeStockSchema.safeParse(input);
@@ -1039,7 +1114,14 @@ export async function placeStockAction(
     // gate's own pre-move read: the sync re-reads and writes only where the two
     // agree, so a crate edited while the stock was moving is left alone rather
     // than overwritten by an acknowledgement that named a different crate.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await invSvc.syncBookCratePlacement([data.itemId], {
         verified,
         audit: {
@@ -1058,6 +1140,7 @@ export async function placeStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -1140,6 +1223,19 @@ export async function bulkPlaceStockAction(
      * left.
      */
     crateSyncRackPreserved?: boolean;
+    /**
+     * The stock moved and the rack label followed it, but the CRATE label was
+     * deliberately LEFT AS IT WAS: the destination is a plain rack, the book
+     * records a crate, and nobody was shown that crate being cleared — this
+     * request carried no acknowledgement of a clear (an older client, a caller
+     * with no confirmation channel, or a race the gate could not predict).
+     *
+     * Maus I, 2026-08-17: a ten-unit put-away onto rack 38-B erased crate
+     * yellow 6 from a book whose crate existed ONLY as that label. Most crates
+     * in this warehouse are label-only, so the label is the crate. Kept, not
+     * wiped — and reported, because it may now be stale.
+     */
+    crateSyncCratePreserved?: boolean;
   }>
 > {
   const parsed = bulkPlaceStockSchema.safeParse(input);
@@ -1258,7 +1354,14 @@ export async function bulkPlaceStockAction(
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.
-    const { failedItemIds, skippedItemIds, staleItemIds, unplacedItemIds, rackPreservedItemIds } =
+    const {
+      failedItemIds,
+      skippedItemIds,
+      staleItemIds,
+      unplacedItemIds,
+      rackPreservedItemIds,
+      cratePreservedItemIds,
+    } =
       await invSvc.syncBookCratePlacement(placedItemIds, {
         verified,
         audit: {
@@ -1283,6 +1386,7 @@ export async function bulkPlaceStockAction(
       ...(staleItemIds.length > 0 ? { crateSyncStale: true } : {}),
       ...(unplacedItemIds.length > 0 ? { crateSyncUnplaced: true } : {}),
       ...(rackPreservedItemIds.length > 0 ? { crateSyncRackPreserved: true } : {}),
+      ...(cratePreservedItemIds.length > 0 ? { crateSyncCratePreserved: true } : {}),
     });
   } catch (e) {
     return toResult(e);

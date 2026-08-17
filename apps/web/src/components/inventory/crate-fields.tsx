@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import type { DestinationFields } from '@/lib/locations/placement-destination';
 import { cn } from '@/lib/utils';
 
 /**
@@ -96,70 +97,6 @@ export function CrateColorSelect({
   );
 }
 
-export type NewDestinationKind = 'rack' | 'crate';
-
-/**
- * Rack-or-crate as an EXPLICIT choice — of the KIND OF ROW being created, and
- * nothing more.
- *
- * It used to be implicit: typing a crate color turned the new location into a
- * crate and leaving it blank made a rack, which meant the single most
- * consequential field on the form (it decides `locations.kind`, and 0270's
- * dedupe index is kind-scoped) was never actually asked about.
- *
- * ═══ IT IS NOT "RACK OR CRATE, PICK ONE PLACE" ═══
- *
- * A CRATE SITS ON A RACK. The crate branch therefore also offers "On rack" +
- * "Row": both facts are true at once, and a picker needs both to find a book
- * (go to rack 38-B, find crate 13 on it). Reading this toggle as mutually
- * exclusive PLACES — and hiding the rack fields on the crate branch — is what
- * made a positioned crate unexpressible and produced books recorded in a crate
- * with an empty RACK column.
- */
-export function DestinationKindToggle({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: NewDestinationKind;
-  onChange: (next: NewDestinationKind) => void;
-  disabled?: boolean;
-}) {
-  const options: Array<{ value: NewDestinationKind; label: string }> = [
-    { value: 'rack', label: 'Rack' },
-    { value: 'crate', label: 'Crate' },
-  ];
-  return (
-    <div className="space-y-1.5">
-      <Label id="new-destination-kind-label">New location type</Label>
-      <div
-        role="radiogroup"
-        aria-labelledby="new-destination-kind-label"
-        className="inline-flex rounded-md border p-0.5"
-      >
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            role="radio"
-            aria-checked={value === opt.value}
-            disabled={disabled}
-            onClick={() => onChange(opt.value)}
-            className={cn(
-              'rounded-[5px] px-3 py-1 text-sm font-medium transition-colors',
-              value === opt.value
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            )}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /**
  * "Current storage" — where this BOOK is recorded today, straight off the
  * row's summary. Read-only by design: the summary is not authoritative (the
@@ -221,6 +158,112 @@ export function DestinationCrateNote({
   );
 }
 
+/**
+ * ═══ THE FOUR FIELDS, ALWAYS VISIBLE — the BOOK put-away's primary "To" input ═══
+ *
+ * Rack number | Row, then Crate color | Crate number, in one bordered group.
+ * Shared by the staging put-away, the bulk put-away and the transfer dialog so
+ * the four boxes look and behave identically on every surface.
+ *
+ * WHY NOT A TOGGLE. These fields used to sit behind "+ New rack / crate" plus a
+ * Rack|Crate radio, and the toggle was the thing that hid the crate: for a
+ * label-only crate (most of this warehouse) the crate the dialog had just said
+ * the book was in was not in the dropdown, and the operator's only visible move
+ * was the bare rack — which clears the crate (Maus I, 2026-08-17). Now the kind
+ * is decided by the planner from what is filled in: any crate box → a crate ON
+ * the typed rack; crate blank → the bare rack. Both facts are on screen at
+ * once because a crate SITS ON a rack — the picker needs both.
+ *
+ * `unknownCrateColor`: a recorded colour the registry Select cannot show. The
+ * raw text is said beside the box so the operator can pick the nearest colour
+ * or leave it blank on purpose (blank changes the pair, so the gate will ask).
+ * `problem`: the planner's own refusal for a half-filled form, in its words.
+ */
+export function BookDestinationFields({
+  idPrefix,
+  fields,
+  onChange,
+  unknownCrateColor,
+  problem,
+  disabled,
+}: {
+  idPrefix: string;
+  fields: DestinationFields;
+  onChange: (next: DestinationFields) => void;
+  unknownCrateColor?: string | null;
+  problem?: string | null;
+  disabled?: boolean;
+}) {
+  const set = (key: keyof DestinationFields) => (value: string) =>
+    onChange({ ...fields, [key]: value });
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div>
+        <p className="text-sm font-medium">Place into</p>
+        <p className="text-muted-foreground text-xs">
+          The rack and, if it sits in one, the crate on that rack. Leave the crate blank to place
+          on the bare rack — the book’s crate label is then cleared, and you will be asked first.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-rack-number`}>Rack number</Label>
+          <Input
+            id={`${idPrefix}-rack-number`}
+            placeholder="e.g. 38"
+            value={fields.rackNumber}
+            maxLength={64}
+            disabled={disabled}
+            onChange={(e) => set('rackNumber')(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-rack-row`}>Row</Label>
+          <Input
+            id={`${idPrefix}-rack-row`}
+            placeholder="e.g. B"
+            value={fields.rackRow}
+            maxLength={64}
+            disabled={disabled}
+            onChange={(e) => set('rackRow')(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-crate-color`}>Crate color</Label>
+          <CrateColorSelect
+            id={`${idPrefix}-crate-color`}
+            value={fields.crateColor}
+            disabled={disabled}
+            onChange={(v) => set('crateColor')(v === NO_CRATE_COLOR ? '' : v)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-crate-number`}>Crate number</Label>
+          <CrateNumberInput
+            id={`${idPrefix}-crate-number`}
+            value={fields.crateNumber}
+            onChange={set('crateNumber')}
+          />
+        </div>
+      </div>
+      {unknownCrateColor && (
+        <p className="text-muted-foreground text-xs">
+          This book’s recorded crate color, “{unknownCrateColor}”, is not one of the crate
+          colors, so it could not be filled in. Pick the nearest one, or leave it blank to record
+          no color.
+        </p>
+      )}
+      {/* The planner's refusal, said where the fields are. Without it a
+          half-filled form would just have a dead Place button and no
+          explanation — and the version of this dialog that had neither offered
+          to create a crate it could not name. */}
+      {problem && <p className="text-destructive text-xs">{problem}</p>}
+    </div>
+  );
+}
+
 /** Crate number field. FREE TEXT: production holds 0, 1..16, "Bin", "Blue Shelf". */
 export function CrateNumberInput({
   value,
@@ -242,61 +285,3 @@ export function CrateNumberInput({
   );
 }
 
-/**
- * WHERE THE CRATE SITS — the rack number and row of a crate destination.
- *
- * Optional, and it must stay optional: production holds a crate on no rack at
- * all (blue "Blue Shelf", 5 books), and demanding a position would force
- * operators to invent one.
- *
- * When it IS given it becomes part of the crate's IDENTITY, not decoration:
- * "gray BIN" names five physically distinct bins in this warehouse (43-B, 43-C,
- * 42-B, 42-C, 41-C), so the position is what tells them apart — in the created
- * `locations.name`, in migration 0270's dedupe key, and on the book's own rack
- * summary. One component for all three dialogs so no surface can offer half of
- * it.
- */
-export function CrateRackPositionFields({
-  idPrefix,
-  rackNumber,
-  rackRow,
-  onRackNumberChange,
-  onRackRowChange,
-}: {
-  idPrefix: string;
-  rackNumber: string;
-  rackRow: string;
-  onRackNumberChange: (next: string) => void;
-  onRackRowChange: (next: string) => void;
-}) {
-  return (
-    <>
-      <p className="text-muted-foreground text-xs">
-        A crate sits on a rack. Say which one and the book is recorded in both — crate 13 on rack
-        38-B. Leave it blank for a crate that is not on a rack.
-      </p>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-crate-rack-number`}>On rack (optional)</Label>
-          <Input
-            id={`${idPrefix}-crate-rack-number`}
-            placeholder="e.g. 38"
-            value={rackNumber}
-            maxLength={64}
-            onChange={(e) => onRackNumberChange(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-crate-rack-row`}>Row (optional)</Label>
-          <Input
-            id={`${idPrefix}-crate-rack-row`}
-            placeholder="e.g. B"
-            value={rackRow}
-            maxLength={64}
-            onChange={(e) => onRackRowChange(e.target.value)}
-          />
-        </div>
-      </div>
-    </>
-  );
-}

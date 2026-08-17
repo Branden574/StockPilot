@@ -18,13 +18,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import {
-  CrateColorSelect,
-  CrateNumberInput,
-  CrateRackPositionFields,
+  BookDestinationFields,
   CurrentStorageSummary,
-  DestinationKindToggle,
-  NO_CRATE_COLOR,
-  type NewDestinationKind,
+  DestinationCrateNote,
 } from '@/components/inventory/crate-fields';
 import {
   PlacementConfirmDialog,
@@ -50,28 +46,59 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import type { DestinationOption } from '@/lib/locations/destination-option';
 import {
+  destinationFromFields,
+  destinationIsRecordedStorage,
   destinationLabel,
+  EMPTY_DESTINATION_FIELDS,
+  fieldsFromOption,
   isCrateChoice,
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  seedDestinationFields,
   type ChosenDestination,
+  type DestinationFields,
 } from '@/lib/locations/placement-destination';
 import { transferStockAction } from '@/server/actions/inventory';
 import { transferableHoldings } from '@/lib/placements';
 
-/** Sentinel Select value for the inline "create a new location" branch —
- *  mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */
+/** NON-BOOKS only: sentinel Select value for the inline "create a new location"
+ *  branch — mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */
 const NEW_LOCATION_SENTINEL = '__new__';
 
 type ActionDestination = Parameters<typeof transferStockAction>[0]['destination'];
 
-interface LocationOption {
+/**
+ * A destination row as this dialog sees it: the put-away dialogs'
+ * `DestinationOption` (the row's own rack/crate columns, camelCase, produced by
+ * the ONE mapper `toDestinationOption`) plus the warehouse it belongs to.
+ *
+ * The columns are what let a BOOK's "To location" pick FILL the four
+ * destination fields — the same rule as the put-away dialogs. They are optional
+ * on the type only so callers that predate them still type-check; a caller that
+ * maps them away leaves the dropdown able to name a row but not to describe it.
+ * `kind` may be null here (a Site), where DestinationOption spells that ''.
+ */
+type LocationOption = Partial<Omit<DestinationOption, 'id' | 'name' | 'kind'>> & {
   id: string;
   name: string;
   kind: string | null;
   warehouse_id: string | null;
+};
+
+/** The same row in the put-away dialogs' shape. */
+function asDestinationOption(loc: LocationOption): DestinationOption {
+  return {
+    id: loc.id,
+    name: loc.name,
+    kind: loc.kind ?? '',
+    rackNumber: loc.rackNumber ?? null,
+    rackRow: loc.rackRow ?? null,
+    crateColor: loc.crateColor ?? null,
+    crateNumber: loc.crateNumber ?? null,
+  };
 }
 
 interface HoldingOption {
@@ -102,9 +129,12 @@ interface StockTransferDialogProps {
    * the rare crated transfer, zero chance of confirming a crate that moved.
    */
   bookStorage?: BookStorageInfo | null;
-  /** Show the "New location…" destination only when the user can actually
-   *  create locations (server still asserts 'locations:manage' + plan limit). */
-  canManageLocations?: boolean;
+  /** Show the "New location…" destination — and, for a book, allow the four
+   *  fields to name a row that does not exist yet — only when the user may MINT
+   *  it (`canMintPlacementDestination`: manager-or-above, or `stock:transfer`,
+   *  or `locations:manage`; the server re-asserts through the placement path's
+   *  SECURITY DEFINER resolve-or-create, migration 0340, owner decision D1). */
+  canMintDestination?: boolean;
   trigger?: React.ReactNode;
 }
 
@@ -116,7 +146,7 @@ export function StockTransferDialog({
   holdings,
   itemType,
   bookStorage,
-  canManageLocations = false,
+  canMintDestination = false,
   trigger,
 }: StockTransferDialogProps) {
   const router = useRouter();
@@ -130,19 +160,19 @@ export function StockTransferDialog({
   const [quantity, setQuantity] = React.useState('1');
   const [notes, setNotes] = React.useState('');
 
-  // Inline new-rack/crate fields. `newKind` is an EXPLICIT choice of the KIND
-  // of row, exactly as in the Staging put-away dialog — see the rule in
-  // packages/core/src/inventory/new-location.ts. This form used to send a rack
-  // number AND the optional crate pair together, which the server then resolved
-  // by precedence: "A1" + "Row 3" + crate "9" created a CRATE called "Crate #9"
-  // and threw the row away (REPRO B). The row is no longer thrown away: that
-  // input is CRATE 9 ON RACK A1-Row 3, and the crate branch keeps the same rack
-  // fields so the operator can say so.
-  const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
-  const [rackNumber, setRackNumber] = React.useState('');
-  const [rackRow, setRackRow] = React.useState('');
-  const [crateColor, setCrateColor] = React.useState('');
-  const [crateNumber, setCrateNumber] = React.useState('');
+  // ═══ THE FOUR FIELDS ARE THE DESTINATION (books) — Maus I, 2026-08-17 ═══
+  // Same rule as the two put-away dialogs (see placement-destination.ts): for
+  // a BOOK the rack pair and crate pair are always visible, seeded from the
+  // recorded storage, and the "To location" dropdown FILLS them. Moving loose
+  // stock off a bare rack INTO the crate the book records is then the default,
+  // one click — which is exactly the repair a Maus-style row needs. A crate
+  // sits on a rack, so both facts are on screen at once. Non-books keep the
+  // older shape: the dropdown, "+ New location…", and the rack pair inline.
+  const [fields, setFields] = React.useState<DestinationFields>(EMPTY_DESTINATION_FIELDS);
+  const { rackNumber, rackRow, crateColor, crateNumber } = fields;
+  const setField = (key: keyof DestinationFields) => (value: string) =>
+    setFields((prev) => ({ ...prev, [key]: value }));
+  const [unknownCrateColor, setUnknownCrateColor] = React.useState<string | null>(null);
 
   const [submitting, setSubmitting] = React.useState(false);
   // Server failures render inline (persistent) as well as via toast — a toast
@@ -168,16 +198,16 @@ export function StockTransferDialog({
     acknowledgedRacks: BookRackAcknowledgedChange[];
   } | null>(null);
 
+  const isBook = itemType === 'book';
+
   React.useEffect(() => {
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open/close */
     setFromLocation(sourceHoldings[0]?.locationId ?? '');
     setToLocation('');
-    setNewKind('rack');
-    setRackNumber('');
-    setRackRow('');
-    setCrateColor('');
-    setCrateNumber('');
+    const seeded = seedDestinationFields(isBook ? bookStorage : null);
+    setFields(seeded.fields);
+    setUnknownCrateColor(seeded.unknownCrateColor);
     setServerError(null);
     setPendingConfirm(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -190,7 +220,7 @@ export function StockTransferDialog({
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
     setPendingConfirm(null);
-  }, [toLocation, newKind, rackNumber, rackRow, crateColor, crateNumber, quantity, fromLocation]);
+  }, [toLocation, rackNumber, rackRow, crateColor, crateNumber, quantity, fromLocation]);
 
   const qtyNum = Number.parseFloat(quantity) || 0;
 
@@ -201,10 +231,9 @@ export function StockTransferDialog({
   // A new location is created inside the SOURCE holding's warehouse — without
   // a known warehouse there's nowhere to create it, so the option hides.
   const sourceWarehouseId = selectedHolding?.warehouseId ?? null;
-  const canCreateHere = canManageLocations && !!sourceWarehouseId;
+  const canCreateHere = canMintDestination && !!sourceWarehouseId;
 
-  const isNew = toLocation === NEW_LOCATION_SENTINEL;
-  const isBook = itemType === 'book';
+  const isNew = !isBook && toLocation === NEW_LOCATION_SENTINEL;
 
   // Destination: all locations except the chosen source and system kinds
   const destinationLocations = locations.filter(
@@ -221,20 +250,35 @@ export function StockTransferDialog({
 
   const hasNoSources = sourceHoldings.length === 0;
 
+  /** The picked existing row as the put-away dialogs see one — its own columns. */
+  const selectedOption: DestinationOption | null =
+    toLoc && toLoc.id !== NEW_LOCATION_SENTINEL ? asDestinationOption(toLoc) : null;
+
+  /** BOOKS: the dropdown FILLS the four fields from the row's own columns. */
+  function pickDestination(id: string) {
+    setToLocation(id);
+    if (!isBook) return;
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) return;
+    setFields(fieldsFromOption(asDestinationOption(loc)));
+    setUnknownCrateColor(null);
+  }
+
   /**
    * The destination as chosen in this form.
    *
-   * `null` for an EXISTING location: this dialog's location list carries only
-   * {id, name, kind}, so it cannot honestly build a DestinationOption with the
-   * crate columns — and it does not need to. An existing destination mints
-   * nothing (no creation confirmation) and its crate metadata is read
-   * server-side from the row itself, which is the only trustworthy copy.
+   * BOOKS: the four fields decide (`destinationFromFields`) — the picked row
+   * by id while the boxes still equal its columns, otherwise a crate on the
+   * typed position or a bare rack, resolved-or-created by name on the server.
+   * NON-BOOKS: the dropdown, or the inline rack pair behind "+ New location…".
+   * An existing destination's crate metadata is still read SERVER-SIDE from
+   * the row itself before anything is written; the columns here only fill
+   * boxes.
    */
-  function chosenNewDestination(): ChosenDestination | null {
-    if (!isNew) return null;
-    return isBook && newKind === 'crate'
-      ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
-      : { mode: 'new-rack', rackNumber, rackRow };
+  function chosenDestination(): ChosenDestination | null {
+    if (isBook) return destinationFromFields(fields, selectedOption);
+    if (isNew) return { mode: 'new-rack', rackNumber, rackRow };
+    return selectedOption ? { mode: 'existing', option: selectedOption } : null;
   }
 
   // THE READINESS GATE IS THE PLANNER — see newDestinationReady. The
@@ -244,9 +288,40 @@ export function StockTransferDialog({
   // ? does not exist yet." A crate is still identified by its NUMBER and a rack
   // by its number; neither branch demands the other's field. That rule now lives
   // in exactly one place.
-  const chosenNew = chosenNewDestination();
-  const newReady = chosenNew !== null && newDestinationReady(chosenNew);
-  const newProblem = chosenNew !== null ? newDestinationProblem(chosenNew) : null;
+  const chosen = chosenDestination();
+  const newReady = chosen !== null && newDestinationReady(chosen);
+  // Would this destination have to be MINTED (no row with that name in the
+  // source warehouse), and may this user do that? Minting needs the placement
+  // gate (stock:transfer / locations:manage / manager) AND a warehouse to
+  // create in; say so here rather than letting the default path for a
+  // label-only crate die on a server refusal.
+  const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
+  const needsMint =
+    plannedLabel.length > 0 &&
+    !locations.some(
+      (l) =>
+        l.warehouse_id === sourceWarehouseId &&
+        l.name.trim().toLowerCase() === plannedLabel.toLowerCase(),
+    );
+  const cannotMint = needsMint && !canCreateHere;
+  // A transfer INTO the place the stock is already in is a no-op the server
+  // refuses; for a book whose fields were seeded from the crate it is being
+  // moved OUT of, that is the opening state, so it is said inline.
+  const sameAsSource =
+    chosen !== null &&
+    !!fromLoc &&
+    (chosen.mode === 'existing'
+      ? chosen.option.id === fromLocation
+      : plannedLabel.length > 0 && plannedLabel.toLowerCase() === fromLoc.name.trim().toLowerCase());
+  const newProblem =
+    chosen !== null
+      ? (newDestinationProblem(chosen) ??
+        (sameAsSource
+          ? 'That is where this stock already is — pick a different destination.'
+          : cannotMint
+            ? `${plannedLabel} does not exist yet, and placing into a new rack or crate needs the Transfer stock permission. Pick an existing location, or ask a manager to create it.`
+            : null))
+      : null;
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -379,6 +454,13 @@ export function StockTransferDialog({
       toast.warning(
         `${itemName} was moved, but its rack label was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
+    } else if (res.data?.crateSyncCratePreserved) {
+      // Its twin for the CRATE label (Maus I, 2026-08-17): a plain-rack
+      // destination for a book that records a crate, with no acknowledged
+      // clear — kept, not wiped, and said out loud.
+      toast.warning(
+        `${itemName} was moved, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.`,
+      );
     }
     setPendingConfirm(null);
     setOpen(false);
@@ -388,11 +470,12 @@ export function StockTransferDialog({
   }
 
   function submit() {
-    if (!fromLocation || !toLocation) {
+    const dest = chosenDestination();
+    if (!fromLocation || !dest) {
       toast.error('Pick both a source and a destination location.');
       return;
     }
-    if (!isNew && fromLocation === toLocation) {
+    if (sameAsSource) {
       toast.error('Source and destination must be different locations.');
       return;
     }
@@ -404,41 +487,44 @@ export function StockTransferDialog({
       toast.error("Can't transfer more than what's in the source location.");
       return;
     }
-    if (isNew && !sourceWarehouseId) {
+    if (dest.mode !== 'existing' && !sourceWarehouseId) {
       toast.error('Pick a source location inside a warehouse first.');
       return;
     }
 
-    const dest = chosenNewDestination();
     // THE LAST GATE BEFORE ANY CONFIRMATION IS BUILT: `destinationLabel` is ''
     // for an invalid plan, and describeNewRackPlacement would dress that up as
     // "Create new crate ?". The words are the planner's, so this toast, the
     // inline message and the server's zod issue are one sentence.
-    const plan = dest ? planNewDestination(dest) : null;
+    const plan = planNewDestination(dest);
     if (plan?.kind === 'invalid') {
       toast.error(plan.message);
       return;
     }
 
-    const destination: ActionDestination = dest
-      ? toActionDestination(dest)
-      : { existingLocationId: toLocation };
+    const destination: ActionDestination = toActionDestination(dest);
 
     // Does this MINT a location? The label comes from the SAME derivation the
     // server names the row with, so the sentence always names what will
     // actually be created — the phone once asked "Create new rack A1?" and
     // created "Crate #9" (REPRO A'). Existence is judged inside the source
     // holding's warehouse, because that is the warehouse the server creates in.
-    const creation = dest
-      ? describeNewRackPlacement({
-          label: destinationLabel(dest),
-          quantity: qtyNum,
-          existingLabels: locations
-            .filter((l) => l.warehouse_id === sourceWarehouseId)
-            .map((l) => l.name),
-          noun: isCrateChoice(dest) ? 'crate' : 'rack',
-        })
-      : null;
+    //
+    // SUPPRESSED when the fields ARE the book's recorded storage: for a
+    // label-only crate no row exists yet, and the recorded truth being minted as
+    // a row for the first time is not a typo to guard against (Maus I).
+    const recordedStorage = isBook && destinationIsRecordedStorage(dest, bookStorage);
+    const creation =
+      dest.mode !== 'existing' && !recordedStorage
+        ? describeNewRackPlacement({
+            label: destinationLabel(dest),
+            quantity: qtyNum,
+            existingLabels: locations
+              .filter((l) => l.warehouse_id === sourceWarehouseId)
+              .map((l) => l.name),
+            noun: isCrateChoice(dest) ? 'crate' : 'rack',
+          })
+        : null;
 
     if (creation === null || creation.exists) {
       void move(destination);
@@ -532,10 +618,12 @@ export function StockTransferDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>To location</Label>
-              <Select value={toLocation} onValueChange={setToLocation}>
+              <Label>{isBook ? 'To location (optional — fills in the fields below)' : 'To location'}</Label>
+              <Select value={toLocation} onValueChange={pickDestination}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select destination" />
+                  <SelectValue
+                    placeholder={isBook ? 'Fill in from an existing location' : 'Select destination'}
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {destinationLocations.map((l) => (
@@ -543,11 +631,17 @@ export function StockTransferDialog({
                       {l.name}
                     </SelectItem>
                   ))}
-                  {canCreateHere && (
+                  {!isBook && canCreateHere && (
                     <SelectItem value={NEW_LOCATION_SENTINEL}>+ New location…</SelectItem>
                   )}
                 </SelectContent>
               </Select>
+              {isBook && selectedOption && (
+                <DestinationCrateNote
+                  crateColor={selectedOption.crateColor}
+                  crateNumber={selectedOption.crateNumber}
+                />
+              )}
               {crossWarehouse && (
                 <p className="text-[11px] text-amber-700 dark:text-amber-400">
                   This transfer crosses warehouses. Both warehouses must be in your access
@@ -556,72 +650,42 @@ export function StockTransferDialog({
               )}
             </div>
 
-            {/* Inline new rack/crate inputs — same fields, same rule and the
-                same explicit Rack|Crate choice as the Staging place dialog. */}
+            {/* ═══ BOOKS: the four fields ARE the destination, always visible ═══ */}
+            {isBook && (
+              <BookDestinationFields
+                idPrefix="transfer"
+                fields={fields}
+                onChange={setFields}
+                unknownCrateColor={unknownCrateColor}
+                problem={newProblem}
+              />
+            )}
+
+            {/* Inline new rack inputs — non-books, behind "+ New location…". */}
             {isNew && (
               <div className="space-y-3 rounded-md border p-3">
-                {isBook && <DestinationKindToggle value={newKind} onChange={setNewKind} />}
-
-                {(!isBook || newKind === 'rack') && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="transfer-rack-number">
-                        Rack number <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="transfer-rack-number"
-                        placeholder="e.g. A1"
-                        value={rackNumber}
-                        onChange={(e) => setRackNumber(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="transfer-rack-row">Row (optional)</Label>
-                      <Input
-                        id="transfer-rack-row"
-                        placeholder="e.g. Row 3"
-                        value={rackRow}
-                        onChange={(e) => setRackRow(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {isBook && newKind === 'crate' && (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="transfer-crate-color">Crate color (optional)</Label>
-                        {/* The CRATE_COLORS registry, not a free-text box. Typing
-                            "navy" here minted a color no swatch, filter or label
-                            sheet can render — and every mixed-case spelling that
-                            reached locations.crate_color came in this way. */}
-                        <CrateColorSelect
-                          id="transfer-crate-color"
-                          value={crateColor}
-                          onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="transfer-crate-number">
-                          Crate number <span className="text-destructive">*</span>
-                        </Label>
-                        <CrateNumberInput
-                          id="transfer-crate-number"
-                          value={crateNumber}
-                          onChange={setCrateNumber}
-                        />
-                      </div>
-                    </div>
-                    <CrateRackPositionFields
-                      idPrefix="transfer"
-                      rackNumber={rackNumber}
-                      rackRow={rackRow}
-                      onRackNumberChange={setRackNumber}
-                      onRackRowChange={setRackRow}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="transfer-rack-number">
+                      Rack number <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="transfer-rack-number"
+                      placeholder="e.g. A1"
+                      value={rackNumber}
+                      onChange={(e) => setField('rackNumber')(e.target.value)}
                     />
-                  </>
-                )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="transfer-rack-row">Row (optional)</Label>
+                    <Input
+                      id="transfer-rack-row"
+                      placeholder="e.g. Row 3"
+                      value={rackRow}
+                      onChange={(e) => setField('rackRow')(e.target.value)}
+                    />
+                  </div>
+                </div>
 
                 {/* The planner's refusal, said where the fields are — so a
                     disabled Transfer button always has a stated reason. */}
@@ -665,7 +729,13 @@ export function StockTransferDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={submitting || hasNoSources || (isNew && !newReady)}
+            disabled={
+              submitting ||
+              hasNoSources ||
+              cannotMint ||
+              sameAsSource ||
+              (isBook || isNew ? !newReady : false)
+            }
           >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer stock'}
           </Button>

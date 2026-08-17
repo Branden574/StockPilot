@@ -9,6 +9,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { WarehousesService } from '@/server/services/warehouses';
 import { requireOrgContext } from '@/lib/auth/session';
+import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
 import {
   toDestinationOption,
   type DestinationLocationRow,
@@ -47,6 +48,13 @@ export default async function StagingPage({
   // With per-role/user permission overrides the two can diverge, which would
   // otherwise show a Place button that always fails server-side.
   const canPlace = can(sessionCtx, 'stock:transfer');
+  // The book put-away places INTO the recorded crate by default and mints the
+  // row when none exists — under 'stock:transfer' (or 'locations:manage'),
+  // through the placement path's own SECURITY DEFINER resolve-or-create
+  // (mint_placement_location, 0340; owner decision D1). ONE derivation, shared
+  // with the item detail; passed down so a dialog can say so inline instead of
+  // failing on submit.
+  const canMintDestination = canMintPlacementDestination(sessionCtx);
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -63,7 +71,11 @@ export default async function StagingPage({
 
       <div className="mt-8">
         <Suspense fallback={<TableBodySkeleton rows={8} />}>
-          <StagingTableSection params={params} canPlace={canPlace} />
+          <StagingTableSection
+            params={params}
+            canPlace={canPlace}
+            canMintDestination={canMintDestination}
+          />
         </Suspense>
       </div>
     </div>
@@ -78,9 +90,11 @@ export default async function StagingPage({
 async function StagingTableSection({
   params,
   canPlace,
+  canMintDestination,
 }: {
   params: StagingSearchParams;
   canPlace: boolean;
+  canMintDestination: boolean;
 }) {
   const itemTypeParam =
     params.type === 'book' ? 'book' : params.type === 'non-book' ? 'non-book' : undefined;
@@ -141,6 +155,7 @@ async function StagingTableSection({
       destinationsMap={destinationsMap}
       warehouseNames={warehouseNames}
       canPlace={canPlace}
+      canMintDestination={canMintDestination}
       activeItemType={itemTypeParam ?? 'all'}
     />
   );

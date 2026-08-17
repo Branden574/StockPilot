@@ -56,6 +56,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import { showWriteCta } from '@/lib/cta-gating';
+import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
@@ -469,10 +470,16 @@ export default function ItemDetail() {
   // re-asserts stock:adjust inside InventoryService.removeStockFromLocation.
   const canAdjustStock =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:adjust'));
-  // Gates the inline "+ New rack" option in the move sheet; the transfer route
-  // asserts 'locations:manage' independently when it creates the rack.
-  const canCreateLocation =
-    isManager || (role !== null && can({ role: role as Role, permissions }, 'locations:manage'));
+  // Gates the move sheet's inline "+ New rack" (non-book) and, for a book, its
+  // DEFAULT path: placing into the crate the label names, which for a
+  // label-only crate means minting the row. The server does that under
+  // 'stock:transfer' (or 'locations:manage') through the placement path only
+  // (mint_placement_location, 0340; owner decision D1), and re-checks it
+  // independently. ONE derivation, shared with the staging worklist.
+  const canCreateLocation = canMintPlacementDestination({
+    role: role as Role | null,
+    permissions,
+  });
   // Restore gate — mirrors the web archive/restore actions' 'items:update'
   // requirement. Cosmetic only; /api/v1/items/[id]/restore re-asserts
   // items:update inside InventoryService.bulkUpdate.

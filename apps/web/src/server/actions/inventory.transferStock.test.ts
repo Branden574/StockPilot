@@ -21,7 +21,7 @@ vi.mock('next/cache', () => ({
 //  - withContext() → a ServiceContext-shaped object whose supabase is a
 //    configurable stub (controls the warehouses verification row).
 //  - the InventoryService / LocationsService classes → spy constructors whose
-//    instances expose transferStock / findOrCreateRackOrCrate spies — the
+//    instances expose transferStock / findOrCreatePlacementDestination spies — the
 //    dedup-safe rack lookup (Unit A) the action actually calls for the
 //    newRack destination, NOT a raw `create`. (transferStockAction never
 //    calls stampPlacementBin — that's placeStock/bulkPlaceStock only.)
@@ -50,6 +50,7 @@ const {
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
     rackPreservedItemIds: [] as string[],
+    cratePreservedItemIds: [] as string[],
   })),
   ctxRef: { ctx: null as unknown },
 }));
@@ -72,10 +73,10 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
+    findOrCreatePlacementDestination = mockFindOrCreateRackOrCrate;
     // The READ half, now that the gate runs BEFORE the row is minted. Defaults
     // to "nothing to reuse", so these suites still exercise the create path and
-    // `findOrCreateRackOrCrate` is still what actually mints.
+    // `findOrCreatePlacementDestination` is still what actually mints.
     findRackOrCrate = mockFindRackOrCrate;
   },
 }));
@@ -151,6 +152,7 @@ beforeEach(() => {
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   });
   installContext();
 });
@@ -241,11 +243,12 @@ describe('transferStockAction (destination union)', () => {
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 
-  it('4. permission branch: a forbidden LocationsService.findOrCreateRackOrCrate (locations:manage) blocks the transfer', async () => {
-    // findOrCreateRackOrCrate falls through to create() (which asserts
-    // 'locations:manage' + the locations plan limit) when no matching
-    // rack/crate already exists — when that throws, the action must surface
-    // the error and NEVER run the transfer against a half-created destination.
+  it('4. permission branch: a forbidden LocationsService.findOrCreatePlacementDestination (no stock:transfer / locations:manage) blocks the transfer', async () => {
+    // findOrCreatePlacementDestination falls through to the placement mint
+    // (stock:transfer OR locations:manage, re-checked inside
+    // mint_placement_location) when no matching rack/crate already exists —
+    // when that throws, the action must surface the error and NEVER run the
+    // transfer against a half-created destination.
     mockFindOrCreateRackOrCrate.mockRejectedValueOnce(new ServiceError('forbidden', 'Permission denied'));
 
     const result = await transferStockAction({
@@ -402,6 +405,7 @@ describe('transferStockAction (destination union)', () => {
       staleItemIds: [],
       unplacedItemIds: [ITEM_ID],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
 
     const result = await transferStockAction({

@@ -169,6 +169,13 @@ function verified(
          * answer — the recorded rack is kept, never wiped.
          */
         rackClearAcknowledged?: boolean;
+        /**
+         * Its twin for the CRATE pair: the operator was shown this book's crate
+         * being CLEARED (a rack-only destination) and agreed. Same FALSE
+         * default, same reason — a stale crate label is recoverable, a wiped
+         * one is not (Maus I, 2026-08-17).
+         */
+        crateClearAcknowledged?: boolean;
       },
     ]
   >,
@@ -181,6 +188,7 @@ function verified(
         crateColor: v.crateColor ?? null,
         crateNumber: v.crateNumber ?? null,
         rackClearAcknowledged: v.rackClearAcknowledged === true,
+        crateClearAcknowledged: v.crateClearAcknowledged === true,
       },
     ]),
   );
@@ -189,6 +197,10 @@ function verified(
 const BLUE_4 = { crateColor: 'blue', crateNumber: '4' };
 /** Blue 4, with the rack erasure shown to the operator and agreed to. */
 const BLUE_4_RACK_CLEAR_OK = { ...BLUE_4, rackClearAcknowledged: true };
+/** Blue 4, with the CRATE clear shown to the operator and agreed to (rack-only destination). */
+const BLUE_4_CRATE_CLEAR_OK = { ...BLUE_4, crateClearAcknowledged: true };
+/** Blue 4, with BOTH erasures shown and agreed — a NULL-kind Site destination. */
+const BLUE_4_BOTH_CLEAR_OK = { ...BLUE_4, rackClearAcknowledged: true, crateClearAcknowledged: true };
 const NO_CRATE = {};
 
 beforeEach(() => vi.clearAllMocks());
@@ -817,6 +829,7 @@ describe('syncBookCratePlacement', () => {
       staleItemIds: [],
       unplacedItemIds: [BOOK_A],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
     // The summary is LEFT ALONE, not cleared: a book with no placed stock is a
     // book whose recorded crate is a human's restocking intent, and wiping it
@@ -905,7 +918,12 @@ describe('syncBookCratePlacement', () => {
       'rpc:inventory_set_book_placement': { data: 1, error: null },
     });
 
-    await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, BLUE_4]]) });
+    await svc.syncBookCratePlacement([BOOK_A], {
+      // …AND THE OPERATOR CHOSE "NO CRATE". Since Maus I (2026-08-17) the crate
+      // clear needs the same permission the rack clear does; the unacknowledged
+      // twin of this test lives in the Maus block below.
+      verified: verified([[BOOK_A, BLUE_4_CRATE_CLEAR_OK]]),
+    });
 
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
     // A book on a rack is in no crate — a stale "Blue 4" walks a picker to a
@@ -955,6 +973,7 @@ describe('syncBookCratePlacement', () => {
       staleItemIds: [],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
   });
 
@@ -1053,6 +1072,7 @@ describe('syncBookCratePlacement', () => {
       staleItemIds: [],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
   });
 
@@ -1080,6 +1100,7 @@ describe('syncBookCratePlacement', () => {
       staleItemIds: [],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
   });
 
@@ -1158,6 +1179,7 @@ describe('syncBookCratePlacement', () => {
       staleItemIds: [],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
     expect(stub.fromCalls).toEqual([]);
   });
@@ -1340,6 +1362,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       staleItemIds: [BOOK_A],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
     // No holdings read either — there was nothing left to reconcile.
     expect(stub.fromCalls).not.toContain('item_stock_levels');
@@ -1356,6 +1379,7 @@ describe('syncBookCratePlacement — the freshness check', () => {
       staleItemIds: [],
       unplacedItemIds: [],
       rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
     });
   });
 });
@@ -1649,7 +1673,8 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
     ]);
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
-      verified: verified([[BOOK_A, BLUE_4]]),
+      // The clear was shown and agreed (see the Maus block for the other half).
+      verified: verified([[BOOK_A, BLUE_4_CRATE_CLEAR_OK]]),
     });
 
     // The row is UPPER-CASED, exactly as stampPlacementBin upper-cases it. Both
@@ -1671,7 +1696,9 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
       holding(BOOK_A, 'loc-legacy', { kind: 'rack', rack_number: '22-B', rack_row: null }),
     ]);
 
-    await svc.syncBookCratePlacement([BOOK_A], { verified: verified([[BOOK_A, BLUE_4]]) });
+    await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, BLUE_4_CRATE_CLEAR_OK]]),
+    });
 
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
       placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }),
@@ -1713,7 +1740,9 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
     const { svc, stub } = world([holding(BOOK_A, 'loc-dc4', { kind: null, type: 'warehouse' })]);
 
     const res = await svc.syncBookCratePlacement([BOOK_A], {
-      verified: verified([[BOOK_A, BLUE_4_RACK_CLEAR_OK]]),
+      // BOTH erasures shown and agreed: a Site destination is a placed location
+      // that names neither a rack nor a crate, so the gate asks both questions.
+      verified: verified([[BOOK_A, BLUE_4_BOTH_CLEAR_OK]]),
     });
 
     expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
@@ -1833,6 +1862,416 @@ describe('syncBookCratePlacement — the rack pair follows the holdings', () => 
 // reports how many labels changed. See the comment at the call site.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// THE CRATE ERASURE NEEDS PERMISSION TOO — Maus I, 2026-08-17 17:50:52.779
+//
+// THE INCIDENT, from prod audit_logs (L4L North Region). Maus I, My Father
+// Bleeds History was recorded {crate yellow 6, rack 38-B}. Ten units were put
+// away from Staging onto rack "38-B" — a plain rack row, and the ONLY holding
+// the book then had. The reconciliation derived the crate half from that rack
+// row (no crate columns) and wrote p_crate_color NULL / p_crate_number NULL:
+// before {yellow,6,38,B} → after {NULL,NULL,38,B}. The owner re-typed the crate
+// by hand 36 seconds later. Same shape, same evening: The Joy Luck Club,
+// red 4 → NULL.
+//
+// WHY THE RACK GUARD DID NOT SAVE IT. The rack half already had this rule
+// ("an erasure nobody was shown is not performed", rackClearAcknowledged); the
+// crate half had no twin — the code said so in as many words. Yet the crate is
+// the MORE fragile fact: 113 of L4L's 124 books carry a crate label with NO
+// crate location row (the crate exists only as the item's summary — L4L has
+// exactly one crate row org-wide), so for those books the label is the only
+// record there is. Deriving "no crate" from a rack row and writing it over that
+// label is not a reconciliation, it is data loss.
+//
+// THE RULE, mirroring the rack half exactly: a CLEAR of a recorded crate is
+// performed only for a book whose clear the operator was SHOWN and agreed to
+// (`crateClearAcknowledged`, granted by the gate when the acknowledged conflict
+// was a clear). Absent that, the recorded pair is kept VERBATIM and the item is
+// reported in `cratePreservedItemIds`. A stale label is recoverable; a wiped
+// one is not. Fingerprint shapes are UNCHANGED — the acknowledgement channel
+// already carries "the operator chose no crate", so no new wire field.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('syncBookCratePlacement — a crate erasure needs permission (Maus)', () => {
+  /** Maus, as the summary reader saw it before the put-away. */
+  const MAUS_SUMMARY = {
+    book_crate_color: 'yellow',
+    book_crate_number: '6',
+    book_rack_number: '38',
+    book_rack_row: 'B',
+  };
+  const RACK_38B_ID = '3b2d8dcb-0000-0000-0000-000000000000';
+  /** The rack "38-B" locations row: kind rack, its own position, NO crate columns. */
+  const RACK_38B_LOC = { kind: 'rack', type: 'shelf', rack_number: '38', rack_row: 'B' };
+  const YELLOW_6 = { crateColor: 'yellow', crateNumber: '6' };
+
+  function maus(holdings: unknown[]) {
+    return svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Maus I, My Father Bleeds History', 'book', MAUS_SUMMARY)],
+        error: null,
+      },
+      'item_stock_levels.select': { data: holdings, error: null },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+  }
+
+  it('THE MAUS REPRO: a plain-rack put-away with NO crate acknowledgement KEEPS the crate label', async () => {
+    // After transfer_stock: ONE holding, the plain rack 38-B. On main this
+    // derived (null, null) from the rack row and wrote it — the audit row in
+    // prod is exactly `after {NULL, NULL, 38, B}`.
+    const { svc, stub } = maus([holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC)]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      // The gate cleared yellow 6 — and granted NOTHING about erasing it. That
+      // is the verdict every caller without a crate answer produces: bulk Set
+      // rack, a write-off drain, an old client, a forged body.
+      verified: verified([[BOOK_A, YELLOW_6]]),
+      audit: { toLocationId: RACK_38B_ID, quantityByItemId: new Map([[BOOK_A, 10]]) },
+    });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // The rack half follows the stock (38-B is where it is); the crate half is
+    // the recorded pair, VERBATIM — never NULL.
+    expect(call.args).toEqual(
+      placementArgs([BOOK_A], { color: 'yellow', number: '6', rackNumber: '38', rackRow: 'B' }),
+    );
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    // …AND IT IS SAID OUT LOUD. The preserve is the fail-safe; the report is
+    // what makes "recoverable" true. Mirrors rackPreservedItemIds exactly.
+    expect(res.cratePreservedItemIds).toEqual([BOOK_A]);
+    expect(res.rackPreservedItemIds).toEqual([]);
+    // The trail shows the crate keys UNCHANGED, not erased.
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    const payload = mockAudit.mock.calls[0]![0] as {
+      before: Record<string, unknown>;
+      after: Record<string, unknown>;
+    };
+    expect(payload.before).toEqual({
+      book_crate_color: 'yellow',
+      book_crate_number: '6',
+      book_rack_number: '38',
+      book_rack_row: 'B',
+    });
+    expect(payload.after).toEqual(payload.before);
+  });
+
+  it('the preserve keeps the recorded BYTES — a legacy spelling is not re-normalised', async () => {
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Maus I', 'book', {
+            book_crate_color: 'Yellow',
+            book_crate_number: 'Six',
+            book_rack_number: '38',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC)],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, { crateColor: 'Yellow', crateNumber: 'Six' }]]),
+    });
+
+    // "Preserved" means the value the row holds (as the summary reader returns
+    // it) — NOT `normalizeCrateColorForWrite`'s "yellow". A preserve that
+    // re-spells the value is its own quiet edit; the rack preserve keeps
+    // `fresh.rackNumber` for the same reason.
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'Yellow', number: 'Six', rackNumber: '38', rackRow: 'B' }),
+    );
+  });
+
+  it('WITH the clear acknowledged, the crate IS cleared — the operator chose "no crate"', async () => {
+    const { svc, stub } = maus([holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC)]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, { ...YELLOW_6, crateClearAcknowledged: true }]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '38', rackRow: 'B' }),
+    );
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+    expect(res.cratePreservedItemIds).toEqual([]);
+  });
+
+  it('a transfer OUT of a REAL crate holding onto a bare shelf, gate answered, still clears', async () => {
+    // Blue #0 on rack 38-B is a real crate row (the one crate row L4L has).
+    // Every unit was moved from it onto rack 40-A and the operator was shown
+    // "Blue 0 will be cleared" and pressed Continue. That is a true clear.
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'The Hunger Games', 'book', {
+            book_crate_color: 'blue',
+            book_crate_number: '0',
+            book_rack_number: '38',
+            book_rack_row: 'B',
+          }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-40a', { kind: 'rack', rack_number: '40', rack_row: 'A' })],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([
+        [BOOK_A, { crateColor: 'blue', crateNumber: '0', crateClearAcknowledged: true }],
+      ]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '40', rackRow: 'A' }),
+    );
+    expect(res.cratePreservedItemIds).toEqual([]);
+    expect(res.syncedItemIds).toEqual([BOOK_A]);
+  });
+
+  it('a book with NO crate label loses nothing on a rack put-away — no preserve, no report', async () => {
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [
+          itemRow(BOOK_A, 'Uncrated', 'book', { book_rack_number: '38', book_rack_row: 'B' }),
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC)],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, NO_CRATE]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '38', rackRow: 'B' }),
+    );
+    expect(res.cratePreservedItemIds).toEqual([]);
+  });
+
+  it('a DIFFERENT crate is a true value — replaced without any clear grant', async () => {
+    // Moving into crate Green 2 replaces yellow 6 with green 2. That is not an
+    // erasure (the gate asked about it, and the ack matched); the preserve rule
+    // is about a NULL pair only.
+    const { svc, stub } = maus([
+      holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, { ...YELLOW_6, rackClearAcknowledged: true }]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'green', number: '2' }),
+    );
+    expect(res.cratePreservedItemIds).toEqual([]);
+  });
+
+  it('the preserve is reported only for a write that LANDED — cratePreserved ⊆ synced', async () => {
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Maus I', 'book', MAUS_SUMMARY)],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC)],
+        error: null,
+      },
+      // RLS filtered the row: zero affected.
+      'rpc:inventory_set_book_placement': { data: 0, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, YELLOW_6]]),
+    });
+
+    expect(res.failedItemIds).toEqual([BOOK_A]);
+    expect(res.cratePreservedItemIds).toEqual([]);
+  });
+
+  it('a book split between the plain rack and its crate is still SKIPPED, never preserved', async () => {
+    const { svc, stub } = maus([
+      holding(BOOK_A, RACK_38B_ID, RACK_38B_LOC),
+      holding(BOOK_A, 'loc-yellow6', {
+        kind: 'crate',
+        crate_color: 'yellow',
+        crate_number: '6',
+        rack_number: '38',
+        rack_row: 'B',
+      }),
+    ]);
+
+    const res = await svc.syncBookCratePlacement([BOOK_A], {
+      verified: verified([[BOOK_A, YELLOW_6]]),
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')).toBeUndefined();
+    expect(res.skippedItemIds).toEqual([BOOK_A]);
+    expect(res.cratePreservedItemIds).toEqual([]);
+  });
+});
+
+describe('assertBookCratePlacementAllowed — granting the crate clear', () => {
+  const YELLOW_6_ON_38B = {
+    book_crate_color: 'yellow',
+    book_crate_number: '6',
+    book_rack_number: '38',
+    book_rack_row: 'B',
+  };
+  const RACK_38B = {
+    kind: 'rack',
+    name: '38-B',
+    rackNumber: '38',
+    rackRow: 'B',
+    crateColor: null,
+    crateNumber: null,
+  };
+  /** The crate the book is already in, AS a positioned crate destination. */
+  const CRATE_YELLOW_6_ON_38B = {
+    kind: 'crate',
+    name: 'Yellow #6 on rack 38-B',
+    rackNumber: '38',
+    rackRow: 'B',
+    crateColor: 'yellow',
+    crateNumber: '6',
+  };
+  const mausItems = {
+    'inventory_items.select': {
+      data: [itemRow(BOOK_A, 'Maus I', 'book', YELLOW_6_ON_38B)],
+      error: null,
+    },
+  };
+
+  it('the default verdict grants NO crate clear', async () => {
+    const { svc } = svcWith({
+      ...mausItems,
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-staging', { kind: 'staging' })],
+        error: null,
+      },
+    });
+    // The same crate, on the same rack: nothing changes, nothing is asked, and
+    // the verdict authorises nothing.
+    const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_YELLOW_6_ON_38B, {
+      toLocationId: 'loc-y6',
+      moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+    });
+    expect(verdicts.get(BOOK_A)).toMatchObject({
+      crateColor: 'yellow',
+      crateNumber: '6',
+      crateClearAcknowledged: false,
+      rackClearAcknowledged: false,
+    });
+  });
+
+  it('placing INTO the recorded crate-on-rack raises NO gate and costs no holdings read', async () => {
+    const { svc, stub } = svcWith(mausItems);
+    await expect(
+      svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_YELLOW_6_ON_38B, {
+        // Not minted yet — the resolve-or-create path consults the gate first.
+        toLocationId: null,
+        moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+      }),
+    ).resolves.toBeInstanceOf(Map);
+    // A crate destination that IS the recorded pair, on a rack that IS the
+    // recorded position: no crate conflict, no rack candidate — the fast path.
+    expect(stub.fromCalls).not.toContain('item_stock_levels');
+  });
+
+  it('acknowledging the CLEAR — with the unchanged crate fingerprint — grants crateClearAcknowledged', async () => {
+    const { svc } = svcWith({
+      ...mausItems,
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-staging', { kind: 'staging' })],
+        error: null,
+      },
+    });
+    // THE FINGERPRINT SHAPE IS PINNED AS A LITERAL. Every shipped OTA client
+    // computes this exact string from the crate pair alone; widening it would
+    // orphan them all. `["yellow","6"]` — no rack, no version, no extra key.
+    expect(bookCrateFingerprint('yellow', '6')).toBe('["yellow","6"]');
+    const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
+      toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+      moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+      acknowledged: [{ itemId: BOOK_A, currentFingerprint: '["yellow","6"]' }],
+    });
+    expect(verdicts.get(BOOK_A)?.crateClearAcknowledged).toBe(true);
+  });
+
+  it('acknowledging a crate CHANGE (not a clear) grants NO clear', async () => {
+    const { svc } = svcWith({
+      ...mausItems,
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-staging', { kind: 'staging' })],
+        error: null,
+      },
+    });
+    const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], CRATE_GREEN_2, {
+      toLocationId: 'loc-green',
+      moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+      acknowledged: [{ itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('yellow', '6') }],
+    });
+    // The write that follows is a REPLACEMENT with a true value; a clear grant
+    // riding on it would let a later race erase the pair unasked.
+    expect(verdicts.get(BOOK_A)?.crateClearAcknowledged).toBe(false);
+  });
+
+  it('a clear the gate DROPPED (split predicted) grants nothing, even if acknowledged', async () => {
+    const { svc } = svcWith({
+      ...mausItems,
+      'item_stock_levels.select': {
+        // Another placed holding survives the move: the sync will skip.
+        data: [
+          holding(BOOK_A, 'loc-staging', { kind: 'staging' }),
+          holding(BOOK_A, 'loc-other', { kind: 'rack', rack_number: '40', rack_row: 'A' }),
+        ],
+        error: null,
+      },
+    });
+    const verdicts = await svc.assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
+      toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+      moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+      acknowledged: [{ itemId: BOOK_A, currentFingerprint: '["yellow","6"]' }],
+    });
+    // Nobody was shown a clear (the gate stayed silent), so no clear is granted
+    // — and if a race then makes 38-B the only holding, the sync preserves.
+    expect(verdicts.get(BOOK_A)?.crateClearAcknowledged).toBe(false);
+  });
+
+  it('a STALE acknowledgement (different crate) refuses, and grants nothing', async () => {
+    const { svc } = svcWith({
+      ...mausItems,
+      'item_stock_levels.select': {
+        data: [holding(BOOK_A, 'loc-staging', { kind: 'staging' })],
+        error: null,
+      },
+    });
+    const err = (await svc
+      .assertBookCratePlacementAllowed([BOOK_A], RACK_38B, {
+        toLocationId: '3b2d8dcb-0000-0000-0000-000000000000',
+        moves: new Map([[BOOK_A, { fromLocationId: 'loc-staging', quantity: 10 }]]),
+        acknowledged: [{ itemId: BOOK_A, currentFingerprint: bookCrateFingerprint('orange', '6') }],
+      })
+      .catch((e: unknown) => e)) as ServiceError;
+    expect(err.code).toBe('conflict');
+  });
+});
+
 describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
   const RACK_28A = 'loc-rack-28a';
 
@@ -1905,7 +2344,14 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
     };
   }
 
-  it('CLEARS a crated book’s summary once its stock sits on the rack', async () => {
+  it('KEEPS a crated book’s crate label once its stock sits on the rack — nobody asked to clear it', async () => {
+    // TEST REWRITTEN (Maus I, 2026-08-17). This used to pin `crateCleared: 1`
+    // and `p_crate_color: null`: bulk Set rack wiping the crate label of every
+    // crated book it moved. Bulk Set rack has NO per-book confirmation channel,
+    // so it can never grant `crateClearAcknowledged` — and in this warehouse
+    // most crates are label-only, so that wipe was the only record of the
+    // crate going. The rack pair the operator typed is written exactly as
+    // before; the crate half is KEPT and REPORTED as `cratePreserved`.
     const { svc, stub } = setRackStub(
       [
         {
@@ -1927,18 +2373,50 @@ describe('bulkUpdate set_rack — the crate summary follows the stock', () => {
 
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'bulk Set rack never reconciled the crate summary at all').toBeDefined();
-    // THE TWO WRITERS AGREE. `inventory_set_rack` already stamped 28-A from the
-    // typed destination; the reconciliation derives the pair from where the stock
-    // now IS and arrives at the same 28-A. That agreement is the point — if the
-    // derivation disagreed with the destination writer on the common path, one of
-    // the two would be overwriting the other on every bulk place.
-    expect(call!.args).toEqual(placementArgs([BOOK_A], { rackNumber: '28', rackRow: 'A' }));
-    // …and it is REPORTED, so the toast can say a label changed.
-    expect(res.crateCleared).toBe(1);
+    // THE TWO WRITERS AGREE on the rack. `inventory_set_rack` already stamped
+    // 28-A from the typed destination; the reconciliation derives the pair from
+    // where the stock now IS and arrives at the same 28-A. The crate half is the
+    // recorded Blue 4, verbatim — never NULL without a human's say-so.
+    expect(call!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'blue', number: '4', rackNumber: '28', rackRow: 'A' }),
+    );
+    // …and it is REPORTED under its own count, so the toast can say the label
+    // was kept (and may now be stale) — not "cleared", not "unchanged".
+    expect(res.cratePreserved).toBe(1);
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBeUndefined();
     // The stock reached the rack, so there is nothing to warn about. This is
     // the count that separates "everything moved" from "nothing moved" —
     // `placed` alone reads 0 for both "already there" and "all refused".
     expect(res.placeFailed).toBeUndefined();
+  });
+
+  it('a book with NO crate label is written plainly — nothing preserved, nothing counted', async () => {
+    const { svc, stub } = setRackStub(
+      [
+        {
+          id: BOOK_A,
+          name: 'Persepolis',
+          item_type: 'book',
+          warehouse_id: 'wh-1',
+          bin_location: null,
+          custom_fields: {},
+        },
+      ],
+      [holding(BOOK_A, RACK_28A, { kind: 'rack', type: 'shelf', rack_number: '28', rack_row: 'A' })],
+    );
+
+    const res = await svc.bulkUpdate({
+      ids: [BOOK_A],
+      op: { kind: 'set_rack', rackNumber: '28', rackRow: 'A' },
+    });
+
+    expect(stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!.args).toEqual(
+      placementArgs([BOOK_A], { rackNumber: '28', rackRow: 'A' }),
+    );
+    expect(res.cratePreserved).toBeUndefined();
+    expect(res.crateCleared).toBeUndefined();
+    expect(res.crateUnchanged).toBeUndefined();
   });
 
   // ═══ THE OPERATOR TYPED THE RACK, AND THE APP MAY NOT UN-TYPE IT ═════════
@@ -2322,11 +2800,17 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
     expect(res.crateSyncUpdated).toBe(false);
   });
 
-  it('FOLLOWS the stock: draining one of two holdings re-points the summary at the one left', async () => {
+  it('FOLLOWS the stock for the RACK, KEEPS the crate: draining the crate holding cannot ask', async () => {
+    // TEST REWRITTEN (Maus I, 2026-08-17). This used to pin the crate CLEARED
+    // (`p_crate_color: null`) when a write-off drained the crate holding and
+    // left the book on a plain rack. A write-off has no destination and so no
+    // gate; nobody can be shown "Blue 4 will be cleared", so the clear is
+    // withheld exactly as the rack clear already was on this path — a stale
+    // label is recoverable, a wiped one is not. It is REPORTED, never silent.
     const { svc, stub } = removeWorld({
       // Recorded Blue 4, and physically in Blue 4 + rack 22-B.
       before: [holding(BOOK_A, CRATE_BLUE_4, crateLoc), holding(BOOK_A, RACK_22B_ID, rackLoc)],
-      // Blue 4 emptied; only the rack is left, and a rack CLEARS the crate.
+      // Blue 4 emptied; only the rack is left.
       after: [holding(BOOK_A, RACK_22B_ID, rackLoc)],
     });
 
@@ -2339,12 +2823,15 @@ describe('removeStockFromLocation — the crate summary follows the stock OUT', 
 
     const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement');
     expect(call, 'the write-off never reconciled the crate summary').toBeDefined();
-    // Crate cleared AND rack 22-B recorded: the write-off left the book on that
-    // rack and only that rack, so both halves of the summary follow.
-    expect(call!.args).toEqual(placementArgs([BOOK_A], { rackNumber: '22', rackRow: 'B' }));
+    // Rack 22-B recorded (the book is on that rack and only that rack); the
+    // crate half is the recorded Blue 4, kept verbatim.
+    expect(call!.args).toEqual(
+      placementArgs([BOOK_A], { color: 'blue', number: '4', rackNumber: '22', rackRow: 'B' }),
+    );
     expect(res.crateSync!.syncedItemIds).toEqual([BOOK_A]);
-    // Blue 4 → no crate is a REAL change, so the operator is told.
-    expect(res.crateSyncUpdated).toBe(true);
+    expect(res.crateSync!.cratePreservedItemIds).toEqual([BOOK_A]);
+    // The label did NOT move, so "your crate label changed" is not claimed…
+    expect(res.crateSyncUpdated).toBe(false);
   });
 
   it('does NOT claim the label moved when the reconciliation rewrote the same crate', async () => {

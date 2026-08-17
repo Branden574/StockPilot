@@ -95,7 +95,13 @@ function installContext(opts: {
   itemRows?: Array<Record<string, unknown>>;
   holdingRows?: Array<Record<string, unknown>>;
   setBookStorage?: { data: unknown; error: { message: string } | null };
-  /** What LocationsService.create returns for an inline "+ New" destination. */
+  /**
+   * What `mint_placement_location` (0340) answers with for an inline "+ New"
+   * destination — the placement path's SECURITY DEFINER resolve-or-create
+   * (owner decision D1: a put-away may mint the crate it places into under
+   * stock:transfer), NOT a direct `locations` insert. `returns setof … rows 1`,
+   * so PostgREST hands back a one-element array.
+   */
   insertedLocation?: Record<string, unknown>;
 } = {}): SupabaseStub {
   const stub = makeSupabaseStub({
@@ -103,7 +109,12 @@ function installContext(opts: {
       data: 'locationRow' in opts ? opts.locationRow : GREEN_CRATE_ROW,
       error: null,
     },
-    'locations.insert': { data: opts.insertedLocation ?? null, error: null },
+    // Deliberately NO 'locations.insert' answer: a regression back to the direct
+    // insert gets `data: null` and fails on the missing row.
+    'rpc:mint_placement_location': {
+      data: opts.insertedLocation ? [opts.insertedLocation] : null,
+      error: null,
+    },
     'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
@@ -119,6 +130,13 @@ function installContext(opts: {
     supabase: stub.client,
   };
   return stub;
+}
+
+/** The arguments the action handed `mint_placement_location` — the ONE mint. */
+function mintArgs(stub: SupabaseStub): Record<string, unknown> {
+  const calls = stub.rpcCalls.filter((c) => c.name === 'mint_placement_location');
+  expect(calls).toHaveLength(1);
+  return calls[0]!.args as Record<string, unknown>;
 }
 
 /** A book recorded as sitting in Blue 4. */
@@ -697,6 +715,117 @@ describe('transferStockAction — the crate summary follows the stock', () => {
     });
   });
 
+  // ═══ MAUS I, 2026-08-17 — THE CRATE CLEAR NEEDS PERMISSION, END TO END ═══
+  //
+  // The test above is the CONSENTED half: the operator was shown "Blue 4 will
+  // be cleared", pressed Continue, and the ack fingerprint reached the gate, so
+  // the gate granted `crateClearAcknowledged` and the sync wrote NULL. That is
+  // the "transfer OUT of a real crate onto a bare shelf, gate answered, still
+  // clears" pin the owner asked for.
+  //
+  // The other half: a request that reaches the sync WITHOUT the gate having
+  // shown a clear. At this boundary an unacknowledged rack move for a crated
+  // book is REFUSED outright (first test in this block), so the only way in is
+  // the RACE the gate documents — at gate time a rival placed holding made the
+  // sync look like a no-op (split → no question asked); by the time the sync
+  // reads, the rival is gone and the destination is the only holding. Before
+  // this fix that path wrote NULL over a crate nobody was asked about.
+  it('a clear the gate never SHOWED is not performed — the label is KEPT and reported', async () => {
+    let holdingsReads = 0;
+    const stub = makeSupabaseStub({
+      'locations.select': { data: RACK_ROW_28A, error: null },
+      'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
+      'inventory_items.select': {
+        data: [
+          {
+            id: BOOK_ID,
+            name: 'Maus I',
+            item_type: 'book',
+            custom_fields: {
+              book_crate_color: 'yellow',
+              book_crate_number: '6',
+              book_rack_number: '28',
+              book_rack_row: 'A',
+            },
+          },
+        ],
+        error: null,
+      },
+      // T0 (the gate's prediction): the destination rack AND a rival crate
+      // holding — split, so the gate asks nothing. T2 (the sync): the rival has
+      // been picked; only the destination is left.
+      'item_stock_levels.select': () => {
+        holdingsReads += 1;
+        return {
+          data:
+            holdingsReads === 1
+              ? [
+                  rackHolding(),
+                  {
+                    item_id: BOOK_ID,
+                    location_id: 'rival-crate',
+                    quantity: 3,
+                    locations: {
+                      id: 'rival-crate',
+                      kind: 'crate',
+                      type: 'bin',
+                      crate_color: 'yellow',
+                      crate_number: '6',
+                      rack_number: null,
+                      rack_row: null,
+                    },
+                  },
+                ]
+              : [rackHolding()],
+          error: null,
+        };
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+    ctxRef.ctx = {
+      organizationId: ORG_ID,
+      userId: 'user-test',
+      role: 'admin',
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set(),
+      supabase: stub.client,
+    };
+
+    // NO acknowledgement of any kind — and none is demanded, because the gate
+    // predicted a split.
+    const res = await transferToRack();
+
+    expect(res.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    const call = stub.rpcCalls.find((c) => c.name === 'inventory_set_book_placement')!;
+    // The rack half follows the stock; the crate half is the recorded yellow 6,
+    // verbatim — never NULL without a human's say-so.
+    expect(call.args).toEqual({
+      p_item_ids: [BOOK_ID],
+      p_crate_color: 'yellow',
+      p_crate_number: '6',
+      p_rack_number: '28',
+      p_rack_row: 'A',
+    });
+    // …and the client is TOLD, on the flag the dialogs render.
+    if (res.ok) {
+      expect(res.data.crateSyncCratePreserved).toBe(true);
+      expect(res.data.crateSyncRackPreserved).toBeUndefined();
+    }
+  });
+
+  it('a clean acknowledged rack move does NOT set crateSyncCratePreserved', async () => {
+    installContext({
+      locationRow: RACK_ROW_28A,
+      itemRows: [blueFourBook()],
+      holdingRows: [rackHolding()],
+    });
+    const res = await transferToRack({ acknowledgedCrateChanges: ACK_BLUE_4 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.crateSyncCratePreserved).toBeUndefined();
+  });
+
   it('a transfer INTO a crate records that crate on the book', async () => {
     const stub = installContext({
       itemRows: [blueFourBook()],
@@ -817,18 +946,20 @@ describe('a new destination may be a crate ON a rack', () => {
     } as Parameters<typeof transferStockAction>[0]);
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.type).toBe('bin');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_type).toBe('bin');
     // The name states BOTH facts — and it is migration 0270's dedupe key, so
     // this is also what keeps two same-numbered crates on different racks two
     // rows.
-    expect(insert.name).toBe('Crate #9 on rack A1-Row 3');
-    expect(insert.crate_number).toBe('9');
+    expect(insert.p_name).toBe('Crate #9 on rack A1-Row 3');
+    expect(insert.p_crate_number).toBe('9');
     // …and the typed rack is NOT dropped: it is stored, decomposed, as the
     // crate's position.
-    expect(insert.rack_number).toBe('A1');
-    expect(insert.rack_row).toBe('Row 3');
+    expect(insert.p_rack_number).toBe('A1');
+    expect(insert.p_rack_row).toBe('Row 3');
+    // Through the placement function, never the table directly.
+    expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
     expect(mockTransferStock).toHaveBeenCalledOnce();
   });
 
@@ -981,8 +1112,8 @@ describe('a new destination may be a crate ON a rack', () => {
 
   it('a NUMBER-ONLY crate is accepted and created as a CRATE', async () => {
     const stub = installContext({
-      // No existing rack/crate in this warehouse — findOrCreateRackOrCrate
-      // falls through to create().
+      // No existing rack/crate in this warehouse — findOrCreatePlacementDestination
+      // falls through to the mint.
       locationRow: [],
       itemRows: [blueFourBook()],
       holdingRows: [greenCrateHolding()],
@@ -1006,16 +1137,16 @@ describe('a new destination may be a crate ON a rack', () => {
     });
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.type).toBe('bin');
-    expect(insert.name).toBe('Crate #9');
-    expect(insert.crate_number).toBe('9');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_type).toBe('bin');
+    expect(insert.p_name).toBe('Crate #9');
+    expect(insert.p_crate_number).toBe('9');
     // No position was given, so none is invented — and the name is
     // byte-identical to the one shipped crates already carry, which is what
     // keeps an existing "Crate #9" row FOUND and REUSED rather than duplicated.
-    expect(insert.rack_number).toBeNull();
-    expect(insert.rack_row).toBeNull();
+    expect(insert.p_rack_number).toBeNull();
+    expect(insert.p_rack_row).toBeNull();
   });
 
   it('a plain rack still creates a RACK, row and all', async () => {
@@ -1042,13 +1173,13 @@ describe('a new destination may be a crate ON a rack', () => {
     });
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('rack');
-    expect(insert.name).toBe('A1-Row 3');
-    expect(insert.rack_number).toBe('A1');
-    expect(insert.rack_row).toBe('Row 3');
-    expect(insert.crate_color).toBeNull();
-    expect(insert.crate_number).toBeNull();
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('rack');
+    expect(insert.p_name).toBe('A1-Row 3');
+    expect(insert.p_rack_number).toBe('A1');
+    expect(insert.p_rack_row).toBe('Row 3');
+    expect(insert.p_crate_color).toBeNull();
+    expect(insert.p_crate_number).toBeNull();
   });
 });
 
@@ -1344,6 +1475,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
     staleItemIds: string[];
     unplacedItemIds: string[];
     rackPreservedItemIds: string[];
+    cratePreservedItemIds: string[];
   } = {
     syncedItemIds: [],
     failedItemIds: [],
@@ -1351,6 +1483,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   };
 
   type SyncBuckets = typeof EMPTY_SYNC;
@@ -1398,6 +1531,7 @@ describe('removeStockFromLocationAction — every reported outcome reaches the c
       ['staleItemIds', 'crateSyncStale'],
       ['unplacedItemIds', 'crateSyncUnplaced'],
       ['rackPreservedItemIds', 'crateSyncRackPreserved'],
+      ['cratePreservedItemIds', 'crateSyncCratePreserved'],
     ] as const;
     for (const [bucket, flag] of cases) {
       const only: Partial<SyncBuckets> = {};

@@ -229,6 +229,57 @@ describe('placementPhysicalNames — what the guard compares', () => {
     ).toEqual([]);
   });
 
+  it('DISTINCT rack positions, once each — a crate ON a rack is that rack (Hunger Games, 2026-08-17)', () => {
+    // 97 loose on "38-B" + 20 in crate "Blue #0 on rack 38-B" is ONE rack.
+    // The Rack column used to read "38-B, Blue #0 on rack 38-B" — the crate's
+    // identity leaking into the rack list — and the header counted two racks
+    // for one shelf. The crate's identity is the Crate column's (the summary
+    // still says blue 0).
+    expect(
+      placementPhysicalNames(
+        resolvePlacement({
+          itemType: 'book',
+          customFields: {
+            book_rack_number: '38',
+            book_rack_row: 'B',
+            book_crate_color: 'blue',
+            book_crate_number: '0',
+          },
+          holdings: [
+            { name: '38-B', quantity: 97, kind: 'rack' },
+            { name: 'Blue #0 on rack 38-B', quantity: 20, kind: 'crate' },
+          ],
+        }),
+      ),
+    ).toEqual(['38-B']);
+    // Two DIFFERENT racks stay two — the split case the books header counts.
+    expect(
+      placementPhysicalNames(
+        resolvePlacement({
+          itemType: 'book',
+          customFields: {},
+          holdings: [
+            { name: '5-A', quantity: 5, kind: 'rack' },
+            { name: 'Blue #0 on rack 2-C', quantity: 20, kind: 'crate' },
+          ],
+        }),
+      ),
+    ).toEqual(['2-C', '5-A']);
+    // A position-less crate is its own place.
+    expect(
+      placementPhysicalNames(
+        resolvePlacement({
+          itemType: 'book',
+          customFields: {},
+          holdings: [
+            { name: '5-A', quantity: 5, kind: 'rack' },
+            { name: 'Blue Shelf', quantity: 20, kind: 'crate' },
+          ],
+        }),
+      ),
+    ).toEqual(['5-A', 'Blue Shelf']);
+  });
+
   it('does not treat a book CRATE SUMMARY as a location', () => {
     // "Crate Red 5" says which box, not which aisle. Two formatters that
     // disagree on whether to render it are not disagreeing about geography.

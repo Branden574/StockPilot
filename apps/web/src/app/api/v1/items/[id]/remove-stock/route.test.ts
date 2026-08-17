@@ -44,6 +44,7 @@ const EMPTY_SYNC: {
   staleItemIds: string[];
   unplacedItemIds: string[];
   rackPreservedItemIds: string[];
+  cratePreservedItemIds: string[];
 } = {
   syncedItemIds: [],
   failedItemIds: [],
@@ -51,6 +52,7 @@ const EMPTY_SYNC: {
   staleItemIds: [],
   unplacedItemIds: [],
   rackPreservedItemIds: [],
+  cratePreservedItemIds: [],
 };
 
 function buildCtx() {
@@ -119,6 +121,7 @@ describe('POST /api/v1/items/[id]/remove-stock — the crate-sync projection', (
       ['staleItemIds', 'crateSyncStale'],
       ['unplacedItemIds', 'crateSyncUnplaced'],
       ['rackPreservedItemIds', 'crateSyncRackPreserved'],
+      ['cratePreservedItemIds', 'crateSyncCratePreserved'],
     ] as const;
     for (const [bucket, flag] of cases) {
       const only: Partial<SyncBuckets> = {};

@@ -15,7 +15,7 @@ vi.mock('next/cache', () => ({
 // resolves withContext() once, then uses ctx.supabase for the destination
 // org-verification and new InventoryService/LocationsService for the writes —
 // transferStock + stampPlacementBin (post-move label re-stamp, once per batch)
-// on InventoryService, findOrCreateRackOrCrate (dedup-safe rack lookup, Unit A)
+// on InventoryService, findOrCreatePlacementDestination (dedup-safe rack lookup, Unit A)
 // on LocationsService.
 const {
   mockTransferStock,
@@ -39,6 +39,7 @@ const {
     staleItemIds: [] as string[],
     unplacedItemIds: [] as string[],
     rackPreservedItemIds: [] as string[],
+    cratePreservedItemIds: [] as string[],
   })),
   // Returns a `locations` ROW (the real method does select('*')), so tests can
   // hand back the crate/rack columns the placement label is derived from.
@@ -65,10 +66,10 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
+    findOrCreatePlacementDestination = mockFindOrCreateRackOrCrate;
     // The READ half, now that the gate runs BEFORE the row is minted. Defaults
     // to "nothing to reuse", so these suites still exercise the create path and
-    // `findOrCreateRackOrCrate` is still what actually mints.
+    // `findOrCreatePlacementDestination` is still what actually mints.
     findRackOrCrate = mockFindRackOrCrate;
   },
 }));
@@ -126,6 +127,7 @@ beforeEach(() => {
     staleItemIds: [],
     unplacedItemIds: [],
     rackPreservedItemIds: [],
+    cratePreservedItemIds: [],
   });
   mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
@@ -172,9 +174,9 @@ describe('bulkPlaceStockAction', () => {
     });
   });
 
-  it('2. creates the new rack ONCE (via findOrCreateRackOrCrate — Unit A), then places all items into it', async () => {
+  it('2. creates the new rack ONCE (via findOrCreatePlacementDestination — Unit A), then places all items into it', async () => {
     const newLocId = '99999999-9999-9999-9999-999999999999';
-    // A full `locations` ROW — what the real findOrCreateRackOrCrate returns
+    // A full `locations` ROW — what the real findOrCreatePlacementDestination returns
     // (select('*')) and what the label stamp is now derived from.
     mockFindOrCreateRackOrCrate.mockResolvedValue({
       id: newLocId,
@@ -199,7 +201,7 @@ describe('bulkPlaceStockAction', () => {
     if (res.ok) expect(res.data.placed).toBe(2);
 
     // Label stamp reflects the RESOLVED location row's own fields, not the
-    // typed input (findOrCreateRackOrCrate may hand back a pre-existing rack).
+    // typed input (findOrCreatePlacementDestination may hand back a pre-existing rack).
     expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_A, ITEM_B], {
       kind: 'rack',
       rackNumber: 'BULK-1',

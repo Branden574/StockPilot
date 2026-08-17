@@ -90,7 +90,12 @@
  * instead of its own. The fix for such a site is DATA, and the guard test
  * (apps/web/src/lib/placement-label.guard.test.ts) pins which sites carry it.
  */
-import { locationNameSitsOnRack, readBookStorage, readItemRack } from './book-storage';
+import {
+  locationNameSitsOnRack,
+  rackPositionOfLocationName,
+  readBookStorage,
+  readItemRack,
+} from './book-storage';
 import { formatRackHoldings, type RackHoldingLike } from './rack-holdings';
 
 /** What an item's placement is known FROM — see the precedence above. */
@@ -286,8 +291,24 @@ export function formatPlacementLabel(res: PlacementResolution): string | null {
  */
 export function placementPhysicalNames(res: PlacementResolution): string[] {
   switch (res.source) {
-    case 'holdings':
-      return [...res.holdings].map((h) => h.name).sort((a, b) => a.localeCompare(b));
+    case 'holdings': {
+      // ═══ DISTINCT RACK POSITIONS, ONCE EACH — Hunger Games, 2026-08-17 ═══
+      // A holding contributes the RACK it stands at, not its full name: a
+      // crate "Blue #0 on rack 38-B" is ON rack 38-B, and a book with 97 loose
+      // on "38-B" plus 20 in that crate is on ONE rack, not two. The Rack
+      // column used to read "38-B, Blue #0 on rack 38-B" — a leak of the
+      // crate's identity into the rack list, and a header count of "2 racks"
+      // for one shelf. The crate's identity is the CRATE column's job (the
+      // summary carries it). Two DIFFERENT racks stay two entries; a
+      // position-less crate ("Blue Shelf") is its own place and stays its own
+      // name. See rackPositionOfLocationName.
+      const names = new Set<string>();
+      for (const h of res.holdings) {
+        const at = rackPositionOfLocationName(h.name, h.kind);
+        if (at) names.add(at);
+      }
+      return [...names].sort((a, b) => a.localeCompare(b));
+    }
     case 'structured':
       // The crate SUMMARY is not a location — it is a note about which box on
       // the rack. The rack is the thing a picker walks to.

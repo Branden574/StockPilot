@@ -235,6 +235,13 @@ const RACK_READ_ONLY = [
   // that no file naming a rack key is unclassified, and this is now the file
   // future readers are pointed at.
   'apps/web/src/lib/locations/destination-option.ts',
+  // The native Move stock sheet (2026-08-17). It reads the destination rows'
+  // own `rack_number` / `rack_row` off the `locations` query so tapping a chip
+  // can FILL a book's four destination fields (fieldsFromDestination in
+  // src/lib/move-stock-form.ts). It stores nothing: the typed pair reaches the
+  // row through POST /api/v1/…/transfer, whose planner and LocationsService
+  // decompose through the shared parser. Reads only.
+  'apps/mobile/src/components/move-stock-modal.tsx',
 ] as const;
 
 /**
@@ -368,6 +375,13 @@ const CRATE_READ_ONLY = [
   // durable write is composeBookCustomFields in book-custom-fields.ts, which
   // normalises. (Its RACK twin is a genuine writer — see RACK_WRITERS.)
   'apps/web/src/components/inventory/item-form.tsx',
+  // The native Move stock sheet (2026-08-17). It reads the destination rows'
+  // own `crate_color` / `crate_number` off the `locations` query so tapping a
+  // chip can FILL a book's four destination fields, and hands them to
+  // fieldsFromDestination (src/lib/move-stock-form.ts) in camelCase. It writes
+  // NOTHING durable — the crate reaches the row through POST /api/v1/…/transfer
+  // and LocationsService.create, which normalises. Reads only.
+  'apps/mobile/src/components/move-stock-modal.tsx',
 ] as const;
 
 describe('crate-shape recurrence guard', () => {

@@ -38,7 +38,11 @@
  */
 
 import {
+  bookCrateFingerprint,
+  bookRackFingerprint,
+  can,
   describeNewRackPlacement,
+  getCrateColor,
   parseBookCrateChangeDetail,
   parseBookRackChangeDetail,
   planNewLocation,
@@ -46,7 +50,10 @@ import {
   type BookCrateChangeDetail,
   type BookRackAcknowledgedChange,
   type BookRackChangeDetail,
+  type BookStorageInfo,
   type NewRackPlacementDecision,
+  type Permission,
+  type Role,
 } from '@stockpilot/core';
 
 // Type-only (erased at build): the two routes' own success bodies, so the
@@ -61,6 +68,16 @@ export interface MoveDestination {
   name: string;
   kind: string | null;
   warehouseId: string | null;
+  /**
+   * The row's own rack/crate columns (migration 0188), when the sheet read
+   * them. For a BOOK, tapping an existing chip FILLS the four destination
+   * fields from these — see `fieldsFromDestination`. Optional so callers and
+   * fixtures that predate them still type-check; absent reads as blank.
+   */
+  rackNumber?: string | null;
+  rackRow?: string | null;
+  crateColor?: string | null;
+  crateNumber?: string | null;
 }
 
 /** One location this item currently holds stock in. */
@@ -276,6 +293,21 @@ export function newLocationFields(n: NewRackInput): {
 /** Is the chosen branch complete enough to submit? A crate needs its NUMBER. */
 export function newLocationReady(n: NewRackInput): boolean {
   return planNewLocation(newLocationFields(n)).kind !== 'invalid';
+}
+
+/**
+ * The planner's OWN refusal for a half-filled form — or null when it can be
+ * named, or when nothing has been typed yet (shouting "Give the rack a number."
+ * at an untouched form is noise). Same words as web's inline message and the
+ * server's zod issue, because they are the planner's, not re-typed here.
+ */
+export function newLocationProblem(n: NewRackInput): string | null {
+  const plan = planNewLocation(newLocationFields(n));
+  if (plan.kind !== 'invalid') return null;
+  const typed = [n.rackNumber, n.rackRow, n.crateColor, n.crateNumber].some(
+    (v) => (v ?? '').trim().length > 0,
+  );
+  return typed ? plan.message : null;
 }
 
 /**
@@ -562,6 +594,9 @@ interface CrateSyncFlags {
   /** The RACK label was kept rather than erased, because nobody was shown the
    *  erasure. The crate half is unaffected — this is the other label. */
   crateSyncRackPreserved?: boolean;
+  /** The CRATE label was kept rather than cleared, because nobody was shown
+   *  the clear (Maus I, 2026-08-17). The rack half followed the stock. */
+  crateSyncCratePreserved?: boolean;
   crateSyncUpdated?: boolean;
 }
 
@@ -571,6 +606,7 @@ type CrateSyncBucket =
   | 'unplaced'
   | 'stale'
   | 'skipped'
+  | 'cratePreserved'
   | 'rackPreserved'
   | 'updated';
 
@@ -587,13 +623,22 @@ type CrateSyncBucket =
  *   1. failed        — the write itself errored. The most actionable, so it wins.
  *   2. unplaced      — nothing is left in a rack or crate for the label to follow.
  *   3. stale         — someone else re-recorded the crate mid-write; theirs stands.
- *   4. skipped       — stock now sits in several places, so there is no one crate.
- *   5. rackPreserved — the CRATE half is fine; the RACK label was kept, unasked.
- *   6. updated       — the label was rewritten, and its value really did change.
+ *   4. skipped        — stock now sits in several places, so there is no one crate.
+ *   5. cratePreserved — the CRATE label was kept, unasked (Maus I): a plain-rack
+ *                       destination for a crated book, with no acknowledged clear.
+ *   6. rackPreserved  — the CRATE half is fine; the RACK label was kept, unasked.
+ *   7. updated        — the label was rewritten, and its value really did change.
  *
- * The first four are mutually exclusive with the last two by construction (a
+ * The first four are mutually exclusive with the last three by construction (a
  * book lands in exactly one server-side bucket), so the tail positions cost
  * nothing and keep "we changed something" from ever hiding "we could not".
+ *
+ * `cratePreserved` sits ABOVE `rackPreserved` because it is about the CRATE
+ * label — the thing this whole vocabulary is named for — and a kept crate label
+ * on a book that just moved onto a bare rack is the more likely thing to be
+ * wrong (the crate is where a picker looks first). The two cannot both be true
+ * of one plain-rack move: that move DERIVES the rack pair, so nothing is
+ * withheld on the rack side.
  *
  * `rackPreserved` sits BELOW the four crate outcomes and above `updated` for the
  * same reason web puts it last in its chain: it is the only one of the six that
@@ -608,6 +653,7 @@ function crateSyncBucket(res: CrateSyncFlags): CrateSyncBucket | null {
   if (res.crateSyncUnplaced) return 'unplaced';
   if (res.crateSyncStale) return 'stale';
   if (res.crateSyncSkipped) return 'skipped';
+  if (res.crateSyncCratePreserved) return 'cratePreserved';
   if (res.crateSyncRackPreserved) return 'rackPreserved';
   if (res.crateSyncUpdated) return 'updated';
   return null;
@@ -661,6 +707,15 @@ export function crateSyncWarning(
       return {
         title: 'Moved — rack label may now be wrong',
         message: `${itemName} was moved, but its rack label was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
+      };
+    // The CRATE label, kept for want of an answer (Maus I, 2026-08-17). With
+    // the sheet pre-filled from the book's current storage the ordinary
+    // put-away places INTO the recorded crate and never reaches this; a stale
+    // snapshot, a race, or a body that omitted the acknowledgement can.
+    case 'cratePreserved':
+      return {
+        title: 'Moved — crate label was kept',
+        message: `${itemName} was placed. The crate label was kept — nobody was asked about clearing it — so it may now name a crate this stock has left. Check the book's details.`,
       };
     default:
       return null;
@@ -727,7 +782,240 @@ export function removeStockCrateWarning(
         title: 'Removed — rack label may now be wrong',
         message: `The rack label on ${itemName} was left as it was — nobody was asked about clearing it, so it may now name a rack this stock has left.`,
       };
+    // The CRATE label, kept because a write-off cannot ask (Maus I): draining
+    // the crate holding left the book on a plain rack, and clearing the label
+    // unasked would have wiped a crate that exists only as that label.
+    case 'cratePreserved':
+      return {
+        title: 'Removed — crate label was kept',
+        message: `The crate label on ${itemName} was left as it was — nobody was asked about clearing it, so it may now name a crate this stock has left.`,
+      };
     default:
       return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE FOUR FIELDS ARE THE DESTINATION — books, after Maus I (2026-08-17)
+//
+// The sheet offered existing rack/crate chips plus "+ New rack / crate…" with
+// the crate boxes behind a Rack|Crate chip pair. Most crates in the L4L
+// warehouse are label-only (113 of 124 books record a crate; the org has ONE
+// crate row), so the crate a book records was never among the chips, and the
+// reachable choice was the bare rack — which clears the crate. Web fixed this
+// first (apps/web/src/lib/locations/placement-destination.ts); this is the
+// phone's copy of the SAME decisions, kept pure so it can be tested here.
+//
+// For a BOOK: rack number, row, crate colour and crate number are always
+// visible, PRE-FILLED from the recorded storage, and an existing chip FILLS
+// them. The planner decides the kind from what is filled in. Blanking the
+// crate is the explicit "no crate" choice, and that is when the gate asks.
+// ---------------------------------------------------------------------------
+
+/** The four boxes as typed. '' means blank; `crateColor` is a slug or ''. */
+export interface DestinationFields {
+  rackNumber: string;
+  rackRow: string;
+  crateColor: string;
+  crateNumber: string;
+}
+
+export const EMPTY_DESTINATION_FIELDS: DestinationFields = {
+  rackNumber: '',
+  rackRow: '',
+  crateColor: '',
+  crateNumber: '',
+};
+
+/**
+ * PRE-FILL from the book's recorded storage — "where it already lives" is the
+ * default destination. A recorded colour the registry does not know cannot be
+ * shown by the chip row, so the box stays blank and the raw text is handed
+ * back for a note (blank changes the pair, so the gate will ask; honest, not
+ * silent). Null/undefined storage seeds nothing.
+ */
+export function seedDestinationFromStorage(storage: BookStorageInfo | null | undefined): {
+  fields: DestinationFields;
+  unknownCrateColor: string | null;
+} {
+  if (!storage) return { fields: { ...EMPTY_DESTINATION_FIELDS }, unknownCrateColor: null };
+  const rawColor = storage.crateColor?.trim() || '';
+  const known = getCrateColor(rawColor);
+  return {
+    fields: {
+      rackNumber: storage.rackNumber?.trim() ?? '',
+      rackRow: storage.rackRow?.trim() ?? '',
+      crateColor: known?.slug ?? '',
+      crateNumber: storage.crateNumber?.trim() ?? '',
+    },
+    unknownCrateColor: rawColor && !known ? rawColor : null,
+  };
+}
+
+/**
+ * FILL from an existing chip — all four boxes, from the row's own columns. A
+ * rack row fills the rack pair and BLANKS the crate (tapping a bare rack IS
+ * choosing "no crate"; the gate will say so before the write). A legacy crate
+ * row with no columns blanks everything and stays placeable by id (see
+ * `bookDestination`).
+ */
+export function fieldsFromDestination(d: MoveDestination): DestinationFields {
+  const known = getCrateColor(d.crateColor ?? null);
+  return {
+    rackNumber: d.rackNumber?.trim() ?? '',
+    rackRow: d.rackRow?.trim() ?? '',
+    crateColor: known?.slug ?? '',
+    crateNumber: d.crateNumber?.trim() ?? '',
+  };
+}
+
+/** Do the boxes still say what this chip's columns say? Same fingerprints as the gate. */
+export function destinationMatchesOption(fields: DestinationFields, d: MoveDestination): boolean {
+  return (
+    bookCrateFingerprint(fields.crateColor, fields.crateNumber) ===
+      bookCrateFingerprint(d.crateColor ?? null, d.crateNumber ?? null) &&
+    bookRackFingerprint(fields.rackNumber, fields.rackRow) ===
+      bookRackFingerprint(d.rackNumber ?? null, d.rackRow ?? null)
+  );
+}
+
+/** What the four boxes describe, for a BOOK. */
+export type BookDestination =
+  | { mode: 'existing'; destination: MoveDestination }
+  | { mode: 'new'; input: NewRackInput };
+
+/**
+ * THE DESTINATION THE FOUR BOXES DESCRIBE.
+ *
+ *   • A chip is selected AND the boxes still equal its columns → that row, by
+ *     id (nothing created).
+ *   • Any crate box filled → a CRATE on the typed position (`kind: 'crate'`).
+ *   • Only rack boxes filled → a bare rack (`kind: 'rack'`).
+ *   • Nothing → null.
+ *
+ * "new" means described by fields, not "will be minted": the server's
+ * findRackOrCrate reuses an existing "Red #4 on rack 38-B" or "38-B" by name
+ * and mints only when no such row exists.
+ */
+export function bookDestination(
+  fields: DestinationFields,
+  selected: MoveDestination | null,
+): BookDestination | null {
+  if (selected && destinationMatchesOption(fields, selected)) {
+    return { mode: 'existing', destination: selected };
+  }
+  const hasCrate = fields.crateColor.trim().length > 0 || fields.crateNumber.trim().length > 0;
+  if (hasCrate) {
+    return {
+      mode: 'new',
+      input: {
+        kind: 'crate',
+        rackNumber: fields.rackNumber,
+        rackRow: fields.rackRow,
+        crateColor: fields.crateColor,
+        crateNumber: fields.crateNumber,
+      },
+    };
+  }
+  const hasRack = fields.rackNumber.trim().length > 0 || fields.rackRow.trim().length > 0;
+  if (hasRack) {
+    return {
+      mode: 'new',
+      input: { kind: 'rack', rackNumber: fields.rackNumber, rackRow: fields.rackRow },
+    };
+  }
+  return null;
+}
+
+/**
+ * IS THIS DESTINATION EXACTLY WHERE THE BOOK IS RECORDED? Same crate pair and
+ * same position, by fingerprint. Used to SUPPRESS the "Create new crate …?"
+ * typo guard on the default path: for a label-only crate no row exists yet,
+ * and the recorded truth being minted as a row is not a typo. A book with
+ * nothing recorded matches nothing.
+ */
+export function bookDestinationIsRecordedStorage(
+  dest: BookDestination,
+  storage: BookStorageInfo | null | undefined,
+): boolean {
+  if (!storage) return false;
+  const recordedCrate = bookCrateFingerprint(storage.crateColor, storage.crateNumber);
+  const recordedRack = bookRackFingerprint(storage.rackNumber, storage.rackRow);
+  if (
+    recordedCrate === bookCrateFingerprint(null, null) &&
+    recordedRack === bookRackFingerprint(null, null)
+  ) {
+    return false;
+  }
+  const crate =
+    dest.mode === 'existing'
+      ? { color: dest.destination.crateColor ?? null, number: dest.destination.crateNumber ?? null }
+      : dest.input.kind === 'crate'
+        ? { color: dest.input.crateColor ?? null, number: dest.input.crateNumber ?? null }
+        : { color: null, number: null };
+  const position =
+    dest.mode === 'existing'
+      ? { rackNumber: dest.destination.rackNumber ?? null, rackRow: dest.destination.rackRow ?? null }
+      : { rackNumber: dest.input.rackNumber, rackRow: dest.input.rackRow ?? null };
+  return (
+    bookCrateFingerprint(crate.color, crate.number) === recordedCrate &&
+    bookRackFingerprint(position.rackNumber, position.rackRow) === recordedRack
+  );
+}
+
+/**
+ * Would placing here have to MINT a row (no destination in the source
+ * warehouse carries the planned name)? A user who may not
+ * (`canMintPlacementDestination` false) is told so inline rather than by a
+ * server refusal.
+ */
+export function bookDestinationNeedsMint(
+  dest: BookDestination,
+  existingLabels: readonly string[],
+): boolean {
+  if (dest.mode === 'existing') return false;
+  const { label } = newRackLabel(dest.input);
+  if (!label) return false;
+  return !existingLabels.some((l) => l.trim().toLowerCase() === label.toLowerCase());
+}
+
+/**
+ * ═══ MAY THIS USER MINT THE RACK OR CRATE A PUT-AWAY PLACES INTO? ═══
+ *
+ * The phone's copy of the server's placement gate — the ONE derivation both
+ * screens (item detail, staging worklist) hand the Move stock sheet as
+ * `canCreateLocation`, so the sheet offers the default path to exactly the
+ * users the server will let through, and never to one it will 403.
+ *
+ * Owner decision D1 (2026-08-17): putting stock into the crate a book's own
+ * label names — the sheet's DEFAULT destination, seeded from the recorded
+ * storage — is a STOCK operation, not location administration. For 113 of
+ * L4L's 124 books that crate exists ONLY as the label, so the put-away must
+ * mint the row, and the server now does that under `stock:transfer` (or
+ * `locations:manage`) through the SECURITY DEFINER `mint_placement_location`
+ * (migration 0340), invoked ONLY from the placement path
+ * (POST /api/v1/items/[id]/transfer's `newRack`, and the web put-away
+ * actions). Before this, the mint asserted `locations:manage`; the Staff
+ * preset holds `stock:transfer` only, so staff saw "needs the Manage
+ * locations permission" on every crated book and could only tap the bare
+ * rack — the crate-erasing path (Maus I).
+ *
+ * So the answer is: manager-or-above, OR the effective `stock:transfer`, OR
+ * the effective `locations:manage`. `permissions` is the EFFECTIVE set when it
+ * has loaded (overrides applied — a viewer granted stock:transfer may mint, a
+ * staff member with it revoked may not); absent, `can` falls back to the
+ * static role defaults, exactly like every other gate on the phone. A null
+ * role (signed out, org not resolved) may do nothing.
+ *
+ * Cosmetic only, like every gate here: the route re-asserts stock:transfer,
+ * and the database function re-checks membership + permission inside.
+ */
+export function canMintPlacementDestination(ctx: {
+  role: Role | null;
+  permissions?: ReadonlySet<Permission>;
+}): boolean {
+  if (ctx.role === null) return false;
+  if (ctx.role === 'owner' || ctx.role === 'admin' || ctx.role === 'manager') return true;
+  const c = { role: ctx.role, permissions: ctx.permissions };
+  return can(c, 'stock:transfer') || can(c, 'locations:manage');
 }
