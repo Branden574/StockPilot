@@ -15,7 +15,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -27,6 +29,13 @@ import {
   type InventoryExportRequest,
 } from '@/lib/download-export';
 import { exportItemTypeKind } from '@/lib/exports/export-request';
+import { droppedFieldsNote, type SharedExportPresetConfig } from '@/lib/exports/preset-config';
+import {
+  deleteSharedExportPresetAction,
+  listSharedExportPresetsAction,
+  saveSharedExportPresetAction,
+  type SharedExportPresetDto,
+} from '@/server/actions/export-presets';
 
 import { ExportBuilderFields } from './export-builder-fields';
 import { ExportBuilderPreview } from './export-builder-preview';
@@ -143,6 +152,19 @@ export function ExportBuilderDialog({
   const [stage, setStage] = React.useState<ExportStage | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [presets, setPresets] = React.useState<ExportPreset[]>(() => presetsFor(itemTypeKind));
+  // Org-shared presets (export_presets, migration 0338). null = not loaded or
+  // not available (table missing in the code-before-migration window, or the
+  // list call failed): the dialog renders EXACTLY as it did before shared
+  // presets existed.
+  const [shared, setShared] = React.useState<SharedExportPresetDto[] | null>(null);
+  // The visible "this preset lost fields to registry evolution" note.
+  const [sharedNote, setSharedNote] = React.useState<string | null>(null);
+  const [saveFormOpen, setSaveFormOpen] = React.useState(false);
+  const [saveName, setSaveName] = React.useState('');
+  const [saveBusy, setSaveBusy] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = React.useState(false);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
   // Remounts ExportBuilderFields at the start of every export attempt so its
   // own internal "X moved to…" reorder announcement (a role="status" region
   // that field-picker never clears once set) cannot re-surface once `busy`
@@ -199,6 +221,44 @@ export function ExportBuilderDialog({
     // effect keys off its VALUE, not its identity.
   }, [open, scope, itemType, itemTypeKind, JSON.stringify(filters), JSON.stringify(selectedIds)]);
 
+  // Load the org's shared presets once per open. Any failure — table not
+  // migrated yet (available:false), permission refusal, network — leaves
+  // `shared` null and the dialog exactly as it was before this feature.
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    listSharedExportPresetsAction()
+      .then((res) => {
+        if (cancelled) return;
+        setShared(res.ok && res.data.available ? res.data.presets : null);
+        // Reset the shared-preset chrome from any previous session HERE (in
+        // the resolution, never synchronously in the effect body — the
+        // react-hooks set-state-in-effect rule): a reopened dialog starts
+        // with no stale note, no half-open save form, no pending confirm.
+        setSharedNote(null);
+        setSaveFormOpen(false);
+        setSaveError(null);
+        setConfirmingDelete(false);
+      })
+      .catch(() => {
+        if (!cancelled) setShared(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // Only presets FOR this export (books vs items) with a readable config are
+  // offered; unreadable rows (out-of-band writes) are deliberately absent.
+  const sharedPresets = React.useMemo(
+    () =>
+      (shared ?? []).filter(
+        (p): p is SharedExportPresetDto & { config: SharedExportPresetConfig } =>
+          p.config !== null && p.config.itemTypeKind === itemTypeKind,
+      ),
+    [shared, itemTypeKind],
+  );
+
   const applyPreset = (preset: ExportPreset) => {
     if (preset.id === CUSTOM_PRESET_ID) {
       setState((s) => ({ ...s, presetId: CUSTOM_PRESET_ID }));
@@ -221,7 +281,88 @@ export function ExportBuilderDialog({
     });
   };
 
+  const applySharedPreset = (preset: SharedExportPresetDto & { config: SharedExportPresetConfig }) => {
+    const cfg = preset.config;
+    setState((s) => {
+      const merged: ExportBuilderState = {
+        ...s,
+        fieldKeys: [...cfg.fieldKeys],
+        presetId: `shared-${preset.id}`,
+        options: {
+          ...s.options,
+          ...(cfg.options ?? {}),
+          includeImages: cfg.fieldKeys.includes('image'),
+          pdf: { ...s.options.pdf, ...(cfg.options?.pdf ?? {}) },
+          xlsx: { ...s.options.xlsx, ...(cfg.options?.xlsx ?? {}) },
+        },
+      };
+      return setFormat(merged, cfg.format ?? s.format, itemTypeKind);
+    });
+    // The visible note the load contract owes: fields the registry no longer
+    // knows were dropped, and the user is told which.
+    setSharedNote(preset.droppedFieldKeys.length > 0 ? droppedFieldsNote(preset) : null);
+    setConfirmingDelete(false);
+  };
+
   const activePreset = presets.find((p) => p.id === state.presetId) ?? null;
+  const activeSharedPreset =
+    sharedPresets.find((p) => `shared-${p.id}` === state.presetId) ?? null;
+
+  async function saveSharedPreset() {
+    if (saveBusy) return;
+    setSaveBusy(true);
+    setSaveError(null);
+    try {
+      const res = await saveSharedExportPresetAction({
+        name: saveName,
+        config: {
+          itemTypeKind,
+          fieldKeys: [...state.fieldKeys],
+          format: state.format,
+          options: state.options,
+        },
+      });
+      if (!res.ok) {
+        setSaveError(res.error.message);
+        return;
+      }
+      setShared((prev) =>
+        [...(prev ?? []), res.data].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setState((s) => ({ ...s, presetId: `shared-${res.data.id}` }));
+      setSaveFormOpen(false);
+      setSaveName('');
+      setSharedNote(null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Saving the preset failed. Please try again.');
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function deleteSharedPreset(preset: SharedExportPresetDto) {
+    if (deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      const res = await deleteSharedExportPresetAction({ id: preset.id });
+      if (!res.ok) {
+        setSharedNote(res.error.message);
+        return;
+      }
+      setShared((prev) => (prev ?? []).filter((p) => p.id !== preset.id));
+      setState((s) =>
+        s.presetId === `shared-${preset.id}` ? { ...s, presetId: CUSTOM_PRESET_ID } : s,
+      );
+      setSharedNote(null);
+    } catch (e) {
+      setSharedNote(
+        e instanceof Error ? e.message : 'Deleting the preset failed. Please try again.',
+      );
+    } finally {
+      setDeleteBusy(false);
+      setConfirmingDelete(false);
+    }
+  }
 
   async function runExport() {
     if (busy || !validation.ok) return;
@@ -237,8 +378,11 @@ export function ExportBuilderDialog({
           filters,
           // "Custom" is not a preset name, it is the absence of one — the
           // filename falls back to slug-scope-date for it.
-          presetName:
-            activePreset && activePreset.id !== CUSTOM_PRESET_ID ? activePreset.name : null,
+          presetName: activeSharedPreset
+            ? activeSharedPreset.name
+            : activePreset && activePreset.id !== CUSTOM_PRESET_ID
+              ? activePreset.name
+              : null,
         }),
         { onStage: setStage },
       );
@@ -311,6 +455,11 @@ export function ExportBuilderDialog({
           <Select
             value={state.presetId}
             onValueChange={(id) => {
+              if (id.startsWith('shared-')) {
+                const sharedPreset = sharedPresets.find((p) => `shared-${p.id}` === id);
+                if (sharedPreset) applySharedPreset(sharedPreset);
+                return;
+              }
               const preset = presets.find((p) => p.id === id);
               if (preset) applyPreset(preset);
             }}
@@ -324,6 +473,16 @@ export function ExportBuilderDialog({
                   {p.name}
                 </SelectItem>
               ))}
+              {sharedPresets.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>Team presets</SelectLabel>
+                  {sharedPresets.map((p) => (
+                    <SelectItem key={`shared-${p.id}`} value={`shared-${p.id}`}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : null}
             </SelectContent>
           </Select>
           <button
@@ -333,7 +492,118 @@ export function ExportBuilderDialog({
           >
             Restore recommended defaults
           </button>
+          {shared !== null && !saveFormOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSaveFormOpen(true);
+                setSaveError(null);
+                setSaveName(activeSharedPreset ? '' : saveName);
+              }}
+              disabled={busy}
+              className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+            >
+              Save as team preset
+            </button>
+          ) : null}
+          {activeSharedPreset?.canDelete && !confirmingDelete ? (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={busy || deleteBusy}
+              className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+            >
+              Delete preset
+            </button>
+          ) : null}
         </div>
+
+        {/* Shared-preset affordances: empty state, save form, delete confirm,
+            and the dropped-fields note the load contract owes. All of it is
+            absent while `shared` is null (table not migrated, list failed). */}
+        {shared !== null && sharedPresets.length === 0 && !saveFormOpen ? (
+          <p className="text-[12.5px] text-[var(--ed-ink-3)]">
+            No team presets yet. Set up an export and choose Save as team preset to share it with
+            your organization.
+          </p>
+        ) : null}
+
+        {saveFormOpen ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-[13px]">
+              Preset name
+              <input
+                type="text"
+                aria-label="Preset name"
+                value={saveName}
+                maxLength={60}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void saveSharedPreset();
+                  }
+                }}
+                className="w-[220px] rounded-sm border border-border bg-background px-2 py-1"
+              />
+            </label>
+            <Button
+              size="sm"
+              onClick={() => void saveSharedPreset()}
+              disabled={saveBusy || saveName.trim().length === 0}
+            >
+              {saveBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Save preset
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSaveFormOpen(false);
+                setSaveError(null);
+              }}
+              disabled={saveBusy}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : null}
+        {saveError ? (
+          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
+            {saveError}
+          </p>
+        ) : null}
+
+        {confirmingDelete && activeSharedPreset ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] text-[var(--ed-ink-2)]">
+              Delete “{activeSharedPreset.name}” for everyone in your organization?
+            </span>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => void deleteSharedPreset(activeSharedPreset)}
+              disabled={deleteBusy}
+            >
+              {deleteBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Delete preset
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmingDelete(false)}
+              disabled={deleteBusy}
+            >
+              Keep it
+            </Button>
+          </div>
+        ) : null}
+
+        {sharedNote ? (
+          <p role="status" className="text-[13px] text-[var(--ed-ink-2)]">
+            {sharedNote}
+          </p>
+        ) : null}
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ExportBuilderFields

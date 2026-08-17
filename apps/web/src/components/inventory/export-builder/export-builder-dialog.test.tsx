@@ -25,6 +25,41 @@ vi.mock('@/lib/download-export', () => ({
   fetchExportPreview: (...a: unknown[]) => previewSpy(...a),
 }));
 
+// Shared presets (export_presets, migration 0338). Default: the feature is
+// AVAILABLE but the org has none — the pre-0338 dialog plus the save
+// affordance. Tests override sharedState per scenario.
+type SharedPresetDto = {
+  id: string;
+  name: string;
+  createdBy: string | null;
+  createdAt: string;
+  config: {
+    itemTypeKind: 'book' | 'other';
+    fieldKeys: string[];
+    format?: 'csv' | 'xlsx' | 'pdf';
+    options?: Record<string, unknown>;
+  } | null;
+  droppedFieldKeys: string[];
+  canDelete: boolean;
+};
+const sharedState: {
+  available: boolean;
+  presets: SharedPresetDto[];
+  saveResult: unknown;
+  deleteResult: unknown;
+} = { available: true, presets: [], saveResult: null, deleteResult: null };
+const listPresetsSpy = vi.fn(async () => ({
+  ok: true as const,
+  data: { available: sharedState.available, presets: sharedState.presets },
+}));
+const savePresetSpy = vi.fn(async () => sharedState.saveResult);
+const deletePresetSpy = vi.fn(async () => sharedState.deleteResult);
+vi.mock('@/server/actions/export-presets', () => ({
+  listSharedExportPresetsAction: (...a: unknown[]) => listPresetsSpy(...(a as [])),
+  saveSharedExportPresetAction: (...a: unknown[]) => savePresetSpy(...(a as [])),
+  deleteSharedExportPresetAction: (...a: unknown[]) => deletePresetSpy(...(a as [])),
+}));
+
 import { ExportBuilderDialog } from './export-builder-dialog';
 
 function renderDialog(overrides: Partial<Parameters<typeof ExportBuilderDialog>[0]> = {}) {
@@ -47,6 +82,13 @@ beforeEach(() => {
   downloadSpy.mockClear();
   previewSpy.mockClear();
   toastError.mockClear();
+  listPresetsSpy.mockClear();
+  savePresetSpy.mockClear();
+  deletePresetSpy.mockClear();
+  sharedState.available = true;
+  sharedState.presets = [];
+  sharedState.saveResult = null;
+  sharedState.deleteResult = null;
   window.localStorage.clear();
 });
 
@@ -159,6 +201,175 @@ describe('ExportBuilderDialog — presets', () => {
     const req = downloadSpy.mock.calls[0]![0] as { fields: string[]; options: { presetName: string } };
     expect(req.fields).toEqual(['name', 'isbn', 'sku', 'author', 'grade', 'quantity_on_hand']);
     expect(req.options.presetName).toBe('Books ISBN list');
+  });
+});
+
+describe('ExportBuilderDialog — shared team presets', () => {
+  const teamPreset: SharedPresetDto = {
+    id: 'p1',
+    name: 'Warehouse walk',
+    createdBy: 'user-2',
+    createdAt: '2026-08-16T00:00:00Z',
+    config: { itemTypeKind: 'book', fieldKeys: ['name', 'isbn', 'rack'], format: 'pdf' },
+    droppedFieldKeys: [],
+    canDelete: false,
+  };
+
+  it('lists shared presets under "Team presets" and applying one drives the export', async () => {
+    sharedState.presets = [teamPreset];
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    expect(screen.getByText('Team presets')).toBeTruthy();
+    await user.click(screen.getByRole('option', { name: 'Warehouse walk' }));
+    await user.click(screen.getByRole('button', { name: 'Export file' }));
+    await waitFor(() => expect(downloadSpy).toHaveBeenCalled());
+    const req = downloadSpy.mock.calls[0]![0] as {
+      fields: string[];
+      options: { presetName: string };
+    };
+    expect(req.fields).toEqual(['name', 'isbn', 'rack']);
+    expect(req.options.presetName).toBe('Warehouse walk');
+  });
+
+  it('shows the VISIBLE dropped-fields note when an applied preset lost fields to the registry', async () => {
+    sharedState.presets = [
+      { ...teamPreset, droppedFieldKeys: ['lexile_level', 'binding_type'] },
+    ];
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    await user.click(screen.getByRole('option', { name: 'Warehouse walk' }));
+    expect(
+      screen.getByText(
+        '"Warehouse walk" references 2 fields that no longer exist and were skipped: lexile_level, binding_type.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('shows no note when nothing was dropped', async () => {
+    sharedState.presets = [teamPreset];
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    await user.click(screen.getByRole('option', { name: 'Warehouse walk' }));
+    expect(screen.queryByText(/no longer exist/)).toBeNull();
+  });
+
+  it('offers presets for THIS export only — an items preset never appears in the books dialog', async () => {
+    sharedState.presets = [
+      teamPreset,
+      { ...teamPreset, id: 'p2', name: 'Items only', config: { itemTypeKind: 'other', fieldKeys: ['name', 'sku'] } },
+      { ...teamPreset, id: 'p3', name: 'Broken row', config: null },
+    ];
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    expect(screen.getByRole('option', { name: 'Warehouse walk' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Items only' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Broken row' })).toBeNull();
+  });
+
+  it('shows the empty state when the org has no shared presets yet', async () => {
+    renderDialog();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'No team presets yet. Set up an export and choose Save as team preset to share it with your organization.',
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('saves the CURRENT builder state as a shared preset and selects it', async () => {
+    sharedState.saveResult = {
+      ok: true,
+      data: {
+        id: 'p9',
+        name: 'Friday count',
+        createdBy: 'user-1',
+        createdAt: 't',
+        config: { itemTypeKind: 'book', fieldKeys: ['name'] },
+        droppedFieldKeys: [],
+        canDelete: true,
+      },
+    };
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('button', { name: 'Save as team preset' }));
+    await user.type(screen.getByRole('textbox', { name: 'Preset name' }), 'Friday count');
+    await user.click(screen.getByRole('button', { name: 'Save preset' }));
+    await waitFor(() => expect(savePresetSpy).toHaveBeenCalledTimes(1));
+    const call = savePresetSpy.mock.calls[0]! as unknown as [
+      { name: string; config: { itemTypeKind: string; fieldKeys: string[]; format: string } },
+    ];
+    expect(call[0].name).toBe('Friday count');
+    expect(call[0].config.itemTypeKind).toBe('book');
+    expect(call[0].config.format).toBe('pdf');
+    expect(call[0].config.fieldKeys[0]).toBe('image'); // the books default, verbatim
+    // The saved preset is now in the picker and active.
+    await user.click(screen.getByRole('combobox', { name: /preset/i }));
+    expect(screen.getByRole('option', { name: 'Friday count' })).toBeTruthy();
+  });
+
+  it('surfaces a duplicate-name refusal inside the dialog, keeping the form open', async () => {
+    sharedState.saveResult = {
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'A preset with this name already exists in your organization. Delete it first, or pick another name.',
+      },
+    };
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('button', { name: 'Save as team preset' }));
+    await user.type(screen.getByRole('textbox', { name: 'Preset name' }), 'Warehouse walk');
+    await user.click(screen.getByRole('button', { name: 'Save preset' }));
+    expect(
+      await screen.findByText(
+        'A preset with this name already exists in your organization. Delete it first, or pick another name.',
+      ),
+    ).toBeTruthy();
+    // The form is still there for a rename — nothing was lost.
+    expect(screen.getByRole('textbox', { name: 'Preset name' })).toBeTruthy();
+  });
+
+  it('deletes only after an explicit confirm, and only where canDelete', async () => {
+    sharedState.presets = [{ ...teamPreset, canDelete: true }];
+    sharedState.deleteResult = { ok: true, data: { id: 'p1' } };
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    await user.click(screen.getByRole('option', { name: 'Warehouse walk' }));
+    await user.click(screen.getByRole('button', { name: 'Delete preset' }));
+    // The confirm names the preset and the blast radius; nothing deleted yet.
+    expect(screen.getByText(/for everyone in your organization\?/)).toBeTruthy();
+    expect(deletePresetSpy).not.toHaveBeenCalled();
+    // The destructive confirm button.
+    const buttons = screen.getAllByRole('button', { name: 'Delete preset' });
+    await user.click(buttons[buttons.length - 1]!);
+    await waitFor(() => expect(deletePresetSpy).toHaveBeenCalledWith({ id: 'p1' }));
+    // Gone from the picker.
+    await user.click(screen.getByRole('combobox', { name: /preset/i }));
+    expect(screen.queryByRole('option', { name: 'Warehouse walk' })).toBeNull();
+  });
+
+  it('offers no delete button for a preset the user cannot delete', async () => {
+    sharedState.presets = [teamPreset]; // canDelete: false
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('combobox', { name: /preset/i }));
+    await user.click(screen.getByRole('option', { name: 'Warehouse walk' }));
+    expect(screen.queryByRole('button', { name: 'Delete preset' })).toBeNull();
+  });
+
+  it('renders EXACTLY the pre-0338 dialog when the table is not migrated yet (available:false)', async () => {
+    sharedState.available = false;
+    renderDialog();
+    await waitFor(() => expect(listPresetsSpy).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Save as team preset' })).toBeNull();
+    expect(screen.queryByText(/No team presets yet/)).toBeNull();
   });
 });
 
