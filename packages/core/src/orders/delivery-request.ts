@@ -26,11 +26,11 @@
 import {
   DRAFT_URL_LIMIT,
   assertRoutableAddress,
-  assertSafeDisplayName,
   composeClipboardText,
   composeMailtoUrl,
   composeOutlookMobileUrl,
   composeOutlookWebUrl,
+  normalizeDisplayName,
   type ComposeTransport,
 } from '../email/outlook-compose';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
@@ -245,8 +245,13 @@ export function deliveryRequestRecipients(input: {
     to: assertRoutableAddress('to', input.to),
     cc: assertRoutableAddress('cc', input.cc),
   };
-  if (input.toName !== undefined) value.toName = assertSafeDisplayName(input.toName);
-  if (input.ccName !== undefined) value.ccName = assertSafeDisplayName(input.ccName);
+  // Empty/whitespace-only names mean ABSENT (bare address), never a chip
+  // with an invisible name — see `normalizeDisplayName`, shared with the
+  // maintenance twin so the two factories cannot drift (pattern #26).
+  const toName = normalizeDisplayName(input.toName);
+  const ccName = normalizeDisplayName(input.ccName);
+  if (toName !== undefined) value.toName = toName;
+  if (ccName !== undefined) value.ccName = ccName;
   return Object.freeze(value) as unknown as DeliveryRequestRecipients;
 }
 
@@ -593,7 +598,11 @@ export function buildDeliveryRequestDraft(
 
   blocks.push(
     [
-      'DELIVERY REQUEST — StockPilot',
+      // The banner follows the fulfillment type, like the subject (owner
+      // decision 2026-08-16) and the action copy: a will-call email opening
+      // with "DELIVERY REQUEST" was the same misstatement the subject fix
+      // corrected, one line lower.
+      isPickup ? 'PICKUP REQUEST — StockPilot' : 'DELIVERY REQUEST — StockPilot',
       '',
       `Order: ${toPlainTextLine(handle)}`,
       `Requested by: ${requesterLabel}`,

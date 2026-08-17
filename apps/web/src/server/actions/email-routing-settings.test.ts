@@ -110,7 +110,29 @@ describe('setOrgEmailRoutingAction — validation runs THE READER-SIDE guards', 
     expect(dbState.updatePayload).toEqual({
       email_routing: { delivery_request: VALID_RECIPIENTS },
     });
+    // The audit row is what makes a silent reroute reconstructable after the
+    // fact, so its SHAPE is the contract, not merely the fact of a call: the
+    // event name dashboards/queries key on, the entity, and an `after` that
+    // names the feature and the exact recipients written.
     expect(auditSpy).toHaveBeenCalledTimes(1);
+    expect(auditSpy).toHaveBeenCalledWith({
+      event: 'email_routing.updated',
+      entityType: 'organization',
+      entityId: 'org-1',
+      after: { feature: 'delivery_request', recipients: VALID_RECIPIENTS },
+    });
+  });
+
+  it('a CLEAR audits the same event with recipients: null, so the reroute-to-nothing is reconstructable too', async () => {
+    dbState.existingRouting = { delivery_request: { to: 'a@b.invalid', cc: 'c@d.invalid' } };
+    const res = await setOrgEmailRoutingAction({ feature: 'delivery_request', recipients: null });
+    expect(res).toMatchObject({ ok: true });
+    expect(auditSpy).toHaveBeenCalledWith({
+      event: 'email_routing.updated',
+      entityType: 'organization',
+      entityId: 'org-1',
+      after: { feature: 'delivery_request', recipients: null },
+    });
   });
 
   it('REFUSES to save what the read path would reject — the guard message verbatim, no write, no audit', async () => {

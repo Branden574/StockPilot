@@ -114,8 +114,58 @@ Honest caveats:
 - The job assumes Metro and the :3000 web server are already running; the
   driver fails fast with a clear message if they are not (that failure
   lands in the log, which is still useful signal).
-- The CI-grade home for this suite is a macOS CI runner that builds a
-  simulator app via EAS (`eas build --platform ios` with a simulator
-  profile), boots a sim, and runs this driver against the built binary —
-  no Metro, no laptop. That is the follow-up; this launchd job is the
-  interim.
+- The CI-grade home is the GitHub Actions workflow below; this launchd job
+  is the laptop-local interim.
+
+## CI (.github/workflows/smoke-sim.yml)
+
+The CI home for this suite: a macOS runner builds a RELEASE simulator app
+via EAS (the `simulator` profile in eas.json — bundled JS, no dev client;
+baked `extra.apiUrl` is the production API), creates and boots an iPad Pro
+13-inch simulator (the driver's tap/swipe geometry is that device's),
+installs the .app, and runs `python3 scripts/smoke/smoke.py --ci --udid
+<created sim>`.
+
+What `--ci` changes, and nothing else changes:
+
+- The Metro and :3000 preflight checks are SKIPPED — a release build has
+  no Metro and no localhost API; those prerequisites do not exist in CI.
+- Flows that depend on the locally served REST API are SKIPPED and printed
+  as SKIP in the summary, never counted as passes.
+- Sign-in falls back to the `STOCKPILOT_SMOKE_PASSWORD` environment
+  variable when the macOS keychain entry is absent (a CI runner has no
+  user keychain).
+
+Which flows run where:
+
+| flow | local | CI | why |
+| --- | --- | --- | --- |
+| `login-shell` | yes | yes | auth is Supabase-direct; CI signs in via the secret |
+| `sheet-scroll` | yes | yes | the Add-items sheet READS via Supabase-direct queries |
+| `delivery-section` | yes | yes | order + routing reads are Supabase-direct |
+| `maintenance` | yes | SKIPPED | its list/detail reads are served by the REST API layer (locally :3000); running it against whatever the release build's baked apiUrl reaches is a deliberate later decision, not a default |
+
+Owner steps before the schedule can be enabled (repo Settings > Secrets):
+
+1. `EXPO_TOKEN` — Expo access token with build rights (expo.dev > Account
+   settings > Access tokens). The `eas build` step cannot authenticate
+   without it.
+2. `STOCKPILOT_SMOKE_PASSWORD` — the demo-org QA password (same value as
+   the keychain entry `stockpilot/demo-org-qa-login`).
+3. Uncomment the `schedule:` block in the workflow. It ships commented out
+   on purpose: a scheduled job that fails nightly for want of a secret is
+   noise, not coverage. `workflow_dispatch` works as soon as the secrets
+   exist.
+
+Honest status: the workflow is authored and statically validated (YAML
+parse + structure checks; the driver's `--ci` path compiles and its CLI
+parses). A macOS runner cannot be executed from the development
+environment, so THE FIRST REAL RUN HAPPENS IN CI via workflow_dispatch and
+may surface runner-environment issues (idb install, EAS queue times,
+simulator runtime names) that static review cannot. The local `pnpm
+smoke:sim` path is behaviourally unchanged — no `--ci` means the same
+flows and assertions as before this change, with two honest deltas: the
+keychain password fetch now falls back to `STOCKPILOT_SMOKE_PASSWORD`
+when the keychain entry is absent, and preflight prints which mode it
+chose. Neither alters what any flow asserts. It is not the workflow
+this README documents above.

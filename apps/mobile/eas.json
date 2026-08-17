@@ -15,6 +15,18 @@
         "EXPO_PUBLIC_API_URL": "http://localhost:3000"
       }
     },
+    "simulator": {
+      "distribution": "internal",
+      "node": "22.19.0",
+      "ios": {
+        "simulator": true,
+        "resourceClass": "m-medium",
+        "image": "macos-tahoe-26.5-xcode-26.6"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "node": "22.19.0",

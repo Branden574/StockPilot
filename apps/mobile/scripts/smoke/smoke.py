@@ -36,6 +36,24 @@ Hard-won simulator facts baked in (each cost real debugging time):
 - Deep links use the `stockpilot` scheme; after openurl the driver polls
   describe-all for a landmark label -- fixed sleeps are only ever brief
   inter-step settling, never the assertion wait.
+
+CI MODE (--ci): the app on a CI runner is a RELEASE simulator build (the
+`simulator` EAS profile) -- its JS is bundled (no Metro) and its baked
+extra.apiUrl is the production API, not localhost:3000. --ci therefore
+skips the Metro and :3000 preflight checks, SKIPS the flows that depend on
+the locally served REST API (LOCAL_API_FLOWS below; skips are printed
+honestly and never counted as passes), reads the sign-in password from the
+STOCKPILOT_SMOKE_PASSWORD environment variable when the macOS keychain
+entry is absent (a CI runner has no user keychain; the value is read into
+memory and never printed or echoed), and expects --udid because the CI
+simulator is created per-run. Everything else -- gesture self-validation,
+the flows themselves, the artifacts -- is identical to a local run, so a
+flow passing locally and failing in CI means the app or the runner, not a
+forked code path. The default (no --ci) behavior asserts exactly what it
+did before this change; two non-asserting deltas exist (the
+STOCKPILOT_SMOKE_PASSWORD fallback and a preflight mode line), so it is
+behaviourally equivalent rather than byte-for-byte the
+local workflow this file has always run.
 """
 
 import argparse
@@ -47,7 +65,11 @@ import sys
 import time
 from datetime import datetime
 
-UDID = "0620A9E7-237A-4E16-9953-C8CD4AC6D284"  # iPad Pro 13-inch (M5), iOS 26.5
+# The LOCAL simulator (iPad Pro 13-inch (M5), iOS 26.5). Overridable with
+# --udid for CI, where the simulator is created per-run -- but it must still
+# be an iPad Pro 13-inch: SCREEN_W/H below are that device's point geometry,
+# and every tap/swipe coordinate is derived from them.
+UDID = "0620A9E7-237A-4E16-9953-C8CD4AC6D284"
 BUNDLE_ID = "app.stockpilot.mobile"
 SCREEN_W, SCREEN_H = 1032, 1376  # points, per describe-all
 SWIPE_DURATION = "0.4"  # a swipe without --duration does nothing at all
@@ -257,22 +279,31 @@ def fail_hard(msg):
     sys.exit(2)
 
 
-def preflight():
-    """Metro alive, API server alive, sim booted, app launched, overlays gone."""
-    if run(["lsof", "-ti", f":{METRO_PORT}"]).stdout.strip() == "":
-        fail_hard(
-            f"Metro dev server is not running on :{METRO_PORT}. The installed "
-            "build is a DEBUG build that loads its JS from Metro. Start it "
-            "with `pnpm start` in apps/mobile and re-run."
-        )
-    if run(["lsof", "-ti", f":{API_PORT}"]).stdout.strip() == "":
-        fail_hard(
-            f"No web server on :{API_PORT}. The debug binary has "
-            "localhost:3000 baked into extra.apiUrl, and the maintenance "
-            "flow (plus the enabled-modules snapshot) reads over that REST "
-            "API. Start apps/web with the prod-Supabase env "
-            "(.env.local.prod) and re-run."
-        )
+def preflight(ci=False):
+    """Metro alive, API server alive, sim booted, app launched, overlays gone.
+
+    In --ci mode the Metro and :3000 checks are SKIPPED, not satisfied some
+    other way: the CI app is a release simulator build whose JS is bundled
+    and whose baked apiUrl is the production API. Those two prerequisites
+    simply do not exist there, and pretending to check them would fail every
+    CI run for reasons that are not failures.
+    """
+    if not ci:
+        if run(["lsof", "-ti", f":{METRO_PORT}"]).stdout.strip() == "":
+            fail_hard(
+                f"Metro dev server is not running on :{METRO_PORT}. The installed "
+                "build is a DEBUG build that loads its JS from Metro. Start it "
+                "with `pnpm start` in apps/mobile and re-run. (A RELEASE sim "
+                "build needs no Metro -- use --ci for that case.)"
+            )
+        if run(["lsof", "-ti", f":{API_PORT}"]).stdout.strip() == "":
+            fail_hard(
+                f"No web server on :{API_PORT}. The debug binary has "
+                "localhost:3000 baked into extra.apiUrl, and the maintenance "
+                "flow (plus the enabled-modules snapshot) reads over that REST "
+                "API. Start apps/web with the prod-Supabase env "
+                "(.env.local.prod) and re-run."
+            )
     if UDID not in run(["xcrun", "simctl", "list", "devices", "booted"]).stdout:
         print(f"Simulator {UDID} not booted; booting...")
         run(["xcrun", "simctl", "boot", UDID])
@@ -399,15 +430,21 @@ def _shell_rendered(els):
 
 
 def _password_login():
-    """Password login from the macOS keychain. The secret is fetched into
-    memory, never printed, never written anywhere, never in argv of anything
-    that logs."""
+    """Password login from the macOS keychain, else STOCKPILOT_SMOKE_PASSWORD
+    (the CI path -- a runner has no user keychain). Either way the secret is
+    fetched into memory, never printed, never written anywhere, never in argv
+    of anything that logs."""
     p = run(
         ["security", "find-generic-password", "-w", "-s", "stockpilot/demo-org-qa-login"]
     )
-    password = p.stdout.rstrip("\n")
-    if p.returncode != 0 or not password:
-        return False, "demo password unavailable in keychain (stockpilot/demo-org-qa-login)"
+    password = p.stdout.rstrip("\n") if p.returncode == 0 else ""
+    if not password:
+        password = os.environ.get("STOCKPILOT_SMOKE_PASSWORD", "")
+    if not password:
+        return False, (
+            "demo password unavailable: not in the keychain "
+            "(stockpilot/demo-org-qa-login) and STOCKPILOT_SMOKE_PASSWORD is unset"
+        )
     email = "demo@stockpilotusa.com"
     els = describe_all()
     fields = [e for e in els if e.get("type") == "TextField" and on_screen(e)]
@@ -559,12 +596,35 @@ FLOWS = [
     ("maintenance", flow_maintenance),
 ]
 
+# Flows whose reads are served by the REST API layer (locally: the :3000 web
+# server the debug binary points at). --ci SKIPS these rather than running
+# them against whatever the release build's baked apiUrl happens to reach --
+# admitting one to CI is a deliberate decision for after a real CI run, not a
+# default. Everything else reads Supabase directly and runs in both modes.
+LOCAL_API_FLOWS = {"maintenance"}
+
 
 def main():
     ap = argparse.ArgumentParser(description="StockPilot simulator smoke suite")
     ap.add_argument("--flow", choices=[n for n, _ in FLOWS], help="run one flow")
     ap.add_argument("--dump", action="store_true", help="dump visible labels and exit")
+    ap.add_argument(
+        "--ci",
+        action="store_true",
+        help="release-sim-build mode: skip the Metro/:3000 preflight checks and "
+        "the LOCAL_API_FLOWS (see module doc)",
+    )
+    ap.add_argument(
+        "--udid",
+        help="target simulator UDID (default: the local iPad Pro 13-inch; a CI "
+        "run creates its own iPad Pro 13-inch and passes it here -- the "
+        "hardcoded point geometry is that device's)",
+    )
     args = ap.parse_args()
+
+    global UDID
+    if args.udid:
+        UDID = args.udid
 
     if args.dump:
         for e in describe_all():
@@ -572,10 +632,16 @@ def main():
                 print(f"{e.get('type', '?'):>18}  {frame_of(e)}  {label_of(e)[:110]!r}")
         return
 
-    preflight()
+    preflight(ci=args.ci)
     validate_gesture()
 
     selected = [(n, f) for n, f in FLOWS if not args.flow or n == args.flow]
+    skipped = []
+    if args.ci:
+        skipped = [n for n, _ in selected if n in LOCAL_API_FLOWS]
+        selected = [(n, f) for n, f in selected if n not in LOCAL_API_FLOWS]
+        for name in skipped:
+            print(f"\n=== {name} ===\nSKIP: needs the locally served REST API; not run under --ci")
     results = []
     for name, fn in selected:
         print(f"\n=== {name} ===")
@@ -604,6 +670,10 @@ def main():
         if shot:
             print(f"{'':<29} screenshot: {shot}")
         any_fail = any_fail or not passed
+    # Skips are reported, never counted: a skipped flow is coverage that did
+    # not happen, and the summary must say so rather than looking greener.
+    for name in skipped:
+        print(f"{name:<20} {'SKIP':<8} needs the locally served REST API; not run under --ci")
     print("=" * 76)
     sys.exit(1 if any_fail else 0)
 

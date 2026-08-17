@@ -18,6 +18,7 @@ import {
   openMeasuredDraft,
   type ComposeButton,
   type MeasuredDraftToOpen,
+  type MeasuredOpenResult,
   type OpenedTransport,
   type OutlookPlatform,
 } from './outlook-transport';
@@ -240,11 +241,15 @@ export async function openMaintenanceDraft(
  *  a call that arrived while an earlier open was unresolved fired no openURL
  *  and no `onOpened` (so no counted draft, no `recordDraftOpened`, and no
  *  duplicate Zendesk ticket); see `composeOpenInFlight` in
- *  ./outlook-transport. */
-export interface MaintenanceOpenResult {
-  outcome: 'opened' | 'blocked' | 'in_flight';
-  used: OpenedTransport | null;
-}
+ *  ./outlook-transport.
+ *
+ *  AN ALIAS of the shared `MeasuredOpenResult`, deliberately (verifier
+ *  follow-up, 2026-08-16): this and `DeliveryOpenResult` used to restate it
+ *  member-by-member, so a member added to the shared opener's result could
+ *  be forgotten in one feature's copy and the compiler would say nothing.
+ *  One definition, two feature-named views — exactly how
+ *  `MaintenanceDraftToOpen` above already aliases `MeasuredDraftToOpen`. */
+export type MaintenanceOpenResult = MeasuredOpenResult;
 
 /** Brief section 21: never permanently block reopening, only warn. Shared with
  *  the order screen's delivery request — see `./outlook-transport`. */

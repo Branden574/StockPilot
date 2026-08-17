@@ -127,6 +127,26 @@ export function assertSafeDisplayName(name: string): string {
 }
 
 /**
+ * A display name is PRESENT only when it has visible characters (verifier
+ * follow-up, 2026-08-16). `assertSafeDisplayName` accepts `''` and `'   '`
+ * clean — no RFC 5322 specials in either — so both recipient factories used
+ * to store them, and a whitespace-only name reached the OWA `mailtouri` path
+ * as the chip `'  <addr>'`: a name-addr with an invisible name. Empty and
+ * whitespace-only names now mean ABSENT (bare address), decided HERE, once,
+ * for both factories (recurring pattern #26 — the delivery and maintenance
+ * factories are twins and must not drift on this).
+ *
+ * NON-BLANK NAMES PASS THROUGH BYTE-IDENTICAL — deliberately NOT trimmed.
+ * Every currently-valid stored value (the seeded L4L names included) must
+ * compose the exact urls it composed before this helper existed; the
+ * golden-diff in the factory tests pins that.
+ */
+export function normalizeDisplayName(name: string | undefined): string | undefined {
+  if (name === undefined || name.trim() === '') return undefined;
+  return assertSafeDisplayName(name);
+}
+
+/**
  * ONE plain mailbox, nothing else — the grammar, and why it is deliberately
  * NARROWER than RFC 5322.
  *

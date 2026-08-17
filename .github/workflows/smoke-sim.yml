@@ -1,0 +1,136 @@
+# ---------------------------------------------------------------------------
+# iOS simulator smoke suite — the CI-grade home for apps/mobile/scripts/smoke.
+#
+# WHAT IT DOES: builds a RELEASE simulator app via EAS (the `simulator`
+# profile in apps/mobile/eas.json — bundled JS, no Metro; baked apiUrl is the
+# production API), downloads and installs it on a per-run iPad Pro 13-inch
+# simulator, and runs the smoke driver in --ci mode. The --ci flag skips the
+# Metro/:3000 preflight checks (those prerequisites do not exist for a
+# release build) and skips the flows that depend on the locally served REST
+# API (currently: maintenance). See apps/mobile/scripts/smoke/README.md for
+# the per-flow CI-vs-local table.
+#
+# OWNER STEPS BEFORE THE SCHEDULE CAN BE ENABLED (in repo Settings > Secrets):
+#   1. EXPO_TOKEN — an Expo access token with build rights on this project
+#      (expo.dev > Account settings > Access tokens). Without it the
+#      `eas build` step cannot authenticate and every run fails at that step.
+#   2. STOCKPILOT_SMOKE_PASSWORD — the demo-org QA password (the value the
+#      local runs read from the macOS keychain entry
+#      stockpilot/demo-org-qa-login). Only needed for the sign-in path: a
+#      fresh CI simulator is never already signed in.
+# Then UNCOMMENT the `schedule:` block below. It is shipped commented out on
+# purpose — enabling a scheduled job that fails every night for want of a
+# secret is noise, not coverage.
+#
+# HONESTY ABOUT VERIFICATION: this workflow was authored and statically
+# validated (actionlint + yaml parse) but macOS runners cannot be executed
+# from the development environment — the FIRST REAL RUN HAPPENS IN CI, via
+# workflow_dispatch, and may surface runner-environment issues (idb install,
+# EAS queue times, simulator runtime names) that static review cannot.
+# ---------------------------------------------------------------------------
+name: Simulator smoke
+
+on:
+  workflow_dispatch:
+  # OWNER: uncomment after adding the EXPO_TOKEN and STOCKPILOT_SMOKE_PASSWORD
+  # secrets (see header). Nightly at 11:30 UTC (03:30/04:30 Pacific).
+  # schedule:
+  #   - cron: '30 11 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: iOS simulator smoke
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6.0.10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      # idb drives the accessibility tree (describe-all), taps and swipes.
+      # idb_companion is the macOS half; fb-idb is the Python client the
+      # driver shells out to.
+      - name: Install idb
+        run: |
+          brew tap facebook/fb
+          brew install idb-companion
+          pipx install fb-idb
+
+      # A RELEASE simulator build — bundled JS, no dev client. Built on EAS
+      # servers (a simulator build needs no signing credentials) and awaited;
+      # --json emits the build record the next step reads the artifact URL
+      # from. Requires the EXPO_TOKEN secret (see header). eas-cli is version-
+      # pinned via pnpm dlx, the same invocation shape as the release:ios
+      # script (eas-cli is deliberately not a devDependency in this repo).
+      - name: Build simulator app (EAS)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          pnpm dlx eas-cli@20.3.0 build \
+            --platform ios \
+            --profile simulator \
+            --non-interactive \
+            --json > /tmp/eas-build.json
+
+      - name: Download and extract the .app
+        run: |
+          BUILD_URL="$(jq -r '.[0].artifacts.buildUrl' /tmp/eas-build.json)"
+          test -n "$BUILD_URL" && test "$BUILD_URL" != "null"
+          curl -fsSL "$BUILD_URL" -o /tmp/stockpilot-sim.tar.gz
+          mkdir -p /tmp/stockpilot-sim
+          tar -xzf /tmp/stockpilot-sim.tar.gz -C /tmp/stockpilot-sim
+          APP_PATH="$(find /tmp/stockpilot-sim -maxdepth 2 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      # An iPad Pro 13-inch, specifically: the driver's tap/swipe coordinates
+      # are that device's point geometry (SCREEN_W/H in smoke.py). The newest
+      # installed iOS runtime is used; the device type name is matched loosely
+      # because Apple renames the chip suffix (M4/M5) across Xcode releases.
+      - name: Create and boot the simulator
+        run: |
+          RUNTIME="$(xcrun simctl list runtimes --json | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | sort_by(.version) | last | .identifier')"
+          test -n "$RUNTIME" && test "$RUNTIME" != "null"
+          DEVTYPE="$(xcrun simctl list devicetypes --json | jq -r '[.devicetypes[] | select(.name | startswith("iPad Pro 13-inch"))] | last | .identifier')"
+          test -n "$DEVTYPE" && test "$DEVTYPE" != "null"
+          UDID="$(xcrun simctl create smoke-ipad "$DEVTYPE" "$RUNTIME")"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          echo "SMOKE_UDID=$UDID" >> "$GITHUB_ENV"
+
+      - name: Install the app
+        run: xcrun simctl install "$SMOKE_UDID" "$APP_PATH"
+
+      - name: Run the smoke suite (--ci)
+        env:
+          STOCKPILOT_SMOKE_PASSWORD: ${{ secrets.STOCKPILOT_SMOKE_PASSWORD }}
+        run: python3 scripts/smoke/smoke.py --ci --udid "$SMOKE_UDID"
+
+      # Failed flows save screenshots; keep them reviewable.
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: apps/mobile/scripts/smoke/artifacts/
+          if-no-files-found: ignore
+
+      - name: Shut down the simulator
+        if: always()
+        run: xcrun simctl shutdown "$SMOKE_UDID" || true

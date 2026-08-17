@@ -34,6 +34,28 @@ describe('maintenanceEmailRecipients', () => {
     expect(Object.keys(r as unknown as Record<string, string>).sort()).toEqual(['cc', 'to']);
   });
 
+  it('EMPTY/WHITESPACE display names mean ABSENT — the delivery twin rule, pinned here too (pattern #26)', () => {
+    // assertSafeDisplayName accepts '' and '   ' clean, so this factory used
+    // to store them; a whitespace-only name became an OWA chip with an
+    // invisible name ('  <addr>'). Both blank shapes now normalize to absent
+    // (bare address) via the SAME shared helper the delivery factory runs.
+    const blank = maintenanceEmailRecipients({
+      to: 'intake@example-tenant.invalid',
+      cc: 'copy@example-tenant.invalid',
+      toName: '',
+      ccName: '   ',
+    });
+    expect(Object.keys(blank as unknown as Record<string, string>).sort()).toEqual(['cc', 'to']);
+
+    // Non-blank names pass through byte-identical — deliberately not trimmed.
+    const padded = maintenanceEmailRecipients({
+      to: 'intake@example-tenant.invalid',
+      cc: 'copy@example-tenant.invalid',
+      ccName: ' Ops Manager ',
+    });
+    expect(padded.ccName).toBe(' Ops Manager ');
+  });
+
   it('refuses a malformed to address (the injection grammar)', () => {
     expect(() =>
       maintenanceEmailRecipients({ to: 'a?cc=attacker@evil.test', cc: 'copy@ok.invalid' }),
