@@ -20,7 +20,7 @@
 
 begin;
 
-select plan(87);
+select plan(117);
 
 \set org      '\'03390000-0000-0000-0000-000000000001\''
 \set orgU     '\'03390000-0000-0000-0000-000000000002\''
@@ -851,6 +851,381 @@ select throws_ok(
   '0339: posting the completed main count again raises cycle_count_not_open'
 );
 reset role;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 9. RECOUNT AFTER A MOVEMENT (t1) + FIRST-ONLY STAMP (t2).
+--    A line counted at 89 while live was 124, then a pick of 15 leaves, then
+--    the counter re-enters 89 — the SAME number. The trigger fires whenever
+--    counted_quantity is in the SET list (UPDATE OF, no WHEN-changed guard):
+--    a recount landing on the same number is still a count taken NOW, so
+--    expected_quantity is re-stamped to the new live 109 and the variance is
+--    re-derived (-20, not the stale -35). expected_at_start is written ONCE
+--    (124) and never overwritten by later counts; clearCount restores
+--    expected_quantity from it; the [rebased] note at post says
+--    'expected 124.0000 at start'.
+--    Mutation-proved: (t1) firing only when the value changes leaves
+--    expected at 124 after the recount and posts -35; (t2) overwriting
+--    expected_at_start on every count moves the start to 109, clearCount
+--    restores 109 and the [rebased] note disappears.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+\set itemR  '\'03390000-0000-0000-0000-0000000001c1\''
+\set ccRe   '\'03390000-0000-0000-0000-0000000001d1\''
+\set lnR    '\'03390000-0000-0000-0000-0000000001f1\''
+\set pickR  '\'03390000-0000-0000-0000-000000000192\''
+
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
+  (:itemR, :org, :whA, 'RB-0339-R', 'Recount-after-movement item (124, count 89, pick -15, recount 89)', 124, 'active', 'none')
+on conflict (id) do nothing;
+delete from public.item_stock_levels where item_id = :itemR;
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+  values (:org, :itemR, :rack, 124) on conflict (item_id, location_id) do nothing;
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at) values
+  (:ccRe, :org, :whA, 'in_progress', 'warehouse', :mgr, now())
+on conflict (id) do nothing;
+insert into public.cycle_count_lines
+  (id, cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id) values
+  (:lnR, :ccRe, :itemR, 124, null, :whA)
+on conflict do nothing;
+
+-- Count 1: the counter enters 89 while live is still 124.
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 89, counted_by = :mgr, counted_at = now()
+ where id = :lnR;
+reset role;
+
+select is(
+  (select expected_at_start || '|' || expected_quantity || '|' || (counted_quantity - expected_quantity)
+     from public.cycle_count_lines where id = :lnR),
+  '124.0000|124.0000|-35.0000',
+  '0339 recount/t1: first count at live 124 -> start 124, expected 124, variance -35 (nothing has moved yet)'
+);
+
+-- A pick of 15 leaves AFTER that count (124 -> 109), on its own ledger row.
+insert into public.stock_movements
+  (id, organization_id, item_id, movement_type, quantity_change,
+   previous_quantity, new_quantity, reason, user_id, reference_type)
+  values (:pickR, :org, :itemR, 'remove', -15, 124, 109, 'order pick after first count (fixture)', :mgr, 'order_request');
+update public.inventory_items set quantity_on_hand = 109 where id = :itemR;
+update public.item_stock_levels set quantity = 109 where item_id = :itemR and location_id = :rack;
+
+-- Count 2: the counter re-enters 89 — the SAME value. counted_quantity is in
+-- the SET list, so the trigger must fire and re-stamp expected to the live 109.
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 89, counted_by = :mgr, counted_at = now()
+ where id = :lnR;
+reset role;
+
+select is(
+  (select expected_quantity from public.cycle_count_lines where id = :lnR),
+  109::numeric,
+  '0339 recount/t1: recounting the SAME 89 after the pick re-stamps expected_quantity to the NEW live 109 (the trigger fires on UPDATE OF counted_quantity even when the value is unchanged)'
+);
+select is(
+  (select counted_quantity - expected_quantity from public.cycle_count_lines where id = :lnR),
+  -20::numeric,
+  '0339 recount/t1: the variance is re-derived: 89 - 109 = -20 (NOT the stale -35)'
+);
+select is(
+  (select expected_at_start from public.cycle_count_lines where id = :lnR),
+  124::numeric,
+  '0339 recount/t2: expected_at_start stays 124 after the recount — the start snapshot is written ONCE'
+);
+
+-- Count 3: the counter taps 89 once more (nothing moved in between). The
+-- start must still not move, even though expected (109) now differs from it.
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 89, counted_by = :mgr, counted_at = now()
+ where id = :lnR;
+reset role;
+
+select is(
+  (select expected_at_start || '|' || expected_quantity from public.cycle_count_lines where id = :lnR),
+  '124.0000|109.0000',
+  '0339 recount/t2: a third count while expected (109) differs from start leaves start at 124 and expected at 109'
+);
+
+-- clearCount: expected_quantity is restored from the ONE start snapshot (124),
+-- not from the last count-time value (109).
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = null, counted_by = null, counted_at = null
+ where id = :lnR;
+reset role;
+
+select is(
+  (select expected_at_start || '|' || expected_quantity from public.cycle_count_lines where id = :lnR),
+  '124.0000|124.0000',
+  '0339 recount/t2: clearCount restores expected_quantity to the start snapshot 124 (start kept at 124)'
+);
+
+-- Count 4: 89 again; live is 109 -> expected 109; then post.
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 89, counted_by = :mgr, counted_at = now()
+ where id = :lnR;
+select is(
+  (select expected_at_start || '|' || expected_quantity from public.cycle_count_lines where id = :lnR),
+  '124.0000|109.0000',
+  '0339 recount: after clear the recount stamps expected 109 again and start is still 124'
+);
+select lives_ok(
+  format($$select public.post_cycle_count(%L)$$, :ccRe),
+  '0339 recount: the manager posts the recount'
+);
+reset role;
+
+select is(
+  (select quantity_change || '|' || previous_quantity || '|' || new_quantity from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccRe and item_id = :itemR),
+  '-20.0000|109.0000|89.0000',
+  '0339 recount/post: change -20 (89 - 109), previous 109 (live), new 89 — the pick that left between count 1 and count 2 is NOT subtracted again'
+);
+select is(
+  (select previous_quantity from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccRe and item_id = :itemR),
+  (select new_quantity from public.stock_movements where id = :pickR),
+  '0339 recount/post: the count row chains from the pick row (previous 109 = pick new_quantity 109)'
+);
+select is(
+  (select notes from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccRe and item_id = :itemR),
+  '[rebased] expected 124.0000 at start, 109.0000 when counted',
+  '0339 recount/t2: the [rebased] note says ''expected 124.0000 at start'' — the first-only stamp survives every recount'
+);
+select is(
+  (select quantity_on_hand from public.inventory_items where id = :itemR),
+  89::numeric,
+  '0339 recount/post: on-hand 109 -> 89'
+);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 10. THE FORBIDDEN GATE, BEHAVIOURALLY (m3).
+--     Who can reach `raise exception 'forbidden'`? The header lock is
+--     `select ... for update` and post_cycle_count is SECURITY INVOKER, so
+--     for the `authenticated` role RLS applies the cycle_counts UPDATE policy
+--     (has_org_role(organization_id,'manager') — the SAME predicate as the
+--     gate) as a row filter: a non-manager never sees the header and gets
+--     cycle_count_not_found (pinned in section 5, staff + outsider). For
+--     authenticated callers the 42501 branch is therefore defence in depth
+--     that RLS makes unreachable — stated plainly.
+--     It IS reachable, and load-bearing, for a connection that BYPASSES RLS
+--     and carries no user: service_role holds EXECUTE on post_cycle_count
+--     (project default privileges; verified in prod 2026-08-17) and
+--     rolbypassrls, and auth.uid() is null there, so has_org_role is false.
+--     Without the gate such a call would COMPLETE the count with
+--     completed_by null. The line below is counted at zero variance on
+--     purpose: with a variance line the SECURITY DEFINER Σ helper would also
+--     refuse ('unauthenticated'), and the failure under mutation would be
+--     ambiguous; at zero variance the gate is the ONLY thing standing.
+--     Mutation-proved: replacing the raise with null completes the count
+--     under service_role (throws_ok + status pins fail).
+-- ═════════════════════════════════════════════════════════════════════════════
+
+\set itemV  '\'03390000-0000-0000-0000-0000000001c2\''
+\set ccSvc  '\'03390000-0000-0000-0000-0000000001d2\''
+\set lnV    '\'03390000-0000-0000-0000-0000000001f2\''
+
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
+  (:itemV, :org, :whA, 'RB-0339-V', 'Service-role gate item', 10, 'active', 'none')
+on conflict (id) do nothing;
+delete from public.item_stock_levels where item_id = :itemV;
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+  values (:org, :itemV, :rack, 10) on conflict (item_id, location_id) do nothing;
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at) values
+  (:ccSvc, :org, :whA, 'in_progress', 'warehouse', :mgr, now())
+on conflict (id) do nothing;
+insert into public.cycle_count_lines
+  (id, cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id) values
+  (:lnV, :ccSvc, :itemV, 10, null, :whA)
+on conflict do nothing;
+
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 10, counted_by = :mgr, counted_at = now()
+ where id = :lnV;                                              -- zero variance
+reset role;
+
+-- The service connection: no user, RLS bypassed.
+set local "request.jwt.claim.sub"  to '';
+set local "request.jwt.claim.role" to 'service_role';
+set local role to 'service_role';
+select ok(
+  auth.uid() is null,
+  'CONTROL: the service_role connection carries no user (auth.uid() is null)'
+);
+select is(
+  (select status from public.cycle_counts where id = :ccSvc),
+  'in_progress',
+  'CONTROL: service_role SEES the open header (RLS bypassed) — so the refusal below is the gate, not not_found'
+);
+select ok(
+  not public.has_org_role(:org, 'manager'),
+  'CONTROL: has_org_role(org, manager) is false with no user'
+);
+select throws_ok(
+  format($$select public.post_cycle_count(%L)$$, :ccSvc),
+  '42501', 'forbidden',
+  '0339 gate: a service_role connection that can see the header but is not a manager is refused by the explicit has_org_role gate: forbidden (42501)'
+);
+reset role;
+
+select is(
+  (select status || '|' || coalesce(completed_by::text, '<null>') || '|' || coalesce(completed_at::text, '<null>')
+     from public.cycle_counts where id = :ccSvc),
+  'in_progress|<null>|<null>',
+  '0339 gate: the refused count stays in_progress with no completed_by/completed_at'
+);
+select is(
+  (select count(*) from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccSvc),
+  0::bigint,
+  '0339 gate: the refused service_role post wrote NO stock_movements rows'
+);
+select ok(
+  has_function_privilege('service_role', 'public.post_cycle_count(uuid)', 'execute')
+  and (select rolbypassrls from pg_roles where rolname = 'service_role'),
+  '0339 gate: service_role holds EXECUTE + BYPASSRLS — the caller for whom this gate is load-bearing exists (revoke the grant and retire this section together)'
+);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 11. LEVEL RECONCILIATION vs the naive delta (m8).
+--     post_cycle_count calls apply_level_delta(v_new - Σlevels), not
+--     apply_level_delta(v_diff). The two are equal only while Σ item_stock_levels
+--     = quantity_on_hand at post time. Pre-v4 inconsistencies exist (a level
+--     row edited by hand, a pre-0199 item), so build two DRIFTED fixtures:
+--       Q1: on-hand 50, rack holds 47 (Σ short by 3)
+--       Q2: on-hand 50, rack holds 53 (Σ long by 3)
+--     Both counted 48 at live 50 (variance -2 each). v4 must leave
+--     Σ levels = 48 = on-hand for BOTH: Q1 gets +1 (48 - 47) into Staging and
+--     its rack is untouched; Q2 is drawn 53 -> 48. The naive delta would
+--     apply -2 to both: Q1 rack 45 (Σ 45 != 48), Q2 rack 51 (Σ 51 != 48).
+--     Mutation-proved: `v_new - v_levels_sum` -> `v_diff` fails the Σ, rack
+--     and Staging pins for both items.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+\set itemQ1 '\'03390000-0000-0000-0000-0000000001c3\''
+\set itemQ2 '\'03390000-0000-0000-0000-0000000001c4\''
+\set ccLvl  '\'03390000-0000-0000-0000-0000000001d3\''
+\set lnQ1   '\'03390000-0000-0000-0000-0000000001f3\''
+\set lnQ2   '\'03390000-0000-0000-0000-0000000001f4\''
+
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
+  (:itemQ1, :org, :whA, 'RB-0339-Q1', 'Levels short of on-hand (50 vs rack 47)', 50, 'active', 'none'),
+  (:itemQ2, :org, :whA, 'RB-0339-Q2', 'Levels long of on-hand (50 vs rack 53)',  50, 'active', 'none')
+on conflict (id) do nothing;
+delete from public.item_stock_levels where item_id in (:itemQ1, :itemQ2);
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
+  (:org, :itemQ1, :rack, 47),
+  (:org, :itemQ2, :rack, 53)
+on conflict (item_id, location_id) do nothing;
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at) values
+  (:ccLvl, :org, :whA, 'in_progress', 'warehouse', :mgr, now())
+on conflict (id) do nothing;
+insert into public.cycle_count_lines
+  (id, cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id) values
+  (:lnQ1, :ccLvl, :itemQ1, 50, null, :whA),
+  (:lnQ2, :ccLvl, :itemQ2, 50, null, :whA)
+on conflict do nothing;
+
+select is(
+  (select array_agg(s.quantity order by ii.sku) from public.inventory_items ii
+     join public.item_stock_levels s on s.item_id = ii.id
+    where ii.id in (:itemQ1, :itemQ2)),
+  array[47::numeric, 53::numeric],
+  'CONTROL: the drifted fixtures hold rack 47 (Q1) and 53 (Q2) against on-hand 50 — Σ levels != on-hand before the post'
+);
+
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 48, counted_by = :mgr, counted_at = now()
+ where id in (:lnQ1, :lnQ2);
+select lives_ok(
+  format($$select public.post_cycle_count(%L)$$, :ccLvl),
+  '0339 levels: the manager posts the drifted-levels count'
+);
+reset role;
+
+-- Q1: Σ short. The ledger row is the plain variance; the levels are
+-- reconciled to the NEW on-hand, not nudged by the variance.
+select is(
+  (select quantity_change || '|' || previous_quantity || '|' || new_quantity from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccLvl and item_id = :itemQ1),
+  '-2.0000|50.0000|48.0000',
+  '0339 levels/Q1: ledger row change -2, previous 50, new 48 (the level drift never leaks into the ledger)'
+);
+select is(
+  (select quantity_on_hand from public.inventory_items where id = :itemQ1),
+  48::numeric,
+  '0339 levels/Q1: on-hand 50 -> 48'
+);
+select is(
+  (select quantity from public.item_stock_levels where item_id = :itemQ1 and location_id = :rack),
+  47::numeric,
+  '0339 levels/Q1: rack stays 47 (Σ 47 -> 48 is +1, so nothing is drawn; the naive -2 would leave 45)'
+);
+select is(
+  (select isl.quantity from public.item_stock_levels isl
+     join public.locations l on l.id = isl.location_id
+    where isl.item_id = :itemQ1 and l.warehouse_id = :whA and l.kind = 'staging' and l.deleted_at is null
+    limit 1),
+  1::numeric,
+  '0339 levels/Q1: the +1 reconciliation delta (48 - 47) landed in Staging'
+);
+select is(
+  (select coalesce(sum(quantity), 0) from public.item_stock_levels where item_id = :itemQ1),
+  48::numeric,
+  '0339 levels/Q1: Σ item_stock_levels = 48 = on-hand after the post (the pre-existing -3 drift is reconciled away)'
+);
+
+-- Q2: Σ long. staging_first draw of 5 (53 -> 48); no Staging row exists so
+-- the whole draw comes from the rack.
+select is(
+  (select quantity_change || '|' || previous_quantity || '|' || new_quantity from public.stock_movements
+    where reference_type = 'cycle_count' and reference_id = :ccLvl and item_id = :itemQ2),
+  '-2.0000|50.0000|48.0000',
+  '0339 levels/Q2: ledger row change -2, previous 50, new 48'
+);
+select is(
+  (select quantity from public.item_stock_levels where item_id = :itemQ2 and location_id = :rack),
+  48::numeric,
+  '0339 levels/Q2: rack drawn 53 -> 48 (Σ 53 -> 48 is -5; the naive -2 would leave 51)'
+);
+select is(
+  (select count(*) from public.item_stock_levels isl
+     join public.locations l on l.id = isl.location_id
+    where isl.item_id = :itemQ2 and l.kind = 'staging'),
+  0::bigint,
+  '0339 levels/Q2: no Staging row was created for a draw-down'
+);
+select is(
+  (select coalesce(sum(quantity), 0) from public.item_stock_levels where item_id = :itemQ2),
+  48::numeric,
+  '0339 levels/Q2: Σ item_stock_levels = 48 = on-hand after the post (the pre-existing +3 drift is reconciled away)'
+);
 
 select * from finish();
 rollback;
