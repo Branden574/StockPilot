@@ -22,15 +22,6 @@ export function ReturnStatusBadge({ status }: { status: ReturnStatus }) {
   }
 }
 
-const REASON_LABELS: Record<string, string> = {
-  damaged: 'Damaged',
-  wrong_item: 'Wrong item',
-  end_of_year: 'End of year',
-  overage: 'Overage',
-  other: 'Other',
-};
-
-export function returnReasonLabel(code: string | null): string {
-  if (!code) return '—';
-  return REASON_LABELS[code] ?? code;
-}
+// The reason labels live in core (`order-returns-view.ts`) so the order page,
+// this returns UI and the phone print the same words for the same code.
+export { returnReasonLabel } from '@stockpilot/core';

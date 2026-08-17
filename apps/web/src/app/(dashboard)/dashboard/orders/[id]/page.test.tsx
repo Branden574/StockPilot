@@ -157,6 +157,10 @@ vi.mock('@/server/services/order-requests', () => ({
 }));
 vi.mock('@/server/services/returns', () => ({
   RMAService: { forCurrentUser: vi.fn(async () => ({ returnableLinesForOrder })) },
+  // The order page's returns read (fired only on completed / legacy delivered
+  // orders). Out of scope here — resolves to "no returns"; page.returns.test.tsx
+  // drives it.
+  loadOrderReturns: vi.fn(async () => []),
 }));
 
 import OrderDetailPage from './page';

@@ -20,8 +20,154 @@
  * friendly client-side gate/cap.
  */
 
+import {
+  describeLineFulfilment,
+  describeReturnLine,
+  formatOrderReturnSummary,
+  ORDER_RETURN_SUMMARY_NOTE,
+  orderReturnSummary,
+  returnHandle,
+  returnLineCountsAsReturned,
+  returnReasonLabel,
+  returnRefsByLine,
+  returnStatusLabel,
+  RETURN_STATUS_LABELS,
+  type OrderReturnLineView,
+  type OrderReturnSummary,
+  type OrderReturnView,
+  type ReturnStatus,
+} from '@stockpilot/core';
+
 export type ReturnDisposition = 'restock' | 'scrap';
 export type ReturnReasonCode = 'damaged' | 'wrong_item' | 'end_of_year' | 'overage' | 'other';
+
+// ── The order's VIEW of its returns (owner report, SO-000085) ──────────────
+//
+// What the order screen says about units that came back after hand-over. The
+// decisions — what counts as returned (the 0197 `applied` latch), the per-line
+// sub-line wording, the order-level summary, the status/reason words — live in
+// core (`order-returns-view.ts`) and are re-exported here so the screen imports
+// ONE module for everything returns-shaped, and so the web suite can import
+// THIS module and pin that the phone's decisions equal what the real web page
+// renders for the same input. Nothing here is a second implementation.
+export {
+  describeLineFulfilment,
+  describeReturnLine,
+  formatOrderReturnSummary,
+  ORDER_RETURN_SUMMARY_NOTE,
+  orderReturnSummary,
+  returnHandle,
+  returnLineCountsAsReturned,
+  returnReasonLabel,
+  returnRefsByLine,
+  returnStatusLabel,
+  RETURN_STATUS_LABELS,
+};
+export type { OrderReturnLineView, OrderReturnSummary, OrderReturnView, ReturnStatus };
+
+/**
+ * The columns the screen selects for the order's returns — the same read the
+ * web page's `loadOrderReturns` performs (returns + embedded return_lines,
+ * RLS-scoped to the org member, oldest first). Kept as a constant so the
+ * select string is testable and cannot drift from the parser below.
+ */
+export const ORDER_RETURNS_SELECT =
+  'id, return_number, status, reason_code, notes, created_at, closed_at, lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied)';
+
+/** Raw PostgREST row shape for ORDER_RETURNS_SELECT (embed may be obj or array). */
+export interface RawOrderReturnRow {
+  id: string;
+  return_number: string | null;
+  status: string;
+  reason_code: string | null;
+  notes: string | null;
+  created_at: string;
+  closed_at: string | null;
+  lines:
+    | RawOrderReturnLineRow[]
+    | RawOrderReturnLineRow
+    | null;
+}
+export interface RawOrderReturnLineRow {
+  id: string;
+  order_request_line_id: string;
+  item_id: string;
+  quantity: number | string | null;
+  disposition: string;
+  applied: boolean | null;
+}
+
+/**
+ * Map the raw rows to the shared view. `applied` is coerced with `=== true` —
+ * the ONLY thing that makes a line count as returned is that latch, and a
+ * null (never written) must read as not applied. Same mapping as web's
+ * `loadOrderReturns`.
+ */
+export function parseOrderReturns(rows: readonly RawOrderReturnRow[] | null | undefined): OrderReturnView[] {
+  return (rows ?? []).map((r) => {
+    const rawLines = Array.isArray(r.lines) ? r.lines : r.lines ? [r.lines] : [];
+    return {
+      id: r.id,
+      returnNumber: r.return_number ?? null,
+      status: r.status,
+      reasonCode: r.reason_code ?? null,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      closedAt: r.closed_at ?? null,
+      lines: rawLines.map((l) => ({
+        orderRequestLineId: l.order_request_line_id,
+        itemId: l.item_id,
+        quantity: Number(l.quantity) || 0,
+        disposition: l.disposition,
+        applied: l.applied === true,
+      })),
+    };
+  });
+}
+
+/**
+ * Whether the screen should read the order's returns at all: only a completed
+ * (or legacy delivered) order can carry one — cancel refuses completed orders
+ * (0155) — so every other status pays nothing. Same predicate the web page
+ * gates its read on (`orderIsReturnable`).
+ */
+export function shouldLoadOrderReturns(status: string | null | undefined): boolean {
+  return Boolean(status) && RETURNABLE_ORDER_STATUSES.has(status as string);
+}
+
+/**
+ * The returns section on the screen renders when there is anything to show:
+ * at least one return to list, or the create affordance. Pure so the gate is
+ * pinned rather than retyped in JSX.
+ */
+export function shouldShowReturnsSection(input: {
+  returnsCount: number;
+  canCreateReturn: boolean;
+}): boolean {
+  return input.returnsCount > 0 || input.canCreateReturn;
+}
+
+/**
+ * The name the panel prints for a return line: the ORDER line's item name
+ * (joined by order_request_line_id — the screen already holds the lines), else
+ * an id prefix so a line whose order row is somehow gone is still legible.
+ */
+export function returnLineItemName(
+  line: Pick<OrderReturnLineView, 'orderRequestLineId' | 'itemId'>,
+  orderLines: readonly { orderRequestLineId: string | null; name: string }[],
+): string | null {
+  const match = orderLines.find((l) => l.orderRequestLineId === line.orderRequestLineId);
+  if (match) return match.name;
+  return line.itemId ? `Item ${line.itemId.slice(0, 8)}` : null;
+}
+
+/** "Other · Aug 17, 2026" — the reason + date caption under a return number. */
+export function describeReturnMeta(r: Pick<OrderReturnView, 'reasonCode' | 'createdAt' | 'closedAt'>): string {
+  const when = r.closedAt ?? r.createdAt;
+  const d = new Date(when);
+  const date = Number.isNaN(d.getTime()) ? when : d.toLocaleDateString();
+  return `${returnReasonLabel(r.reasonCode)} · ${date}`;
+}
 
 /** Same options + labels as the web CreateReturnDialog's reason select. */
 export const RETURN_REASONS: { value: ReturnReasonCode; label: string }[] = [
