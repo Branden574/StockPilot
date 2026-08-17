@@ -47,6 +47,11 @@ export default async function StagingPage({
   // With per-role/user permission overrides the two can diverge, which would
   // otherwise show a Place button that always fails server-side.
   const canPlace = can(sessionCtx, 'stock:transfer');
+  // The book put-away places INTO the recorded crate by default and mints the
+  // row when none exists — which RLS (`locations_insert`, migration 0212)
+  // allows only with `locations:manage`. Passed down so the dialog can say so
+  // inline instead of failing on submit.
+  const canManageLocations = can(sessionCtx, 'locations:manage');
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -63,7 +68,11 @@ export default async function StagingPage({
 
       <div className="mt-8">
         <Suspense fallback={<TableBodySkeleton rows={8} />}>
-          <StagingTableSection params={params} canPlace={canPlace} />
+          <StagingTableSection
+            params={params}
+            canPlace={canPlace}
+            canManageLocations={canManageLocations}
+          />
         </Suspense>
       </div>
     </div>
@@ -78,9 +87,11 @@ export default async function StagingPage({
 async function StagingTableSection({
   params,
   canPlace,
+  canManageLocations,
 }: {
   params: StagingSearchParams;
   canPlace: boolean;
+  canManageLocations: boolean;
 }) {
   const itemTypeParam =
     params.type === 'book' ? 'book' : params.type === 'non-book' ? 'non-book' : undefined;
@@ -141,6 +152,7 @@ async function StagingTableSection({
       destinationsMap={destinationsMap}
       warehouseNames={warehouseNames}
       canPlace={canPlace}
+      canManageLocations={canManageLocations}
       activeItemType={itemTypeParam ?? 'all'}
     />
   );

@@ -12,11 +12,16 @@
  * destination row before it writes anything.
  */
 import {
+  bookCrateFingerprint,
+  bookRackFingerprint,
   formatCrateColorLabel,
   formatRackLabel,
   formatRackPosition,
+  getCrateColor,
+  hasRackPosition,
   normalizeRackFields,
   planNewLocation,
+  type BookStorageInfo,
   type NewLocationFields,
   type NewLocationPlan,
   type RackPosition,
@@ -235,4 +240,232 @@ export function destinationPhrase(dest: ChosenDestination): string {
       ? formatRackLabel(normalizeRackFields({ number: dest.rackNumber, row: dest.rackRow }))
       : destinationLabel(dest);
   return `onto rack ${label}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FOUR FIELDS ARE THE DESTINATION — put-away for BOOKS after Maus I
+//
+// THE DEFECT (L4L, 2026-08-17). The book dialogs offered a flat list of
+// EXISTING location rows plus a "+ New rack / crate" sentinel that hid the
+// crate fields two clicks deep on a "kind" toggle. Most crates in this
+// warehouse are label-only — 113 of 124 books record a crate, the org has ONE
+// crate row — so "Red 4 on rack 38-B", the crate the dialog had just told the
+// operator the book was in, was NOT in the list. The reachable choices were the
+// bare rack (which clears the crate; the gate then asked, and the operator had
+// nowhere else to go but "Continue") or re-typing the crate from scratch on the
+// hidden branch. Two labels were erased that evening.
+//
+// THE RULE. For a book the four fields — rack number, row, crate colour, crate
+// number — ARE the "To" input, always visible, PRE-FILLED from the book's
+// recorded storage, and the primary action places INTO exactly that crate on
+// that rack (the server resolves-or-creates the row by name, migration 0270's
+// dedupe key, which embeds the position). The existing-location dropdown stays
+// as a shortcut that FILLS the four fields. Rack-only placement is still one
+// blank away, and that is precisely the case that changes the crate pair, so
+// that is when the gate asks — and only then.
+//
+// These helpers are the pure half of that rule, shared by all three web dialogs
+// (staging put-away, bulk put-away, transfer) so no surface can hold its own
+// opinion of "what do these four boxes mean". The phone has its own copy of the
+// same decisions in apps/mobile/src/lib/move-stock-form.ts.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The four boxes, as typed. Empty string means "blank". */
+export interface DestinationFields {
+  rackNumber: string;
+  rackRow: string;
+  /** A CRATE_COLORS slug or ''. The Select cannot hold anything else. */
+  crateColor: string;
+  crateNumber: string;
+}
+
+export const EMPTY_DESTINATION_FIELDS: DestinationFields = {
+  rackNumber: '',
+  rackRow: '',
+  crateColor: '',
+  crateNumber: '',
+};
+
+/**
+ * PRE-FILL from the book's recorded storage — the default destination is
+ * "where this book already lives".
+ *
+ * `unknownCrateColor` carries a recorded colour that is NOT one of
+ * CRATE_COLORS (production has never stored one, but the column is free text
+ * and the Select cannot render an unknown value): the box is left blank and the
+ * dialog shows the raw text beside it so the operator can pick the nearest one
+ * or leave it blank knowingly. Blank means the pair CHANGES (colour cleared),
+ * so the gate will ask — honest, not silent.
+ *
+ * A null/undefined storage (a non-book, or a book with nothing recorded) seeds
+ * nothing.
+ */
+export function seedDestinationFields(storage: BookStorageInfo | null | undefined): {
+  fields: DestinationFields;
+  unknownCrateColor: string | null;
+} {
+  if (!storage) return { fields: { ...EMPTY_DESTINATION_FIELDS }, unknownCrateColor: null };
+  const rawColor = storage.crateColor?.trim() || '';
+  const known = getCrateColor(rawColor);
+  return {
+    fields: {
+      rackNumber: storage.rackNumber?.trim() ?? '',
+      rackRow: storage.rackRow?.trim() ?? '',
+      crateColor: known?.slug ?? '',
+      crateNumber: storage.crateNumber?.trim() ?? '',
+    },
+    unknownCrateColor: rawColor && !known ? rawColor : null,
+  };
+}
+
+/**
+ * FILL from an existing location the operator picked in the dropdown — all
+ * four boxes, from the row's own columns. A rack row fills the rack pair and
+ * BLANKS the crate (picking a bare rack IS choosing "no crate", and the gate
+ * will say so); a positioned crate fills all four; a legacy crate row with no
+ * columns blanks everything (see `destinationFromFields` for how it is still
+ * placeable by id).
+ */
+export function fieldsFromOption(option: DestinationOption): DestinationFields {
+  const known = getCrateColor(option.crateColor);
+  return {
+    rackNumber: option.rackNumber?.trim() ?? '',
+    rackRow: option.rackRow?.trim() ?? '',
+    crateColor: known?.slug ?? '',
+    crateNumber: option.crateNumber?.trim() ?? '',
+  };
+}
+
+/**
+ * Do the four boxes still say what this option's columns say? Compared with
+ * the same fingerprints the gate uses (crate pair, rack pair), so "blue"/"4"
+ * matches a row storing "Blue"/" 4 " and a rack typed "22-b" matches "22"/"B".
+ *
+ * True for a legacy crate row (no columns) against blank boxes: nothing has
+ * been typed over it, so the row is still what the operator picked.
+ */
+export function destinationMatchesOption(
+  fields: DestinationFields,
+  option: DestinationOption,
+): boolean {
+  return (
+    bookCrateFingerprint(fields.crateColor, fields.crateNumber) ===
+      bookCrateFingerprint(option.crateColor, option.crateNumber) &&
+    bookRackFingerprint(fields.rackNumber, fields.rackRow) ===
+      bookRackFingerprint(option.rackNumber, option.rackRow)
+  );
+}
+
+/**
+ * THE DESTINATION THE FOUR BOXES DESCRIBE.
+ *
+ *   • An option is selected AND the boxes still equal its columns
+ *     → `existing` by id (the server re-reads the row; nothing is created).
+ *   • Any crate box carries text → `new-crate` on the typed position (the
+ *     planner decides kind and name; the server resolves-or-creates by name).
+ *   • Only rack boxes carry text → `new-rack`.
+ *   • Nothing → null (nothing to submit).
+ *
+ * "new-" here means "described by fields", not "will be minted": the server's
+ * findRackOrCrate reuses an existing "Red #4 on rack 38-B" or "38-B" by name
+ * and mints only when no such row exists. That is why the four fields can be
+ * the primary input without a "+ New" branch: the same fields name an existing
+ * row and a not-yet-existing one alike.
+ */
+export function destinationFromFields(
+  fields: DestinationFields,
+  selected: DestinationOption | null,
+): ChosenDestination | null {
+  if (selected && destinationMatchesOption(fields, selected)) {
+    return { mode: 'existing', option: selected };
+  }
+  const hasCrate = fields.crateColor.trim().length > 0 || fields.crateNumber.trim().length > 0;
+  if (hasCrate) {
+    return {
+      mode: 'new-crate',
+      crateColor: fields.crateColor,
+      crateNumber: fields.crateNumber,
+      rackNumber: fields.rackNumber,
+      rackRow: fields.rackRow,
+    };
+  }
+  const hasRack = fields.rackNumber.trim().length > 0 || fields.rackRow.trim().length > 0;
+  if (hasRack) return { mode: 'new-rack', rackNumber: fields.rackNumber, rackRow: fields.rackRow };
+  return null;
+}
+
+/**
+ * IS THIS DESTINATION EXACTLY WHERE THE BOOK IS RECORDED? — same crate pair and
+ * same rack position, by fingerprint.
+ *
+ * Used to SUPPRESS the "Create new crate Red #4 on rack 38-B?" typo guard on
+ * the default path: for a label-only crate no row exists yet, so the guard would
+ * fire on every put-away of every crated book in this warehouse — for a
+ * destination the operator did not type but the record supplied. That is not a
+ * typo to guard against; it is the recorded truth being minted as a row for the
+ * first time. Any OTHER not-yet-existing label (typed, or filled from a
+ * different option) keeps the guard and its near-match suggestions.
+ *
+ * A book with nothing recorded matches nothing (a blank record is not a place).
+ */
+export function destinationIsRecordedStorage(
+  dest: ChosenDestination,
+  storage: BookStorageInfo | null | undefined,
+): boolean {
+  if (!storage) return false;
+  const recordedCrate = bookCrateFingerprint(storage.crateColor, storage.crateNumber);
+  const recordedRack = bookRackFingerprint(storage.rackNumber, storage.rackRow);
+  const nothingRecorded =
+    recordedCrate === bookCrateFingerprint(null, null) &&
+    recordedRack === bookRackFingerprint(null, null);
+  if (nothingRecorded) return false;
+  const crate = destinationCrate(dest);
+  const position = destinationPosition(dest);
+  return (
+    bookCrateFingerprint(crate.color, crate.number) === recordedCrate &&
+    bookRackFingerprint(position?.rackNumber, position?.rackRow) === recordedRack
+  );
+}
+
+/**
+ * THE ONE STORAGE A BATCH SHARES — or null.
+ *
+ * The bulk put-away sends N books to ONE destination, so "pre-fill from the
+ * recorded storage" only means something when every selected book records the
+ * same crate pair AND the same rack position (a case that is common: a
+ * receiving batch of one title, or a shelf of one crate re-staged together).
+ * A batch whose books disagree, or any book with nothing recorded, seeds
+ * nothing — the operator names the destination, and the gate asks per book.
+ *
+ * Compared by the gate's own fingerprints so spelling and case never split a
+ * batch that is physically one crate. Returns the FIRST storage (any of them
+ * would do — they fingerprint the same).
+ */
+export function sharedRecordedStorage(
+  storages: ReadonlyArray<BookStorageInfo | null | undefined>,
+): BookStorageInfo | null {
+  if (storages.length === 0) return null;
+  const first = storages[0];
+  if (!first) return null;
+  const crate = bookCrateFingerprint(first.crateColor, first.crateNumber);
+  const rack = bookRackFingerprint(first.rackNumber, first.rackRow);
+  const nothing =
+    crate === bookCrateFingerprint(null, null) && rack === bookRackFingerprint(null, null);
+  if (nothing) return null;
+  for (const s of storages) {
+    if (!s) return null;
+    if (bookCrateFingerprint(s.crateColor, s.crateNumber) !== crate) return null;
+    if (bookRackFingerprint(s.rackNumber, s.rackRow) !== rack) return null;
+  }
+  return first;
+}
+
+/** True when the four boxes name a rack position but no crate — the one choice
+ *  that CLEARS a recorded crate, and therefore the one the gate asks about. */
+export function fieldsAreRackOnly(fields: DestinationFields): boolean {
+  return (
+    fields.crateColor.trim().length === 0 &&
+    fields.crateNumber.trim().length === 0 &&
+    hasRackPosition({ rackNumber: fields.rackNumber, rackRow: fields.rackRow })
+  );
 }

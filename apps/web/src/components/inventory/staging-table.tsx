@@ -50,6 +50,14 @@ export interface StagingTableProps {
    *  (e.g. archived/inactive) fall back to a truncated UUID. */
   warehouseNames: Record<string, string>;
   canPlace: boolean;
+  /**
+   * Whether this user may CREATE rack/crate rows (`locations:manage`). The
+   * book put-away dialogs place INTO the recorded crate by default, minting the
+   * row when it does not exist; a user who cannot mint is told so inline rather
+   * than by a server refusal. Defaults to true (today's behaviour) for callers
+   * that predate it.
+   */
+  canManageLocations?: boolean;
   /** 'all' | 'book' | 'non-book' — synced from ?type= URL param. */
   activeItemType: 'all' | 'book' | 'non-book';
 }
@@ -121,6 +129,7 @@ export function StagingTable({
   destinationsMap,
   warehouseNames,
   canPlace,
+  canManageLocations = true,
   activeItemType,
 }: StagingTableProps) {
   const router = useRouter();
@@ -243,6 +252,7 @@ export function StagingTable({
             }))}
             destinationsMap={destinationsMap}
             warehouseNames={warehouseNames}
+            canManageLocations={canManageLocations}
             onPlaced={clearSelection}
             trigger={
               <Button size="sm" variant="outline">
@@ -438,6 +448,7 @@ export function StagingTable({
                             availableQuantity={row.quantity}
                             destinations={destinations}
                             bookStorage={row.bookStorage}
+                            canManageLocations={canManageLocations}
                             trigger={
                               <Button size="sm" variant="outline">
                                 Place

@@ -45,6 +45,10 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  toDestinationOption,
+  type DestinationLocationRow,
+} from '@/lib/locations/destination-option';
 import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
@@ -433,8 +437,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   currentQuantity={item.quantity_on_hand as number}
                   currentLocationId={(item.primary_location_id as string | null) ?? null}
                   locations={locations.map((l) => ({
-                    id: l.id as string,
-                    name: l.name as string,
+                    // Through the ONE mapper, so the row's own rack/crate
+                    // columns (0188) travel in the put-away dialogs' shape and
+                    // a BOOK's "To location" pick can FILL the four destination
+                    // fields instead of only naming a row.
+                    ...toDestinationOption(l as DestinationLocationRow),
                     kind: (l.kind as string | null) ?? null,
                     warehouse_id: (l.warehouse_id as string | null) ?? null,
                   }))}

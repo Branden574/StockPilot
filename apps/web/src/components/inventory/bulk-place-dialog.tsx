@@ -21,13 +21,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import {
-  CrateColorSelect,
-  CrateNumberInput,
-  CrateRackPositionFields,
+  BookDestinationFields,
+  CurrentStorageSummary,
   DestinationCrateNote,
-  DestinationKindToggle,
-  NO_CRATE_COLOR,
-  type NewDestinationKind,
 } from '@/components/inventory/crate-fields';
 import {
   PlacementConfirmDialog,
@@ -57,17 +53,25 @@ import { Textarea } from '@/components/ui/textarea';
 import type { DestinationOption } from '@/lib/locations/destination-option';
 import {
   destinationCrate,
+  destinationFromFields,
+  destinationIsRecordedStorage,
   destinationLabel,
   destinationPhrase,
   destinationPosition,
+  EMPTY_DESTINATION_FIELDS,
+  fieldsFromOption,
   isCrateChoice,
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  seedDestinationFields,
+  sharedRecordedStorage,
   type ChosenDestination,
+  type DestinationFields,
 } from '@/lib/locations/placement-destination';
 import { bulkPlaceStockAction } from '@/server/actions/inventory';
 
+/** Mixed / non-book selections only: the dropdown entry that opens the inline rack form. */
 const NEW_RACK_SENTINEL = '__new__';
 
 type ActionDestination = Parameters<typeof bulkPlaceStockAction>[0]['destination'];
@@ -92,20 +96,40 @@ interface BulkPlaceDialogProps {
   warehouseNames: Record<string, string>;
   /** Called after a successful (full or partial) place so the parent can clear selection. */
   onPlaced: () => void;
+  /**
+   * Whether this user may CREATE rack/crate rows (`locations:manage`; RLS
+   * `locations_insert` requires it). The all-books form places INTO the
+   * recorded crate by default and mints the row when none exists; a user who
+   * cannot mint is told so inline. Defaults to true (today's behaviour).
+   */
+  canManageLocations?: boolean;
   trigger: React.ReactNode;
 }
 
-export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlaced, trigger }: BulkPlaceDialogProps) {
+export function BulkPlaceDialog({
+  rows,
+  destinationsMap,
+  warehouseNames,
+  onPlaced,
+  canManageLocations = true,
+  trigger,
+}: BulkPlaceDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
 
   const [destId, setDestId] = React.useState<string>('');
   const [notes, setNotes] = React.useState('');
-  const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
-  const [rackNumber, setRackNumber] = React.useState('');
-  const [rackRow, setRackRow] = React.useState('');
-  const [crateColor, setCrateColor] = React.useState('');
-  const [crateNumber, setCrateNumber] = React.useState('');
+  // ═══ THE FOUR FIELDS ARE THE DESTINATION (all-books batches) — Maus I ═══
+  // Same rule as the single put-away (place-from-staging-dialog.tsx): for a
+  // selection that is ALL books the four boxes are the primary "To" input,
+  // always visible, seeded from the ONE storage the batch shares (if it shares
+  // one), and the dropdown FILLS them. A mixed selection keeps the older shape
+  // — dropdown plus "+ New rack" — because a crate is a BOOK fact.
+  const [fields, setFields] = React.useState<DestinationFields>(EMPTY_DESTINATION_FIELDS);
+  const { rackNumber, rackRow, crateColor, crateNumber } = fields;
+  const setField = (key: keyof DestinationFields) => (value: string) =>
+    setFields((prev) => ({ ...prev, [key]: value }));
+  const [unknownCrateColor, setUnknownCrateColor] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
   // ONE confirmation for the whole batch, however many questions it raises: a
   // genuinely-new rack/crate (the 2026-07-23 guard — bulk had none, so a typed
@@ -144,7 +168,6 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
   const warehouseName = warehouseId ? (warehouseNames[warehouseId] ?? null) : null;
 
   const totalUnits = rows.reduce((s, r) => s + r.quantity, 0);
-  const isNew = destId === NEW_RACK_SENTINEL;
   const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
 
   // MIXED SELECTIONS ARE RACK-ONLY (for inline creation).
@@ -160,35 +183,48 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
   const bookCount = rows.filter((r) => r.itemType === 'book').length;
   const allBooks = rows.length > 0 && bookCount === rows.length;
   const nonBookCount = rows.length - bookCount;
+  const isNew = !allBooks && destId === NEW_RACK_SENTINEL;
+  // The ONE storage every selected book records — or null. Seeds the fields
+  // (the default destination is where the batch already lives) and suppresses
+  // the typo guard for exactly that destination.
+  const sharedStorage = React.useMemo(
+    () => (allBooks ? sharedRecordedStorage(rows.map((r) => r.bookStorage ?? null)) : null),
+    [allBooks, rows],
+  );
 
   React.useEffect(() => {
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset fields on open */
     setDestId('');
     setNotes('');
-    setNewKind('rack');
-    setRackNumber('');
-    setRackRow('');
-    setCrateColor('');
-    setCrateNumber('');
+    const seeded = seedDestinationFields(sharedStorage);
+    setFields(seeded.fields);
+    setUnknownCrateColor(seeded.unknownCrateColor);
     setPendingConfirm(null);
     /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
     setPendingConfirm(null);
-  }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber]);
+  }, [destId, rackNumber, rackRow, crateColor, crateNumber]);
 
-  // The crate branch carries the SAME rack pair the rack branch does: the
-  // toggle picks the KIND of row, not which of two true facts survives. A crate
-  // sits on a rack.
+  /** The dropdown, for an all-books batch, FILLS the four fields. */
+  function pickExisting(id: string) {
+    setDestId(id);
+    if (!allBooks) return;
+    const option = destinations.find((d) => d.id === id);
+    if (!option) return;
+    setFields(fieldsFromOption(option));
+    setUnknownCrateColor(null);
+  }
+
+  /** ALL BOOKS: the four fields decide (`destinationFromFields`). MIXED: the
+   *  dropdown, or the inline rack pair behind "+ New rack". */
   function chosenDestination(): ChosenDestination | null {
-    if (isNew) {
-      return allBooks && newKind === 'crate'
-        ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
-        : { mode: 'new-rack', rackNumber, rackRow };
-    }
+    if (allBooks) return destinationFromFields(fields, selectedDestination);
+    if (isNew) return { mode: 'new-rack', rackNumber, rackRow };
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
 
@@ -199,12 +235,26 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
   // name ("Create new crate ?").
   const chosen = chosenDestination();
   const newReady = chosen !== null && newDestinationReady(chosen);
-  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
+  // Would this destination have to be MINTED, and may this user do that? See
+  // the single put-away for why this is said here rather than on the server.
+  const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
+  const needsMint =
+    plannedLabel.length > 0 &&
+    !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
+  const cannotMint = needsMint && !canManageLocations;
+  const newProblem =
+    chosen !== null
+      ? (newDestinationProblem(chosen) ??
+        (cannotMint
+          ? `${plannedLabel} does not exist yet, and creating racks or crates needs the Manage locations permission. Pick an existing location, or ask a manager to create it.`
+          : null))
+      : null;
   const canSubmit =
     !submitting &&
     singleWarehouse &&
     rows.length > 0 &&
-    (isNew ? newReady : destId.length > 0);
+    !cannotMint &&
+    (allBooks || isNew ? newReady : destId.length > 0);
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -344,8 +394,12 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
       );
     const crateItems = deferToServer ? [] : predicted;
 
+    // SUPPRESSED when the fields ARE the storage every selected book records —
+    // the recorded truth being minted as a row for the first time is not a
+    // typo. See the single put-away for the full reasoning.
+    const recordedStorage = allBooks && destinationIsRecordedStorage(dest, sharedStorage);
     const creation =
-      dest.mode === 'existing'
+      dest.mode === 'existing' || recordedStorage
         ? null
         : describeNewRackPlacement({
             label: destinationLabel(dest),
@@ -542,110 +596,110 @@ export function BulkPlaceDialog({ rows, destinationsMap, warehouseNames, onPlace
           </p>
         ) : (
           <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>To location</Label>
-              <Select value={destId} onValueChange={setDestId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select destination" />
-                </SelectTrigger>
-                <SelectContent>
-                  {destinations.map((d) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {d.name}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value={NEW_RACK_SENTINEL}>
-                    {allBooks ? '+ New rack / crate' : '+ New rack'}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              {selectedDestination && (
-                <DestinationCrateNote
-                  crateColor={selectedDestination.crateColor}
-                  crateNumber={selectedDestination.crateNumber}
+            {allBooks ? (
+              <>
+                {/* Where the batch is recorded today, when it is ONE place. */}
+                {sharedStorage && <CurrentStorageSummary storage={sharedStorage} />}
+
+                {/* Existing-location shortcut — FILLS the four fields below. */}
+                <div className="space-y-1.5">
+                  <Label id="bulk-existing-label">Pick an existing rack / crate (optional)</Label>
+                  <Select value={destId} onValueChange={pickExisting}>
+                    <SelectTrigger aria-labelledby="bulk-existing-label">
+                      <SelectValue placeholder="Fill in from an existing location" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {destinations.map((d) => (
+                        <SelectItem key={d.id} value={d.id}>
+                          {d.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedDestination && (
+                    <DestinationCrateNote
+                      crateColor={selectedDestination.crateColor}
+                      crateNumber={selectedDestination.crateNumber}
+                    />
+                  )}
+                </div>
+
+                <BookDestinationFields
+                  idPrefix="bulk"
+                  fields={fields}
+                  onChange={setFields}
+                  unknownCrateColor={unknownCrateColor}
+                  problem={newProblem}
                 />
-              )}
-              {selectedDestination?.kind === 'crate' && nonBookCount > 0 && (
-                <p className="text-muted-foreground text-xs">
-                  {nonBookCount} of the {rows.length} selected rows{' '}
-                  {nonBookCount === 1 ? 'is not a book' : 'are not books'} — no crate is recorded
-                  for {nonBookCount === 1 ? 'it' : 'them'}.
-                </p>
-              )}
-            </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label>To location</Label>
+                  <Select value={destId} onValueChange={pickExisting}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select destination" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {destinations.map((d) => (
+                        <SelectItem key={d.id} value={d.id}>
+                          {d.name}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={NEW_RACK_SENTINEL}>+ New rack</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {selectedDestination && (
+                    <DestinationCrateNote
+                      crateColor={selectedDestination.crateColor}
+                      crateNumber={selectedDestination.crateNumber}
+                    />
+                  )}
+                  {selectedDestination?.kind === 'crate' && nonBookCount > 0 && (
+                    <p className="text-muted-foreground text-xs">
+                      {nonBookCount} of the {rows.length} selected rows{' '}
+                      {nonBookCount === 1 ? 'is not a book' : 'are not books'} — no crate is
+                      recorded for {nonBookCount === 1 ? 'it' : 'them'}.
+                    </p>
+                  )}
+                </div>
 
-            {isNew && (
-              <div className="space-y-3 rounded-md border p-3">
-                {allBooks ? (
-                  <DestinationKindToggle value={newKind} onChange={setNewKind} />
-                ) : (
-                  <p className="text-muted-foreground text-xs">
-                    The selection includes items that are not books, so a new location here is a
-                    rack. Place books on their own to create a crate.
-                  </p>
-                )}
+                {isNew && (
+                  <div className="space-y-3 rounded-md border p-3">
+                    <p className="text-muted-foreground text-xs">
+                      The selection includes items that are not books, so a new location here is
+                      a rack. Place books on their own to place them into a crate.
+                    </p>
 
-                {(!allBooks || newKind === 'rack') && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-rack-number">
-                        Rack number <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="bulk-rack-number"
-                        placeholder="e.g. A1"
-                        value={rackNumber}
-                        onChange={(e) => setRackNumber(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bulk-rack-row">Row (optional)</Label>
-                      <Input
-                        id="bulk-rack-row"
-                        placeholder="e.g. Row 3"
-                        value={rackRow}
-                        onChange={(e) => setRackRow(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {allBooks && newKind === 'crate' && (
-                  <>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <Label htmlFor="bulk-crate-color">Crate color (optional)</Label>
-                        <CrateColorSelect
-                          id="bulk-crate-color"
-                          value={crateColor}
-                          onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                        <Label htmlFor="bulk-rack-number">
+                          Rack number <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id="bulk-rack-number"
+                          placeholder="e.g. A1"
+                          value={rackNumber}
+                          onChange={(e) => setField('rackNumber')(e.target.value)}
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <Label htmlFor="bulk-crate-number">
-                          Crate number <span className="text-destructive">*</span>
-                        </Label>
-                        <CrateNumberInput
-                          id="bulk-crate-number"
-                          value={crateNumber}
-                          onChange={setCrateNumber}
+                        <Label htmlFor="bulk-rack-row">Row (optional)</Label>
+                        <Input
+                          id="bulk-rack-row"
+                          placeholder="e.g. Row 3"
+                          value={rackRow}
+                          onChange={(e) => setField('rackRow')(e.target.value)}
                         />
                       </div>
                     </div>
-                    <CrateRackPositionFields
-                      idPrefix="bulk"
-                      rackNumber={rackNumber}
-                      rackRow={rackRow}
-                      onRackNumberChange={setRackNumber}
-                      onRackRowChange={setRackRow}
-                    />
-                  </>
-                )}
 
-                {/* The planner's refusal, said where the fields are — so a
-                    disabled Place button always has a stated reason. */}
-                {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
-              </div>
+                    {/* The planner's refusal, said where the fields are — so a
+                        disabled Place button always has a stated reason. */}
+                    {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
+                  </div>
+                )}
+              </>
             )}
 
             <div className="space-y-1.5">

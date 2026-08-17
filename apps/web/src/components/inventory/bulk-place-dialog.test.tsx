@@ -79,9 +79,32 @@ async function open(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /place selected/i }));
 }
 
+/** MIXED selections: the one "To location" dropdown. */
 async function chooseDestination(user: ReturnType<typeof userEvent.setup>, name: string | RegExp) {
   await user.click(screen.getByRole('combobox'));
   await user.click(await screen.findByRole('option', { name }));
+}
+
+/** ALL-BOOKS selections: the existing-location shortcut that FILLS the fields
+ *  (the crate colour Select is a combobox too, so it is named). */
+async function chooseExisting(user: ReturnType<typeof userEvent.setup>, name: string | RegExp) {
+  await user.click(screen.getByRole('combobox', { name: /existing rack \/ crate/i }));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
+async function chooseCrateColor(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole('combobox', { name: /^crate color$/i }));
+  await user.click(await screen.findByRole('option', { name }));
+}
+
+async function blankRack(user: ReturnType<typeof userEvent.setup>) {
+  await user.clear(screen.getByLabelText(/rack number/i));
+  await user.clear(screen.getByLabelText(/^row/i));
+}
+
+async function blankCrate(user: ReturnType<typeof userEvent.setup>) {
+  await chooseCrateColor(user, 'No color');
+  await user.clear(screen.getByLabelText(/crate number/i));
 }
 
 beforeEach(() => {
@@ -97,7 +120,7 @@ describe('BulkPlaceDialog — new-rack confirmation (2026-07-23 incident)', () =
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, '1-A');
+    await chooseExisting(user, '1-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
@@ -109,7 +132,7 @@ describe('BulkPlaceDialog — new-rack confirmation (2026-07-23 incident)', () =
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack/i);
+    // ALL BOOKS: the four fields are always visible — no "+ New" entry to find.
     await user.type(screen.getByLabelText(/rack number/i), '100-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
@@ -125,7 +148,6 @@ describe('BulkPlaceDialog — new-rack confirmation (2026-07-23 incident)', () =
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack/i);
     await user.type(screen.getByLabelText(/rack number/i), '100-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
     await user.click(screen.getByRole('button', { name: /create and place/i }));
@@ -141,7 +163,6 @@ describe('BulkPlaceDialog — new-rack confirmation (2026-07-23 incident)', () =
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack/i);
     await user.type(screen.getByLabelText(/rack number/i), '100-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
     await user.click(screen.getByRole('button', { name: /use 1-A instead/i }));
@@ -165,8 +186,8 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack \/ crate/i);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
+    // No toggle: any crate box filled makes it a crate.
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/crate number/i), '9');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
     await user.click(screen.getByRole('button', { name: /create and place 2/i }));
@@ -184,10 +205,8 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack \/ crate/i);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
     await user.type(screen.getByLabelText(/crate number/i), 'BIN');
-    await user.type(screen.getByLabelText(/on rack/i), '43');
+    await user.type(screen.getByLabelText(/rack number/i), '43');
     await user.type(screen.getByLabelText(/^row/i), 'B');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
@@ -213,8 +232,6 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog();
     await open(user);
-    await chooseDestination(user, /new rack \/ crate/i);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
     await user.type(screen.getByLabelText(/crate number/i), 'BIN');
     await user.type(screen.getByLabelText(/^row/i), 'B');
 
@@ -226,7 +243,7 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(screen.queryByText(/create new crate/i)).not.toBeInTheDocument();
     expect(mockBulkPlace).not.toHaveBeenCalled();
 
-    await user.type(screen.getByLabelText(/on rack/i), '43');
+    await user.type(screen.getByLabelText(/rack number/i), '43');
     expect(screen.queryByText('Give the rack a number.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
   });
@@ -240,9 +257,9 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(await screen.findByRole('option', { name: '+ New rack' })).toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: '+ New rack' }));
 
-    expect(screen.queryByRole('radio', { name: 'Crate' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/rack number/i)).toBeInTheDocument();
-    expect(screen.getByText(/place books on their own to create a crate/i)).toBeInTheDocument();
+    expect(screen.getByText(/place books on their own to place them into a crate/i)).toBeInTheDocument();
   });
 
   it('a MIXED selection placed into an EXISTING crate says which rows get no crate', async () => {
@@ -260,7 +277,7 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog(EIGHT_BOOKS);
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 8$/i }));
 
     // ONE dialog, not one per title.
@@ -291,7 +308,7 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('blue', '4') })));
     await open(user);
-    await chooseDestination(user, '1-A');
+    await chooseExisting(user, '1-A');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     const confirm = screen.getByRole('alertdialog');
@@ -305,7 +322,7 @@ describe('BulkPlaceDialog — book crates', () => {
     const inRed7 = ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') }));
     renderDialog(inRed7);
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
@@ -356,7 +373,7 @@ describe('BulkPlaceDialog — book crates', () => {
     }));
     renderDialog(onRack38A);
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     // Nothing was predicted and nothing was waived.
@@ -415,9 +432,13 @@ describe('BulkPlaceDialog — book crates', () => {
       })),
     );
     await open(user);
-    await chooseDestination(user, /new rack \/ crate/i);
-    await user.click(screen.getByRole('radio', { name: 'Crate' }));
-    await user.type(screen.getByLabelText(/crate number/i), '9');
+    // Seeded from the shared storage (Blue 4 on 38-A); the operator types a
+    // brand-new position-less "Crate #9" over it.
+    await blankRack(user);
+    await chooseCrateColor(user, 'No color');
+    const number = screen.getByLabelText(/crate number/i);
+    await user.clear(number);
+    await user.type(number, '9');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     // Only the creation question, and it claims nothing it cannot support.
@@ -514,7 +535,7 @@ describe('BulkPlaceDialog — book crates', () => {
     // No local summaries, so nothing is predicted — the payload is the only source.
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: null })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     const confirm = screen.getByRole('alertdialog');
@@ -533,7 +554,7 @@ describe('BulkPlaceDialog — book crates', () => {
     // earlier retry test deliberately avoided by setting bookStorage: null.
     renderDialog(EIGHT_BOOKS);
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 8$/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -575,7 +596,7 @@ describe('BulkPlaceDialog — book crates', () => {
     });
     renderDialog(EIGHT_BOOKS);
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 8$/i }));
     await user.click(screen.getByRole('button', { name: /continue placement/i }));
 
@@ -595,7 +616,7 @@ describe('BulkPlaceDialog — book crates', () => {
     const user = userEvent.setup();
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 7.');
@@ -617,7 +638,7 @@ describe('BulkPlaceDialog — book crates', () => {
     });
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     // The green toast still fires — the stock DID move. The warning is what
@@ -636,7 +657,7 @@ describe('BulkPlaceDialog — book crates', () => {
     });
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(mockToast.warning).toHaveBeenCalledWith(
@@ -658,7 +679,7 @@ describe('BulkPlaceDialog — book crates', () => {
     });
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 7.');
@@ -675,11 +696,113 @@ describe('BulkPlaceDialog — book crates', () => {
     });
     renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
     await open(user);
-    await chooseDestination(user, 'Red #7');
+    await chooseExisting(user, 'Red #7');
     await user.click(screen.getByRole('button', { name: /^place 2$/i }));
 
     expect(mockToast.warning).toHaveBeenCalledWith(
       'Some titles now hold stock in more than one location, so their crate labels were left unchanged.',
+    );
+  });
+  // ═══ THE FOUR FIELDS ARE THE DESTINATION — Maus I / The Joy Luck Club ═══
+  it('an ALL-BOOKS batch that shares ONE recorded storage opens PRE-FILLED and places INTO it by default', async () => {
+    const user = userEvent.setup();
+    // Both books record Red 4 on rack 38-B; no such crate row exists (L4L's
+    // shape). Before this fix the batch could only go to an existing row.
+    renderDialog(
+      ROWS.map((r) => ({
+        ...r,
+        bookStorage: { ...storage('red', '4'), rackNumber: '38', rackRow: 'B', rackLabel: '38-B' },
+      })),
+    );
+    await open(user);
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('38');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('B');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('4');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent('Red');
+    expect(screen.getByRole('dialog')).toHaveTextContent(/current storage/i);
+
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+    // No typo guard (the record is not a typo), no crate question (same pair).
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockBulkPlace).toHaveBeenCalledTimes(1);
+    expect(mockBulkPlace.mock.calls[0]![0]).toEqual({
+      placements: [
+        { itemId: 'i-1', fromLocationId: 'stg-1', quantity: 140 },
+        { itemId: 'i-2', fromLocationId: 'stg-1', quantity: 40 },
+      ],
+      notes: undefined,
+      destination: {
+        newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'red', rackNumber: '38', rackRow: 'B' },
+      },
+      acknowledgedRackChanges: [],
+    });
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items into Red crate 4 on rack 38-B.');
+  });
+
+  it('a batch whose books record DIFFERENT places opens blank — the operator names the destination', async () => {
+    const user = userEvent.setup();
+    renderDialog(EIGHT_BOOKS);
+    await open(user);
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('');
+    expect(screen.queryByText(/current storage/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 8$/i })).toBeDisabled();
+  });
+
+  it('BLANKING the crate is the explicit no-crate choice: asked per book, and Continue clears', async () => {
+    const user = userEvent.setup();
+    renderDialog(
+      ROWS.map((r) => ({
+        ...r,
+        bookStorage: { ...storage('blue', '4'), rackNumber: '1', rackRow: 'A', rackLabel: '1-A' },
+      })),
+    );
+    await open(user);
+    await blankCrate(user);
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('2 titles will be recorded in no crate');
+    expect(confirm).toHaveTextContent('2 titles now in Blue 4');
+    // Rack 1-A exists: no creation question rides along.
+    expect(confirm).not.toHaveTextContent(/create new/i);
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /continue placement/i }));
+    expect(mockBulkPlace.mock.calls[0]![0]).toMatchObject({
+      destination: { newRack: { warehouseId: 'wh-1', rackNumber: '1', rackRow: 'A' } },
+      acknowledgedCrateChanges: [
+        { itemId: 'i-1', currentFingerprint: '["blue","4"]' },
+        { itemId: 'i-2', currentFingerprint: '["blue","4"]' },
+      ],
+    });
+  });
+
+  it('picking an existing option FILLS the four fields', async () => {
+    const user = userEvent.setup();
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('blue', '4') })));
+    await open(user);
+    await chooseExisting(user, 'Red #7');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('7');
+    expect(screen.getByRole('combobox', { name: /^crate color$/i })).toHaveTextContent('Red');
+    await chooseExisting(user, '10-A');
+    expect(screen.getByLabelText(/rack number/i)).toHaveValue('10');
+    expect(screen.getByLabelText(/^row/i)).toHaveValue('A');
+    expect(screen.getByLabelText(/crate number/i)).toHaveValue('');
+  });
+
+  it('warns when crate labels were KEPT because nobody was asked about clearing them', async () => {
+    const user = userEvent.setup();
+    mockBulkPlace.mockResolvedValue({
+      ok: true,
+      data: { placed: 2, failed: [], crateSyncCratePreserved: true },
+    });
+    renderDialog(ROWS.map((r) => ({ ...r, bookStorage: storage('red', '7') })));
+    await open(user);
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Some titles kept a crate label this placement would have cleared — nobody was asked, so it was left as it was and may now be wrong.',
     );
   });
 });

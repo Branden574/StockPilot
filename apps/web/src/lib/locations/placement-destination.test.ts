@@ -1,15 +1,24 @@
+import type { BookStorageInfo } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
 import type { DestinationOption } from './destination-option';
 import {
   destinationCrate,
+  destinationFromFields,
+  destinationIsRecordedStorage,
   destinationLabel,
+  destinationMatchesOption,
   destinationPhrase,
   destinationPosition,
   destinationRackLabel,
+  EMPTY_DESTINATION_FIELDS,
+  fieldsAreRackOnly,
+  fieldsFromOption,
   isCrateChoice,
   newDestinationProblem,
   newDestinationReady,
+  seedDestinationFields,
+  sharedRecordedStorage,
   type ChosenDestination,
 } from './placement-destination';
 
@@ -304,5 +313,266 @@ describe('destinationPhrase — reads as English in a success sentence', () => {
         option: crateOption({ name: 'Old Crate', crateColor: null, crateNumber: null }),
       }),
     ).toBe('into Old Crate');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FOUR FIELDS ARE THE DESTINATION — Maus I / The Joy Luck Club, 2026-08-17
+//
+// The Joy Luck Club: recorded Red 4 on rack 38-B, 25 in staging. The dialog
+// listed existing rows only; "Red #4 on rack 38-B" had no row, so it was not
+// there. Bare "38-B" was, and choosing it cleared the crate. These pin the
+// replacement rule: the four boxes ARE the destination, seeded from the record.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The Joy Luck Club's recorded storage, exactly as readBookStorage returns it. */
+const RED_4_ON_38B: BookStorageInfo = {
+  rackNumber: '38',
+  rackRow: 'B',
+  crateColor: 'red',
+  crateNumber: '4',
+  grade: null,
+  rackLabel: '38-B',
+  crateLabel: 'Red 4',
+};
+
+describe('seedDestinationFields — the default destination is where the book already lives', () => {
+  it('pre-fills all four boxes from the recorded storage', () => {
+    expect(seedDestinationFields(RED_4_ON_38B)).toEqual({
+      fields: { rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '4' },
+      unknownCrateColor: null,
+    });
+  });
+
+  it('a recorded colour is seeded as its CRATE_COLORS slug, whatever the stored case', () => {
+    expect(seedDestinationFields({ ...RED_4_ON_38B, crateColor: ' Red ' }).fields.crateColor).toBe(
+      'red',
+    );
+  });
+
+  it('an UNKNOWN recorded colour leaves the box blank and hands the raw text back for a note', () => {
+    expect(seedDestinationFields({ ...RED_4_ON_38B, crateColor: 'taupe' })).toEqual({
+      fields: { rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '4' },
+      unknownCrateColor: 'taupe',
+    });
+  });
+
+  it('a crate with NO recorded rack seeds a position-less crate', () => {
+    expect(
+      seedDestinationFields({ ...RED_4_ON_38B, rackNumber: null, rackRow: null, rackLabel: null })
+        .fields,
+    ).toEqual({ rackNumber: '', rackRow: '', crateColor: 'red', crateNumber: '4' });
+  });
+
+  it('a rack with NO recorded crate seeds the rack pair only', () => {
+    expect(
+      seedDestinationFields({
+        ...RED_4_ON_38B,
+        crateColor: null,
+        crateNumber: null,
+        crateLabel: null,
+      }).fields,
+    ).toEqual({ rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '' });
+  });
+
+  it('nothing recorded (or a non-book) seeds nothing', () => {
+    expect(seedDestinationFields(null).fields).toEqual(EMPTY_DESTINATION_FIELDS);
+    expect(seedDestinationFields(undefined).fields).toEqual(EMPTY_DESTINATION_FIELDS);
+  });
+});
+
+describe('fieldsFromOption — the dropdown FILLS the boxes', () => {
+  it('a rack row fills the rack pair and BLANKS the crate — picking a bare rack is choosing no crate', () => {
+    expect(fieldsFromOption(option({ rackNumber: '38', rackRow: 'B' }))).toEqual({
+      rackNumber: '38',
+      rackRow: 'B',
+      crateColor: '',
+      crateNumber: '',
+    });
+  });
+
+  it('a positioned crate row fills all four', () => {
+    expect(
+      fieldsFromOption(
+        crateOption({
+          name: 'Blue #0 on rack 38-B',
+          crateColor: 'Blue',
+          crateNumber: '0',
+          rackNumber: '38',
+          rackRow: 'B',
+        }),
+      ),
+    ).toEqual({ rackNumber: '38', rackRow: 'B', crateColor: 'blue', crateNumber: '0' });
+  });
+
+  it('a legacy crate row with no columns fills nothing', () => {
+    expect(
+      fieldsFromOption(crateOption({ name: 'Old Crate', crateColor: null, crateNumber: null })),
+    ).toEqual(EMPTY_DESTINATION_FIELDS);
+  });
+});
+
+describe('destinationFromFields — what the four boxes describe', () => {
+  const RED_4_FIELDS = { rackNumber: '38', rackRow: 'B', crateColor: 'red', crateNumber: '4' };
+
+  it('the seeded record, nothing selected → a crate ON that rack, described by fields', () => {
+    expect(destinationFromFields(RED_4_FIELDS, null)).toEqual({
+      mode: 'new-crate',
+      crateColor: 'red',
+      crateNumber: '4',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+    // …and it names the row migration 0270 dedupes on: the server reuses an
+    // existing "Red #4 on rack 38-B" and mints it once otherwise.
+    expect(destinationLabel(destinationFromFields(RED_4_FIELDS, null)!)).toBe(
+      'Red #4 on rack 38-B',
+    );
+  });
+
+  it('a selected option whose columns still equal the boxes → EXISTING by id', () => {
+    const rack38b = option({ id: 'r-38b', name: '38-B', rackNumber: '38', rackRow: 'B' });
+    expect(destinationFromFields(fieldsFromOption(rack38b), rack38b)).toEqual({
+      mode: 'existing',
+      option: rack38b,
+    });
+  });
+
+  it('typing over a selected option demotes it to the fields — the boxes win', () => {
+    const rack38b = option({ id: 'r-38b', name: '38-B', rackNumber: '38', rackRow: 'B' });
+    // The operator picked 38-B and then typed the crate back in.
+    expect(destinationFromFields({ ...fieldsFromOption(rack38b), crateNumber: '4' }, rack38b))
+      .toEqual({ mode: 'new-crate', crateColor: '', crateNumber: '4', rackNumber: '38', rackRow: 'B' });
+  });
+
+  it('a legacy crate row (no columns) stays placeable by id against blank boxes', () => {
+    const legacy = crateOption({ id: 'c-old', name: 'Old Crate', crateColor: null, crateNumber: null });
+    expect(destinationFromFields(EMPTY_DESTINATION_FIELDS, legacy)).toEqual({
+      mode: 'existing',
+      option: legacy,
+    });
+  });
+
+  it('rack boxes only → a rack (the one choice that clears a recorded crate)', () => {
+    const fields = { rackNumber: '38', rackRow: 'B', crateColor: '', crateNumber: '' };
+    expect(destinationFromFields(fields, null)).toEqual({
+      mode: 'new-rack',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+    expect(fieldsAreRackOnly(fields)).toBe(true);
+    expect(fieldsAreRackOnly(RED_4_FIELDS)).toBe(false);
+    // A row alone is not a position, so it is not "rack-only" either.
+    expect(fieldsAreRackOnly({ ...fields, rackNumber: '' })).toBe(false);
+  });
+
+  it('a colour with no number is still a crate choice — the planner then refuses it, inline', () => {
+    const dest = destinationFromFields(
+      { rackNumber: '', rackRow: '', crateColor: 'red', crateNumber: '' },
+      null,
+    )!;
+    expect(dest.mode).toBe('new-crate');
+    expect(newDestinationReady(dest)).toBe(false);
+  });
+
+  it('all blank → nothing to submit', () => {
+    expect(destinationFromFields(EMPTY_DESTINATION_FIELDS, null)).toBeNull();
+  });
+});
+
+describe('destinationMatchesOption — fingerprint equality, not byte equality', () => {
+  it('matches across spelling and case, like the gate does', () => {
+    const row = crateOption({ crateColor: 'Blue', crateNumber: ' 4 ', rackNumber: '22', rackRow: 'b' });
+    expect(
+      destinationMatchesOption(
+        { rackNumber: '22', rackRow: 'B', crateColor: 'blue', crateNumber: '4' },
+        row,
+      ),
+    ).toBe(true);
+    expect(
+      destinationMatchesOption(
+        { rackNumber: '22', rackRow: 'B', crateColor: 'blue', crateNumber: '5' },
+        row,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('destinationIsRecordedStorage — suppress the typo guard for the recorded truth', () => {
+  it('the seeded fields ARE the recorded storage', () => {
+    expect(
+      destinationIsRecordedStorage(
+        destinationFromFields(seedDestinationFields(RED_4_ON_38B).fields, null)!,
+        RED_4_ON_38B,
+      ),
+    ).toBe(true);
+  });
+
+  it('a different crate, or the same crate on a different rack, is NOT', () => {
+    expect(
+      destinationIsRecordedStorage(
+        newCrate({ crateColor: 'red', crateNumber: '5', rackNumber: '38', rackRow: 'B' }),
+        RED_4_ON_38B,
+      ),
+    ).toBe(false);
+    expect(
+      destinationIsRecordedStorage(
+        newCrate({ crateColor: 'red', crateNumber: '4', rackNumber: '40', rackRow: 'A' }),
+        RED_4_ON_38B,
+      ),
+    ).toBe(false);
+  });
+
+  it('rack-only fields on a crated book are NOT the recorded storage', () => {
+    expect(
+      destinationIsRecordedStorage({ mode: 'new-rack', rackNumber: '38', rackRow: 'B' }, RED_4_ON_38B),
+    ).toBe(false);
+  });
+
+  it('a book with nothing recorded matches nothing — blank is not a place', () => {
+    const blank: BookStorageInfo = {
+      rackNumber: null,
+      rackRow: null,
+      crateColor: null,
+      crateNumber: null,
+      grade: null,
+      rackLabel: null,
+      crateLabel: null,
+    };
+    expect(destinationIsRecordedStorage(newCrate({ crateNumber: '4' }), blank)).toBe(false);
+    expect(destinationIsRecordedStorage(newCrate({ crateNumber: '4' }), null)).toBe(false);
+  });
+
+  it('sharedRecordedStorage: a batch that records ONE place seeds it; a mixed batch seeds nothing', () => {
+    expect(sharedRecordedStorage([RED_4_ON_38B, { ...RED_4_ON_38B, crateColor: 'Red' }])).toBe(
+      RED_4_ON_38B,
+    );
+    expect(sharedRecordedStorage([RED_4_ON_38B, { ...RED_4_ON_38B, crateNumber: '5' }])).toBeNull();
+    expect(sharedRecordedStorage([RED_4_ON_38B, { ...RED_4_ON_38B, rackRow: 'A' }])).toBeNull();
+    expect(sharedRecordedStorage([RED_4_ON_38B, null])).toBeNull();
+    expect(sharedRecordedStorage([])).toBeNull();
+    const blank: BookStorageInfo = {
+      rackNumber: null,
+      rackRow: null,
+      crateColor: null,
+      crateNumber: null,
+      grade: null,
+      rackLabel: null,
+      crateLabel: null,
+    };
+    expect(sharedRecordedStorage([blank, blank])).toBeNull();
+  });
+
+  it('an existing option equal to the record counts too', () => {
+    const row = crateOption({
+      name: 'Red #4 on rack 38-B',
+      crateColor: 'red',
+      crateNumber: '4',
+      rackNumber: '38',
+      rackRow: 'B',
+    });
+    expect(destinationIsRecordedStorage({ mode: 'existing', option: row }, RED_4_ON_38B)).toBe(
+      true,
+    );
   });
 });

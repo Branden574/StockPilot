@@ -22,14 +22,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import {
-  CrateColorSelect,
-  CrateNumberInput,
-  CrateRackPositionFields,
+  BookDestinationFields,
   CurrentStorageSummary,
   DestinationCrateNote,
-  DestinationKindToggle,
-  NO_CRATE_COLOR,
-  type NewDestinationKind,
 } from '@/components/inventory/crate-fields';
 import {
   PlacementConfirmDialog,
@@ -58,17 +53,24 @@ import { Textarea } from '@/components/ui/textarea';
 import type { DestinationOption } from '@/lib/locations/destination-option';
 import {
   destinationCrate,
+  destinationFromFields,
+  destinationIsRecordedStorage,
   destinationLabel,
   destinationPhrase,
   destinationPosition,
+  EMPTY_DESTINATION_FIELDS,
+  fieldsFromOption,
   isCrateChoice,
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  seedDestinationFields,
   type ChosenDestination,
+  type DestinationFields,
 } from '@/lib/locations/placement-destination';
 import { placeStockAction } from '@/server/actions/inventory';
 
+/** Non-books only: the dropdown entry that opens the inline rack form. */
 const NEW_RACK_SENTINEL = '__new__';
 
 type ActionDestination = Parameters<typeof placeStockAction>[0]['destination'];
@@ -94,6 +96,16 @@ interface PlaceFromStagingDialogProps {
    * the server re-reads the item before it writes.
    */
   bookStorage?: BookStorageInfo | null;
+  /**
+   * Whether this user may CREATE a rack/crate row (`locations:manage`; RLS
+   * `locations_insert` requires it, migration 0212). The server is the
+   * authority; this only lets the dialog say so BEFORE the submit when the four
+   * fields name a row that does not exist yet — for a label-only crate that is
+   * the default path, and a bare server refusal there would read as "put-away
+   * is broken". Defaults to true so callers that predate the prop keep today's
+   * behaviour (offer, and let the server refuse).
+   */
+  canManageLocations?: boolean;
   trigger?: React.ReactNode;
 }
 
@@ -108,6 +120,7 @@ export function PlaceFromStagingDialog({
   availableQuantity,
   destinations,
   bookStorage,
+  canManageLocations = true,
   trigger,
 }: PlaceFromStagingDialogProps) {
   const router = useRouter();
@@ -119,14 +132,26 @@ export function PlaceFromStagingDialog({
   const [quantity, setQuantity] = React.useState(String(availableQuantity));
   const [notes, setNotes] = React.useState('');
 
-  // Inline "+ New" fields. `newKind` is now an EXPLICIT choice — typing a crate
-  // color used to be the only thing that made a destination a crate, which
-  // meant the field deciding locations.kind was never actually asked about.
-  const [newKind, setNewKind] = React.useState<NewDestinationKind>('rack');
-  const [rackNumber, setRackNumber] = React.useState('');
-  const [rackRow, setRackRow] = React.useState('');
-  const [crateColor, setCrateColor] = React.useState('');
-  const [crateNumber, setCrateNumber] = React.useState('');
+  // ═══ THE FOUR FIELDS ARE THE DESTINATION (books) — Maus I, 2026-08-17 ═══
+  //
+  // For a BOOK these four boxes are the primary "To" input: always visible,
+  // PRE-FILLED from the book's recorded storage on open, and the primary action
+  // places INTO exactly that crate on that rack (the server resolves-or-creates
+  // the row by name). They used to live behind a "+ New rack / crate" dropdown
+  // entry and a Rack|Crate toggle, so for a label-only crate — most crates in
+  // this warehouse — the crate the dialog had just said the book was in was not
+  // in the list and could only be re-typed from scratch. The reachable choice
+  // was the bare rack, which clears the crate; the gate asked; the operator had
+  // nowhere else to go. See placement-destination.ts for the pure rules.
+  //
+  // For a NON-BOOK the older shape stays: the dropdown, "+ New rack / crate",
+  // and the rack pair inline. Nothing about a non-book was wrong.
+  const [fields, setFields] = React.useState<DestinationFields>(EMPTY_DESTINATION_FIELDS);
+  const { rackNumber, rackRow, crateColor, crateNumber } = fields;
+  const setField = (key: keyof DestinationFields) => (value: string) =>
+    setFields((prev) => ({ ...prev, [key]: value }));
+  /** A recorded crate colour the Select cannot show (not in CRATE_COLORS). */
+  const [unknownCrateColor, setUnknownCrateColor] = React.useState<string | null>(null);
 
   const [submitting, setSubmitting] = React.useState(false);
   // ONE pending confirmation, whatever it has to ask about — a genuinely new
@@ -157,21 +182,21 @@ export function PlaceFromStagingDialog({
   const [serverError, setServerError] = React.useState<string | null>(null);
 
   const isBook = itemType === 'book';
-  const isNew = destId === NEW_RACK_SENTINEL;
+  const isNew = !isBook && destId === NEW_RACK_SENTINEL;
   const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
 
-  // Reset form state whenever the dialog opens
+  // Reset form state whenever the dialog opens — and for a BOOK, seed the four
+  // fields from its recorded storage. "Where it already lives" is the default
+  // destination; the operator edits away from it, never toward it.
   React.useEffect(() => {
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset all fields when dialog opens */
     setDestId('');
     setQuantity(String(availableQuantity));
     setNotes('');
-    setNewKind('rack');
-    setRackNumber('');
-    setRackRow('');
-    setCrateColor('');
-    setCrateNumber('');
+    const seeded = seedDestinationFields(isBook ? bookStorage : null);
+    setFields(seeded.fields);
+    setUnknownCrateColor(seeded.unknownCrateColor);
     setServerError(null);
     setPendingConfirm(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -184,23 +209,36 @@ export function PlaceFromStagingDialog({
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale confirmation on edit
     setPendingConfirm(null);
-  }, [destId, newKind, rackNumber, rackRow, crateColor, crateNumber, quantity]);
+  }, [destId, rackNumber, rackRow, crateColor, crateNumber, quantity]);
 
   const qtyNum = Number.parseInt(quantity, 10);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
 
+  /**
+   * The existing-location dropdown, for a BOOK, is a shortcut that FILLS the
+   * four fields from the row's own columns. Picking a bare rack blanks the
+   * crate — that IS choosing "no crate", and the gate will say so before the
+   * write. The selection is remembered so that, while the boxes still equal
+   * the row, the request goes by id (nothing to create).
+   */
+  function pickExisting(id: string) {
+    setDestId(id);
+    if (!isBook) return;
+    const option = destinations.find((d) => d.id === id);
+    if (!option) return;
+    setFields(fieldsFromOption(option));
+    setUnknownCrateColor(null);
+  }
+
   /** The destination as chosen in this form — the input to every derivation.
    *
-   *  The crate branch carries the SAME rack fields the rack branch does: a
-   *  crate sits on a rack, so the toggle picks the kind of row, not which of
-   *  two facts survives. Anything typed into "On rack" therefore follows the
-   *  operator across the toggle instead of being silently discarded. */
+   *  BOOKS: the four fields decide (`destinationFromFields`) — an existing row
+   *  by id while the boxes still equal it, otherwise a crate on the typed
+   *  position (any crate box filled) or a bare rack. NON-BOOKS: the dropdown,
+   *  or the inline rack pair behind "+ New rack / crate". */
   function chosenDestination(): ChosenDestination | null {
-    if (isNew) {
-      return newKind === 'crate'
-        ? { mode: 'new-crate', crateColor, crateNumber, rackNumber, rackRow }
-        : { mode: 'new-rack', rackNumber, rackRow };
-    }
+    if (isBook) return destinationFromFields(fields, selectedDestination);
+    if (isNew) return { mode: 'new-rack', rackNumber, rackRow };
     return selectedDestination ? { mode: 'existing', option: selectedDestination } : null;
   }
 
@@ -213,9 +251,34 @@ export function PlaceFromStagingDialog({
   // apps/mobile/src/lib/move-stock-form.ts).
   const chosen = chosenDestination();
   const newReady = chosen !== null && newDestinationReady(chosen);
-  // The planner's OWN sentence, rendered inline beside the fields it is about.
-  const newProblem = chosen !== null ? newDestinationProblem(chosen) : null;
-  const canSubmit = !submitting && qtyValid && (isNew ? newReady : destId.length > 0);
+  // Would this destination have to be MINTED? Only a caller with
+  // `locations:manage` can do that (RLS refuses everyone else), so say so here
+  // instead of letting the default path for a label-only crate die on a
+  // server refusal. Judged by the same label the server resolves by, so an
+  // existing "Red #4 on rack 38-B" is correctly not a mint.
+  const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
+  const needsMint =
+    plannedLabel.length > 0 &&
+    !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
+  const cannotMint = needsMint && !canManageLocations;
+  // The planner's OWN sentence, rendered inline beside the fields it is about
+  // — or, when the fields are fine but the row would need creating by someone
+  // who may not, that.
+  const newProblem =
+    chosen !== null
+      ? (newDestinationProblem(chosen) ??
+        (cannotMint
+          ? `${plannedLabel} does not exist yet, and creating racks or crates needs the Manage locations permission. Pick an existing location, or ask a manager to create it.`
+          : null))
+      : null;
+  // A BOOK submits whenever the four fields name a place the planner can name
+  // (an existing row by id is always ready). A non-book: the dropdown, or a
+  // ready inline rack.
+  const canSubmit =
+    !submitting &&
+    qtyValid &&
+    !cannotMint &&
+    (isBook || isNew ? newReady : destId.length > 0);
 
   function toActionDestination(dest: ChosenDestination): ActionDestination {
     if (dest.mode === 'existing') return { existingLocationId: dest.option.id };
@@ -528,8 +591,16 @@ export function PlaceFromStagingDialog({
     //    against this warehouse's existing rack/crate names — an existing
     //    label is reused by the server, so it is not a creation and needs no
     //    confirmation (zero friction on the common path).
+    //
+    //    SUPPRESSED when the fields ARE the book's recorded storage. For a
+    //    label-only crate — most crates in this warehouse — no row exists yet,
+    //    so the typo guard would fire on every put-away of every crated book,
+    //    for a destination the operator did not type but the record supplied.
+    //    That is the recorded truth being minted as a row for the first time,
+    //    not a typo; the near-match suggestions stay for anything typed.
+    const recordedStorage = isBook && destinationIsRecordedStorage(dest, bookStorage);
     const creation =
-      dest.mode === 'existing'
+      dest.mode === 'existing' || recordedStorage
         ? null
         : describeNewRackPlacement({
             label: destinationLabel(dest),
@@ -654,102 +725,95 @@ export function PlaceFromStagingDialog({
             </div>
           </div>
 
-          {/* Destination picker */}
-          <div className="space-y-1.5">
-            <Label>To location</Label>
-            <Select value={destId} onValueChange={setDestId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select destination" />
-              </SelectTrigger>
-              <SelectContent>
-                {destinations.map((d) => (
-                  <SelectItem key={d.id} value={d.id}>
-                    {d.name}
-                  </SelectItem>
-                ))}
-                <SelectItem value={NEW_RACK_SENTINEL}>+ New rack / crate</SelectItem>
-              </SelectContent>
-            </Select>
-            {/* An EXISTING crate already carries its metadata — show it rather
-                than making the user re-type what the location row holds. */}
-            {isBook && selectedDestination && (
-              <DestinationCrateNote
-                crateColor={selectedDestination.crateColor}
-                crateNumber={selectedDestination.crateNumber}
+          {/* ═══ BOOKS: the four fields ARE the destination ═══ */}
+          {isBook ? (
+            <>
+              {/* Existing-location shortcut — FILLS the four fields below. */}
+              <div className="space-y-1.5">
+                <Label id="place-existing-label">Pick an existing rack / crate (optional)</Label>
+                <Select value={destId} onValueChange={pickExisting}>
+                  <SelectTrigger aria-labelledby="place-existing-label">
+                    <SelectValue placeholder="Fill in from an existing location" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {destinations.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* An EXISTING crate already carries its metadata — show it
+                    rather than making the user re-type what the row holds. */}
+                {selectedDestination && (
+                  <DestinationCrateNote
+                    crateColor={selectedDestination.crateColor}
+                    crateNumber={selectedDestination.crateNumber}
+                  />
+                )}
+              </div>
+
+              <BookDestinationFields
+                idPrefix="place"
+                fields={fields}
+                onChange={setFields}
+                unknownCrateColor={unknownCrateColor}
+                problem={newProblem}
               />
-            )}
-          </div>
+            </>
+          ) : (
+            <>
+              {/* Destination picker */}
+              <div className="space-y-1.5">
+                <Label>To location</Label>
+                <Select value={destId} onValueChange={pickExisting}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select destination" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {destinations.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={NEW_RACK_SENTINEL}>+ New rack / crate</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {/* Inline new rack/crate inputs */}
-          {isNew && (
-            <div className="space-y-3 rounded-md border p-3">
-              {isBook && <DestinationKindToggle value={newKind} onChange={setNewKind} />}
-
-              {(!isBook || newKind === 'rack') && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="place-rack-number">
-                      Rack number <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="place-rack-number"
-                      placeholder="e.g. A1"
-                      value={rackNumber}
-                      onChange={(e) => setRackNumber(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="place-rack-row">Row (optional)</Label>
-                    <Input
-                      id="place-rack-row"
-                      placeholder="e.g. Row 3"
-                      value={rackRow}
-                      onChange={(e) => setRackRow(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {isBook && newKind === 'crate' && (
-                <>
+              {/* Inline new rack inputs */}
+              {isNew && (
+                <div className="space-y-3 rounded-md border p-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label htmlFor="place-crate-color">Crate color (optional)</Label>
-                      <CrateColorSelect
-                        id="place-crate-color"
-                        value={crateColor}
-                        onChange={(v) => setCrateColor(v === NO_CRATE_COLOR ? '' : v)}
+                      <Label htmlFor="place-rack-number">
+                        Rack number <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="place-rack-number"
+                        placeholder="e.g. A1"
+                        value={rackNumber}
+                        onChange={(e) => setField('rackNumber')(e.target.value)}
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label htmlFor="place-crate-number">
-                        Crate number <span className="text-destructive">*</span>
-                      </Label>
-                      <CrateNumberInput
-                        id="place-crate-number"
-                        value={crateNumber}
-                        onChange={setCrateNumber}
+                      <Label htmlFor="place-rack-row">Row (optional)</Label>
+                      <Input
+                        id="place-rack-row"
+                        placeholder="e.g. Row 3"
+                        value={rackRow}
+                        onChange={(e) => setField('rackRow')(e.target.value)}
                       />
                     </div>
                   </div>
-                  {/* A crate SITS ON a rack — both, or the picker only ever
-                      learns half of where the book is. */}
-                  <CrateRackPositionFields
-                    idPrefix="place"
-                    rackNumber={rackNumber}
-                    rackRow={rackRow}
-                    onRackNumberChange={setRackNumber}
-                    onRackRowChange={setRackRow}
-                  />
-                </>
-              )}
 
-              {/* The planner's refusal, said where the fields are. Without it a
-                  half-filled form would just have a dead Place button and no
-                  explanation — and the version of this dialog that had neither
-                  offered to create a crate it could not name. */}
-              {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
-            </div>
+                  {/* The planner's refusal, said where the fields are. Without
+                      it a half-filled form would just have a dead Place button
+                      and no explanation. */}
+                  {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
+                </div>
+              )}
+            </>
           )}
 
           {/* Quantity — supports split */}
