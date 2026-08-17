@@ -598,7 +598,11 @@ export function buildDeliveryRequestDraft(
 
   blocks.push(
     [
-      'DELIVERY REQUEST — StockPilot',
+      // The banner follows the fulfillment type, like the subject (owner
+      // decision 2026-08-16) and the action copy: a will-call email opening
+      // with "DELIVERY REQUEST" was the same misstatement the subject fix
+      // corrected, one line lower.
+      isPickup ? 'PICKUP REQUEST — StockPilot' : 'DELIVERY REQUEST — StockPilot',
       '',
       `Order: ${toPlainTextLine(handle)}`,
       `Requested by: ${requesterLabel}`,

@@ -839,6 +839,22 @@ describe('buildDeliveryRequestDraft — pickup body (owner decision: pickup gets
     expect(pickup().body).toContain('Fulfillment method: Pickup / will-call');
   });
 
+  it('OPENS with the pickup banner — the body no longer contradicts its own subject', () => {
+    // The banner follows the fulfillment type like the subject and the action
+    // copy (owner decision 2026-08-16, extended to the body's first line). A
+    // will-call email opening "DELIVERY REQUEST" was the last surviving copy
+    // of the misstatement. Both directions pinned: the pickup banner present,
+    // the delivery wording absent from the WHOLE pickup body.
+    const { body } = pickup();
+    expect(body.startsWith('PICKUP REQUEST — StockPilot')).toBe(true);
+    expect(body).not.toContain('DELIVERY REQUEST');
+  });
+
+  it('a delivery body still opens with the delivery banner — untouched by the pickup branch', () => {
+    const { body } = buildDeliveryRequestDraft(makeDraftInput());
+    expect(body.startsWith('DELIVERY REQUEST — StockPilot')).toBe(true);
+  });
+
   it('names where to collect from and who is collecting', () => {
     const { body } = pickup();
     expect(body).toContain('PICKUP FROM\nDC4 will-call desk');
