@@ -461,7 +461,10 @@ export function StagingTable({
         </div>
       ) : visibleRows.length === 0 ? (
         /* Filtered empty: rows exist, the active filters hide all of them. */
-        <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <div
+          className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center"
+          data-testid="staging-filtered-empty"
+        >
           <p className="text-muted-foreground text-sm">
             No staging items match these filters.
           </p>
