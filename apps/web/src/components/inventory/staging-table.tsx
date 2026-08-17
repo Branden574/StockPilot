@@ -16,6 +16,7 @@ import {
   formatStagingCount,
   hasActiveStagingFilters,
   isSamePoNumber,
+  isStaleAge,
   normalizeStagingText,
   type StagingAgeFilter,
   type StagingFilters,
@@ -98,9 +99,9 @@ export interface StagingTableProps {
 function AgeBadge({ ageDays }: { ageDays: number | null }) {
   if (ageDays === null) return <span className="text-muted-foreground text-sm">—</span>;
 
-  // The SAME threshold the Age filter's Recent/Stale buckets use
-  // (staging-filters.ts), so the badge and the filter can never disagree.
-  const isStale = ageDays > STALE_THRESHOLD_DAYS;
+  // The SAME predicate the Age filter's Stale bucket uses (staging-filters.ts),
+  // not a re-typed comparison, so the badge and the filter cannot drift apart.
+  const isStale = isStaleAge(ageDays);
   return (
     <span className="flex items-center gap-1.5">
       <span className="text-sm tabular-nums">{ageDays}d</span>
@@ -236,9 +237,15 @@ export function StagingTable({
   function updateFilters(patch: Partial<StagingFilters>) {
     const next: StagingFilters = { ...filters, ...patch };
     setFilters(next);
-    const keep = new Set(filterStagingRows(rows, next).map(rowKey));
+    // A key survives only if its row is visible BOTH now and under the new
+    // filters. The "now" half matters after a rows refresh: a selected row the
+    // fresh data no longer matches (e.g. it aged past the Stale line under
+    // Age=Recent) is already invisible and must not come back selected when the
+    // user widens the filter.
+    const visibleNow = new Set(visibleRows.map(rowKey));
+    const visibleNext = new Set(filterStagingRows(rows, next).map(rowKey));
     setSelectedKeys((prev) => {
-      const pruned = new Set([...prev].filter((k) => keep.has(k)));
+      const pruned = new Set([...prev].filter((k) => visibleNow.has(k) && visibleNext.has(k)));
       return pruned.size === prev.size ? prev : pruned;
     });
   }

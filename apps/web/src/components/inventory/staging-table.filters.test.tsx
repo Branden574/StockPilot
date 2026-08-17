@@ -170,6 +170,33 @@ describe('StagingTable filters — PO picker + click-to-filter', () => {
     expect(routerPush).not.toHaveBeenCalled();
   });
 
+  it('the No PO chip reads "PO: No PO", never the internal sentinel', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderTable();
+    await pick(user, 'Filter by purchase order', 'No PO / Unattributed (1)');
+    const chips = screen.getByTestId('staging-active-filters');
+    expect(within(chips).getByText('PO: No PO')).toBeInTheDocument();
+    expect(within(chips).queryByText(/__none__/)).not.toBeInTheDocument();
+    fireEvent.click(within(chips).getByRole('button', { name: 'Remove filter PO: No PO' }));
+    expect(count()).toBe('4 items');
+  });
+
+  it('click-to-filter snaps to the picker\'s canonical spelling of the PO', () => {
+    // Two rows carry the same PO typed two ways; the picker groups them under
+    // whichever spelling it met first (row order), and clicking the OTHER
+    // spelling must select that same option, not create an orphan filter value.
+    const upper = makeRow({ itemId: 'U', name: 'Upper case PO', sourcePoNumber: 'PO-100', sourceLocationId: 'stg-u' });
+    const lower = makeRow({ itemId: 'L', name: 'Lower case PO', sourcePoNumber: 'po-100', sourceLocationId: 'stg-l' });
+    renderTable({ rows: [upper, lower, C] });
+    fireEvent.click(screen.getByRole('button', { name: 'po-100' }));
+    expect(count()).toBe('2 of 3 items');
+    expect(screen.getByText('Upper case PO')).toBeInTheDocument();
+    expect(screen.getByText('Lower case PO')).toBeInTheDocument();
+    // The Select trigger shows the canonical option (with its count), and the chip matches it.
+    expect(screen.getByRole('combobox', { name: 'Filter by purchase order' })).toHaveTextContent('PO-100 (2)');
+    expect(within(screen.getByTestId('staging-active-filters')).getByText('PO: PO-100')).toBeInTheDocument();
+  });
+
   it('clicking a PO number in a row filters to that PO and does not navigate', () => {
     renderTable();
     const poButton = screen.getAllByRole('button', { name: 'PO-200' })[0]!;
@@ -222,15 +249,19 @@ describe('StagingTable filters — source and age', () => {
   it('Age: Recent keeps 3d and 7d; Stale keeps 14d; a null age shows under neither', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderTable();
+    // Under All, exactly one badge (B at 14d) — C at 7d, ON the boundary, wears none.
+    expect(screen.getAllByText('Stale', { selector: 'div' })).toHaveLength(1);
     await pick(user, 'Filter by age', /^Recent/);
     expect(count()).toBe('2 of 4 items');
     expect(screen.getByText('Acer Chromebook')).toBeInTheDocument();
     expect(screen.getByText('Whiteboard markers')).toBeInTheDocument();
+    // Badge and filter agree at the boundary: nothing the Recent bucket keeps
+    // is badged Stale (a `>=` badge would light up the 7d row here).
+    expect(screen.queryByText('Stale', { selector: 'div' })).not.toBeInTheDocument();
     await pick(user, 'Filter by age', /^Stale/);
     expect(count()).toBe('1 of 4 items');
     expect(screen.getByText('Persepolis')).toBeInTheDocument();
-    // The Stale badge and the Stale filter agree: the one row the filter keeps
-    // is the one row wearing the badge.
+    // ...and the one row the Stale bucket keeps is the one row wearing the badge.
     expect(screen.getAllByText('Stale', { selector: 'div' })).toHaveLength(1);
   });
 });
@@ -344,6 +375,32 @@ describe('StagingTable filters — selection safety', () => {
     expect(screen.getByText('1 selected')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select Whiteboard markers' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('checkbox', { name: 'Select Acer Chromebook' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('a rows refresh that hides a selected row under the active filter drops it from Place selected and it does not come back on widen', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { rerender } = renderTable();
+    await pick(user, 'Filter by age', /^Recent/); // A (3d) and C (7d)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all placeable rows' }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    // Overnight, C ages to 8d: the next server render hands us fresh rows.
+    const agedC = { ...C, ageDays: 8 };
+    rerender(
+      <StagingTable rows={[A, B, agedC, D]} destinationsMap={DESTS} warehouseNames={{ wh1: 'WH One' }} canPlace activeItemType="all" />,
+    );
+    // C is no longer visible under Recent, so it is no longer selected — and,
+    // above all, not in the bulk payload.
+    expect(count()).toBe('1 of 4 items');
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect((bulkPlaceRowsSeen.at(-1) as Array<{ itemId: string }>).map((r) => r.itemId)).toEqual(['A']);
+
+    // Widening to Any age brings C back on screen UNselected.
+    await pick(user, 'Filter by age', /^Any age/);
+    expect(count()).toBe('4 items');
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Whiteboard markers' })).toHaveAttribute('aria-checked', 'false');
+    expect((bulkPlaceRowsSeen.at(-1) as Array<{ itemId: string }>).map((r) => r.itemId)).toEqual(['A']);
   });
 
   it('keeps the composite itemId::sourceLocationId identity under a filter', () => {
