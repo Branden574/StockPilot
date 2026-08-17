@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as Linking from 'expo-linking';
@@ -1482,5 +1485,74 @@ describe('the phone adds only its recipients to the shared mapping', () => {
     expect(prepared.draft.to).toBe(DELIVERY_REQUEST_EMAIL.to);
     expect(prepared.draft.cc).toBe('arosas@cvwest.org');
     expect(prepared.draft.ccName).toBe(DELIVERY_REQUEST_EMAIL_NAMES.cc);
+  });
+});
+
+/**
+ * WIRING PINS for app/order/[id].tsx's per-org email routing (the
+ * maintenance-api.test.ts house convention: readFileSync + string/regex
+ * assertions over the screen source, because app/ imports native modules at
+ * top level and this repo's vitest cannot compile it).
+ *
+ * HONEST LIMITS, stated up front: these are TEXT assertions — nothing
+ * executes. They catch CALL-REMOVAL (an import, an assignment, a threaded
+ * argument disappearing from the file, a hardcoded value replacing the
+ * tested helper's result), and that is all they catch. They do NOT prove the
+ * code runs the way the pin implies at runtime — a matched assignment can be
+ * dead code beside a replacement, and no regex can see that. Every DECISION
+ * pinned here (isMissingEmailRoutingColumn's 42703 rule, the parser, the
+ * gate, the transport fit) is proven BEHAVIORALLY elsewhere in this file;
+ * these pins only prove the screen still WIRES those tested helpers in.
+ * Runtime verification stays a hand-test on the simulator.
+ */
+describe('app/order/[id].tsx is wired to the tested email-routing helpers', () => {
+  const src = readFileSync(path.resolve(__dirname, '../../app/order/[id].tsx'), 'utf8');
+
+  it('`deliveryRouting` DEFAULTS to unset — a never-read row hides the action, and never selects the compiled constants', () => {
+    expect(src).toMatch(
+      /let\s+deliveryRouting:\s*OrgEmailRoutingReadState\s*=\s*\{\s*state:\s*'unset'\s*\}\s*;/,
+    );
+  });
+
+  it('the org-row read actually SELECTS email_routing alongside timezone', () => {
+    // Dropping the column from this select would leave deliveryRouting
+    // permanently 'unset' (action hidden for every configured org) with no
+    // error anywhere — the read succeeds, the parser sees undefined.
+    expect(src).toContain("supabase.from('organizations').select('timezone, email_routing')");
+  });
+
+  it('the 42703 branch is GUARDED BY the tested isMissingEmailRoutingColumn, retries WITHOUT the column, and records fallback', () => {
+    // The decision lives in the tested lib; the screen may only consume it.
+    // Open the guard's block body and require both halves of the remedy
+    // inside it: the timezone-only retry select and the 'fallback' stamp —
+    // the ONLY path that ever reaches the compiled constants.
+    const guardMatch = src.match(
+      /if\s*\(orgResFirst\.error\s*&&\s*isMissingEmailRoutingColumn\(orgResFirst\.error\)\)\s*\{([\s\S]*?)\}\s*else\s*\{/,
+    );
+    expect(guardMatch).not.toBeNull();
+    const body = guardMatch![1];
+    expect(body).toContain(".select('timezone')");
+    // The retry must not re-select the column that just 42703'd.
+    expect(body).not.toContain(".select('timezone, email_routing')");
+    expect(body).toContain("deliveryRouting = { state: 'fallback' };");
+  });
+
+  it('every OTHER outcome resolves through the tested parser — deliveryRoutingFromOrgRow, never a hand-rolled shape check', () => {
+    expect(src).toMatch(/deliveryRouting\s*=\s*deliveryRoutingFromOrgRow\(/);
+  });
+
+  it('the routing is THREADED into the display gate (canRequestDelivery), not just fetched and dropped', () => {
+    const gateMatch = src.match(/const\s+showDeliveryRequest\s*=\s*canRequestDelivery\(\{([\s\S]*?)\}\)\s*;/);
+    expect(gateMatch).not.toBeNull();
+    expect(gateMatch![1]).toMatch(
+      /routing:\s*order\?\.deliveryRouting\s*\?\?\s*\{\s*state:\s*'unset'\s*\}/,
+    );
+  });
+
+  it('the branded recipients come from deliveryRecipientsForRouting(order.deliveryRouting) and are threaded into prepareOrderDeliveryRequest with the probe answer', () => {
+    expect(src).toContain('deliveryRecipientsForRouting(order.deliveryRouting)');
+    expect(src).toContain(
+      'prepareOrderDeliveryRequest(deliveryOrderData, deliveryRecipients, nativeOutlook)',
+    );
   });
 });

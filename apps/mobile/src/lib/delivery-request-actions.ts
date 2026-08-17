@@ -15,6 +15,7 @@ import {
 import {
   composeTransportForProbe,
   openMeasuredDraft,
+  type MeasuredOpenResult,
   type OpenedTransport,
   type OutlookPlatform,
   type OutlookTransportUrls,
@@ -328,11 +329,15 @@ export type DeliveryEmailTransport = 'outlook' | 'mailto';
  *  a particular app having opened. `in_flight` is the double-tap swallow —
  *  a call that arrived while an earlier open was unresolved fired no openURL
  *  and no `onOpened` (so no counted draft, and no second request to DC4);
- *  see `composeOpenInFlight` in ./outlook-transport. */
-export interface DeliveryOpenResult {
-  outcome: 'opened' | 'blocked' | 'in_flight';
-  used: OpenedTransport | null;
-}
+ *  see `composeOpenInFlight` in ./outlook-transport.
+ *
+ *  AN ALIAS of the shared `MeasuredOpenResult`, deliberately (verifier
+ *  follow-up, 2026-08-16): this and `MaintenanceOpenResult` used to restate
+ *  it member-by-member, so a member added to the shared opener's result
+ *  could be forgotten in one feature's copy and the compiler would say
+ *  nothing. One definition, two feature-named views — the same shape this
+ *  file already uses for `MaintenanceDraftToOpen`. */
+export type DeliveryOpenResult = MeasuredOpenResult;
 
 /**
  * A prepared draft, as the OPENER needs it: the three composed urls, whether
