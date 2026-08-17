@@ -105,6 +105,15 @@ interface Fixture {
    * Written by hand from the situation, never derived from any formatter.
    */
   walkTo: string[];
+  /**
+   * The books table's RACK COLUMN for this fixture, when it legitimately
+   * differs from `walkTo`. That column answers "which racks" — a crate ON a
+   * rack contributes its POSITION there and its identity to the Crate column —
+   * so a positioned crate reads "43-B", not "Gray #BIN on rack 43-B", and a
+   * book split between a rack and a crate on that same rack reads ONE rack.
+   * Absent, the column must equal `walkTo`. Hand-written, like `walkTo`.
+   */
+  booksRack?: string[];
 }
 
 const FIXTURES: Fixture[] = [
@@ -143,6 +152,33 @@ const FIXTURES: Fixture[] = [
     binLocation: 'Gray #BIN on rack 43-B',
     holdings: [{ name: 'Gray #BIN on rack 43-B', quantity: 5, kind: 'crate' }],
     walkTo: ['Gray #BIN on rack 43-B'],
+    // The Rack column shows the rack the crate SITS ON; "Gray BIN" is the Crate
+    // column's. Consciously changed from the full crate name (2026-08-17).
+    booksRack: ['43-B'],
+  },
+  {
+    // THE LEAK (Hunger Games, L4L, 2026-08-17): 97 loose on rack 38-B and 20
+    // in crate "Blue #0 on rack 38-B" rendered the Rack column as
+    // "38-B, Blue #0 on rack 38-B" — two entries for ONE rack, and a header
+    // counting two. The slips and the count sheet legitimately name both
+    // places (a picker walks to the shelf AND opens the crate); the Rack
+    // column names the rack once. Two DIFFERENT racks stay split — that is the
+    // 'item split across two holdings' fixture, unchanged.
+    what: 'book split between a rack and a crate ON that rack',
+    itemType: 'book',
+    customFields: {
+      book_rack_number: '38',
+      book_rack_row: 'B',
+      book_crate_color: 'blue',
+      book_crate_number: '0',
+    },
+    binLocation: '38-B',
+    holdings: [
+      { name: '38-B', quantity: 97, kind: 'rack' },
+      { name: 'Blue #0 on rack 38-B', quantity: 20, kind: 'crate' },
+    ],
+    walkTo: ['38-B', 'Blue #0 on rack 38-B'],
+    booksRack: ['38-B'],
   },
   {
     // UNCHANGED BEHAVIOUR. The narrowing is crates only — a single rack holding
@@ -243,6 +279,7 @@ describe('cycle-count sheet — countSheetLocationLabel', () => {
     ['non-book moved entirely into a position-less crate', 'Blue Shelf ×12'],
     ['book moved entirely into a position-less crate', 'Gray #BIN ×5'],
     ['book in a POSITIONED crate — the position must survive', 'Gray #BIN on rack 43-B ×5'],
+    ['book split between a rack and a crate ON that rack', '38-B ×97 · Blue #0 on rack 38-B ×20'],
     ['item on a plain rack, single holding', 'Rack 2-C'],
     ['item split across two holdings', '2-C ×20 · 5-A ×5'],
     ['item with no holdings data', 'Rack 2-C'],
@@ -301,7 +338,14 @@ describe('inventory table, BOOKS view — bookRackLabelFor', () => {
   it.each([
     // The books layout renders no quantities in this cell — names only.
     ['book moved entirely into a position-less crate', 'Gray #BIN'],
-    ['book in a POSITIONED crate — the position must survive', 'Gray #BIN on rack 43-B'],
+    // The RACK column shows the rack the crate SITS ON — "Gray BIN" lives in
+    // the Crate column. This literal consciously changed from
+    // 'Gray #BIN on rack 43-B' on 2026-08-17; a formatter that puts the full
+    // crate name back here is the Hunger Games leak returning.
+    ['book in a POSITIONED crate — the position must survive', '43-B'],
+    // ONE rack, once — 97 loose on it plus 20 in a crate on it. Used to read
+    // '38-B, Blue #0 on rack 38-B'.
+    ['book split between a rack and a crate ON that rack', '38-B'],
   ])('%s -> %s', (what, expected) => {
     expect(label(byWhat(what))).toBe(expected);
   });
@@ -490,16 +534,20 @@ describe('every formatter names the SAME physical location', () => {
   });
 
   it('the books table agrees too, on the fixtures its layout can render', () => {
-    // Books-only layout, so the two book fixtures.
+    // Books-only layout, so the book fixtures. The Rack column names RACK
+    // POSITIONS (a crate on a rack contributes the rack; its identity is the
+    // Crate column's), so where that legitimately differs from the walk-to
+    // list the fixture says so by hand in `booksRack`.
     for (const what of [
       'book moved entirely into a position-less crate',
       'book in a POSITIONED crate — the position must survive',
+      'book split between a rack and a crate ON that rack',
     ]) {
       const f = byWhat(what);
       expect(
         namesIn(bookRackLabelFor({ custom_fields: f.customFields, placed_holdings: f.holdings })),
         what,
-      ).toEqual(f.walkTo);
+      ).toEqual(f.booksRack ?? f.walkTo);
     }
   });
 
@@ -711,6 +759,16 @@ const STORED_SUMMARY_BY_DESIGN = [
   // about to change it. Neither composes a walk-to label, and neither should
   // start; if one does, it moves to DELEGATES_TO_RESOLVER.
   'apps/web/src/server/services/inventory.ts',
+  // The PHONE'S half of the same idea (2026-08-17). The Move stock sheet
+  // seeds its four destination fields from the book's recorded rack/crate —
+  // the stored summary, read through the CANONICAL `readBookStorage` because
+  // those fields feed the placement fingerprints — and the staging worklist
+  // parser carries that summary off the wire (`rackLabel` is a field of it).
+  // Both report what the item SAYS as the DEFAULT for the control that is about
+  // to change it; neither composes a walk-to label. If either starts deciding
+  // where stock IS, it moves to DELEGATES_TO_RESOLVER.
+  'apps/mobile/src/components/move-stock-modal.tsx',
+  'apps/mobile/src/lib/staging-worklist.ts',
 ] as const;
 
 /**
