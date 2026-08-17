@@ -18,12 +18,16 @@
 --
 --   C) DRIFT (live qty ≠ snapshot): on_hand=11 and rack level=11 going in
 --      (Σ=on_hand holds), but the count's snapshot expected_quantity=10 and
---      counted=7 → new on_hand = expected + v_diff = 7. This is the case the
---      naive `apply_level_delta(v_diff)` got WRONG: it would draw only 3 off
+--      counted=7 → new on_hand = 7. This is the case the naive
+--      `apply_level_delta(v_diff)` got WRONG: it would draw only 3 off
 --      the live 11 levels → Σ=8 ≠ on_hand 7. The reconcile-to-new-on-hand
 --      fix draws 11−7 = 4 so Σ = on_hand = 7. We assert on_hand=7, rack=7,
 --      and Σ item_stock_levels = 7 (the assertion that fails under the old
 --      code and proves the invariant holds even under drift).
+--      0339 NOTE: the fixture inserts the line already counted, so the rebase
+--      trigger stamps expected_at_start=10 and rebases expected to the live
+--      11; v4 then applies (7 − 11) on top of 11 → the same on_hand 7 with a
+--      chained ledger row (previous 11, change −4). See tests/0339.
 --
 -- Scenarios A/B use a clean initial state (expected=on_hand=rack=10) so the
 -- reconcile delta equals v_diff. Scenario C deliberately seeds drift.
@@ -334,12 +338,17 @@ begin
   perform public.post_cycle_count('cc990000-0000-0000-0000-00000000000a'::uuid);
 end$$;
 
--- 10. quantity_on_hand = expected + v_diff = 10 + (−3) = 7 (NOT live 11 − 3 = 8)
+-- 10. quantity_on_hand = 7. Under 0196/0327 this was snapshot + v_diff =
+--     10 + (−3). Since 0339 the line is REBASED when counted (expected 10 →
+--     live 11, start kept in expected_at_start) and the variance 7 − 11 = −4
+--     is applied on top of the live 11: 11 − 4 = 7. Same on-hand, truthful
+--     ledger (previous 11, change −4). Under either arithmetic this test pins
+--     that on-hand lands on the counted 7, never on 8.
 select is(
   (select quantity_on_hand from public.inventory_items
     where id = 'cc990000-0000-0000-0000-000000000008'::uuid),
   7::numeric,
-  'drift: quantity_on_hand = 7 (snapshot 10 − 3, not live 11 − 3)'
+  'drift: quantity_on_hand = 7 (0339: live 11 + (7 − rebased 11) = 7; not live 11 − 3 = 8)'
 );
 
 -- 11. Σ item_stock_levels = quantity_on_hand even under drift (the core fix).

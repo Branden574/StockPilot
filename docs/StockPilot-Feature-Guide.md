@@ -157,7 +157,7 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 **What it is:** a count session (`cycle_counts` module) that can be **warehouse-scoped** or **by-selection** (pick specific items/books to count). Counting writes correction movements so the ledger stays honest.
 
 **How to use:**
-- **Cycle counts → New** → choose scope (warehouse or a selection) → count each line (system qty vs. counted qty) → finalize. Variances post as movements.
+- **Cycle counts → New** → choose scope (warehouse or a selection) → count each line (system qty vs. counted qty) → finalize. Variances post as movements. The system qty a line is measured against is the quantity when that line was counted (the session-start snapshot until then), and posting applies each variance on top of the current stock — stock that moves after a line is counted is kept, never counted twice.
 - **Mobile / AI shelf-scan:** count on the floor by scanning, or use the **AI shelf scan** to count from a photo of the shelf.
 
 ### Inventory Cleanup

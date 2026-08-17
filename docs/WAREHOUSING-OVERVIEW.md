@@ -156,7 +156,7 @@ Replaces the "where did Kim email that PDF six months ago?" problem with a searc
 
 ### Cycle counts + AI shelf scan
 
-Standard cycle count: manager defines scope (warehouse, categories, locations), staff counts on a phone, system computes variance against system stock, variances become `stock_movement` adjustments.
+Standard cycle count: manager defines scope (warehouse, categories, locations), staff counts on a phone, system computes variance against system stock as of the moment each line was counted (migration 0339: the line's expected quantity is rebased when it is counted; the start snapshot is kept in `expected_at_start`), variances become `stock_movement` adjustments applied on top of the live quantity at post time so the ledger chains and post-count movements are preserved.
 
 **AI Shelf Scan** is a unique capability: take one photo of a textbook shelf with your phone, Google Gemini reads the spines, returns ISBN matches with confidence scores. Matches above 0.85 confidence auto-populate the count lines. Average single-photo turnaround: 4-8 seconds for 25-30 books.
 

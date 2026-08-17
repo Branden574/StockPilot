@@ -30,6 +30,7 @@ import {
   type CachedCycleCountHeader,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
+import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
@@ -374,7 +375,9 @@ export default function CycleCountDetail() {
     });
     setPosting(false);
     if (error) {
-      Alert.alert('Could not post', error.message);
+      // 0339: stale_line / negative_result are fail-closed refusals that ask
+      // for a recount; the mapper turns every stable code into a sentence.
+      Alert.alert('Could not post', postCycleCountErrorMessage(error.message));
       return;
     }
     Alert.alert('Posted', 'Variance adjustments applied.');
@@ -532,6 +535,13 @@ export default function CycleCountDetail() {
             paddingBottom: footerReservation(footerHeight, 140),
           }}
         >
+          {lines.length > 0 ? (
+            <Text style={styles.expectedHint}>
+              Expected is the system quantity when the line was counted (the quantity
+              at session start until then). Stock that moves after a line is counted is
+              kept when the count is posted.
+            </Text>
+          ) : null}
           {lines.map((l) => {
             const draftVal = draft[l.id];
             const isDrafting = draftVal !== undefined;
@@ -755,6 +765,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   expected: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
+  expectedHint: { color: theme.textMuted, fontSize: 12, marginBottom: space.sm },
   variance: { fontSize: 13, fontWeight: '700', marginTop: 4 },
   countBox: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 110 },
   countInput: {

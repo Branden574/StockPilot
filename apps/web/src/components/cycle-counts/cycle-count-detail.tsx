@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { variantLabel } from '@stockpilot/core';
 
+import { HelpTip } from '@/components/onboarding/help-tip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -350,7 +351,19 @@ export function CycleCountDetail({
             <TableRow>
               <TableHead>Item</TableHead>
               <TableHead>SKU</TableHead>
-              <TableHead className="text-right">Expected</TableHead>
+              <TableHead className="text-right">
+                <span className="inline-flex items-center gap-1.5">
+                  Expected
+                  <HelpTip label="the Expected quantity">
+                    <p>
+                      The system quantity when the line was counted (the quantity at
+                      session start until then). Variance is counted minus expected, and
+                      posting applies that variance on top of the current stock — stock
+                      that moved after a line was counted is kept, never counted twice.
+                    </p>
+                  </HelpTip>
+                </span>
+              </TableHead>
               <TableHead className="text-right">Counted</TableHead>
               <TableHead className="text-right">Variance</TableHead>
               <TableHead className="w-12" />
@@ -455,7 +468,8 @@ export function CycleCountDetail({
                 {totalDelta > 0 ? '+' : ''}
                 {formatNumber(totalDelta)}
               </strong>{' '}
-              units) and update inventory to match the counted quantities.
+              units). Each line moves stock by counted minus the system quantity at the
+              time it was counted; stock that moved after a line was counted is kept.
             </p>
             {uncounted > 0 && (
               <p className="text-warning">
