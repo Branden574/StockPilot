@@ -713,6 +713,69 @@ describe('InventoryService.adjustStock — audit capture', () => {
   });
 });
 
+describe('InventoryService.adjustStock — draw-down mode + placed-stock error mapping (0341)', () => {
+  const ITEM = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 3,
+    reorder_point: 0,
+    name: 'Polo S',
+    sku: 'POLO-S',
+  };
+  function stubWith(rpc: { data: unknown; error: { message: string } | null }) {
+    return makeSupabaseStub({
+      'inventory_items.select': { data: ITEM, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'rpc:adjust_stock': rpc,
+    });
+  }
+
+  it("a manual removal with NO location passes p_mode 'any' (shelf first, then Staging)", async () => {
+    const stub = stubWith({ data: { quantity_on_hand: 0, reorder_point: 0 }, error: null });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.adjustStock({ itemId: 'itm-1', quantityChange: -3, movementType: 'remove', reason: 'Out of stock' });
+    const call = stub.rpcCalls.find((c) => c.name === 'adjust_stock');
+    expect(call!.args).toMatchObject({ p_item_id: 'itm-1', p_quantity_change: -3, p_location_id: null, p_mode: 'any' });
+  });
+
+  it('a removal WITH an explicit location passes no mode (the RPC decrements that level directly)', async () => {
+    const stub = stubWith({ data: { quantity_on_hand: 2, reorder_point: 0 }, error: null });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.adjustStock({ itemId: 'itm-1', quantityChange: -1, movementType: 'remove', locationId: 'loc-17a', reason: 'Damaged' });
+    const call = stub.rpcCalls.find((c) => c.name === 'adjust_stock');
+    expect(call!.args).toMatchObject({ p_location_id: 'loc-17a' });
+    expect(call!.args).not.toHaveProperty('p_mode');
+  });
+
+  it('a positive adjustment passes no mode (mode only governs the null-location DRAW)', async () => {
+    const stub = stubWith({ data: { quantity_on_hand: 5, reorder_point: 0 }, error: null });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.adjustStock({ itemId: 'itm-1', quantityChange: 2, movementType: 'add', locationId: 'loc-17a' });
+    const call = stub.rpcCalls.find((c) => c.name === 'adjust_stock');
+    expect(call!.args).not.toHaveProperty('p_mode');
+  });
+
+  it("maps insufficient_placed_stock to a validation_error that names the holdings problem, not 'internal_error'", async () => {
+    const stub = stubWith({ data: null, error: { message: 'insufficient_placed_stock' } });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const p = svc.adjustStock({ itemId: 'itm-1', quantityChange: -3, movementType: 'remove' });
+    await expect(p).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(p).rejects.toThrow(/stock by location does not cover/);
+    await expect(p).rejects.not.toThrow(/Insufficient stock for this adjustment/);
+  });
+
+  it('still maps plain insufficient_stock to the short message', async () => {
+    const stub = stubWith({ data: null, error: { message: 'insufficient_stock' } });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await expect(svc.adjustStock({ itemId: 'itm-1', quantityChange: -9, movementType: 'remove' })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Insufficient stock for this adjustment',
+    });
+  });
+});
+
 describe('InventoryService.transferStock — audit capture', () => {
   it('emits stock.transferred with entityId=itemId + before/after location_id', async () => {
     const stub = makeSupabaseStub({
