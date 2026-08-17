@@ -351,7 +351,7 @@ export function StagingTable({
           </div>
           <span className="bg-border mx-1 hidden h-5 w-px sm:block" aria-hidden />
 
-          <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
             PO
             <Select
               value={poSelectValue}
@@ -374,9 +374,9 @@ export function StagingTable({
                 )}
               </SelectContent>
             </Select>
-          </label>
+          </div>
 
-          <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
             Source
             <Select
               value={filters.source}
@@ -393,9 +393,9 @@ export function StagingTable({
                 ))}
               </SelectContent>
             </Select>
-          </label>
+          </div>
 
-          <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
             Age
             <Select
               value={filters.age}
@@ -412,7 +412,7 @@ export function StagingTable({
                 ))}
               </SelectContent>
             </Select>
-          </label>
+          </div>
         </div>
 
         {filtersActive && (
