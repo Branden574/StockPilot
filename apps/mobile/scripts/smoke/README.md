@@ -163,5 +163,9 @@ parses). A macOS runner cannot be executed from the development
 environment, so THE FIRST REAL RUN HAPPENS IN CI via workflow_dispatch and
 may surface runner-environment issues (idb install, EAS queue times,
 simulator runtime names) that static review cannot. The local `pnpm
-smoke:sim` path is untouched — no `--ci` means byte-for-byte the workflow
+smoke:sim` path is behaviourally unchanged — no `--ci` means the same
+flows and assertions as before this change, with two honest deltas: the
+keychain password fetch now falls back to `STOCKPILOT_SMOKE_PASSWORD`
+when the keychain entry is absent, and preflight prints which mode it
+chose. Neither alters what any flow asserts. It is not the workflow
 this README documents above.

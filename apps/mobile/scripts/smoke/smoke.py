@@ -49,7 +49,10 @@ memory and never printed or echoed), and expects --udid because the CI
 simulator is created per-run. Everything else -- gesture self-validation,
 the flows themselves, the artifacts -- is identical to a local run, so a
 flow passing locally and failing in CI means the app or the runner, not a
-forked code path. The default (no --ci) behavior is byte-for-byte the
+forked code path. The default (no --ci) behavior asserts exactly what it
+did before this change; two non-asserting deltas exist (the
+STOCKPILOT_SMOKE_PASSWORD fallback and a preflight mode line), so it is
+behaviourally equivalent rather than byte-for-byte the
 local workflow this file has always run.
 """
 
