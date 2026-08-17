@@ -96,6 +96,24 @@ describe('EmailRoutingPanel — status per read state', () => {
     ).toBeInTheDocument();
   });
 
+  it("fallback: the migration-pending line says storage is not available yet and that the release's built-in recipients are in use", () => {
+    // The 'fallback' read state exists ONLY for the code-before-migration
+    // deploy window (Postgres 42703 — see OrgEmailRoutingReadState). The
+    // amber copy is the one place an admin learns why their save would not
+    // stick yet, so it is pinned verbatim.
+    renderPanel({ state: 'fallback' }, UNSET);
+    expect(
+      screen.getByText(
+        "Email-routing storage is not available yet (a database migration is pending). The release's built-in recipients are in use until it lands; saving here will work after the migration.",
+      ),
+    ).toBeInTheDocument();
+    // Only the delivery card is in the fallback state; the unset maintenance
+    // card keeps its own status line — the two cards' states are independent.
+    expect(
+      screen.getByText('Not configured — members do not see the email action.'),
+    ).toBeInTheDocument();
+  });
+
   it('valid: renders the LIVE notice preview — the exact sentence members read', () => {
     renderPanel(VALID, UNSET);
     expect(
