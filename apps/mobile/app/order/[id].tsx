@@ -58,9 +58,24 @@ import {
 } from '@/lib/orders-api';
 import {
   buildReturnPayload,
+  describeLineFulfilment,
+  describeReturnLine,
+  describeReturnMeta,
+  formatOrderReturnSummary,
   initialReturnDraft,
+  ORDER_RETURN_SUMMARY_NOTE,
+  ORDER_RETURNS_SELECT,
+  orderReturnSummary,
+  parseOrderReturns,
   RETURN_REASONS,
   returnableLines,
+  returnHandle,
+  returnLineItemName,
+  returnStatusLabel,
+  shouldLoadOrderReturns,
+  shouldShowReturnsSection,
+  type OrderReturnView,
+  type RawOrderReturnRow,
   type ReturnDraftLine,
   type ReturnReasonCode,
 } from '@/lib/order-returns';
@@ -220,6 +235,11 @@ interface OrderHeader {
   isShortStock: boolean;
   /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
   hasFulfillableStock: boolean;
+  /** The order's returns (RMAs) with their lines — the reverse of the returns
+   *  page's "Against order" link. Empty on any non-returnable status (never
+   *  read there) and when nothing was ever returned. Decisions about what they
+   *  mean live in lib/order-returns (shared with web through core). */
+  returns: OrderReturnView[];
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -366,6 +386,19 @@ export default function OrderDetail() {
   );
   const showCreateReturn =
     canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
+  // Order-level returned roll-up (SO-000085) — null when nothing was ever
+  // returned, so the summary card renders nothing and the screen is unchanged.
+  // The per-line number is `returned_quantity` (the durable 0153 budget the
+  // create-return math above already reads); the shared helper only sums it.
+  const returnSummary = React.useMemo(
+    () =>
+      order
+        ? orderReturnSummary(
+            order.lines.map((l) => ({ fulfilled: l.fulfilled, returned: l.returned })),
+          )
+        : null,
+    [order],
+  );
 
   // ── Delivery request ────────────────────────────────────────────────────
   // Mobile parity with the web order page's SendDeliveryRequestButton. Opens a
@@ -753,6 +786,29 @@ export default function OrderDetail() {
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
 
+    // The order's RETURNS (owner report, SO-000085: a delivered order with a
+    // closed RMA read as a clean 1/1/1 with nothing about the return). Same
+    // read the web order page performs — returns + embedded return_lines,
+    // RLS-scoped (returns_select / return_lines_select = is_org_member), so
+    // every org member sees the order's own history regardless of the returns
+    // module switch or returns:read (those only gate the returns SCREENS,
+    // which the phone does not have — this list renders inline). Gated on the
+    // status only: nothing but a completed / legacy-delivered order can carry
+    // a return (cancel refuses completed, 0155). A failed read leaves []: a
+    // returns hiccup must never blank the order.
+    let orderReturns: OrderReturnView[] = [];
+    const headerStatusForReturns =
+      ((data as Record<string, unknown> | null)?.status as string | null) ?? null;
+    if (shouldLoadOrderReturns(headerStatusForReturns)) {
+      const { data: returnRows } = await supabase
+        .from('returns')
+        .select(ORDER_RETURNS_SELECT)
+        .eq('organization_id', orgId)
+        .eq('order_request_id', id)
+        .order('created_at', { ascending: true });
+      orderReturns = parseOrderReturns((returnRows ?? []) as unknown as RawOrderReturnRow[]);
+    }
+
     // NOTE (2026-07-22): the per-order stock_reservations read that used to sit
     // here is GONE. It existed only to mirror removeLine's reservation refusal,
     // and that refusal was the production defect: a reservation is a soft hold
@@ -948,6 +1004,7 @@ export default function OrderDetail() {
         totalFulfilled,
         isShortStock,
         hasFulfillableStock,
+        returns: orderReturns,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -1546,6 +1603,30 @@ export default function OrderDetail() {
                   </Mono>
                 </Card>
               ) : null}
+              {/* Returned units, stated as a LATER event beside the shipped
+                  total (SO-000085). Neutral, not the amber of the owed card:
+                  nothing needs attention, the order is simply not the clean
+                  "everything delivered and kept" it would otherwise read as.
+                  The net figure is arithmetic on records; its caveat is
+                  printed with it because it can be wrong for an in-person
+                  swap recorded only in a return's notes — those notes are in
+                  the RETURNS section below. Renders nothing when nothing was
+                  returned. */}
+              {returnSummary ? (
+                <Card padding={14}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <Body size={13} color={c.ink}>
+                      Returns
+                    </Body>
+                    <Mono size={11} color={c.ink} style={{ flexShrink: 1 }} numberOfLines={2}>
+                      {formatOrderReturnSummary(returnSummary)}
+                    </Mono>
+                  </View>
+                  <Mono size={10.5} color={c.ink4} style={{ marginTop: 6 }}>
+                    {ORDER_RETURN_SUMMARY_NOTE}
+                  </Mono>
+                </Card>
+              ) : null}
               {order.lines.length === 0 ? (
                 <Mono size={11} color={c.ink4}>
                   This order has no items yet.
@@ -1558,6 +1639,11 @@ export default function OrderDetail() {
                     // twins address the line by id, so a row without one has
                     // nothing to send.
                     const editable = canEditItems && l.orderRequestLineId !== null;
+                    const lineSubline = describeLineFulfilment({
+                      requested: l.requested,
+                      fulfilled: l.fulfilled,
+                      returned: l.returned,
+                    });
                     return (
                       <Pressable
                         key={`${l.sku ?? l.name}-${i}`}
@@ -1627,13 +1713,20 @@ export default function OrderDetail() {
                           <Mono size={13} color={c.ink}>
                             ×{l.requested}
                           </Mono>
-                          {l.fulfilled > 0 && l.fulfilled < l.requested ? (
-                            <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
-                              {l.fulfilled} provided · {l.requested - l.fulfilled} owed
-                            </Mono>
-                          ) : l.fulfilled >= l.requested && l.requested > 0 ? (
-                            <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
-                              fulfilled
+                          {/* The sub-line comes from the shared describer so
+                              web and the phone say the same thing about the
+                              same line: "1 provided · 2 owed", "fulfilled",
+                              and — after a return — "fulfilled · 1 returned".
+                              Fulfilled is the shipped count and is never
+                              rewritten; the returned figure is appended as a
+                              later event. Amber only while units are OWED. */}
+                          {lineSubline ? (
+                            <Mono
+                              size={10.5}
+                              color={l.fulfilled > 0 && l.fulfilled < l.requested ? '#b45309' : c.ink4}
+                              style={{ marginTop: 2 }}
+                            >
+                              {lineSubline}
                             </Mono>
                           ) : null}
                           {editable ? (
@@ -1976,14 +2069,77 @@ export default function OrderDetail() {
             </View>
           ) : null}
 
-          {showCreateReturn ? (
+          {/* The order's returns — number, status, what came back and how it
+              was dispositioned, and the NOTES. The notes are where an
+              in-person swap is recorded today (SO-000085: "Size S … swapped
+              out for Ladies size M" — the replacement is on no order line), so
+              they must be readable where a human looks at the order. Listed
+              for every viewer (RLS decided what came back). There is no native
+              returns screen to navigate to, so each RMA renders inline. */}
+          {shouldShowReturnsSection({
+            returnsCount: order.returns.length,
+            canCreateReturn: showCreateReturn,
+          }) ? (
             <View style={{ gap: 8 }}>
-              <Eyebrow>RETURNS</Eyebrow>
-              {actionBtn('Create return', 'create-return', openReturnSheet)}
-              <Mono size={10.5} color={c.ink4}>
-                Goes to the returns approval queue — stock moves only after it is approved and
-                received.
-              </Mono>
+              <Eyebrow>
+                {`RETURNS${order.returns.length > 0 ? ` · ${order.returns.length}` : ''}`}
+              </Eyebrow>
+              {order.returns.map((r) => (
+                <Card key={r.id} padding={14}>
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <Mono size={12} color={c.ink} numberOfLines={1} style={{ flexShrink: 1 }}>
+                      {returnHandle(r)}
+                    </Mono>
+                    <Mono size={10} tracking={0.08} upper color={c.ink4}>
+                      {returnStatusLabel(r.status)}
+                    </Mono>
+                  </View>
+                  <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                    {describeReturnMeta(r)}
+                  </Mono>
+                  {r.lines.map((rl, i) => (
+                    <Mono
+                      key={`${r.id}-${rl.orderRequestLineId}-${i}`}
+                      size={11}
+                      color={c.ink}
+                      style={{ marginTop: i === 0 ? 8 : 2 }}
+                    >
+                      {describeReturnLine({
+                        quantity: rl.quantity,
+                        itemName: returnLineItemName(rl, order.lines),
+                        disposition: rl.disposition,
+                        applied: rl.applied,
+                      })}
+                    </Mono>
+                  ))}
+                  {r.notes ? (
+                    <Body size={13} color={c.ink} style={{ marginTop: 8 }}>
+                      {r.notes}
+                    </Body>
+                  ) : null}
+                </Card>
+              ))}
+              {order.returns.length > 0 ? (
+                <Mono size={10.5} color={c.ink4}>
+                  A return is a later event — the shipped count above is never rewritten.
+                </Mono>
+              ) : null}
+              {showCreateReturn ? (
+                <>
+                  {actionBtn('Create return', 'create-return', openReturnSheet)}
+                  <Mono size={10.5} color={c.ink4}>
+                    Goes to the returns approval queue — stock moves only after it is approved
+                    and received.
+                  </Mono>
+                </>
+              ) : null}
             </View>
           ) : null}
 
