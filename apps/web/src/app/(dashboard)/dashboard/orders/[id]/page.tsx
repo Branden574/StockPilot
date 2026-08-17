@@ -923,9 +923,15 @@ export default async function OrderDetailPage({
                 attention, the order is simply not the clean "everything
                 delivered and kept" it would otherwise read as. The net figure
                 is arithmetic on records (provided − returned across closed
-                returns); its caveat rides in the title/aria because it can be
-                wrong for an in-person swap recorded only in a return's notes,
-                and the returns panel with those notes sits directly beneath. */}
+                returns), and for an in-person swap recorded only in a
+                return's notes it is factually WRONG (SO-000085: the records
+                say net 2, Lillian holds 3). So the caveat is PRINTED in the
+                strip — a reader who never hovers must not be misled — in the
+                same words the phone prints beneath its Returns card
+                (ORDER_RETURN_SUMMARY_NOTE, one constant, both surfaces). It
+                also rides in the figure's title/aria so the figure carries
+                its own qualification wherever it is read alone. The returns
+                panel with the notes it points at sits directly beneath. */}
             {returnSummary && (
               <div
                 className="border-b border-border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground"
@@ -949,6 +955,9 @@ export default async function OrderDetailPage({
                     )}
                   </span>
                 </div>
+                <p className="mt-1 text-[10.5px] leading-snug" data-testid="order-return-summary-note">
+                  {ORDER_RETURN_SUMMARY_NOTE}
+                </p>
               </div>
             )}
             <Table>

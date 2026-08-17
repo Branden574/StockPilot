@@ -169,3 +169,22 @@ keychain password fetch now falls back to `STOCKPILOT_SMOKE_PASSWORD`
 when the keychain entry is absent, and preflight prints which mode it
 chose. Neither alters what any flow asserts. It is not the workflow
 this README documents above.
+
+## Owed hand-tests (render debt this suite does NOT cover)
+
+Recorded here so a green run is never read as coverage it cannot give.
+
+- **Order screen: returns section** (`app/order/[id].tsx`, order-side
+  return visibility, SO-000085). Mobile vitest cannot reach the `.tsx`, so
+  the per-line "fulfilled · 1 returned" sub-line, the Returns summary card
+  with its caveat, and the inline RMA cards (number, status word, reason ·
+  date, per-line "1 × item — Restock · applied", NOTES verbatim) are pinned
+  only as helper decisions in `src/lib/order-returns.view.test.ts`;
+  deleting the notes block from the screen leaves every suite green. This
+  suite is read-only and Demo Co held no completed order with a closed
+  return at ship time, so it cannot render one either. OWED: a simulator
+  hand-test on Demo Co (`71b27a4a-7948-4638-bc3f-535974713bd2`, fenced from
+  L4L — never fixture the live org): complete an order, create a return
+  against it, approve / receive / close it with a note, then open the order
+  on the phone and check the three surfaces above. When such an order
+  exists in Demo Co, a read-only `order-returns` flow can be added here.

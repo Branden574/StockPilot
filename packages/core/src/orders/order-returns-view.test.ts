@@ -120,6 +120,63 @@ describe('order-returns-view — the rule: applied is the only thing that counts
     });
   });
 
+  it('ONE RMA with TWO lines against the same order line: quantities add, the handle is listed ONCE (mutation: dropping the dedupe lists it twice)', () => {
+    // A single return that took two units of the S line back with different
+    // dispositions — one restocked, one scrapped — is two return_lines rows
+    // pointing at the same order_request_line_id under one header.
+    const twoLines: OrderReturnView = {
+      ...CLOSED_RMA,
+      id: 'r5',
+      returnNumber: 'RMA-5',
+      lines: [
+        { orderRequestLineId: S_LINE, quantity: 1, disposition: 'restock', applied: true },
+        { orderRequestLineId: S_LINE, quantity: 2, disposition: 'scrap', applied: true },
+      ],
+    };
+    const refs = returnRefsByLine([twoLines]);
+    expect(refs.get(S_LINE)).toEqual({
+      applied: { quantity: 3, returnNumbers: ['RMA-5'] },
+      pending: { quantity: 0, returnNumbers: [] },
+    });
+    expect(refs.get(S_LINE)!.applied.returnNumbers).toHaveLength(1);
+    // The hover text names it once too.
+    expect(describeLineReturnRefs(3, refs.get(S_LINE))).toBe('3 returned on RMA-5');
+  });
+
+  it('ONE in-flight RMA with TWO unapplied lines on the same order line: pending adds, the handle is listed ONCE', () => {
+    const twoPending: OrderReturnView = {
+      ...CLOSED_RMA,
+      id: 'r6',
+      returnNumber: 'RMA-6',
+      status: 'requested',
+      closedAt: null,
+      lines: [
+        { orderRequestLineId: S_LINE, quantity: 1, disposition: 'restock', applied: false },
+        { orderRequestLineId: S_LINE, quantity: 1, disposition: 'scrap', applied: false },
+      ],
+    };
+    const refs = returnRefsByLine([twoPending]);
+    expect(refs.get(S_LINE)).toEqual({
+      applied: { quantity: 0, returnNumbers: [] },
+      pending: { quantity: 2, returnNumbers: ['RMA-6'] },
+    });
+    expect(describeLineReturnRefs(1, refs.get(S_LINE))).toBe('1 returned; 2 pending on RMA-6');
+  });
+
+  it('a legacy header with NO number: two lines on one order line still yield ONE "Return <id8>" handle', () => {
+    const legacy: OrderReturnView = {
+      ...CLOSED_RMA,
+      id: 'abcdef12-3456-7890-abcd-ef1234567890',
+      returnNumber: null,
+      lines: [
+        { orderRequestLineId: S_LINE, quantity: 1, disposition: 'restock', applied: true },
+        { orderRequestLineId: S_LINE, quantity: 1, disposition: 'restock', applied: true },
+      ],
+    };
+    const refs = returnRefsByLine([legacy]);
+    expect(refs.get(S_LINE)?.applied).toEqual({ quantity: 2, returnNumbers: ['Return abcdef12'] });
+  });
+
   it('zero / negative / non-finite quantities are ignored', () => {
     const refs = returnRefsByLine([
       {

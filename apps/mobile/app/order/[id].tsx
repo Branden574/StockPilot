@@ -2075,7 +2075,23 @@ export default function OrderDetail() {
               out for Ladies size M" — the replacement is on no order line), so
               they must be readable where a human looks at the order. Listed
               for every viewer (RLS decided what came back). There is no native
-              returns screen to navigate to, so each RMA renders inline. */}
+              returns screen to navigate to, so each RMA renders inline.
+
+              RENDER DEBT — READ BEFORE TRUSTING THE GREEN SUITE. Mobile vitest
+              cannot reach this .tsx: the decisions the cards print are pinned
+              in src/lib/order-returns.view.test.ts, and the web suite scans
+              this file for the helper CALLS, but nothing automated proves the
+              cards actually RENDER the notes / status / lines. Deleting the
+              `r.notes` block below leaves every suite green. What is owed:
+              a simulator hand-test on Demo Co (71b27a4a-…, fenced from L4L —
+              never fixture on the live org): complete an order, create a
+              return against it, approve / receive / close it with a note,
+              then open the order and check (1) the line reads "fulfilled ·
+              1 returned", (2) the Returns card reads "N provided · 1 returned
+              · net …" with the caveat beneath, (3) the RMA card shows number,
+              status word, reason · date, "1 × item — Restock · applied" and
+              the note verbatim. Demo Co held no such order at ship time; the
+              read-only smoke suite (scripts/smoke) cannot create one. */}
           {shouldShowReturnsSection({
             returnsCount: order.returns.length,
             canCreateReturn: showCreateReturn,

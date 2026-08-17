@@ -25,15 +25,22 @@ import * as mobile from '../../../../../../../mobile/src/lib/order-returns';
  *       figure and Owed are unchanged when returned_quantity flips 0 -> 1;
  *   (c) an order with NO returns renders exactly as before — no strip, no
  *       returned sub-line, no panel, no "returned" anywhere (golden by
- *       negation, plus the render is byte-identical whether the returns read
- *       returned [] or threw);
+ *       NEGATION against the pre-feature shape; there is no stored
+ *       pre-feature HTML baseline — see the note on that test), plus a
+ *       THROWN returns read degrades to the same render as an empty one;
  *   (d) an UNAPPLIED return (in flight, denied, cancelled) counts for nothing
  *       in the returned figure — the rule is the 0197 `applied` latch, and
  *       the number rendered is `returned_quantity`, which that latch bumps;
  *   (e) the phone's decisions equal what the web page renders for the same
  *       input — the strings are compared against the MOBILE module (which
  *       re-exports core), and the mobile screen source is scanned to prove it
- *       renders through that module rather than a hand-rolled copy.
+ *       renders through that module rather than a hand-rolled copy;
+ *   (f) the summary's "provided" figure is SHIPPED (quantity_fulfilled),
+ *       never STAGED (quantity_picked) — a fixture where the two differ pins
+ *       the shipped-vs-staged rule;
+ *   (g) the exchange-gap caveat is PRINTED in the strip (not hover-only), in
+ *       the same words the phone prints, so a reader who never hovers is not
+ *       misled by "net 2 with requester" on an in-person swap.
  */
 
 const orderGet = vi.fn();
@@ -303,12 +310,25 @@ describe('(c) golden — an order with no returns renders exactly as before', ()
     expect(loadOrderReturnsMock).toHaveBeenCalledWith(SUPABASE_CLIENT, 'org-1', ORDER_ID);
   });
 
-  it('the no-returns render is byte-identical whether the returns read returned [] or THREW (degrade, never break the page)', async () => {
+  // HONEST SCOPE: this compares two renders of the SAME (post-feature) page —
+  // one where the returns read resolved [] and one where it THREW — and pins
+  // that the throw degrades to exactly the empty-read render. It is NOT a diff
+  // against a pre-feature baseline; no pre-feature HTML is stored (a stored
+  // golden of a 1,100-line page would break on every unrelated copy change
+  // and on the relative-time strings). The pre-feature SHAPE is pinned by
+  // negation in the test above (no strip / sub-line / panel / "returned"
+  // anywhere; Fulfilled cells hold only the number).
+  it('a THROWN returns read renders the same HTML as an EMPTY one on a no-returns order (degrade, never break the page — same page both sides, not a pre-feature baseline)', async () => {
     const { container: ok } = await renderPage();
     const okHtml = ok.innerHTML;
     loadOrderReturnsMock.mockRejectedValueOnce(new Error('boom'));
     const { container: failed } = await renderPage();
+    expect(loadOrderReturnsMock).toHaveBeenCalledTimes(2);
     expect(failed.innerHTML).toBe(okHtml);
+    // And that render is the no-returns shape (so "same" is not "both broken").
+    expect(failed.querySelector('[data-testid="order-return-summary"]')).toBeNull();
+    expect(failed.querySelector('[data-testid="order-returns"]')).toBeNull();
+    expect(failed.textContent).toContain('Total qty 3');
   });
 
   it.each(['approved', 'in_transit', 'backordered', 'cancelled', 'denied'] as const)(
@@ -356,6 +376,32 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     expect(figure.getAttribute('title')).toContain('not counted');
     expect(figure.getAttribute('title')).toContain('return notes');
     expect(strip.querySelector('a[href="#order-returns"]')?.textContent).toBe('See returns');
+  });
+
+  // (g) SO-000085: the records say "net 2 with requester" but Lillian holds
+  // three shirts (the S came back and a Medium went out in person, recorded
+  // only in the RMA notes). A hover-only caveat leaves the plain figure
+  // misleading for anyone who never hovers, so the caveat is PRINTED.
+  it('(g) the exchange-gap caveat is PRINTED in the strip — visible text, not only title/aria — verbatim and in the phone\'s words', async () => {
+    const { container } = await renderPage();
+    const strip = container.querySelector('[data-testid="order-return-summary"]') as HTMLElement;
+    const note = strip.querySelector('[data-testid="order-return-summary-note"]') as HTMLElement;
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe(
+      'Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+    );
+    // It is real rendered text, not an attribute: the strip's textContent
+    // carries it, and it is not hidden from anyone.
+    expect(strip.textContent).toContain('is not counted — read the return notes below.');
+    expect(note.getAttribute('aria-hidden')).toBeNull();
+    expect(note.hasAttribute('hidden')).toBe(false);
+    expect(note.getAttribute('title')).toBeNull();
+    // Same constant the phone prints beneath its Returns card.
+    expect(note.textContent).toBe(mobile.ORDER_RETURN_SUMMARY_NOTE);
+    // The figure itself still carries the caveat for a reader who lands on it alone.
+    expect(strip.querySelector('[title]')?.getAttribute('title')).toBe(mobile.ORDER_RETURN_SUMMARY_NOTE);
+    // And the strip prints it exactly once (no duplicate paragraph).
+    expect(strip.querySelectorAll('[data-testid="order-return-summary-note"]')).toHaveLength(1);
   });
 
   it('panel: heading, RMA number, Closed badge, reason, the applied restock line naming the item, and the NOTES verbatim', async () => {
@@ -414,6 +460,50 @@ describe('(b) fulfilled is NEVER rewritten by a return', () => {
   });
 });
 
+describe('(f) the summary reads SHIPPED (quantity_fulfilled), never STAGED (quantity_picked)', () => {
+  // quantity_picked is what a picker STAGED; quantity_fulfilled is what
+  // SHIPPED at hand-over. Every fixture elsewhere in this file has the two
+  // equal, which is exactly the fixture under which summing the wrong column
+  // stays green — so these two make them differ, in both directions.
+  it('staged 2 / shipped 1 on the M line: the strip says "3 provided" (1+1+1 shipped), NOT "4 provided" (1+2+1 staged); Owed follows shipped', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        lines: [
+          line(S_LINE, "Women's Polo S", { returned_quantity: 1 }),
+          line(M_LINE, "Women's Polo M", { quantity_requested: 2, quantity_picked: 2, quantity_fulfilled: 1 }),
+          line(XL_LINE, "Men's Polo XL"),
+        ],
+      }),
+    );
+    loadOrderReturnsMock.mockResolvedValue([closedRma()]);
+    const { container } = await renderPage();
+    const figure = container.querySelector('[data-testid="order-return-summary"] [title]') as HTMLElement;
+    expect(figure.childNodes[0]?.textContent).toBe('3 provided · 1 returned · net 2 with requester');
+    expect(figure.textContent).not.toContain('4 provided');
+    // The M line: shipped 1 of 2 → Owed 1 (staged units are not provided).
+    expect(shippedFigure(fulfilledCell(container, "Women's Polo M"))).toBe('1');
+    expect(owedCell(container, "Women's Polo M").textContent).toBe('1');
+  });
+
+  it('staged NULL / shipped 1 on the M line (0245 close_partial clears quantity_picked): the strip still says "3 provided", NOT "2 provided"', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        lines: [
+          line(S_LINE, "Women's Polo S", { returned_quantity: 1 }),
+          line(M_LINE, "Women's Polo M", { quantity_picked: null, quantity_fulfilled: 1 }),
+          line(XL_LINE, "Men's Polo XL"),
+        ],
+      }),
+    );
+    loadOrderReturnsMock.mockResolvedValue([closedRma()]);
+    const { container } = await renderPage();
+    const figure = container.querySelector('[data-testid="order-return-summary"] [title]') as HTMLElement;
+    expect(figure.childNodes[0]?.textContent).toBe('3 provided · 1 returned · net 2 with requester');
+    expect(figure.textContent).not.toContain('2 provided');
+    expect(fulfilledCell(container, "Women's Polo M").textContent).toBe('1');
+  });
+});
+
 describe('(d) an unapplied return counts for nothing in the returned figure — the rule is the applied latch', () => {
   it.each(['requested', 'approved', 'received'] as const)(
     'in-flight %s RMA (applied=false, returned_quantity 0): no "returned" on the line or strip; the panel lists it as pending',
@@ -464,24 +554,62 @@ describe('(d) an unapplied return counts for nothing in the returned figure — 
     expect(container.querySelector('[data-testid="order-return-summary"]')).not.toBeNull();
   });
 
-  it('a pending RMA on a line that ALSO has an applied one: the figure is the applied count; the hover names both', async () => {
-    orderGet.mockResolvedValue(detailFixture({ lines: so85Lines(1) }));
-    loadOrderReturnsMock.mockResolvedValue([
-      closedRma(),
-      closedRma({
-        id: 'r2',
-        returnNumber: 'RMA-2',
-        status: 'requested',
-        closedAt: null,
-        notes: null,
-        lines: [{ orderRequestLineId: S_LINE, itemId: `item-${S_LINE}`, quantity: 1, disposition: 'restock', applied: false }],
-      }),
-    ]);
-    const { container } = await renderPage();
-    const sub = container.querySelector('[data-testid="line-returned"]') as HTMLElement;
-    expect(sub.textContent).toBe('1 returned');
-    expect(sub.getAttribute('title')).toBe(`1 returned on ${RMA_NUMBER}; 1 pending on RMA-2`);
-    expect(container.querySelector('[data-testid="order-returns"] h2')?.textContent).toBe('Returns (2)');
+  it('a pending RMA on a line that ALSO has an applied one: the figure is the applied count; the hover names both; every row renders; date prefers closedAt; the strip aria carries the caveat', async () => {
+    // Fixed clock (Date only — timers untouched) so the relative dates are
+    // literal: the closed RMA was CREATED two days ago and CLOSED three hours
+    // ago; the pending one was created 32 minutes ago and has no closedAt.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-17T20:12:00Z'));
+    try {
+      orderGet.mockResolvedValue(detailFixture({ lines: so85Lines(1) }));
+      loadOrderReturnsMock.mockResolvedValue([
+        closedRma({ createdAt: '2026-08-15T17:10:00Z', closedAt: '2026-08-17T17:12:00Z' }),
+        closedRma({
+          id: 'r2',
+          returnNumber: 'RMA-2',
+          status: 'requested',
+          createdAt: '2026-08-17T19:40:00Z',
+          closedAt: null,
+          notes: null,
+          lines: [{ orderRequestLineId: S_LINE, itemId: `item-${S_LINE}`, quantity: 1, disposition: 'restock', applied: false }],
+        }),
+      ]);
+      const { container } = await renderPage();
+      const sub = container.querySelector('[data-testid="line-returned"]') as HTMLElement;
+      expect(sub.textContent).toBe('1 returned');
+      expect(sub.getAttribute('title')).toBe(`1 returned on ${RMA_NUMBER}; 1 pending on RMA-2`);
+      const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
+      expect(panel.querySelector('h2')?.textContent).toBe('Returns (2)');
+
+      // W18: the heading's count is the number of rows actually rendered —
+      // both RMAs, oldest first, each with its own handle, status and line.
+      const rows = Array.from(panel.querySelectorAll('[data-testid="order-return"]')) as HTMLElement[];
+      expect(rows).toHaveLength(2);
+      expect(rows[0]!.textContent).toContain(RMA_NUMBER);
+      expect(rows[0]!.textContent).toContain('Closed');
+      expect(rows[0]!.textContent).toContain("1 × Women's Polo S — Restock · applied");
+      expect(rows[0]!.querySelector('[data-testid="order-return-notes"]')?.textContent).toBe(RMA_NOTES);
+      expect(rows[1]!.textContent).toContain('RMA-2');
+      expect(rows[1]!.textContent).toContain('Requested');
+      expect(rows[1]!.textContent).toContain("1 × Women's Polo S — Restock · pending");
+      expect(rows[1]!.querySelector('[data-testid="order-return-notes"]')).toBeNull();
+
+      // W16: the date beside the reason is closedAt when the return closed
+      // ("3 hours ago", not the "2 days ago" of its createdAt), and createdAt
+      // when it has not (RMA-2: "32 minutes ago").
+      expect(rows[0]!.textContent).toContain('Other · 3 hours ago');
+      expect(rows[0]!.textContent).not.toContain('2 days ago');
+      expect(rows[1]!.textContent).toContain('Other · 32 minutes ago');
+
+      // W17: the strip's figure carries the summary AND the caveat in its
+      // aria-label, literally.
+      const figure = container.querySelector('[data-testid="order-return-summary"] [title]') as HTMLElement;
+      expect(figure.getAttribute('aria-label')).toBe(
+        '3 provided · 1 returned · net 2 with requester. Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -546,7 +674,13 @@ describe('(e) the phone says what the web page renders — pinned against the MO
     const phone = mobile.formatOrderReturnSummary(mobile.orderReturnSummary(MOBILE_LINES)!);
     expect(web).toBe(phone);
     expect(phone).toBe('3 provided · 1 returned · net 2 with requester');
-    // and the caveat both surfaces print is the same constant
+    // and the caveat both surfaces PRINT is the same constant — the phone
+    // prints it beneath its Returns card; web prints it beneath the figure
+    // (visible text) and also carries it in the figure's title.
+    expect(
+      container.querySelector('[data-testid="order-return-summary"] [data-testid="order-return-summary-note"]')
+        ?.textContent,
+    ).toBe(mobile.ORDER_RETURN_SUMMARY_NOTE);
     expect(container.querySelector('[data-testid="order-return-summary"] [title]')?.getAttribute('title')).toBe(
       mobile.ORDER_RETURN_SUMMARY_NOTE,
     );

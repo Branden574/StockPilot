@@ -24,6 +24,17 @@ import {
  * The order screen's returns view — the decisions the screen renders and
  * nothing else (app/order/[id].tsx only maps rows through these and prints).
  *
+ * WHAT THIS FILE CANNOT SEE (render debt, recorded on purpose). Mobile vitest
+ * does not load .tsx, so nothing here proves the screen RENDERS what these
+ * helpers return: mutating app/order/[id].tsx to drop the RMA notes block, the
+ * status word or the per-line rows leaves this file — and every other suite —
+ * green. The web suite (page.returns.test.tsx) scans the screen source for
+ * the helper CALLS, which catches a hand-rolled copy, not a dropped render.
+ * The owed check is a simulator hand-test on Demo Co (fenced from L4L): a
+ * completed order with a closed, noted return, opened on the phone — see the
+ * RENDER DEBT comment above the returns section in the screen for the exact
+ * checklist. Do not read a green run here as coverage of the cards.
+ *
  * SO-000085 as prod holds it (read-only, 2026-08-17): three lines 1/1 each,
  * one CLOSED RMA whose single line restocked the Women's Polo S (applied), so
  * that order line carries returned_quantity 1; the swap for a Medium is in the
