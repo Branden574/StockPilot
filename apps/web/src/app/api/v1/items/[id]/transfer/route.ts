@@ -39,9 +39,14 @@ export const dynamic = 'force-dynamic';
  *     crateColor?, rackNumber?, rackRow? }) — a crate SITS ON a rack, so the
  *     rack pair alongside crate fields is that crate's POSITION and both are
  *     kept; see packages/core/src/inventory/new-location.ts. Created via
- *     LocationsService.create (asserts 'locations:manage'; racks/crates don't
- *     count against the sites plan limit) in the SOURCE location's warehouse,
- *     which is derived server-side (never trusted from the client).
+ *     LocationsService.findOrCreatePlacementDestination — the put-away's own
+ *     resolve-or-create, which proceeds under 'stock:transfer' (or
+ *     'locations:manage') through the SECURITY DEFINER mint_placement_location
+ *     (0340; owner decision D1, 2026-08-17: putting stock into the crate a
+ *     book's label names is a stock operation, and the Staff preset holds
+ *     stock:transfer only). Racks/crates don't count against the sites plan
+ *     limit. Created in the SOURCE location's warehouse, which is derived
+ *     server-side (never trusted from the client).
  *   - acknowledgedCrateChanges: the answer to a
  *     BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION refusal — item id + the
  *     fingerprint of the crate the client displayed, never a blanket flag.
@@ -72,9 +77,10 @@ export const dynamic = 'force-dynamic';
  * (3) this route additionally pins the destination to THIS session's org
  * (ctx.organizationId) and rejects the staging/unplaced system buckets — which
  * also gives a clean 400 instead of a generic RPC 500. A newly created rack is
- * born in-org (LocationsService.create scopes to ctx.organizationId), and its
- * warehouse is taken from the source location's own warehouse, so it can't be
- * seeded under a foreign org.
+ * born in-org (findOrCreatePlacementDestination passes ctx.organizationId, and
+ * mint_placement_location re-checks the caller's membership of that org and
+ * that the warehouse is the org's, inside), and its warehouse is taken from the
+ * source location's own warehouse, so it can't be seeded under a foreign org.
  */
 const newRackSchema = z
   .object({
@@ -211,13 +217,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate with
-      // the same warehouse+name first — mirrors the web actions' dedup fix
-      // (migration 0270); previously this always INSERTed, minting a
-      // duplicate `locations` row every time the mobile app put away onto a
-      // rack name that already existed. Asserts 'locations:manage' and scopes
-      // the insert to ctx.organizationId on the create-fallback path only
-      // (racks/crates don't consume the sites plan limit).
+      // findOrCreatePlacementDestination reuses an existing non-deleted
+      // rack/crate with the same warehouse+name first — mirrors the web
+      // actions' dedup fix (migration 0270); previously this always INSERTed,
+      // minting a duplicate `locations` row every time the mobile app put away
+      // onto a rack name that already existed. The create-fallback proceeds
+      // under 'stock:transfer' (or 'locations:manage') and is scoped to
+      // ctx.organizationId (racks/crates don't consume the sites plan limit).
       //
       // Kind, name and columns all come out of ONE `planNewLocation` verdict,
       // so the row created is provably the row the client's confirmation named.
@@ -328,7 +334,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      const created = await new LocationsService(ctx).findOrCreateRackOrCrate(pendingNewRack);
+      const created = await new LocationsService(ctx).findOrCreatePlacementDestination(pendingNewRack);
       toLocationId = created.id as string;
       dest = toPlaceDest(created as Record<string, unknown>);
     }

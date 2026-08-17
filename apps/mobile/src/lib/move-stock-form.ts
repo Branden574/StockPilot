@@ -40,6 +40,7 @@
 import {
   bookCrateFingerprint,
   bookRackFingerprint,
+  can,
   describeNewRackPlacement,
   getCrateColor,
   parseBookCrateChangeDetail,
@@ -51,6 +52,8 @@ import {
   type BookRackChangeDetail,
   type BookStorageInfo,
   type NewRackPlacementDecision,
+  type Permission,
+  type Role,
 } from '@stockpilot/core';
 
 // Type-only (erased at build): the two routes' own success bodies, so the
@@ -962,8 +965,9 @@ export function bookDestinationIsRecordedStorage(
 
 /**
  * Would placing here have to MINT a row (no destination in the source
- * warehouse carries the planned name)? A user without `locations:manage`
- * cannot, and is told so inline rather than by a server refusal.
+ * warehouse carries the planned name)? A user who may not
+ * (`canMintPlacementDestination` false) is told so inline rather than by a
+ * server refusal.
  */
 export function bookDestinationNeedsMint(
   dest: BookDestination,
@@ -973,4 +977,45 @@ export function bookDestinationNeedsMint(
   const { label } = newRackLabel(dest.input);
   if (!label) return false;
   return !existingLabels.some((l) => l.trim().toLowerCase() === label.toLowerCase());
+}
+
+/**
+ * ═══ MAY THIS USER MINT THE RACK OR CRATE A PUT-AWAY PLACES INTO? ═══
+ *
+ * The phone's copy of the server's placement gate — the ONE derivation both
+ * screens (item detail, staging worklist) hand the Move stock sheet as
+ * `canCreateLocation`, so the sheet offers the default path to exactly the
+ * users the server will let through, and never to one it will 403.
+ *
+ * Owner decision D1 (2026-08-17): putting stock into the crate a book's own
+ * label names — the sheet's DEFAULT destination, seeded from the recorded
+ * storage — is a STOCK operation, not location administration. For 113 of
+ * L4L's 124 books that crate exists ONLY as the label, so the put-away must
+ * mint the row, and the server now does that under `stock:transfer` (or
+ * `locations:manage`) through the SECURITY DEFINER `mint_placement_location`
+ * (migration 0340), invoked ONLY from the placement path
+ * (POST /api/v1/items/[id]/transfer's `newRack`, and the web put-away
+ * actions). Before this, the mint asserted `locations:manage`; the Staff
+ * preset holds `stock:transfer` only, so staff saw "needs the Manage
+ * locations permission" on every crated book and could only tap the bare
+ * rack — the crate-erasing path (Maus I).
+ *
+ * So the answer is: manager-or-above, OR the effective `stock:transfer`, OR
+ * the effective `locations:manage`. `permissions` is the EFFECTIVE set when it
+ * has loaded (overrides applied — a viewer granted stock:transfer may mint, a
+ * staff member with it revoked may not); absent, `can` falls back to the
+ * static role defaults, exactly like every other gate on the phone. A null
+ * role (signed out, org not resolved) may do nothing.
+ *
+ * Cosmetic only, like every gate here: the route re-asserts stock:transfer,
+ * and the database function re-checks membership + permission inside.
+ */
+export function canMintPlacementDestination(ctx: {
+  role: Role | null;
+  permissions?: ReadonlySet<Permission>;
+}): boolean {
+  if (ctx.role === null) return false;
+  if (ctx.role === 'owner' || ctx.role === 'admin' || ctx.role === 'manager') return true;
+  const c = { role: ctx.role, permissions: ctx.permissions };
+  return can(c, 'stock:transfer') || can(c, 'locations:manage');
 }

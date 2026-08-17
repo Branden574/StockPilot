@@ -97,12 +97,15 @@ interface BulkPlaceDialogProps {
   /** Called after a successful (full or partial) place so the parent can clear selection. */
   onPlaced: () => void;
   /**
-   * Whether this user may CREATE rack/crate rows (`locations:manage`; RLS
-   * `locations_insert` requires it). The all-books form places INTO the
-   * recorded crate by default and mints the row when none exists; a user who
-   * cannot mint is told so inline. Defaults to true (today's behaviour).
+   * Whether this user may MINT the rack/crate the put-away places into
+   * (`canMintPlacementDestination`: manager-or-above, or `stock:transfer`, or
+   * `locations:manage` — the grants the placement path's SECURITY DEFINER
+   * resolve-or-create accepts, migration 0340, owner decision D1). The
+   * all-books form places INTO the recorded crate by default and mints the row
+   * when none exists; a user who cannot mint is told so inline. Defaults to
+   * true (today's behaviour).
    */
-  canManageLocations?: boolean;
+  canMintDestination?: boolean;
   trigger: React.ReactNode;
 }
 
@@ -111,7 +114,7 @@ export function BulkPlaceDialog({
   destinationsMap,
   warehouseNames,
   onPlaced,
-  canManageLocations = true,
+  canMintDestination = true,
   trigger,
 }: BulkPlaceDialogProps) {
   const router = useRouter();
@@ -241,12 +244,12 @@ export function BulkPlaceDialog({
   const needsMint =
     plannedLabel.length > 0 &&
     !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
-  const cannotMint = needsMint && !canManageLocations;
+  const cannotMint = needsMint && !canMintDestination;
   const newProblem =
     chosen !== null
       ? (newDestinationProblem(chosen) ??
         (cannotMint
-          ? `${plannedLabel} does not exist yet, and creating racks or crates needs the Manage locations permission. Pick an existing location, or ask a manager to create it.`
+          ? `${plannedLabel} does not exist yet, and placing into a new rack or crate needs the Transfer stock permission. Pick an existing location, or ask a manager to create it.`
           : null))
       : null;
   const canSubmit =

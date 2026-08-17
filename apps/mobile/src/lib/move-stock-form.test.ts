@@ -10,6 +10,7 @@ import {
   bookDestinationIsRecordedStorage,
   bookDestinationNeedsMint,
   bookRackRefusal,
+  canMintPlacementDestination,
   rackAcknowledgementField,
   transferRequestBody,
   crateSyncWarning,
@@ -39,6 +40,7 @@ import type {
   BookCrateChangeDetail,
   BookRackChangeDetail,
   BookStorageInfo,
+  Permission,
 } from '@stockpilot/core';
 
 type WriteOffBody = Awaited<ReturnType<typeof removeStockFromLocation>>;
@@ -1721,5 +1723,73 @@ describe('bookDestinationNeedsMint — said inline for a user who cannot create 
         [],
       ),
     ).toBe(false);
+  });
+});
+
+// ── D1: the phone offers the default path to STAFF ──────────────────────────
+//
+// Owner decision D1 (2026-08-17): a put-away may resolve-or-create the crate a
+// book's label names under stock:transfer (server: mint_placement_location,
+// migration 0340, invoked only from the placement path). The Staff preset holds
+// stock:transfer and NOT locations:manage, so the old `canCreateLocation`
+// derivation (manager OR locations:manage) hid the sheet's default path from
+// every staff member and pushed them onto the bare rack — the crate-erasing
+// path. `canMintPlacementDestination` is the ONE derivation both screens now
+// hand the sheet.
+
+describe('canMintPlacementDestination — the phone mirrors the server placement gate', () => {
+  const none = new Set<Permission>();
+  it('STAFF (static preset: stock:transfer, no locations:manage) may mint — the D1 pin', () => {
+    expect(canMintPlacementDestination({ role: 'staff' })).toBe(true);
+  });
+  it('manager-or-above always may', () => {
+    expect(canMintPlacementDestination({ role: 'manager', permissions: none })).toBe(true);
+    expect(canMintPlacementDestination({ role: 'admin', permissions: none })).toBe(true);
+    expect(canMintPlacementDestination({ role: 'owner', permissions: none })).toBe(true);
+  });
+  it('a VIEWER (neither permission) may not; a null role may not', () => {
+    expect(canMintPlacementDestination({ role: 'viewer' })).toBe(false);
+    expect(canMintPlacementDestination({ role: null })).toBe(false);
+    expect(
+      canMintPlacementDestination({ role: null, permissions: new Set<Permission>(['stock:transfer']) }),
+    ).toBe(false);
+  });
+  it('the EFFECTIVE set wins over the preset: a viewer GRANTED stock:transfer may, a staff member with it REVOKED may not', () => {
+    expect(
+      canMintPlacementDestination({
+        role: 'viewer',
+        permissions: new Set<Permission>(['stock:transfer']),
+      }),
+    ).toBe(true);
+    expect(
+      canMintPlacementDestination({
+        role: 'staff',
+        permissions: new Set<Permission>(['items:read', 'stock:adjust']),
+      }),
+    ).toBe(false);
+  });
+  it('locations:manage alone still suffices (the wider grant the insert policy already honours)', () => {
+    expect(
+      canMintPlacementDestination({
+        role: 'viewer',
+        permissions: new Set<Permission>(['locations:manage']),
+      }),
+    ).toBe(true);
+  });
+  it('is the ONE derivation both screens hand the sheet, and neither keeps a locations:manage copy', () => {
+    // Behaviour is pinned above; this pins the WIRING — the value the sheet
+    // receives is this function's, on both screens, and the old derivation
+    // (which would 403-proof staff out of the default path) is gone from both.
+    for (const src of [itemScreen, stagingScreen]) {
+      expect(src).toContain('const canCreateLocation = canMintPlacementDestination({');
+      expect(src).toContain("import { canMintPlacementDestination } from '@/lib/move-stock-form';");
+      // The old derivation, verbatim — the expression that hid the default
+      // path from staff. Not the string 'locations:manage' alone: the comments
+      // beside the new derivation legitimately name the wider grant.
+      expect(src).not.toContain("can({ role: role as Role, permissions }, 'locations:manage')");
+    }
+    // The sheet's inline refusal names the permission that now decides.
+    expect(modal).toContain('needs the Transfer stock permission');
+    expect(modal).not.toContain('needs the Manage locations permission');
   });
 });

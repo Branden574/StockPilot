@@ -537,7 +537,8 @@ const acknowledgedRackChangesSchema = z
   .optional();
 
 /**
- * The inline-creation arguments for LocationsService.findOrCreateRackOrCrate.
+ * The inline-creation arguments for
+ * LocationsService.findOrCreatePlacementDestination.
  * ONE builder, driven by the ONE core planner, so every write path agrees on
  * what a set of fields creates AND on what it is called.
  *
@@ -601,12 +602,24 @@ async function resolveNewLocation(
  * Mint the destination the gate has now approved — or reuse whatever appeared in
  * the window since `resolveNewLocation` looked. Returns the REAL row's id and
  * columns, which is what every write below uses.
+ *
+ * UNDER stock:transfer, NOT locations:manage (owner decision D1, 2026-08-17).
+ * `findOrCreatePlacementDestination` is the put-away's own resolve-or-create:
+ * the same find, and a create that proceeds for anyone who may move stock —
+ * through the SECURITY DEFINER `mint_placement_location` (0340), which
+ * re-checks the org, the permission and the warehouse inside. Putting stock
+ * into the crate the book's label names is a stock operation; the Staff preset
+ * holds stock:transfer only, and through `create` (locations:manage) every
+ * label-only crated book was unreachable for staff, who were pushed onto the
+ * bare rack — the crate-erasing path. Ordinary location creation elsewhere
+ * keeps locations:manage; this is the ONLY place the exception applies on the
+ * web (the mobile /api/v1 transfer route is its twin).
  */
 async function commitNewLocation(
   svc: LocationsService,
   n: { warehouseId: string; parentId?: string | null } & NewLocationFields,
 ): Promise<{ toLocationId: string; dest: PlaceDest }> {
-  const created = await svc.findOrCreateRackOrCrate(newLocationInput(n));
+  const created = await svc.findOrCreatePlacementDestination(newLocationInput(n));
   return {
     toLocationId: (created as { id: string }).id,
     dest: toPlaceDest(created as unknown as Record<string, unknown>),
@@ -663,9 +676,12 @@ async function warehouseInOrg(
 // ---------------------------------------------------------------------------
 // transferStockAction — move placed stock between locations; destination may
 // be an existing location OR a rack/crate created inline (same union as
-// placeStockAction). Creating a location goes through LocationsService.create,
-// which asserts 'locations:manage' + the 'locations' plan limit; the transfer
-// itself stays gated on 'stock:transfer' inside InventoryService.transferStock.
+// placeStockAction). Creating a location goes through
+// LocationsService.findOrCreatePlacementDestination, which proceeds under
+// 'stock:transfer' (or 'locations:manage') via the SECURITY DEFINER
+// mint_placement_location (0340) — racks/crates never consumed the site plan
+// limit; the transfer itself stays gated on 'stock:transfer' inside
+// InventoryService.transferStock.
 // ---------------------------------------------------------------------------
 
 const transferStockActionSchema = z

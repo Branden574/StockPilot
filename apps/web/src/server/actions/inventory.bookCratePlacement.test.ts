@@ -95,7 +95,13 @@ function installContext(opts: {
   itemRows?: Array<Record<string, unknown>>;
   holdingRows?: Array<Record<string, unknown>>;
   setBookStorage?: { data: unknown; error: { message: string } | null };
-  /** What LocationsService.create returns for an inline "+ New" destination. */
+  /**
+   * What `mint_placement_location` (0340) answers with for an inline "+ New"
+   * destination — the placement path's SECURITY DEFINER resolve-or-create
+   * (owner decision D1: a put-away may mint the crate it places into under
+   * stock:transfer), NOT a direct `locations` insert. `returns setof … rows 1`,
+   * so PostgREST hands back a one-element array.
+   */
   insertedLocation?: Record<string, unknown>;
 } = {}): SupabaseStub {
   const stub = makeSupabaseStub({
@@ -103,7 +109,12 @@ function installContext(opts: {
       data: 'locationRow' in opts ? opts.locationRow : GREEN_CRATE_ROW,
       error: null,
     },
-    'locations.insert': { data: opts.insertedLocation ?? null, error: null },
+    // Deliberately NO 'locations.insert' answer: a regression back to the direct
+    // insert gets `data: null` and fails on the missing row.
+    'rpc:mint_placement_location': {
+      data: opts.insertedLocation ? [opts.insertedLocation] : null,
+      error: null,
+    },
     'warehouses.select': { data: { id: GREEN_CRATE_ROW.warehouse_id }, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
@@ -119,6 +130,13 @@ function installContext(opts: {
     supabase: stub.client,
   };
   return stub;
+}
+
+/** The arguments the action handed `mint_placement_location` — the ONE mint. */
+function mintArgs(stub: SupabaseStub): Record<string, unknown> {
+  const calls = stub.rpcCalls.filter((c) => c.name === 'mint_placement_location');
+  expect(calls).toHaveLength(1);
+  return calls[0]!.args as Record<string, unknown>;
 }
 
 /** A book recorded as sitting in Blue 4. */
@@ -928,18 +946,20 @@ describe('a new destination may be a crate ON a rack', () => {
     } as Parameters<typeof transferStockAction>[0]);
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.type).toBe('bin');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_type).toBe('bin');
     // The name states BOTH facts — and it is migration 0270's dedupe key, so
     // this is also what keeps two same-numbered crates on different racks two
     // rows.
-    expect(insert.name).toBe('Crate #9 on rack A1-Row 3');
-    expect(insert.crate_number).toBe('9');
+    expect(insert.p_name).toBe('Crate #9 on rack A1-Row 3');
+    expect(insert.p_crate_number).toBe('9');
     // …and the typed rack is NOT dropped: it is stored, decomposed, as the
     // crate's position.
-    expect(insert.rack_number).toBe('A1');
-    expect(insert.rack_row).toBe('Row 3');
+    expect(insert.p_rack_number).toBe('A1');
+    expect(insert.p_rack_row).toBe('Row 3');
+    // Through the placement function, never the table directly.
+    expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
     expect(mockTransferStock).toHaveBeenCalledOnce();
   });
 
@@ -1092,8 +1112,8 @@ describe('a new destination may be a crate ON a rack', () => {
 
   it('a NUMBER-ONLY crate is accepted and created as a CRATE', async () => {
     const stub = installContext({
-      // No existing rack/crate in this warehouse — findOrCreateRackOrCrate
-      // falls through to create().
+      // No existing rack/crate in this warehouse — findOrCreatePlacementDestination
+      // falls through to the mint.
       locationRow: [],
       itemRows: [blueFourBook()],
       holdingRows: [greenCrateHolding()],
@@ -1117,16 +1137,16 @@ describe('a new destination may be a crate ON a rack', () => {
     });
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.type).toBe('bin');
-    expect(insert.name).toBe('Crate #9');
-    expect(insert.crate_number).toBe('9');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_type).toBe('bin');
+    expect(insert.p_name).toBe('Crate #9');
+    expect(insert.p_crate_number).toBe('9');
     // No position was given, so none is invented — and the name is
     // byte-identical to the one shipped crates already carry, which is what
     // keeps an existing "Crate #9" row FOUND and REUSED rather than duplicated.
-    expect(insert.rack_number).toBeNull();
-    expect(insert.rack_row).toBeNull();
+    expect(insert.p_rack_number).toBeNull();
+    expect(insert.p_rack_row).toBeNull();
   });
 
   it('a plain rack still creates a RACK, row and all', async () => {
@@ -1153,13 +1173,13 @@ describe('a new destination may be a crate ON a rack', () => {
     });
 
     expect(res.ok).toBe(true);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('rack');
-    expect(insert.name).toBe('A1-Row 3');
-    expect(insert.rack_number).toBe('A1');
-    expect(insert.rack_row).toBe('Row 3');
-    expect(insert.crate_color).toBeNull();
-    expect(insert.crate_number).toBeNull();
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('rack');
+    expect(insert.p_name).toBe('A1-Row 3');
+    expect(insert.p_rack_number).toBe('A1');
+    expect(insert.p_rack_row).toBe('Row 3');
+    expect(insert.p_crate_color).toBeNull();
+    expect(insert.p_crate_number).toBeNull();
   });
 });
 

@@ -14,6 +14,7 @@
 import {
   bookCrateFingerprint,
   bookRackFingerprint,
+  can,
   formatCrateColorLabel,
   formatRackLabel,
   formatRackPosition,
@@ -24,7 +25,9 @@ import {
   type BookStorageInfo,
   type NewLocationFields,
   type NewLocationPlan,
+  type Permission,
   type RackPosition,
+  type Role,
 } from '@stockpilot/core';
 
 import type { DestinationOption } from './destination-option';
@@ -468,4 +471,42 @@ export function fieldsAreRackOnly(fields: DestinationFields): boolean {
     fields.crateNumber.trim().length === 0 &&
     hasRackPosition({ rackNumber: fields.rackNumber, rackRow: fields.rackRow })
   );
+}
+
+/**
+ * ═══ MAY THIS USER MINT THE RACK OR CRATE A PUT-AWAY PLACES INTO? ═══
+ *
+ * The client's copy of the server's placement gate — the ONE derivation the
+ * staging page and the item detail hand the three dialogs as
+ * `canMintDestination`, so a dialog offers the default path to exactly the
+ * users the server will let through, and never to one it will refuse.
+ *
+ * Owner decision D1 (2026-08-17): putting stock into the crate a book's own
+ * label names — the dialogs' DEFAULT destination, seeded from the recorded
+ * storage — is a STOCK operation, not location administration. For 113 of
+ * L4L's 124 books that crate exists ONLY as the label, so the put-away must
+ * mint the row, and the server does that under `stock:transfer` (or
+ * `locations:manage`) through the SECURITY DEFINER `mint_placement_location`
+ * (migration 0340), invoked ONLY from the placement path
+ * (`LocationsService.findOrCreatePlacementDestination`, called by the three
+ * put-away/transfer actions and the mobile transfer route). Before this the
+ * mint asserted `locations:manage`; the Staff preset holds `stock:transfer`
+ * only, so staff saw "needs the Manage locations permission" on every crated
+ * book and could only place onto the bare rack — the crate-erasing path.
+ *
+ * So the answer is: manager-or-above, OR the effective `stock:transfer`, OR
+ * the effective `locations:manage` — the same three grants the database
+ * function accepts. `can` reads the EFFECTIVE set when the context carries one
+ * (overrides applied), else the static role defaults.
+ *
+ * Cosmetic, like every client gate: the action re-asserts, and the function
+ * re-checks membership + permission inside. The phone's copy is
+ * apps/mobile/src/lib/move-stock-form.ts `canMintPlacementDestination`.
+ */
+export function canMintPlacementDestination(ctx: {
+  role: Role;
+  permissions?: ReadonlySet<Permission>;
+}): boolean {
+  if (ctx.role === 'owner' || ctx.role === 'admin' || ctx.role === 'manager') return true;
+  return can(ctx, 'stock:transfer') || can(ctx, 'locations:manage');
 }

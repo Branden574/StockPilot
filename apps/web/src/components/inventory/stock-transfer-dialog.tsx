@@ -129,9 +129,12 @@ interface StockTransferDialogProps {
    * the rare crated transfer, zero chance of confirming a crate that moved.
    */
   bookStorage?: BookStorageInfo | null;
-  /** Show the "New location…" destination only when the user can actually
-   *  create locations (server still asserts 'locations:manage' + plan limit). */
-  canManageLocations?: boolean;
+  /** Show the "New location…" destination — and, for a book, allow the four
+   *  fields to name a row that does not exist yet — only when the user may MINT
+   *  it (`canMintPlacementDestination`: manager-or-above, or `stock:transfer`,
+   *  or `locations:manage`; the server re-asserts through the placement path's
+   *  SECURITY DEFINER resolve-or-create, migration 0340, owner decision D1). */
+  canMintDestination?: boolean;
   trigger?: React.ReactNode;
 }
 
@@ -143,7 +146,7 @@ export function StockTransferDialog({
   holdings,
   itemType,
   bookStorage,
-  canManageLocations = false,
+  canMintDestination = false,
   trigger,
 }: StockTransferDialogProps) {
   const router = useRouter();
@@ -228,7 +231,7 @@ export function StockTransferDialog({
   // A new location is created inside the SOURCE holding's warehouse — without
   // a known warehouse there's nowhere to create it, so the option hides.
   const sourceWarehouseId = selectedHolding?.warehouseId ?? null;
-  const canCreateHere = canManageLocations && !!sourceWarehouseId;
+  const canCreateHere = canMintDestination && !!sourceWarehouseId;
 
   const isNew = !isBook && toLocation === NEW_LOCATION_SENTINEL;
 
@@ -288,9 +291,10 @@ export function StockTransferDialog({
   const chosen = chosenDestination();
   const newReady = chosen !== null && newDestinationReady(chosen);
   // Would this destination have to be MINTED (no row with that name in the
-  // source warehouse), and may this user do that? Creating needs
-  // `locations:manage` AND a warehouse to create in; say so here rather than
-  // letting the default path for a label-only crate die on a server refusal.
+  // source warehouse), and may this user do that? Minting needs the placement
+  // gate (stock:transfer / locations:manage / manager) AND a warehouse to
+  // create in; say so here rather than letting the default path for a
+  // label-only crate die on a server refusal.
   const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
   const needsMint =
     plannedLabel.length > 0 &&
@@ -315,7 +319,7 @@ export function StockTransferDialog({
         (sameAsSource
           ? 'That is where this stock already is — pick a different destination.'
           : cannotMint
-            ? `${plannedLabel} does not exist yet, and creating racks or crates needs the Manage locations permission. Pick an existing location, or ask a manager to create it.`
+            ? `${plannedLabel} does not exist yet, and placing into a new rack or crate needs the Transfer stock permission. Pick an existing location, or ask a manager to create it.`
             : null))
       : null;
 

@@ -1,8 +1,9 @@
-import type { BookStorageInfo } from '@stockpilot/core';
+import type { BookStorageInfo, Permission } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
 import type { DestinationOption } from './destination-option';
 import {
+  canMintPlacementDestination,
   destinationCrate,
   destinationFromFields,
   destinationIsRecordedStorage,
@@ -574,5 +575,56 @@ describe('destinationIsRecordedStorage — suppress the typo guard for the recor
     expect(destinationIsRecordedStorage({ mode: 'existing', option: row }, RED_4_ON_38B)).toBe(
       true,
     );
+  });
+});
+
+// ── D1: the web dialogs offer the default path to STAFF ─────────────────────
+//
+// Owner decision D1 (2026-08-17): a put-away may resolve-or-create the crate a
+// book's label names under stock:transfer (server:
+// LocationsService.findOrCreatePlacementDestination → mint_placement_location,
+// migration 0340, invoked only from the placement path). The Staff preset holds
+// stock:transfer and NOT locations:manage, so the old client derivation
+// (`can(ctx, 'locations:manage')`) hid the dialogs' default path from every
+// staff member — "needs the Manage locations permission" on every label-only
+// crated book — and pushed them onto the bare rack, the crate-erasing path.
+// `canMintPlacementDestination` is the ONE derivation Staging and the item
+// detail hand the three dialogs.
+
+describe('canMintPlacementDestination — the client mirrors the server placement gate', () => {
+  const none = new Set<Permission>();
+  it('STAFF (static preset: stock:transfer, no locations:manage) may mint — the D1 pin', () => {
+    expect(canMintPlacementDestination({ role: 'staff' })).toBe(true);
+  });
+  it('manager-or-above always may (the function admits has_org_role manager regardless of overrides)', () => {
+    expect(canMintPlacementDestination({ role: 'manager', permissions: none })).toBe(true);
+    expect(canMintPlacementDestination({ role: 'admin', permissions: none })).toBe(true);
+    expect(canMintPlacementDestination({ role: 'owner', permissions: none })).toBe(true);
+  });
+  it('a VIEWER (neither permission) may not', () => {
+    expect(canMintPlacementDestination({ role: 'viewer' })).toBe(false);
+    expect(canMintPlacementDestination({ role: 'viewer', permissions: none })).toBe(false);
+  });
+  it('the EFFECTIVE set wins over the preset: a viewer GRANTED stock:transfer may, a staff member with it REVOKED may not', () => {
+    expect(
+      canMintPlacementDestination({
+        role: 'viewer',
+        permissions: new Set<Permission>(['stock:transfer']),
+      }),
+    ).toBe(true);
+    expect(
+      canMintPlacementDestination({
+        role: 'staff',
+        permissions: new Set<Permission>(['items:read', 'stock:adjust']),
+      }),
+    ).toBe(false);
+  });
+  it('locations:manage alone still suffices (the wider grant the insert policy already honours)', () => {
+    expect(
+      canMintPlacementDestination({
+        role: 'viewer',
+        permissions: new Set<Permission>(['locations:manage']),
+      }),
+    ).toBe(true);
   });
 });

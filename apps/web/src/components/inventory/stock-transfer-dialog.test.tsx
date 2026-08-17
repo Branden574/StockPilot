@@ -45,7 +45,7 @@ function renderDialog() {
         [{ locationId: 'loc-a', locationName: 'Receiving Dock', quantity: 40, kind: null, warehouseId: 'wh-1' }] as never
       }
       itemType="asset"
-      canManageLocations
+      canMintDestination
     />,
   );
 }
@@ -130,7 +130,7 @@ function renderBookDialog(
     bookStorage?: Record<string, unknown> | null;
     locations?: unknown[];
     holdings?: unknown[];
-    canManageLocations?: boolean;
+    canMintDestination?: boolean;
   } = {},
 ) {
   return render(
@@ -153,7 +153,7 @@ function renderBookDialog(
       }
       itemType="book"
       bookStorage={(opts.bookStorage === undefined ? BLUE_4_NO_RACK : opts.bookStorage) as never}
-      canManageLocations={opts.canManageLocations ?? true}
+      canMintDestination={opts.canMintDestination ?? true}
     />,
   );
 }
@@ -359,17 +359,17 @@ describe('StockTransferDialog — the book destination fields', () => {
     expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
   });
 
-  it('without Manage locations, a destination that would have to be CREATED is said inline, not refused on submit', async () => {
+  it('without the placement gate (stock:transfer / locations:manage), a destination that would have to be CREATED is said inline, not refused on submit', async () => {
     const user = userEvent.setup();
-    renderBookDialog({ canManageLocations: false });
+    renderBookDialog({ canMintDestination: false });
     await openBook(user);
     // Blue 4 (position-less) has no row in this warehouse.
-    expect(screen.getByText(/needs the Manage locations permission/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs the Transfer stock permission/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /transfer stock/i })).toBeDisabled();
     // An existing row is still fine.
     await user.click(screen.getAllByRole('combobox')[1]!);
     await user.click(await screen.findByRole('option', { name: '22-B' }));
-    expect(screen.queryByText(/needs the Manage locations permission/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs the Transfer stock permission/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /transfer stock/i })).toBeEnabled();
   });
 });
@@ -602,7 +602,7 @@ describe('StockTransferDialog — system buckets are not destinations', () => {
           ] as never
         }
         itemType="asset"
-        canManageLocations
+        canMintDestination
       />,
     );
 

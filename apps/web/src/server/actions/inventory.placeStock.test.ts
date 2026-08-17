@@ -21,7 +21,7 @@ vi.mock('next/cache', () => ({
 //  - withContext() → returns a ServiceContext-shaped object whose supabase is
 //    a configurable stub (controls the locations/warehouses verification rows).
 //  - the InventoryService / LocationsService classes → spy constructors whose
-//    instances expose transferStock / stampPlacementBin / findOrCreateRackOrCrate
+//    instances expose transferStock / stampPlacementBin / findOrCreatePlacementDestination
 //    spies — the SAME methods the action actually calls (dedup-safe rack
 //    lookup + the post-transfer bin_location label stamp).
 // ---------------------------------------------------------------------------
@@ -74,10 +74,10 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
+    findOrCreatePlacementDestination = mockFindOrCreateRackOrCrate;
     // The READ half, now that the gate runs BEFORE the row is minted. Defaults
     // to "nothing to reuse", so these suites still exercise the create path and
-    // `findOrCreateRackOrCrate` is still what actually mints.
+    // `findOrCreatePlacementDestination` is still what actually mints.
     findRackOrCrate = mockFindRackOrCrate;
   },
 }));
@@ -187,12 +187,12 @@ describe('placeStockAction', () => {
     });
   });
 
-  it('2. creates a rack (via the dedup-safe findOrCreateRackOrCrate lookup) then transfers to the new location id', async () => {
+  it('2. creates a rack (via the dedup-safe findOrCreatePlacementDestination lookup) then transfers to the new location id', async () => {
     const newLocId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 
     const callOrder: string[] = [];
     // Returns a full `locations` ROW, because that is what the real
-    // findOrCreateRackOrCrate returns (select('*')) and what the action now
+    // findOrCreatePlacementDestination returns (select('*')) and what the action now
     // derives the placement label from.
     mockFindOrCreateRackOrCrate.mockImplementation(async () => {
       callOrder.push('create');
@@ -223,7 +223,7 @@ describe('placeStockAction', () => {
       },
     });
 
-    // findOrCreateRackOrCrate (the dedup-safe lookup — Unit A) was called
+    // findOrCreatePlacementDestination (the dedup-safe lookup — Unit A) was called
     // with kind='rack' (no crateColor)
     expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
     const createArg = (mockFindOrCreateRackOrCrate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
@@ -249,7 +249,7 @@ describe('placeStockAction', () => {
     expect(callOrder).toEqual(['create', 'transfer']);
 
     // The label stamp comes from the RESOLVED location row, not from what the
-    // user typed. findOrCreateRackOrCrate may return a PRE-EXISTING row (a
+    // user typed. findOrCreatePlacementDestination may return a PRE-EXISTING row (a
     // case-insensitive name match), and that row's columns are the truth about
     // that rack/crate — see test 8 for the divergent case.
     expect(mockStampPlacementBin).toHaveBeenCalledWith([ITEM_ID], {

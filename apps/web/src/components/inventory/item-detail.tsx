@@ -49,6 +49,7 @@ import {
   toDestinationOption,
   type DestinationLocationRow,
 } from '@/lib/locations/destination-option';
+import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
 import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
@@ -282,10 +283,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
   // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
   const canEditNotes = can(ctx, 'movements:edit_notes');
-  // Gates the transfer dialog's inline "New location…" destination — the
-  // server re-asserts 'locations:manage' (+ the locations plan limit) inside
-  // LocationsService.create, so this only hides the UI affordance.
-  const canManageLocations = can(ctx, 'locations:manage');
+  // Gates the transfer dialog's inline "New location…" destination and, for a
+  // book, its default path (placing into the recorded crate, minting the row
+  // when none exists). The server does that under 'stock:transfer' (or
+  // 'locations:manage') through the placement path only
+  // (mint_placement_location, 0340; owner decision D1) and re-asserts it, so
+  // this only hides the UI affordance. ONE derivation, shared with Staging.
+  const canMintDestination = canMintPlacementDestination(ctx);
   // Public-catalog visibility (P3): the row + select only render for
   // public_links:manage holders; the server action re-asserts.
   const canManagePublicVisibility = can(ctx, 'public_links:manage');
@@ -455,7 +459,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                       ? readBookStorage(item.custom_fields as Record<string, unknown> | null)
                       : null
                   }
-                  canManageLocations={canManageLocations}
+                  canMintDestination={canMintDestination}
                 />
               )}
               <ReportProblemButton

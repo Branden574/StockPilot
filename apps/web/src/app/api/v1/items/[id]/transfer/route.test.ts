@@ -30,7 +30,12 @@ vi.mock('@/lib/rate-limit', () => ({
 vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
 vi.mock('@/server/services/context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/context')>();
-  return { ...actual, assertPermission: vi.fn(), assertPlanLimit: vi.fn() };
+  // The permission gates (`assertPermission`, `assertAnyPermission`) are REAL
+  // here and run against the static role, so the D1 pins below mean what they
+  // say: a staff put-away really passes stock:transfer, a viewer really is
+  // refused. (They used to be mocked; a mutation that re-gated the mint on
+  // locations:manage slipped straight past the staff pin while they were.)
+  return { ...actual, assertPlanLimit: vi.fn() };
 });
 vi.mock('@/server/services/audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/audit')>();
@@ -96,7 +101,18 @@ function install(opts: {
   locationRows?: unknown[];
   itemRows?: Array<Record<string, unknown>>;
   holdingRows?: unknown[];
+  /**
+   * The row `mint_placement_location` (0340) answers with when the route mints
+   * a new rack/crate — the SECURITY DEFINER resolve-or-create the placement
+   * path uses instead of a direct `locations` insert (owner decision D1: a
+   * put-away may mint the crate it places into under stock:transfer).
+   * `returns setof … rows 1`, so PostgREST hands back a one-element array.
+   */
   insertedLocation?: Record<string, unknown>;
+  /** What the mint RPC ERRORS with, if it should (the function's own 42501). */
+  mintError?: { message: string; code?: string };
+  /** The caller's role — defaults to manager; the D1 pins use staff/viewer. */
+  role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 }): SupabaseStub {
   const queue = [...(opts.locationRows ?? [])];
   const stub = makeSupabaseStub({
@@ -106,7 +122,12 @@ function install(opts: {
       data: (queue.length > 1 ? queue.shift() : queue[0]) as never,
       error: null,
     }),
-    'locations.insert': { data: opts.insertedLocation ?? null, error: null },
+    // Deliberately NO 'locations.insert' answer: the placement path must never
+    // reach the table directly (RLS refuses staff there); a regression that
+    // did would get `data: null` and fail below on the missing row.
+    'rpc:mint_placement_location': opts.mintError
+      ? { data: null, error: opts.mintError }
+      : { data: opts.insertedLocation ? [opts.insertedLocation] : null, error: null },
     'inventory_items.select': { data: opts.itemRows ?? [], error: null },
     'item_stock_levels.select': { data: opts.holdingRows ?? [], error: null },
     'rpc:inventory_set_book_placement': { data: 1, error: null },
@@ -115,13 +136,20 @@ function install(opts: {
   vi.mocked(withApiContext).mockResolvedValue({
     organizationId: 'org-1',
     userId: 'u-1',
-    role: 'manager' as const,
+    role: (opts.role ?? 'manager') as never,
     supabase: stub.client as never,
     mfaRequired: false,
     mfaSatisfied: true,
     enabledModules: new Set<ModuleId>(),
   } as never);
   return stub;
+}
+
+/** The arguments the route handed `mint_placement_location` — the ONE mint. */
+function mintArgs(stub: SupabaseStub): Record<string, unknown> {
+  const calls = stub.rpcCalls.filter((c) => c.name === 'mint_placement_location');
+  expect(calls).toHaveLength(1);
+  return calls[0]!.args as Record<string, unknown>;
 }
 
 function request(body: unknown) {
@@ -452,11 +480,13 @@ describe('POST /api/v1/items/[id]/transfer — a new destination may be a crate 
     );
 
     expect(res.status).toBe(200);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.name).toBe('Crate #9 on rack A1');
-    expect(insert.crate_number).toBe('9');
-    expect(insert.rack_number).toBe('A1');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_name).toBe('Crate #9 on rack A1');
+    expect(insert.p_crate_number).toBe('9');
+    expect(insert.p_rack_number).toBe('A1');
+    // No direct table insert: the mint went through the placement function.
+    expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
     expect(mockTransferStock).toHaveBeenCalledOnce();
   });
 
@@ -544,11 +574,11 @@ describe('POST /api/v1/items/[id]/transfer — a new destination may be a crate 
     );
 
     expect(res.status).toBe(200);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('crate');
-    expect(insert.type).toBe('bin');
-    expect(insert.name).toBe('Crate #9');
-    expect(insert.rack_number).toBeNull();
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('crate');
+    expect(insert.p_type).toBe('bin');
+    expect(insert.p_name).toBe('Crate #9');
+    expect(insert.p_rack_number).toBeNull();
   });
 
   it('a plain rack still creates a RACK with a decomposed pair', async () => {
@@ -576,10 +606,185 @@ describe('POST /api/v1/items/[id]/transfer — a new destination may be a crate 
     );
 
     expect(res.status).toBe(200);
-    const insert = stub.chainArgs.get('locations.insert')![0]![0] as Record<string, unknown>;
-    expect(insert.kind).toBe('rack');
-    expect(insert.name).toBe('A1-Row 3');
-    expect(insert.rack_number).toBe('A1');
-    expect(insert.rack_row).toBe('Row 3');
+    const insert = mintArgs(stub);
+    expect(insert.p_kind).toBe('rack');
+    expect(insert.p_name).toBe('A1-Row 3');
+    expect(insert.p_rack_number).toBe('A1');
+    expect(insert.p_rack_row).toBe('Row 3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D1 (owner decision, 2026-08-17): STAFF put-away may resolve-or-create the
+// labelled crate under stock:transfer.
+//
+// The Staff preset holds stock:transfer and NOT locations:manage. Before this,
+// the mint went through LocationsService.create (asserts locations:manage), so
+// staff saw "needs the Manage locations permission" on every label-only crated
+// book (113 of L4L's 124) and could only place onto the bare rack — the
+// crate-erasing path. Now the mint is the placement path's own
+// findOrCreatePlacementDestination -> mint_placement_location (0340), gated on
+// stock:transfer OR locations:manage, and the function re-checks org +
+// permission inside. `assertAnyPermission` is NOT mocked in this file (only
+// assertPermission is), so these run the real gate against the static role.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/v1/items/[id]/transfer — D1: staff mints the labelled crate under stock:transfer', () => {
+  const YELLOW_HOLDING = {
+    item_id: ITEM,
+    location_id: CRATE,
+    quantity: 10,
+    locations: {
+      id: CRATE,
+      kind: 'crate',
+      type: 'bin',
+      crate_color: 'yellow',
+      crate_number: '6',
+      rack_number: '38',
+      rack_row: 'B',
+    },
+  };
+  const YELLOW_LABEL = {
+    book_crate_color: 'yellow',
+    book_crate_number: '6',
+    book_rack_number: '38',
+    book_rack_row: 'B',
+  };
+  const YELLOW_FIELDS = { crateColor: 'yellow', crateNumber: '6', rackNumber: '38', rackRow: 'B' };
+
+  it('a STAFF put-away into a label-only crate SUCCEEDS end to end: minted through the placement function, no gate, label kept', async () => {
+    const stub = install({
+      role: 'staff',
+      // The book records yellow 6 on 38-B; no such row exists yet.
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book(YELLOW_LABEL)],
+      holdingRows: [YELLOW_HOLDING],
+      insertedLocation: {
+        id: CRATE,
+        kind: 'crate',
+        name: 'Yellow #6 on rack 38-B',
+        rack_number: '38',
+        rack_row: 'B',
+        crate_color: 'yellow',
+        crate_number: '6',
+      },
+    });
+
+    const res = await POST(
+      request({
+        fromLocationId: STAGING,
+        quantity: 10,
+        newRack: YELLOW_FIELDS,
+        acknowledgedCrateChanges: [],
+        acknowledgedRackChanges: [],
+      }),
+      { params },
+    );
+
+    // Not a 403: staff got through.
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.toLocationId).toBe(CRATE);
+    // Minted ONCE, through the function, with the label's own four fields.
+    expect(mintArgs(stub)).toMatchObject({
+      p_org: 'org-1',
+      p_warehouse_id: WAREHOUSE,
+      p_kind: 'crate',
+      p_name: 'Yellow #6 on rack 38-B',
+      p_crate_color: 'yellow',
+      p_crate_number: '6',
+      p_rack_number: '38',
+      p_rack_row: 'B',
+    });
+    expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
+    // The stock moved into the minted row.
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(mockTransferStock.mock.calls[0]![0]).toMatchObject({ toLocationId: CRATE });
+    // The label was KEPT: the reconciliation derived yellow 6 / 38-B from the
+    // holding, so no clear happened and nothing was preserved-under-protest.
+    expect(body.crateSyncCratePreserved).toBeUndefined();
+    expect(body.crateSyncRackPreserved).toBeUndefined();
+    expect(body.crateSyncFailed).toBeUndefined();
+  });
+
+  it('a second STAFF put-away into the same crate REUSES the row (find, no mint)', async () => {
+    const YELLOW_ROW = {
+      id: CRATE,
+      warehouse_id: WAREHOUSE,
+      kind: 'crate',
+      name: 'Yellow #6 on rack 38-B',
+      rack_number: '38',
+      rack_row: 'B',
+      crate_color: 'yellow',
+      crate_number: '6',
+    };
+    const stub = install({
+      role: 'staff',
+      // The dedupe candidate list now holds the row the first put-away minted.
+      locationRows: [STAGING_ROW, [YELLOW_ROW]],
+      itemRows: [book(YELLOW_LABEL)],
+      holdingRows: [YELLOW_HOLDING],
+    });
+
+    const res = await POST(
+      request({
+        fromLocationId: STAGING,
+        quantity: 4,
+        newRack: YELLOW_FIELDS,
+        acknowledgedCrateChanges: [],
+        acknowledgedRackChanges: [],
+      }),
+      { params },
+    );
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { toLocationId: string }).toLocationId).toBe(CRATE);
+    // Found, not minted.
+    expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(0);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+  });
+
+  it('a VIEWER (no stock:transfer, no locations:manage) is still refused before any mint', async () => {
+    const stub = install({
+      role: 'viewer',
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book({})],
+      insertedLocation: { id: CRATE, kind: 'crate', name: 'Yellow #6 on rack 38-B' },
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 1, newRack: YELLOW_FIELDS }),
+      { params },
+    );
+
+    expect(res.status).toBe(403);
+    expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(0);
+    expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+
+  it("the function's OWN gate (42501) is surfaced as forbidden, and nothing moves", async () => {
+    // Belt and braces: the app-layer gate passed (staff has stock:transfer) but
+    // the SECURITY DEFINER function refused (the membership it re-checks inside
+    // is not accepted, or the warehouse is not this org's). The route must say
+    // "permission", not "internal error", and must not transfer.
+    const stub = install({
+      role: 'staff',
+      locationRows: [STAGING_ROW, []],
+      itemRows: [book({})],
+      mintError: { message: 'insufficient_privilege', code: '42501' },
+    });
+
+    const res = await POST(
+      request({ fromLocationId: STAGING, quantity: 1, newRack: YELLOW_FIELDS }),
+      { params },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe('forbidden');
+    expect(String(body.message)).toMatch(/Transfer stock permission/);
+    expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(1);
+    expect(mockTransferStock).not.toHaveBeenCalled();
   });
 });

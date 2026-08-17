@@ -9,6 +9,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { WarehousesService } from '@/server/services/warehouses';
 import { requireOrgContext } from '@/lib/auth/session';
+import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
 import {
   toDestinationOption,
   type DestinationLocationRow,
@@ -48,10 +49,12 @@ export default async function StagingPage({
   // otherwise show a Place button that always fails server-side.
   const canPlace = can(sessionCtx, 'stock:transfer');
   // The book put-away places INTO the recorded crate by default and mints the
-  // row when none exists — which RLS (`locations_insert`, migration 0212)
-  // allows only with `locations:manage`. Passed down so the dialog can say so
-  // inline instead of failing on submit.
-  const canManageLocations = can(sessionCtx, 'locations:manage');
+  // row when none exists — under 'stock:transfer' (or 'locations:manage'),
+  // through the placement path's own SECURITY DEFINER resolve-or-create
+  // (mint_placement_location, 0340; owner decision D1). ONE derivation, shared
+  // with the item detail; passed down so a dialog can say so inline instead of
+  // failing on submit.
+  const canMintDestination = canMintPlacementDestination(sessionCtx);
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -71,7 +74,7 @@ export default async function StagingPage({
           <StagingTableSection
             params={params}
             canPlace={canPlace}
-            canManageLocations={canManageLocations}
+            canMintDestination={canMintDestination}
           />
         </Suspense>
       </div>
@@ -87,11 +90,11 @@ export default async function StagingPage({
 async function StagingTableSection({
   params,
   canPlace,
-  canManageLocations,
+  canMintDestination,
 }: {
   params: StagingSearchParams;
   canPlace: boolean;
-  canManageLocations: boolean;
+  canMintDestination: boolean;
 }) {
   const itemTypeParam =
     params.type === 'book' ? 'book' : params.type === 'non-book' ? 'non-book' : undefined;
@@ -152,7 +155,7 @@ async function StagingTableSection({
       destinationsMap={destinationsMap}
       warehouseNames={warehouseNames}
       canPlace={canPlace}
-      canManageLocations={canManageLocations}
+      canMintDestination={canMintDestination}
       activeItemType={itemTypeParam ?? 'all'}
     />
   );

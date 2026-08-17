@@ -137,8 +137,10 @@ function RackField({
  *    remembered alongside it.
  *
  * The destination is either an existing rack/crate OR one created inline via
- * "+ New rack…" (gated on canCreateLocation; the server asserts
- * 'locations:manage' and creates it in the source location's warehouse).
+ * "+ New rack…" / the book's four fields (gated on canCreateLocation — the
+ * phone's copy of the placement gate, `canMintPlacementDestination`; the
+ * server creates it in the source location's warehouse under 'stock:transfer'
+ * or 'locations:manage', through the placement path only — 0340, D1).
  *
  * The mode rules live in src/lib/move-stock-form.ts, which is where they can be
  * tested — apps/mobile has no component-test harness.
@@ -441,7 +443,7 @@ export function MoveStockModal({
         (sameAsSource
           ? 'That is where this stock already is — pick a different destination.'
           : cannotMint
-            ? `${newRackLabel(bookDest.input).label} does not exist yet, and creating racks or crates needs the Manage locations permission. Tap an existing rack or crate, or ask a manager to create it.`
+            ? `${newRackLabel(bookDest.input).label} does not exist yet, and placing into a new rack or crate needs the Transfer stock permission. Tap an existing rack or crate, or ask a manager to create it.`
             : null))
       : null;
   // A destination is chosen when: BOOK — the fields name a place the planner

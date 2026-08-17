@@ -18,7 +18,9 @@ import { api } from './api';
  *
  * The destination is EITHER an existing location (`toLocationId`) OR a rack/crate
  * created inline (`newRack`) — exactly one. The new rack is created server-side
- * in the source location's warehouse (asserts 'locations:manage').
+ * in the source location's warehouse, under 'stock:transfer' (or
+ * 'locations:manage') — the placement path's own resolve-or-create
+ * (mint_placement_location, migration 0340; owner decision D1).
  */
 /**
  * The inline-created destination. RACK **XOR** CRATE — the server refuses a

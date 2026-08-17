@@ -97,15 +97,17 @@ interface PlaceFromStagingDialogProps {
    */
   bookStorage?: BookStorageInfo | null;
   /**
-   * Whether this user may CREATE a rack/crate row (`locations:manage`; RLS
-   * `locations_insert` requires it, migration 0212). The server is the
-   * authority; this only lets the dialog say so BEFORE the submit when the four
-   * fields name a row that does not exist yet — for a label-only crate that is
-   * the default path, and a bare server refusal there would read as "put-away
-   * is broken". Defaults to true so callers that predate the prop keep today's
-   * behaviour (offer, and let the server refuse).
+   * Whether this user may MINT the rack/crate the put-away places into
+   * (`canMintPlacementDestination`: manager-or-above, or `stock:transfer`, or
+   * `locations:manage` — the grants the placement path's SECURITY DEFINER
+   * resolve-or-create accepts, migration 0340, owner decision D1). The server
+   * is the authority; this only lets the dialog say so BEFORE the submit when
+   * the four fields name a row that does not exist yet — for a label-only
+   * crate that is the default path, and a bare server refusal there would read
+   * as "put-away is broken". Defaults to true so callers that predate the prop
+   * keep today's behaviour (offer, and let the server refuse).
    */
-  canManageLocations?: boolean;
+  canMintDestination?: boolean;
   trigger?: React.ReactNode;
 }
 
@@ -120,7 +122,7 @@ export function PlaceFromStagingDialog({
   availableQuantity,
   destinations,
   bookStorage,
-  canManageLocations = true,
+  canMintDestination = true,
   trigger,
 }: PlaceFromStagingDialogProps) {
   const router = useRouter();
@@ -251,16 +253,16 @@ export function PlaceFromStagingDialog({
   // apps/mobile/src/lib/move-stock-form.ts).
   const chosen = chosenDestination();
   const newReady = chosen !== null && newDestinationReady(chosen);
-  // Would this destination have to be MINTED? Only a caller with
-  // `locations:manage` can do that (RLS refuses everyone else), so say so here
-  // instead of letting the default path for a label-only crate die on a
-  // server refusal. Judged by the same label the server resolves by, so an
+  // Would this destination have to be MINTED? Only a caller the placement gate
+  // admits (stock:transfer / locations:manage / manager) can do that, so say
+  // so here instead of letting the default path for a label-only crate die on
+  // a server refusal. Judged by the same label the server resolves by, so an
   // existing "Red #4 on rack 38-B" is correctly not a mint.
   const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
   const needsMint =
     plannedLabel.length > 0 &&
     !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
-  const cannotMint = needsMint && !canManageLocations;
+  const cannotMint = needsMint && !canMintDestination;
   // The planner's OWN sentence, rendered inline beside the fields it is about
   // — or, when the fields are fine but the row would need creating by someone
   // who may not, that.
@@ -268,7 +270,7 @@ export function PlaceFromStagingDialog({
     chosen !== null
       ? (newDestinationProblem(chosen) ??
         (cannotMint
-          ? `${plannedLabel} does not exist yet, and creating racks or crates needs the Manage locations permission. Pick an existing location, or ask a manager to create it.`
+          ? `${plannedLabel} does not exist yet, and placing into a new rack or crate needs the Transfer stock permission. Pick an existing location, or ask a manager to create it.`
           : null))
       : null;
   // A BOOK submits whenever the four fields name a place the planner can name

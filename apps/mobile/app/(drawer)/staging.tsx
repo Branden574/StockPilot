@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { can, type Role } from '@stockpilot/core';
+import { type Role } from '@stockpilot/core';
 
 import { ItemHistorySheet } from '@/components/item-history-sheet';
 import { MoveStockModal } from '@/components/move-stock-modal';
@@ -21,6 +21,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import {
   canPlaceStagingRow,
   isStagingStale,
@@ -138,11 +139,15 @@ export default function StagingScreen() {
     };
   }, [orgId]);
 
-  // Gates the inline "+ New rack" branch inside the move sheet; the transfer
-  // route asserts 'locations:manage' independently when it creates the rack.
-  const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
-  const canCreateLocation =
-    isManager || (role !== null && can({ role: role as Role, permissions }, 'locations:manage'));
+  // Gates the sheet's DEFAULT path — placing into the crate the book's label
+  // names, which for a label-only crate means minting the row. The server does
+  // that under 'stock:transfer' (or 'locations:manage') through the placement
+  // path only (mint_placement_location, 0340; owner decision D1), and re-checks
+  // it independently. ONE derivation, shared with the item screen.
+  const canCreateLocation = canMintPlacementDestination({
+    role: role as Role | null,
+    permissions,
+  });
 
   // Monotonic sequence guard: switching the Items/Books filter fires a new
   // request while the previous one is still in flight, and the slower response
