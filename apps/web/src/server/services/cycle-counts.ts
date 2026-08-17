@@ -110,12 +110,18 @@ export interface CycleCountDetailPage {
 export type CycleCountLineFilter = 'all' | 'uncounted' | 'variance';
 
 /**
- * Maps stable PG raise-exception codes from post_cycle_count (v2,
- * migration 0079) into user-friendly errors. Codes are kept stable
- * across releases; UI strings live in TypeScript so we can tune them
- * without a DB migration.
+ * Maps stable PG raise-exception codes from post_cycle_count (v2 0079,
+ * v4 0339) into user-friendly errors. Codes are kept stable across
+ * releases; UI strings live in TypeScript so we can tune them without a
+ * DB migration.
+ *
+ * v4 (0339) adds two fail-closed refusals. Both mean "one line's stock
+ * moved in a way the count cannot attribute": the humane fix is a
+ * clear + recount of that line, never a silent double-count. Mobile
+ * posts through the RPC directly and mirrors these strings in
+ * app/cycle-count/[id].tsx.
  */
-function mapPostCycleCountError(message: string): ServiceError {
+export function mapPostCycleCountError(message: string): ServiceError {
   if (message.includes('cycle_count_not_found')) {
     return new ServiceError('not_found', 'Cycle count not found.');
   }
@@ -135,6 +141,18 @@ function mapPostCycleCountError(message: string): ServiceError {
     return new ServiceError(
       'validation_error',
       'An item moved to a different warehouse mid-count. Cancel this count and restart it for the new warehouse, or clear the affected lines.',
+    );
+  }
+  if (message.includes('cycle_count_stale_line')) {
+    return new ServiceError(
+      'validation_error',
+      'A line was counted before its stock changed and cannot be posted safely. Clear and recount that line, then post again.',
+    );
+  }
+  if (message.includes('cycle_count_negative_result')) {
+    return new ServiceError(
+      'validation_error',
+      'Posting would take an item below zero because stock moved out after it was counted. Recount that line, then post again.',
     );
   }
   return new ServiceError('internal_error', message);
@@ -1078,7 +1096,17 @@ export class CycleCountsService {
   /** Records a counted quantity for a single line. When `aiScanId` is
    *  set, the line's `ai_scan_id` FK is also written so the audit
    *  trail traces the count back to the AI Shelf Scan that proposed
-   *  it. NULL on the existing manual + barcode paths. */
+   *  it. NULL on the existing manual + barcode paths.
+   *
+   *  The write fires tg_cycle_count_line_rebase_expected (0339): the DB
+   *  stamps expected_at_start (first count only) and rebases
+   *  expected_quantity to the live system quantity NOW, so the variance
+   *  every reader shows (counted - expected) is measured against what the
+   *  shelf should have held when it was counted. Every writer — this
+   *  method behind the web action and the /record API (mobile manual,
+   *  barcode, AI scan, offline replay) — inherits it. counted_at is
+   *  stamped server-side, so an offline-queued count is "counted" at sync
+   *  time (stated limit; see 0339 header). */
   async recordCount(input: {
     cycleCountId: string;
     lineId: string;
@@ -1297,7 +1325,9 @@ export class CycleCountsService {
     }
   }
 
-  /** Clears a previously-recorded count for a line so the user can recount. */
+  /** Clears a previously-recorded count for a line so the user can recount.
+   *  The DB trigger (0339) restores expected_quantity to expected_at_start,
+   *  so the line reads as it did at session start until recounted. */
   async clearCount(input: { cycleCountId: string; lineId: string }): Promise<void> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
@@ -1375,6 +1405,13 @@ export class CycleCountsService {
    * Posts every counted line as an adjust-type stock_movement (only when
    * variance != 0), updates inventory_items.quantity_on_hand, flips the
    * session to 'completed'. Atomic via the post_cycle_count RPC.
+   *
+   * Variance semantics (0339): a line's expected_quantity is rebased to the
+   * live system quantity at the moment it is counted (DB trigger on
+   * recordCount/clearCount), and the RPC applies counted - expected ON TOP
+   * OF the live quantity at post time. Stock that moved before the count is
+   * already in the counted number; stock that moved after is preserved; the
+   * movement row's previous_quantity chains from the ledger.
    */
   async post(id: string): Promise<CycleCountRow> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
@@ -1385,8 +1422,9 @@ export class CycleCountsService {
     });
     if (error) {
       // Map stable PG raise codes to user-friendly ServiceErrors.
-      // post_cycle_count v2 emits: cycle_count_not_found,
-      // cycle_count_not_open, forbidden, item_out_of_scope.
+      // post_cycle_count emits: cycle_count_not_found, cycle_count_not_open,
+      // forbidden, item_out_of_scope (v2 0079), cycle_count_stale_line,
+      // cycle_count_negative_result (v4 0339).
       throw mapPostCycleCountError(error.message);
     }
     await audit(
