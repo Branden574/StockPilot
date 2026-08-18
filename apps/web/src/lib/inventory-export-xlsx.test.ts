@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 
 import { getExportField, type InventoryExportFieldKey } from './exports/field-registry';
 import type { InventoryExportSourceRow } from './exports/source-row';
-import { readImageDimensions, toInventoryXlsx, XLSX_IMAGE_CELL } from './inventory-export-xlsx';
+import {
+  readImageDimensions,
+  toInventoryXlsx,
+  XLSX_IMAGE_CELL,
+  XLSX_IMAGES_NOT_EMBEDDED_METRIC,
+  xlsxImagesNotEmbeddedNote,
+} from './inventory-export-xlsx';
 
 const fieldsFor = (keys: InventoryExportFieldKey[]) => keys.map((k) => getExportField(k)!);
 
@@ -361,6 +367,55 @@ describe('toInventoryXlsx — summary sheet', () => {
       includeSummarySheet: true,
     });
     expect(JSON.stringify(wb.worksheets[1]!.getSheetValues())).toContain('Inventory value');
+  });
+
+  // 2026-08-18: 30 of 272 pictures silently came back blank (transform 429s).
+  // A blank picture cell must be distinguishable from "no cover".
+  it('reports Images not embedded with the exact note when at least one image was skipped', async () => {
+    const wb = await build({
+      includeSummarySheet: true,
+      imageMode: 'embedded',
+      imagesSkipped: 3,
+      imagesRequested: 8,
+    });
+    const summary = wb.worksheets[1]!;
+    const values = summary.getSheetValues() as Array<Array<unknown> | undefined>;
+    const metricRow = values.find((r) => r && r[1] === XLSX_IMAGES_NOT_EMBEDDED_METRIC);
+    expect(metricRow).toBeDefined();
+    expect(metricRow![1]).toBe('Images not embedded');
+    expect(metricRow![2]).toBe(3);
+    const text = JSON.stringify(values);
+    expect(text).toContain(
+      '3 of 8 images could not be fetched and were left blank. Re-run the export to retry.',
+    );
+    expect(xlsxImagesNotEmbeddedNote(3, 8)).toBe(
+      '3 of 8 images could not be fetched and were left blank. Re-run the export to retry.',
+    );
+  });
+
+  it('adds NO Images not embedded row when nothing was skipped (0 or undefined)', async () => {
+    for (const imagesSkipped of [0, undefined]) {
+      const wb = await build({
+        includeSummarySheet: true,
+        imageMode: 'embedded',
+        imagesSkipped,
+        imagesRequested: 8,
+      });
+      const text = JSON.stringify(wb.worksheets[1]!.getSheetValues());
+      expect(text, String(imagesSkipped)).not.toContain('Images not embedded');
+      expect(text, String(imagesSkipped)).not.toContain('could not be fetched');
+    }
+  });
+
+  it('adds nothing at all — no extra sheet — when the summary sheet is off, even with skips', async () => {
+    const wb = await build({
+      includeSummarySheet: false,
+      imageMode: 'embedded',
+      imagesSkipped: 3,
+      imagesRequested: 8,
+    });
+    expect(wb.worksheets).toHaveLength(1);
+    expect(JSON.stringify(wb.worksheets[0]!.getSheetValues())).not.toContain('Images not embedded');
   });
 });
 
