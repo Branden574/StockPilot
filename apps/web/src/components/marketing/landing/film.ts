@@ -204,39 +204,20 @@ const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
  */
 const FILM_SCALE = 1;
 
-/**
- * Minimum interval between canvas repaints, in milliseconds.
- *
- * The film is decoupled from the page's frame rate on purpose. Repainting a
- * full-viewport canvas uploads a fresh texture the size of the display; on a 2x
- * screen that is ~20MB per repaint, and doing it every animation frame was what
- * kept scrolling at ~40fps while the rest of the page ran at 115.
- *
- * 24fps is not a compromise here — it is the rate actual film runs at. The
- * background advances cinematically while the DOM keeps scrolling at full rate,
- * and the two are visually independent.
- *
- * Measured at DPR 2 on the production build: uncapped 40fps, capped 24fps → see
- * FILM_MIN_FRAME_MS in the commit message for the after number.
+/*
+ * NO REPAINT CAP. A 24fps cap was tried: it measured a marginal ~2fps and made
+ * the film visibly STEP — on a 120Hz display it painted every fifth refresh and
+ * each paint skipped several film frames. Frame continuity matters more than a
+ * couple of fps; the film paints on every animation frame the scrub moves.
  */
-const FILM_MIN_FRAME_MS = 1000 / 24;
 
-/**
- * How many decoded frames to keep resident, centred on the playhead.
- *
- * THIS IS A PERFORMANCE FIX, NOT A MEMORY NICETY. Holding all 786 images alive
- * is far more decoded bitmap than a browser will keep — it evicts under the
- * pressure, and then drawImage has to decode the JPEG synchronously, on the main
- * thread, inside the scroll. Profiled at DPR 2 that worked out at roughly 46ms
- * per draw and pinned scrolling near 40fps no matter how slowly the page was
- * scrolled, which is what gave it away: the cost tracked frames RETAINED, not
- * frames drawn.
- *
- * Keeping a bounded window means the frames actually in play stay decoded.
- * Anything outside it is released and re-fetched from the HTTP cache if the
- * reader scrolls back, which is cheap.
+/*
+ * NO EVICTION WINDOW. Bounding retained frames to a window around the playhead
+ * was tried on the theory that browser eviction was forcing re-decodes inside
+ * the scroll. It measured no gain, and it caused the exact symptom it was meant
+ * to prevent: outrun the window and nearestLoaded hands you a frame from far
+ * away — a visible jump. The browser manages its own bitmap cache; let it.
  */
-const RESIDENT_WINDOW = 90;
 
 export interface FilmHandle {
   destroy: () => void;
@@ -279,9 +260,6 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
   let cw = 0;
   let ch = 0;
   let raf = 0;
-  let lastPaint = 0;
-  /** Indices currently held in memory. Bounded by RESIDENT_WINDOW. */
-  const resident = new Set<number>();
 
   /** Progress of the scroll position across the mapped range, 0..1. */
   const progress = (): number => {
@@ -291,28 +269,6 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
     if (total <= 0) return 0;
     // rect.top is negative once we are inside the range.
     return clamp01(-rect.top / total);
-  };
-
-  /**
-   * Release frames far from the playhead so the ones near it stay decoded.
-   * Clearing src is what actually lets the browser drop the decoded bitmap;
-   * dropping the reference alone is not enough while the element is live.
-   */
-  const evictFar = (centre: number) => {
-    const half = Math.floor(RESIDENT_WINDOW / 2);
-    const lo = centre - half;
-    const hi = centre + half;
-    for (const idx of resident) {
-      if (idx >= lo && idx <= hi) continue;
-      const img = frames[idx];
-      if (img) {
-        img.onload = null;
-        img.onerror = null;
-        img.src = '';
-      }
-      frames[idx] = undefined;
-      resident.delete(idx);
-    }
   };
 
   const nearestLoaded = (i: number): number => {
@@ -393,7 +349,6 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
        */
       const markReady = () => {
         img._ok = true;
-        resident.add(index0);
         if (!ready) {
           ready = true;
           resize();
@@ -445,43 +400,27 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
       }
     }
 
-    // Then keep the window around the playhead filled, following the reader.
-    // A global sweep is pointless now that frames outside the window are
-    // evicted — it would spend bandwidth and decode time on frames that get
-    // dropped before anyone sees them.
-    const half = Math.floor(RESIDENT_WINDOW / 2);
-    for (;;) {
-      if (destroyed) return;
-      const centre = Math.round(clamp01(progress()) * (COUNT - 1));
-      let filled = 0;
-      for (let d = 0; d <= half && filled < 8; d++) {
-        for (const i of d === 0 ? [centre] : [centre + d, centre - d]) {
-          if (destroyed) return;
-          if (i >= 0 && i < COUNT && !frames[i]) {
-            await load(i);
-            filled++;
-          }
-        }
+    // Then the global spread, coarse to fine. Stride 16 first means that within
+    // a couple of seconds no frame anywhere in the film is more than 8 away from
+    // a decoded one — so a flick to a new chapter lands close, never far.
+    for (const stride of [16, 8, 4, 2, 1]) {
+      for (let i = 0; i < COUNT; i += stride) {
+        if (destroyed) return;
+        await load(i);
       }
-      // Nothing left to fetch near the reader — idle until they move.
-      await new Promise((r) => setTimeout(r, filled === 0 ? 250 : 0));
+      // Yield between passes so decoding never blocks interaction.
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 
-  const tick = (now: number) => {
+  const tick = () => {
     if (destroyed) return;
     if (ready) {
       const target = progress();
       // Ease toward the target so a flung scroll does not strobe frames.
       curT += (target - curT) * 0.18;
       if (Math.abs(target - curT) < 0.0006) curT = target;
-      // Repaint at film rate, not display rate. See FILM_MIN_FRAME_MS.
-      if (now - lastPaint >= FILM_MIN_FRAME_MS) {
-        lastPaint = now;
-        const at = curT * (COUNT - 1);
-        draw(at);
-        if (resident.size > RESIDENT_WINDOW) evictFar(Math.round(at));
-      }
+      draw(curT * (COUNT - 1));
     }
     raf = requestAnimationFrame(tick);
   };
