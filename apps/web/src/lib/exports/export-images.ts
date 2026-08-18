@@ -349,8 +349,15 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
         if (total > MAX_EMBEDDED_IMAGE_BYTES) {
           // Release the reader and tear down the connection immediately —
           // never keep pulling once we know the body is oversized.
+          // Under real undici, cancel() on a reader whose request was just
+          // aborted REJECTS with AbortError; awaiting it bare would land in the
+          // catch below and turn a definitive 'oversized' skip into a retry
+          // that re-streams the same oversized body up to four times (found by
+          // the 2026-08-18 verifier against a real http server). Fire-and-
+          // forget the cancel and swallow its rejection; the abort already
+          // tore the connection down.
           controller.abort();
-          await reader.cancel();
+          void reader.cancel().catch(() => {});
           return { kind: 'skip', reason: 'oversized' };
         }
       }
@@ -407,6 +414,12 @@ async function fetchOne(url: string, deps: FetchDeps): Promise<FetchOneResult> {
     lastRetryReason = outcome.reason;
     if (attempt === IMAGE_FETCH_MAX_ATTEMPTS) break;
     const backoff = computeBackoffMs(attempt, outcome.retryAfterMs, deps.random);
+    // Do not sleep out a backoff that ends past the deadline: the next
+    // iteration would only discover the deadline after the wait, burning up
+    // to IMAGE_FETCH_BACKOFF_CAP_MS of the route's budget for nothing.
+    if (deps.now() + backoff >= deps.deadlineAt) {
+      return { image: null, reason: lastRetryReason };
+    }
     if (outcome.reason === 'rateLimited') {
       // Slow EVERY worker, not just this one; this worker then waits at the
       // gate at the top of the next iteration.

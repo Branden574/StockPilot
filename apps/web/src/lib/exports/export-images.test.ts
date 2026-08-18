@@ -90,11 +90,17 @@ function jpegResponse(bytes: number, contentType = 'image/jpeg'): Response {
  */
 function streamedResponse(
   chunkSizes: number[],
-  opts: { contentType?: string; contentLength?: string } = {},
+  opts: { contentType?: string; contentLength?: string; cancelRejects?: boolean } = {},
 ): { response: Response; pulledSizes: number[] } {
   const pulledSizes: number[] = [];
   let index = 0;
   const stream = new ReadableStream<Uint8Array>({
+    // Real undici: cancelling a reader whose request was just aborted REJECTS
+    // with AbortError. Opt in to model that, so the oversize branch is proven
+    // against the behaviour production fetch actually has.
+    cancel: opts.cancelRejects
+      ? () => Promise.reject(new DOMException('This operation was aborted', 'AbortError'))
+      : undefined,
     pull(controller) {
       if (index >= chunkSizes.length) {
         controller.close();
@@ -283,7 +289,7 @@ describe('fetchExportImageBytes — hard byte cap (streaming)', () => {
     const chunkSizes = [300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024];
     const { response, pulledSizes } = streamedResponse(chunkSizes); // no content-length header at all
     const fetchImpl = vi.fn(async () => response);
-    const { images, skipped } = await fetchExportImageBytes(
+    const { images, skipped, skippedReasons } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.jpg']]),
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
@@ -291,6 +297,25 @@ describe('fetchExportImageBytes — hard byte cap (streaming)', () => {
     expect(skipped).toBe(1);
     // The hard proof: the implementation must not have pulled every chunk.
     // A soft (post-buffer) cap would drain the whole 5-chunk stream first.
+    expect(pulledSizes.length).toBeLessThan(chunkSizes.length);
+    // Oversize is FINAL and classified: one request, never retried.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(skippedReasons.oversized).toBe(1);
+  });
+
+  it('oversized stream whose cancel() rejects after abort (real undici) is still ONE attempt, reason oversized', async () => {
+    const chunkSizes = [300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024, 300 * 1024];
+    const { response, pulledSizes } = streamedResponse(chunkSizes, { cancelRejects: true });
+    const fetchImpl = vi.fn(async () => response);
+    const clock = fakeClock();
+    const { images, skippedReasons } = await fetchExportImageBytes(
+      new Map([['a', 'https://signed.example/a.jpg']]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch, ...clock },
+    );
+    expect(images.has('a')).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(skippedReasons).toMatchObject({ oversized: 1, other: 0 });
+    expect(clock.sleep).not.toHaveBeenCalled();
     expect(pulledSizes.length).toBeLessThan(chunkSizes.length);
   });
 
@@ -521,8 +546,8 @@ describe('GC10 — batched image work is opt-in only (rider)', () => {
  * observes the pause, while a worker that skipped the gate would read the
  * un-advanced clock — which is exactly what the gate test asserts on.
  */
-function fakeClock() {
-  let t = 0;
+function fakeClock(start = 0) {
+  let t = start;
   const sleep = vi.fn(async (ms: number) => {
     const target = t + ms;
     await new Promise((resolve) => setTimeout(resolve, 2));
@@ -665,13 +690,43 @@ describe('fetchExportImageBytes — retry with backoff', () => {
     expect(clock.sleep.mock.calls[0]![0]).toBeGreaterThanOrEqual(2000);
   });
 
-  it('honours an HTTP-date Retry-After', async () => {
-    const clock = fakeClock();
-    // Fake clock starts at epoch 0; a date 3s later means "wait 3000ms".
-    const date = new Date(3000).toUTCString();
+  it('honours an HTTP-date Retry-After relative to NOW (realistic epoch, exact wait)', async () => {
+    // A realistic epoch, so "the date minus now" and "the date as an absolute
+    // number" are wildly different and the test can tell them apart. Dates
+    // carry whole seconds only, so start on a second boundary.
+    const clock = fakeClock(1_700_000_000_000);
+    const date = new Date(1_700_000_000_000 + 3000).toUTCString();
     const fetchImpl = fetchSequence(statusResponse(429, { 'retry-after': date }), jpegResponse(64));
     await fetchExportImageBytes(one, { fetchImpl: fetchImpl as unknown as typeof fetch, ...clock });
-    expect(clock.sleep.mock.calls[0]![0]).toBeGreaterThanOrEqual(3000);
+    expect(clock.sleep).toHaveBeenCalledTimes(1);
+    expect(clock.sleep.mock.calls[0]![0]).toBe(3000);
+  });
+
+  it('jitter is bounded to 0-99ms: random=0.999 makes the first backoff exactly 250+99', async () => {
+    const clock = fakeClock();
+    const fetchImpl = fetchSequence(statusResponse(500), jpegResponse(64));
+    await fetchExportImageBytes(one, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0.999,
+    });
+    expect(clock.sleep).toHaveBeenCalledTimes(1);
+    expect(clock.sleep.mock.calls[0]![0]).toBe(349);
+  });
+
+  it('a backoff that would end past the deadline is not slept at all: the entry is skipped immediately', async () => {
+    const clock = fakeClock();
+    const fetchImpl = fetchSequence(statusResponse(429), jpegResponse(64));
+    const { images, skippedReasons } = await fetchExportImageBytes(one, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      ...clock,
+      totalDeadlineMs: 100, // backoff would be 250
+    });
+    expect(images.has('a')).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(clock.sleep).not.toHaveBeenCalled();
+    expect(skippedReasons).toMatchObject({ rateLimited: 1, deadline: 0 });
   });
 
   it('caps a huge Retry-After at IMAGE_FETCH_BACKOFF_CAP_MS (4000)', async () => {
