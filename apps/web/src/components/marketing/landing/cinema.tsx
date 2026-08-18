@@ -107,6 +107,7 @@ export function Cinema({ rangeId }: { rangeId: string }) {
           and the branded intro lifts onto an unpainted hero, with no error. */}
       <img id="sp-poster" ref={posterRef} src={HI.poster} alt="" aria-hidden />
       <canvas id="sp-film" ref={canvasRef} aria-hidden />
+      <div id="sp-tint" aria-hidden />
       <div id="sp-scrim" aria-hidden />
       <div id="sp-grain" aria-hidden />
       <div id="sp-vignette" aria-hidden />

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { LANDING_CSS } from './styles';
 import { CHAPTER_RANGE, frameUrl, HI, keyframeFor, LO, pickTier, type Conditions } from './film';
 import { STAGES } from './fixture';
 
@@ -163,5 +164,45 @@ describe('segment resolution — the cut is data, not filesystem layout', () => 
         expect(frameUrl(set, i)).toMatch(/^\/landing\/[a-z-]+\/f_\d{4}\.jpg$/);
       }
     }
+  });
+});
+
+
+describe('landing stylesheet — guards that keep costing real time', () => {
+  it('contains no backtick or interpolation that would break the template literal', () => {
+    // This has broken the build three times: a backtick inside a CSS comment
+    // silently terminates the template literal and the failure surfaces as an
+    // unrelated TypeScript parse error hundreds of lines away.
+    expect(LANDING_CSS).not.toContain('`');
+    expect(LANDING_CSS).not.toContain('${');
+  });
+
+  it('keeps the hero ground byte-identical to the loading intro ink', () => {
+    // #sp-stage must equal LI.ink (#0b0c0a) or the branded intro's reveal shows
+    // a seam. The intro paints that exact value in its pre-hydration curtain.
+    expect(LANDING_CSS).toContain('#sp-stage{position:fixed;inset:0;z-index:0;background:#0b0c0a');
+  });
+
+  it('keeps the nav glyph at the size the intro flight hard-codes', () => {
+    // LI.NAV_MARK_PX = 26. The flight scale is 26 / markSize; resizing this
+    // lands the flown mark at the wrong size and no test would catch it.
+    expect(LANDING_CSS).toContain('#sp-landing .glyph{width:26px;height:26px');
+  });
+
+  it('does not reintroduce per-frame compositing over the film', () => {
+    // Measured: a CSS filter on the full-screen canvas, a mix-blend-mode layer
+    // above it, and backdrop-filter panels sampling it took scrolling to 10fps
+    // with every single frame janked. These are the three that must not return.
+    //
+    // Comments are stripped first — the rules explaining WHY these were removed
+    // naturally mention them by name, and matching prose made this fail on its
+    // own documentation.
+    const css = LANDING_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(css, 'no declared mix-blend-mode').not.toMatch(/mix-blend-mode\s*:/);
+    expect(css, 'no declared backdrop-filter').not.toMatch(/backdrop-filter\s*:/);
+    // A filter on the full-screen film or poster layer specifically.
+    expect(css, 'no filter on the film layers').not.toMatch(
+      /#sp-(film|poster)[^{}]*\{[^}]*[^-]filter\s*:/,
+    );
   });
 });
