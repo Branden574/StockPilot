@@ -811,10 +811,10 @@ describe('fetchExportImageBytes — whole-call deadline', () => {
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-async function makeWebp(size: number): Promise<Uint8Array> {
+async function makeWebp(width: number, height = width): Promise<Uint8Array> {
   const sharp = (await import('sharp')).default;
   const buf = await sharp({
-    create: { width: size, height: size, channels: 3, background: { r: 200, g: 30, b: 30 } },
+    create: { width, height, channels: 3, background: { r: 200, g: 30, b: 30 } },
   })
     .webp()
     .toBuffer();
@@ -845,6 +845,16 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
     expect(dims).not.toBeNull();
     expect(dims.width).toBeLessThanOrEqual(16);
     expect(dims.height).toBeLessThanOrEqual(16);
+  });
+
+  it('a landscape WebP fits INSIDE the square box, aspect preserved (64x32 into 16 -> 16x8)', async () => {
+    const webp = await makeWebp(64, 32);
+    const fetchImpl = vi.fn(async () => bytesResponse(webp, 'image/webp'));
+    const { images } = await fetchExportImageBytes(
+      new Map([['a', 'https://signed.example/a.webp']]),
+      { fetchImpl: fetchImpl as unknown as typeof fetch, targetWidth: 16 },
+    );
+    expect(readImageDimensions(images.get('a')!.data)).toEqual({ width: 16, height: 8 });
   });
 
   it('a WebP already smaller than targetWidth is not enlarged (8x8 stays 8x8)', async () => {

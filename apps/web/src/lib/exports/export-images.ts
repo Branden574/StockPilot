@@ -454,7 +454,6 @@ export async function fetchExportImageBytes(
   let skipped = 0;
   let totalBytes = 0;
   let budgetSpent = false;
-  let deadlineHit = false;
 
   // Per-request URL cache, scoped to THIS call only — a plain local Map,
   // deliberately NOT module-level state. Two rows commonly resolve to the
@@ -495,21 +494,17 @@ export async function fetchExportImageBytes(
   const worker = async (): Promise<void> => {
     for (;;) {
       if (budgetSpent) return;
-      if (deps.now() >= deps.deadlineAt) {
-        // Nothing new starts after the deadline. Whatever is left is
-        // counted below, once, after every worker has stopped.
-        deadlineHit = true;
-        return;
-      }
       const index = cursor++;
       if (index >= entries.length) return;
       const [id, url] = entries[index]!;
+      // The deadline is enforced inside fetchOne, after the gate wait and
+      // before EVERY attempt: an entry reached after the deadline resolves
+      // to a 'deadline' skip without a single request being started.
       const { promise, isOwner } = resolveUrl(url);
       const result = await promise;
       if (!result.image) {
         skipped++;
         skippedReasons[result.reason ?? 'other']++;
-        if (result.reason === 'deadline') deadlineHit = true;
         continue;
       }
       if (isOwner) {
@@ -528,14 +523,6 @@ export async function fetchExportImageBytes(
   await Promise.all(
     Array.from({ length: Math.min(IMAGE_FETCH_CONCURRENCY, entries.length) }, () => worker()),
   );
-
-  if (deadlineHit) {
-    // Entries no worker ever picked up. Anything a worker DID pick up but
-    // could not start is already counted above as a 'deadline' skip.
-    const remaining = Math.max(0, entries.length - Math.min(cursor, entries.length));
-    skipped += remaining;
-    skippedReasons.deadline += remaining;
-  }
 
   return {
     images,
