@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
@@ -9,6 +9,8 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { publishAuthState } from '@/components/auth/auth-state';
+import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
@@ -16,21 +18,14 @@ import { signInAction } from '@/server/actions/auth';
 
 import { ACCOUNT_DISABLED_PATH, signInSchema, type SignInInput } from '@stockpilot/core';
 
-/**
- * Same-origin path sanitizer. Rejects absolute URLs, protocol-relative
- * (`//evil.com`), and non-path inputs to prevent an open-redirect via the
- * `?redirect=` query param.
- */
-function safeRedirectPath(raw: string | null): string {
-  if (!raw) return '/dashboard';
-  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
-  return raw;
-}
-
 export function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirect = safeRedirectPath(params.get('redirect'));
+
+  // Cosmetic only — drives the panel beside the form. Never read by any
+  // authentication decision, and the flow is identical if it is ignored.
+  const [succeeded, setSucceeded] = React.useState(false);
 
   const {
     register,
@@ -44,8 +39,10 @@ export function SignInForm() {
   });
 
   const onSubmit = handleSubmit(async (values) => {
+    publishAuthState('submitting');
     const res = await signInAction(values);
     if (!res.ok) {
+      publishAuthState('idle');
       // A disabled account gets the dedicated screen, not a toast: the message
       // is not something a user can act on from the form, and a toast vanishes
       // before it can be read.
@@ -66,6 +63,11 @@ export function SignInForm() {
       router.refresh();
       return;
     }
+    // The confirmation rides the navigation that was already happening. There
+    // is deliberately no await, no timeout and no "continue" step between this
+    // and router.replace — a success animation must never cost the user time.
+    publishAuthState('success');
+    setSucceeded(true);
     toast.success('Signed in.');
     router.replace(redirect);
     router.refresh();
@@ -73,7 +75,7 @@ export function SignInForm() {
 
   return (
     <form onSubmit={onSubmit} className="space-y-4" noValidate>
-      <div className="space-y-2">
+      <div className="auth-field space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input
           id="email"
@@ -81,12 +83,19 @@ export function SignInForm() {
           autoComplete="email"
           placeholder="you@company.com"
           {...register('email')}
+          onFocus={() => publishAuthState('email')}
+          onBlur={(e) => {
+            register('email').onBlur(e);
+            publishAuthState('idle');
+          }}
           aria-invalid={!!errors.email}
         />
-        {errors.email && <p className="text-destructive text-xs">{errors.email.message}</p>}
+        <p className="auth-msg text-destructive text-xs" role="alert">
+          {errors.email?.message ?? ''}
+        </p>
       </div>
 
-      <div className="space-y-2">
+      <div className="auth-field space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
           <Link href="/reset" className="text-muted-foreground hover:text-foreground text-xs">
@@ -97,9 +106,16 @@ export function SignInForm() {
           id="password"
           autoComplete="current-password"
           {...register('password')}
+          onFocus={() => publishAuthState('password')}
+          onBlur={(e) => {
+            register('password').onBlur(e);
+            publishAuthState('idle');
+          }}
           aria-invalid={!!errors.password}
         />
-        {errors.password && <p className="text-destructive text-xs">{errors.password.message}</p>}
+        <p className="auth-msg text-destructive text-xs" role="alert">
+          {errors.password?.message ?? ''}
+        </p>
       </div>
 
       <label className="text-muted-foreground flex items-center gap-2.5 text-sm">
@@ -111,8 +127,23 @@ export function SignInForm() {
         <span>Remember me on this device</span>
       </label>
 
-      <Button type="submit" className="w-full" variant="gradient" size="lg" disabled={isSubmitting}>
-        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}
+      <Button
+        type="submit"
+        className="w-full"
+        variant="gradient"
+        size="lg"
+        disabled={isSubmitting || succeeded}
+      >
+        {succeeded ? (
+          <span className="auth-submit-done">
+            <Check className="h-4 w-4" aria-hidden />
+            Welcome back
+          </span>
+        ) : isSubmitting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          'Sign in'
+        )}
       </Button>
     </form>
   );

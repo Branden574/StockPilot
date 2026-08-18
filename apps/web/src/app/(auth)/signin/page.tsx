@@ -14,6 +14,7 @@ export const metadata: Metadata = {
 export default function SignInPage() {
   return (
     <AuthCard
+      eyebrow="Sign in"
       title="Welcome back"
       description="Sign in to continue managing your inventory."
       footer={<>Need access? Ask your StockPilot administrator.</>}

@@ -16,6 +16,7 @@ export default async function ResetPage({
   const { error } = await searchParams;
   return (
     <AuthCard
+      eyebrow="Password reset"
       title="Reset your password"
       description="We'll email you a link to set a new password."
       footer={

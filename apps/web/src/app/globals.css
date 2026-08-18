@@ -457,3 +457,363 @@
   opacity: 1;
   transform: none;
 }
+
+/* ── Authentication ground ────────────────────────────────────────────────────
+ * `bg-mesh` was referenced by three surfaces — (auth)/layout.tsx, invite/[token]
+ * and onboarding — but was never defined anywhere in the stylesheet or the
+ * Tailwind config, so all three rendered a flat `--background`. This authors the
+ * utility those files have always asked for.
+ *
+ * Design constraint: the decoration must cost the FORM nothing. The washes are
+ * anchored to opposite corners and fall to zero well before the central band
+ * that holds the input column; the hairline rules are masked out of that same
+ * band. So no field ever sits on a gradient or a rule.
+ *
+ * TWO LAYERS ON PURPOSE. `mask-image` applies to an element's whole rendering,
+ * pseudo-elements included — so masking the rules on the parent would erase the
+ * corner washes along with them. The washes live on the element (never masked)
+ * and the rules live on ::before (masked). Do not merge them back together.
+ *
+ * Purely static: no animation, no backdrop-filter behind an input, no image
+ * request, nothing that can shift layout.
+ */
+.bg-mesh {
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(44rem 34rem at 96% -8%, hsl(var(--accent) / 0.22), transparent 62%),
+    radial-gradient(40rem 32rem at 2% 106%, hsl(var(--accent) / 0.16), transparent 60%);
+}
+
+.bg-mesh::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    hsl(var(--border) / 0.85) 0 1px,
+    transparent 1px 7rem
+  );
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, transparent 28%, transparent 72%, #000 100%);
+  mask-image: linear-gradient(90deg, #000 0%, transparent 28%, transparent 72%, #000 100%);
+}
+
+.dark .bg-mesh {
+  background-image:
+    radial-gradient(44rem 34rem at 96% -8%, hsl(var(--accent) / 0.16), transparent 62%),
+    radial-gradient(40rem 32rem at 2% 106%, hsl(var(--accent) / 0.11), transparent 60%);
+}
+.dark .bg-mesh::before {
+  background-image: repeating-linear-gradient(
+    90deg,
+    hsl(var(--border)) 0 1px,
+    transparent 1px 7rem
+  );
+}
+
+/* ── Authentication shell ─────────────────────────────────────────────────────
+ * A cinematic split on desktop, a form-first stack on mobile.
+ *
+ * Governing rule: the decoration never delays or obstructs the form. The visual
+ * column is aria-hidden, loads no media, and its animation is purely decorative.
+ * The form column is usable from first paint.
+ */
+.auth-shell {
+  display: grid;
+  grid-template-columns: 55fr 45fr;
+  min-height: 100svh;
+  background: hsl(var(--background));
+}
+
+/* ── visual column ── */
+.auth-visual {
+  position: relative;
+  overflow: hidden;
+  border-right: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+.auth-visual-ground {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(60rem 44rem at 88% -12%, hsl(var(--accent) / 0.26), transparent 60%),
+    radial-gradient(48rem 38rem at -6% 108%, hsl(var(--accent) / 0.14), transparent 58%),
+    repeating-linear-gradient(90deg, hsl(var(--border) / 0.35) 0 1px, transparent 1px 9rem);
+}
+.auth-visual-inner {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  padding: clamp(1.75rem, 3vw, 3rem);
+}
+/* The operation sits on the optical centre line, not the floor of the panel. */
+.auth-visual-inner .auth-stage {
+  align-self: center;
+  width: 100%;
+  max-width: 34rem;
+}
+.auth-visual-brand {
+  display: inline-flex;
+  width: fit-content;
+  opacity: 0;
+  animation: auth-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) 0.05s forwards;
+}
+
+/* ── the looping operation ── */
+.auth-stage {
+  opacity: 0;
+  animation: auth-in 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) 0.16s forwards;
+}
+.auth-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+  padding-bottom: 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.auth-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(var(--accent));
+  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.2);
+}
+.auth-stage-sep { opacity: 0.4; }
+
+.auth-flow { list-style: none; margin: 0; padding: 0; }
+.auth-flow li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2px 1fr auto;
+  grid-template-areas: 'rail k v' 'rail meta meta';
+  gap: 0 0.9rem;
+  padding: 0.95rem 0 0.95rem 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.7);
+  /* Each row settles at readable weight, then takes its turn in the loop. */
+  animation: auth-step 11s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation-delay: calc(var(--i) * 1.35s);
+}
+.af-rail {
+  grid-area: rail;
+  background: hsl(var(--border));
+  border-radius: 1px;
+  animation: auth-rail 11s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation-delay: calc(var(--i) * 1.35s);
+}
+.af-k {
+  grid-area: k;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  align-self: center;
+}
+.af-v {
+  grid-area: v;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: -0.015em;
+  color: hsl(var(--foreground));
+  align-self: center;
+}
+.af-meta {
+  grid-area: meta;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  padding-top: 0.3rem;
+}
+.auth-stage-foot {
+  align-self: end;
+  margin-top: 1.5rem;
+  max-width: 34ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: hsl(var(--muted-foreground));
+}
+
+@keyframes auth-step {
+  0%, 6%    { opacity: 0.5; }
+  10%, 20%  { opacity: 1; }
+  26%, 100% { opacity: 0.5; }
+}
+@keyframes auth-rail {
+  0%, 6%    { background: hsl(var(--border)); }
+  10%, 20%  { background: hsl(var(--accent)); }
+  26%, 100% { background: hsl(var(--border)); }
+}
+@keyframes auth-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── form column ── */
+.auth-panel { display: flex; flex-direction: column; min-width: 0; }
+.auth-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 4rem;
+  padding: 0 clamp(1.25rem, 3vw, 2.5rem);
+}
+/* The brand lives in the visual column on desktop; the form column carries it
+   only when that column is gone. */
+.auth-panel-brand { display: none; }
+.auth-panel-main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 0 clamp(1.25rem, 3vw, 2.5rem) 3rem;
+}
+/* Top-weighted, NOT vertically centred. These screens inject content mid-stack
+   constantly — a TOTP step, an error banner, an invite's org block — and a
+   centred wrapper re-centres on every one, sliding the password field out from
+   under a cursor that was already moving toward it. */
+.auth-panel-col {
+  width: 100%;
+  max-width: 25rem;
+  padding-top: clamp(1.5rem, 9vh, 4.5rem);
+  opacity: 0;
+  animation: auth-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) 0.1s forwards;
+}
+.auth-panel-foot {
+  padding: 0 clamp(1.25rem, 3vw, 2.5rem) 2rem;
+  text-align: center;
+}
+.auth-panel-foot p { font-size: 12px; color: hsl(var(--muted-foreground)); }
+.auth-panel-foot nav {
+  display: flex;
+  justify-content: center;
+  gap: 1.25rem;
+  margin: 0.75rem auto 0;
+  max-width: 25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid hsl(var(--border) / 0.6);
+  font-size: 12px;
+}
+.auth-panel-foot nav a { color: hsl(var(--muted-foreground)); }
+.auth-panel-foot nav a:hover { color: hsl(var(--foreground)); }
+
+/* ── tablet: narrow the cinema, widen the work ── */
+@media (max-width: 1100px) {
+  .auth-shell { grid-template-columns: 40fr 60fr; }
+  .auth-stage-foot { display: none; }
+}
+
+/* ── mobile: the split is REMOVED, not squeezed ── */
+@media (max-width: 780px) {
+  .auth-shell { grid-template-columns: 1fr; }
+  .auth-visual { display: none; }
+  .auth-panel-brand { display: inline-flex; }
+  .auth-panel-col { padding-top: clamp(1rem, 4vh, 2rem); }
+}
+
+/* ── reduced motion: same composition, nothing moving ── */
+@media (prefers-reduced-motion: reduce) {
+  .auth-visual-brand,
+  .auth-stage,
+  .auth-panel-col {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+  /* Every row at its settled, readable state rather than mid-cycle. */
+  .auth-flow li { animation: none; opacity: 1; }
+  .af-rail { animation: none; background: hsl(var(--border)); }
+}
+
+/* ── Auth: input microinteractions ────────────────────────────────────────────
+ * Focus is signalled three ways at once — the label takes the accent, the field
+ * takes an accent border, and a soft accent ring appears. All three are cheap,
+ * none of them move anything, and none of them change the field's box, so
+ * nothing reflows when focus moves between fields.
+ */
+.auth-field:focus-within > label,
+.auth-field:focus-within > div > label {
+  color: hsl(var(--accent-foreground));
+  transition: color 0.16s ease;
+}
+.auth-field input:focus-visible {
+  border-color: hsl(var(--accent));
+  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.16);
+  outline: none;
+}
+.auth-field input {
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease;
+}
+.auth-field:focus-within input:not(:focus-visible) { background: hsl(var(--muted) / 0.35); }
+
+/* Errors appear beneath the field WITHOUT moving anything.
+ *
+ * This has to be enforced, not assumed. Rendering the message conditionally
+ * pushed the submit button down 24px the moment a field went invalid — measured,
+ * not theorised — which is the jump that lands a click on the wrong target when
+ * someone is tabbing quickly through a login they have done a thousand times.
+ *
+ * Reserving space around a conditional node was not enough either: it still
+ * moved 8px, because Tailwind's `space-y-*` sibling selector outranks a plain
+ * child rule. So the message element is ALWAYS in the DOM, empty when there is
+ * nothing to say, holding a fixed height either way. Appearing and disappearing
+ * both cost exactly zero layout. Verified by measuring the submit button's box
+ * before and after invalidation.
+ *
+ * role="alert" on the always-present node also means the message is announced
+ * when it arrives, which a conditionally-mounted node does less reliably.
+ */
+.auth-msg {
+  min-height: 1rem;
+  line-height: 1rem;
+  margin-top: 0.25rem !important;
+}
+.auth-msg:not(:empty) { animation: auth-err 0.18s ease-out; }
+
+.auth-submit-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: auth-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* ── Auth: the panel answers the form ─────────────────────────────────────────
+ * Strictly decorative. If any of this is ignored the sign-in flow is identical.
+ */
+/* Any deliberate state stops the ambient loop, so the panel is answering the
+   user rather than talking over them. */
+.auth-stage:not([data-phase='idle']) .auth-flow li,
+.auth-stage:not([data-phase='idle']) .af-rail {
+  animation-play-state: paused;
+}
+.auth-stage:not([data-phase='idle']) .auth-flow li { opacity: 0.42; }
+
+.auth-flow li[data-lit] { opacity: 1; }
+.auth-flow li[data-lit] .af-rail { background: hsl(var(--accent)); }
+
+/* In flight: the whole ledger breathes once per second — the system is working. */
+.auth-stage[data-phase='submitting'] .auth-flow li { opacity: 0.55; }
+.auth-stage[data-phase='submitting'] .af-rail {
+  background: hsl(var(--accent) / 0.55);
+  animation: auth-pulse 1s ease-in-out infinite !important;
+  animation-play-state: running !important;
+}
+@keyframes auth-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+
+/* Resolved: every stage accounted for, settled, nothing moving. */
+.auth-stage[data-phase='success'] .auth-flow li { opacity: 1; }
+.auth-stage[data-phase='success'] .af-rail { background: hsl(var(--accent)); }
+.auth-stage[data-phase='success'] .auth-live { box-shadow: 0 0 0 5px hsl(var(--accent) / 0.24); }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-field p,
+  .auth-submit-done { animation: none; }
+  .auth-stage[data-phase='submitting'] .af-rail { animation: none !important; opacity: 1; }
+}

@@ -27,7 +27,7 @@ export const metadata: Metadata = { title: 'Account disabled' };
  */
 export default function AccountDisabledPage() {
   return (
-    <AuthCard title={ACCOUNT_DISABLED_TITLE} description={ACCOUNT_DISABLED_MESSAGE}>
+    <AuthCard eyebrow="Account status" title={ACCOUNT_DISABLED_TITLE} description={ACCOUNT_DISABLED_MESSAGE}>
       <form action={signOutAction}>
         <Button type="submit" variant="outline" className="w-full">
           Sign out
