@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { EmbeddedImage } from '@/lib/exports/export-images';
 import { getExportField, type InventoryExportFieldKey } from '@/lib/exports/field-registry';
 import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
@@ -10,6 +11,7 @@ import {
   CATALOG_COVER_PT,
   EXPORT_PDF_EM_DASH,
   InventoryExportPdf,
+  toPdfImageSrc,
 } from './inventory-export-pdf';
 
 /**
@@ -32,6 +34,13 @@ const keys: InventoryExportFieldKey[] = [
   'status',
 ];
 const fields = keys.map((k) => getExportField(k)!);
+
+/** Fetched bytes for the fixture row, as the route's fetchExportImageBytes hands them over. */
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 8, 7]);
+const IMAGES: ReadonlyMap<string, EmbeddedImage> = new Map([
+  ['i-1', { data: PNG_BYTES, extension: 'png' }],
+]);
 
 function makeSource(overrides: Partial<InventoryExportSourceRow> = {}): InventoryExportSourceRow {
   return {
@@ -157,13 +166,55 @@ describe('buildExportPdfRows', () => {
     expect(rows[0]!.cells.quantity_on_hand).toBe('0');
   });
 
-  it('carries the image URL only when images are on', () => {
+  it('carries the fetched image BYTES only when images are on, never the URL', () => {
+    const on = buildExportPdfRows([makeSource()], makeLayout(), fields, {
+      showImages: true,
+      images: IMAGES,
+    })[0]!;
+    expect(on.imageSrc).not.toBeNull();
+    expect(on.imageSrc!.format).toBe('png');
+    expect(Buffer.isBuffer(on.imageSrc!.data)).toBe(true);
+    expect([...on.imageSrc!.data]).toEqual([...PNG_BYTES]);
     expect(
-      buildExportPdfRows([makeSource()], makeLayout(), fields, { showImages: true })[0]!.imageUrl,
-    ).toBe('https://signed.example/a.webp');
-    expect(
-      buildExportPdfRows([makeSource()], makeLayout(), fields, { showImages: false })[0]!.imageUrl,
+      buildExportPdfRows([makeSource()], makeLayout(), fields, { showImages: false, images: IMAGES })[0]!
+        .imageSrc,
     ).toBeNull();
+    // A source row still carries a URL; it must not leak into the PDF row.
+    expect(JSON.stringify(on)).not.toContain('signed.example');
+  });
+
+  it("maps a jpeg to react-pdf's 'jpg' format", () => {
+    const rows = buildExportPdfRows([makeSource()], makeLayout(), fields, {
+      showImages: true,
+      images: new Map([['i-1', { data: JPEG_BYTES, extension: 'jpeg' }]]),
+    });
+    expect(rows[0]!.imageSrc!.format).toBe('jpg');
+    expect([...rows[0]!.imageSrc!.data]).toEqual([...JPEG_BYTES]);
+  });
+
+  it('a row whose bytes were not fetched gets null, even though its source row has a URL', () => {
+    const rows = buildExportPdfRows(
+      [makeSource(), makeSource({ id: 'i-2' })],
+      makeLayout(),
+      fields,
+      { showImages: true, images: IMAGES },
+    );
+    expect(rows[0]!.imageSrc).not.toBeNull();
+    expect(rows[1]!.imageSrc).toBeNull();
+    // No images map at all: every row is null.
+    for (const row of buildExportPdfRows([makeSource()], makeLayout(), fields, { showImages: true })) {
+      expect(row.imageSrc).toBeNull();
+    }
+  });
+
+  it('NO string ever reaches imageSrc: toPdfImageSrc yields a Buffer source or null', () => {
+    expect(toPdfImageSrc(undefined)).toBeNull();
+    expect(toPdfImageSrc({ data: new Uint8Array(0), extension: 'png' })).toBeNull();
+    const src = toPdfImageSrc({ data: PNG_BYTES, extension: 'png' })!;
+    expect(typeof src).toBe('object');
+    expect(typeof src.data).not.toBe('string');
+    expect(Buffer.isBuffer(src.data)).toBe(true);
+    expect(src.format).toBe('png');
   });
 
   it('renders an undefined value as an em dash', () => {
@@ -189,7 +240,7 @@ describe('InventoryExportPdf — table mode', () => {
       title: 'Books export',
       subtitle: 'filtered - 111 books',
       layout,
-      rows: buildExportPdfRows([makeSource()], layout, fields, { showImages: true }),
+      rows: buildExportPdfRows([makeSource()], layout, fields, { showImages: true, images: IMAGES }),
       repeatHeaders: true,
       pageNumbers: true,
       catalog: null,
@@ -241,9 +292,10 @@ describe('InventoryExportPdf — table mode', () => {
   });
 
   it('draws the image with objectFit contain so a cover is never cropped', () => {
-    const image = elementsOfType(render(), 'IMAGE').find(
-      (el) => (el.props.src as string) === 'https://signed.example/a.webp',
-    );
+    const image = elementsOfType(render(), 'IMAGE').find((el) => {
+      const src = el.props.src as { data?: Buffer; format?: string } | string;
+      return typeof src === 'object' && Buffer.isBuffer(src.data) && src.format === 'png';
+    });
     expect(image).toBeDefined();
     // style is an array ([styles.thumb, {width, height}]), same pattern the
     // "grows the row" test below merges with Object.assign — react-pdf
@@ -254,10 +306,22 @@ describe('InventoryExportPdf — table mode', () => {
     expect(merged.objectFit).toBe('contain');
   });
 
-  it('draws a placeholder, not a broken image, when a row has none', () => {
+  it('hands react-pdf a { data, format } buffer source, never a URL string', () => {
+    const images = elementsOfType(render(), 'IMAGE');
+    expect(images.length).toBeGreaterThan(0);
+    for (const el of images) {
+      expect(typeof el.props.src).toBe('object');
+      expect(Buffer.isBuffer((el.props.src as { data: unknown }).data)).toBe(true);
+    }
+    expect(JSON.stringify(render())).not.toContain('signed.example');
+  });
+
+  it('draws a placeholder, not a broken image, when a row has no bytes', () => {
     const layout = makeLayout();
+    // No bytes arrived for this row (no image, or the fetch was skipped).
     const rows = buildExportPdfRows([makeSource({ image: null })], layout, fields, {
       showImages: true,
+      images: new Map(),
     });
     const tree = render({ layout, rows });
     expect(elementsOfType(tree, 'IMAGE')).toHaveLength(0);
@@ -359,13 +423,19 @@ describe('InventoryExportPdf — book catalog mode', () => {
       catalogColumns: columns,
     });
     const sources = [makeSource(rowOverrides), makeSource({ ...rowOverrides, id: 'i-2' })];
+    // Bytes only for rows that still have a source image: a `image: null`
+    // override models "no cover", so it gets no bytes either.
+    const images = new Map<string, EmbeddedImage>();
+    for (const source of sources) {
+      if (source.image) images.set(source.id, { data: PNG_BYTES, extension: 'png' });
+    }
     return InventoryExportPdf({
       orgName: 'Demo Co',
       orgLogoUrl: null,
       title: 'Books catalog',
       subtitle: 'filtered - 2 books',
       layout,
-      rows: buildExportPdfRows(sources, layout, fields, { showImages: true }),
+      rows: buildExportPdfRows(sources, layout, fields, { showImages: true, images }),
       repeatHeaders: false,
       pageNumbers: true,
       catalog: { columns, fields, itemTypeKind: 'book' },
