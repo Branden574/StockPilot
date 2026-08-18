@@ -40,6 +40,7 @@ export default async function MfaChallengePage() {
 
   return (
     <AuthCard
+      eyebrow="Two-factor"
       title="Two-factor authentication"
       description="One more step. Confirm it's you with a code from your authenticator app."
     >

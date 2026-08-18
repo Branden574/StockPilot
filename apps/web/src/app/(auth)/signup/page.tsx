@@ -17,6 +17,7 @@ export const metadata: Metadata = {
 export default function SignUpPage() {
   return (
     <AuthCard
+      eyebrow="Invite only"
       title="Invite-only access"
       description="StockPilot is a private company tool. Accounts are created by admin invitation."
       footer={

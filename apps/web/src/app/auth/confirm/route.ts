@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { createClient } from '@/lib/supabase/server';
+import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 
 import type { EmailOtpType } from '@supabase/supabase-js';
 
@@ -23,14 +24,6 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  * "token not found"). GET renders a click-through page; only the form's
  * POST calls verifyOtp. Scanners follow GET/HEAD but don't submit forms.
  */
-
-/** Same-origin relative-path guard — mirrors /auth/callback. */
-function safeRedirectPath(raw: string | null): string {
-  if (!raw) return '/dashboard';
-  if (!raw.startsWith('/')) return '/dashboard';
-  if (raw.startsWith('//') || raw.startsWith('/\\')) return '/dashboard';
-  return raw;
-}
 
 /** Only the email types we actually send through this route. 'magiclink' is
  *  the B2B portal invite fallback for EXISTING auth users (generateLink rejects

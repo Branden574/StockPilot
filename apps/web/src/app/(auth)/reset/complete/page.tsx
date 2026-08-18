@@ -11,6 +11,7 @@ export const metadata: Metadata = {
 export default function ResetCompletePage() {
   return (
     <AuthCard
+      eyebrow="New password"
       title="Set a new password"
       description="Choose a strong password you don't use anywhere else."
       footer={

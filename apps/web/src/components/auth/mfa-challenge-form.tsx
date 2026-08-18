@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   Dialog,
   DialogContent,
@@ -27,17 +28,6 @@ interface MfaChallengeFactor {
 
 interface MfaChallengeFormProps {
   factors: MfaChallengeFactor[];
-}
-
-/**
- * Same-origin path sanitizer. Rejects absolute URLs, protocol-relative
- * (`//evil.com`), and non-path inputs to prevent an open-redirect via the
- * `?redirect=` query param after a successful MFA challenge.
- */
-function safeRedirectPath(raw: string | null): string {
-  if (!raw) return '/dashboard';
-  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
-  return raw;
 }
 
 export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
