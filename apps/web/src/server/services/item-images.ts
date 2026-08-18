@@ -440,8 +440,9 @@ export class ItemImagesService {
   }
 
   /**
-   * Shared implementation behind {@link primaryImagesForPdfRendering} and
-   * {@link primaryImagesForBrowserDisplay}. Both callers need the exact same
+   * Shared implementation behind {@link primaryImagesForPdfRendering},
+   * {@link primaryImagesForServerDecoding} and
+   * {@link primaryImagesForBrowserDisplay}. All callers need the exact same
    * `item_images` row pick (one per item, primary-first) and the exact same
    * Phase 2 `custom_fields.thumbnail_url` fallback for items with no
    * `item_images` row at all (bulk-imported books) — they differ ONLY in how
@@ -578,6 +579,51 @@ export class ItemImagesService {
         (await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth)) ??
         (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path) : null)
       );
+    });
+  }
+
+  /**
+   * Returns a Map<itemId, smallSignedUrl> for a caller that fetches the bytes
+   * SERVER-SIDE and can decode WebP ITSELF — today the inventory export
+   * pipeline (lib/exports/export-images.ts, which runs WebP through sharp
+   * before handing PNG bytes to exceljs / react-pdf).
+   *
+   * Per-item resolution order — PLAIN-first:
+   *   1. plain(thumb_path) — a signed OBJECT URL of the stored 200px WebP.
+   *      No transform parameters, so it is served from the CDN-cached object
+   *      path and is NOT subject to Supabase's image-transformation rate
+   *      limit.
+   *   2. transform(storage_path, targetWidth) — only when the row has no
+   *      thumb_path (pre-0122 uploads); the master is 2048px, far too big to
+   *      embed, so this is the one leg that still needs the transformer.
+   *   3. custom_fields.thumbnail_url — Phase 2 fallback for items with no
+   *      item_images row (bulk-imported books), unchanged.
+   *
+   * WHY not {@link primaryImagesForPdfRendering}: that chain is
+   * TRANSFORM-first because its consumers (react-pdf `<Image src={url}>` in
+   * the pick slip, packing slips and report PDFs) cannot decode WebP, so the
+   * transformer's PNG re-encode is the only form they can render. But the
+   * transformer is rate-limited per project: on 2026-08-18 one L4L "DC4
+   * Inventory Items" Excel export issued 272 `/storage/v1/render/image`
+   * requests in 24 seconds and 30 of them came back HTTP 429 — each one a
+   * blank picture cell, interleaved with rows whose files were identical in
+   * every way. A consumer that decodes WebP itself has no reason to pay for
+   * that endpoint at all for the common (has-thumb) case, so it takes the
+   * plain object URL and only falls back to a transform when there is no
+   * thumb to sign. The PDF-rendering chain is unchanged for its URL
+   * consumers.
+   *
+   * `targetWidth` defaults to 200, matching the stored thumb_path dimension —
+   * only exercised on the no-thumb transform fallback leg.
+   */
+  async primaryImagesForServerDecoding(
+    itemIds: string[],
+    targetWidth = 200,
+  ): Promise<Map<string, string>> {
+    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
+      return row.thumb_path
+        ? await getCachedItemImageSignedUrl(row.thumb_path)
+        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
     });
   }
 
