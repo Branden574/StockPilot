@@ -45,8 +45,25 @@ export interface InventoryXlsxInput {
   imageSize: ExportImageSize;
   /** itemId to bytes, for embedded / both. Missing ids render blank. */
   images?: ReadonlyMap<string, EmbeddedImage>;
+  /**
+   * How many rows had an image URL but no bytes arrived (fetch failed, was
+   * rate-limited, timed out, or the deadline passed). When > 0 the summary
+   * sheet says so, so a blank picture cell reads as "not fetched" rather
+   * than "no cover". Counts only; never a URL.
+   */
+  imagesSkipped?: number;
+  /** How many rows had an image URL to fetch (the M in "N of M"). */
+  imagesRequested?: number;
   /** Appended to the summary sheet when the row cap truncated the export. */
   truncatedNote?: string;
+}
+
+/** Summary-sheet metric label used when at least one picture could not be embedded. */
+export const XLSX_IMAGES_NOT_EMBEDDED_METRIC = 'Images not embedded';
+
+/** Summary-sheet note under that metric. Professional prose, no emojis. */
+export function xlsxImagesNotEmbeddedNote(skipped: number, requested: number): string {
+  return `${skipped} of ${requested} images could not be fetched and were left blank. Re-run the export to retry.`;
 }
 
 /**
@@ -305,6 +322,14 @@ function addSummarySheet(wb: ExcelJS.Workbook, input: InventoryXlsxInput): void 
   };
   tally('Category totals', (r) => r.category);
   tally('Status totals', (r) => r.status);
+
+  if ((input.imagesSkipped ?? 0) > 0) {
+    const skipped = input.imagesSkipped!;
+    const requested = Math.max(input.imagesRequested ?? skipped, skipped);
+    ws.addRow({});
+    add(XLSX_IMAGES_NOT_EMBEDDED_METRIC, skipped);
+    ws.addRow({ metric: xlsxImagesNotEmbeddedNote(skipped, requested) });
+  }
 
   if (input.truncatedNote) {
     ws.addRow({});

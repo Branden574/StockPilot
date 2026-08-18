@@ -1,5 +1,6 @@
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 
+import type { EmbeddedImage } from '@/lib/exports/export-images';
 import { fieldHeading, type InventoryExportField } from '@/lib/exports/field-registry';
 import type { ExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
@@ -22,10 +23,20 @@ import { pdfStyles, PDF_COLORS } from './styles';
 
 export const EXPORT_PDF_EM_DASH = '—';
 
+/**
+ * What react-pdf's `<Image>` receives: BYTES, never a URL. The route fetches
+ * every thumbnail itself (fetchExportImageBytes: retry, backoff, shared rate
+ * gate, deadline, WebP decode) so react-pdf never issues its own un-retried
+ * fetch against the rate-limited transform endpoint — the 2026-08-18 blank
+ * cell defect. `format` follows @react-pdf/types SourceDataBuffer: 'jpg', not
+ * 'jpeg'.
+ */
+export type InventoryExportPdfImageSrc = { data: Buffer; format: 'png' | 'jpg' };
+
 export interface InventoryExportPdfRow {
   /** Column key to already-formatted string. Never null, never undefined. */
   cells: Record<string, string>;
-  imageUrl: string | null;
+  imageSrc: InventoryExportPdfImageSrc | null;
 }
 
 export interface InventoryExportCatalogOptions {
@@ -159,7 +170,11 @@ export function buildExportPdfRows(
   // dropped from the signature.
   _layout: ExportPdfLayout,
   fields: readonly InventoryExportField[],
-  opts: { showImages: boolean },
+  opts: {
+    showImages: boolean;
+    /** itemId to fetched bytes. A row with no entry renders the placeholder. */
+    images?: ReadonlyMap<string, EmbeddedImage>;
+  },
 ): InventoryExportPdfRow[] {
   const columnFields = fields.filter((f) => f.key !== 'image');
   return rows.map((row) => {
@@ -171,9 +186,18 @@ export function buildExportPdfRows(
     }
     return {
       cells,
-      imageUrl: opts.showImages ? (row.image?.thumbnailUrl ?? null) : null,
+      imageSrc: opts.showImages ? toPdfImageSrc(opts.images?.get(row.id)) : null,
     };
   });
+}
+
+/** Fetched bytes -> react-pdf buffer source. Never a URL. */
+export function toPdfImageSrc(image: EmbeddedImage | undefined): InventoryExportPdfImageSrc | null {
+  if (!image || image.data.byteLength === 0) return null;
+  return {
+    data: Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength),
+    format: image.extension === 'jpeg' ? 'jpg' : 'png',
+  };
 }
 
 function TableHeader({ layout, fixed }: { layout: ExportPdfLayout; fixed: boolean }) {
@@ -223,10 +247,10 @@ function TableBody({ layout, rows }: { layout: ExportPdfLayout; rows: InventoryE
                 { width: layout.imageColumnWidthPt, height: layout.imageBoxPt.heightPt },
               ]}
             >
-              {row.imageUrl ? (
+              {row.imageSrc ? (
                 // eslint-disable-next-line jsx-a11y/alt-text
                 <Image
-                  src={row.imageUrl}
+                  src={row.imageSrc}
                   style={[
                     styles.thumb,
                     { width: layout.imageBoxPt.widthPt, height: layout.imageBoxPt.heightPt },
@@ -378,10 +402,10 @@ function CatalogBody({
             ]}
           >
             <View style={{ width: cover.widthPt, flexShrink: 0 }}>
-              {row.imageUrl ? (
+              {row.imageSrc ? (
                 // eslint-disable-next-line jsx-a11y/alt-text
                 <Image
-                  src={row.imageUrl}
+                  src={row.imageSrc}
                   style={[styles.thumb, { width: cover.widthPt, height: cover.heightPt }]}
                 />
               ) : (

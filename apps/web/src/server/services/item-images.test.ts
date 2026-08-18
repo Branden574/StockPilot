@@ -66,6 +66,8 @@ const BROWSER_OK = 'aaaa3333-0000-4000-8000-000000000013';
 const PDF_FB1 = 'aaaa4444-0000-4000-8000-000000000014';
 const PDF_FB2 = 'aaaa5555-0000-4000-8000-000000000015';
 const PDF_OK = 'aaaa6666-0000-4000-8000-000000000016';
+const SERVER_OK = 'aaaa7777-0000-4000-8000-000000000017';
+const SERVER_NOTHUMB = 'aaaa8888-0000-4000-8000-000000000018';
 
 
 function svc(): ItemImagesService {
@@ -410,6 +412,112 @@ describe('ItemImagesService — PDF vs browser signing-chain contrast', () => {
         'https://signed/browser-nothumb-master-transform',
       );
     });
+  });
+});
+
+/**
+ * 2026-08-18: the export pipeline decodes WebP itself (sharp), so it must NOT
+ * pay for the rate-limited transform endpoint on rows that have a stored
+ * thumb — 30 of one export's 272 transform requests came back 429 and every
+ * one was a blank cell. This chain is PLAIN(thumb) -> transform(master, only
+ * when there is no thumb). primaryImagesForPdfRendering is untouched: its
+ * consumers hand URLs to react-pdf and still need the PNG re-encode.
+ */
+describe('ItemImagesService.primaryImagesForServerDecoding — plain(thumb) -> transform(master)', () => {
+  it('signs the PLAIN thumb (no transform options) and never touches the transformer for a thumb row', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: [
+          {
+            item_id: 'item-server-ok',
+            storage_path: `${ORG}/items/${SERVER_OK}/master.jpg`,
+            thumb_path: `${ORG}/items/${SERVER_OK}/thumb.webp`,
+            is_primary: true,
+            sort_order: 0,
+          },
+        ],
+        error: null,
+      },
+    });
+    const service = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+    createSignedUrlMock.mockResolvedValueOnce({
+      data: { signedUrl: 'https://signed/server-ok-plain-thumb' },
+      error: null,
+    });
+
+    const map = await service.primaryImagesForServerDecoding(['item-server-ok'], 200);
+
+    expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
+    const call = createSignedUrlMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${ORG}/items/${SERVER_OK}/thumb.webp`);
+    expect(call.length).toBe(2); // plain signer — no transform options arg
+    expect(call[2]).toBeUndefined();
+    expect(map.get('item-server-ok')).toBe('https://signed/server-ok-plain-thumb');
+  });
+
+  it('uses transform(master, targetWidth) ONLY when the row has no thumb_path', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: [
+          {
+            item_id: 'item-server-nothumb',
+            storage_path: `${ORG}/items/${SERVER_NOTHUMB}/master.jpg`,
+            thumb_path: null,
+            is_primary: true,
+            sort_order: 0,
+          },
+        ],
+        error: null,
+      },
+    });
+    const service = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+    createSignedUrlMock.mockResolvedValueOnce({
+      data: { signedUrl: 'https://signed/server-nothumb-master-transform' },
+      error: null,
+    });
+
+    const map = await service.primaryImagesForServerDecoding(['item-server-nothumb'], 320);
+
+    expect(createSignedUrlMock).toHaveBeenCalledTimes(1);
+    const [path, , options] = createSignedUrlMock.mock.calls[0]!;
+    expect(path).toBe(`${ORG}/items/${SERVER_NOTHUMB}/master.jpg`);
+    expect(options).toEqual(
+      expect.objectContaining({ transform: expect.objectContaining({ width: 320 }) }),
+    );
+    expect(map.get('item-server-nothumb')).toBe('https://signed/server-nothumb-master-transform');
+  });
+
+  it('defaults targetWidth to 200 on the no-thumb leg', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: [
+          {
+            item_id: 'item-server-nothumb-default',
+            storage_path: `${ORG}/items/${SERVER_NOTHUMB}/master2.jpg`,
+            thumb_path: null,
+            is_primary: true,
+            sort_order: 0,
+          },
+        ],
+        error: null,
+      },
+    });
+    const service = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+    createSignedUrlMock.mockResolvedValueOnce({
+      data: { signedUrl: 'https://signed/x' },
+      error: null,
+    });
+    await service.primaryImagesForServerDecoding(['item-server-nothumb-default']);
+    const [, , options] = createSignedUrlMock.mock.calls[0]!;
+    expect(options).toEqual(
+      expect.objectContaining({ transform: expect.objectContaining({ width: 200 }) }),
+    );
   });
 });
 

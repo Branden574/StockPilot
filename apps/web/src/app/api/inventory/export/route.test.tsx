@@ -1,12 +1,17 @@
 import { Readable } from 'node:stream';
 
+import ExcelJS from 'exceljs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
-import { attachExportImages } from '@/lib/exports/export-images';
+import {
+  attachExportImages,
+  EXPORT_IMAGE_TARGET_WIDTH_PX,
+  fetchExportImageBytes,
+} from '@/lib/exports/export-images';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -65,6 +70,7 @@ vi.mock('@/lib/exports/export-images', async (importOriginal) => {
       images: new Map(),
       skipped: 0,
       truncated: false,
+      skippedReasons: { rateLimited: 0, timeout: 0, unsupported: 0, oversized: 0, other: 0, deadline: 0 },
     })),
   };
 });
@@ -497,5 +503,100 @@ describe('POST /api/inventory/export — response headers match the format', () 
     );
     expect(res.headers.get('Content-Type')).toBe('application/pdf');
     expect(res.headers.get('Content-Disposition')).toMatch(/filename="[^"]+\.pdf"$/);
+  });
+});
+
+// 2026-08-18: the PDF branch used to hand react-pdf signed URLs to fetch on its
+// own (no retry, no rate gate) — the same transform endpoint whose 429s left
+// Excel cells blank. Both branches now go through fetchExportImageBytes and
+// the PDF document receives BYTES; Excel additionally reports what was skipped.
+describe('POST /api/inventory/export — images are fetched once, as bytes, and skips are surfaced', () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const fetched = () => vi.mocked(fetchExportImageBytes);
+
+  it('pdf: calls fetchExportImageBytes with the tier width and hands the document { data, format } — never a URL', async () => {
+    stubSourceRows({ rows: [{ ...SOURCE_ROW, image: { thumbnailUrl: 'https://signed.example/a.webp' } }] });
+    fetched().mockResolvedValueOnce({
+      images: new Map([['i-1', { data: PNG, extension: 'png' }]]),
+      skipped: 0,
+      truncated: false,
+      skippedReasons: { rateLimited: 0, timeout: 0, unsupported: 0, oversized: 0, other: 0, deadline: 0 },
+    });
+    await POST(
+      buildRequest({
+        format: 'pdf',
+        scope: 'all',
+        itemType: 'book',
+        fields: ['image', 'name'],
+        options: { includeImages: true, imageSize: 'large' },
+      }),
+    );
+    expect(fetched()).toHaveBeenCalledTimes(1);
+    const [urls, opts] = fetched().mock.calls[0]!;
+    expect(urls.get('i-1')).toBe('https://signed.example/a.webp');
+    expect(opts?.targetWidth).toBe(EXPORT_IMAGE_TARGET_WIDTH_PX.large);
+    const rows = capturedElement!.props.rows as Array<{ imageSrc: unknown }>;
+    const src = rows[0]!.imageSrc as { data: Buffer; format: string };
+    expect(typeof src).toBe('object');
+    expect(Buffer.isBuffer(src.data)).toBe(true);
+    expect(src.format).toBe('png');
+    expect(JSON.stringify(rows)).not.toContain('signed.example');
+  });
+
+  it('pdf: does NOT fetch bytes when images are off', async () => {
+    stubSourceRows();
+    await POST(
+      buildRequest({
+        format: 'pdf',
+        scope: 'all',
+        itemType: 'book',
+        fields: ['name'],
+        options: { includeImages: false },
+      }),
+    );
+    expect(fetched()).not.toHaveBeenCalled();
+  });
+
+  it('xlsx: forwards the skipped count into the Summary sheet as Images not embedded', async () => {
+    stubSourceRows({
+      rows: [
+        { ...SOURCE_ROW, id: 'i-1', image: { thumbnailUrl: 'https://signed.example/1.webp' } },
+        { ...SOURCE_ROW, id: 'i-2', image: { thumbnailUrl: 'https://signed.example/2.webp' } },
+        { ...SOURCE_ROW, id: 'i-3', image: { thumbnailUrl: 'https://signed.example/3.webp' } },
+      ],
+      total: 3,
+    });
+    fetched().mockResolvedValueOnce({
+      images: new Map([['i-1', { data: PNG, extension: 'png' }]]),
+      skipped: 2,
+      truncated: false,
+      skippedReasons: { rateLimited: 2, timeout: 0, unsupported: 0, oversized: 0, other: 0, deadline: 0 },
+    });
+    const res = await POST(
+      buildRequest({
+        format: 'xlsx',
+        scope: 'all',
+        itemType: 'book',
+        fields: ['image', 'name'],
+        options: {
+          includeImages: true,
+          imageMode: 'embedded',
+          imageSize: 'medium',
+          xlsx: { includeSummarySheet: true },
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const [, opts] = fetched().mock.calls[0]!;
+    expect(opts?.targetWidth).toBe(EXPORT_IMAGE_TARGET_WIDTH_PX.medium);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()) as unknown as ArrayBuffer);
+    const summary = wb.getWorksheet('Summary')!;
+    expect(summary).toBeDefined();
+    const text = JSON.stringify(summary.getSheetValues());
+    expect(text).toContain('Images not embedded');
+    expect(text).toContain(
+      '2 of 3 images could not be fetched and were left blank. Re-run the export to retry.',
+    );
   });
 });

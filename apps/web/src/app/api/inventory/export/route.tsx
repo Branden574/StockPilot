@@ -16,8 +16,9 @@ import { toInventoryCsv } from '@/lib/exports/export-csv';
 import {
   attachExportImages,
   fetchExportImageBytes,
+  EXPORT_IMAGE_TARGET_WIDTH_PX,
   EXPORT_TOO_MANY_IMAGES_MESSAGE,
-  type EmbeddedImage,
+  type FetchExportImageBytesResult,
 } from '@/lib/exports/export-images';
 import { buildExportFilename } from '@/lib/exports/filename';
 import {
@@ -26,6 +27,7 @@ import {
   resolveExportFields,
 } from '@/lib/exports/export-request';
 import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
+import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 import { buildExportPdfRows, InventoryExportPdf } from '@/lib/pdf/inventory-export-pdf';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
@@ -37,6 +39,26 @@ export const dynamic = 'force-dynamic';
 // Large-org CSV/Excel/PDF export can take a while. (api/inventory is not under a
 // vercel.json functions glob, so set the budget inline.)
 export const maxDuration = 60;
+
+/**
+ * Fetch the bytes for every row that resolved an image URL, sized for the
+ * chosen tier. Shared by the Excel and PDF branches so both embed BYTES that
+ * went through the same retry / rate-gate / deadline / WebP-decode pipeline;
+ * react-pdf in particular is never handed a URL to fetch on its own.
+ */
+async function collectExportImageBytes(
+  rows: readonly InventoryExportSourceRow[],
+  imageSize: keyof typeof EXPORT_IMAGE_TARGET_WIDTH_PX,
+): Promise<FetchExportImageBytesResult & { requested: number }> {
+  const urls = new Map<string, string>();
+  for (const row of rows) {
+    if (row.image) urls.set(row.id, row.image.thumbnailUrl);
+  }
+  const fetched = await fetchExportImageBytes(urls, {
+    targetWidth: EXPORT_IMAGE_TARGET_WIDTH_PX[imageSize],
+  });
+  return { ...fetched, requested: urls.size };
+}
 
 /**
  * Unified inventory export: any scope (selected / filtered / all) x any format
@@ -173,17 +195,11 @@ export async function POST(request: NextRequest) {
 
     // -- Excel (.xlsx) ------------------------------------------------------
     if (format === 'xlsx') {
-      let images: Map<string, EmbeddedImage> | undefined;
-      let imageTruncated = false;
+      let fetched: Awaited<ReturnType<typeof collectExportImageBytes>> | undefined;
       if (imagesRequested && (options.imageMode === 'embedded' || options.imageMode === 'both')) {
-        const urls = new Map<string, string>();
-        for (const row of result.rows) {
-          if (row.image) urls.set(row.id, row.image.thumbnailUrl);
-        }
-        const fetched = await fetchExportImageBytes(urls);
-        images = fetched.images;
-        imageTruncated = fetched.truncated;
+        fetched = await collectExportImageBytes(result.rows, options.imageSize);
       }
+      const imageTruncated = fetched?.truncated ?? false;
       const buf = await toInventoryXlsx({
         fields,
         rows: result.rows,
@@ -193,7 +209,9 @@ export async function POST(request: NextRequest) {
         includeSummarySheet: options.xlsx.includeSummarySheet,
         imageMode: imagesRequested ? options.imageMode : null,
         imageSize: options.imageSize,
-        images,
+        images: fetched?.images,
+        imagesSkipped: fetched?.skipped,
+        imagesRequested: fetched?.requested,
         truncatedNote: imageTruncated
           ? `${truncatedNote ? `${truncatedNote} ` : ''}${EXPORT_TOO_MANY_IMAGES_MESSAGE}`
           : truncatedNote,
@@ -233,9 +251,16 @@ export async function POST(request: NextRequest) {
       // (capped) — the long-SKU overlap fix.
       rows: result.rows,
     });
-    const showImages = layout.imageColumnWidthPt > 0 || options.pdf.layout === 'catalog';
+    const showImages =
+      (layout.imageColumnWidthPt > 0 || options.pdf.layout === 'catalog') && imagesRequested;
+    // Bytes, not URLs: the same fetch pipeline as Excel. react-pdf is never
+    // asked to fetch a signed URL itself.
+    const pdfImages = showImages
+      ? (await collectExportImageBytes(result.rows, options.imageSize)).images
+      : undefined;
     const pdfRows = buildExportPdfRows(result.rows, layout, fields, {
-      showImages: showImages && imagesRequested,
+      showImages,
+      images: pdfImages,
     });
 
     const titleNoun = result.slug === 'books' ? 'Books' : 'Inventory';
