@@ -1,0 +1,289 @@
+<title>StockPilot Site Rollout Roadmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1C2430;
+    --ink-soft: #4B5563;
+    --paper: #FBFAF7;
+    --card: #FFFFFF;
+    --rule: #E3E1DA;
+    --accent: #2F5D8A;
+    --accent-soft: #E7EEF6;
+    --live: #3D7A5E;
+    --live-soft: #E4F0EA;
+    --next: #8A6D2F;
+    --next-soft: #F5EEDD;
+    --hold: #B8B3A6;
+    --hold-soft: #EFECE4;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --sans: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #E9ECF1; --ink-soft: #AEB6C2; --paper: #131820; --card: #1A2029; --rule: #2A323E;
+      --accent: #8FB4DA; --accent-soft: #1E2C3C; --live: #7FBF9C; --live-soft: #1D2E27;
+      --next: #D6B26A; --next-soft: #33291A; --hold: #6B7280; --hold-soft: #232A34;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #E9ECF1; --ink-soft: #AEB6C2; --paper: #131820; --card: #1A2029; --rule: #2A323E;
+    --accent: #8FB4DA; --accent-soft: #1E2C3C; --live: #7FBF9C; --live-soft: #1D2E27;
+    --next: #D6B26A; --next-soft: #33291A; --hold: #6B7280; --hold-soft: #232A34;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 17px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .page { max-width: 880px; margin: 0 auto; padding: 56px 28px 96px; }
+  h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.005em; text-wrap: balance; margin: 0; }
+  h1 { font-size: 40px; line-height: 1.12; }
+  h2 { font-size: 26px; line-height: 1.2; margin-top: 56px; margin-bottom: 14px; }
+  h3 { font-size: 19px; margin-top: 26px; margin-bottom: 8px; }
+  p { margin: 0 0 14px; max-width: 72ch; }
+  .meta { color: var(--ink-soft); font-size: 15px; margin: 10px 0 24px; }
+  .eyebrow { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin-bottom: 8px; }
+  .lede { font-size: 19px; color: var(--ink); max-width: 66ch; }
+  .glance { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 28px 0 8px; }
+  .glance > div { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+  .glance .n { font-family: var(--serif); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .glance .l { font-size: 13px; color: var(--ink-soft); margin-top: 4px; line-height: 1.35; }
+  .glance .order { font-family: var(--serif); font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
+  table { width: 100%; border-collapse: collapse; font-size: 15.5px; margin: 8px 0 18px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-weight: 600; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  ol, ul { padding-left: 22px; margin: 0 0 14px; max-width: 72ch; }
+  li { margin: 6px 0; }
+  .gate li strong { color: var(--ink); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+  .pill.live { background: var(--live-soft); color: var(--live); }
+  .pill.next { background: var(--next-soft); color: var(--next); }
+  .pill.hold { background: var(--hold-soft); color: var(--ink-soft); }
+  figure { margin: 22px 0 8px; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 16px 10px; overflow-x: auto; }
+  figure svg { display: block; max-width: 100%; height: auto; min-width: 640px; color: var(--ink); }
+  figcaption { font-size: 14px; color: var(--ink-soft); margin-top: 8px; max-width: 80ch; }
+  .rule { border: 0; border-top: 1px solid var(--rule); margin: 40px 0; }
+  .roles { background: var(--accent-soft); border-radius: 8px; padding: 12px 16px; font-size: 15.5px; }
+  .callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; color: var(--ink); max-width: 72ch; }
+  @media (max-width: 720px) { .glance { grid-template-columns: repeat(2, 1fr); } h1 { font-size: 32px; } }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="page">
+  <div class="eyebrow">Learn4Life · StockPilot</div>
+  <h1>Site rollout roadmap</h1>
+  <p class="meta">Prepared August 18, 2026 · For Superintendent Gill · Prepared by Branden Vincent-Walker</p>
+  <p class="lede">How StockPilot goes from the Central Valley West pilot to every Learn4Life site, in what order, by when, and what has to be true before each step. Every number in this document is taken from the live system today.</p>
+
+  <div class="glance">
+    <div><div class="n">15 wks</div><div class="l">CVW live since May 6, 2026</div></div>
+    <div><div class="order">CVW → KVA → CVLYII → MLA → CVS</div><div class="l">One region at a time, four weeks each</div></div>
+    <div><div class="n">Feb 26, 2027</div><div class="l">All five regions live (Jan 29 on the fast path)</div></div>
+    <div><div class="n">6 checks</div><div class="l">The measurable gate every region must pass before the next opens</div></div>
+  </div>
+
+  <h2>Where we are today: the CVW pilot</h2>
+  <p>DC4, the central distribution center, has run on StockPilot since the first week of May. In those 15 weeks:</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th class="num">Since go-live</th><th class="num">Last 30 days</th></tr></thead>
+    <tbody>
+      <tr><td>Items under management</td><td class="num">395 active (113 books), 13,869 units</td><td class="num"></td></tr>
+      <tr><td>Order requests from sites</td><td class="num">85</td><td class="num">32</td></tr>
+      <tr><td>Purchase orders received</td><td class="num">47</td><td class="num">15</td></tr>
+      <tr><td>Stock movements recorded</td><td class="num">1,030</td><td class="num">260</td></tr>
+      <tr><td>Cycle counts</td><td class="num">16</td><td class="num"></td></tr>
+      <tr><td>Staff accounts</td><td class="num">14 across CVW, CVS, KVA and the district office</td><td class="num"></td></tr>
+    </tbody>
+  </table></div>
+  <p>What is live for CVW today, on the website and the iPhone/iPad app (App Store version 1.3.0):</p>
+  <ul>
+    <li>Site staff request items from the DC4 catalog and follow the order through approval, picking, packing and shipment.</li>
+    <li>Delivery requests and maintenance requests open in Outlook pre-filled, from a computer or a phone; the warehouse copy and the maintenance team's copy have been confirmed arriving.</li>
+    <li>Purchase orders are imported by scan, received against, staged and put away to the exact rack and crate; books keep both their rack and their crate.</li>
+    <li>Cycle counts, returns and exchanges, stock adjustments and write-offs, with a full movement history per item.</li>
+    <li>Exports (Excel, PDF, CSV) with pictures, saved layouts, and per-site catalog visibility.</li>
+    <li>Two-factor sign-in, role-based permissions, and an audit trail on every change.</li>
+  </ul>
+
+  <h2>What "solid" means: the gate to leave CVW</h2>
+  <p>The instruction is to move to KVA once the CVW release is solid. "Solid" needs a definition that can be checked rather than felt, so the same test can be applied to every region afterwards. CVW is considered solid when all six of the following hold at the same time. Target: <strong>Friday, September 25, 2026</strong>.</p>
+  <ol class="gate">
+    <li><strong>Four consecutive weeks with no severity-1 defect.</strong> A severity-1 defect is anything that loses or misstates stock, blocks an order from moving, or sends a request to the wrong place. This week's two, a full write-off that failed when a unit sat in Staging and blank pictures in an Excel export, are fixed and verified in production; the clock restarts from August 18.</li>
+    <li><strong>Orders go through the system.</strong> At least 90 percent of CVW site orders in the trailing 30 days are placed in StockPilot rather than by email or phone. Baseline today: 32 in the last 30 days.</li>
+    <li><strong>Requests reach people.</strong> Delivery and maintenance requests confirmed arriving (done) and used by at least three different CVW requesters.</li>
+    <li><strong>Stock is trustworthy.</strong> Cycle-count variance at or under 2 percent of counted units on two consecutive counts, and hand-typed stock adjustments falling week over week in favour of counts. Today hand adjustments outnumber count corrections roughly nine to one; that ratio is the single best indicator of whether the numbers on the screen match the shelf.</li>
+    <li><strong>People are on board.</strong> Every CVW staff member who places orders has an account, has been trained, and has signed in within the last 30 days; everyone on the phone app is on 1.3.0 or newer.</li>
+    <li><strong>Support is quiet.</strong> Fewer than two open help requests older than seven days.</li>
+  </ol>
+  <p>Each item is a number pulled from the system, so the weekly status can show green, amber or red against it without argument.</p>
+
+  <h2>The rollout playbook: four weeks per region</h2>
+  <p>Each region gets the same four-week sequence. Nothing new is invented per region; the only thing that changes is who is in the room.</p>
+
+  <figure>
+    <svg viewBox="0 0 960 150" role="img" aria-label="Four-week playbook: Ready in week 0, Train in week 1, Go-live in week 2, Hypercare in weeks 3 and 4, ending at an exit gate that must be green before the next region opens.">
+      <defs>
+        <marker id="arrow-play" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <!-- steps -->
+      <g font-family="Source Sans 3, Helvetica Neue, Arial, sans-serif" font-size="13" fill="currentColor">
+        <rect x="20" y="40" width="170" height="54" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="105" y="62" text-anchor="middle" font-weight="600">Week 0 · Ready</text>
+        <text x="105" y="80" text-anchor="middle" font-size="12" opacity="0.8">accounts, addresses, charters</text>
+
+        <line x1="190" y1="67" x2="222" y2="67" stroke="currentColor" stroke-width="1.2" marker-end="url(#arrow-play)"/>
+
+        <rect x="224" y="40" width="170" height="54" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="309" y="62" text-anchor="middle" font-weight="600">Week 1 · Train</text>
+        <text x="309" y="80" text-anchor="middle" font-size="12" opacity="0.8">2 × 30 min + champion session</text>
+
+        <line x1="394" y1="67" x2="426" y2="67" stroke="currentColor" stroke-width="1.2" marker-end="url(#arrow-play)"/>
+
+        <rect x="428" y="40" width="170" height="54" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="513" y="62" text-anchor="middle" font-weight="600">Week 2 · Go-live</text>
+        <text x="513" y="80" text-anchor="middle" font-size="12" opacity="0.8">first orders shadowed by DC4</text>
+
+        <line x1="598" y1="67" x2="630" y2="67" stroke="currentColor" stroke-width="1.2" marker-end="url(#arrow-play)"/>
+
+        <rect x="632" y="40" width="170" height="54" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="717" y="62" text-anchor="middle" font-weight="600">Weeks 3–4 · Hypercare</text>
+        <text x="717" y="80" text-anchor="middle" font-size="12" opacity="0.8">daily 10-min check-in</text>
+
+        <line x1="802" y1="67" x2="846" y2="67" stroke="currentColor" stroke-width="1.2" marker-end="url(#arrow-play)"/>
+        <!-- gate -->
+        <polygon points="880,42 918,67 880,92 842,67" fill="#3D7A5E" opacity="0.18" stroke="#3D7A5E" stroke-width="1.4"/>
+        <text x="880" y="71" text-anchor="middle" font-size="12" font-weight="600">gate</text>
+        <text x="880" y="118" text-anchor="middle" font-size="12" opacity="0.8">6 checks green →</text>
+        <text x="880" y="134" text-anchor="middle" font-size="12" opacity="0.8">next region opens</text>
+      </g>
+    </svg>
+    <figcaption>The same four-week sequence for every region. The exit gate reuses the six CVW checks; the next region does not open until it is green.</figcaption>
+  </figure>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Week</th><th>Step</th><th>What happens</th><th>Who</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><strong>Ready</strong></td><td>Accounts created for every requester and approver at the region's campuses; delivery addresses and site contacts entered; each campus mapped to its charter for billing; catalog visibility set; delivery cadence agreed with DC4; phones checked (iPhone/iPad today, Android when the Play account is live).</td><td>DC4 lead, site champion, StockPilot</td></tr>
+      <tr><td>1</td><td><strong>Train</strong></td><td>Two 30-minute sessions for requesters (place an order, request a delivery, report a facilities issue, track it), one 45-minute session for the site champion and approvers, printed one-page guides, and a practice space that mirrors the live system.</td><td>StockPilot with the site champion</td></tr>
+      <tr><td>2</td><td><strong>Go-live</strong></td><td>The region's first orders are placed for real. DC4 shadows each one end to end. A ten-minute daily check-in between the site champion and DC4 catches confusion the same day.</td><td>Site champion, DC4</td></tr>
+      <tr><td>3–4</td><td><strong>Hypercare and exit</strong></td><td>Daily monitoring of orders, deliveries and defects; a written exit review against the same six criteria used for CVW, scaled to the region. The next region opens only when this review is green.</td><td>DC4 lead, StockPilot</td></tr>
+    </tbody>
+  </table></div>
+  <p class="roles"><strong>Roles.</strong> DC4 lead: Andrew Rosas · Warehouse operations: Peter Mathis and the DC4 team · Site champion: one named person per region, chosen by the region · StockPilot: Branden Vincent-Walker (training, configuration, fixes, weekly status).</p>
+
+  <h2>Timeline</h2>
+  <p>One region at a time, because DC4 is one team and shadowing two regions' first orders at once is where mistakes come from.</p>
+
+  <figure>
+    <svg viewBox="0 0 960 300" role="img" aria-label="Timeline from August 2026 to March 2027: CVW stabilisation August 18 to September 25; KVA September 28 to October 23; CVLYII October 26 to November 20; MLA readiness November 30 to December 18; MLA go-live January 4 to 29; CVS February 1 to 26; steady state from March 1. Thanksgiving week and the winter break are held clear of go-lives.">
+      <g font-family="Source Sans 3, Helvetica Neue, Arial, sans-serif" font-size="12" fill="currentColor">
+        <!-- month grid -->
+        <g stroke="currentColor" stroke-opacity="0.18" stroke-width="1">
+          <line x1="150" y1="34" x2="150" y2="262"/><line x1="250.8" y1="34" x2="250.8" y2="262"/><line x1="348.3" y1="34" x2="348.3" y2="262"/><line x1="449.1" y1="34" x2="449.1" y2="262"/><line x1="546.6" y1="34" x2="546.6" y2="262"/><line x1="647.4" y1="34" x2="647.4" y2="262"/><line x1="748.2" y1="34" x2="748.2" y2="262"/><line x1="839.2" y1="34" x2="839.2" y2="262"/><line x1="940" y1="34" x2="940" y2="262"/>
+        </g>
+        <g font-weight="600" opacity="0.85">
+          <text x="200" y="26" text-anchor="middle">Aug 2026</text><text x="299" y="26" text-anchor="middle">Sep</text><text x="398" y="26" text-anchor="middle">Oct</text><text x="497" y="26" text-anchor="middle">Nov</text><text x="597" y="26" text-anchor="middle">Dec</text><text x="697" y="26" text-anchor="middle">Jan 2027</text><text x="793" y="26" text-anchor="middle">Feb</text><text x="889" y="26" text-anchor="middle">Mar</text>
+        </g>
+        <!-- holiday holds -->
+        <rect x="520.6" y="34" width="16.3" height="228" fill="currentColor" opacity="0.07"/>
+        <rect x="611.6" y="34" width="39.1" height="228" fill="currentColor" opacity="0.07"/>
+        <text x="528.7" y="276" text-anchor="middle" font-size="11" opacity="0.7">Thanksgiving</text>
+        <text x="631" y="276" text-anchor="middle" font-size="11" opacity="0.7">Winter break</text>
+        <!-- today -->
+        <line x1="205.3" y1="34" x2="205.3" y2="262" stroke="#2F5D8A" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="205.3" y="290" text-anchor="middle" font-size="11" fill="#2F5D8A" font-weight="600">Aug 18 · today</text>
+
+        <!-- rows -->
+        <text x="140" y="60" text-anchor="end" font-weight="600">CVW</text>
+        <rect x="205.3" y="48" width="126.8" height="18" rx="4" fill="#3D7A5E"/>
+        <text x="268.7" y="61" text-anchor="middle" font-size="11" fill="#FFFFFF" font-weight="600">stabilise · gate Sep 25</text>
+
+        <text x="140" y="94" text-anchor="end" font-weight="600">KVA</text>
+        <rect x="338.6" y="82" width="84.5" height="18" rx="4" fill="#2F5D8A"/>
+        <text x="380.8" y="95" text-anchor="middle" font-size="11" fill="#FFFFFF" font-weight="600">Sep 28 – Oct 23</text>
+
+        <text x="140" y="128" text-anchor="end" font-weight="600">CVLYII</text>
+        <rect x="429.6" y="116" width="84.6" height="18" rx="4" fill="#2F5D8A"/>
+        <text x="471.9" y="129" text-anchor="middle" font-size="11" fill="#FFFFFF" font-weight="600">Oct 26 – Nov 20</text>
+
+        <text x="140" y="162" text-anchor="end" font-weight="600">MLA</text>
+        <rect x="543.4" y="150" width="61.8" height="18" rx="4" fill="none" stroke="#2F5D8A" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <text x="574.3" y="163" text-anchor="middle" font-size="11" fill="currentColor">readiness</text>
+        <rect x="657.2" y="150" width="84.5" height="18" rx="4" fill="#2F5D8A"/>
+        <text x="699.5" y="163" text-anchor="middle" font-size="11" fill="#FFFFFF" font-weight="600">Jan 4 – Jan 29</text>
+
+        <text x="140" y="196" text-anchor="end" font-weight="600">CVS</text>
+        <rect x="748.2" y="184" width="84.6" height="18" rx="4" fill="#2F5D8A"/>
+        <text x="790.5" y="197" text-anchor="middle" font-size="11" fill="#FFFFFF" font-weight="600">Feb 1 – Feb 26</text>
+
+        <text x="140" y="230" text-anchor="end" font-weight="600">All sites</text>
+        <rect x="839.2" y="218" width="100.8" height="18" rx="4" fill="#3D7A5E" opacity="0.35"/>
+        <text x="889.6" y="231" text-anchor="middle" font-size="11" fill="currentColor" font-weight="600">steady state</text>
+
+        <!-- gate markers between waves -->
+        <g fill="#3D7A5E">
+          <polygon points="332.1,66 336.6,71 332.1,76 327.6,71"/>
+          <polygon points="423.1,100 427.6,105 423.1,110 418.6,105"/>
+          <polygon points="514.2,134 518.7,139 514.2,144 509.7,139"/>
+          <polygon points="741.7,168 746.2,173 741.7,178 737.2,173"/>
+          <polygon points="832.8,202 837.3,207 832.8,212 828.3,207"/>
+        </g>
+      </g>
+    </svg>
+    <figcaption>Solid bars are four-week waves; the dashed bar is readiness work only. Green diamonds are exit gates: a wave that misses its gate shifts everything after it by the same amount rather than overlapping. Shaded bands are held clear of go-lives.</figcaption>
+  </figure>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Wave</th><th>Region</th><th>Campuses (as configured today)</th><th>Dates</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><strong>CVW</strong> — stabilise <span class="pill live">live</span></td><td>Clovis, Manchester, Sunnyside, Mendota</td><td>Aug 18 – Sep 25, 2026</td><td>Gate defined above</td></tr>
+      <tr><td>1</td><td><strong>KVA</strong> <span class="pill next">next</span></td><td>Hanford, Tulare</td><td>Sep 28 – Oct 23, 2026</td><td>Closest to the CVW model; one KVA account already exists</td></tr>
+      <tr><td>2</td><td><strong>CVLYII</strong></td><td>Visalia</td><td>Oct 26 – Nov 20, 2026</td><td>Single campus; ends before Thanksgiving week</td></tr>
+      <tr><td>—</td><td>MLA readiness only <span class="pill hold">prep</span></td><td>Sacramento</td><td>Nov 30 – Dec 18, 2026</td><td>Distance changes the delivery model; readiness work only, no go-live over the winter break</td></tr>
+      <tr><td>3</td><td><strong>MLA</strong></td><td>Sacramento</td><td>Jan 4 – Jan 29, 2027</td><td>Go-live after the break, when staff are back and DC4 has capacity</td></tr>
+      <tr><td>4</td><td><strong>CVS</strong></td><td>CVS General, CVSII Madera, CVSII West Shaw, AMB Sanchez</td><td>Feb 1 – Feb 26, 2027</td><td>Largest region; DC4 warehouse staff from CVS already use the system daily, so training weight is on site requesters</td></tr>
+      <tr><td>—</td><td>Steady state</td><td>All</td><td>From Mar 1, 2027</td><td>Monthly status, quarterly review</td></tr>
+    </tbody>
+  </table></div>
+  <p class="callout"><strong>Two rules govern the dates.</strong> If a region misses its exit gate, every following region shifts by the same amount rather than overlapping. And if CVW clears its gate early, the plan moves up: <strong>fast path</strong> — CVW gate by September 11 puts KVA at September 14 – October 9 and CVLYII at October 12 – November 6, which leaves a choice. Either keep MLA's go-live at January 4 and spend the three weeks gained as buffer before the break (finish still February 26), or go live at MLA November 30 – December 18 with hypercare running across the break and CVS at January 4 – 29, finishing four weeks early on <strong>January 29, 2027</strong>. The second option asks more of DC4 in December; it is a leadership call and is not assumed.</p>
+
+  <h2>What each region gets on day one</h2>
+  <ul>
+    <li>Order requests against the DC4 catalog, with approval where the region wants it, and status visible to the requester throughout.</li>
+    <li>Delivery requests and maintenance requests that open pre-filled in Outlook, from a computer or the phone app.</li>
+    <li>Order tracking, returns and exchanges, and a history of everything requested by that campus.</li>
+    <li>The phone app on iPhone and iPad; Android as soon as the organization's Google Play account is in place.</li>
+    <li>Printed pick slips, packing slips and labels at DC4 for that region's orders, and exports of anything on screen.</li>
+  </ul>
+
+  <h2>Risks and how they are handled</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Risk</th><th>Handling</th></tr></thead>
+    <tbody>
+      <tr><td>DC4 capacity during a wave</td><td>One region at a time; go-live weeks never overlap; hypercare check-ins are ten minutes, not meetings.</td></tr>
+      <tr><td>Android phones at a site</td><td>iPhone/iPad today. The Android build is ready and is waiting on the Google Play account, which needs the business registration paperwork. Until then Android users use the website, which does everything the app does except camera scanning.</td></tr>
+      <tr><td>Holidays and testing windows</td><td>Thanksgiving week and the winter break are kept clear of go-lives; MLA deliberately lands after the break.</td></tr>
+      <tr><td>Distance (MLA)</td><td>Sacramento is not a same-day run from DC4. December is set aside to agree the delivery cadence and whether MLA holds any stock on site before anyone is trained.</td></tr>
+      <tr><td>Stock numbers drifting from the shelf</td><td>Counts over hand adjustments; the ratio is watched weekly and is part of every exit gate.</td></tr>
+      <tr><td>A site champion leaves</td><td>Two people trained at the champion session in every region, not one.</td></tr>
+      <tr><td>Scope creep ("can our site keep its own stockroom in the system?")</td><td>The system supports it, but it is a separate decision per site with its own short plan; it does not ride inside a rollout wave.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Decisions needed from leadership</h2>
+  <ol>
+    <li>Confirm the campus list and the sequence above, and name a site champion (and a backup) for KVA now, so their accounts and training can be scheduled for the week of September 28.</li>
+    <li>Device policy for site staff: iPhone/iPad only for now, or push the Google Play account paperwork so Android is available by the MLA wave.</li>
+    <li>MLA delivery model: scheduled runs from DC4, carrier, or a small stock held on site.</li>
+    <li>Preferred training format and times per region (two 30-minute sessions in the first week of each wave, on site or over video).</li>
+    <li>Approval rules per region: who approves site orders, and above what value.</li>
+  </ol>
+
+  <h2>How progress will be reported</h2>
+  <p>A one-page status every Monday during a wave and monthly otherwise: orders placed and fulfilled, requester adoption, delivery and maintenance requests sent, defects open and closed, stock accuracy, and each of the six gate criteria marked green, amber or red. The same page is used for every region so they can be compared side by side.</p>
+
+  <hr class="rule">
+  <p class="meta">Figures as of August 18, 2026 from the live StockPilot system for Learn4Life North Region. Dates assume each region clears its exit gate on schedule.</p>
+</div>
