@@ -4,13 +4,13 @@
 
 How StockPilot goes from the Central Valley West pilot to every Learn4Life site, in what order, by when, and what has to be true before each step. Every number below is taken from the live system today.
 
-**At a glance:** CVW has been live since May 6, 2026 (15 weeks) · rollout order **CVW → KVA → CVLYII → MLA → CVS** · one region at a time, four weeks per region, each opened only after the previous one passes a measurable gate · **all five regions live by February 26, 2027** (January 29 on the fast path, if CVW settles by September 11 and MLA goes live before the winter break).
+**At a glance:** DC4 has run on StockPilot since May 6, 2026; CVW site staff went live the week of August 10 · rollout order **CVW → KVA → CVLYII → MLA → CVS** · one region at a time, four weeks per region, each opened only after the previous one passes a measurable gate · **all five regions live by February 26, 2027** (January 29 on the fast path, if CVW settles by September 11 and MLA goes live before the winter break).
 
 ---
 
-## Where we are today: the CVW pilot
+## Where we are today: DC4 since May, CVW sites since last week
 
-DC4, the central distribution center, has run on StockPilot since the first week of May. In those 15 weeks:
+Two different clocks are running. DC4, the central distribution center, has run its warehouse on StockPilot since the first week of May: receiving, put-away, counts, picking and shipping. CVW site staff, the first requesters outside the warehouse, were signed up between August 5 and 12: Marissa, Crystal and Doua, three accounts across the four CVW campuses, with two site orders placed in the first week. The warehouse figures over 15 weeks:
 
 | | Since go-live | Last 30 days |
 |---|---|---|
@@ -19,9 +19,9 @@ DC4, the central distribution center, has run on StockPilot since the first week
 | Purchase orders received | 47 | 15 |
 | Stock movements recorded | 1,030 | 260 |
 | Cycle counts | 16 | |
-| Staff accounts | 14 across CVW, CVS, KVA and the district office | |
+| Staff accounts | 14 across CVW, CVS, KVA and the district office (3 are CVW site requesters, added last week) | |
 
-What is live for CVW today, on the website and the iPhone/iPad app (App Store version 1.3.0):
+What CVW site staff and DC4 have available today, on the website and the iPhone/iPad app (App Store version 1.3.0):
 
 - Site staff request items from the DC4 catalog and follow the order through approval, picking, packing and shipment.
 - Delivery requests and maintenance requests open in Outlook pre-filled, from a computer or a phone; the warehouse copy and the maintenance team's copy have been confirmed arriving.
@@ -32,13 +32,13 @@ What is live for CVW today, on the website and the iPhone/iPad app (App Store ve
 
 ## What "solid" means: the gate to leave CVW
 
-The instruction is to move to KVA once the CVW release is solid. "Solid" needs a definition that can be checked rather than felt, so the same test can be applied to every region afterwards. CVW is considered solid when all of the following hold at the same time, and the target is **Friday, September 25, 2026**:
+The instruction is to move to KVA once the CVW release is solid. "Solid" needs a definition that can be checked rather than felt, so the same test can be applied to every region afterwards. CVW site staff have been live for one week, so the gate is judged on roughly six weeks of real site use. CVW is considered solid when all of the following hold at the same time, and the target is **Friday, September 25, 2026**:
 
 1. **Four consecutive weeks with no severity-1 defect.** A severity-1 defect is anything that loses or misstates stock, blocks an order from moving, or sends a request to the wrong place. (This week's two: a full write-off that failed when a unit sat in Staging, and blank pictures in an Excel export. Both fixed and verified in production; the clock restarts from August 18.)
-2. **Orders go through the system.** At least 90 percent of CVW site orders in the trailing 30 days are placed in StockPilot rather than by email or phone. Baseline today: 32 in the last 30 days.
+2. **Orders go through the system.** At least 90 percent of CVW site orders in the trailing 30 days are placed in StockPilot rather than by email or phone. Baseline: two site orders in the first week; the site champion reports any request that still arrives by email or phone.
 3. **Requests reach people.** Delivery and maintenance requests confirmed arriving (done) and used by at least three different CVW requesters.
 4. **Stock is trustworthy.** Cycle-count variance at or under 2 percent of counted units on two consecutive counts, and hand-typed stock adjustments falling week over week in favour of counts. (Today hand adjustments outnumber count corrections roughly nine to one; that ratio is the single best indicator of whether the numbers on the screen match the shelf.)
-5. **People are on board.** Every CVW staff member who places orders has an account, has been trained, and has signed in within the last 30 days; everyone on the phone app is on 1.3.0 or newer.
+5. **People are on board.** Every CVW staff member who places orders has an account, has been trained, and has signed in within the last 30 days; each of the four CVW campuses has at least one trained requester (three accounts today); everyone on the phone app is on 1.3.0 or newer.
 6. **Support is quiet.** Fewer than two open help requests older than seven days.
 
 Each item is a number pulled from the system, so the weekly status can show green, amber or red against it without argument.
@@ -62,7 +62,7 @@ One region at a time, because DC4 is one team and shadowing two regions' first o
 
 | Wave | Region | Campuses (as configured today) | Dates | Notes |
 |---|---|---|---|---|
-| 0 | **CVW** — stabilise | Clovis, Manchester, Sunnyside, Mendota | Aug 18 – Sep 25, 2026 | Gate defined above |
+| 0 | **CVW** — first weeks live | Clovis, Manchester, Sunnyside, Mendota | Aug 10 – Sep 25, 2026 | Site staff live since Aug 10; gate defined above |
 | 1 | **KVA** | Hanford, Tulare | Sep 28 – Oct 23, 2026 | Closest to the CVW model; one KVA account already exists |
 | 2 | **CVLYII** | Visalia | Oct 26 – Nov 20, 2026 | Single campus; ends before Thanksgiving week |
 | — | MLA readiness only | Sacramento | Nov 30 – Dec 18, 2026 | Distance changes the delivery model; readiness work only, no go-live over the winter break |
