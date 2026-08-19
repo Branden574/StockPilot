@@ -92,3 +92,64 @@ export function formatBulkArchiveStockBlockMessage(itemsWithStock: number): stri
     `Remove or move their stock first, or archive anyway to write it off.`
   );
 }
+
+/** One item still holding stock inside a location being archived. */
+export interface LocationStockHolderSummary {
+  name: string;
+  quantity: number;
+}
+
+/** How many holders the location-archive message names before summarising. */
+const MAX_NAMED_HOLDERS = 3;
+
+/**
+ * The message shown when archiving a LOCATION is refused because stock is still
+ * sitting in it — the twin of formatArchiveStockBlockMessage, and deliberately
+ * NOT the same sentence.
+ *
+ * ═══ WHY THIS IS A SEPARATE BUILDER — rack 100-A, 2026-08-19 ═══
+ *
+ * Archiving an ITEM preserves quantity_on_hand and hides the item, so "archive
+ * it anyway to write it off" is a fair description of the override. Archiving a
+ * LOCATION removes nothing whatsoever: the `item_stock_levels` rows pointing at
+ * it survive the soft-delete untouched, so every unit keeps counting toward
+ * on-hand, valuation and reconciliation while the place it names disappears
+ * from every list the warehouse can see.
+ *
+ * That is exactly the trap this guard exists to close. An operator who finds a
+ * rack that should not exist reaches for delete; on 2026-07-23 a test rack
+ * 100-A was created at DC4 and 22 units are sitting on it still. Archiving it
+ * would have turned a visible phantom into an invisible one, and the item
+ * wording would have told them they were writing the stock off while doing it.
+ *
+ * So this copy says what actually happens, and the override is offered as the
+ * deliberate decommission it is rather than as a cleanup.
+ *
+ * Example (rack 100-A as it stands today):
+ *   "Cannot archive: 100-A still holds 22 units across 2 items (12 of Science
+ *    Dimensions Earth & Space Science, 10 of Science Dimensions Earth & Space
+ *    Science). Move or write off that stock first — archiving anyway leaves it
+ *    still counted in on hand but attached to a hidden location."
+ */
+export function formatLocationArchiveStockBlockMessage(
+  locationName: string,
+  total: number,
+  holders: readonly LocationStockHolderSummary[],
+): string {
+  const unit = total === 1 ? 'unit' : 'units';
+  const itemNoun = holders.length === 1 ? 'item' : 'items';
+  const named = holders.slice(0, MAX_NAMED_HOLDERS);
+  const rest = holders.length - named.length;
+  const detail =
+    named.length > 0
+      ? ` (${named
+          .map((h) => `${formatStockQuantity(h.quantity)} of ${h.name}`)
+          .join(', ')}${rest > 0 ? `, and ${rest} more` : ''})`
+      : '';
+  const across = holders.length > 0 ? ` across ${holders.length} ${itemNoun}` : '';
+  return (
+    `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
+    `${across}${detail}. Move or write off that stock first — archiving anyway leaves it ` +
+    `still counted in on hand but attached to a hidden location.`
+  );
+}

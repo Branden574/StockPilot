@@ -113,6 +113,11 @@ export function LocationsManager({
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<LocationRow | null>(null);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
+  // The stock guard's refusal, held so the operator can READ what is on the
+  // rack before deciding. Cleared whenever the dialog closes or a new target is
+  // chosen — a stale message next to a different location's name is worse than
+  // none, because the whole point is that they act on the specific number.
+  const [archiveStockBlock, setArchiveStockBlock] = React.useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = React.useState<LocationRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
   const [tab, setTab] = React.useState<LocationGroup>('site');
@@ -137,17 +142,30 @@ export function LocationsManager({
     setOpen(true);
   }
 
-  async function confirmArchive() {
+  /**
+   * `acknowledgeStock` is only ever true on the SECOND press, after the guard
+   * has refused and its message is on screen. Never sent optimistically: the
+   * override's entire justification is that a human read the units first.
+   */
+  async function confirmArchive(acknowledgeStock = false) {
     if (!archiveTarget) return;
     setArchiveBusy(true);
-    const res = await archiveLocationAction(archiveTarget.id);
+    const res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
     setArchiveBusy(false);
     if (!res.ok) {
+      // A stock refusal is rendered INSIDE the dialog, persistently, because it
+      // is the thing being decided — a toast auto-dismisses outside the modal
+      // and takes the quantities with it. Anything else stays a toast.
+      if (res.error.details?.locationHoldsStock === true) {
+        setArchiveStockBlock(res.error.message);
+        return;
+      }
       toast.error(res.error.message);
       return;
     }
     toast.success(`"${archiveTarget.name}" archived.`);
     setArchiveTarget(null);
+    setArchiveStockBlock(null);
     router.refresh();
   }
 
@@ -271,7 +289,10 @@ export function LocationsManager({
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => setArchiveTarget(row)}
+                              onClick={() => {
+                                setArchiveStockBlock(null);
+                                setArchiveTarget(row);
+                              }}
                               aria-label={`Archive ${row.name}`}
                             >
                               <Trash2 className="h-4 w-4 text-muted-foreground" />
@@ -293,19 +314,28 @@ export function LocationsManager({
       <DestructiveConfirm
         open={archiveTarget !== null}
         onOpenChange={(v) => {
-          if (!v) setArchiveTarget(null);
+          if (!v) {
+            setArchiveTarget(null);
+            setArchiveStockBlock(null);
+          }
         }}
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive location?'}
         description={
-          <>
-            The location is hidden from pick lists and item forms. Items currently assigned to
-            it keep their assignment until you move them. You can restore it from the{' '}
-            <strong>Archived view</strong>.
-          </>
+          archiveStockBlock ? (
+            // The guard's own words, verbatim — they name the units and the
+            // items, which is precisely what the decision turns on.
+            <span className="text-destructive">{archiveStockBlock}</span>
+          ) : (
+            <>
+              The location is hidden from pick lists and item forms. Items currently assigned to
+              it keep their assignment until you move them. You can restore it from the{' '}
+              <strong>Archived view</strong>.
+            </>
+          )
         }
-        confirmLabel="Archive"
+        confirmLabel={archiveStockBlock ? 'Archive anyway' : 'Archive'}
         pending={archiveBusy}
-        onConfirm={confirmArchive}
+        onConfirm={() => confirmArchive(archiveStockBlock !== null)}
       />
 
       <DestructiveConfirm
