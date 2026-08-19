@@ -573,7 +573,20 @@ describe('StockTransferDialog — the crate confirmation', () => {
 // Pinned here so a future "show every location" tidy-up cannot quietly hand
 // operators a destination the server will reject.
 // ---------------------------------------------------------------------------
-describe('StockTransferDialog — system buckets are not destinations', () => {
+describe('StockTransferDialog — Staging is not a destination, Unplaced is', () => {
+  // ═══ THE TEST THAT PASSED FOR THE WRONG REASON ═══
+  //
+  // This block used to assert that BOTH buckets were absent, with
+  // `/^unplaced$/i`. When Unplaced became a real destination its option label
+  // grew an explanation, and the anchored regex stopped matching — so the
+  // assertion went on "passing" while asserting nothing about the behaviour it
+  // was named for. Every check below now pins the option by its ROLE and its
+  // full accessible name, so a relabel fails loudly instead of silently
+  // vacating the test.
+  //
+  // The rule these pin: Staging is the RECEIVING inbox and stays out; Unplaced
+  // is "on hand, on no rack" and is the non-destructive way off a rack — the
+  // affordance whose absence cost 220 books on 2026-07-23 (rack 100-A).
   const WITH_BUCKETS = [
     { id: 'loc-a', name: 'Receiving Dock', kind: null, warehouse_id: 'wh-1' },
     { id: 'loc-b', name: 'Aisle A', kind: null, warehouse_id: 'wh-1' },
@@ -581,12 +594,11 @@ describe('StockTransferDialog — system buckets are not destinations', () => {
     { id: 'loc-unp', name: 'Unplaced', kind: 'unplaced', warehouse_id: 'wh-1' },
   ];
 
-  it('omits Staging and Unplaced from the destination options', async () => {
-    const user = userEvent.setup();
-    render(
+  function renderWithBuckets(itemType: string) {
+    return render(
       <StockTransferDialog
         itemId="item-1"
-        itemName="Countertop Blender"
+        itemName={itemType === 'book' ? 'Persepolis' : 'Countertop Blender'}
         currentQuantity={40}
         currentLocationId={null}
         locations={WITH_BUCKETS as never}
@@ -601,18 +613,83 @@ describe('StockTransferDialog — system buckets are not destinations', () => {
             },
           ] as never
         }
-        itemType="asset"
+        itemType={itemType}
         canMintDestination
       />,
     );
+  }
 
+  async function openDestinations(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole('button', { name: /transfer/i }));
     await user.click(screen.getAllByRole('combobox')[1]!);
+  }
+
+  it('omits Staging, and offers Unplaced with what it does spelled out', async () => {
+    const user = userEvent.setup();
+    renderWithBuckets('asset');
+    await openDestinations(user);
 
     // A real destination is offered...
     expect(await screen.findByRole('option', { name: /aisle a/i })).toBeInTheDocument();
-    // ...and the two system buckets are not, in either spelling.
-    expect(screen.queryByRole('option', { name: /^staging$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /^unplaced$/i })).not.toBeInTheDocument();
+    // ...Staging is not, in any spelling.
+    expect(screen.queryByRole('option', { name: /staging/i })).not.toBeInTheDocument();
+    // ...and Unplaced IS, saying in the option itself that the stock survives.
+    // Pinned to the full string: "Unplaced" alone would pass on a bare relabel
+    // and the reassurance is the entire reason this option exists.
+    expect(
+      screen.getByRole('option', { name: 'Unplaced — off the rack, stock kept' }),
+    ).toBeInTheDocument();
+  });
+
+  it('lists Unplaced FIRST — the safe way off a rack is not buried under 48 racks', async () => {
+    const user = userEvent.setup();
+    renderWithBuckets('asset');
+    await openDestinations(user);
+
+    await screen.findByRole('option', { name: /aisle a/i });
+    const names = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(names[0]).toBe('Unplaced — off the rack, stock kept');
+  });
+
+  it('a BOOK can pick Unplaced — the four-fields destination model must not swallow it', async () => {
+    // The risky path. For a book the destination is derived from the rack/crate
+    // fields, not the dropdown, so an option that carries NO rack and NO crate
+    // could easily resolve to "nothing chosen" and leave Transfer inert. It
+    // must resolve to the picked row itself.
+    mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: {} });
+    const user = userEvent.setup();
+    renderWithBuckets('book');
+    await openDestinations(user);
+    await user.click(
+      await screen.findByRole('option', { name: 'Unplaced — off the rack, stock kept' }),
+    );
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+
+    expect(mockTransferStockAction).toHaveBeenCalledWith(
+      expect.objectContaining({ destination: { existingLocationId: 'loc-unp' } }),
+    );
+  });
+
+  it('un-placing a book surfaces the stale-label warning rather than a silent success', async () => {
+    // The honest-reporting half that made allowing this destination safe: the
+    // reconciliation has no placed holding left to follow, so the crate label
+    // may now name a crate holding none of it. The operator must hear that.
+    mockTransferStockAction.mockResolvedValueOnce({
+      ok: true,
+      data: { crateSyncUnplaced: true },
+    });
+    const user = userEvent.setup();
+    renderWithBuckets('book');
+    await openDestinations(user);
+    await user.click(
+      await screen.findByRole('option', { name: 'Unplaced — off the rack, stock kept' }),
+    );
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+
+    // Pinned verbatim, not by substring: this sentence IS the safeguard that
+    // replaced the blanket refusal, so a reword must come back through here.
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      'Persepolis was moved, but none of its stock is in a rack or crate now — its crate label was left unchanged and may be wrong.',
+    );
   });
 });

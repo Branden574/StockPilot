@@ -289,9 +289,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      if (destLoc.kind === 'staging' || destLoc.kind === 'unplaced') {
+      // ═══ STAGING IS NOT A DESTINATION. UNPLACED IS ═══
+      //
+      // The phone's twin of the split in transferStockAction — see the long
+      // note there for rack 100-A and the 220 books it cost. Short version:
+      // Staging is the RECEIVING inbox and moving stock back into it forges an
+      // unprocessed receipt, so it stays refused. Unplaced just means "on hand,
+      // on no rack" — the non-destructive way off a rack, and the alternative
+      // to a write-off that nobody had. `crateSyncUnplaced` is reported on the
+      // response so a book left in no placement is never silent about its
+      // possibly-stale label.
+      if (destLoc.kind === 'staging') {
         return NextResponse.json(
-          { error: 'validation_error', message: 'Pick a rack or crate as the destination.' },
+          {
+            error: 'validation_error',
+            message: 'Staging is the receiving workflow — pick a rack, a crate, or Unplaced.',
+          },
           { status: 400 },
         );
       }

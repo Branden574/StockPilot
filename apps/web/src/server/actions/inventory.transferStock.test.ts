@@ -306,58 +306,119 @@ describe('transferStockAction (destination union)', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // A STAGING/UNPLACED BUCKET IS NOT A DESTINATION — the fourth surface
+  // STAGING IS NOT A DESTINATION. UNPLACED IS — rack 100-A, 2026-07-23
   //
-  // placeStockAction, bulkPlaceStockAction and POST /api/v1/items/[id]/transfer
-  // all refused this already; Transfer did not, and the gap was not merely
-  // untidy. All 40 units of a book recorded "Blue 4" could be transferred into
-  // Staging: the gate refused first and PROMISED "Placing it here will change
-  // that to no crate", the operator acknowledged exactly that, the stock left
-  // Blue 4 — and the reconciliation, which classifies staging out of the
-  // placement set, found nothing to synchronize to and wrote nothing. Plain
-  // success, item still reads "Blue 4", picker walks to an empty crate.
+  // These two buckets were refused together, and lumping them cost 220 books.
+  // Andrew created a test rack, moved 242 units onto it, and then had to get
+  // them off. The dialog offered exactly two ways: transfer to another REAL
+  // rack, or "Remove from rack" — which is a WRITE-OFF. There was no way to
+  // say "this stock is on hand but on no rack", because `unplaced` was
+  // filtered out of every destination list. He wrote off four lots (Persepolis
+  // -140, Maus I -40, Hunger Games -20, The distance between us -20) two hours
+  // after a physical cycle count had verified those very balances. The books
+  // were real PO receipts. Nothing brought them back.
   //
-  // Neither shipped client can produce this: the web dialog filters
-  // `kind !== 'staging' && kind !== 'unplaced'` out of its destination list and
-  // the phone's Move stock sheet queries `.in('kind', ['rack','crate'])`. So
-  // nothing legitimate is being blocked here — only a forged or future caller.
+  // So the two buckets are now separated, because they were never the same:
+  //
+  //   STAGING is the RECEIVING workflow's inbox. Moving stock back into it
+  //   would forge the appearance of an un-processed receipt, and the dialog
+  //   already says as much when the SOURCE is staged ("placement is handled in
+  //   the staging workflow"). Still refused.
+  //
+  //   UNPLACED is simply "on hand, on no rack" — the exact inverse of a
+  //   put-away, and the honest home for stock leaving a rack that should never
+  //   have existed. It is non-destructive and fully reversible, which is
+  //   precisely what the write-off it replaces is not.
+  //
+  // The blanket refusal was justified by SILENCE, not by the destination: the
+  // reconciliation classifies both buckets out of the placement set, found
+  // nothing to synchronize to, and wrote nothing while the item went on
+  // reading "Blue 4". That silence is over — `crateSyncUnplaced` is reported
+  // by this action and surfaced as a warning by both clients (test 9 below).
+  // The operator is now TOLD the label may be stale instead of the move being
+  // forbidden to protect them from a message that did not exist yet.
   // ─────────────────────────────────────────────────────────────────────────
-  for (const kind of ['staging', 'unplaced'] as const) {
-    it(`7. rejects transferring INTO a ${kind} bucket — no gate, no move`, async () => {
-      installContext({
-        destinationRow: {
-          id: EXISTING_LOC,
-          warehouse_id: WAREHOUSE_ID,
-          kind,
-          rack_number: null,
-          rack_row: null,
-          crate_color: null,
-          crate_number: null,
-          name: kind === 'staging' ? 'Staging' : 'Unplaced',
-        },
-      });
-
-      const result = await transferStockAction({
-        itemId: ITEM_ID,
-        fromLocationId: FROM_LOC,
-        quantity: 40,
-        destination: { existingLocationId: EXISTING_LOC },
-      });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('validation_error');
-        // The SAME sentence the three siblings answer with — one rule, one
-        // wording, every surface.
-        expect(result.error.message).toBe('Pick a rack or crate as the destination.');
-      }
-      // Refused BEFORE the book-crate gate can promise a clearing it cannot
-      // deliver, and before anything physical happens.
-      expect(mockAssertBookCrate).not.toHaveBeenCalled();
-      expect(mockTransferStock).not.toHaveBeenCalled();
-      expect(mockSyncBookCrate).not.toHaveBeenCalled();
+  it('7. rejects transferring INTO the staging bucket — no gate, no move', async () => {
+    installContext({
+      destinationRow: {
+        id: EXISTING_LOC,
+        warehouse_id: WAREHOUSE_ID,
+        kind: 'staging',
+        rack_number: null,
+        rack_row: null,
+        crate_color: null,
+        crate_number: null,
+        name: 'Staging',
+      },
     });
-  }
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('validation_error');
+      expect(result.error.message).toBe(
+        'Staging is the receiving workflow — pick a rack, a crate, or Unplaced.',
+      );
+    }
+    // Refused BEFORE the book-crate gate can promise a clearing it cannot
+    // deliver, and before anything physical happens.
+    expect(mockAssertBookCrate).not.toHaveBeenCalled();
+    expect(mockTransferStock).not.toHaveBeenCalled();
+    expect(mockSyncBookCrate).not.toHaveBeenCalled();
+  });
+
+  it('7b. ALLOWS transferring INTO the unplaced bucket — the un-place that replaces a write-off', async () => {
+    installContext({
+      destinationRow: {
+        id: EXISTING_LOC,
+        warehouse_id: WAREHOUSE_ID,
+        kind: 'unplaced',
+        rack_number: null,
+        rack_row: null,
+        crate_color: null,
+        crate_number: null,
+        name: 'Unplaced',
+      },
+    });
+    // Taking a book off its last rack leaves it in no placement at all, which
+    // is the reconciliation's `placed.size === 0` branch — the flag, not a
+    // refusal, is what the operator gets.
+    mockSyncBookCrate.mockResolvedValueOnce({
+      syncedItemIds: [],
+      failedItemIds: [],
+      skippedItemIds: [],
+      staleItemIds: [],
+      unplacedItemIds: [ITEM_ID],
+      rackPreservedItemIds: [],
+      cratePreservedItemIds: [],
+    });
+
+    const result = await transferStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 40,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(result.ok).toBe(true);
+    // The stock genuinely moved — this is a MOVE, and the quantity is
+    // untouched. That is the entire point: 22 units are still stranded on
+    // 100-A today precisely because the only alternative destroyed stock.
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(mockTransferStock).toHaveBeenCalledWith(
+      expect.objectContaining({ toLocationId: EXISTING_LOC, quantity: 40 }),
+    );
+    // The gate still runs — un-placing is not a bypass of the crate rules.
+    expect(mockAssertBookCrate).toHaveBeenCalled();
+    // ...and the operator is TOLD the label may now be stale.
+    if (result.ok) expect(result.data.crateSyncUnplaced).toBe(true);
+  });
 
   it('8. an ACKNOWLEDGED transfer into staging is refused too — the acknowledgement is not a bypass', async () => {
     // The exact request the reviewer ran: the client answered the gate's
@@ -388,7 +449,9 @@ describe('transferStockAction (destination union)', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.message).toBe('Pick a rack or crate as the destination.');
+      expect(result.error.message).toBe(
+        'Staging is the receiving workflow — pick a rack, a crate, or Unplaced.',
+      );
     }
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
