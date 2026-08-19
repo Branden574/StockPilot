@@ -5,6 +5,7 @@ import {
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
+  formatLocationArchiveStockBlockMessage,
   formatStockQuantity,
 } from './stock-writeoff';
 
@@ -65,5 +66,69 @@ describe('formatBulkArchiveStockBlockMessage', () => {
 describe('RACK_WRITE_OFF_MOVEMENT_TYPE', () => {
   it('is a removal, not a transfer', () => {
     expect(RACK_WRITE_OFF_MOVEMENT_TYPE).toBe('remove');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LOCATION SIDE OF THE SAME GUARD — rack 100-A, 2026-08-19
+//
+// Archiving an ITEM that still holds stock was guarded; archiving a LOCATION
+// that still holds stock was not. That asymmetry is worse than it sounds: the
+// natural reaction to "there is a rack here that should not exist" is to delete
+// the rack, and doing so soft-deletes a row whose item_stock_levels holdings
+// survive. The units keep counting toward on-hand and valuation while the
+// location they name disappears from every list — the phantom rack becomes an
+// INVISIBLE phantom rack.
+//
+// So the copy must NOT reuse the item wording. Archiving an item "writes off"
+// its stock in the sense that it stops being visible; archiving a location does
+// not remove anything at all, and telling an operator it does would be a lie
+// pointed straight at the failure mode.
+// ---------------------------------------------------------------------------
+describe('formatLocationArchiveStockBlockMessage', () => {
+  it('names the location, the total, and the items holding it', () => {
+    const msg = formatLocationArchiveStockBlockMessage('100-A', 22, [
+      { name: 'Science Dimensions Earth & Space Science', quantity: 12 },
+      { name: 'Science Dimensions Earth & Space Science', quantity: 10 },
+    ]);
+    expect(msg).toContain('100-A');
+    expect(msg).toContain('22 units');
+    expect(msg).toContain('2 items');
+    expect(msg).toContain('12 of Science Dimensions Earth & Space Science');
+  });
+
+  it('says what archiving anyway ACTUALLY does — never "write it off"', () => {
+    const msg = formatLocationArchiveStockBlockMessage('100-A', 22, [
+      { name: 'A book', quantity: 22 },
+    ]);
+    // The whole point of a separate builder. Archiving a location removes no
+    // stock; promising otherwise is how the orphan gets created deliberately.
+    expect(msg).not.toMatch(/write it off/i);
+    expect(msg).toContain('still counted');
+    expect(msg).toContain('hidden location');
+  });
+
+  it('singularises one unit and one item', () => {
+    const msg = formatLocationArchiveStockBlockMessage('37-B', 1, [
+      { name: 'A book', quantity: 1 },
+    ]);
+    expect(msg).toContain('1 unit ');
+    expect(msg).toContain('1 item');
+    expect(msg).not.toContain('units');
+    expect(msg).not.toContain('items');
+  });
+
+  it('caps the named items and counts the rest, so a 50-item rack is readable', () => {
+    const holders = Array.from({ length: 50 }, (_, i) => ({ name: `Book ${i}`, quantity: 2 }));
+    const msg = formatLocationArchiveStockBlockMessage('22-A', 100, holders);
+    expect(msg).toContain('Book 0');
+    expect(msg).toContain('and 47 more');
+    expect(msg).not.toContain('Book 20');
+  });
+
+  it('drops the parenthetical entirely when no items are named', () => {
+    const msg = formatLocationArchiveStockBlockMessage('22-A', 5, []);
+    expect(msg).toContain('5 units');
+    expect(msg).not.toContain('(');
   });
 });

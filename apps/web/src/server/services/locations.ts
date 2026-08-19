@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   formatCrateLocationName,
+  formatLocationArchiveStockBlockMessage,
   formatRackLabel,
   formatRackPosition,
   locationNameSitsOnRack,
@@ -509,7 +510,14 @@ export class LocationsService {
     return data;
   }
 
-  async archive(id: string) {
+  /**
+   * Soft-delete a location.
+   *
+   * `acknowledgeStock` is the deliberate-decommission override for the stock
+   * guard below. It defaults to off, and the UI only offers it after the
+   * refusal has named what is actually sitting there.
+   */
+  async archive(id: string, opts: { acknowledgeStock?: boolean } = {}) {
     assertPermission(this.ctx, 'locations:manage');
     // Staging/Unplaced are auto-created per warehouse and receiving routes
     // stock through them — archiving one breaks put-away until it silently
@@ -526,6 +534,27 @@ export class LocationsService {
         "Staging and Unplaced are managed automatically per warehouse and can't be archived.",
       );
     }
+    // ═══ STOCK GUARD — rack 100-A, 2026-08-19 ═══
+    //
+    // Archiving a location does NOT touch its holdings. The
+    // `item_stock_levels` rows pointing at it survive the soft-delete intact,
+    // so every unit keeps counting toward on-hand, valuation and
+    // reconciliation while the place it names disappears from every list —
+    // and from every picker, transfer source and export, all of which filter
+    // deleted locations out. The stock becomes simultaneously counted and
+    // unreachable.
+    //
+    // This sits directly in the path of the incident that motivated it. Rack
+    // 100-A was created at DC4 as a test, holds 22 real units today, and the
+    // obvious reaction to "this rack should not exist" is to delete it. Doing
+    // so would convert a visible phantom into an invisible one.
+    //
+    // InventoryService.archive has guarded the ITEM side of exactly this since
+    // the 2026-07-23 wave; the location side was the asymmetry.
+    if (!opts.acknowledgeStock) {
+      await this.assertEmptyOrThrow(id);
+    }
+
     const { data: row, error } = await this.ctx.supabase
       .from('locations')
       .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })
@@ -535,7 +564,80 @@ export class LocationsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!row) throw new ServiceError('not_found', 'Location not found.');
-    void audit({ event: 'location.archived', entityType: 'location', entityId: id }, this.ctx);
+    void audit(
+      {
+        event: 'location.archived',
+        entityType: 'location',
+        entityId: id,
+        // Recorded because it is the only trace that an operator chose to
+        // strand stock rather than move it first.
+        ...(opts.acknowledgeStock ? { extra: { acknowledged_stock: true } } : {}),
+      },
+      this.ctx,
+    );
+  }
+
+  /**
+   * Refuse when the location still holds stock, naming the total and the items
+   * holding it so the operator knows what to move first.
+   *
+   * FAIL-CLOSED, matching InventoryService.assertBulkArchivableOrThrow: if the
+   * read errors we cannot prove the location is empty, and deleting it on an
+   * unknown risks orphaning stock on a transient PostgREST failure. Refusing a
+   * legitimate archive is recoverable; the other direction is not.
+   *
+   * Zero-quantity rows are ignored deliberately. A (item, location) pair keeps
+   * its row after the stock leaves — 100-A itself carries four of them — and
+   * treating those as stock would make every used rack permanently
+   * un-archivable.
+   */
+  private async assertEmptyOrThrow(id: string): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('quantity, inventory_items!inner(id, name)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('location_id', id)
+      .gt('quantity', 0);
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not verify this location is empty before archiving. Please try again.',
+      );
+    }
+    const rows = (data ?? []) as unknown as Array<{
+      quantity: number;
+      inventory_items: { name: string } | null;
+    }>;
+    // Re-filtered in JS as well as in the query. `.gt('quantity', 0)` is the
+    // real filter, but "a zero row is not stock" is the INVARIANT this guard
+    // rests on, and leaving it expressible only as a PostgREST argument means a
+    // refactor that drops or loosens that argument turns every used rack
+    // permanently un-archivable with nothing failing to say so.
+    const holders = rows
+      .filter((r) => Number(r.quantity) > 0)
+      .map((r) => ({
+        name: r.inventory_items?.name ?? 'an item',
+        quantity: Number(r.quantity),
+      }));
+    if (holders.length === 0) return;
+
+    const total = holders.reduce((sum, h) => sum + h.quantity, 0);
+    const { data: loc } = await this.ctx.supabase
+      .from('locations')
+      .select('name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    const name = (loc as { name?: string } | null)?.name ?? 'This location';
+    // STRUCTURED, not a sentence the client re-parses. Mapping this refusal by
+    // substring is recurring-bug #28: the match silently stops working the
+    // moment the copy is reworded, and the override quietly becomes
+    // unreachable with every test still green. The flag is the contract.
+    throw new ServiceError(
+      'validation_error',
+      formatLocationArchiveStockBlockMessage(name, total, holders),
+      { locationHoldsStock: true, units: total, items: holders.length },
+    );
   }
 
   /**

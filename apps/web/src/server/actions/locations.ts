@@ -51,10 +51,19 @@ export async function updateLocationAction(
   }
 }
 
-export async function archiveLocationAction(id: string): Promise<ActionResult<void>> {
+/**
+ * `acknowledgeStock` is the deliberate-decommission override for the archive
+ * stock guard. Omitted/false is the safe default: the service refuses and names
+ * the units and the items holding them, and the UI only offers the override
+ * once the operator has read that refusal.
+ */
+export async function archiveLocationAction(
+  id: string,
+  opts: { acknowledgeStock?: boolean } = {},
+): Promise<ActionResult<void>> {
   try {
     const svc = await LocationsService.forCurrentUser();
-    await svc.archive(id);
+    await svc.archive(id, { acknowledgeStock: opts.acknowledgeStock === true });
     revalidatePath('/dashboard/locations');
     await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
