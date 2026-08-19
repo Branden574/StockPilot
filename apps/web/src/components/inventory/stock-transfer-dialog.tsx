@@ -235,13 +235,35 @@ export function StockTransferDialog({
 
   const isNew = !isBook && toLocation === NEW_LOCATION_SENTINEL;
 
-  // Destination: all locations except the chosen source and system kinds
-  const destinationLocations = locations.filter(
-    (l) =>
-      l.id !== fromLocation &&
-      l.kind !== 'staging' &&
-      l.kind !== 'unplaced',
-  );
+  // ═══ DESTINATIONS: STAGING IS OUT, UNPLACED IS IN — rack 100-A ═══
+  //
+  // This list used to filter BOTH system buckets, and that omission is what
+  // made the 2026-07-23 write-off inevitable. Andrew had 242 units on a test
+  // rack that does not physically exist and needed them off it; the only two
+  // affordances in the whole app were "move to another REAL rack" and the
+  // PackageMinus beside each holding, which is a WRITE-OFF. He took the second
+  // one four times and 220 real books left the system under reason "test".
+  //
+  // STAGING stays out: it is the RECEIVING inbox, and stock arriving there
+  // reads as an unprocessed receipt. This dialog already refuses to treat it as
+  // a workflow when the SOURCE is staged.
+  //
+  // UNPLACED goes in, FIRST, because "on hand but on no rack" is the honest
+  // answer for stock coming off a bad rack and the one the operator could not
+  // give. It is a move, not a deduction — reversible by a put-away, unlike the
+  // write-off it exists to replace. The server allows exactly this pair
+  // (transferStockAction) and reports `crateSyncUnplaced` so a book left in no
+  // placement is never silent about its now-possibly-stale label.
+  const destinationLocations = React.useMemo(() => {
+    const eligible = locations.filter(
+      (l) => l.id !== fromLocation && l.kind !== 'staging',
+    );
+    // Sorted, not merely included: an operator hunting for "get this off the
+    // rack" should not have to scroll a 48-rack list to find the one option
+    // that does it without destroying anything.
+    const unplaced = eligible.filter((l) => l.kind === 'unplaced');
+    return [...unplaced, ...eligible.filter((l) => l.kind !== 'unplaced')];
+  }, [locations, fromLocation]);
 
   const fromLoc = locations.find((l) => l.id === fromLocation);
   const toLoc = locations.find((l) => l.id === toLocation);
@@ -628,7 +650,9 @@ export function StockTransferDialog({
                 <SelectContent>
                   {destinationLocations.map((l) => (
                     <SelectItem key={l.id} value={l.id}>
-                      {l.name}
+                      {l.kind === 'unplaced'
+                        ? `${l.name} — off the rack, stock kept`
+                        : l.name}
                     </SelectItem>
                   ))}
                   {!isBook && canCreateHere && (

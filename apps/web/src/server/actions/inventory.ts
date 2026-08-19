@@ -782,33 +782,55 @@ export async function transferStockAction(
       if (!loc) {
         return err('validation_error', 'Destination location not found in your organization.');
       }
-      // ═══ A STAGING/UNPLACED BUCKET IS NOT A DESTINATION — HERE TOO ═══
+      // ═══ STAGING IS NOT A DESTINATION. UNPLACED IS — rack 100-A ═══
       //
-      // The three siblings on this path already refuse it (placeStockAction,
-      // bulkPlaceStockAction, and the mobile /api/v1/items/[id]/transfer
-      // route); this one did not, and the omission was silently lossy rather
-      // than merely inconsistent. The reviewer transferred all 40 units of
-      // The Outsiders (recorded Blue 4) into Staging: the gate correctly
-      // refused first, PROMISING "Placing it here will change that to no
-      // crate" — and once the operator acknowledged exactly that, the stock
-      // left Blue 4, the reconciliation found no placed holding to
-      // synchronize to, and the item went on reading "Blue 4" with no flag on
-      // the response at all. The promise the operator answered was not kept,
-      // and nothing said so.
+      // These two buckets were refused TOGETHER, and lumping them cost 220
+      // books on 2026-07-23. Andrew created a test rack (100-A, a rack number
+      // the DC4 floor does not have), moved 242 units onto it from Staging,
+      // and then had to get them off again. Every destination list filtered
+      // BOTH buckets out, so the only two affordances were "transfer to
+      // another REAL rack" and "Remove from rack" — which is a WRITE-OFF. He
+      // wrote off four lots (Persepolis -140, Maus I -40, Hunger Games -20,
+      // The distance between us -20) with reason "test", two hours after a
+      // physical cycle count had verified those exact balances. They were real
+      // PO receipts (CVW-002199/002200/002201). Nothing brought them back, and
+      // 22 units of a fifth lot are stranded on 100-A to this day.
       //
-      // NO SHIPPED SURFACE LOSES A WORKFLOW TO THIS. Both transfer clients
-      // already exclude the buckets from the destination list they render:
-      // the web Transfer dialog filters `kind !== 'staging' && kind !==
-      // 'unplaced'` (stock-transfer-dialog.tsx), and the phone's Move stock
-      // sheet queries `.in('kind', ['rack','crate'])` (move-stock-modal.tsx).
-      // "Return to staging" is not a transfer on either surface — the dialog
-      // says so in as many words when a source is staged ("placement is
-      // handled in the staging workflow"). So this closes a forged-request /
-      // future-client hole with zero user-visible regression, and the
-      // honest-reporting half below covers the races that can still land here
-      // legitimately.
-      if (loc.kind === 'staging' || loc.kind === 'unplaced') {
-        return err('validation_error', 'Pick a rack or crate as the destination.');
+      // The two buckets were never the same thing:
+      //
+      //   STAGING is the RECEIVING workflow's inbox. Moving stock back into it
+      //   forges the appearance of an unprocessed receipt, and this dialog
+      //   already says so when the SOURCE is staged ("placement is handled in
+      //   the staging workflow"). Still refused, and the acknowledgement is
+      //   still not a bypass.
+      //
+      //   UNPLACED means "on hand, on no rack" — the exact inverse of a
+      //   put-away and the honest home for stock coming off a rack that should
+      //   never have existed. It is non-destructive and fully reversible,
+      //   which is precisely what the write-off it replaces is not.
+      //
+      // WHAT ACTUALLY JUSTIFIED THE BLANKET REFUSAL WAS SILENCE, NOT THE
+      // DESTINATION. The Outsiders case reads: the gate promised "Placing it
+      // here will change that to no crate", the operator acknowledged exactly
+      // that, the stock left Blue 4 — and the reconciliation, which classifies
+      // both buckets out of the placement set, found nothing to synchronize to
+      // and wrote nothing, with NO FLAG ON THE RESPONSE AT ALL. The promise
+      // was not kept and nothing said so.
+      //
+      // That silence is over. `crateSyncUnplaced` is reported by this action
+      // and surfaced as a warning by both clients ("... has no stock in a rack
+      // or crate now — its crate label was left unchanged and may be wrong").
+      // The operator is now TOLD the label may be stale, which is the outcome
+      // the refusal was standing in for. Refusing the move as well only leaves
+      // them the write-off, and the write-off is not recoverable.
+      //
+      // placeStockAction and bulkPlaceStockAction still refuse BOTH — a
+      // put-away's whole contract is that it lands on a placement.
+      if (loc.kind === 'staging') {
+        return err(
+          'validation_error',
+          'Staging is the receiving workflow — pick a rack, a crate, or Unplaced.',
+        );
       }
       toLocationId = loc.id;
       // Crate metadata from THIS row, read moments ago.

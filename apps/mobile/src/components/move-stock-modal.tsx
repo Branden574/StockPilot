@@ -282,8 +282,31 @@ export function MoveStockModal({
       const resolved = resolveMoveSource(hs, { putAwaySourceLocationId });
       const scope = moveDestinationScope(resolved);
 
-      // Destination candidates: real placement locations (racks/crates), never
-      // the staging/unplaced system buckets. The server re-checks this.
+      // Destination candidates: real placement locations (racks/crates), plus
+      // the per-warehouse Unplaced bucket IN FREE-FORM MODE ONLY. Never
+      // Staging. The server allows exactly this pair (see the note in POST
+      // /api/v1/items/[id]/transfer).
+      //
+      // ═══ WHY UNPLACED IS HERE, AND WHY NOT IN PUT-AWAY ═══
+      //
+      // Unplaced was filtered out everywhere until rack 100-A. With no way to
+      // say "off the rack, still on hand", the only way to clear a rack that
+      // should not exist was the write-off — and on 2026-07-23 that cost 220
+      // real books. Free-form Move, reached from the item screen, is exactly
+      // where that repair happens, so it offers Unplaced.
+      //
+      // PUT-AWAY DOES NOT. It is reached from the Staging worklist's Place with
+      // a FIXED source, and its whole contract is that the stock lands on a
+      // placement; letting Place resolve to "no rack" would drain the worklist
+      // without shelving anything, which is a different bug from the one being
+      // fixed. `putAwaySourceLocationId` is the mode signal — it is only ever
+      // set by that worklist.
+      //
+      // Staging is out of both: stock arriving there reads as an unprocessed
+      // receipt.
+      const destinationKinds = putAwaySourceLocationId
+        ? ['rack', 'crate']
+        : ['rack', 'crate', 'unplaced'];
       //
       // Narrowed at the QUERY to the scope the resolved source implies, so the
       // phone never even holds an out-of-warehouse rack; moveDestinationChoices()
@@ -298,7 +321,7 @@ export function MoveStockModal({
           .select('id, name, kind, warehouse_id, rack_number, rack_row, crate_color, crate_number')
           .eq('organization_id', organizationId)
           .is('deleted_at', null)
-          .in('kind', ['rack', 'crate']);
+          .in('kind', destinationKinds);
         if (scope.kind === 'warehouse') {
           destQuery = destQuery.eq('warehouse_id', scope.warehouseId);
         }
@@ -315,6 +338,10 @@ export function MoveStockModal({
           crateColor: str(d.crate_color),
           crateNumber: str(d.crate_number),
         }));
+        // Unplaced FIRST, not buried at "U" in a 48-rack alphabetical list —
+        // the whole point is that the non-destructive way off a rack is the
+        // easy one to reach.
+        ds = [...ds.filter((d) => d.kind === 'unplaced'), ...ds.filter((d) => d.kind !== 'unplaced')];
       }
 
       // The BOOK's recorded storage — the seed for the four fields. The
@@ -399,6 +426,12 @@ export function MoveStockModal({
     scope: source ? moveDestinationScope(source) : { kind: 'none' },
   });
   const selectedChip = isBook ? (destChoices.find((d) => d.id === toId) ?? null) : null;
+  // Derived from what is ACTUALLY on screen, not from the mode, so the heading
+  // can never promise a chip the list does not contain (or omit one it does).
+  // Put-away has no Unplaced chip and keeps the old wording; free-form has one
+  // and must say so — an operator looking for the safe way off a rack should
+  // find it named in the heading, not only in a chip.
+  const offersUnplaced = destChoices.some((d) => d.kind === 'unplaced');
 
   // ═══ WHAT THE FOUR BOXES DESCRIBE (books) ═══
   // The chip by id while the boxes still equal its columns; otherwise a crate
@@ -784,7 +817,13 @@ export function MoveStockModal({
 
                 <View style={{ gap: 6, marginBottom: 16 }}>
                   <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                    {isBook ? 'TO RACK / CRATE — TAP TO FILL IN' : 'TO RACK / CRATE'}
+                    {offersUnplaced
+                      ? isBook
+                        ? 'TO RACK, CRATE, OR UNPLACED — TAP TO FILL IN'
+                        : 'TO RACK, CRATE, OR UNPLACED'
+                      : isBook
+                        ? 'TO RACK / CRATE — TAP TO FILL IN'
+                        : 'TO RACK / CRATE'}
                   </Mono>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {destChoices.map((d) => (
