@@ -103,19 +103,35 @@ export async function createItemAction(
 export async function updateItemAction(
   id: string,
   input: UpdateItemInput,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<
+  ActionResult<{
+    id: string;
+    /**
+     * Present ONLY when the edit set a rack and this item's stock did not
+     * reach it. The edit still succeeded — this says the label and the stock
+     * disagree, which is the thing a picker needs to know before walking to
+     * that rack. Mirrors createItemAction's field of the same name.
+     */
+    placementFailed?: { rackName: string };
+  }>
+> {
   const parsed = updateItemSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
     const svc = await InventoryService.forCurrentUser();
-    await svc.update(id, parsed.data);
+    const updated = (await svc.update(id, parsed.data)) as {
+      placementFailed?: { rackName: string };
+    } | null;
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${id}`);
-    return ok({ id });
+    return ok({
+      id,
+      ...(updated?.placementFailed ? { placementFailed: updated.placementFailed } : {}),
+    });
   } catch (e) {
     return toResult(e);
   }

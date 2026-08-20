@@ -1303,21 +1303,28 @@ export function ItemForm({
     } else {
       toast.success(isEdit ? 'Item updated.' : 'Item created.');
     }
-    // Independent of the photo outcome, and only ever set on a create — the
-    // edit path never auto-places, which is why `res.data` is a union that
-    // carries the field on one side only. Read through an explicit optional
-    // rather than widening updateItemAction's return type to include something
-    // it can never produce.
-    const placementFailed = isEdit
-      ? undefined
-      : (res.data as { placementFailed?: { rackName: string; count: number } })
-          .placementFailed;
+    // Independent of the photo outcome, and now set on BOTH paths. The edit
+    // path used to be unable to produce this — setting a rack here relabelled
+    // the item and left its stock where it was — which is precisely the bug
+    // fixed on 2026-08-20. Reading it on create only would re-hide the failure
+    // the fix exists to surface.
+    //
+    // `count: 1` because a single-item save places exactly one item; the shared
+    // message builder uses it to choose between "its stock" and "the stock for
+    // N of them", and the size-run twin above is the caller that passes more.
+    const placementFailed = (
+      res.data as { placementFailed?: { rackName: string; count?: number } }
+    ).placementFailed;
     // See the size-run twin above for why this is its own toast rather than
     // another branch of the photo tree.
     if (placementFailed) {
-      toast.warning(placementWarningMessage('Item created', placementFailed), {
-        duration: 10000,
-      });
+      toast.warning(
+        placementWarningMessage(isEdit ? 'Item saved' : 'Item created', {
+          rackName: placementFailed.rackName,
+          count: placementFailed.count ?? 1,
+        }),
+        { duration: 10000 },
+      );
     }
 
     onDone?.();
