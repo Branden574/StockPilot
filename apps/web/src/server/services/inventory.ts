@@ -3780,7 +3780,75 @@ export class InventoryService {
       })();
     }
 
-    return data;
+    // ═══ SETTING A RACK ON THE EDIT FORM MOVES THE STOCK ═══
+    //
+    // It did not, and that was the whole bug (owner report, 2026-08-20, "6 foot
+    // table"): typing 7 / B here wrote bin_location '7-B' and
+    // custom_fields.rack_number/_row, the detail page then read "DC4 7-B", and
+    // all ten units stayed in Unplaced with no movement written. The label said
+    // one thing and the stock said another.
+    //
+    // THE INCONSISTENCY IS WHAT MADE IT A TRAP. The same two boxes already MOVE
+    // stock on manual create (placeManualCreateOnRack) and in bulk Set rack
+    // (placeItemsOntoRackByName). Only single-item edit relabelled, which is
+    // not a distinction anybody could infer from the form.
+    //
+    // REUSES THE BULK HELPER rather than cloning stock logic, so all three
+    // paths keep one definition of what placing means — including the rule
+    // that matters most here: an item whose stock is SPLIT across several
+    // placements is relabelled and NEVER moved, because there is no honest way
+    // to decide which rack the operator meant. Stock that is not yet placed
+    // (Staging, Unplaced, a bare site) is auto-placed; a single existing rack
+    // holding is moved wholesale.
+    //
+    // BOOKS ARE DELIBERATELY EXCLUDED. A book records a crate as well as a
+    // rack, and silently placing one onto a bare rack from this form is exactly
+    // the crate erasure that bit Maus I on 2026-08-17. Books have their own
+    // placement path with a confirmation gate; it should stay the only way.
+    let placementFailed: { rackName: string } | undefined;
+    const isBookRow = ((current as { item_type?: string | null }).item_type ?? null) === 'book';
+    if (!isBookRow && changedKeys.includes('custom_fields')) {
+      const rackOf = (row: Record<string, unknown>) => {
+        const cf = (row.custom_fields ?? {}) as Record<string, unknown>;
+        const parsed = normalizeRackFields({
+          number: typeof cf.rack_number === 'string' ? cf.rack_number : null,
+          row: typeof cf.rack_row === 'string' ? cf.rack_row : null,
+        });
+        const num = parsed.number || null;
+        return { num, row: num ? parsed.row?.toUpperCase() ?? null : null };
+      };
+      const before = rackOf(beforeRow);
+      const after = rackOf(afterRow);
+      // Only on a real CHANGE to a real rack. Re-placing on every save would
+      // drag stock back onto the label after somebody had deliberately
+      // transferred it away, and clearing the rack is a relabel, not a move —
+      // there is nowhere to move stock TO.
+      const rackChanged = after.num !== null && (after.num !== before.num || after.row !== before.row);
+      if (rackChanged) {
+        const rackName = formatRackLabel({ number: after.num!, row: after.row });
+        try {
+          const outcome = await this.placeItemsOntoRackByName(
+            [id],
+            after.num,
+            after.row,
+            rackName,
+          );
+          if (outcome.failedItemIds.length > 0) placementFailed = { rackName };
+        } catch (e) {
+          // FAIL-SOFT, LOUD. The edit itself already succeeded and must not be
+          // undone by a placement hiccup — but the caller is told, because the
+          // silent version of this is the defect being fixed.
+          console.error('[item update] rack auto-place failed', {
+            itemId: id,
+            rackName,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          placementFailed = { rackName };
+        }
+      }
+    }
+
+    return placementFailed ? { ...(data as object), placementFailed } : data;
   }
 
   /**
