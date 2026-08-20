@@ -116,7 +116,14 @@ const inventoryGet = vi.fn();
 const inventoryPlacements = vi.fn(async () => []);
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: {
-    forCurrentUser: vi.fn(async () => ({ get: inventoryGet, placements: inventoryPlacements })),
+    forCurrentUser: vi.fn(async () => ({
+      get: inventoryGet,
+      placements: inventoryPlacements,
+      // Reserved feeds the On hand / Reserved / Available line. Empty map =
+      // nothing reserved, which is the shape these fixtures already assume
+      // and which renders no availability line at all.
+      reservedQuantityByItemIds: vi.fn(async () => new Map<string, number>()),
+    })),
   },
 }));
 
