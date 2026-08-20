@@ -685,18 +685,24 @@ select is(
   '3.0000|10.0000|13.0000',
   '0339 no-drift positive: change +3, previous 10, new 13'
 );
+-- INVERTED BY 0342. These two pinned the surplus going to Staging, which was
+-- the behaviour and was the bug: three units the counter found ON the rack were
+-- added to the put-away worklist. 0342 stamps the counted location at count
+-- time and reconciles there. The 0339 guarantees this file exists for — the
+-- count-time rebase and the ledger chain, asserted immediately above — are
+-- untouched by that change.
 select is(
   (select quantity from public.item_stock_levels where item_id = :itemS and location_id = :rack),
-  10::numeric,
-  '0339 no-drift positive: rack stays at 10 (surplus not added to the rack)'
+  13::numeric,
+  '0342: the +3 surplus returns to the counted rack (10 -> 13)'
 );
 select is(
   (select isl.quantity from public.item_stock_levels isl
      join public.locations l on l.id = isl.location_id
     where isl.item_id = :itemS and l.warehouse_id = :whA and l.kind = 'staging' and l.deleted_at is null
     limit 1),
-  3::numeric,
-  '0339 no-drift positive: surplus +3 landed in Staging'
+  null::numeric,
+  '0342: Staging never sees the surplus — no row is created for it'
 );
 
 -- ── Z: drift, zero variance -> nothing posted ───────────────────────────────
@@ -1182,18 +1188,22 @@ select is(
   48::numeric,
   '0339 levels/Q1: on-hand 50 -> 48'
 );
+-- INVERTED BY 0342, same reason. The Σ arithmetic this pair was written to
+-- protect is unchanged and still load-bearing: the reconciliation delta is
+-- (new on-hand − Σ levels) = 48 − 47 = +1, NOT the naive −2 that would leave
+-- the rack at 45. Only its DESTINATION moved, from Staging to the counted rack.
 select is(
   (select quantity from public.item_stock_levels where item_id = :itemQ1 and location_id = :rack),
-  47::numeric,
-  '0339 levels/Q1: rack stays 47 (Σ 47 -> 48 is +1, so nothing is drawn; the naive -2 would leave 45)'
+  48::numeric,
+  '0342 levels/Q1: the +1 delta (48 - 47) goes to the counted rack; the naive -2 would still leave 45'
 );
 select is(
   (select isl.quantity from public.item_stock_levels isl
      join public.locations l on l.id = isl.location_id
     where isl.item_id = :itemQ1 and l.warehouse_id = :whA and l.kind = 'staging' and l.deleted_at is null
     limit 1),
-  1::numeric,
-  '0339 levels/Q1: the +1 reconciliation delta (48 - 47) landed in Staging'
+  null::numeric,
+  '0342 levels/Q1: Staging is untouched by the reconciliation'
 );
 select is(
   (select coalesce(sum(quantity), 0) from public.item_stock_levels where item_id = :itemQ1),

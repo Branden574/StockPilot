@@ -292,16 +292,26 @@ select is(
   'positive variance: quantity_on_hand = 13 (10 + 3)'
 );
 
--- 7. Rack level unchanged (surplus goes to Staging, not back to rack)
+-- 7. SURPLUS RETURNS TO THE COUNTED RACK — inverted by migration 0342.
+--
+-- This assertion used to pin the opposite ("rack stays at 10, surplus goes to
+-- Staging"). That WAS the behaviour, and it was the bug: counting a rack and
+-- finding three more put three units on the put-away worklist for stock that
+-- had never moved. 0342 stamps the counted location when the count is recorded
+-- and reconciles the variance there. Kept and inverted rather than deleted —
+-- the scenario is still exactly the one worth pinning, only the correct answer
+-- changed.
 select is(
   (select quantity from public.item_stock_levels
     where item_id    = 'cc990000-0000-0000-0000-000000000004'::uuid
       and location_id = 'cc990000-0000-0000-0000-000000000005'::uuid),
-  10::numeric,
-  'positive variance: rack level stays at 10 (surplus not added to rack)'
+  13::numeric,
+  '0342: positive variance returns to the counted rack (10 -> 13)'
 );
 
--- 8. Surplus +3 landed in Staging
+-- 8. ...and Staging is left alone. `is` against null, not 0: with nothing ever
+-- staged for this item there is no Staging row at all, and that absence IS the
+-- fix — a row of 0 would mean we touched it.
 select is(
   (select isl.quantity
      from public.item_stock_levels isl
@@ -311,8 +321,8 @@ select is(
       and l.kind         = 'staging'
       and l.deleted_at   is null
     limit 1),
-  3::numeric,
-  'positive variance: surplus (+3) landed in Staging location'
+  null::numeric,
+  '0342: Staging never sees the surplus — no row was created for it at all'
 );
 
 -- 9. Σ item_stock_levels = quantity_on_hand (invariant)
