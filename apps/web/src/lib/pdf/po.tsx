@@ -89,6 +89,13 @@ export const RECEIPT_NUMBER_MAX_CHARS = 28;
 export const RECEIVED_BY_MAX = 33;
 
 /**
+ * Item-name budget for a receipt's itemized sub-row. The name cell spans the
+ * number+date+by columns (flex 78); `by` paints ~33 chars at flex 35, so 78
+ * scales to ~73 — minus the sub-row indent, 68 is what fits without wrapping.
+ */
+export const RECEIPT_ITEM_NAME_MAX = 68;
+
+/**
  * Characters of SKU that fit on ONE line of the SKU column.
  *
  * A SKU never contains a space, so @react-pdf lays it out as a single
@@ -155,6 +162,11 @@ const poTable = StyleSheet.create({
   // width bounded by RECEIPT_NUMBER_MAX_CHARS.
   receiptNumberCell: { paddingRight: CELL_GUTTER },
   receiptStatus: { fontSize: 7.5, color: PDF_COLORS.ink3, marginTop: 1 },
+  // A receipt's itemized sub-row: indented under its parent receipt, no top
+  // border (the border belongs to the receipt row that owns the group), sku in
+  // small mono after the name so the pair stays one line high.
+  receiptItemRow: { flexDirection: 'row', paddingLeft: 10, paddingTop: 1, paddingBottom: 1 },
+  receiptItemSku: { fontSize: 7.5, fontFamily: 'Courier', color: PDF_COLORS.ink3 },
 });
 
 export interface PoPdfLine {
@@ -167,6 +179,22 @@ export interface PoPdfLine {
   lineTotal: number;
 }
 
+/**
+ * One item on a receipt — the itemized breakdown under a receipt row.
+ *
+ * The totals row alone ("Accepted 200") answers HOW MUCH but not WHAT: a
+ * receipt covering five shirt sizes printed one opaque number, and the person
+ * reading the PDF a month later could not reconstruct which items that receiver
+ * actually signed for. Owner ask 2026-08-20 (CVLYII-001460): the breakdown is
+ * the traceability, so it prints under every receipt.
+ */
+export interface PoPdfReceiptLine {
+  sku: string;
+  name: string;
+  accepted: number;
+  rejected: number;
+}
+
 export interface PoPdfReceipt {
   receiptNumber: string;
   receivedAt: string | null;
@@ -174,6 +202,9 @@ export interface PoPdfReceipt {
   status: string;
   totalAccepted: number;
   totalRejected: number;
+  /** Itemized breakdown. Optional so older callers/tests keep compiling;
+   *  the PDF route always supplies it. Empty = render totals only. */
+  lines?: PoPdfReceiptLine[];
 }
 
 /**
@@ -725,7 +756,8 @@ export function PurchaseOrderPdf({
                 </Text>
               </View>
               {receipts.map((r, i) => (
-                <View key={`${r.receiptNumber}-${i}`} style={pdfStyles.tRow}>
+                <View key={`${r.receiptNumber}-${i}`}>
+                  <View style={pdfStyles.tRow}>
                   {/*
                    * Two-line stack, not a run. The status used to be appended
                    * into this same mono <Text>, which made the worst case
@@ -771,6 +803,46 @@ export function PurchaseOrderPdf({
                   >
                     {formatNumberForPdf(r.totalRejected)}
                   </Text>
+                  </View>
+                  {(r.lines ?? []).map((rl, li) => (
+                    <View key={`${r.receiptNumber}-line-${li}`} style={poTable.receiptItemRow}>
+                      {/* Name + sku span the number/date/by columns so the
+                          quantities land under the same Accepted/Rejected
+                          headings as the receipt totals above them. */}
+                      <View
+                        style={[
+                          poTable.cellGutter,
+                          { flex: RECEIPT_COLS.number + RECEIPT_COLS.date + RECEIPT_COLS.by },
+                        ]}
+                      >
+                        <Text style={pdfStyles.tCell}>
+                          {truncate(rl.name, RECEIPT_ITEM_NAME_MAX)}
+                          {rl.sku ? '  ' : ''}
+                          {rl.sku ? <Text style={poTable.receiptItemSku}>{rl.sku}</Text> : null}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          pdfStyles.tCell,
+                          pdfStyles.tRight,
+                          poTable.cellGutterRight,
+                          { flex: RECEIPT_COLS.accepted },
+                        ]}
+                      >
+                        {formatNumberForPdf(rl.accepted)}
+                      </Text>
+                      <Text
+                        style={[
+                          pdfStyles.tCell,
+                          pdfStyles.tRight,
+                          poTable.cellGutterRight,
+                          { flex: RECEIPT_COLS.rejected },
+                        ]}
+                      >
+                        {formatNumberForPdf(rl.rejected)}
+                      </Text>
+                    </View>
+                  ))}
                 </View>
               ))}
             </View>

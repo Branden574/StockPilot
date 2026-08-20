@@ -14,6 +14,7 @@ import {
   type PoPdfCharge,
   type PoPdfLine,
   type PoPdfReceipt,
+  type PoPdfReceiptLine,
 } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
@@ -111,12 +112,45 @@ export async function GET(
     try {
       const receivingSvc = new ReceivingService(ctx);
       const { receipts, lines: receiptLines } = await receivingSvc.listForPurchaseOrder(id);
+
+      // A receipt line's item can be MISSING from itemsById: that map is built
+      // from the PO's CURRENT lines, and a line whose item was swapped or
+      // removed after receiving still names the item it actually received.
+      // Hydrate the gap (includeDeleted, same as the PO lines above) so the
+      // breakdown never prints "Unknown item" for stock somebody signed for.
+      const missingItemIds = [
+        ...new Set(
+          receiptLines.map((rl) => rl.item_id).filter((iid) => iid && !itemsById.has(iid)),
+        ),
+      ];
+      if (missingItemIds.length > 0) {
+        const extra = await inventorySvc.byIds(missingItemIds, { includeDeleted: true });
+        for (const it of extra) itemsById.set(it.id, it);
+      }
+
       const totalsByReceipt = new Map<string, { accepted: number; rejected: number }>();
+      const linesByReceipt = new Map<string, PoPdfReceiptLine[]>();
       for (const rl of receiptLines) {
+        const accepted = Number(rl.qty_accepted_base) || 0;
+        const rejected = Number(rl.qty_rejected_base) || 0;
         const t = totalsByReceipt.get(rl.receipt_id) ?? { accepted: 0, rejected: 0 };
-        t.accepted += Number(rl.qty_accepted_base) || 0;
-        t.rejected += Number(rl.qty_rejected_base) || 0;
+        t.accepted += accepted;
+        t.rejected += rejected;
         totalsByReceipt.set(rl.receipt_id, t);
+        // The itemized breakdown (owner ask 2026-08-20): WHAT each receipt
+        // covered, not only how much. An all-zero line is a PO line that was on
+        // the receiving screen but had nothing arrive — noise on a printout, so
+        // it is dropped here rather than asking the template to reason about it.
+        if (accepted === 0 && rejected === 0) continue;
+        const item = itemsById.get(rl.item_id);
+        const arr = linesByReceipt.get(rl.receipt_id) ?? [];
+        arr.push({
+          sku: item?.sku ?? '',
+          name: item?.name ?? 'Unknown item',
+          accepted,
+          rejected,
+        });
+        linesByReceipt.set(rl.receipt_id, arr);
       }
       // Oldest-first reads naturally as a chronological receiving log
       // (the service returns newest-first).
@@ -131,6 +165,11 @@ export async function GET(
             status: r.status,
             totalAccepted: t.accepted,
             totalRejected: t.rejected,
+            // Name order, not insertion order: receipt lines arrive in DB row
+            // order, which is meaningless on paper.
+            lines: (linesByReceipt.get(r.id) ?? []).sort((a, b) =>
+              a.name.localeCompare(b.name),
+            ),
           };
         });
     } catch {
