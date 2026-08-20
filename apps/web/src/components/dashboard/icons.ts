@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowLeftRight,
   BarChart3,
   Bell,
@@ -46,6 +47,7 @@ import { ZendeskLogo } from './zendesk-logo';
  * placements in `packages/core/src/modules/registry.ts`.
  */
 export const NAV_ICONS: Record<string, LucideIcon> = {
+  AlertTriangle,
   ArrowLeftRight,
   BarChart3,
   Bell,

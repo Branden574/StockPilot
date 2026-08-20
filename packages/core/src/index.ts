@@ -25,6 +25,7 @@ export * from './inventory/new-location';
 export * from './inventory/rack-holdings';
 export * from './inventory/placement-resolution';
 export * from './inventory/stock-writeoff';
+export * from './warehouse/exceptions';
 export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
