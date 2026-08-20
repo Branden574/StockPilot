@@ -1,7 +1,8 @@
 # ADR: Warehouse task model
 
 - **Date:** 2026-08-20
-- **Status:** Proposed — no migration written
+- **Status:** DESIGNED, DEFERRED — no migration written, and none should be until the
+  trigger condition below is met. See "Why this is deferred".
 - **Context:** Warehouse OS expansion, Release A. Follows the gap report audit of
   2026-08-20 (121 tables, 336 migrations, 80 services).
 - **Supersedes nothing.** No task/work-queue concept exists today: the audit found
@@ -206,3 +207,74 @@ manager.
    at the same service call that changes the source.
 3. **Over-modelling.** `metadata` is a display payload. Any business rule that
    reads it is a signal the type deserves a column.
+
+
+---
+
+# Why this is deferred
+
+Added 2026-08-20 after measuring the operation the model was designed for. The
+design above stands. The **timing** does not.
+
+## There is no backlog for a queue to manage
+
+| Surface | State |
+|---|---|
+| Orders | 52 completed, 18 denied, 16 cancelled, **1 in flight** (5 hours old) |
+| Open POs | 3 partially received, oldest **2.4 days** |
+| Staging | 5 rows, oldest **1.5 days** |
+| Throughput | ~1 order/day, 4 pickers ever, 410 active SKUs |
+
+Nothing is sitting in `approved`, `picking` or `packed`. Work arrives and is done
+the same day. "What should I do next" is a question this warehouse can answer by
+looking around the room.
+
+## The proposed v1 generator would fire into a healthy process
+
+Put-away from staging completes in under two days unaided. Generating a task for
+it adds ceremony to something that is not broken — the precise failure mode the
+gap report warned about, since the audit found eight tables built ahead of
+demand and carrying zero rows.
+
+The obvious alternative generator is no better. The 49 units sitting in Unplaced
+look like stranded work until you read the timestamps: all ten rows share
+`2026-06-25 19:23:43.764917`, the same instant as the rack backfill. It is
+migration residue — mostly tables, flags and table covers — so a generator would
+fire once and then never again.
+
+## What is actually wrong is not queued, it is undetected
+
+Measured the same day:
+
+| Condition | Found |
+|---|---|
+| Cycle-count lines with variance | **16 lines, 817 units** of absolute discrepancy |
+| Unplaced for over 30 days | 10 rows, 49 units |
+| Item label disagrees with where its stock is | 2 items |
+| Stock on a rack the floor does not have | 22 units — *visible for four weeks before anyone noticed* |
+
+Every one of those was found by hand-written SQL, not by anything in the
+product. None of them was ever assigned to someone and forgotten. They were
+simply **wrong**, and nothing surfaced them.
+
+A work queue answers "who does what next". These are not that question.
+
+## Correction to the gap report
+
+The gap report listed Exception Center (F10) as depending on the task model
+(F1). **That dependency is wrong.** An exception center is a derived read model
+over tables that already exist — it needs queries, not a task table, and it can
+ship without any of the schema proposed above.
+
+## The trigger for revisiting
+
+Build this model when any of these becomes true:
+
+1. Orders regularly sit more than a day in a non-terminal status, **or**
+2. More than one worker is picking concurrently often enough that "who is on
+   what" is asked out loud, **or**
+3. A second site goes live and one manager covers both.
+
+Point 3 is on the roadmap (CVW → KVA → CVLYII → MLA → CVS). This document is
+therefore expected to be picked up, not thrown away — the design is the
+deliverable, and it is finished. What is deferred is the migration.
