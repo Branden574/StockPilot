@@ -65,6 +65,13 @@ export type CartAction =
   | { type: 'set-qty'; itemId: string; quantity: number }
   | { type: 'remove'; itemId: string }
   | { type: 'clear' }
+  /**
+   * Back to a blank order, keeping only the warehouse and the pickup/delivery
+   * mode. Distinct from `clear`, which empties the BASKET mid-order and must
+   * leave the setup answers alone. Dispatch this when an order is finished —
+   * see handleDone in orders-storefront.tsx.
+   */
+  | { type: 'reset' }
   | {
       type: 'set-setup';
       patch: Partial<Pick<CartState, 'charterId' | 'fulfillmentType' | 'onBehalfOf'>>;
