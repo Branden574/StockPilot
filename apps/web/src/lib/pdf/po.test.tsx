@@ -363,6 +363,64 @@ describe('PurchaseOrderPdf', () => {
     expect(status).toBeUndefined();
   });
 
+  // ── Itemized receipt breakdown — owner ask 2026-08-20 (CVLYII-001460) ──
+  // A receipt row saying "Accepted 200" answers how much but not WHAT: a
+  // five-size shirt receipt printed one opaque number. The breakdown under
+  // each receipt is the traceability the printout exists for.
+
+  it('itemizes what each receipt covered, under that receipt', () => {
+    const nodes = render({
+      receipts: [
+        {
+          ...postedReceipt,
+          totalAccepted: 90,
+          totalRejected: 4,
+          lines: [
+            { sku: 'SP-GILDAN-CBLUE-S', name: 'Gildan Softstyle T-Shirt Carolina Blue - S', accepted: 25, rejected: 0 },
+            { sku: 'SP-GILDAN-CBLUE-M', name: 'Gildan Softstyle T-Shirt Carolina Blue - M', accepted: 65, rejected: 4 },
+          ],
+        },
+      ],
+    });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('Gildan Softstyle T-Shirt Carolina Blue - S');
+    expect(allText).toContain('Gildan Softstyle T-Shirt Carolina Blue - M');
+    expect(allText).toContain('SP-GILDAN-CBLUE-S');
+    // The per-line quantities render, not only the receipt totals.
+    expect(allText).toContain('25');
+    expect(allText).toContain('65');
+  });
+
+  it('renders totals-only when a receipt carries no lines — older callers keep working', () => {
+    // `lines` is optional precisely so a caller built before the breakdown
+    // (or a test fixture) does not crash the whole PDF export.
+    const nodes = render({ receipts: [postedReceipt] });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('R-20260721-223330-e7a08b');
+  });
+
+  it('caps an over-long item name instead of letting it run into Accepted', () => {
+    const longName =
+      'An Extremely Long Product Name That Would Absolutely Collide With The Accepted Column If Left Unbounded In This Layout';
+    const nodes = render({
+      receipts: [
+        {
+          ...postedReceipt,
+          lines: [{ sku: 'SP-X', name: longName, accepted: 3, rejected: 0 }],
+        },
+      ],
+    });
+    const cell = nodes.find((n) => textOf(n.props.children).startsWith('An Extremely Long'));
+    expect(cell).toBeDefined();
+    // The pin is that truncation HAPPENED, asserted structurally rather than by
+    // total cell length — textOf concatenates the nested sku <Text>, so a
+    // length bound would really be testing the concatenation, not the cap.
+    const cellText = textOf(cell!.props.children);
+    expect(cellText).not.toContain(longName);
+    expect(cellText).toContain('…');
+    expect(cellText).toContain('SP-X');
+  });
+
   it('caps an over-long received-by value instead of letting it run into Accepted', () => {
     const email = 'branden.vincent-walker@subdomain.example.com';
     const nodes = render({ receipts: [{ ...postedReceipt, receivedByName: email }] });
