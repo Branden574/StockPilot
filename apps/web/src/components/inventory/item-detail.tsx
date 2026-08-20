@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 
 import { ItemActivityPanel } from '@/components/inventory/item-activity-panel';
 import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
+import { StockAvailabilityLine } from '@/components/inventory/stock-availability-line';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
@@ -130,7 +131,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
   const serialsSvc = new SerialsService(ctx);
-  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs, serialsPage] =
+  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs, serialsPage, reservedByItem] =
     await Promise.all([
       categoryIdForFetch
         ? ctx.supabase
@@ -174,6 +175,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       // First page of registered serials (+ total). Fail-closed read: an
       // empty page on error, so the panel degrades instead of the page.
       serialsSvc.list(id, { page: 1 }),
+      // RESERVED, through the accessor that already owns this truth. The audit
+      // found `stock_reservations` live since mig 0073 and read by the orders
+      // catalog, rentals and auto-archive — but nowhere an operator could see
+      // the three numbers together. Reusing reservedQuantityByItemIds rather
+      // than querying here is the point: availability is derived from two
+      // existing facts, and a second query is how the two drift.
+      inventorySvc.reservedQuantityByItemIds([id]),
     ]);
 
   // Resolve the org's defined custom fields against this item's stored
@@ -500,6 +508,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     awaitingFirstReceipt={
                       (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
                     }
+                  />
+                  <StockAvailabilityLine
+                    onHand={Number(item.quantity_on_hand ?? 0)}
+                    reserved={reservedByItem.get(id) ?? 0}
+                    unit={item.unit_of_measure as string}
                   />
                   <PlacementsBreakdown
                     placements={holdings}
