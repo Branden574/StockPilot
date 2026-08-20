@@ -189,6 +189,28 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     </span>
                   )
                 )}
+                {/* ═══ WHERE IT WENT, NEXT TO HOW MUCH — owner report 2026-08-19 ═══
+                    "Stock transferred 12 · 46 → 46 on hand" reads like a bug.
+                    It is not: a transfer relocates stock, so on-hand is
+                    unchanged BY CONSTRUCTION and the 12 is the physical amount
+                    moved. The row was telling the truth while hiding the one
+                    fact that explains it — the route used to sit fifth on the
+                    metadata line below, behind actor, email, relative time and
+                    absolute time, and ran off the side of a normal viewport.
+
+                    The row this was reported from is the 2026-07-23 transfer
+                    that put 12 units onto test rack 100-A. The destination was
+                    recorded faithfully all along; a reader scanning this feed
+                    would have seen books walking onto a rack that does not
+                    exist, if the layout had not buried the field saying so.
+
+                    The phone has rendered it as a labelled WHERE field since
+                    the overhaul (item-history-sheet.tsx). This is web catching
+                    up. Order is deliberate: what happened, how much, WHERE,
+                    then what you now own. */}
+                {route && (
+                  <span className="text-muted-foreground text-[11px]">{route}</span>
+                )}
                 {e.kind === 'movement' && e.previousQuantity !== null && e.quantityAfter !== null ? (
                   <span className="text-muted-foreground text-[11px] tabular-nums">
                     {formatNumber(e.previousQuantity)} → {formatNumber(e.quantityAfter)} on hand
@@ -217,12 +239,6 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     carry its accurate date+time, not just "2 months ago"). */}
                 <time dateTime={e.createdAt}>{formatRelative(e.createdAt)}</time>
                 <LocalDateTime iso={e.createdAt} prefix=" · " />
-                {route && (
-                  <>
-                    <span className="mx-1.5">·</span>
-                    <span>{route}</span>
-                  </>
-                )}
                 {referenceDisplayLabel && (
                   <>
                     <span className="mx-1.5">·</span>

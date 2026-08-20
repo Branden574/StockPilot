@@ -214,6 +214,73 @@ describe('ActivityFeed', () => {
     expect(screen.queryByText(/→ Rack/)).not.toBeInTheDocument();
   });
 
+  // ─────────────────────────────────────────────────────────────────────
+  // THE ROUTE BELONGS NEXT TO THE QUANTITY — owner report 2026-08-19
+  //
+  // "Stock transferred 12 · 46 → 46 on hand" reads like a bug. It is not: a
+  // transfer relocates stock, so on-hand is unchanged by construction and the
+  // 12 is the physical amount moved. The row was TELLING the truth and hiding
+  // the fact that explains it — the route sat fifth on the metadata line,
+  // behind actor, email, relative time and absolute time, and ran off the side
+  // of the viewport on a normal-width screen.
+  //
+  // The row this was reported from is the 2026-07-23 transfer that put 12 units
+  // onto test rack 100-A. The destination was recorded faithfully the whole
+  // time; anyone scanning the feed would have seen books walking onto a rack
+  // that does not exist, if the layout had not buried the one field saying so.
+  //
+  // The phone has always rendered it as a labelled WHERE field
+  // (item-history-sheet.tsx). This is web catching up, not a new idea.
+  //
+  // The tests below pin PLACEMENT, not merely presence — the pre-existing route
+  // tests assert the text exists and would have passed either way.
+  // ─────────────────────────────────────────────────────────────────────
+  it('puts the route on the SAME line as the label and the quantity', () => {
+    render(
+      <ActivityFeed
+        events={[
+          makeEvent({
+            type: 'transfer',
+            delta: 0,
+            movedQuantity: 12,
+            previousQuantity: 46,
+            quantityAfter: 46,
+            fromLocationId: 'loc-a',
+            toLocationId: 'loc-b',
+          }),
+        ]}
+        locationNames={{ 'loc-a': 'Staging', 'loc-b': '100-A' }}
+      />,
+    );
+    const route = screen.getByText('Staging → 100-A');
+    const line = route.closest('div');
+    // Co-located with what happened and how much — the three facts that make
+    // "46 → 46 on hand" legible instead of alarming.
+    expect(line).toHaveTextContent('Stock transferred');
+    expect(line).toHaveTextContent('12');
+  });
+
+  it('keeps the route OFF the actor/timestamp line', () => {
+    render(
+      <ActivityFeed
+        events={[
+          makeEvent({
+            type: 'transfer',
+            delta: 0,
+            movedQuantity: 12,
+            fromLocationId: 'loc-a',
+            toLocationId: 'loc-b',
+          }),
+        ]}
+        locationNames={{ 'loc-a': 'Staging', 'loc-b': '100-A' }}
+      />,
+    );
+    // Rendered once, not duplicated across both lines.
+    expect(screen.getAllByText('Staging → 100-A')).toHaveLength(1);
+    const actor = screen.getByText(/Jane Doe/);
+    expect(actor.closest('div')).not.toHaveTextContent('Staging → 100-A');
+  });
+
   // ── Issue 5: from→to context for non-transfer movement types ────────────
 
   it('renders a "→ B" destination for a receive_po movement (to_location_id only, no from)', () => {
