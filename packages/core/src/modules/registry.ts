@@ -105,6 +105,22 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Items', href: '/dashboard/inventory', iconName: 'Boxes', defaultSortOrder: 0, requires: 'items:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Staging', href: '/dashboard/inventory/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
+      // EXCEPTIONS sits in the inventory section rather than becoming its own
+      // module: it owns no tables and is a pure derived read over inventory,
+      // locations and reservations, so a module toggle would gate a view of
+      // data the org can already see.
+      //
+      // GATED ON `items:read`, NOT `reports:read`. The registry's own invariant
+      // caught the first attempt: a module's permissions array must be a superset
+      // of what its placements require, and `reports:read` belongs to reporting,
+      // not to inventory. Forcing it in would have made the inventory module
+      // claim a permission it does not own.
+      //
+      // It is the better gate on the merits too. Every condition this page reports
+      // is an inventory fact already visible on the item pages, and the people best
+      // placed to act on "this rack label is wrong" are the staff walking the racks,
+      // not only managers. Read-only, no new permission, so no pgTAP bump in 0207.
+      { surface: 'web_sidebar', section: 'inventory', label: 'Exceptions', href: '/dashboard/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 7, requires: 'items:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Tags', href: '/dashboard/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Items', href: '/inventory', iconName: 'Box', defaultSortOrder: 0, mobileTabEligible: true, requires: 'items:read' },
       // Native twin of the web Staging page — same section, same sort order,

@@ -135,6 +135,11 @@ describe('nav order is frozen to the original static nav', () => {
     expect(hrefs).toEqual([
       '/dashboard',
       '/dashboard/inventory', '/dashboard/inventory/staging',
+      // Exceptions (sortOrder 7) lands between Staging (5) and Books (20).
+      // This list is FROZEN on purpose — it is the guard that a nav change is
+      // deliberate rather than an accident of registry ordering. Updated here
+      // knowingly: the Exception Center is a new inventory-oversight surface.
+      '/dashboard/exceptions',
       '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
       '/dashboard/movements', '/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders',
       '/dashboard/cycle-counts', '/dashboard/procedures', '/dashboard/purchase-orders',
