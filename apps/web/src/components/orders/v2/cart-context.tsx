@@ -27,6 +27,21 @@ export function initialCartState(
   };
 }
 
+/**
+ * Nothing worth restoring: no basket, and no setup answer a person typed.
+ * `warehouseId` and `fulfillmentType` are excluded on purpose — they are seeded
+ * on every page load, so a draft carrying only those restores nothing.
+ */
+function isPristineCart(state: CartState): boolean {
+  return (
+    state.lines.length === 0 &&
+    state.onBehalfOf === null &&
+    state.charterId === null &&
+    state.notes === '' &&
+    (state.neededBy ?? '') === ''
+  );
+}
+
 export function cartReducer(state: CartState, action: CartAction): CartState {
   switch (action.type) {
     case 'hydrate':
@@ -95,7 +110,28 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         lines: state.lines.filter((l) => l.itemId !== action.itemId),
       };
     case 'clear':
+      // BASKET ONLY. The setup answers (requester, charter, dates, notes) are
+      // deliberately untouched — this is the "empty my basket" button, pressed
+      // mid-order, and wiping who the order is for would be its own surprise.
+      // The end-of-order wipe is `reset`.
       return { ...state, lines: [] };
+    case 'reset':
+      // ═══ A NEW ORDER STARTS BLANK — owner report 2026-08-19 ═══
+      //
+      // `clear` was doing double duty as the end-of-order reset, so
+      // `onBehalfOf` survived a completed order and the NEXT one opened
+      // pre-filled with the last person's name and email. onBehalfOf becomes
+      // `requestedFor` + `requesterEmail` on submit — who gets notified and who
+      // the warehouse hands the goods to — so inheriting it silently addresses
+      // one person's delivery to another. `neededBy` is the same hazard one
+      // step on: it drives the schedule event created on approve.
+      //
+      // initialCartState has always described itself as "the post-`clear`
+      // shape". This is the first code path that actually uses it that way.
+      return initialCartState({
+        warehouseId: state.warehouseId,
+        fulfillmentType: state.fulfillmentType,
+      });
     case 'set-setup':
       return { ...state, ...action.patch };
     case 'set-notes':
@@ -152,10 +188,22 @@ export function CartProvider({
   React.useEffect(() => {
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(
-          `${STORAGE_PREFIX}${state.warehouseId}`,
-          JSON.stringify(state),
-        );
+        // ═══ THE SAVE THAT UNDID THE CLEAR ═══
+        //
+        // This effect runs on EVERY state change, so the dispatches inside
+        // handleDone re-wrote the draft milliseconds after clearCartDraft()
+        // deleted it — carrying the finished order's requester and needed-by
+        // date straight back into localStorage, where the next visit hydrated
+        // them. Clearing the key was never going to hold while the writer
+        // immediately put it back.
+        //
+        // A pristine cart now REMOVES the key instead of persisting an empty
+        // draft. Removing rather than skipping matters: skipping would leave a
+        // stale draft on disk when a shopper empties their basket, which is the
+        // resurrection bug pointed the other way.
+        const key = `${STORAGE_PREFIX}${state.warehouseId}`;
+        if (isPristineCart(state)) localStorage.removeItem(key);
+        else localStorage.setItem(key, JSON.stringify(state));
       } catch {
         /* quota exceeded — silent fail; draft is best-effort. */
       }

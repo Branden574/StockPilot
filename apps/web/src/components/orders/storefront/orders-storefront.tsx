@@ -826,9 +826,17 @@ function StorefrontCatalog({
   }
 
   function handleDone() {
+    // ONE `reset`, not clear + set-notes. Those two emptied the basket and the
+    // notes and left everything else standing, so the finished order's
+    // requester (and its needed-by date) opened the NEXT order pre-filled with
+    // the last person's name and email — the 2026-08-19 report. `reset` returns
+    // the whole cart to what a fresh page load builds.
+    //
+    // clearCartDraft still runs, and now it holds: the debounced writer
+    // recognises a pristine cart and removes the key rather than re-persisting
+    // the state this dispatch just cleaned.
     clearCartDraft(warehouseId);
-    dispatch({ type: 'clear' });
-    dispatch({ type: 'set-notes', value: '' });
+    dispatch({ type: 'reset' });
     setReviewStage(null);
     setSubmitted(null);
   }
