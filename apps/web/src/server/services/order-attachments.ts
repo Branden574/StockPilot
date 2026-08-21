@@ -4,12 +4,11 @@ import { unstable_cache } from 'next/cache';
 
 import { isManagerOrAbove } from '@stockpilot/core';
 
-import { isSniffedFileAllowedInBucket, sniffFile } from '@/lib/file-signature';
-import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orderAttachmentPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
+import { verifyStoredDocumentOrDelete } from './upload-verification';
 
 const BUCKET = 'order-attachments';
 
@@ -221,28 +220,18 @@ export class OrderAttachmentsService {
       throw new ServiceError('validation_error', 'Invalid storage path.');
     }
 
-    // ═══ VERIFY THE BYTES, NOT THE CLIENT'S WORD FOR THEM ═══
+    // ═══ VERIFY THE BYTES, AND THEN VERIFY WHAT THEY DO ═══
     //
     // order-attachments-panel.tsx uploads client-direct with
     // `contentType: file.type`, and the bucket's allowed_mime_types only
     // validates that client-sent header. Delivery proof and signed paperwork
     // are later signed and rendered, so an unverified object here is a payload
-    // host on our own storage origin. Verify-or-delete, mirroring the
-    // maintenance-attachments reference: on any disagreement the object is
-    // REMOVED and no row is written.
-    const admin = createAdminClient();
-    const head = await fetchObjectPrefix(admin.storage.from(BUCKET), input.storagePath);
-    if (!head) {
-      throw new ServiceError('validation_error', 'This file could not be verified.');
-    }
-    const sniffed = sniffFile(head.prefix);
-    if (!sniffed || !isSniffedFileAllowedInBucket(sniffed, BUCKET)) {
-      await admin.storage.from(BUCKET).remove([input.storagePath]);
-      throw new ServiceError(
-        'validation_error',
-        'This file could not be uploaded because it failed our security checks.',
-      );
-    }
+    // host on our own storage origin.
+    //
+    // The shared gate sniffs the leading bytes AND scans the whole object for
+    // active content. On either failure it REMOVES the object and throws, so
+    // no row is written pointing at something we did not verify.
+    const sniffed = await verifyStoredDocumentOrDelete(BUCKET, input.storagePath);
 
     const { data, error } = await this.ctx.supabase
       .from('order_request_attachments')

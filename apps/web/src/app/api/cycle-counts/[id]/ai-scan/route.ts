@@ -11,6 +11,7 @@ import {
   SHELF_SCAN_RESPONSE_SCHEMA,
   type ShelfScanLineInput,
 } from '@/lib/ai/shelf-scan';
+import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   isSniffedKindAllowedInBucket,
@@ -152,6 +153,16 @@ export async function POST(
         error: 'invalid_image',
         message: 'This file could not be uploaded because it failed our security checks.',
       },
+      { status: 422 },
+    );
+  }
+
+  // And whether anything is hiding after the end of the image. Cheap here
+  // because the bytes are already in hand — no second read, no signed URL.
+  const photoThreat = scanDocumentBytes(new Uint8Array(photoBytes), sniffedPhoto.kind);
+  if (photoThreat) {
+    return NextResponse.json(
+      { error: 'invalid_image', message: THREAT_MESSAGES[photoThreat.code] },
       { status: 422 },
     );
   }

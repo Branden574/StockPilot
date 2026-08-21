@@ -45,12 +45,21 @@ const UPLOAD = {
   sha256: 'a'.repeat(64),
 };
 
-const SCAN_FILES = [
-  { bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg', fileName: 'image.jpg' },
-];
+/**
+ * A REAL (if tiny) JPEG: SOI, one SOF0 carrying dimensions, EOI.
+ *
+ * These fixtures used to be `new Uint8Array([1, 2, 3])` with `mimeType:
+ * 'image/jpeg'` alongside — which was fine while `createFromScan` believed the
+ * declared type, and is exactly the input it now refuses. Three arbitrary
+ * bytes are not a JPEG, and the whole point of the change is that saying so
+ * does not make it one.
+ */
+const REAL_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00, 0xff, 0xd9]);
 
-/** sha256 of the three bytes above — a fixed literal, not a recomputation. */
-const SHA_OF_123 = '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81';
+const SCAN_FILES = [{ bytes: REAL_JPEG, mimeType: 'image/jpeg', fileName: 'image.jpg' }];
+
+/** sha256 of the bytes above — a fixed literal, not a recomputation. */
+const SHA_OF_FIXTURE = '1ad39ead91e6ce49ad08aedf6454190ab291a705d21620d1fa0c26732cfd02df';
 
 function svc(
   stub: ReturnType<typeof makeSupabaseStub>,
@@ -243,7 +252,7 @@ describe('createFromScan — display_name is persisted independently of file_nam
     expect(row.file_name).toBe('image.jpg');
     expect(row.source_type).toBe('scan');
     expect(row.file_mime_type).toBe('image/jpeg');
-    expect(row.file_size).toBe(3);
+    expect(row.file_size).toBe(REAL_JPEG.byteLength);
   });
 
   it('OLD CLIENT: a scan with no displayName still succeeds, storing null', async () => {
@@ -260,13 +269,13 @@ describe('createFromScan — display_name is persisted independently of file_nam
     const b = stubFor();
     await svc(b).createFromScan({ files: SCAN_FILES, displayName: 'A totally different name' });
 
-    expect(insertedRow(a).sha256).toBe(SHA_OF_123);
-    expect(insertedRow(b).sha256).toBe(SHA_OF_123);
+    expect(insertedRow(a).sha256).toBe(SHA_OF_FIXTURE);
+    expect(insertedRow(b).sha256).toBe(SHA_OF_FIXTURE);
     expect(insertedRow(a).storage_path).toBe(
-      'org-1/po-imports/039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81.jpg',
+      `org-1/po-imports/${SHA_OF_FIXTURE}.jpg`,
     );
     expect(insertedRow(b).storage_path).toBe(
-      'org-1/po-imports/039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81.jpg',
+      `org-1/po-imports/${SHA_OF_FIXTURE}.jpg`,
     );
     expect(insertedRow(a).display_name).toBe('Name one');
     expect(insertedRow(b).display_name).toBe('A totally different name');

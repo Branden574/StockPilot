@@ -40,6 +40,8 @@ import {
   type TrackingProfileCache,
 } from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
+import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { sniffFile } from '@/lib/file-signature';
 import {
   isAllowedPoImportUploadMime,
   PO_IMPORT_SCAN_MIME_TYPES,
@@ -884,26 +886,45 @@ export class PoImportsService {
         'Limit is 5 frames per scan — split larger POs into separate scans.',
       );
     }
-    // MED-22 — every frame's declared type must be one the scan path accepts.
-    // The `/api/po-imports/scan` route checks the same set at its boundary, but
-    // this method is the shared service twin: `mimeType` is written straight
-    // into the storage object's Content-Type below (via the SERVICE-ROLE
-    // client, which the bucket's RLS cannot second-guess) and is also what
-    // Gemini is handed. A caller reaching the service directly could otherwise
-    // park an arbitrary content type in the po-imports bucket.
-    for (const f of input.files) {
-      if (!PO_IMPORT_SCAN_MIME_TYPES.has(f.mimeType)) {
+    // ═══ THE BYTES GET THE LAST WORD, NOT `mimeType` ═══
+    //
+    // MED-22 checked every frame's DECLARED type against the accepted set, and
+    // a declared type is the caller's word for it. That word then decided
+    // three things: the Content-Type written into the po-imports object (via
+    // the SERVICE-ROLE client, which the bucket's own RLS cannot second-guess),
+    // the media type handed to the vision model, and the `file_mime_type`
+    // recorded on the row. Nothing anywhere opened the file.
+    //
+    // Every other upload surface was closed against this in the byte-
+    // verification wave; this one was missed, and it is the worst one to miss:
+    // the bytes go to storage AND to an external AI provider. So the declared
+    // type is now discarded entirely — `sniffFile` decides what this is, and
+    // `scanDocumentBytes` decides whether it is safe to have opened.
+    //
+    // Sniffing happens BEFORE the dedup hash and the upload, so a rejected
+    // frame leaves no object, no row and no vision spend.
+    const files = input.files.map((f) => {
+      const sniffed = sniffFile(f.bytes);
+      if (!sniffed || !PO_IMPORT_SCAN_MIME_TYPES.has(sniffed.mime)) {
         throw new ServiceError(
           'validation_error',
-          `Unsupported file type: ${f.mimeType}. Use JPEG/PNG/WEBP/HEIC or PDF.`,
+          `${f.fileName} is not a file we can read as a purchase order. Use JPEG/PNG/WEBP/HEIC or PDF.`,
         );
       }
-    }
+      const threat = scanDocumentBytes(f.bytes, sniffed.kind);
+      if (threat) {
+        throw new ServiceError('validation_error', THREAT_MESSAGES[threat.code]);
+      }
+      // `mimeType` is REPLACED, not merely validated. Leaving the declared
+      // value on the object would let it keep flowing downstream past a check
+      // it never satisfied.
+      return { ...f, mimeType: sniffed.mime };
+    });
 
     // Hash the concatenated bytes for dedup.
     const hash = createHash('sha256');
     let totalSize = 0;
-    for (const f of input.files) {
+    for (const f of files) {
       hash.update(f.bytes);
       totalSize += f.bytes.byteLength;
     }
@@ -930,8 +951,8 @@ export class PoImportsService {
     // standard po-imports bucket policy expects user-uploaded paths;
     // service-role bypasses RLS for the bulk-upload case.
     const admin = createAdminClient();
-    const baseFileName = input.files[0]!.fileName;
-    const baseFile = input.files[0]!;
+    const baseFileName = files[0]!.fileName;
+    const baseFile = files[0]!;
     const ext = baseFile.mimeType === 'application/pdf' ? 'pdf' : 'jpg';
     const storagePath = `${this.ctx.organizationId}/po-imports/${sha256}.${ext}`;
 
@@ -950,7 +971,7 @@ export class PoImportsService {
 
     // Run extraction over every frame.
     const extracted = await extractPoFromMedia(
-      input.files.map((f) => ({
+      files.map((f) => ({
         base64: Buffer.from(f.bytes).toString('base64'),
         mimeType: f.mimeType,
       })),

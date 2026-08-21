@@ -113,7 +113,18 @@ function extractedPo(lines: Array<Record<string, unknown>>) {
   };
 }
 
-const FILES = [{ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg', fileName: 'po.jpg' }];
+/**
+ * A REAL (if tiny) JPEG: SOI, one SOF0 carrying dimensions, EOI.
+ *
+ * These fixtures used to be `new Uint8Array([1, 2, 3])` with `mimeType:
+ * 'image/jpeg'` alongside — which was fine while `createFromScan` believed the
+ * declared type, and is exactly the input it now refuses. Three arbitrary
+ * bytes are not a JPEG, and the whole point of the change is that saying so
+ * does not make it one.
+ */
+const REAL_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00, 0xff, 0xd9]);
+
+const FILES = [{ bytes: REAL_JPEG, mimeType: 'image/jpeg', fileName: 'po.jpg' }];
 
 describe('createFromScan — variant columns reach po_import_lines', () => {
   it('writes every extracted variant field onto the line', async () => {

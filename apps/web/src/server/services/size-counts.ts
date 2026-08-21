@@ -3,6 +3,7 @@ import 'server-only';
 import type { CountingUnit } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import {
   isSniffedKindAllowedInBucket,
   MIME_FOR_KIND,
@@ -263,6 +264,10 @@ export class SizeCountsService {
         'This file could not be uploaded because it failed our security checks.',
       );
     }
+    // And whether anything is hiding after the end of the image.
+    const threat = scanDocumentBytes(new Uint8Array(input.imageBytes), sniffed.kind);
+    if (threat) throw new ServiceError('validation_error', THREAT_MESSAGES[threat.code]);
+
     // Extension and stored content-type both follow the BYTES, not the claim.
     const ext = sniffed.kind === 'webp' ? 'webp' : sniffed.kind === 'png' ? 'png' : 'jpg';
     const path = `${this.ctx.organizationId}/${crypto.randomUUID()}.${ext}`;
