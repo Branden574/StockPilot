@@ -75,9 +75,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return sizeCountError(e);
   }
 
-  // Per-user: a brisk scan cadence on a stack of boxes is one every few
-  // seconds, so 20/min is generous while still capping a runaway client.
-  const rl = await checkRateLimit(`size-count-scan:${ctx.userId}`, 20, 60_000);
+  // 90/min, not 20. The original 20 assumed one tap per stack, and a measured
+  // run at the real receiving pace — a garment sliding past the camera every
+  // second — 429'd on item 21 of 25. A limit that refuses the workload it was
+  // built for is not a safety margin, it is a bug; the burst here is the
+  // FEATURE. 90 leaves headroom above the ~60/min a fast operator generates
+  // while still stopping a client stuck in a loop.
+  const rl = await checkRateLimit(`size-count-scan:${ctx.userId}`, 90, 60_000);
   if (!rl.allowed) {
     return NextResponse.json(
       { error: 'rate_limited', retryAt: rl.resetAt },
@@ -91,7 +95,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // bounds a stuck client; it does nothing about twenty staff scanning all day
   // on a plan nobody costed. This is the only ceiling on what one org can spend
   // on vision here, and without it there is none.
-  const orgRl = await checkRateLimit(`size-count-scan-org:${ctx.organizationId}`, 2000, 24 * 60 * 60 * 1000);
+  // Raised with it: a 50-garment box is ~50 calls, so 2000/day capped an org
+  // at 40 boxes. 10000 is ~200 boxes a day, well past any real shift, and
+  // still a real ceiling on what one org can spend on vision in a day.
+  const orgRl = await checkRateLimit(`size-count-scan-org:${ctx.organizationId}`, 10_000, 24 * 60 * 60 * 1000);
   if (!orgRl.allowed) {
     return NextResponse.json(
       { error: 'rate_limited_org', retryAt: orgRl.resetAt },
