@@ -12,6 +12,11 @@ import {
   type ShelfScanLineInput,
 } from '@/lib/ai/shelf-scan';
 import { checkRateLimit } from '@/lib/rate-limit';
+import {
+  isSniffedKindAllowedInBucket,
+  MIME_FOR_KIND,
+  sniffImage,
+} from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
@@ -128,10 +133,35 @@ export async function POST(
     mimeType === 'image/webp' ? 'webp' : mimeType === 'image/png' ? 'png' : 'jpg';
   const photoStoragePath = `${ctx.organizationId}/${cycleCountId}/${crypto.randomUUID()}.${photoExt}`;
   const photoBytes = await photoBlob.arrayBuffer();
+
+  // ═══ SNIFF BEFORE THE WRITE, AND BEFORE THE AI ═══
+  //
+  // `mimeType` above is the multipart part's declared Content-Type — the
+  // client's word for it, exactly like the bucket's own allowed_mime_types
+  // check. These bytes then do two things: they land in cycle-count-scans, and
+  // they are base64'd to a vision model a few lines below.
+  //
+  // Because the bytes pass THROUGH this handler, the check goes here rather
+  // than as the fetch-back-and-delete the attachment finalizes need. Nothing
+  // unverified reaches storage at all, and — the point the upload-security
+  // brief makes separately — nothing unverified reaches the AI provider.
+  const sniffedPhoto = sniffImage(new Uint8Array(photoBytes));
+  if (!sniffedPhoto || !isSniffedKindAllowedInBucket(sniffedPhoto.kind, 'cycle-count-scans')) {
+    return NextResponse.json(
+      {
+        error: 'invalid_image',
+        message: 'This file could not be uploaded because it failed our security checks.',
+      },
+      { status: 422 },
+    );
+  }
+
   const { error: uploadErr } = await admin.storage
     .from('cycle-count-scans')
     .upload(photoStoragePath, photoBytes, {
-      contentType: mimeType,
+      // The SNIFFED mime, never the declared one — the stored value is what
+      // storage later serves this object as.
+      contentType: MIME_FOR_KIND[sniffedPhoto.kind],
       upsert: false,
     });
   if (uploadErr) {

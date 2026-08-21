@@ -3,6 +3,11 @@ import 'server-only';
 import type { CountingUnit } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import {
+  isSniffedKindAllowedInBucket,
+  MIME_FOR_KIND,
+  sniffImage,
+} from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -238,17 +243,36 @@ export class SizeCountsService {
   }): Promise<{ id: string }> {
     assertModuleEnabled(this.ctx, 'instant_size_count');
     assertPermission(this.ctx, 'stock:adjust');
-    const ext =
-      input.mimeType === 'image/webp'
-        ? 'webp'
-        : input.mimeType === 'image/png'
-          ? 'png'
-          : 'jpg';
+    // ═══ SNIFF BEFORE THE WRITE ═══
+    //
+    // `input.mimeType` is the caller's declared type, and the bucket's own
+    // allowed_mime_types only ever checks that same declared value — so a
+    // renamed binary reaches this bucket by claiming image/webp. This is the
+    // largest object store in the system (2,174 objects at the time of the
+    // upload-hardening audit) and its contents are fed to a vision model as
+    // training data, so unverified bytes here are both a payload host and a
+    // poisoned corpus.
+    //
+    // The bytes pass THROUGH this method, so the check goes before the upload
+    // rather than as the fetch-back-and-delete a client-direct finalize needs.
+    // Nothing unverified reaches storage at all.
+    const sniffed = sniffImage(new Uint8Array(input.imageBytes));
+    if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'size-count-training')) {
+      throw new ServiceError(
+        'validation_error',
+        'This file could not be uploaded because it failed our security checks.',
+      );
+    }
+    // Extension and stored content-type both follow the BYTES, not the claim.
+    const ext = sniffed.kind === 'webp' ? 'webp' : sniffed.kind === 'png' ? 'png' : 'jpg';
     const path = `${this.ctx.organizationId}/${crypto.randomUUID()}.${ext}`;
     const admin = createAdminClient();
     const { error: upErr } = await admin.storage
       .from('size-count-training')
-      .upload(path, input.imageBytes, { contentType: input.mimeType, upsert: false });
+      .upload(path, input.imageBytes, {
+        contentType: MIME_FOR_KIND[sniffed.kind],
+        upsert: false,
+      });
     if (upErr) throw new ServiceError('internal_error', upErr.message);
 
     const { data, error } = await this.ctx.supabase
