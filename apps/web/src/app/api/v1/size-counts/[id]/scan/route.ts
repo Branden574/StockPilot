@@ -156,7 +156,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (useClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) {
     return NextResponse.json({ error: 'feature_unavailable' }, { status: 503 });
   }
-  const modelVersion = useClaude ? env.ANTHROPIC_MODEL : env.GEMINI_MODEL;
+  // The ESCALATED model, not the global one — this route's accuracy was
+  // measured on it (see the note on ANTHROPIC_SIZE_SCAN_MODEL in lib/env.ts).
+  // Recorded on every event it produces, so a later audit can tell which model
+  // read a given count.
+  const modelVersion = useClaude ? env.ANTHROPIC_SIZE_SCAN_MODEL : env.GEMINI_MODEL;
   // The SNIFFED mime, never the declared one — the same rule the upload paths
   // follow, for the same reason.
   const mediaType = MIME_FOR_KIND[sniffed.kind];
@@ -169,10 +173,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         prompt: SIZE_SCAN_PROMPT,
         schema: SIZE_SCAN_RESPONSE_SCHEMA,
         media: [{ data: base64, mediaType }],
+        model: env.ANTHROPIC_SIZE_SCAN_MODEL,
         maxTokens: 2048,
-        // Deterministic: two scans of one motionless stack must not disagree,
-        // and there is nothing creative to sample for here.
-        temperature: 0,
+        // NO `temperature`. sonnet-5+ rejects the parameter outright and 400s
+        // the whole call — which would present as a scanner that never reads
+        // anything. The forced tool plus the schema already constrain the
+        // output, so there is nothing the parameter was buying here.
       });
     } else {
       const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({
@@ -183,7 +189,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           // "object"), but the SDK's ResponseSchema type does not model
           // `propertyOrdering` — the field this schema's accuracy depends on.
           responseSchema: SIZE_SCAN_RESPONSE_SCHEMA as unknown as ResponseSchema,
-          temperature: 0,
+          temperature: 0,  // Gemini still takes it, and determinism is wanted.
         },
       });
       const result = await model.generateContent([

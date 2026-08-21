@@ -122,6 +122,27 @@ const serverSchema = z.object({
     .optional()
     .default('claude-sonnet-5')
     .transform((s) => s.trim()),
+  // Size-scan-only model escalation, on the same reasoning as the PO scan
+  // above and with the measurement to back it. Against the 267-sticker
+  // corpus (apps/web/scripts/size-scan-eval/), at confidence >= 0.7:
+  //
+  //     claude-haiku-4-5      89.9%   27 wrong readings
+  //     claude-sonnet-4-5     95.1%   10 wrong readings
+  //     claude-sonnet-5       99.3%    2 wrong readings
+  //
+  // and of those last two, ONE is a mislabelled corpus entry (the sticker in
+  // burst 259 plainly reads XXXL; it was captured as XXL), so the real figure
+  // is one genuine miss in 267. Every wrong reading is a row somebody has to
+  // correct on the review screen, which is the time this feature exists to
+  // save — so the accuracy is the product, and the cost delta on a
+  // few-scans-a-day path is negligible.
+  //
+  // NOTE: sonnet-5+ REJECTS `temperature`, so the scan call must not send one.
+  ANTHROPIC_SIZE_SCAN_MODEL: z
+    .string()
+    .optional()
+    .default('claude-sonnet-5')
+    .transform((s) => s.trim()),
   AI_PROVIDER: z.enum(['claude', 'gemini']).optional(),
 
   // QuickBooks Online connector (integrations module). OAuth2 app

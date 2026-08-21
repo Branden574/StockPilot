@@ -128,6 +128,37 @@ describe('parseSizeScanResponse — hostile and malformed input', () => {
     expect(r.counts).toEqual([{ size: 'M', count: 1 }]);
   });
 
+  it('recovers a double-encoded stickers array instead of dropping it', () => {
+    // OBSERVED IN PRODUCTION MODELS, not invented: sonnet-5 returned this shape
+    // once in 260 calls, through a forced tool schema. Dropping it is safe but
+    // loses a good reading, and "the scan found nothing" is the one answer an
+    // operator cannot argue with.
+    const inner = JSON.stringify([dot('M'), dot('L')]);
+    const r = parseSizeScanResponse(
+      JSON.stringify({ stickers: inner, noStickerVisible: false, notes: '' }),
+    );
+    expect(r.counts).toEqual([
+      { size: 'M', count: 1 },
+      { size: 'L', count: 1 },
+    ]);
+  });
+
+  it('recovers a double-encoded LONE sticker object', () => {
+    // The exact payload observed: one object, not an array, inside the string.
+    const inner = JSON.stringify(dot('XS', 1, 'SX'));
+    const r = parseSizeScanResponse(
+      JSON.stringify({ stickers: inner, noStickerVisible: false, notes: '' }),
+    );
+    expect(r.counts).toEqual([{ size: 'XS', count: 1 }]);
+  });
+
+  it('still proposes nothing when the encoded string is itself garbage', () => {
+    const r = parseSizeScanResponse(
+      JSON.stringify({ stickers: 'not json at all', noStickerVisible: false, notes: '' }),
+    );
+    expect(r.counts).toEqual([]);
+  });
+
   it('survives rows that are not objects', () => {
     const r = parseSizeScanResponse(body([null, 'M', 7, dot('S')]));
     expect(r.counts).toEqual([{ size: 'S', count: 1 }]);
