@@ -12,7 +12,7 @@ see any of them. This suite can.
 
 ```
 cd apps/mobile
-pnpm smoke:sim              # all four flows
+pnpm smoke:sim              # all five flows
 pnpm smoke:sim --flow sheet-scroll   # one flow while iterating
 python3 scripts/smoke/smoke.py --dump  # print the current screen's labels
 ```
@@ -27,6 +27,7 @@ screenshot under `scripts/smoke/artifacts/` (gitignored) and prints its path.
 | `login-shell` | render-only | app reaches the signed-in shell; tabs render | blank/stuck shell on boot |
 | `sheet-scroll` | **behavioural** | orders -> first order -> Add items sheet: a row must MOVE under a swipe, and a scrim tap must close the sheet | d8e9669f: sheets could not be scrolled until something else took the touch |
 | `delivery-section` | render-only | deep link to SO-000021 (fulfillment=delivery): delivery-request section renders with its action button and the recipients line naming dc4@learn4life.org | #132's SCREEN renders and does not crash. It does NOT verify the compose url or transport — those are unit-pinned; the url handed to the OS is only observable on a tap this read-only suite must not make |
+| `size-scan` | render-only | size-count session -> the "Scan sizes" entry point -> the scan screen behind it | #168's mobile surface renders and routes. It does **NOT** cover capture -> review -> confirm: the simulator has no camera, so `takePictureAsync` never returns a frame and the review list is unreachable. That half is unit-pinned in `apps/web/src/lib/ai/size-scan.test.ts`, measured against real photographs by `apps/web/scripts/size-scan-eval/`, and was walked end-to-end against live prod |
 | `maintenance` | render-only | maintenance list -> first request detail -> the email action area's controls (Open in Outlook / Copy Email Details) exist | the #127/#136 SCREEN renders. It does NOT exercise compose-link fit, one-tap copy, or the double-tap guard — those behaviours are unit-pinned in src/lib; this flow only proves the screen offering them still stands up |
 
 Be precise about what "render-only" buys: those three flows catch a crash, a

@@ -199,6 +199,24 @@ export default function SizeCountScreen() {
         <Text style={styles.hint}>
           Tap a size to add one. Long-press to remove one.
         </Text>
+
+        {/* THE SCAN IS AN ACCELERATOR, NOT A REPLACEMENT. It lands on a review
+            list with the counts pre-filled and every number adjustable, and
+            only what the operator confirms is queued — through this same
+            outbox, as the same kind of event. The tap grid above stays the
+            primary way to count, which is why this sits below it rather than
+            in the header. */}
+        {isOpen ? (
+          <Pressable
+            onPress={() => router.push(`/size-count/scan/${id}`)}
+            style={styles.scanBtn}
+          >
+            <Text style={styles.scanLabel}>Scan sizes with the camera</Text>
+            <Text style={styles.scanSub}>
+              Photograph a sticker or a stack — you check every reading before it counts
+            </Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
 
       {isOpen ? (
@@ -253,6 +271,16 @@ const styles = StyleSheet.create({
   sizeBtnDisabled: { opacity: 0.5 },
   sizeLabel: { color: theme.textMuted, fontSize: 14, fontWeight: '600' },
   sizeCount: { color: theme.text, fontSize: 32, fontWeight: '800', marginTop: 4 },
+  scanBtn: {
+    marginTop: space.lg,
+    padding: space.md,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    backgroundColor: theme.card,
+  },
+  scanLabel: { color: theme.primary, fontSize: 15, fontWeight: '700' },
+  scanSub: { color: theme.textMuted, fontSize: 12, marginTop: 2, lineHeight: 17 },
   hint: { color: theme.textMuted, fontSize: 12, marginTop: space.md, textAlign: 'center' },
   footer: {
     flexDirection: 'row',

@@ -581,6 +581,53 @@ def flow_maintenance():
     return True, "maintenance detail rendered with the email action area"
 
 
+
+def flow_size_scan():
+    """SIZE SCAN. The AI size-sticker scanner's mobile surface (#168): the
+    entry point on the counter, and the scan screen it opens.
+
+    WHAT THIS DOES NOT COVER, and cannot: capture -> review -> confirm. The
+    simulator has no camera, so `takePictureAsync` never returns a frame and
+    the review list is unreachable here. That half is covered elsewhere —
+    the parser and the prompt invariants are unit-pinned in
+    apps/web/src/lib/ai/size-scan.test.ts, the accuracy is measured against
+    real photographs by apps/web/scripts/size-scan-eval/, and the route was
+    walked end-to-end against live prod with real corpus images. What THIS
+    guards is the thing none of those can see: that the button exists on the
+    counter, that it routes, and that the screen behind it stands up instead
+    of crashing or rendering blank.
+
+    Read-only: it opens an EXISTING demo-org session and taps nothing that
+    writes. The session id is pinned the same way SO-000021 is in
+    flow_delivery_section — a stable fixture that predates the feature."""
+    open_url(f"stockpilot://size-count/{SIZE_COUNT_SESSION_ID}")
+    # The first deep link after a cold launch can land before the router is
+    # ready; wait_for's own polling covers the slow case.
+    if not wait_for("Size count", timeout=30):
+        return False, "size-count session screen did not render"
+    if find_all("enabled for this workspace"):
+        return False, (
+            "instant_size_count is disabled for this workspace -- the app's "
+            "module snapshot is stale or the org toggle was turned off"
+        )
+    btn = _scroll_until("Scan sizes with the camera", max_swipes=8)
+    if btn is None:
+        return False, "counter rendered without the 'Scan sizes' entry point"
+    tap_element(btn)
+    time.sleep(2)
+    els = describe_all()
+    # Either outcome is correct and which one you get depends on the
+    # simulator's privacy state, so accept both rather than pinning whichever
+    # this machine happens to be in — a flow that fails on a fresh sim is a
+    # flow people learn to ignore.
+    if find_all("Camera access needed", els):
+        return True, "scan screen rendered its camera-permission gate"
+    for needle in ("Scan sizes", "Tap to capture"):
+        if not find_all(needle, els):
+            return False, f"scan screen rendered without {needle!r}"
+    return True, "scan screen rendered its capture UI"
+
+
 # ---------------------------------------------------------------------------
 # MUTATING-FLOWS extension point.
 # V1 is read-only by design: a nightly run must not accrete junk data in
@@ -589,11 +636,16 @@ def flow_maintenance():
 # explicit --allow-writes argument so a plain nightly run stays read-only.
 # ---------------------------------------------------------------------------
 
+# A demo-org size-count session that predates the scanner. Pinned like
+# SO-000021 above: the suite is read-only, so it must not create one.
+SIZE_COUNT_SESSION_ID = "9544a80a-599d-43c4-b6e7-ed9feea98e68"
+
 FLOWS = [
     ("login-shell", flow_login_shell),
     ("sheet-scroll", flow_sheet_scroll),
     ("delivery-section", flow_delivery_section),
     ("maintenance", flow_maintenance),
+    ("size-scan", flow_size_scan),
 ]
 
 # Flows whose reads are served by the REST API layer (locally: the :3000 web
@@ -601,7 +653,7 @@ FLOWS = [
 # them against whatever the release build's baked apiUrl happens to reach --
 # admitting one to CI is a deliberate decision for after a real CI run, not a
 # default. Everything else reads Supabase directly and runs in both modes.
-LOCAL_API_FLOWS = {"maintenance"}
+LOCAL_API_FLOWS = {"maintenance", "size-scan"}
 
 
 def main():
