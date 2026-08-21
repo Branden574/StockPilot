@@ -78,6 +78,18 @@ export const SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS = {
   'org-logos': ['image/png', 'image/jpeg', 'image/webp', 'image/avif'],
   // migration 0315:29-35 — HEIC deliberately excluded.
   'maintenance-photos': ['image/png', 'image/jpeg', 'image/webp'],
+  // Added by the upload-hardening audit, 2026-08-21. Both are server-side
+  // capture paths whose bytes pass THROUGH a handler, so their guard sniffs
+  // before the write rather than fetching back to verify — nothing unverified
+  // reaches storage, and for cycle-count-scans nothing unverified reaches the
+  // vision model either.
+  //
+  // Every mime below is one `sniffImage` already detects, which is the
+  // invariant this table exists to keep checkable: a bucket listed here
+  // accepting a format the sniffer cannot recognise would have its legitimate
+  // uploads rejected, not protected.
+  'cycle-count-scans': ['image/png', 'image/jpeg', 'image/webp'],
+  'size-count-training': ['image/png', 'image/jpeg', 'image/webp'],
 } as const;
 
 export type SnifferGatedBucket = keyof typeof SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS;
