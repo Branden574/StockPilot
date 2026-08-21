@@ -2,11 +2,9 @@ import 'server-only';
 
 import { isValidStoragePath, poAttachmentPathShape } from '@/lib/storage-path';
 
-import { isSniffedFileAllowedInBucket, sniffFile } from '@/lib/file-signature';
-import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
-import { createAdminClient } from '@/lib/supabase/admin';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { verifyStoredDocumentOrDelete } from './upload-verification';
 
 const BUCKET = 'po-attachments';
 
@@ -134,34 +132,22 @@ export class PoAttachmentsService {
       throw new ServiceError('validation_error', 'Invalid storage path — wrong org prefix.');
     }
 
-    // ═══ VERIFY THE BYTES, NOT THE CLIENT'S WORD FOR THEM ═══
+    // ═══ VERIFY THE BYTES, AND THEN VERIFY WHAT THEY DO ═══
     //
-    // The bucket's allowed_mime_types only checks the Content-Type header the
-    // client sent with its PUT, and po-attachments-panel.tsx passes
+    // The bucket's allowed_mime_types only checks the Content-Type the client
+    // sent with its PUT, and po-attachments-panel.tsx passes
     // `contentType: file.type` — the browser's word. A renamed binary, an HTML
     // document or an SVG carrying script all reach this bucket by declaring
     // `application/pdf`. These objects are later signed, opened, and bundled
     // into the attachments zip, so an unverified one is a payload host on our
     // own storage origin.
     //
-    // Same verify-or-delete shape as the maintenance-attachments reference:
-    // range-read the leading bytes, sniff, and on any disagreement REMOVE the
-    // object and write no row — never leave an unverified object with a row
-    // pointing at it. The prefix read doubles as the existence check, so a
-    // finalize never preceded by a real PUT writes no phantom row.
-    const admin = createAdminClient();
-    const head = await fetchObjectPrefix(admin.storage.from(BUCKET), input.storagePath);
-    if (!head) {
-      throw new ServiceError('validation_error', 'This file could not be verified.');
-    }
-    const sniffed = sniffFile(head.prefix);
-    if (!sniffed || !isSniffedFileAllowedInBucket(sniffed, BUCKET)) {
-      await admin.storage.from(BUCKET).remove([input.storagePath]);
-      throw new ServiceError(
-        'validation_error',
-        'This file could not be uploaded because it failed our security checks.',
-      );
-    }
+    // The shared gate sniffs the leading bytes AND scans the whole object for
+    // active content: a genuine PDF that runs something when a warehouse
+    // manager opens it passes the sniff and fails the scan. On either failure
+    // it REMOVES the object and throws, so no row is ever written pointing at
+    // an object we did not verify.
+    const sniffed = await verifyStoredDocumentOrDelete(BUCKET, input.storagePath);
 
     const { data, error } = await this.ctx.supabase
       .from('po_attachments')
