@@ -3,6 +3,7 @@ import 'server-only';
 import type { CountingUnit } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { SIZE_SCAN_SIZES } from '@/lib/ai/size-scan';
 import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import {
   isSniffedKindAllowedInBucket,
@@ -463,6 +464,57 @@ export class SizeCountsService {
   }
 
   /** Session header + the per-size tally (SUM of quantity_delta by size). */
+  /**
+   * The FULL pre-flight gate for an AI scan, run before any bytes are read and
+   * before any paid vision call is made.
+   *
+   * Same shape as `CycleCountsService.getLineSetForAiScan`, and for the same
+   * reason: a route that reads the body first, calls the model, and only then
+   * discovers the caller had no business here has already spent money and
+   * already handed a customer photograph to an external provider. Everything
+   * that can refuse must refuse first.
+   *
+   * Returns the vocabulary the prompt is built from, so the caller never has to
+   * reach back into the session for it.
+   */
+  async getScanContext(sessionId: string): Promise<{
+    allowedSizes: string[];
+    groupName: string | null;
+  }> {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    // Asserted EXPLICITLY rather than leaned on through the registry's
+    // dependsOn: a module's declared dependency governs whether it can be
+    // switched on, not whether the dependency is still on now.
+    assertModuleEnabled(this.ctx, 'ai');
+    assertPermission(this.ctx, 'stock:adjust');
+
+    const { data: session, error } = await this.ctx.supabase
+      .from('size_count_sessions')
+      .select('warehouse_id, status, product_group_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!session) throw new ServiceError('not_found', 'Size count not found.');
+    const s = session as {
+      warehouse_id: string | null;
+      status: SizeCountStatus;
+      product_group_id: string | null;
+    };
+    if (s.status === 'completed' || s.status === 'canceled') {
+      throw new ServiceError('conflict', 'This size count is closed — it can no longer be counted.');
+    }
+    if (s.warehouse_id) {
+      await assertWarehouseAccess(s.warehouse_id, 'write', this.ctx);
+    }
+
+    const group = await this.groupContext(s.product_group_id);
+    return {
+      allowedSizes: group?.sizes?.length ? group.sizes : [...SIZE_SCAN_SIZES],
+      groupName: group?.name ?? null,
+    };
+  }
+
   async getSession(sessionId: string): Promise<{
     session: SizeCountSessionRow;
     tally: Array<{ size: string; quantity: number }>;
