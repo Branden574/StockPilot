@@ -23,11 +23,19 @@ const config: ExpoConfig = {
   // the browser. That declaration is native config and CANNOT be delivered by
   // an OTA, which is the whole reason this version exists.
   //
+  // 1.4.0 ADDS react-native-vision-camera + Nitro, for the hands-free size
+  // gate. Frame-processor pixel access is native code, so it CANNOT ship over
+  // the air — this bump is not optional. Shipping the module without it is the
+  // crash-on-launch from builds #31/#32: the new binary inherits the old
+  // runtime's OTA history and gets served a bundle importing a module it does
+  // not contain.
+  //
   // BUMPING THIS SPLITS THE OTA AUDIENCE. runtimeVersion.policy is
-  // 'appVersion', so an update published from this commit reaches 1.3.0
-  // installs ONLY. Users still on 1.2.0 keep receiving 1.2.0 updates and must
-  // be served from a pre-bump commit until they upgrade.
-  version: '1.3.0',
+  // 'appVersion', so an update published from this commit reaches 1.4.0
+  // installs ONLY — which is ZERO devices until this build ships and users
+  // update. Anyone still on 1.3.0 keeps receiving 1.3.0 updates and must be
+  // served from a version-string-reverted tree until they upgrade.
+  version: '1.4.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   // `newArchEnabled` used to live here. Expo SDK 55 REMOVED it from the app

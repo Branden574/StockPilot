@@ -207,15 +207,31 @@ export default function SizeCountScreen() {
             primary way to count, which is why this sits below it rather than
             in the header. */}
         {isOpen ? (
-          <Pressable
-            onPress={() => router.push(`/size-count/scan/${id}`)}
-            style={styles.scanBtn}
-          >
-            <Text style={styles.scanLabel}>Scan sizes with the camera</Text>
-            <Text style={styles.scanSub}>
-              Photograph a sticker or a stack — you check every reading before it counts
-            </Text>
-          </Pressable>
+          <>
+            {/* HANDS-FREE FIRST: it is the fast path — prop the phone, slide
+                garments past, tap nothing. The single-photo scan sits under it
+                as the fallback for a stack you want to shoot in one frame, and
+                because it is the one that works with no camera device (the
+                simulator) and if the gate ever misbehaves on the floor. */}
+            <Pressable
+              onPress={() => router.push(`/size-count/handsfree/${id}`)}
+              style={[styles.scanBtn, styles.scanBtnPrimary]}
+            >
+              <Text style={styles.scanLabelPrimary}>Hands-free counting</Text>
+              <Text style={styles.scanSubPrimary}>
+                Prop the phone over the table and slide garments past — no tapping
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => router.push(`/size-count/scan/${id}`)}
+              style={styles.scanBtn}
+            >
+              <Text style={styles.scanLabel}>Scan one photo</Text>
+              <Text style={styles.scanSub}>
+                Photograph a sticker or a stack — you check every reading before it counts
+              </Text>
+            </Pressable>
+          </>
         ) : null}
       </ScrollView>
 
@@ -279,6 +295,9 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     backgroundColor: theme.card,
   },
+  scanBtnPrimary: { backgroundColor: theme.primary, borderColor: theme.primary, marginBottom: space.sm },
+  scanLabelPrimary: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  scanSubPrimary: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2, lineHeight: 17 },
   scanLabel: { color: theme.primary, fontSize: 15, fontWeight: '700' },
   scanSub: { color: theme.textMuted, fontSize: 12, marginTop: 2, lineHeight: 17 },
   hint: { color: theme.textMuted, fontSize: 12, marginTop: space.md, textAlign: 'center' },

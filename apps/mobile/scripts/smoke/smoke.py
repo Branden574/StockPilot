@@ -610,9 +610,24 @@ def flow_size_scan():
             "instant_size_count is disabled for this workspace -- the app's "
             "module snapshot is stale or the org toggle was turned off"
         )
-    btn = _scroll_until("Scan sizes with the camera", max_swipes=8)
-    if btn is None:
-        return False, "counter rendered without the 'Scan sizes' entry point"
+    # BOTH entry points. Hands-free (#the gate) is the fast path and the
+    # single-photo scan is its fallback; a counter offering only one of them is
+    # a regression whichever one went missing.
+    if _scroll_until("Hands-free counting", max_swipes=8) is None:
+        return False, "counter rendered without the 'Hands-free counting' entry point"
+    if _scroll_until("Scan one photo", max_swipes=8) is None:
+        return False, "counter rendered without the single-photo scan entry point"
+    # _scroll_until stops as soon as an element is technically visible, which on
+    # a long size grid leaves the last card straddling the bottom edge — its
+    # frame is on-screen but its tappable CENTRE is not, so the tap silently
+    # lands on nothing. One more swipe puts it properly in view, and the element
+    # must be RE-FOUND afterwards because the earlier frame is now stale.
+    swipe(516, 1000, 516, 700)
+    time.sleep(0.8)
+    found = find_all("Scan one photo")
+    if not found:
+        return False, "single-photo entry point disappeared after scrolling into view"
+    btn = found[0]
     tap_element(btn)
     time.sleep(2)
     els = describe_all()
@@ -625,7 +640,19 @@ def flow_size_scan():
     for needle in ("Scan sizes", "Tap to capture"):
         if not find_all(needle, els):
             return False, f"scan screen rendered without {needle!r}"
-    return True, "scan screen rendered its capture UI"
+
+    # And the hands-free gate screen. On the simulator this MUST land on the
+    # no-camera branch: useCameraDevice() returns null where there is no camera,
+    # and the value of asserting it is that the screen degrades to a sentence
+    # instead of a black rectangle that reads as a hang. A crash here would mean
+    # the vision-camera native module is missing from the installed binary,
+    # which is exactly the regression a JS-only OTA would cause.
+    open_url(f"stockpilot://size-count/handsfree/{SIZE_COUNT_SESSION_ID}")
+    if wait_for("Hands-free", timeout=25) is None:
+        return False, "hands-free screen did not render (vision-camera missing from this build?)"
+    if not find_all("No camera on this device"):
+        return False, "hands-free screen did not degrade to its no-camera branch on the simulator"
+    return True, "single-photo capture UI and hands-free no-camera branch both rendered"
 
 
 # ---------------------------------------------------------------------------
