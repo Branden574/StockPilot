@@ -4,7 +4,8 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
+const { createAdminClientMock } = vi.hoisted(() => ({ createAdminClientMock: vi.fn() }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
 // ItemImagesService.record now sniffs via a RANGE READ of the object's
 // leading bytes (fetchObjectPrefix) instead of download(). The helper is the
 // storage-read seam here: makeStorageSpy wires it to the same `body` its
@@ -89,6 +90,12 @@ function pngBytes(): Uint8Array {
   return b;
 }
 
+/** `%PDF-` at offset 0 — the whole header the sniffer needs. Attachment
+ *  buckets accept PDF, so the paired positives below upload one. */
+function pdfBytes(): Uint8Array {
+  return new Uint8Array([...'%PDF-1.7\n1 0 obj'].map((c) => c.charCodeAt(0)));
+}
+
 /** A storage stub that records every call, so a test can assert the storage
  *  client was NEVER reached — the only assertion that proves the refusal
  *  happened before the object could be read. `body` also becomes what the
@@ -104,7 +111,14 @@ function makeStorageSpy(body: Uint8Array | null) {
     error: null,
   }));
   const api = { remove, createSignedUrl };
-  return { api, from: vi.fn(() => api), remove, createSignedUrl };
+  const spy = { api, from: vi.fn(() => api), remove, createSignedUrl };
+  // The attachment services reach storage through createAdminClient() (their
+  // byte guard runs with elevated rights so a caller's RLS cannot hide the
+  // object it is about to verify), not through ctx.supabase like
+  // ItemImagesService. Arm both from the one spy so a test's assertions about
+  // "storage was never touched" stay true whichever handle the service uses.
+  createAdminClientMock.mockReturnValue({ storage: spy } as never);
+  return spy;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -255,6 +269,9 @@ describe('OrderAttachmentsService.add — HI-8', () => {
   });
 
   it('PAIRED POSITIVE — the real minted path is accepted and the row is written', async () => {
+    // Now also has to satisfy the finalize BYTE check: a legitimate path is
+    // necessary but no longer sufficient, which is the point of that guard.
+    makeStorageSpy(pngBytes());
     const { stub, svc } = svcWith();
     const out = await svc.add({ ...base, storagePath: `${ORG}/${ENTITY}/${FILE}.jpg` });
     expect(out).toEqual({ id: 'att-1' });
@@ -357,6 +374,9 @@ describe('PoAttachmentsService.add — HI-8', () => {
   });
 
   it('PAIRED POSITIVE — both real mints are accepted: the web uuid filename and the mobile base36 one', async () => {
+    // PDF bytes, not PNG: these mints are .pdf, and the finalize guard now
+    // gates on what the bytes ARE. A legitimate path is no longer sufficient.
+    makeStorageSpy(pdfBytes());
     for (const file of [`${FILE}.pdf`, 'k3j4h5g6f7d8.pdf']) {
       const { svc } = svcWith();
       const out = await svc.add({ ...base, storagePath: `${ORG}/${ENTITY}/${file}` });
