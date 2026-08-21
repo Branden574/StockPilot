@@ -20,7 +20,7 @@
 
 begin;
 
-select plan(5);
+select plan(7);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- The pin still exists and is still a pin (INV-24's property, locally)
@@ -60,16 +60,28 @@ select is(
     ) s
   ),
   array[
+    'application/csv',
     'application/pdf',
     'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'image/heic',
     'image/heif',
     'image/jpeg',
     'image/png',
     'image/webp',
-    'text/*'
+    'text/csv',
+    'text/plain'
   ],
-  '0332: the po-imports pin is EXACTLY 0325''s set plus image/heif'
+  -- UPDATED BY 0344, which replaced `text/*` with explicit types. The wildcard
+  -- matched text/html, and objects here are served from the storage origin
+  -- with their stored mime — so declaring text/html was enough to host a
+  -- rendering page on our own domain. `text/plain` is kept deliberately:
+  -- operating systems label .csv as text/plain often enough that dropping it
+  -- would reject real imports, and plain text carries no active content.
+  --
+  -- This assertion did its job. It is a literal pin, so widening the bucket
+  -- could not happen quietly — it failed CI the moment 0344 landed.
+  '0344: the po-imports pin is EXACTLY the explicit set that replaced text/*'
 );
 
 -- A separate cardinality assertion so a future rewrite that both adds and
@@ -77,8 +89,27 @@ select is(
 select is(
   (select array_length(allowed_mime_types, 1)
      from storage.buckets where id = 'po-imports'),
-  8,
-  '0332: po-imports pins exactly 8 content types'
+  11,
+  '0344: po-imports pins exactly 11 content types — no wildcard among them'
+);
+
+-- THE PROPERTY 0344 EXISTS FOR, asserted directly rather than only implied by
+-- the list above: no entry may be a wildcard, and text/html must not be
+-- reachable. A future edit that reintroduces `text/*` would satisfy neither.
+select is(
+  (select count(*) from (
+     select unnest(allowed_mime_types) as t
+       from storage.buckets where id = 'po-imports'
+   ) s where t like '%*%'),
+  0::bigint,
+  '0344: no wildcard survives in the po-imports allowlist'
+);
+
+select ok(
+  not ('text/html' = any(
+    select unnest(allowed_mime_types) from storage.buckets where id = 'po-imports'
+  )),
+  '0344: text/html is not declarable against po-imports'
 );
 
 select * from finish();
