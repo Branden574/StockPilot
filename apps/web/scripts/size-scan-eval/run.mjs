@@ -221,7 +221,10 @@ async function callClaude({ prompt, schema }, b64, apiKey) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 2048,
-      temperature: 0,
+      // sonnet-5 and newer REJECT `temperature` outright (see the note on
+      // ANTHROPIC_PO_SCAN_MODEL in lib/env.ts). Sending it turns the whole
+      // run into 400s, which looks like a model that cannot read stickers.
+      ...(/sonnet-5|opus-5|haiku-5/.test(MODEL) ? {} : { temperature: 0 }),
       tools: [{ name: 'report_stickers', description: 'Report the size stickers read from the photo.', input_schema: schema }],
       tool_choice: { type: 'tool', name: 'report_stickers' },
       messages: [
@@ -246,7 +249,11 @@ async function callClaude({ prompt, schema }, b64, apiKey) {
  *  Only round dots count — a reading on a neck tag is not a sticker, which is
  *  the same rule `parseSizeScanResponse` applies in production. */
 function primaryOf(res, minConf, SIZES) {
-  const good = (res.stickers ?? []).filter(
+  // OBSERVED IN THE WILD: sonnet-5 returned `stickers` as a JSON-encoded
+  // STRING once in 260 calls, through a forced tool schema. Mirror what
+  // parseSizeScanResponse does in production rather than assuming the shape.
+  const raw = typeof res.stickers === 'string' ? tryParseArray(res.stickers) : res.stickers;
+  const good = (Array.isArray(raw) ? raw : []).filter(
     (s) =>
       SIZES.includes(s.size) &&
       (s.confidence ?? 0) >= minConf &&
@@ -282,7 +289,10 @@ async function scoreRun(sample, shipped) {
             res = await callClaude(shipped, b64, ANTHROPIC_API_KEY);
           } catch (e) {
             err = e.message;
-            if (/429|rate|overload|529/i.test(err)) {
+            // Transient NETWORK failures retry too. Without this a dropped
+            // connection ends that burst's attempts immediately and quietly
+            // shrinks the sample the score is computed from.
+            if (/429|rate|overload|529|fetch failed|ECONN|ETIMEDOUT|socket/i.test(err)) {
               await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
             } else break;
           }
@@ -296,6 +306,15 @@ async function scoreRun(sample, shipped) {
 
   fs.writeFileSync(path.join(OUT, `run-${MODEL}.json`), JSON.stringify({ MODEL, results }, null, 2));
   report(results, shipped.SIZES);
+}
+
+function tryParseArray(s) {
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v : [v];
+  } catch {
+    return [];
+  }
 }
 
 function report(results, SIZES) {

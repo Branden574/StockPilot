@@ -46,16 +46,28 @@ seven sizes photographed by one person in one warehouse.
 
 ## Results so far (267 bursts, confidence >= 0.7)
 
-| prompt | model | overall | no-sticker recall | false sizes |
+| prompt | model | overall | no-sticker recall | wrong readings |
 |---|---|---:|---:|---:|
-| first draft | Haiku 4.5 | 73.0% | 40.5% | 25 |
-| + rotation alphabet | Haiku 4.5 | 89.1% | 83.3% | 7 |
-| + carrier field | Haiku 4.5 | 89.9% | 100% | 0 |
-| + carrier field | Sonnet 4.5 | 95.5% | 100% | 0 |
-| shipped prompt | Sonnet 4.5 | **95.1%** | 97.6% | 1 |
+| first draft | haiku-4-5 | 73.0% | 40.5% | 44 |
+| + rotation alphabet | haiku-4-5 | 89.1% | 83.3% | 20 |
+| + carrier field | haiku-4-5 | 89.9% | 100% | 27 |
+| + carrier field | sonnet-4-5 | 95.1% | 97.6% | 10 |
+| **shipped** | **sonnet-5** | **99.3%** | **100%** | **2** |
 
-The remaining error is concentrated in one place: **XXXL read as XXL, 7 of 26**.
-It is not a resolution problem — running the same bursts at full capture
-resolution scored identically, because the vision API downsamples to roughly
-1568px on the long edge anyway, so the sticker never gains pixels. Fixing it
-needs a crop stage (locate the dot, crop, re-read), which is not built.
+Of those last two, ONE is a mislabelled corpus entry — the sticker in burst 259
+plainly reads XXXL and was captured as XXL — so the honest figure is **one
+genuine miss in 267**. It is burst 243: a `7XX` dot (XXL upside down) read as
+`7XXX`.
+
+`--model=` takes any Anthropic model id. **sonnet-5 and newer reject
+`temperature`**, and this script omits it for them automatically; a caller
+copying the request shape elsewhere must do the same or every call 400s, which
+presents as a model that cannot read anything.
+
+The X-miscounting that dominated the smaller models is essentially gone on
+sonnet-5 (XXXL went 19/26 -> 26/26). Worth knowing for whoever revisits this: a
+bigger IMAGE does not help that class. Running the same bursts at full capture
+resolution scored identically on sonnet-4-5, because the vision API downsamples
+to roughly 1568px on the long edge anyway, so the sticker never gains pixels. A
+crop stage would — it is not built, and at one miss in 267 it is not worth
+building yet.

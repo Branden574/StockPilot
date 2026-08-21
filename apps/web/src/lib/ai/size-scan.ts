@@ -13,10 +13,16 @@
  * edit to this prompt can be re-measured rather than argued about. The
  * headline numbers on that set, at confidence >= 0.7:
  *
- *      first draft                          73.0%
+ *      first draft (haiku-4-5)              73.0%
  *      + rotation alphabet                  89.1%
- *      + carrier classification (Haiku)     89.9%
- *      + carrier classification (Sonnet)    95.5%
+ *      + carrier classification             89.9%
+ *      …on sonnet-4-5                       95.1%
+ *      …on sonnet-5 (SHIPPED)               99.3%
+ *
+ * Of the two misses at 99.3%, ONE is a mislabelled corpus entry — the sticker
+ * in burst 259 plainly reads XXXL and was captured as XXL — so the honest
+ * figure is one genuine miss in 267. The model is pinned by
+ * ANTHROPIC_SIZE_SCAN_MODEL; see the note there.
  *
  * Two findings did nearly all of that work, and both are worth understanding
  * before touching anything here.
@@ -57,12 +63,14 @@
  * because the database accepts them, but nothing has ever verified the model
  * reads them, and the measured accuracy above says nothing about them.
  *
- * The one structural error left is XXXL read as XXL — the model transcribes
- * `"XXL", xCount 2` at high confidence on a genuine three-X dot, on the smaller
- * oval stickers one vendor uses. Sending a bigger image does NOT fix it: full
- * capture resolution scored identically, because the vision API downsamples to
+ * The X-miscounting that dominated the smaller models is essentially gone on
+ * sonnet-5 (XXXL went from 19/26 to 26/26). The single remaining miss is its
+ * mirror image: a rotated `7XX` — XXL upside down — read as `7XXX`. Worth
+ * knowing that a bigger IMAGE does not help this class; full capture resolution
+ * scored identically on sonnet-4-5, because the vision API downsamples to
  * roughly 1568px on the long edge anyway, so the sticker never gains pixels.
- * The fix is a crop stage — locate the dot, crop, re-read — which is not built.
+ * A crop stage would; it is not built, and at one miss in 267 it is not worth
+ * building yet.
  */
 
 /** The nine sizes, matching the `size_label` CHECK in migration 0284 exactly
@@ -345,7 +353,15 @@ export function parseSizeScanResponse(raw: string): SizeScanResult {
   const stickers: SizeScanSticker[] = [];
   const discarded: SizeScanResult['discarded'] = [];
 
-  const rows = Array.isArray(parsed?.stickers) ? parsed.stickers : [];
+  // OBSERVED, not hypothetical: once in 260 calls, sonnet-5 returned
+  // `stickers` as a JSON-ENCODED STRING rather than an array — through a
+  // forced tool schema that should have made it impossible. Dropping it would
+  // be safe but would silently lose a perfectly good reading, and "the scan
+  // found nothing" is the one answer an operator cannot argue with. The model
+  // gave us the data; it just double-encoded it, so unwrap it.
+  const rawRows =
+    typeof parsed?.stickers === 'string' ? reparseStickers(parsed.stickers) : parsed?.stickers;
+  const rows = Array.isArray(rawRows) ? rawRows : [];
   for (const row of rows.slice(0, MAX_SIZE_SCAN_STICKERS)) {
     if (typeof row !== 'object' || row === null) continue;
     const r = row as Record<string, unknown>;
@@ -395,6 +411,16 @@ export function parseSizeScanResponse(raw: string): SizeScanResult {
  * and load-bearing on Gemini, which wraps JSON in ```json often enough that
  * `parseShelfScanResponse` carries the same two lines.
  */
+/** A double-encoded `stickers` value: an array, or a lone object to wrap. */
+function reparseStickers(encoded: string): unknown[] {
+  try {
+    const v: unknown = JSON.parse(encoded);
+    return Array.isArray(v) ? v : [v];
+  } catch {
+    return [];
+  }
+}
+
 function safeParse(raw: string): { stickers?: unknown } | null {
   const attempt = (s: string): { stickers?: unknown } | null => {
     try {
