@@ -130,3 +130,7 @@ pnpm-lock\ *.yaml
 * [2-9].json
 
 secrets/
+
+# Python bytecode from the simulator smoke driver
+__pycache__/
+*.pyc
