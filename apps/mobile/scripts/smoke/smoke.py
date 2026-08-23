@@ -77,7 +77,15 @@ METRO_PORT = 8081
 API_PORT = 3000  # baked into the debug binary's extra.apiUrl
 DELIVERY_ORDER_URL = "stockpilot://order/fead05f8-d3cd-4c51-b88b-41f7136f1602"
 DELIVERY_ORDER_LABEL = "SO-000021"
-DELIVERY_RECIPIENT = "dc4@learn4life.org"
+# Demo Co's OWN routing (organizations.email_routing, mig 0337) — not the
+# compiled L4L pair. Asserted by prefix because idb's accessibility labels have
+# been seen dropping the tail of long strings, and the email sits mid-sentence
+# in "Opens a draft to <to>, copying <cc>."
+DELIVERY_RECIPIENT = "warehouse-demo@"
+# The address that must NEVER render in Demo Co. Seeing it means the org's
+# email_routing read fell back to the compiled L4L constants — which in a real
+# org is a delivery request emailed to another company's warehouse inbox.
+DELIVERY_FORBIDDEN_RECIPIENT = "dc4@learn4life.org"
 SHEET_LANDMARK = "Search items to add"  # the Add-items sheet's search field
 MOVE_EPSILON = 20  # points a row must move before we call it a scroll
 SMOKE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -533,6 +541,14 @@ def flow_delivery_section():
         return False, "delivery request action button not found"
     if not find_all(DELIVERY_RECIPIENT, els):
         return False, f"recipients line does not name {DELIVERY_RECIPIENT}"
+    # The routing-regression guard. This flow FAILED here on 2026-08-21 for the
+    # opposite reason — it still expected the L4L pair after 0337 gave Demo Co
+    # its own routing. The absence check is the half that matters in prod.
+    if find_all(DELIVERY_FORBIDDEN_RECIPIENT, els, visible=False):
+        return False, (
+            f"recipients line names {DELIVERY_FORBIDDEN_RECIPIENT} -- the org's "
+            "email_routing read regressed to the compiled L4L fallback"
+        )
     if not find_all(DELIVERY_ORDER_LABEL, els, visible=False):
         return False, "order screen lost its landmark after scrolling (possible crash)"
     return True, f"delivery section rendered: action button + recipients naming {DELIVERY_RECIPIENT}"
