@@ -45,9 +45,48 @@ function secretsEqual(a: string, b: string): boolean {
  * List-Unsubscribe header) moved into the family.
  */
 
+/** The one display timezone every label in this file is built from. Named
+ *  once so the day WORD and the printed TIME can never be computed against
+ *  different zones — that disagreement is exactly how "tomorrow" ends up over
+ *  a time that reads today. */
+const DISPLAY_TZ = 'America/Los_Angeles';
+
 /** Format one field of a date in the org display timezone (PT). */
 function tzPart(d: Date, opts: Intl.DateTimeFormatOptions): string {
-  return d.toLocaleString('en-US', { ...opts, timeZone: 'America/Los_Angeles' });
+  return d.toLocaleString('en-US', { ...opts, timeZone: DISPLAY_TZ });
+}
+
+/** The calendar date in the display zone as YYYY-MM-DD. en-CA is used purely
+ *  because it formats that way; nothing here is locale-facing. */
+function tzDateKey(d: Date): string {
+  return d.toLocaleDateString('en-CA', { timeZone: DISPLAY_TZ });
+}
+
+/**
+ * The word that goes after the em dash: "today", "tomorrow", or the weekday.
+ *
+ * THE BUG THIS REPLACES: the day-ahead reminder said 'tomorrow' unconditionally,
+ * because the code assumed "inside the 24h window and more than an hour away"
+ * meant tomorrow. It does not — an event at 2:30pm seen at 1:20pm is 70 minutes
+ * away and squarely today. A delivery reminder that names the wrong day is
+ * worse than none: it tells someone to prepare for the wrong shift.
+ *
+ * So the word is derived from CALENDAR DATES, not from an elapsed-time bucket.
+ * Both keys are whole dates in the display zone, parsed at UTC midnight, so the
+ * difference is whole days and a DST boundary cannot shift it.
+ */
+function dayWordFor(startsAt: Date, now: Date): string {
+  const nowKey = tzDateKey(now);
+  const startKey = tzDateKey(startsAt);
+  const days = Math.round(
+    (Date.parse(`${startKey}T00:00:00Z`) - Date.parse(`${nowKey}T00:00:00Z`)) / 86_400_000,
+  );
+  if (days <= 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  // Unreachable through the 24h query window above, which can span at most one
+  // calendar boundary. Named honestly rather than defaulted to a lie, so a
+  // future caller with a wider window gets a true word instead of a wrong one.
+  return tzPart(startsAt, { weekday: 'long' });
 }
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -132,7 +171,9 @@ export async function GET(req: Request) {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles',
       });
-      const horizon = isOneHour ? 'in 1 hour' : 'tomorrow';
+      // The day-ahead word is COMPUTED, never assumed — see dayWordFor.
+      const dayWord = dayWordFor(new Date(ev.starts_at), new Date(now));
+      const horizon = isOneHour ? 'in 1 hour' : dayWord;
       const title = `Reminder: ${ev.title} — ${horizon}`;
       const body = `${when}${ev.location_text ? ` · ${ev.location_text}` : ''}`;
       const link = `/dashboard/schedule/${ev.id}`;
@@ -153,6 +194,7 @@ export async function GET(req: Request) {
       const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
       const sharedParams = {
         eventTitle: ev.title,
+        dayWord,
         month: tzPart(startsAt, { month: 'short' }),
         day: tzPart(startsAt, { day: 'numeric' }),
         dow: tzPart(startsAt, { weekday: 'short' }),

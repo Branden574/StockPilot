@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -98,8 +98,23 @@ function stubFor(events: unknown[], extra: Record<string, { data: unknown; error
   });
 }
 
+// The clock is FROZEN at the exact moment the owner reported (2026-08-24
+// 13:20 PT), and only Date is faked — faking setTimeout too would hang any
+// awaited delay inside the route.
+//
+// Freezing is not decoration. `eventIn(20)` is 20 real hours ahead, which lands
+// on TOMORROW for most of the day and on TODAY for a run between midnight and
+// 04:00 PT. Before the day word was computed, "tomorrow" was hardcoded and that
+// difference was invisible; now that the route renders the real day, a live
+// clock would make these assertions pass or fail by the hour of the CI run.
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-08-24T20:20:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('GET /api/cron/schedule-reminders', () => {
@@ -176,6 +191,86 @@ describe('GET /api/cron/schedule-reminders', () => {
     expect(s.html).toContain('calendar@2x.gif');
     // Full (non-compact) event card renders the details row.
     expect(s.html).toContain('Full count of bin locations A4-01 through A4-36.');
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE DAY WORD — owner-reported 2026-08-24
+  //
+  // "why does it say tomorrow when the 24th is today?" SO-000088 was a 2:30 PM
+  // delivery; the cron fired at 1:20 PM the SAME afternoon and titled it
+  // "tomorrow". The query window is now..now+24h, which is a DURATION, and it
+  // spans two calendar days for all but one instant of the day. The word was
+  // hardcoded to the name of the far edge, so every same-day event more than an
+  // hour out was mislabelled — and "tomorrow" for something happening in seventy
+  // minutes is not a cosmetic wording bug, it is an instruction to stop looking
+  // for it today.
+  //
+  // Both surfaces are asserted every time. The push title and the email subject
+  // are built from two different expressions in two different files; fixing one
+  // and leaving the other is the failure mode these tests exist to catch.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it('says TODAY for an event later the same day (the reported bug)', async () => {
+    // 13:20 PT + 70min = 14:30 PT — past the 1h window, so it takes the
+    // day-ahead path, which is exactly how SO-000088 got labelled "tomorrow".
+    const stub = stubFor([eventIn(70 / 60)]);
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    // It went down the day-ahead path, not the 1h one — otherwise this test
+    // would be proving nothing about the day word at all.
+    const updateArgs = stub.chainArgs.get('schedule_events.update') ?? [];
+    expect(updateArgs[0]?.[0]).toEqual({ reminded_24h_at: expect.any(String) });
+
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — today');
+    expect(push.title).not.toMatch(/tomorrow/i);
+
+    const s = sendEmailMock.mock.calls[0]![0];
+    expect(s.subject).toBe('Reminder: Cycle count — Aisle 4 — today');
+    expect(s.html).not.toMatch(/tomorrow/i);
+    expect(s.text).not.toMatch(/tomorrow/i);
+    // The word reaches the badge and the headline, not just the subject line.
+    expect(s.html).toContain('Today');
+    expect(s.html).toContain('Today, 2:30');
+  });
+
+  it('says TOMORROW for the next calendar day', async () => {
+    // 13:20 PT + 20h = 09:20 PT on the 25th.
+    const stub = stubFor([eventIn(20)]);
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — tomorrow');
+    expect(sendEmailMock.mock.calls[0]![0].subject).toBe(
+      'Reminder: Cycle count — Aisle 4 — tomorrow',
+    );
+  });
+
+  it('counts CALENDAR days, not elapsed hours', async () => {
+    // 23 hours ahead is "tomorrow" from 13:20 (12:20 PT on the 25th) and would
+    // be "today" from 00:30. Hours-from-now cannot tell those apart; only the
+    // date key in the display zone can. This is also the case a naive
+    // `diff < 24h ? 'today' : 'tomorrow'` gets backwards.
+    const stub = stubFor([eventIn(23)]);
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — tomorrow');
+  });
+
+  it('still says "in 1 hour" on the 1h path, whatever day it falls on', async () => {
+    // The 1h notice never carried the bug and must not acquire a day word now.
+    const stub = stubFor([eventIn(0.5)]);
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — in 1 hour');
   });
 
   it('never sends a late 24h notice after the 1h notice (two-horizon guard)', async () => {

@@ -16,6 +16,7 @@ import type { ScheduleReminderParams } from './schedule';
 
 const BASE: ScheduleReminderParams = {
   eventTitle: 'Cycle count — Aisle 4',
+  dayWord: 'tomorrow',
   month: 'Jun',
   day: '11',
   dow: 'Thu',
@@ -108,10 +109,33 @@ describe('sched-tmrw', () => {
     expect(html).toContain('Thu, Jun 11, 9:00 AM · DCIV — Fresno. Assigned to you.');
   });
 
+  it('renders the day word the SENDER computed, in all four places', () => {
+    // Owner-reported 2026-08-24: a 2:30pm delivery announced as "tomorrow" at
+    // 1:20pm the same afternoon. The template hardcoded "tomorrow" in the
+    // subject, the badge, the headline and the plain-text part, so the caller
+    // had no way to say otherwise. `dayWord` is now required (a missing one is
+    // a type error, not a silent "tomorrow") and every one of those four places
+    // reads from it — a fix applied to three of the four still ships the bug.
+    const { html, subject, text } = renderSchedTomorrow({ ...BASE, dayWord: 'today' });
+    expect(subject).toBe('Reminder: Cycle count — Aisle 4 — today');
+    expect(html).toContain('Today');           // badge
+    expect(html).toContain('Today, 9:00 AM.'); // headline
+    expect(text).toContain('today');
+    expect(html).not.toMatch(/tomorrow/i);
+    expect(text).not.toMatch(/tomorrow/i);
+    expect(subject).not.toMatch(/tomorrow/i);
+  });
+
+  it('carries a weekday through unchanged for an event further out', () => {
+    const { html, subject } = renderSchedTomorrow({ ...BASE, dayWord: 'Thursday' });
+    expect(subject).toBe('Reminder: Cycle count — Aisle 4 — Thursday');
+    expect(html).toContain('Thursday, 9:00 AM.');
+  });
+
   it('drops "Assigned to you" for manager recipients (the claim would be false)', () => {
     const { html, text } = renderSchedTomorrow({ ...BASE, assignedToYou: false });
     expect(html).not.toContain('Assigned to you');
-    expect(html).toContain('a day-ahead heads-up for this event');
+    expect(html).toContain('a heads-up for this event');
     expect(text).not.toContain('Assigned to you');
   });
 
@@ -120,13 +144,13 @@ describe('sched-tmrw', () => {
     expect(html).not.toContain('undefined');
     expect(html).not.toMatch(/\bnull\b/);
     expect(html).toContain('Thu, Jun 11, 9:00 AM. Assigned to you.');
-    expect(html).toContain('a day-ahead heads-up for your assigned event. Details below');
+    expect(html).toContain('a heads-up for your assigned event. Details below');
   });
 
   it('falls back to "Hi —" when the first name is missing', () => {
     const { html, text } = renderSchedTomorrow({ ...BASE, firstName: null });
-    expect(html).toContain('Hi &mdash; a day-ahead heads-up');
-    expect(text).toContain('Hi — a day-ahead heads-up');
+    expect(html).toContain('Hi &mdash; a heads-up');
+    expect(text).toContain('Hi — a heads-up');
   });
 });
 
