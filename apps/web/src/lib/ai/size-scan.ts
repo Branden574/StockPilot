@@ -432,3 +432,92 @@ function safeParse(raw: string): { stickers?: unknown } | null {
   };
   return attempt(raw) ?? attempt(raw.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, ''));
 }
+
+// ─── HANDS-FREE MODE ────────────────────────────────────────────────────────
+
+/**
+ * The hands-free addendum, APPENDED to the measured overview prompt rather
+ * than forked from it. The overview prompt is a measured artifact (95.1% /
+ * 99.3% on the 267-burst corpus, harness in scripts/size-scan-eval) and every
+ * rotation, carrier and counting rule in it still applies here; maintaining a
+ * second copy would drift. Composition keeps one source of truth and the
+ * eval harness keeps reading SIZE_SCAN_PROMPT untouched.
+ *
+ * WHY THE MODE EXISTS: hands-free photos are fired by a physical gate that
+ * accepts EXACTLY ONE garment traversal per photo. The overview contract
+ * ("report every dot you can see") is actively wrong for that — a frame that
+ * also catches the previous garment leaving, the next one entering, or the
+ * stack in the background would tally several units for one physical pass.
+ * The first floor run did exactly this: 7 reads produced 9 tally units.
+ */
+export const SIZE_SCAN_HANDSFREE_ADDENDUM = `
+
+HANDS-FREE MODE — THIS PHOTO CONTAINS EXACTLY ONE GARMENT OF INTEREST.
+
+This photo was taken automatically by a fixed camera the moment ONE garment
+passed through a counting lane, so the subject is a single garment, roughly
+centred. Anything else that may be visible is NOT the subject:
+  - a previous garment partly out of frame at an edge
+  - the next garment just entering at an edge
+  - a box, stack or pile of other garments in the background
+
+Report AT MOST ONE sticker: the round size dot on the centred garment. Every
+rule above still applies — rotation, the carrier test, the exact size
+spellings. Only the count changes: one dot, or none.
+
+If you cannot single out the centred garment's dot — nothing readable, or two
+or more dots are equally plausible subjects — report NO stickers and set
+noStickerVisible to true. In this mode a doubled or borrowed reading is far
+worse than an empty one, because this photo already represents exactly one
+physical garment; an empty answer is shown to the operator as "unread" and the
+garment gets re-passed.`;
+
+export const SIZE_SCAN_HANDSFREE_PROMPT = SIZE_SCAN_PROMPT + SIZE_SCAN_HANDSFREE_ADDENDUM;
+
+export type HandsfreeScanTarget = {
+  size: SizeScanSize;
+  rawText: string;
+  confidence: number;
+};
+
+export type HandsfreeScanResult = {
+  /** The single garment's reading, or null. NEVER more than one — that is the
+   *  mode's contract with the physical gate. */
+  target: HandsfreeScanTarget | null;
+  /** Why target is null, when it is. */
+  ambiguity: 'none_visible' | 'multiple_stickers' | null;
+  /** When ambiguity is 'multiple_stickers': the competing readings, for the
+   *  HUD/debugging. Deliberately NOT counts — nothing here may be tallied. */
+  competing: SizeScanSticker[];
+  discarded: SizeScanResult['discarded'];
+};
+
+/**
+ * Parse a hands-free scan response — the ≤1 HARD INVARIANT lives here, on the
+ * server, not in the prompt. The prompt asks the model for at most one dot;
+ * this function REFUSES to pass more than one through no matter what comes
+ * back. Two or more accepted readings means the photo could not be attributed
+ * to a single garment, and the honest answer is "unread", never "add both":
+ * one physical traversal must move the tally by at most one.
+ */
+export function parseHandsfreeScanResponse(raw: string): HandsfreeScanResult {
+  const base = parseSizeScanResponse(raw);
+  if (base.stickers.length === 1) {
+    const s = base.stickers[0]!;
+    return {
+      target: { size: s.size, rawText: s.rawText, confidence: s.confidence },
+      ambiguity: null,
+      competing: [],
+      discarded: base.discarded,
+    };
+  }
+  if (base.stickers.length === 0) {
+    return { target: null, ambiguity: 'none_visible', competing: [], discarded: base.discarded };
+  }
+  return {
+    target: null,
+    ambiguity: 'multiple_stickers',
+    competing: base.stickers,
+    discarded: base.discarded,
+  };
+}

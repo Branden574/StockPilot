@@ -21,7 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { API_BASE } from '@/lib/api';
 import { postMultipart } from '@/lib/multipart-upload';
-import { enqueue } from '@/lib/queue';
+import { enqueue, newIdempotencyKey } from '@/lib/queue';
 import { supabase } from '@/lib/supabase';
 import { syncNow } from '@/lib/sync';
 import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
@@ -182,9 +182,17 @@ export default function SizeScanScreen() {
       // outbox as a tapped count, so a scan confirmed in a dead spot at the
       // back of the warehouse is not lost. The server dedups on
       // idempotency_key, so a replay is safe.
-      for (const [size, quantity] of entries) {
-        await enqueue('size_count_event', {
-          sessionId: id,
+      // ONE outbox row for the WHOLE confirmation — atomic by construction.
+      // Review proved every per-size-loop variant loses: a partial enqueue
+      // failure followed by a retry either double-counts (fresh keys) or
+      // silently drops an edited quantity (stable keys + the server's
+      // ignoreDuplicates upsert). A single row cannot partially fail, its
+      // replay carries identical per-event keys, and the server dedupes each.
+      const countedAt = new Date().toISOString();
+      await enqueue('size_count_event', {
+        sessionId: id,
+        events: entries.map(([size, quantity]) => ({
+          idempotencyKey: newIdempotencyKey(),
           size,
           quantityDelta: quantity,
           // The ledger's own value for a photographed count, distinguishing
@@ -192,9 +200,9 @@ export default function SizeScanScreen() {
           recognitionMethod: 'box_overview',
           confidence: confidenceFor(phase.scan, size),
           modelVersion: phase.scan.modelVersion,
-          countedAt: new Date().toISOString(),
-        });
-      }
+          countedAt,
+        })),
+      });
       void syncNow();
       router.back();
     } catch (e) {

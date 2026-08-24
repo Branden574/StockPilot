@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseHandsfreeScanResponse,
   parseSizeScanResponse,
   SIZE_SCAN_MIN_CONFIDENCE,
+  SIZE_SCAN_HANDSFREE_ADDENDUM,
+  SIZE_SCAN_HANDSFREE_PROMPT,
   SIZE_SCAN_PROMPT,
   SIZE_SCAN_RESPONSE_SCHEMA,
   SIZE_SCAN_SIZES,
@@ -219,5 +222,64 @@ describe('the prompt and schema hold the properties the accuracy depends on', ()
     // phrase can straddle a newline. Pinning the exact spacing would fail on
     // reflow — brittleness about formatting, not about the guarantee.
     expect(SIZE_SCAN_PROMPT).toMatch(/Legibility\s+is\s+not\s+the\s+test/i);
+  });
+});
+
+describe('hands-free mode — one physical pass may tally at most one garment', () => {
+  it('the hands-free prompt COMPOSES the measured overview prompt, never forks it', () => {
+    // The overview prompt is a measured artifact (95.1%/99.3% on the corpus).
+    // Every rotation/carrier rule must survive verbatim into hands-free —
+    // startsWith pins that a reword of one cannot silently drift from the
+    // other, and the eval harness keeps measuring the shared body.
+    expect(SIZE_SCAN_HANDSFREE_PROMPT.startsWith(SIZE_SCAN_PROMPT)).toBe(true);
+    expect(SIZE_SCAN_HANDSFREE_PROMPT.endsWith(SIZE_SCAN_HANDSFREE_ADDENDUM)).toBe(true);
+    expect(SIZE_SCAN_HANDSFREE_ADDENDUM).toMatch(/AT MOST ONE/);
+    expect(SIZE_SCAN_HANDSFREE_ADDENDUM).toMatch(/EXACTLY ONE GARMENT/);
+    expect(SIZE_SCAN_HANDSFREE_ADDENDUM).toMatch(/edge/i);
+    expect(SIZE_SCAN_HANDSFREE_ADDENDUM).toMatch(/background/i);
+  });
+
+  it('one accepted reading becomes the target', () => {
+    const r = parseHandsfreeScanResponse(body([dot('XL')]));
+    expect(r.target).toMatchObject({ size: 'XL', confidence: 1 });
+    expect(r.ambiguity).toBeNull();
+  });
+
+  it('no readings → null target, none_visible → the client counts an UNREAD', () => {
+    const r = parseHandsfreeScanResponse(body([], true));
+    expect(r.target).toBeNull();
+    expect(r.ambiguity).toBe('none_visible');
+  });
+
+  it('HARD INVARIANT: two readings never pass through — even of DIFFERENT sizes', () => {
+    // The overview contract would tally both. One physical pass may move the
+    // tally by at most one, so ambiguity wins over guessing which is the
+    // subject.
+    const r = parseHandsfreeScanResponse(body([dot('M'), dot('XL')]));
+    expect(r.target).toBeNull();
+    expect(r.ambiguity).toBe('multiple_stickers');
+    expect(r.competing).toHaveLength(2);
+  });
+
+  it('HARD INVARIANT: two readings of the SAME size also refuse — this was the 7-reads-9-units bug', () => {
+    // The first floor run: a frame catching the target AND a same-size stack
+    // dot behind it added 2 units for one garment. Same size does not make it
+    // one garment.
+    const r = parseHandsfreeScanResponse(body([dot('S'), dot('S')]));
+    expect(r.target).toBeNull();
+    expect(r.ambiguity).toBe('multiple_stickers');
+  });
+
+  it('a neck tag next to the target does not make it ambiguous — carriers filter first', () => {
+    const r = parseHandsfreeScanResponse(
+      body([dot('M'), { ...dot('L'), carrier: 'printed_tag_or_label' }]),
+    );
+    expect(r.target).toMatchObject({ size: 'M' });
+    expect(r.ambiguity).toBeNull();
+  });
+
+  it('a low-confidence second dot does not make it ambiguous — the floor filters first', () => {
+    const r = parseHandsfreeScanResponse(body([dot('M'), dot('L', 0.3)]));
+    expect(r.target).toMatchObject({ size: 'M' });
   });
 });

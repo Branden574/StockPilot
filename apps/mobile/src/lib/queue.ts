@@ -42,12 +42,25 @@ function uuid(): string {
   });
 }
 
+/** A fresh outbox idempotency key, exported for callers that must mint keys
+ *  BEFORE enqueueing — a commit that retries after a partial failure needs
+ *  the same key on the retry, or the server's (session, key) dedupe cannot
+ *  recognise the replay and the ledger double-counts. */
+export function newIdempotencyKey(): string {
+  return uuid();
+}
+
 export async function enqueue(
   kind: PendingActionKind,
   payload: Record<string, unknown>,
+  opts?: {
+    /** Caller-stable key (see newIdempotencyKey). Omitted = fresh key, the
+     *  behaviour every existing call site keeps. */
+    idempotencyKey?: string;
+  },
 ): Promise<{ id: number; idempotencyKey: string }> {
   const db = await getDb();
-  const idempotencyKey = uuid();
+  const idempotencyKey = opts?.idempotencyKey ?? uuid();
   const result = await db.runAsync(
     `insert into pending_actions (kind, idempotency_key, payload_json, created_at)
      values (?, ?, ?, ?)`,
@@ -325,4 +338,47 @@ function safeParse(s: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Sum the size deltas this session has SITTING IN THE OUTBOX — pending,
+ * in-flight or failed-but-retryable rows that the server has not confirmed.
+ *
+ * The tap counter overlays these on the server-seeded tally when it regains
+ * focus: review confirmed that seeding from the server alone RACES the drain
+ * (syncNow pulls a snapshot before it posts the queue), so an operator's
+ * still-queued taps — or a hands-free commit made seconds ago — visibly
+ * vanished from the screen, inviting the re-taps that become double counts
+ * once the queue drains. Server truth + local queue = actual truth.
+ */
+export async function pendingSizeCountDeltas(
+  sessionId: string,
+): Promise<Record<string, number>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ payload_json: string }>(
+    `select payload_json from pending_actions
+      where kind = 'size_count_event' and status != 'ok'`,
+  );
+  const out: Record<string, number> = {};
+  for (const row of rows) {
+    try {
+      const payload = JSON.parse(row.payload_json) as {
+        sessionId?: string;
+        size?: string;
+        quantityDelta?: number;
+        events?: { size?: string; quantityDelta?: number }[];
+      };
+      if (payload.sessionId !== sessionId) continue;
+      const events = Array.isArray(payload.events)
+        ? payload.events
+        : [{ size: payload.size, quantityDelta: payload.quantityDelta }];
+      for (const e of events) {
+        if (typeof e.size !== 'string') continue;
+        out[e.size] = (out[e.size] ?? 0) + (typeof e.quantityDelta === 'number' ? e.quantityDelta : 1);
+      }
+    } catch {
+      // A malformed row is the sender's problem; the overlay just skips it.
+    }
+  }
+  return out;
 }

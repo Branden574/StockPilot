@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { api } from '@/lib/api';
-import { enqueue } from '@/lib/queue';
+import { enqueue, pendingSizeCountDeltas } from '@/lib/queue';
 import { resolveSizeChips } from '@/lib/size-count-chips';
 import { syncNow } from '@/lib/sync';
 import { radius, space, theme } from '@/lib/theme';
@@ -50,14 +50,18 @@ export default function SizeCountScreen() {
   const historyRef = React.useRef<string[]>([]);
 
   // Seed the tally from the server (so a resumed/queued session shows prior
-  // counts). Offline: fall back to an empty local tally; taps still queue.
-  React.useEffect(() => {
+  // counts) — and RE-seed on every focus: returning from a hands-free commit
+  // used to show a stale total that excluded the garments just counted, and
+  // the Finish alert quoted it. Offline: fall back to the local tally; taps
+  // still queue.
+  useFocusEffect(
+    React.useCallback(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await api<{
           session: SessionInfo;
-          tally: Array<{ size: string; quantity: number }>;
+          tally: { size: string; quantity: number }[];
           group: GroupInfo | null;
         }>(`/api/v1/size-counts/${id}`);
         if (cancelled) return;
@@ -65,6 +69,17 @@ export default function SizeCountScreen() {
         setGroup(res.group ?? null);
         const seeded: Tally = {};
         for (const t of res.tally) seeded[t.size] = t.quantity;
+        // OVERLAY THE OUTBOX. The server's tally lags anything still queued
+        // locally (the drain races this very fetch — review measured the
+        // fetch winning almost always), so seeding from the server alone made
+        // just-counted garments vanish on refocus and invited double-tapping
+        // them back in. Server truth + queued deltas = what the operator
+        // actually counted.
+        const queued = await pendingSizeCountDeltas(id);
+        for (const [size, delta] of Object.entries(queued)) {
+          seeded[size] = (seeded[size] ?? 0) + delta;
+        }
+        if (cancelled) return;
         setTally(seeded);
       } catch {
         // Offline or transient — start from a local zero tally; the server
@@ -76,7 +91,8 @@ export default function SizeCountScreen() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+    }, [id]),
+  );
 
   const isOpen = (session?.status ?? 'active') === 'active';
   const total = React.useMemo(

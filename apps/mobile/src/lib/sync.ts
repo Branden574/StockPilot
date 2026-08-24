@@ -50,8 +50,8 @@ interface SnapshotResponse {
    * as "not loaded" (no banner), never as all-access or as zero warehouses.
    */
   warehouseScope?: { hasAllAccess: boolean; warehouseNames: string[] };
-  warehouses: Array<{ id: string; name: string }>;
-  items: Array<{
+  warehouses: { id: string; name: string }[];
+  items: {
     id: string;
     sku: string;
     name: string;
@@ -60,36 +60,36 @@ interface SnapshotResponse {
     unitCost: number;
     warehouseId: string | null;
     itemType: string | null;
-  }>;
-  openPOs: Array<{
+  }[];
+  openPOs: {
     id: string;
     poNumber: string | null;
     status: string;
     expectedAt: string | null;
     warehouseId: string | null;
-    lines: Array<{
+    lines: {
       id: string;
       itemId: string;
       qtyOrdered: number;
       qtyReceived: number;
       unitCost: number;
-    }>;
-  }>;
-  openCycleCounts: Array<{
+    }[];
+  }[];
+  openCycleCounts: {
     id: string;
     status: string;
     warehouseId: string | null;
     startedAt: string;
     assignedTo: string | null;
     notes: string | null;
-    lines: Array<{
+    lines: {
       id: string;
       itemId: string;
       expected: number;
       counted: number | null;
-    }>;
-  }>;
-  bundles: Array<{
+    }[];
+  }[];
+  bundles: {
     id: string;
     name: string;
     sku: string | null;
@@ -97,8 +97,8 @@ interface SnapshotResponse {
     phantomItemId: string | null;
     phantomQty: number;
     phantomWarehouseId: string | null;
-    components: Array<{ itemId: string; quantity: number; isOptional: boolean }>;
-  }>;
+    components: { itemId: string; quantity: number; isOptional: boolean }[];
+  }[];
 }
 
 export async function isOnline(): Promise<boolean> {
@@ -381,16 +381,28 @@ async function sendOne(
       throw new Error('adjust_stock queueing not yet wired — adjust online for now');
     }
     case 'size_count_event': {
-      // Instant Size Count: one tapped/detected garment = one event. The
-      // server dedups on idempotency_key, so a single-event batch is safe to
-      // replay. sessionId is the already-created (online) session.
+      // Instant Size Count. Two payload shapes share this kind:
+      //   single — one tapped/detected garment = one event (legacy shape;
+      //            the outbox row's own key IS the event key)
+      //   batch  — `events: [...]`, each event carrying its OWN
+      //            idempotencyKey, all enqueued as ONE outbox row.
+      // The batch shape exists because a commit that enqueued one row per
+      // size could PARTIALLY fail, and every repair of that (retrying with
+      // fresh keys, retrying with stable keys) was proven by review to either
+      // double-count or silently drop grown quantities. One row is atomic:
+      // it either entered the outbox whole or not at all, a replay of the row
+      // replays identical per-event keys, and the server dedups per event.
       const sessionId = String(payload.sessionId ?? '');
       if (!sessionId) throw new Error('size_count_event: missing sessionId');
-      const { sessionId: _drop, ...event } = payload;
-      void _drop;
+      const batch = Array.isArray(payload.events) ? payload.events : null;
+      const events = batch ?? [(() => {
+        const { sessionId: _drop, ...event } = payload;
+        void _drop;
+        return { ...event, idempotencyKey };
+      })()];
       await api(`/api/v1/size-counts/${sessionId}/events`, {
         method: 'POST',
-        body: { events: [{ ...event, idempotencyKey }] },
+        body: { events },
       });
       return;
     }
