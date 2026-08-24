@@ -599,26 +599,23 @@ def flow_maintenance():
 
 
 def flow_size_scan():
-    """SIZE SCAN. The AI size-sticker scanner's mobile surface (#168): the
-    entry point on the counter, and the scan screen it opens.
+    """SIZE SCAN. The AI size-sticker scanner's mobile surface: the entry point
+    on the counter and the scan screen it opens.
 
-    WHAT THIS DOES NOT COVER, and cannot: capture -> review -> confirm. The
-    simulator has no camera, so `takePictureAsync` never returns a frame and
-    the review list is unreachable here. That half is covered elsewhere —
-    the parser and the prompt invariants are unit-pinned in
-    apps/web/src/lib/ai/size-scan.test.ts, the accuracy is measured against
-    real photographs by apps/web/scripts/size-scan-eval/, and the route was
-    walked end-to-end against live prod with real corpus images. What THIS
-    guards is the thing none of those can see: that the button exists on the
-    counter, that it routes, and that the screen behind it stands up instead
-    of crashing or rendering blank.
+    ALSO GUARDS THE REMOVAL. Hands-free counting was removed on 2026-08-24
+    after three hardware failures; this asserts the counter offers exactly ONE
+    camera path and that the hands-free deep link no longer resolves to a
+    screen. A dead route that still renders is how a removed feature comes
+    back by accident.
+
+    WHAT THIS DOES NOT COVER: capture -> review -> confirm. The simulator has
+    no camera, so takePictureAsync never returns a frame. That half is covered
+    by the parser unit tests, the accuracy harness against real photographs,
+    and an end-to-end walk of the route against live prod.
 
     Read-only: it opens an EXISTING demo-org session and taps nothing that
-    writes. The session id is pinned the same way SO-000021 is in
-    flow_delivery_section — a stable fixture that predates the feature."""
+    writes."""
     open_url(f"stockpilot://size-count/{SIZE_COUNT_SESSION_ID}")
-    # The first deep link after a cold launch can land before the router is
-    # ready; wait_for's own polling covers the slow case.
     if not wait_for("Size count", timeout=30):
         return False, "size-count session screen did not render"
     if find_all("enabled for this workspace"):
@@ -626,49 +623,24 @@ def flow_size_scan():
             "instant_size_count is disabled for this workspace -- the app's "
             "module snapshot is stale or the org toggle was turned off"
         )
-    # BOTH entry points. Hands-free (#the gate) is the fast path and the
-    # single-photo scan is its fallback; a counter offering only one of them is
-    # a regression whichever one went missing.
-    if _scroll_until("Hands-free counting", max_swipes=8) is None:
-        return False, "counter rendered without the 'Hands-free counting' entry point"
-    if _scroll_until("Scan one photo", max_swipes=8) is None:
-        return False, "counter rendered without the single-photo scan entry point"
-    # _scroll_until stops as soon as an element is technically visible, which on
-    # a long size grid leaves the last card straddling the bottom edge — its
-    # frame is on-screen but its tappable CENTRE is not, so the tap silently
-    # lands on nothing. One more swipe puts it properly in view, and the element
-    # must be RE-FOUND afterwards because the earlier frame is now stale.
-    swipe(516, 1000, 516, 700)
-    time.sleep(0.8)
-    found = find_all("Scan one photo")
-    if not found:
-        return False, "single-photo entry point disappeared after scrolling into view"
-    btn = found[0]
+    els = describe_all()
+    if find_all("Hands-free", els):
+        return False, "the removed hands-free entry point is still on the counter"
+    btn = _scroll_until("Scan sizes with the camera", max_swipes=8)
+    if btn is None:
+        return False, "counter rendered without the 'Scan sizes' entry point"
     tap_element(btn)
     time.sleep(2)
     els = describe_all()
     # Either outcome is correct and which one you get depends on the
     # simulator's privacy state, so accept both rather than pinning whichever
-    # this machine happens to be in — a flow that fails on a fresh sim is a
-    # flow people learn to ignore.
+    # this machine happens to be in.
     if find_all("Camera access needed", els):
         return True, "scan screen rendered its camera-permission gate"
     for needle in ("Scan sizes", "Tap to capture"):
         if not find_all(needle, els):
             return False, f"scan screen rendered without {needle!r}"
-
-    # And the hands-free gate screen. On the simulator this MUST land on the
-    # no-camera branch: useCameraDevice() returns null where there is no camera,
-    # and the value of asserting it is that the screen degrades to a sentence
-    # instead of a black rectangle that reads as a hang. A crash here would mean
-    # the vision-camera native module is missing from the installed binary,
-    # which is exactly the regression a JS-only OTA would cause.
-    open_url(f"stockpilot://size-count/handsfree/{SIZE_COUNT_SESSION_ID}")
-    if wait_for("Hands-free", timeout=25) is None:
-        return False, "hands-free screen did not render (vision-camera missing from this build?)"
-    if not find_all("No camera on this device"):
-        return False, "hands-free screen did not degrade to its no-camera branch on the simulator"
-    return True, "single-photo capture UI and hands-free no-camera branch both rendered"
+    return True, "scan screen rendered its capture UI"
 
 
 # ---------------------------------------------------------------------------

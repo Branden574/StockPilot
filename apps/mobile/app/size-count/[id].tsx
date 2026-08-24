@@ -18,6 +18,31 @@ import { resolveSizeChips } from '@/lib/size-count-chips';
 import { syncNow } from '@/lib/sync';
 import { radius, space, theme } from '@/lib/theme';
 
+/**
+ * WHY THERE IS NO HANDS-FREE MODE HERE.
+ *
+ * A hands-free counter — prop the phone over the table, slide garments past,
+ * tap nothing — was built (PRs #172/#175/#176) and REMOVED on 2026-08-24
+ * after three consecutive hardware failures, each with a different root
+ * cause: the gate never fired (iOS Frame.timestamp is seconds, not
+ * nanoseconds); then it fired 23 times for ~10 shirts (a moving garment kept
+ * re-triggering a scene-change threshold); then it hung in calibration
+ * forever (the phone's real motion noise floor measured ~14 against a
+ * threshold of 3).
+ *
+ * The pattern, not any one bug, is the finding: detecting "a new physical
+ * object arrived" from a 24x24 luma grid is too fragile against camera noise,
+ * auto-exposure and hand tremor, and none of it can be validated off-device.
+ * Doing it properly needs real on-device object detection and a dataset far
+ * larger than the 267 distinct stickers we have.
+ *
+ * What survives is the part that is MEASURED: the single-photo scanner reads
+ * stickers at 99.3% (1 miss in 267, harness in apps/web/scripts/size-scan-eval)
+ * and reads EVERY sticker in one frame — so a box is counted by photographing
+ * the stack, lifting a layer, and photographing again. Roughly six photos for
+ * fifty garments, using only the path that works.
+ */
+
 interface SessionInfo {
   id: string;
   status: string;
@@ -222,32 +247,25 @@ export default function SizeCountScreen() {
             outbox, as the same kind of event. The tap grid above stays the
             primary way to count, which is why this sits below it rather than
             in the header. */}
+        {/* THE SCAN IS AN ACCELERATOR, NOT A REPLACEMENT. It lands on a review
+            list with the counts pre-filled and every number adjustable, and
+            only what the operator confirms is queued — through this same
+            outbox, as the same kind of event. The tap grid above stays the
+            primary way to count, which is why this sits below it.
+
+            A hands-free variant (prop the phone, slide garments past, tap
+            nothing) was built and REMOVED on 2026-08-24 after three failed
+            hardware runs. See the note at the top of this file. */}
         {isOpen ? (
-          <>
-            {/* HANDS-FREE FIRST: it is the fast path — prop the phone, slide
-                garments past, tap nothing. The single-photo scan sits under it
-                as the fallback for a stack you want to shoot in one frame, and
-                because it is the one that works with no camera device (the
-                simulator) and if the gate ever misbehaves on the floor. */}
-            <Pressable
-              onPress={() => router.push(`/size-count/handsfree/${id}`)}
-              style={[styles.scanBtn, styles.scanBtnPrimary]}
-            >
-              <Text style={styles.scanLabelPrimary}>Hands-free counting</Text>
-              <Text style={styles.scanSubPrimary}>
-                Prop the phone over the table and slide garments past — no tapping
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => router.push(`/size-count/scan/${id}`)}
-              style={styles.scanBtn}
-            >
-              <Text style={styles.scanLabel}>Scan one photo</Text>
-              <Text style={styles.scanSub}>
-                Photograph a sticker or a stack — you check every reading before it counts
-              </Text>
-            </Pressable>
-          </>
+          <Pressable
+            onPress={() => router.push(`/size-count/scan/${id}`)}
+            style={styles.scanBtn}
+          >
+            <Text style={styles.scanLabel}>Scan sizes with the camera</Text>
+            <Text style={styles.scanSub}>
+              Photograph a sticker or a whole stack — you check every reading before it counts
+            </Text>
+          </Pressable>
         ) : null}
       </ScrollView>
 
@@ -311,9 +329,6 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     backgroundColor: theme.card,
   },
-  scanBtnPrimary: { backgroundColor: theme.primary, borderColor: theme.primary, marginBottom: space.sm },
-  scanLabelPrimary: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  scanSubPrimary: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2, lineHeight: 17 },
   scanLabel: { color: theme.primary, fontSize: 15, fontWeight: '700' },
   scanSub: { color: theme.textMuted, fontSize: 12, marginTop: 2, lineHeight: 17 },
   hint: { color: theme.textMuted, fontSize: 12, marginTop: space.md, textAlign: 'center' },
