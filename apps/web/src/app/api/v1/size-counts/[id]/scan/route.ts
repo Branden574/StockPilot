@@ -4,9 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
 import {
-  parseHandsfreeScanResponse,
   parseSizeScanResponse,
-  SIZE_SCAN_HANDSFREE_PROMPT,
   SIZE_SCAN_PROMPT,
   SIZE_SCAN_RESPONSE_SCHEMA,
 } from '@/lib/ai/size-scan';
@@ -112,7 +110,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'expected multipart/form-data' }, { status: 415 });
   }
   let photo: Blob;
-  let handsfree = false;
   try {
     const form = await req.formData();
     const file = form.get('image');
@@ -120,13 +117,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'image field is required' }, { status: 400 });
     }
     photo = file;
-    // TWO RECOGNITION CONTRACTS, one endpoint. 'handsfree' photos are fired
-    // by a physical gate that accepts exactly ONE garment traversal per
-    // photo, so the reader must answer with AT MOST ONE garment — the
-    // overview contract ("report every dot") would tally the neighbouring
-    // stack into a single pass. Anything other than the literal string keeps
-    // the default, so old clients are untouched.
-    handsfree = form.get('mode') === 'handsfree';
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'invalid_body' },
@@ -187,9 +177,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     if (useClaude) {
       raw = await claudeGenerateJsonString({
-        // The handsfree prompt COMPOSES the measured overview prompt with a
-        // single-target addendum — every rotation/carrier rule survives.
-        prompt: handsfree ? SIZE_SCAN_HANDSFREE_PROMPT : SIZE_SCAN_PROMPT,
+        prompt: SIZE_SCAN_PROMPT,
         schema: SIZE_SCAN_RESPONSE_SCHEMA,
         media: [{ data: base64, mediaType }],
         model: env.ANTHROPIC_SIZE_SCAN_MODEL,
@@ -212,7 +200,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
       const result = await model.generateContent([
-        { text: handsfree ? SIZE_SCAN_HANDSFREE_PROMPT : SIZE_SCAN_PROMPT },
+        { text: SIZE_SCAN_PROMPT },
         { inlineData: { data: base64, mimeType: mediaType } },
       ]);
       raw = result.response.text();
@@ -222,27 +210,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       { error: 'vision_failed', message: e instanceof Error ? e.message : 'unknown' },
       { status: 502 },
     );
-  }
-
-  if (handsfree) {
-    // ≤1 IS ENFORCED HERE, not just asked for in the prompt: two or more
-    // accepted readings mean the photo could not be attributed to a single
-    // garment, and the honest answer is unread — one physical traversal must
-    // never move the tally by more than one.
-    const hf = parseHandsfreeScanResponse(raw);
-    const allowedSizes = new Set(scanContext.allowedSizes);
-    return NextResponse.json({
-      mode: 'handsfree',
-      target: hf.target,
-      ambiguity: hf.ambiguity,
-      // A real reading outside this session's size scale is surfaced, not
-      // silently dropped — the client shows it as unread with the reason.
-      outsideScale: hf.target != null && !allowedSizes.has(hf.target.size),
-      competing: hf.competing,
-      discarded: hf.discarded,
-      modelVersion,
-      groupName: scanContext.groupName,
-    });
   }
 
   const result = parseSizeScanResponse(raw);
