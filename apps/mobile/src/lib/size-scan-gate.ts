@@ -1,6 +1,9 @@
 import * as React from 'react';
+import { Platform } from 'react-native';
 import { CommonResolutions, useFrameOutput } from 'react-native-vision-camera';
 import { createSynchronizable, scheduleOnRN } from 'react-native-worklets';
+
+import { decideGate, frameTimestampToMsFactor } from './size-scan-gate-core';
 
 /**
  * THE GATE — the thing that decides when a garment has passed, without asking
@@ -69,32 +72,25 @@ import { createSynchronizable, scheduleOnRN } from 'react-native-worklets';
  * readout on hardware rather than guessed at twice.
  */
 
-// ─── tuning (all in mean |delta| of 8-bit luma, so 0..255) ────────────────
+// The tuning constants (SCENE_CHANGED, SHARP_ENOUGH, FORCE_AFTER_MS,
+// REFRACTORY_MS) and the whole fire decision live in ./size-scan-gate-core —
+// a pure, React-Native-free module so the decision can be unit-tested against
+// the timestamps each platform actually produces. This file is the CAMERA
+// wiring; that file is the LOGIC. GRID and ROI come from there too.
 
-/** How different the scene must be from the LAST CAPTURE before a new garment
- *  is believed to be present. The main dial: too low double-counts one shirt,
- *  too high skips shirts that resemble their predecessor. */
-const SCENE_CHANGED = 12;
+/** Raw `Frame.timestamp` -> milliseconds, resolved ONCE on the JS thread and
+ *  captured into the worklet as a plain number. iOS reports seconds, Android
+ *  nanoseconds; see frameTimestampToMsFactor for the citation. This is the fix
+ *  for the 1.4.0 "counts nothing" bug — the gate assumed nanoseconds and its
+ *  refractory window became 350,000,000 ms, permanently open. */
+const TS_TO_MS = frameTimestampToMsFactor(Platform.OS);
 
-/** Instantaneous frame-to-frame motion at or below which a frame is considered
- *  sharp enough to read. Not a stop — just a lull. */
-const SHARP_ENOUGH = 6;
-
-/** Hard deadline. Once the scene has been "changed" for this long without ever
- *  going sharp, fire anyway on the calmest frame seen. A soft photo that reads
- *  beats a garment that was never photographed. */
-const FORCE_AFTER_MS = 700;
-
-/** Minimum gap between captures. Belt-and-braces against a single garment
- *  firing twice; at one garment per second this costs nothing. */
-const REFRACTORY_MS = 350;
-
-/** Sparse sample grid over the region of interest. 24*24 = 576 reads a frame,
- *  which is nothing next to decoding it. */
+/** Sparse sample grid over the region of interest. 24*24 = 576 luma reads a
+ *  frame, nothing next to decoding it. Sampling geometry, not decision logic,
+ *  so it lives with the camera wiring rather than in the pure core. */
 const GRID = 24;
-
-/** Centred fraction of the frame that is sampled. Excludes the edges, where the
- *  operator's hands live and would otherwise read as scene change. */
+/** Centred fraction of the frame that is sampled. Excludes the edges, where
+ *  the operator's hands live and would otherwise read as scene change. */
 const ROI = 0.6;
 
 export type GateDebug = {
@@ -228,7 +224,9 @@ export function useSizeScanGate(opts: {
         const n = GRID * GRID;
         const motion = motionSum / n;
         const sceneDelta = scratch.hasRef ? sceneSum / n : 255;
-        const now = frame.timestamp;
+        // Normalised to MILLISECONDS — see TS_TO_MS. Was `frame.timestamp`
+        // (nanoseconds assumed), which is seconds on iOS and jammed the gate.
+        const now = frame.timestamp * TS_TO_MS;
         const isArmed = armed.getDirty();
 
         if (onDebugRef.current != null) {
@@ -241,32 +239,17 @@ export function useSizeScanGate(opts: {
           }
         }
 
-        if (!isArmed) {
-          // Disarmed (review sheet open). Keep sampling so `prev` stays current,
-          // but do not accumulate a change window — otherwise the moment we
-          // re-arm we fire on a stale one.
-          scratch.changedAt = 0;
-          return;
-        }
-        if (now - scratch.lastFiredAt < REFRACTORY_MS * 1e6) return;
+        // THE DECISION lives in the pure core so it can be unit-tested against
+        // real iPhone/Android timestamps (see size-scan-gate-core.test.ts).
+        // `scratch` supplies the two mutable timing fields decideGate needs;
+        // it mutates them in place — both run on the camera runtime, so this is
+        // a direct worklet call with no serialization.
+        if (!decideGate(scratch, now, sceneDelta, motion, isArmed)) return;
 
-        if (sceneDelta < SCENE_CHANGED) {
-          // Same garment still under the camera. This is the branch that stops
-          // one shirt being counted five times as it crosses.
-          scratch.changedAt = 0;
-          return;
-        }
-
-        // A different garment is present. Wait for a lull to get a sharp frame,
-        // but not forever.
-        if (scratch.changedAt === 0) scratch.changedAt = now;
-        const waited = (now - scratch.changedAt) / 1e6;
-        if (motion > SHARP_ENOUGH && waited < FORCE_AFTER_MS) return;
-
+        // Fired: this frame becomes the new reference so the SAME garment does
+        // not fire again as it finishes crossing.
         ref.set(prev);
         scratch.hasRef = true;
-        scratch.changedAt = 0;
-        scratch.lastFiredAt = now;
         scheduleOnRN(fire);
       } finally {
         // NON-NEGOTIABLE. An undisposed frame holds a buffer the pipeline needs
