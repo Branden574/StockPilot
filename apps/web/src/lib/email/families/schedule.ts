@@ -77,6 +77,18 @@ export interface ScheduleFooterUrls {
 
 export interface ScheduleReminderParams {
   eventTitle: string;
+  /**
+   * The day the event falls on, RELATIVE TO SEND TIME and lowercase:
+   * "today", "tomorrow", or a weekday name.
+   *
+   * REQUIRED ON PURPOSE. This template used to hardcode "tomorrow" everywhere
+   * — subject, badge, headline and image alt — because it only ever ran from
+   * a 24h-ahead cron. That cron's window is now..+24h, which also contains
+   * events LATER TODAY, so it announced a 2:30pm delivery as "tomorrow" at
+   * 1:20pm the same afternoon. Making this a required field means the next
+   * caller cannot silently inherit the same assumption; the compiler asks.
+   */
+  dayWord: string;
   /** Date-rail cells, e.g. "Jun" / "11" / "Thu". */
   month: string;
   day: string;
@@ -144,6 +156,12 @@ function scheduleEventCard(p: ScheduleReminderParams, compact: boolean): string 
   });
 }
 
+/** "today" -> "Today". Sentence-case for the headline and badge slots, which
+ *  read as labels rather than prose. */
+function capitalize(w: string): string {
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
 /** Registry preheader when all merge values exist; honest fallbacks otherwise. */
 function tomorrowPreheader(p: ScheduleReminderParams): string {
   const def = esEmailById('sched-tmrw');
@@ -184,7 +202,7 @@ function textLines(p: ScheduleReminderParams, subject: string, lead: string): st
 
 export function renderSchedTomorrow(p: ScheduleReminderParams): RenderedScheduleEmail {
   const def = esEmailById('sched-tmrw');
-  const subject = def.subject({ event: p.eventTitle });
+  const subject = def.subject({ event: p.eventTitle, when: p.dayWord });
   const preheader = tomorrowPreheader(p);
 
   const eventPhrase = p.assignedToYou ? 'your assigned event' : 'this event';
@@ -194,20 +212,23 @@ export function renderSchedTomorrow(p: ScheduleReminderParams): RenderedSchedule
     brandStrip({ tag: def.tag }),
     section(
       '36px 36px 24px',
-      `${statusPill({ variant: def.badge.variant, label: def.badge.label({}) })}
+      `${statusPill({
+        variant: def.badge.variant,
+        label: def.badge.label({ day: capitalize(p.dayWord) }),
+      })}
       ${headline({
         lead: escapeHtml(p.eventTitle),
-        turn: `Tomorrow, ${escapeHtml(p.startTime)}.`,
+        turn: `${escapeHtml(capitalize(p.dayWord))}, ${escapeHtml(p.startTime)}.`,
       })}
       ${bodyText(
-        `${greeting(p.firstName)}a day-ahead heads-up for ${eventPhrase}${at}. Details below; nothing to confirm.`,
+        `${greeting(p.firstName)}a heads-up for ${eventPhrase}${at}. Details below; nothing to confirm.`,
       )}`,
     ),
     section(
       '0 36px 28px',
       heroSlot({
         src: esAssetUrl('motion/calendar@2x.gif'),
-        alt: escapeHtml(`Calendar: ${p.eventTitle} — tomorrow, ${p.startTime}`),
+        alt: escapeHtml(`Calendar: ${p.eventTitle} — ${p.dayWord}, ${p.startTime}`),
       }),
     ),
     section('0 36px 28px', scheduleEventCard(p, false)),
@@ -226,7 +247,7 @@ export function renderSchedTomorrow(p: ScheduleReminderParams): RenderedSchedule
   const text = textLines(
     p,
     subject,
-    `${greetingText(p.firstName)}a day-ahead heads-up for ${p.assignedToYou ? 'your assigned event' : 'this event'}${p.location ? ` at ${p.location}` : ''}. Details below; nothing to confirm.`,
+    `${greetingText(p.firstName)}a heads-up for ${p.assignedToYou ? 'your assigned event' : 'this event'}${p.location ? ` at ${p.location}` : ''}. Details below; nothing to confirm.`,
   );
 
   return { subject, html, text, from: def.from, headers: scheduleHeaders(p) };

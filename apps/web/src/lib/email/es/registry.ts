@@ -650,10 +650,16 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     to: 'Assignee',
     from: 'StockPilot <schedule@stockpilotusa.com>',
     replyTo: 'Not monitored',
-    subject: (p: { event: string }) => `Reminder: ${p.event} — tomorrow`,
+    // `when` is the day word the SENDER computed ("today" / "tomorrow" / a
+    // weekday). It defaults to 'tomorrow' so the catalog preview and every
+    // existing content pin render unchanged, but the cron always passes the
+    // real one — this template covers any event inside the day-ahead window,
+    // and a good share of those are later the same day.
+    subject: (p: { event: string; when?: string }) =>
+      `Reminder: ${p.event} — ${p.when ?? 'tomorrow'}`,
     preheader: (p: { when: string; where: string }) =>
       `${p.when} · ${p.where}. Assigned to you.`,
-    badge: { variant: 'info', label: () => 'Tomorrow' },
+    badge: { variant: 'info', label: (p: { day?: string } = {}) => p.day ?? 'Tomorrow' },
     cta: 'Open schedule',
     motionNote: 'L2 · Calendar tile',
     motionAsset: 'calendar',
