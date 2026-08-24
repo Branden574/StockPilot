@@ -381,7 +381,12 @@ async function sendOne(
       throw new Error('adjust_stock queueing not yet wired — adjust online for now');
     }
     case 'size_count_event': {
-      // Instant Size Count. Two payload shapes share this kind:
+      // RETIRED 2026-08-24 with the mobile size-count screens. Kept as a
+      // DRAIN-ONLY path: nothing enqueues this kind any more, but rows
+      // already in an operator's outbox must still reach the server. The
+      // /api/v1/size-counts endpoints remain live for exactly this.
+      //
+      // Two payload shapes share this kind:
       //   single — one tapped/detected garment = one event (legacy shape;
       //            the outbox row's own key IS the event key)
       //   batch  — `events: [...]`, each event carrying its OWN

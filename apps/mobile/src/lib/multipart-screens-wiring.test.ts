@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest';
  * convention outright — node_modules/expo/src/winter/fetch/convertFormData.ts
  * says so in a comment ("`uri` is not supported for React Native's FormData")
  * and then throws `Unsupported FormDataPart implementation`. Every mobile
- * screen that uploaded a file this way died: PO scan, size-count capture,
- * cycle-count AI scan, and AI chat photo attach. The fix routes all four
+ * screen that uploaded a file this way died: PO scan, cycle-count AI scan,
+ * and AI chat photo attach. The fix routes all of them
  * through lib/multipart-upload's postMultipart, which builds the body itself.
  *
  * WHY SOURCE-LEVEL PINS: the four call sites live under app/, which the mobile
@@ -44,10 +44,11 @@ function appSourceFiles(dir: string = APP_DIR): string[] {
   return out;
 }
 
-/** The four screens the regression killed, relative to app/. */
+/** The screens the regression killed, relative to app/. size-count/capture
+ *  was a fifth until the size-count feature was removed on 2026-08-24; the
+ *  bug it guards against is unchanged for the rest. */
 const UPLOAD_SCREENS = [
   'scan-po/index.tsx',
-  'size-count/capture.tsx',
   'cycle-count/ai-scan/[id].tsx',
   'ai/chat.tsx',
 ];

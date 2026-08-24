@@ -754,26 +754,31 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // seam; the real-time detector is on-device (see the Phase 0 spec).
     dependsOn: ['ai'],
     permissions: ['stock:adjust'],
-    surfaces: ['mobile'],
+    // NO SURFACE. The mobile screens were removed on 2026-08-24 (see below),
+    // and there has never been a web UI — what remains is the API and the
+    // tables, which is why this is 'api' rather than deleted outright.
+    surfaces: ['api'],
     apiPrefixes: ['/api/v1/size-counts'],
     ownsTables: ['size_count_sessions', 'size_count_events', 'size_count_adjustments'],
     minPlan: 'business',
-    // Off by default everywhere — gated behind a TestFlight pilot until the
-    // on-device model is validated. Enable per-org when piloting.
     defaultOnFor: [],
-    // Mobile-only entry; appears in the drawer only for orgs with the module
-    // enabled. Points at the start-a-count screen (v1 has no list yet).
-    placements: [
-      {
-        surface: 'mobile_drawer',
-        section: 'inventory',
-        label: 'Size count',
-        href: '/size-count/new',
-        iconName: 'ScanLine',
-        defaultSortOrder: 95,
-        requires: 'stock:adjust',
-      },
-    ],
+    /**
+     * NO PLACEMENTS — deliberately empty, not an oversight.
+     *
+     * This carried a mobile_drawer entry ("Size count" -> /size-count/new)
+     * until the whole mobile feature was removed on 2026-08-24 at the owner's
+     * call. The tap counter, the photo scanner and the training-capture tool
+     * are gone from the app; a placement pointing at a route that no longer
+     * exists would render a drawer row that dead-ends.
+     *
+     * The MODULE stays because the server does: SizeCountsService and the
+     * /api/v1/size-counts routes still gate on it, and it still owns its three
+     * tables plus every count already recorded in them. Anything rebuilt here
+     * later inherits a working, permission-gated backend — see
+     * apps/web/scripts/size-scan-eval for the sticker reader's measured
+     * accuracy, which was never the part that failed.
+     */
+    placements: [],
   },
   sports: {
     id: 'sports',
