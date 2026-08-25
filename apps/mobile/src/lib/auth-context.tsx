@@ -1,5 +1,6 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import {
   getAccountGateState,
@@ -270,6 +271,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       sub.subscription.unsubscribe();
     };
+  }, []);
+
+  // IDENTITY REFRESH ON FOREGROUND. A verified email change completed on the
+  // web (mig 0345) changes auth.users.email immediately, but the session user
+  // persisted on this phone keeps the OLD address until the next token refresh
+  // — up to an hour — and no USER_UPDATED event ever fires here for a change
+  // this client did not make. Ask GoTrue when the app comes to the foreground;
+  // if the addresses differ, pull a fresh session (TOKEN_REFRESHED → setSession
+  // above) and drop the cached profile. Offline or failed → change nothing.
+  React.useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state !== 'active') return;
+      // Detached promise chain, never awaited (the same discipline as the
+      // cold-launch probe): RN fetch has no timeout, so nothing that owns UI
+      // state may wait on this network call.
+      void supabase.auth
+        .getSession()
+        .then(({ data: sess }) => {
+          const current = sess.session?.user?.email;
+          if (!sess.session || !current) return null;
+          return supabase.auth.getUser().then(({ data, error }) => {
+            const live = data.user?.email;
+            if (error || !live) return null;
+            if (live.toLowerCase() === current.toLowerCase()) return null;
+            // The profile cache is keyed by id AND email (use-profile.ts), so
+            // the refreshed session user misses it and refetches on its own.
+            return supabase.auth.refreshSession();
+          });
+        })
+        .catch(() => {
+          // best-effort — an offline device keeps its last known identity
+        });
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
   }, []);
 
   const signIn: AuthState['signIn'] = async (email, password) => {

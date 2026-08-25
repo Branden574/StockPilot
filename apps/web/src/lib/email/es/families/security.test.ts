@@ -213,3 +213,136 @@ describe('signin (renderSigninAlertEmail)', () => {
     expect(res.html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 });
+
+// ── email change (2026-08-25, mig 0345) ─────────────────────────────
+
+import {
+  renderEmailChangeCurrentEmail,
+  renderEmailChangeNewEmail,
+  renderEmailChangedNoticeEmail,
+} from './security';
+
+const EC = {
+  currentEmail: 'branden574@gmail.com',
+  newEmail: 'branden@stockpilotusa.com',
+  confirmUrl: 'https://stockpilotusa.com/auth/confirm?token_hash=NEWSIDE&type=email_change',
+  approveUrl: 'https://stockpilotusa.com/auth/confirm?token_hash=CURSIDE&type=email_change',
+  changedAt: 'Aug 25, 2026, 4:02 PM UTC',
+  requestedAt: 'Aug 25, 2026, 3:58 PM UTC',
+  appUrl: 'https://stockpilotusa.com',
+};
+
+describe('email-change-new (renderEmailChangeNewEmail)', () => {
+  const render = () =>
+    renderEmailChangeNewEmail({
+      newEmail: EC.newEmail,
+      currentEmail: EC.currentEmail,
+      confirmUrl: EC.confirmUrl,
+      firstName: 'Branden',
+      appUrl: EC.appUrl,
+    });
+
+  it('renders the confirmation to the NEW address and says the current one stays canonical', () => {
+    const res = render();
+    assertNoLeakage(res);
+    assertWeight(res);
+    assertEssentialFooter(res.html);
+    expect(res.html).toContain('Confirm your new email.');
+    expect(res.html).toContain(EC.newEmail);
+    expect(res.html).toContain(EC.currentEmail);
+    expect(res.html).toContain('>Confirm new email &rarr;</a>');
+    expect(res.html).toContain('token_hash=NEWSIDE&amp;type=email_change');
+    expect(res.text).toContain(EC.confirmUrl);
+    expect(res.text).toContain(`keeps using ${EC.currentEmail} until both addresses have confirmed`);
+    // The new-side email must never carry the approval (current-side) link.
+    expect(res.html).not.toContain('CURSIDE');
+  });
+
+  it('subject and preheader are byte-equal to the registry builders', () => {
+    const def = esEmailById('email-change-new');
+    const res = render();
+    expect(res.subject).toBe(def.subject({}));
+    expect(res.preheader).toBe(def.preheader({ linkExpiry: '60 minutes' }));
+    expect(res.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+  });
+});
+
+describe('email-change-current (renderEmailChangeCurrentEmail)', () => {
+  const render = () =>
+    renderEmailChangeCurrentEmail({
+      currentEmail: EC.currentEmail,
+      newEmail: EC.newEmail,
+      approveUrl: EC.approveUrl,
+      firstName: 'Branden',
+      requestedAt: EC.requestedAt,
+      appUrl: EC.appUrl,
+    });
+
+  it('leads with the "do not approve" warning and carries the approval link', () => {
+    const res = render();
+    assertNoLeakage(res);
+    assertWeight(res);
+    assertEssentialFooter(res.html);
+    expect(res.html).toContain('Approve your email change.');
+    expect(res.html).toContain('Do not approve it.');
+    expect(res.html).toContain('>Approve email change &rarr;</a>');
+    expect(res.html).toContain('token_hash=CURSIDE&amp;type=email_change');
+    expect(res.html).toContain('Requested Aug 25, 2026, 3:58 PM UTC.');
+    expect(res.html).toContain('https://stockpilotusa.com/reset');
+    expect(res.text).toContain(EC.approveUrl);
+    expect(res.html).not.toContain('NEWSIDE');
+  });
+
+  it('subject names the target address, byte-equal to the registry', () => {
+    const def = esEmailById('email-change-current');
+    const res = render();
+    expect(res.subject).toBe(def.subject({ newEmail: EC.newEmail }));
+    expect(res.subject).toBe(`Approve changing your StockPilot email to ${EC.newEmail}`);
+    expect(res.preheader).toBe(def.preheader({ linkExpiry: '60 minutes' }));
+  });
+
+  it('escapes a hostile target address', () => {
+    const res = renderEmailChangeCurrentEmail({
+      currentEmail: EC.currentEmail,
+      newEmail: '"><img src=x onerror=alert(1)>@evil.test',
+      approveUrl: EC.approveUrl,
+    });
+    expect(res.html).not.toContain('<img src=x');
+    expect(res.html).toContain('&lt;img src=x');
+  });
+});
+
+describe('email-changed (renderEmailChangedNoticeEmail)', () => {
+  const render = () =>
+    renderEmailChangedNoticeEmail({
+      oldEmail: EC.currentEmail,
+      newEmail: EC.newEmail,
+      changedAt: EC.changedAt,
+      firstName: 'Branden',
+      appUrl: EC.appUrl,
+    });
+
+  it('records previous → new, the time, and the "didn’t do this" escalation', () => {
+    const res = render();
+    assertNoLeakage(res);
+    assertWeight(res);
+    assertEssentialFooter(res.html);
+    expect(res.html).toContain('Your sign-in email was changed.');
+    expect(res.html).toContain(EC.currentEmail);
+    expect(res.html).toContain(EC.newEmail);
+    expect(res.html).toContain('Aug 25, 2026, 4:02 PM UTC');
+    expect(res.html).toContain('Contact your administrator immediately.');
+    expect(res.html).toContain('>Contact support &rarr;</a>');
+    expect(res.text).toContain(`from ${EC.currentEmail} to ${EC.newEmail}`);
+    // No link that could act on the account: this is a record, not a lever.
+    expect(res.html).not.toContain('token_hash=');
+  });
+
+  it('subject and preheader are byte-equal to the registry builders', () => {
+    const def = esEmailById('email-changed');
+    const res = render();
+    expect(res.subject).toBe(def.subject({}));
+    expect(res.subject).toBe('Your StockPilot email was changed');
+    expect(res.preheader).toBe(def.preheader({ newEmail: EC.newEmail }));
+  });
+});

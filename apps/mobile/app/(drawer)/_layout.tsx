@@ -73,6 +73,10 @@ export default function DrawerLayout() {
         options={{ drawerLabel: 'Unsent work', drawerItemStyle: { display: 'none' } }}
       />
       <Drawer.Screen
+        name="settings/change-email"
+        options={{ drawerLabel: 'Change email', drawerItemStyle: { display: 'none' } }}
+      />
+      <Drawer.Screen
         name="admin/index"
         options={{ drawerLabel: 'Admin overview', drawerItemStyle: { display: 'none' } }}
       />

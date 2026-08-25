@@ -16,6 +16,15 @@ const verifyOtp = vi.fn();
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({ auth: { verifyOtp } }),
 }));
+const completeEmailChange = vi.fn(async (_args: { userId: string }) => ({
+  email: 'new@example.com',
+  notifiedPreviousEmail: 'old@example.com',
+}));
+vi.mock('@/server/services/email-change', () => ({
+  completeEmailChange: (args: { userId: string }) => completeEmailChange(args),
+  EMAIL_CHANGE_RETURN_PATH: '/dashboard/settings/profile',
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 import { GET, POST } from './route';
 
@@ -54,7 +63,10 @@ describe('GET /auth/confirm', () => {
     // as the existing-user re-invite fallback — it now legitimately renders
     // the click-through form (see the test above). Use a type this route
     // genuinely never allowlists instead.
-    const res = await GET(getReq('token_hash=abc&type=email_change&next=%2Fdashboard'));
+    // 'email_change' joined the allowlist on 2026-08-25 (verified email
+    // change, mig 0345); 'signup' is a real EmailOtpType this route never
+    // sends and never accepts.
+    const res = await GET(getReq('token_hash=abc&type=signup&next=%2Fdashboard'));
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/signin?error=auth_callback_failed`);
     expect(verifyOtp).not.toHaveBeenCalled();
@@ -94,8 +106,83 @@ describe('POST /auth/confirm', () => {
   });
 
   it('rejects disallowed types without calling verifyOtp', async () => {
-    const res = await POST(postReq({ token_hash: 'abc', type: 'email_change', next: '/x' }));
+    const res = await POST(postReq({ token_hash: 'abc', type: 'signup', next: '/x' }));
     expect(verifyOtp).not.toHaveBeenCalled();
     expect(res.status).toBe(303);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// EMAIL CHANGE (type=email_change, mig 0345). Production runs secure email
+// change: two links, one per address, and GoTrue applies the change only when
+// BOTH have been verified. Measured 2026-08-25: the first verifyOtp returns no
+// session and changes nothing; the second returns a session for the account.
+// ─────────────────────────────────────────────────────────────────────────
+describe('/auth/confirm — email_change', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET renders the click-through form for an email_change token without consuming it', async () => {
+    const res = await GET(getReq('token_hash=ec123&type=email_change'));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('Confirm your email change');
+    expect(html).toContain('form method="post"');
+    expect(html).toContain('ec123');
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('FIRST confirmation (no session returned) renders "one to go" and completes nothing', async () => {
+    verifyOtp.mockResolvedValue({ data: { user: null, session: null }, error: null });
+    const res = await POST(postReq({ token_hash: 'side-a', type: 'email_change' }));
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'email_change', token_hash: 'side-a' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const html = await res.text();
+    expect(html).toContain('One confirmation done');
+    expect(html).toContain('/dashboard/settings/profile');
+    expect(completeEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('SECOND confirmation (session returned) completes the change and lands on Profile', async () => {
+    verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1', email: 'new@example.com' } } },
+      error: null,
+    });
+    const res = await POST(postReq({ token_hash: 'side-b', type: 'email_change' }));
+    expect(completeEmailChange).toHaveBeenCalledWith({ userId: 'u-1' });
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
+  });
+
+  it('IGNORES next for email_change — the destination is hard-coded', async () => {
+    verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1' } } },
+      error: null,
+    });
+    const res = await POST(
+      postReq({ token_hash: 'side-b', type: 'email_change', next: '/dashboard/orders' }),
+    );
+    expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
+  });
+
+  it('an expired/used/tampered email_change link gets its own page, never the /signin bounce, and mutates nothing', async () => {
+    verifyOtp.mockResolvedValue({ data: { user: null, session: null }, error: { message: 'Token has expired or is invalid' } });
+    const res = await POST(postReq({ token_hash: 'stale', type: 'email_change' }));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('expired or was already used');
+    expect(html).toContain('Nothing about your account has changed');
+    expect(completeEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('a completion hook failure never blocks the redirect (best-effort notify)', async () => {
+    verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1' } } },
+      error: null,
+    });
+    completeEmailChange.mockRejectedValueOnce(new Error('resend down'));
+    const res = await POST(postReq({ token_hash: 'side-b', type: 'email_change' }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
   });
 });

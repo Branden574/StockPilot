@@ -14,7 +14,7 @@ import { SETTINGS_TOUR } from '@/lib/onboarding/tours';
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
   { href: '/dashboard/settings/security', title: 'Security', description: 'Two-factor authentication and org MFA policy.' },
-  { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name and avatar.' },
+  { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name, avatar, and sign-in email.' },
   { href: '/dashboard/settings/notifications', title: 'Notifications', description: 'Weekly digest email and preferences.' },
   { href: '/dashboard/settings/roles', title: 'Roles & permissions', description: 'Reference for what each role can see and do across StockPilot.' },
 ];

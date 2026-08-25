@@ -306,6 +306,31 @@ const EXPECTED: Expected[] = [
     badge: 'Resolved',
   },
   {
+    id: 'email-change-new',
+    subject: 'Confirm your new StockPilot email',
+    preheader:
+      'Confirm this address to finish changing your sign-in email. This link works for 60 minutes.',
+    preheaderParams: { linkExpiry: '60 minutes' },
+    badge: 'Confirm email',
+  },
+  {
+    id: 'email-change-current',
+    subject: 'Approve changing your StockPilot email to branden@stockpilotusa.com',
+    subjectParams: { newEmail: 'branden@stockpilotusa.com' },
+    preheader:
+      'A request was made to change your sign-in email. Approve it only if that was you — 60 minutes to act.',
+    preheaderParams: { linkExpiry: '60 minutes' },
+    badge: 'Approve change',
+  },
+  {
+    id: 'email-changed',
+    subject: 'Your StockPilot email was changed',
+    preheader:
+      'This account now signs in as branden@stockpilotusa.com. If that wasn’t you, contact your administrator right away.',
+    preheaderParams: { newEmail: 'branden@stockpilotusa.com' },
+    badge: 'Email changed',
+  },
+  {
     id: 'maintenance-resolved',
     subject: 'Maintenance request MR-2026-000123 marked resolved',
     subjectParams: { handle: 'MR-2026-000123' },
@@ -317,22 +342,23 @@ const EXPECTED: Expected[] = [
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (30 — 29 design-package rows + the 2026-08-06 Maintenance Resolved row, see the 28-vs-29 flag)', () => {
-    expect(ES_EMAILS).toHaveLength(30);
-    expect(EXPECTED).toHaveLength(30);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(30);
+  it('carries every row of ES.EMAILS (33 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25)', () => {
+    expect(ES_EMAILS).toHaveLength(33);
+    expect(EXPECTED).toHaveLength(33);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(33);
   });
 
-  it('splits into 26 live + 2 latent + 2 concept', () => {
+  it('splits into 29 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(26);
+    expect(by('live')).toBe(29);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
 
   it('matches the family counts from the design package', () => {
     const by = (fam: string) => ES_EMAILS.filter((e) => e.family === fam).length;
-    expect(by('security')).toBe(2);
+    // 2 design-package rows + 3 email-change rows (2026-08-25).
+    expect(by('security')).toBe(5);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);
     expect(by('fulfillment')).toBe(4);
