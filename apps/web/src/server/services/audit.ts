@@ -234,6 +234,13 @@ export type AuditEvent =
   | 'member.password_reset_sent'
   | 'user.profile.updated'
   | 'user.session.invalidated'
+  // Verified self-service email change (mig 0345). 'changed' is written by
+  // the auth.users trigger (or the idempotent app reconcile), never by the
+  // request flow, so it exists exactly once per real change.
+  | 'user.email.change_requested'
+  | 'user.email.change_resent'
+  | 'user.email.change_cancelled'
+  | 'user.email.changed'
   // Org-level admin actions (replacing prior misuse of warehouse.updated
   // for org logo / MFA policy changes).
   | 'organization.updated'

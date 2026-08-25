@@ -117,6 +117,9 @@ PGTAP_TESTS=(
   supabase/tests/0312_close_disable_residual_gaps.test.sql
   supabase/tests/0313_stop_notifying_disabled_accounts.test.sql
 
+  # Account identity: verified self-service email change (projection pin + sync).
+  supabase/tests/0345_verified_email_change.test.sql
+
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
   supabase/tests/0142_order_attachments_read_floor.test.sql

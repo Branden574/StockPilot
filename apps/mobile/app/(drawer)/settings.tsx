@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Lock,
   LogOut,
+  Mail,
   Menu,
   Moon,
   Plug,
@@ -257,6 +258,14 @@ export default function Settings() {
                 () => undefined,
               )
             }
+          />
+          <Hair inset={70} />
+          <SettingRow
+            icon={Mail}
+            title="Email"
+            detail={profile.email ?? undefined}
+            chevron
+            onPress={() => router.push('/settings/change-email' as never)}
           />
           <Hair inset={70} />
           <SettingRow

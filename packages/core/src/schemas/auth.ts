@@ -48,6 +48,25 @@ export const changePasswordSchema = z
   });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
+/**
+ * Self-service email change. Trim BEFORE validating (a pasted address with a
+ * trailing space is a typo, not an attack) and lowercase the result so every
+ * comparison against auth.users / the citext profile column is stable.
+ * Nothing else is normalised: plus-addresses and dots are real mailbox
+ * semantics and stay as typed.
+ */
+export const changeEmailSchema = z.object({
+  newEmail: z
+    .string()
+    .trim()
+    .min(1, 'Enter your new email address')
+    .max(254, 'That email address is too long')
+    .email('Enter a valid email address')
+    .toLowerCase(),
+  currentPassword: z.string().min(1, 'Enter your current password'),
+});
+export type ChangeEmailInput = z.infer<typeof changeEmailSchema>;
+
 export const updateProfileSchema = z.object({
   fullName: z.string().min(1).max(120).trim().optional(),
   avatarUrl: z.string().url().nullable().optional(),

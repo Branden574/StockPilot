@@ -54,7 +54,12 @@ export function useProfile(): Profile {
       setProfile({ fullName: null, avatarUrl: null, email: null, initials: '··' });
       return;
     }
-    const cached = cache.get(user.id);
+    // Keyed by id AND email: after a verified email change the session user
+    // arrives with a new address on the next token refresh, and a cache
+    // keyed by id alone would keep serving the old profile (the module-level
+    // Map survives refreshes; invalidateProfile has no automatic caller).
+    const cacheKey = `${user.id}:${user.email ?? ''}`;
+    const cached = cache.get(cacheKey);
     if (cached) {
       setProfile(cached);
       return;
@@ -82,7 +87,7 @@ export function useProfile(): Profile {
         email,
         initials: initialsFor(fullName, email),
       };
-      cache.set(user.id, next);
+      cache.set(cacheKey, next);
       setProfile(next);
     })();
     return () => {
@@ -99,5 +104,9 @@ export function useProfile(): Profile {
  * value on their next render.
  */
 export function invalidateProfile(user: User | null): void {
-  if (user) cache.delete(user.id);
+  if (!user) return;
+  // Every key for this user, whatever email it was cached under.
+  for (const key of cache.keys()) {
+    if (key.startsWith(`${user.id}:`)) cache.delete(key);
+  }
 }

@@ -140,3 +140,35 @@ describe('GET /api/cron/weekly-digest — disabled accounts', () => {
     expect(bulkArgs[isIndex]).toEqual(['disabled_at', null]);
   });
 });
+
+describe('GET /api/cron/weekly-digest — recipient address follows the profile projection', () => {
+  it('addresses the digest to the CURRENT user_profiles.email, read at run time', async () => {
+    // After a verified email change, auth.users.email is the identity and the
+    // 0345 trigger writes it into user_profiles.email in the same transaction
+    // (proven in supabase/tests/0345_verified_email_change.test.sql). This
+    // test pins the other half: the digest takes its recipient from THAT row
+    // at send time and carries no address of its own — so the run after a
+    // change goes to the new inbox and never to the abandoned one.
+    const stub = makeSupabaseStub({
+      'user_profiles.select': {
+        data: [recipientRow('user-a', 'new@acme.test')],
+        error: null,
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z' },
+        error: null,
+      },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0]![0].to).toBe('new@acme.test');
+    expect(sendEmailMock.mock.calls[0]![0].to).not.toBe('old@acme.test');
+  });
+});

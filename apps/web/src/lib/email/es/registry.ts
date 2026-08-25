@@ -169,6 +169,73 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     footer: 'ess',
   }),
 
+  // Verified self-service email change (2026-08-25, mig 0345). Three rows
+  // outside the original design package: the two confirmation links secure
+  // email change requires (one per address) and the after-the-fact notice
+  // GoTrue no longer sends for us.
+  d({
+    id: 'email-change-new',
+    family: 'security',
+    name: 'Email Change — Confirm New Address',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'User requests to change their sign-in email (sent to the NEW address)',
+    to: 'The new address',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'Confirm your new StockPilot email',
+    preheader: (p: { linkExpiry: string }) =>
+      `Confirm this address to finish changing your sign-in email. This link works for ${p.linkExpiry}.`,
+    badge: { variant: 'sec', label: () => 'Confirm email' },
+    cta: 'Confirm new email',
+    cta2: 'Contact support',
+    motionNote: 'L1 · Lock + ring',
+    motionAsset: 'lock',
+    footer: 'ess',
+  }),
+  d({
+    id: 'email-change-current',
+    family: 'security',
+    name: 'Email Change — Approve From Current Address',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'User requests to change their sign-in email (sent to the CURRENT address)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: (p: { newEmail: string }) => `Approve changing your StockPilot email to ${p.newEmail}`,
+    preheader: (p: { linkExpiry: string }) =>
+      `A request was made to change your sign-in email. Approve it only if that was you — ${p.linkExpiry} to act.`,
+    badge: { variant: 'sec', label: () => 'Approve change' },
+    cta: 'Approve email change',
+    cta2: 'Reset password',
+    motionNote: 'L1 · Lock + ring',
+    motionAsset: 'lock',
+    footer: 'ess',
+  }),
+  d({
+    id: 'email-changed',
+    family: 'security',
+    name: 'Email Changed Notice',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'Both confirmations completed and the sign-in email changed (sent to the OLD address)',
+    to: 'Account holder (previous address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'Your StockPilot email was changed',
+    preheader: (p: { newEmail: string }) =>
+      `This account now signs in as ${p.newEmail}. If that wasn’t you, contact your administrator right away.`,
+    badge: { variant: 'sec', label: () => 'Email changed' },
+    cta: 'Contact support',
+    motionNote: 'L1 · Device pulse',
+    motionAsset: 'pulse',
+    footer: 'ess',
+  }),
+
   // ── Invitations ───────────────────────────────────────────────────
   d({
     id: 'team-invite',
