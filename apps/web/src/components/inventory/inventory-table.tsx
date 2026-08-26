@@ -78,6 +78,7 @@ import { rememberLastListUrl } from '@/lib/last-list-url';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { resolveStartOrder, writeOrderPrefill } from '@/lib/orders/start-order-prefill';
 
 interface Item {
   id: string;
@@ -85,6 +86,9 @@ interface Item {
   name: string;
   status: 'active' | 'archived' | 'discontinued';
   quantity_on_hand: number;
+  /** Warehouse this item row belongs to. Shipped by the list loader; used by
+   *  the 'Start an order' shortcut to route the selection to one warehouse. */
+  warehouse_id?: string | null;
   reorder_point: number;
   unit_cost: number;
   retail_price: number;
@@ -328,6 +332,9 @@ export interface InventoryTableProps {
    * can(ctx, 'public_links:manage'). Default false → hidden.
    */
   canSetPublicVisibility?: boolean;
+  /** Viewer can place order requests AND the orders module is enabled. Enables
+   *  the bulk 'Start an order' shortcut. Default false → hidden. */
+  canStartOrder?: boolean;
   /**
    * When provided, renders a small camera button inside the search
    * input on the right edge. Click invokes the callback so the
@@ -620,6 +627,7 @@ export function InventoryTable({
   showBookFields = false,
   canCreate = true,
   canSetPublicVisibility = false,
+  canStartOrder = false,
   onScanRequest,
   page = 1,
   pageSize = 50,
@@ -1814,6 +1822,49 @@ export function InventoryTable({
             // counter is selectedIds.length, so both stay correct even when two
             // rack rows of the same item are checked.
             selectedIds={selectedItemIds}
+            canStartOrder={canStartOrder}
+            onStartOrder={() => {
+              // Resolve ONE warehouse for the selection (an order is per
+              // warehouse) from the checked rows + the active warehouse filter,
+              // hand it off in sessionStorage, and open the storefront. The
+              // storefront applies the prefill and reports anything not
+              // orderable there. See lib/orders/start-order-prefill.ts.
+              const byId = new Map<string, Item>();
+              for (const r of effectiveInstant?.items ?? items) byId.set(r.id, r);
+              for (const r of serverHits ?? []) byId.set(r.id, r);
+              const rows = selectedItemIds.map((id) => {
+                const r = byId.get(id);
+                return {
+                  id,
+                  warehouse_id: r?.warehouse_id ?? null,
+                  status: r?.status ?? 'active',
+                };
+              });
+              const resolved = resolveStartOrder(rows, activeWarehouseId);
+              if (!resolved) {
+                toast.error(
+                  'None of the selected items can be ordered (they may be archived or have no warehouse).',
+                );
+                return;
+              }
+              writeOrderPrefill({
+                warehouseId: resolved.warehouseId,
+                itemIds: resolved.itemIds,
+              });
+              if (resolved.droppedOtherWarehouse > 0) {
+                toast.message(
+                  `Starting an order for one warehouse — ${resolved.droppedOtherWarehouse} item${
+                    resolved.droppedOtherWarehouse === 1 ? '' : 's'
+                  } in other warehouses ${
+                    resolved.droppedOtherWarehouse === 1 ? 'was' : 'were'
+                  } left out.`,
+                );
+              }
+              setSelected(new Set());
+              router.push(
+                `/dashboard/orders/new?warehouseId=${encodeURIComponent(resolved.warehouseId)}`,
+              );
+            }}
             categories={categories}
             suppliers={suppliers}
             locations={locations}

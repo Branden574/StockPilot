@@ -10,6 +10,7 @@ import {
   Layers,
   Loader2,
   MapPin,
+  ShoppingCart,
   Tags as TagsIcon,
   Truck,
   Undo2,
@@ -75,6 +76,13 @@ export interface BulkActionsTag {
 
 interface BulkActionsProps {
   selectedIds: string[];
+  /** Manager/requester shortcut: drop the checked items into a new order draft
+   *  (opens the storefront pre-filled). Rendered only when `canStartOrder`. The
+   *  table owns the warehouse resolution + sessionStorage handoff. */
+  onStartOrder?: () => void;
+  /** Gate for the "Start an order" button: viewer holds orders:request AND the
+   *  orders module is enabled. Default false → button hidden. */
+  canStartOrder?: boolean;
   categories: BulkActionsCategory[];
   suppliers: BulkActionsSupplier[];
   locations: BulkActionsLocation[];
@@ -130,6 +138,8 @@ const PUBLIC_VISIBILITY_LABELS: Record<ItemPublicVisibility, string> = {
 
 export function BulkActions({
   selectedIds,
+  onStartOrder,
+  canStartOrder = false,
   categories,
   suppliers,
   locations,
@@ -362,6 +372,22 @@ export function BulkActions({
         <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">
           {count} selected
         </span>
+
+        {canStartOrder && onStartOrder ? (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            {/* Primary workflow, so it leads the bar and carries the accent
+                treatment rather than the plain link styling of the edit
+                actions. Drops the checked items into a new order draft. */}
+            <button
+              type="button"
+              onClick={onStartOrder}
+              className="inline-flex items-center gap-1 rounded-[5px] bg-foreground px-2 py-0.5 font-medium text-background transition-opacity hover:opacity-90"
+            >
+              <ShoppingCart className="h-3 w-3" /> Start an order
+            </button>
+          </>
+        ) : null}
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <a

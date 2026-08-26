@@ -148,6 +148,12 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
 interface CartContextValue {
   state: CartState;
   dispatch: React.Dispatch<CartAction>;
+  /**
+   * True once the one-shot localStorage hydration has run. A one-shot prefill
+   * (Start an order from Items) gates on this so its added lines land ON TOP of
+   * a restored draft instead of being clobbered by a later hydrate dispatch.
+   */
+  hydrated: boolean;
 }
 
 const CartContext = React.createContext<CartContextValue | null>(null);
@@ -167,6 +173,7 @@ export function CartProvider({
   children: React.ReactNode;
 }) {
   const [state, dispatch] = React.useReducer(cartReducer, initial);
+  const [hydrated, setHydrated] = React.useState(false);
 
   // Hydration is a one-shot on mount — re-running it on warehouseId
   // change would clobber the `set-warehouse` action's deliberate cart
@@ -174,13 +181,18 @@ export function CartProvider({
   React.useEffect(() => {
     try {
       const raw = localStorage.getItem(`${STORAGE_PREFIX}${initial.warehouseId}`);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as CartState;
-      if (parsed && parsed.warehouseId === initial.warehouseId) {
-        dispatch({ type: 'hydrate', state: parsed });
+      if (raw) {
+        const parsed = JSON.parse(raw) as CartState;
+        if (parsed && parsed.warehouseId === initial.warehouseId) {
+          dispatch({ type: 'hydrate', state: parsed });
+        }
       }
     } catch {
       /* corrupted draft = ignore */
+    } finally {
+      // Signal AFTER the hydrate dispatch is queued so a prefill effect that
+      // waits on `hydrated` applies on top of the restored draft, never under it.
+      setHydrated(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -212,7 +224,7 @@ export function CartProvider({
   }, [state]);
 
   return (
-    <CartContext.Provider value={{ state, dispatch }}>
+    <CartContext.Provider value={{ state, dispatch, hydrated }}>
       {children}
     </CartContext.Provider>
   );

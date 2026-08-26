@@ -37,6 +37,10 @@ import { createOrderRequestAction } from '@/server/actions/order-requests';
 import { isManagerOrAbove, type OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
 
 import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
+import {
+  partitionPrefillAgainstCatalog,
+  takeOrderPrefill,
+} from '@/lib/orders/start-order-prefill';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '../v2/types';
 
 import {
@@ -618,12 +622,53 @@ function StorefrontCatalog({
   const { items, aisles } = React.use(catalogPromise);
 
   const router = useRouter();
-  const { state, dispatch } = useCart();
+  const { state, dispatch, hydrated } = useCart();
 
   const itemMap = React.useMemo(
     () => new Map(items.map((it) => [it.id, it])),
     [items],
   );
+
+  // ═══ "Start an order from Items" one-shot prefill ═══
+  //
+  // The Inventory bulk-action bar drops a { warehouseId, itemIds } blob in
+  // sessionStorage and navigates here with ?warehouseId=<that>. Consume it
+  // exactly once, AFTER cart hydration has settled (so the added lines sit on
+  // top of any restored draft rather than being clobbered by a late hydrate),
+  // and gate every id on the resolved catalog — the authority on what is
+  // orderable in this warehouse. Skipped ids (out of stock, bundle, rental,
+  // wrong warehouse, restricted category) are counted, not silently dropped.
+  const prefillDone = React.useRef(false);
+  React.useEffect(() => {
+    if (prefillDone.current || !hydrated) return;
+    prefillDone.current = true; // one attempt regardless of outcome
+    const prefill = takeOrderPrefill(warehouseId);
+    if (!prefill || prefill.itemIds.length === 0) return;
+
+    const { addable, skipped } = partitionPrefillAgainstCatalog(prefill.itemIds, items);
+    for (const itemId of addable) {
+      // Default quantity 1 — the requester adjusts in the cart. `add` dedupes
+      // by item, so re-adding an item already in a restored draft tops it up.
+      dispatch({ type: 'add', itemId, quantity: 1 });
+    }
+
+    if (addable.length === 0) {
+      toast.error(
+        skipped === 1
+          ? "That item isn't orderable from this warehouse right now."
+          : "None of those items are orderable from this warehouse right now.",
+      );
+    } else {
+      const added = `Added ${addable.length} item${addable.length === 1 ? '' : 's'} to your cart.`;
+      const left =
+        skipped > 0
+          ? ` ${skipped} weren’t available here and were skipped.`
+          : '';
+      toast.success(added + left);
+    }
+    // Run once when hydration settles; deps are intentionally minimal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
 
   /* --- frequently ordered --- */
   const { items: freqApiItems, loading: freqLoading } = useFreqItems(warehouseId);

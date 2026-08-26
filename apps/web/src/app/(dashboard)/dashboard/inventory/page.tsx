@@ -45,7 +45,9 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { getWarehousesForRequest,
+  getModulesForRequest,
+} from '@/lib/dashboard/request-cache';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
@@ -363,6 +365,12 @@ async function InventoryTableSection({
   // Public-catalog visibility (P3): shows the "Set public visibility" bulk
   // action in the table's bulk bar; the server action re-asserts.
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
+  // "Start an order" bulk shortcut: viewer can place order requests AND the
+  // (optional) orders module is on. getModulesForRequest is request-cached and
+  // shared with the layout, so this costs no extra round trip.
+  const canStartOrder =
+    can(sessionCtx, 'orders:request') &&
+    (await getModulesForRequest(sessionCtx.organizationId)).has('orders');
 
   // INSTANT MODE (AWAITED) — DEEP LINKS ONLY (see the streaming note
   // below for the default view). For a manager+ deep link at or under
@@ -493,6 +501,7 @@ async function InventoryTableSection({
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
+        canStartOrder={canStartOrder}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -813,6 +822,7 @@ async function InventoryTableSection({
       lookups={lookups}
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
+      canStartOrder={canStartOrder}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}
