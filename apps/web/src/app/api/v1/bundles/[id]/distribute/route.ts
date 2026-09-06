@@ -15,6 +15,11 @@ const bodySchema = z.object({
   scheduleEventId: z.string().uuid().nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   allowShortage: z.boolean().optional(),
+  // 0347: mobile mints this BEFORE its first attempt and sends the same value
+  // from the offline outbox, so a replay after a lost response (or the
+  // client's own 20 s timeout) returns the original distribution instead of
+  // drawing components twice. Optional: the web modal sends none.
+  idempotencyKey: z.string().uuid().optional(),
 });
 
 /**
@@ -64,6 +69,7 @@ export async function POST(
       scheduleEventId: parsed.data.scheduleEventId ?? null,
       notes: parsed.data.notes ?? null,
       allowShortage: parsed.data.allowShortage ?? false,
+      idempotencyKey: parsed.data.idempotencyKey ?? null,
     });
     revalidateInventoryList(ctx.organizationId);
     return NextResponse.json(out);

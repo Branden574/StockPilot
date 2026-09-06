@@ -367,9 +367,12 @@ async function sendOne(
     case 'distribute_bundle': {
       const bundleId = String(payload.bundleId ?? '');
       if (!bundleId) throw new Error('distribute_bundle: missing bundleId');
+      // The row's key is the same one the screen sent on its direct attempt
+      // (0347), so the server returns the original distribution if that
+      // attempt actually committed instead of drawing components again.
       await api(`/api/v1/bundles/${bundleId}/distribute`, {
         method: 'POST',
-        body: payload,
+        body: { ...payload, idempotencyKey },
       });
       return;
     }

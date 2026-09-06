@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
@@ -25,7 +25,7 @@ import {
   type CachedItem,
   type CachedWarehouse,
 } from '@/lib/db-reads';
-import { enqueue } from '@/lib/queue';
+import { enqueue, newIdempotencyKey } from '@/lib/queue';
 import { syncNow } from '@/lib/sync';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -151,6 +151,13 @@ export default function BundleDetail() {
       if (!proceed) return;
     }
 
+    // ═══ ONE KEY FOR EVERY ATTEMPT OF THIS DISTRIBUTION (0347) ═══
+    //
+    // Minted BEFORE the first request and reused by the outbox replay, so the
+    // server can recognise a retry. Without it, a response lost after the
+    // server committed (or api()'s own 20 s timeout) meant the queued replay
+    // distributed AGAIN: components drawn twice, two distribution rows.
+    const idempotencyKey = newIdempotencyKey();
     setBusy(true);
     try {
       // Try direct send first; fall back to queue if offline.
@@ -161,20 +168,35 @@ export default function BundleDetail() {
           warehouseId,
           allowShortage,
           notes: 'Mobile distribute',
+          idempotencyKey,
         },
       });
       Alert.alert('Distributed', `Shipped ${n} kit${n === 1 ? '' : 's'}.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (e) {
-      // Queue for retry on reconnect.
-      await enqueue('distribute_bundle', {
-        bundleId: bundle.id,
-        quantity: n,
-        warehouseId,
-        allowShortage,
-        notes: 'Mobile distribute (offline)',
-      });
+      // A 4xx is the server REFUSING this request (shortage, permission,
+      // archived bundle, conflict). Queueing it would replay a refusal every
+      // minute forever while the operator was told it was saved — and a
+      // shortage refusal would then silently distribute later once stock was
+      // topped up. Show the server's message and stop.
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        Alert.alert('Could not distribute', e.message);
+        return;
+      }
+      // Transport failure, timeout or 5xx: the server may or may not have
+      // committed. Queue the SAME key so the replay is absorbed if it did.
+      await enqueue(
+        'distribute_bundle',
+        {
+          bundleId: bundle.id,
+          quantity: n,
+          warehouseId,
+          allowShortage,
+          notes: 'Mobile distribute (offline)',
+        },
+        { idempotencyKey },
+      );
       void syncNow();
       Alert.alert(
         'Queued',
