@@ -70,15 +70,24 @@ export function usePushNotifications(user: User | null) {
         const token = tokenRes.data;
         if (!token || cancelled) return;
 
-        await supabase.from('push_tokens').upsert(
-          {
-            user_id: user.id,
-            token,
-            platform: Platform.OS === 'ios' ? 'ios' : 'android',
-            last_used_at: new Date().toISOString(),
-          },
-          { onConflict: 'token' },
-        );
+        // ═══ REBIND GOES THROUGH THE RPC, NOT A RAW UPSERT (0348) ═══
+        //
+        // `upsert(..., { onConflict: 'token' })` cannot rebind a token row that
+        // still belongs to a PREVIOUS user of this device: push_tokens carries
+        // one policy, push_tokens_self `using (user_id = auth.uid())`, so the
+        // UPDATE half matches no row the new user may touch and Postgres
+        // answers "new row violates row-level security policy". The catch
+        // below then swallowed it as a warning — so the handset kept the old
+        // binding and silently received the previous user's notifications.
+        // register_push_token is SECURITY DEFINER and self-authorising on
+        // auth.uid(): it deletes any other binding of this token, then writes
+        // the caller's row. It is the only audited rebind path.
+        const { error: registerErr } = await supabase.rpc('register_push_token', {
+          p_token: token,
+          p_platform: Platform.OS === 'ios' ? 'ios' : 'android',
+          p_device_id: null,
+        });
+        if (registerErr) throw registerErr;
       } catch (err) {
         // Best-effort. We never want a notifications setup failure to
         // crash the app shell or block the user from signing in.
