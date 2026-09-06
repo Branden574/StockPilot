@@ -146,6 +146,41 @@ comment on function public._cycle_count_org_stock_sum(uuid, uuid) is
 
 -- ── 3. next_po_number: pin search_path, close anon ─────────────────────────
 -- ALTER FUNCTION ... SET does not change the body, ownership, or ACLs.
+-- ═══ PRODUCTION DRIFT, found while pushing this migration (2026-09-06) ═══
+--
+-- This statement was written as a bare `alter function` because the LOCAL
+-- catalog has next_po_number: a `supabase db reset` replays 0005, which
+-- creates it. Production does NOT have it — the push failed here with
+-- `function public.next_po_number(uuid) does not exist` (42883).
+--
+-- The consequence had been live since 2026-05-20 and nothing reported it,
+-- because BOTH callers discard the RPC error and fall back:
+--     purchase-orders.ts:606 / po-imports.ts:1618
+--     const { data } = await supabase.rpc('next_po_number', ...)
+--     poNumber = (data as string | null) ?? `PO-${Date.now()}`
+-- So every auto-numbered PO in production got an epoch timestamp. Measured on
+-- prod before this migration: 27 POs shaped `PO-<13 digits>` (most recent
+-- PO-1788277456195), and ZERO of the intended `PO-YYYY-NNNN` shape.
+--
+-- So: CREATE it (idempotently, byte-identical to 0005 — this is a restore, not
+-- a redesign) and then pin the search_path. `create or replace` is a no-op on
+-- every environment that already has it.
+--
+-- BEHAVIOUR CHANGE, deliberate and flagged: once this lands, newly
+-- auto-numbered production POs become `PO-2026-NNNN` instead of `PO-<epoch>`.
+-- That is the format 0005 always intended. Existing PO numbers are untouched,
+-- and no collision is possible — the existing rows are epoch- or
+-- supplier-shaped, never `PO-YYYY-NNNN`.
+create or replace function public.next_po_number(p_org_id uuid)
+returns text
+language sql
+stable
+as $$
+  select 'PO-' || to_char(now(), 'YYYY') || '-' || lpad(((
+    select count(*) from public.purchase_orders where organization_id = p_org_id
+  ) + 1)::text, 4, '0')
+$$;
+
 alter function public.next_po_number(uuid) set search_path = public;
 
 revoke execute on function public.next_po_number(uuid) from public, anon;

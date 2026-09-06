@@ -1,4 +1,5 @@
 import 'server-only';
+import { reportError } from '@/lib/error-reporter';
 
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -1615,9 +1616,20 @@ export class PoImportsService {
       }
     }
 
-    const { data: nextNum } = await this.ctx.supabase.rpc('next_po_number', {
-      p_org_id: this.ctx.organizationId,
-    });
+    // Same discarded-error trap as PurchaseOrdersService.create — see the note
+    // there. The fallback stays (an approve must never fail for want of a
+    // number) but a missing/failing RPC is now reported instead of silently
+    // producing `PO-<epoch>`.
+    const { data: nextNum, error: nextNumErr } = await this.ctx.supabase.rpc(
+      'next_po_number',
+      { p_org_id: this.ctx.organizationId },
+    );
+    if (nextNumErr) {
+      void reportError(new Error(`next_po_number failed: ${nextNumErr.message}`), {
+        tag: 'po-imports.next_po_number',
+        organizationId: this.ctx.organizationId,
+      });
+    }
     const poNumber = (nextNum as string | null) ?? `PO-${Date.now()}`;
 
     const subtotal = inventoryLines.reduce(
