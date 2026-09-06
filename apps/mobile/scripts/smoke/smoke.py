@@ -399,32 +399,13 @@ def flow_login_shell():
     a blank or stuck shell on device -- invisible to vitest, which cannot
     mount the .tsx shell at all."""
     launch_app(fresh=True)
-    deadline = time.time() + 60
-    state = None
-    while time.time() < deadline:
-        try:
-            els = describe_all()
-        except RuntimeError:
-            time.sleep(1)
-            continue
-        if _shell_rendered(els):
-            state = "shell"
-            break
-        if find_all("Sign in to", els) or find_all("WELCOME BACK", els):
-            state = "login"
-            break
-        time.sleep(1)
-    if state is None:
-        return False, "neither the signed-in shell nor the sign-in screen appeared in 60s"
-    if state == "login":
-        ok, why = _password_login()
-        if not ok:
-            return False, why
-        deadline = time.time() + 60
-        while time.time() < deadline and not _shell_rendered(describe_all()):
-            time.sleep(1)
-        if not _shell_rendered(describe_all()):
-            return False, "sign-in submitted but the signed-in shell never rendered"
+    # ensure_signed_in() handles all three boot states -- already-signed-in
+    # shell, the marketing landing page, and the sign-in form itself. The old
+    # two-state machine here knew nothing about the landing page, so a fresh
+    # install fell straight through to "neither ... appeared in 60s".
+    ok, why = ensure_signed_in(timeout=120)
+    if not ok:
+        return False, why
     dismiss_overlays()
     els = describe_all()
     missing = [t for t in ("Home", "Items", "Scan") if not find_all(t, els)]
@@ -435,6 +416,122 @@ def flow_login_shell():
 
 def _shell_rendered(els):
     return all(find_all(t, els) for t in ("Home", "Items", "Scan"))
+
+
+def find_exact(label, elements=None):
+    """Elements whose label is EXACTLY `label`.
+
+    find_all() is a substring match, and on the redesigned auth screen the
+    heading "Sign in to StockPilot" contains "Sign in" -- so a substring
+    lookup taps the TITLE and the form is never submitted. Every button here
+    is addressed by exact label for that reason.
+    """
+    if elements is None:
+        elements = describe_all()
+    return [e for e in elements
+            if label_of(e).strip() == label and on_screen(e)]
+
+
+def paste_into(el, text):
+    """Type via the simulator pasteboard.
+
+    `idb ui text` silently truncates and drops shifted characters: it turned
+    demo@stockpilotusa.com into demockpilotusa.com, which then failed sign-in
+    with no error worth reading. The pasteboard is exact. The value goes in on
+    stdin, never argv, and the pasteboard is scrubbed by the caller.
+    """
+    x, y, w, h = frame_of(el)
+    cx, cy = int(x + w / 2), int(y + h / 2)
+    subprocess.run(["xcrun", "simctl", "pbcopy", UDID],
+                   input=text.encode(), check=True)
+    idb("ui", "tap", str(cx), str(cy))
+    time.sleep(0.5)
+    idb("ui", "tap", str(cx), str(cy), "--duration", "1.3")
+    time.sleep(1.2)
+    hits = find_exact("Paste")
+    if not hits:
+        return False
+    tap_element(hits[0])
+    time.sleep(0.8)
+    return True
+
+
+def dismiss_system_alert():
+    """Dismiss iOS's own "Save Password?" alert after a sign-in.
+
+    A SYSTEM alert is not in the app's accessibility tree: describe-all
+    returns the Application node and nothing else, so every label lookup comes
+    back empty and the suite concludes the shell never rendered -- when in fact
+    sign-in succeeded and the shell is sitting right behind the alert.
+
+    The alert is a fixed-size, centred panel on both the iPad and the iPhone,
+    so "Not Now" sits at a constant OFFSET from the screen centre (measured on
+    both: -74, +105 points). Only ever tapped when the tree is genuinely empty,
+    so a normal screen can never be hit by this.
+    """
+    els = describe_all()
+    if any(label_of(e).strip() for e in els if e.get("type") != "Application"):
+        return False
+    tap(SCREEN_W / 2 - 74, SCREEN_H / 2 + 105)
+    time.sleep(1.5)
+    return True
+
+
+def _open_signin_form(timeout=30):
+    """Get from the marketing landing screen to the sign-in form.
+
+    The landing+auth redesign made the app BOOT to a marketing page with a
+    "Sign in" link in the header; the form is one screen further in. The suite
+    used to assume the form was the first thing a signed-out app showed, so on
+    a fresh install it never reached a field and every flow failed behind a
+    harness abort that blamed the orders list.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        els = describe_all()
+        if [e for e in els if e.get("type") == "TextField" and on_screen(e)]:
+            return True
+        link = find_exact("Sign in", els)
+        if link:
+            tap_element(link[0])
+            time.sleep(2.5)
+            continue
+        time.sleep(1)
+    return False
+
+
+def ensure_signed_in(timeout=120):
+    """Sign in if needed, so preflight checks run against the real shell.
+
+    validate_gesture() needs the orders list, which needs a session. On a
+    fresh simulator install there is none, so this has to happen BEFORE the
+    gesture self-validation rather than inside the login flow.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            els = describe_all()
+        except RuntimeError:
+            time.sleep(1)
+            continue
+        if _shell_rendered(els):
+            dismiss_overlays()
+            return True, "already signed in"
+        if not _open_signin_form(timeout=20):
+            time.sleep(1)
+            continue
+        ok, why = _password_login()
+        if not ok:
+            return False, why
+        end = time.time() + 60
+        while time.time() < end:
+            dismiss_system_alert()
+            dismiss_overlays()
+            if _shell_rendered(describe_all()):
+                return True, "signed in"
+            time.sleep(1.5)
+        return False, "sign-in submitted but the shell never rendered"
+    return False, "could not reach a sign-in form or the shell"
 
 
 def _password_login():
@@ -459,25 +556,35 @@ def _password_login():
     if not fields:
         return False, "sign-in screen rendered but no email field found"
     fields.sort(key=lambda e: frame_of(e)[1])
-    tap_element(fields[0])
-    time.sleep(0.5)
-    type_text(email)  # short chunks: idb ui text truncates long strings
-    typed = _field_value_containing("@")
-    if typed and typed != email and email.startswith(typed):
-        for ch in email[len(typed):]:  # key in the truncated tail
-            idb("ui", "text", ch)
-    secure = [
-        e for e in describe_all() if e.get("type") == "SecureTextField" and on_screen(e)
-    ]
-    if not secure:
-        return False, "no password field found on sign-in screen"
-    tap_element(secure[0])
-    time.sleep(0.5)
-    type_text(password)
-    btn = wait_for("Sign in", timeout=5)
+    if not paste_into(fields[0], email):
+        return False, "could not paste the email (no Paste in the edit menu)"
+    if _field_value_containing("@") != email:
+        return False, f"email field did not take the address: {_field_value_containing('@')!r}"
+
+    # iOS 26 reports this app's password box as a plain TextField, not a
+    # SecureTextField, so a type-only lookup finds nothing and the old code
+    # bailed with "no password field found" on every run. Prefer the secure
+    # type when it IS reported; otherwise fall back to the second field.
+    els = describe_all()
+    secure = [e for e in els if e.get("type") == "SecureTextField" and on_screen(e)]
+    if secure:
+        pw_field = secure[0]
+    else:
+        tfs = [e for e in els if e.get("type") == "TextField" and on_screen(e)]
+        tfs.sort(key=lambda e: frame_of(e)[1])
+        if len(tfs) < 2:
+            return False, "no password field found on sign-in screen"
+        pw_field = tfs[1]
+    pasted = paste_into(pw_field, password)
+    del password
+    subprocess.run(["xcrun", "simctl", "pbcopy", UDID], input=b"-", check=False)
+    if not pasted:
+        return False, "could not paste the password (no Paste in the edit menu)"
+
+    btn = find_exact("Sign in")
     if not btn:
         return False, "no Sign in button found"
-    tap_element(btn)
+    tap_element(btn[-1])
     return True, "submitted"
 
 
@@ -650,6 +757,12 @@ def main():
         return
 
     preflight(ci=args.ci)
+    # Sign in FIRST: validate_gesture() scrolls the orders list, which does not
+    # exist without a session, and a fresh simulator install has none.
+    launch_app(fresh=True)
+    ok, why = ensure_signed_in()
+    if not ok:
+        fail_hard(f"could not sign in before the gesture self-validation: {why}")
     validate_gesture()
 
     selected = [(n, f) for n, f in FLOWS if not args.flow or n == args.flow]
