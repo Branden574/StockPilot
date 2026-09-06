@@ -6,6 +6,7 @@ import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } 
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 import { ScannerTip } from '@/components/scanner-tip';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
   PdfTooLargeError,
@@ -14,6 +15,7 @@ import {
   scanDocumentPages,
   scanFileName,
 } from '@/lib/document-scanner';
+import { extractApiErrorMessage } from '@/lib/po-import-approve';
 import { hasSeenScanTip, markScanTipSeen } from '@/lib/scanner-tip-flag';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -33,6 +35,25 @@ interface AttachmentRow {
 
 const MAX_BYTES = 15 * 1024 * 1024; // must match the bucket's file_size_limit (mig 0211)
 
+/**
+ * Extension for the storage object's filename, derived from the picked file's
+ * name. Sanitised to lowercase alphanumerics AND bounded to 10 characters,
+ * falling back to 'bin'.
+ *
+ * The bound is not cosmetic. Since SP-018 the row is recorded by the server,
+ * whose positive path shape (lib/storage-path.ts OBJECT_FILENAME_SEGMENT)
+ * accepts an extension of 1-10 alphanumerics — so a file named `scan.#$%`
+ * (sanitises to an EMPTY extension, path ending in a bare '.') or
+ * `notes.verylongextension` would upload fine and then be refused at
+ * finalize, leaving the user with a failed attach for a perfectly good file.
+ * The real content type is settled server-side by the byte sniff regardless
+ * of what this says.
+ */
+function safeExt(fileName: string): string {
+  const raw = (fileName.split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return raw.length > 0 && raw.length <= 10 ? raw : 'bin';
+}
+
 function mimeForExt(ext: string): string {
   switch (ext.toLowerCase()) {
     case 'png':
@@ -51,9 +72,12 @@ function mimeForExt(ext: string): string {
 
 /**
  * Attach photos (camera or library) to a purchase order from the phone — e.g. a
- * supplier packing slip. All client-side via the RLS-enforced Supabase client:
- * upload to the private po-attachments bucket, then insert the metadata row
- * (RLS gates both on purchase_orders:manage). Mirrors the web PO attachments.
+ * supplier packing slip. Two steps, exactly like the web panel: PUT the bytes
+ * into the private po-attachments bucket (RLS-enforced signed-URL upload),
+ * then FINALIZE on the server via POST /api/v1/purchase-orders/[id]/
+ * attachments, which is the Bearer twin of `addPoAttachmentAction` and the
+ * only path that byte-verifies the object before recording the row (SP-018 —
+ * see uploadToPo). Mirrors the web PO attachments.
  *
  * Four sources: camera, photo library (both resized), the Files app
  * (PDFs / images via expo-document-picker, uploaded raw), and the native
@@ -134,13 +158,14 @@ export function PoAttachments({ poId }: { poId: string }) {
 
   /**
    * Core upload shared by every attach source (camera, library, Files app,
-   * document scanner): storage object first, then the po_attachments row.
-   * Rolls the orphaned object back if the metadata insert is rejected (e.g.
-   * RLS — the user lacks purchase_orders:manage). The bytes stream straight
-   * off disk via lib/storage-upload's native createUploadTask (signed-URL
-   * PUT, same RLS insert gate enforced at mint) — which also retires this
-   * call site's fetch('file://').arrayBuffer() and gives REAL upload
-   * progress. Callers own the busy state.
+   * document scanner): storage object first, then the server finalize that
+   * records the po_attachments row. Rolls the orphaned object back if the
+   * finalize is refused (e.g. the user lacks purchase_orders:manage, or the
+   * server's byte scan rejects the file). The bytes stream straight off disk
+   * via lib/storage-upload's native createUploadTask (signed-URL PUT, same
+   * RLS insert gate enforced at mint) — which also retires this call site's
+   * fetch('file://').arrayBuffer() and gives REAL upload progress. Callers
+   * own the busy state.
    */
   async function uploadToPo(file: {
     uri: string;
@@ -167,43 +192,59 @@ export function PoAttachments({ poId }: { poId: string }) {
         fileUri: file.uri,
         contentType,
         // Floor + hold at 99: 100 is claimed only by genuine completion of
-        // upload AND row insert, never by rounding.
+        // the upload AND the server finalize, never by rounding.
         onProgress: (fraction) => setUploadPercent(Math.min(99, Math.floor(fraction * 100))),
       });
       if (!up.ok) {
         Alert.alert('Upload failed', up.error);
         return;
       }
-      // ⚠️ KNOWN GAP (SP-018, unfixed — needs a server route this file
-      // cannot add): this insert goes straight to PostgREST, so the
-      // finalize-time gate every other attachment surface runs —
-      // PoAttachmentsService.add() → verifyStoredDocumentOrDelete(), which
-      // sniffs the real magic bytes AND scans the object for active content
-      // (a PDF carrying /OpenAction /Launch), deleting it on failure — never
-      // runs for a file attached from the phone. `contentType` below is the
-      // client's word (pickDocument passes asset.mimeType raw), and it is
-      // what the row records and every downstream reader trusts: the web
-      // panel signs it for the whole org and api/purchase-orders/[id]/
-      // attachments.zip bundles it. Closing this needs (1) a Bearer twin
-      // POST /api/v1/purchase-orders/[id]/attachments calling
-      // PoAttachmentsService.add(), (2) this call site switched to it, then
-      // (3) a migration dropping the authenticated INSERT policy (0211)
-      // once the old-binary audience has moved. Same shape in
-      // apps/mobile/app/order/[id].tsx:1319 (order_request_attachments) and
-      // the mobile item_images inserts. See lib/storage-path.ts's
-      // poAttachmentPathShape note, which documents the same bypass.
-      const { error: rowErr } = await supabase.from('po_attachments').insert({
-        organization_id: orgId,
-        purchase_order_id: poId,
-        storage_path: path,
-        file_name: file.fileName,
-        content_type: contentType,
-        size_bytes: sizeBytes,
-        uploaded_by: user.id,
-      });
-      if (rowErr) {
+      // ═══ FINALIZE ON THE SERVER, NEVER STRAIGHT INTO POSTGREST (SP-018) ═══
+      //
+      // This used to insert the po_attachments row itself. Going straight to
+      // PostgREST skipped PoAttachmentsService.add() →
+      // verifyStoredDocumentOrDelete(), which sniffs the object's REAL magic
+      // bytes AND scans it for active content (a genuine PDF carrying
+      // /OpenAction /Launch passes any client-side magic-byte check — that is
+      // precisely why the scan lives on the server), deleting the object on
+      // failure. So a file attached from a phone was never scanned, and
+      // `contentType` — the client's word, taken raw from
+      // `asset.mimeType` in pickDocument — was what the row recorded and what
+      // every downstream reader trusted: the web panel signs it for the whole
+      // org and api/purchase-orders/[id]/attachments.zip bundles it.
+      //
+      // The route below is the Bearer twin of the web `addPoAttachmentAction`,
+      // so both surfaces now run the same gate and the row records the SNIFFED
+      // mime. `contentType` is still sent for parity, but the server ignores
+      // the claim.
+      //
+      // The storage rollback below is kept on purpose: the server removes the
+      // object itself when the SNIFF fails, but every other refusal
+      // (purchase_orders:manage revoked, a wrong path shape, the PO not in
+      // this org) would otherwise strand the bytes in the bucket. A double
+      // remove is harmless; a missing one is a leak.
+      //
+      // NOT changed here: the `authenticated` INSERT policy on po_attachments
+      // (0211) stays until the old-binary OTA audience has moved — those
+      // builds still insert directly, and revoking it now would break them.
+      // Same shape in apps/mobile/app/order/[id].tsx (order_request_attachments);
+      // the mobile item_images inserts are still on the old path.
+      try {
+        await api(`/api/v1/purchase-orders/${poId}/attachments`, {
+          method: 'POST',
+          body: {
+            storagePath: path,
+            fileName: file.fileName,
+            contentType,
+            sizeBytes,
+          },
+        });
+      } catch (e) {
         await supabase.storage.from(BUCKET).remove([path]);
-        Alert.alert('Could not attach', rowErr.message);
+        Alert.alert(
+          'Could not attach',
+          extractApiErrorMessage(e, 'That file was refused. Please try a different one.'),
+        );
         return;
       }
       await load();
@@ -271,7 +312,7 @@ export function PoAttachments({ poId }: { poId: string }) {
     setBusy(true);
     try {
       const name = (asset.name && asset.name.trim()) || 'file';
-      const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const ext = safeExt(name);
       await uploadToPo({
         uri: asset.uri,
         ext,

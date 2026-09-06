@@ -71,22 +71,28 @@ describe('mapPostReceiptError', () => {
 /**
  * Source-level wiring pin: the screen imports native modules at top level, so
  * vitest cannot render it (see vitest.config.ts). These assertions are what
- * stops the post_receipt_v2 failure branch regressing to a raw alert.
+ * stops the receipt-post failure branch regressing to a raw alert.
+ *
+ * The branch is anchored on the API call, not on `supabase.rpc(...)`: SP-007b
+ * moved this post off the RPC and onto `/api/v1/po/<id>/receipts` so the
+ * receipt runs through ReceivingService (audit row, `receipt.posted` outbox
+ * event, `po.received` webhook). The recovery policy pinned below is
+ * unchanged by that move — only where the error comes from changed.
  */
-describe('po/[id].tsx post_receipt_v2 failure branch', () => {
+describe('po/[id].tsx receipt-post failure branch', () => {
   const screen = readFileSync(path.resolve(__dirname, '../../app/po/[id].tsx'), 'utf8');
-  const start = screen.indexOf("supabase.rpc('post_receipt_v2'");
+  const start = screen.indexOf('`/api/v1/po/${id}/receipts`');
   // End at the SUCCESS comment, not at the 'Posted' alert: the success path
   // clears idemKeyRef too, and including it would make the reset assertion
   // below pass for free.
   const branch = screen.slice(start, screen.indexOf('// Posted:', start));
 
-  it('routes the RPC error through mapPostReceiptError instead of alerting error.message', () => {
+  it('routes the failure through mapPostReceiptError instead of alerting the raw message', () => {
     expect(start).toBeGreaterThan(-1);
     expect(screen).toMatch(
       /import \{ mapPostReceiptError \} from '@\/lib\/receipt-post-error'/,
     );
-    expect(branch).toMatch(/mapPostReceiptError\(error\)/);
+    expect(branch).toMatch(/mapPostReceiptError\(\{/);
     expect(branch).not.toMatch(/Alert\.alert\('Receive failed', error\.message\)/);
   });
 

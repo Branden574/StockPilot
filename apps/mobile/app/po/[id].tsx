@@ -17,9 +17,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { CountingUnit, SizeScaleValueOrder } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
-import { buildReceiptRequestHash } from '@/lib/receipt-request-hash';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   buildPoBlocks,
@@ -427,19 +427,26 @@ export default function PoReceiveScreen() {
       }
     }
 
+    // camelCase because this is the API route's body (the shared
+    // postReceiptSchema), NOT the RPC's snake_case p_lines — see the post
+    // below for why the phone no longer talks to the RPC.
     const payloadLines = lines
       .map((l) => {
         const d = draft[l.id] ?? { received: '', rejected: '' };
         const received = Number(d.received) || 0;
         if (received <= 0) return null;
+        // unit_cost is typed number but arrives from PostgREST as
+        // number | string | null. The schema refuses null/NaN/negative, so
+        // normalise to 0 — which is exactly what the service defaults an
+        // omitted cost to (`l.unitCost ?? 0`).
+        const cost = Number(l.unit_cost);
         return {
-          po_line_id: l.id,
-          qty_received: received,
+          poLineId: l.id,
+          qtyReceived: received,
           // Everything received goes into usable stock — no separate reject step.
-          qty_accepted: received,
-          qty_rejected: 0,
-          unit_cost: l.unit_cost,
-          notes: null,
+          qtyAccepted: received,
+          qtyRejected: 0,
+          unitCost: Number.isFinite(cost) && cost >= 0 ? cost : 0,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -455,46 +462,78 @@ export default function PoReceiveScreen() {
     submittingRef.current = true;
     setPosting(true);
 
-    // Stable key for this intent: reused on retry so the RPC dedupes a
-    // post that actually succeeded server-side but failed to ack to the client.
+    // Stable key for this intent: reused on retry so the server dedupes a
+    // post that actually succeeded but failed to ack to the client. It is
+    // `mobile-<po>-<ts>-<rand>`, NOT a uuid — idempotency_keys.key is text,
+    // and the route's schema deliberately does not pin .uuid() (SP-007b).
     if (!idemKeyRef.current) {
       idemKeyRef.current = `mobile-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
     const idempotencyKey = idemKeyRef.current;
 
-    // The hash is the REQUEST, not the key (0013 contract): a retry with the
-    // same key and the same lines returns the earlier receipt; a retry after
-    // the operator EDITED the lines must raise idempotency_conflict instead of
-    // silently returning the old receipt as success. Passing the key here as
-    // the hash made every retry match. See receipt-request-hash.ts.
-    const requestHash = buildReceiptRequestHash({
-      purchaseOrderId: id,
-      warehouseId: header.destination_warehouse_id,
-      notes: null,
-      lines: payloadLines,
-    });
-    const { error } = await supabase.rpc('post_receipt_v2', {
-      p_purchase_order_id: id,
-      p_warehouse_id: header.destination_warehouse_id,
-      p_lines: payloadLines,
-      p_idempotency_key: idempotencyKey,
-      p_request_hash: requestHash,
-      p_notes: null,
-    });
+    // WHY THIS IS AN API CALL AND NOT A DIRECT post_receipt_v2 RPC
+    // (SP-007b). This screen used to invoke the RPC directly. The receipt and
+    // the stock landed correctly, so nothing looked broken — but every side
+    // effect ReceivingService performs AROUND the RPC was skipped for any
+    // delivery received on a phone: no `stock.receipt.posted` audit row (so
+    // it never appeared in Activity or the Exception Center), no
+    // `receipt.posted` outbox event (so the QuickBooks connector, which
+    // subscribes to that topic, never heard about it), no `po.received`
+    // webhook, no auto-unarchive, no inventory-list revalidation. The route
+    // is the Bearer twin of the web receive action and runs all of them.
+    //
+    // The request hash moved SERVER-side with it (receiving.ts
+    // hashReceiptRequest), which is why this file no longer builds one: the
+    // 0013 contract — same key + same lines returns the earlier receipt, same
+    // key + EDITED lines raises idempotency_conflict — is now enforced with
+    // the same digest both clients use, and a key-as-hash cannot recur here.
+    let failure: unknown = null;
+    try {
+      await api<{ receiptId: string; receiptNumber: string }>(
+        `/api/v1/po/${id}/receipts`,
+        {
+          method: 'POST',
+          body: {
+            warehouseId: header.destination_warehouse_id,
+            idempotencyKey,
+            lines: payloadLines,
+          },
+        },
+      );
+    } catch (e) {
+      failure = e;
+    }
     setPosting(false);
     submittingRef.current = false;
 
-    if (error) {
-      // A failure is NOT automatically retryable with this key. `mapPostReceiptError`
-      // decides: `idempotency_conflict` means the FIRST attempt committed
-      // server-side (its ack was lost) and these edited lines were refused —
-      // keeping the key would raise that same conflict forever, and clearing it
-      // without re-reading the PO would post the already-received quantities a
-      // second time. So the conflict arm retires the intent AND reloads, which
-      // also reseeds `draft`, leaving the receiver looking at what is genuinely
-      // still outstanding. Every other raise string rolls the whole RPC back,
-      // so the same key stays correct for a straight retry.
-      const action = mapPostReceiptError(error);
+    if (failure) {
+      // A failure is NOT automatically retryable with this key.
+      // `mapPostReceiptError` decides: `idempotency_conflict` means the FIRST
+      // attempt committed server-side (its ack was lost) and these edited
+      // lines were refused — keeping the key would raise that same conflict
+      // forever, and clearing it without re-reading the PO would post the
+      // already-received quantities a second time. So the conflict arm
+      // retires the intent AND reloads, which also reseeds `draft`, leaving
+      // the receiver looking at what is genuinely still outstanding. Every
+      // other refusal rolls the whole RPC back, so the same key stays correct
+      // for a straight retry.
+      //
+      // The mapper keys off the RAW token strings the RPC raises, and the
+      // route answers with the service's HUMAN sentence instead — three
+      // different refusals all arrive as HTTP 409. So the route tags the one
+      // whose recovery differs with `details.reason`, and that token is what
+      // gets fed to the mapper; anything else falls through to the mapper's
+      // default arm, which shows the server's sentence and KEEPS the key.
+      // Mapping on the sentence instead would be recurring pattern #28 all
+      // over again (a sibling error class silently missing its arm).
+      const reason =
+        failure instanceof ApiError &&
+        typeof (failure.details as { reason?: unknown } | undefined)?.reason === 'string'
+          ? ((failure.details as { reason: string }).reason)
+          : null;
+      const action = mapPostReceiptError({
+        message: reason ?? (failure instanceof Error ? failure.message : String(failure)),
+      });
       if (action.resetIntent) idemKeyRef.current = null;
       if (action.reload) {
         setLoading(true);
@@ -744,8 +783,11 @@ export default function PoReceiveScreen() {
  * the group's own counting unit — the native mirror of the web
  * `SizeRunReceiveGrid`.
  *
- * Each size still posts as its own `p_lines` entry, so `post_receipt_v2` sees
- * exactly what it sees today. Mobile never sends `lots` or `serials`, which is
+ * Each size still posts as its own receipt LINE, so the server (and the
+ * `post_receipt_v2` call underneath it) sees exactly what it saw when this
+ * screen spoke to the RPC directly — the SP-007b re-route to
+ * `/api/v1/po/<id>/receipts` changed the transport, not the line shape.
+ * Mobile never sends `lots` or `serials`, which is
  * fine for quantity variants and now also for `serial_optional` (0295/0296);
  * an item that is strictly `serial` still has to be received on the web, and
  * that is unchanged by this layout.

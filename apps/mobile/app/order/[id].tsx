@@ -44,6 +44,7 @@ import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
@@ -1292,10 +1293,11 @@ export default function OrderDetail() {
     );
   };
 
-  // Uploads ONE asset (resize → storage → row). Returns success/failure
-  // WITHOUT touching the shared `uploading` flag or refetching, so the single
-  // and batch flows can share it. Per-file storage rollback on a row-insert
-  // failure is preserved so we never leave an orphaned object behind. The
+  // Uploads ONE asset (resize → storage → SERVER finalize, which records the
+  // row). Returns success/failure WITHOUT touching the shared `uploading`
+  // flag or refetching, so the single and batch flows can share it. Per-file
+  // storage rollback on a refused finalize is preserved so we never leave an
+  // orphaned object behind. The
   // bytes stream straight off disk via lib/storage-upload's native
   // createUploadTask (signed-URL PUT, same RLS insert gate enforced at mint)
   // — which also retires this call site's fetch('file://').arrayBuffer() and
@@ -1316,17 +1318,36 @@ export default function OrderDetail() {
         onProgress,
       });
       if (!up.ok) return { ok: false, error: up.error };
-      const { error: rowErr } = await supabase.from('order_request_attachments').insert({
-        organization_id: orgId,
-        order_request_id: id,
-        storage_path: path,
-        file_name: null,
-        content_type: mimeForExt(resized.ext),
-        kind,
-      });
-      if (rowErr) {
+      // ═══ FINALIZE ON THE SERVER, NEVER STRAIGHT INTO POSTGREST (SP-018) ═══
+      //
+      // This used to insert the order_request_attachments row itself. That
+      // skipped OrderAttachmentsService.add() → verifyStoredDocumentOrDelete(),
+      // the ONLY place the uploaded object's real magic bytes are sniffed and
+      // its body scanned for active content — so a file attached from a phone
+      // was never checked, and the row recorded whatever content_type the
+      // client claimed, which is the value the web panel and every download
+      // path then trust. The route below runs the same service the web panel
+      // does, so both surfaces are verified identically and the row records
+      // the SNIFFED mime.
+      //
+      // The storage rollback is kept deliberately: the server deletes the
+      // object itself when the SNIFF fails, but every other refusal
+      // (permission, a non-attachable order status, a wrong path shape) would
+      // otherwise leave orphaned bytes in the bucket. Rolling back twice is
+      // harmless; not rolling back is a leak.
+      try {
+        await api(`/api/v1/orders/${id}/attachments`, {
+          method: 'POST',
+          body: {
+            storagePath: path,
+            fileName: null,
+            contentType: mimeForExt(resized.ext),
+            kind,
+          },
+        });
+      } catch (e) {
         await supabase.storage.from(BUCKET).remove([path]);
-        return { ok: false, error: rowErr.message };
+        return { ok: false, error: extractApiErrorMessage(e, 'Could not attach that photo.') };
       }
       return { ok: true };
     } catch (e) {
