@@ -143,7 +143,9 @@ export function PoReceiveDialog({
       setEntries(Object.fromEntries(linesRef.current.map((l) => [l.id, blankEntry()])));
       setNotes('');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `lines` is read through a ref on purpose: a new array identity from an RSC refresh must NOT wipe in-progress entry.
+    // `lines` is deliberately NOT a dependency — see the comment above; it is
+    // read through linesRef so a new array identity from an RSC refresh cannot
+    // wipe in-progress entry.
   }, [open]);
 
   function setField(lineId: string, patch: Partial<LineEntry>) {

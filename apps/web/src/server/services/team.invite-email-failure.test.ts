@@ -115,7 +115,7 @@ describe('TeamService.resendInvite — no audit row for a send that did not happ
   it('throws and writes NO audit row when the resend fails', async () => {
     vi.mocked(sendEmail).mockResolvedValue({ ok: false, error: '500 upstream' } as never);
     const svc = new TeamService(makeServiceContext(existingInviteStub().client, { role: 'admin' }));
-    await expect(svc.resendInvite('invite-1', 'L4L North Region', 'Branden')).rejects.toMatchObject({
+    await expect(svc.resendInvite('invite-1')).rejects.toMatchObject({
       code: 'conflict',
     });
     // The claim 'user.invited resent:true' must not outlive the send.
@@ -124,7 +124,7 @@ describe('TeamService.resendInvite — no audit row for a send that did not happ
 
   it('audits only a real send', async () => {
     const svc = new TeamService(makeServiceContext(existingInviteStub().client, { role: 'admin' }));
-    await svc.resendInvite('invite-1', 'L4L North Region', 'Branden');
+    await svc.resendInvite('invite-1');
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'user.invited', after: expect.objectContaining({ resent: true }) }),
       expect.anything(),
