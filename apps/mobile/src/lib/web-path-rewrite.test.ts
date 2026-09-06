@@ -66,3 +66,50 @@ describe('maintenance deep links (all three notification doors route through her
     expect(rewriteWebPath('/dashboard/maintenance?scope=all')).toBe('/maintenance');
   });
 });
+
+// SP-031: four notification link shapes that are STILL EMITTED in prod had no
+// rule here, so every one of them fell through the /dashboard/* catch-all and
+// dead-ended the tap on the Home tab even though a native twin exists:
+//   (a) 0042 trg_cycle_counts_assigned  -> '/dashboard/cycle-counts/<id>'
+//   (b) cron auto-reorder + recurring-pos -> '/dashboard/purchase-orders' (BARE)
+//   (c) 0091 low/out-of-stock crossing  -> '/dashboard/inventory?stock=out&type=all'
+//   (d) 0042 bundle shortage            -> '/dashboard/bundles/<id>'
+// The ordering assertions are the real guard: the two BARE-list rules sit
+// after their /<uuid> siblings and must never shadow them.
+
+describe('SP-031 notification doors with native twins', () => {
+  it('cycle-count assignment opens the count, not home', () => {
+    expect(rewriteWebPath('/dashboard/cycle-counts/11111111-1111-4111-8111-111111111111')).toBe(
+      '/cycle-count/11111111-1111-4111-8111-111111111111',
+    );
+  });
+
+  it('bundle shortage opens the bundle, not home', () => {
+    expect(rewriteWebPath('/dashboard/bundles/33333333-3333-4333-8333-333333333333')).toBe(
+      '/bundles/33333333-3333-4333-8333-333333333333',
+    );
+  });
+
+  it('the bare purchase-orders list (auto-reorder / recurring-po cron) resolves', () => {
+    expect(rewriteWebPath('/dashboard/purchase-orders')).toBe('/purchase-orders');
+    expect(rewriteWebPath('/dashboard/purchase-orders?status=draft')).toBe('/purchase-orders');
+  });
+
+  it('ORDERING: a purchase-order id still beats the bare list rule', () => {
+    expect(rewriteWebPath('/dashboard/purchase-orders/44444444-4444-4444-8444-444444444444')).toBe(
+      '/po/44444444-4444-4444-8444-444444444444',
+    );
+  });
+
+  it('the low/out-of-stock crossing link resolves to the Items tab', () => {
+    expect(rewriteWebPath('/dashboard/inventory?stock=out&type=all')).toBe('/inventory');
+    expect(rewriteWebPath('/dashboard/inventory')).toBe('/inventory');
+  });
+
+  it('ORDERING: staging and item detail still beat the bare inventory rule', () => {
+    expect(rewriteWebPath('/dashboard/inventory/staging?type=book')).toBe('/staging');
+    expect(rewriteWebPath('/dashboard/inventory/55555555-5555-4555-8555-555555555555')).toBe(
+      '/item/55555555-5555-4555-8555-555555555555',
+    );
+  });
+});

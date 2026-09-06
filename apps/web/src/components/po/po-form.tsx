@@ -497,14 +497,35 @@ function SizeRunAddDialog({
   const [groupId, setGroupId] = React.useState<string>(runs[0]?.groupId ?? '');
   const [quantities, setQuantities] = React.useState<Record<string, number>>({});
 
-  // Reset on every open so a previous run's quantities can never leak into the
+  // The reset below needs the CURRENT runs but must not re-run when their
+  // identity changes — so it reads them through a ref instead of a dep. The
+  // ref is synced in its own effect (never during render) and is declared
+  // FIRST, so on the commit that opens the dialog it lands before the reset
+  // effect below reads it.
+  const runsRef = React.useRef(runs);
+  React.useEffect(() => {
+    runsRef.current = runs;
+  });
+
+  // Reset on every OPEN so a previous run's quantities can never leak into the
   // next one and silently order stock nobody asked for.
+  //
+  // Deps are `[open]` ALONE, deliberately. They used to include `runs`, and
+  // that blanked live input: `runs` is the parent's `sizeRuns` useMemo over
+  // [groupItems, items, productGroups], and all three of those props are
+  // rebuilt fresh by the Server Component on every render. The PO routes sit
+  // inside the org-wide InventoryRealtime nudge, so a colleague receiving a
+  // PO or moving stock fires router.refresh() -> new prop identities -> new
+  // `runs` array -> this effect fired while the dialog was still OPEN and
+  // wiped every per-size quantity the buyer had typed (and snapped the group
+  // select back to runs[0]). Same class as the receive dialog's [open, lines]
+  // reset. A re-derived array that is value-identical is not a reason to
+  // discard user input; only re-opening the dialog is.
   React.useEffect(() => {
     if (!open) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open
-    setGroupId(runs[0]?.groupId ?? '');
+    setGroupId(runsRef.current[0]?.groupId ?? '');
     setQuantities({});
-  }, [open, runs]);
+  }, [open]);
 
   const run = runs.find((r) => r.groupId === groupId) ?? null;
   const totalQty = run

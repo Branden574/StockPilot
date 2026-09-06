@@ -30,8 +30,10 @@ import {
   type CachedCycleCountHeader,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
+import { fetchAllCycleCountLines } from '@/lib/cycle-count-lines-fetch';
 import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
+import { postCycleCount } from '@/lib/cycle-counts-api';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
@@ -177,13 +179,10 @@ export default function CycleCountDetail() {
         .eq('organization_id', orgId)
         .eq('id', id)
         .maybeSingle(),
-      supabase
-        .from('cycle_count_lines')
-        .select(
-          `id, expected_quantity, counted_quantity, counted_at, updated_at,
-           item:inventory_items!item_id (id, name, sku, barcode, variant_size, jersey_number)`,
-        )
-        .eq('cycle_count_id', id),
+      // Paged, NOT a bare select: PostgREST clamps one response to 1000 rows
+      // (SP-032), so a >1000-line count used to arrive silently truncated —
+      // the missing lines were uncountable and got cached that way.
+      fetchAllCycleCountLines(supabase, id),
     ]);
 
     if (ccErr || lErr || !cc) {
@@ -374,15 +373,26 @@ export default function CycleCountDetail() {
     if (!proceed) return;
 
     setPosting(true);
-    const { error } = await supabase.rpc('post_cycle_count', {
-      p_cycle_count_id: header.id,
-    });
-    setPosting(false);
-    if (error) {
-      // 0339: stale_line / negative_result are fail-closed refusals that ask
-      // for a recount; the mapper turns every stable code into a sentence.
-      Alert.alert('Could not post', postCycleCountErrorMessage(error.message));
+    try {
+      // Through the Bearer twin, NOT the post_cycle_count RPC (SP-055).
+      // The RPC alone applies the variance but skips the cycle_counts module
+      // gate, the warehouse write-scope check, the `cycle_count.posted` audit
+      // row and the `cycle_count.completed` integration event — so a count
+      // posted from a phone moved stock while the audit console and every
+      // connector stayed silent. The route runs the same service the web does.
+      await postCycleCount(header.id);
+    } catch (e) {
+      // The route already maps every stable refusal to a sentence, so its
+      // message is shown as-is; postCycleCountErrorMessage stays as the
+      // FALLBACK for anything that still arrives as a raw code (0339's
+      // stale_line / negative_result among them).
+      Alert.alert(
+        'Could not post',
+        postCycleCountErrorMessage(e instanceof Error ? e.message : null),
+      );
       return;
+    } finally {
+      setPosting(false);
     }
     Alert.alert('Posted', 'Variance adjustments applied.');
     router.back();

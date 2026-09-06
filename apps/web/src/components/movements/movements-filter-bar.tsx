@@ -74,10 +74,25 @@ export function MovementsFilterBar({
     [mode, onChange, router, basePath],
   );
 
+  // The needle we last handed upstream. Seeded with the mount value so the
+  // initial render still skips a redundant apply (in server mode that would
+  // router.replace() the page back over the user's own ?page= navigation).
+  //
+  // It has to be a REF of the last APPLIED value, not a `q === initial.q`
+  // comparison: instant mode passes a module constant as `initial`
+  // (movements-instant-table.tsx EMPTY_FILTERS, q:'' for the life of the
+  // component), so comparing against it also swallowed the keystroke that
+  // returns q to '' — select-all + Backspace left the ledger, and the Export
+  // CSV href built from the same filter state, pinned to the old needle while
+  // the search box read empty (SP-034). Server mode hid it because the URL
+  // round-trip keeps initial.q equal to the committed value.
+  const appliedQ = React.useRef(initial.q);
   React.useEffect(() => {
-    // Skip the initial mount (value already reflected upstream).
-    if (q === initial.q) return;
-    const t = setTimeout(() => apply({ q, ...latest.current }), 300);
+    if (q === appliedQ.current) return;
+    const t = setTimeout(() => {
+      appliedQ.current = q;
+      apply({ q, ...latest.current });
+    }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
@@ -96,6 +111,7 @@ export function MovementsFilterBar({
   }
   function clearAll() {
     setQ('');
+    appliedQ.current = '';
     setType('');
     setFrom('');
     setTo('');
@@ -121,6 +137,7 @@ export function MovementsFilterBar({
             type="button"
             onClick={() => {
               setQ('');
+              appliedQ.current = '';
               apply({ q: '', type, from, to });
             }}
             aria-label="Clear search"

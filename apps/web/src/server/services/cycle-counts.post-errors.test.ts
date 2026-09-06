@@ -75,3 +75,37 @@ describe('mapPostCycleCountError — post_cycle_count raise codes (0079 + 0339)'
     );
   });
 });
+
+/**
+ * 0342/0343 counted-location validation. post_cycle_count refuses a line whose
+ * counted_location_id is in another org (42501) or outside the count's
+ * warehouse scope (22023). Neither code contains any of the older substrings
+ * (`item_out_of_scope` is NOT a substring of `cycle_count_location_out_of_scope`),
+ * so before SP-098 they fell through to internal_error and the operator saw
+ * either a generic "internal error" toast (web) or the raw Postgres string
+ * (mobile). Recurring bug pattern #28(b): enumerate the RPC's raises and map
+ * every sibling class.
+ */
+describe('mapPostCycleCountError — counted-location raises (0342 + 0343)', () => {
+  it('cycle_count_location_out_of_scope -> validation_error with clear/recount copy', () => {
+    const e = mapPostCycleCountError('cycle_count_location_out_of_scope');
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toContain('location');
+    expect(e.message).toContain('Clear and recount');
+  });
+
+  it('cycle_count_location_out_of_org -> validation_error with clear/recount copy', () => {
+    const e = mapPostCycleCountError('cycle_count_location_out_of_org');
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toContain('location');
+    expect(e.message).toContain('Clear and recount');
+  });
+
+  it('the more specific location codes win over the older item_out_of_scope mapping', () => {
+    // Ordering guard: `…location_out_of_scope` must not be swallowed by a
+    // looser substring test added later.
+    expect(mapPostCycleCountError('P0001: cycle_count_location_out_of_scope').message).not.toBe(
+      mapPostCycleCountError('item_out_of_scope').message,
+    );
+  });
+});

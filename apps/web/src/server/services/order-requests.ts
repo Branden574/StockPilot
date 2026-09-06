@@ -1,9 +1,13 @@
 import 'server-only';
 
+import { after } from 'next/server';
+
 import {
   can,
   formatOrderNumber,
+  formatOrgDateTime,
   isManagerOrAbove,
+  resolveOrgTimezone,
   resolveRequesterIdentity,
 } from '@stockpilot/core';
 
@@ -137,6 +141,10 @@ export interface OrderRequestLineRow {
   returned_quantity: number;
   unit_cost_at_request: number;
   notes: string | null;
+  /** When the line was added. Optional because only get() reads it back —
+   *  it is what makes `pickSlipStale` able to tell "this line arrived after
+   *  the picker printed their sheet" from "this line was always here". */
+  created_at?: string | null;
 }
 
 export interface OrderRequestLineWithItem extends OrderRequestLineRow {
@@ -328,6 +336,44 @@ export async function syncOrderScheduleEvent(
       organizationId: organizationId ?? null,
       extra: { orderId, outcome },
     });
+  }
+}
+
+/**
+ * Run post-response work so the serverless invocation actually STAYS ALIVE for
+ * it.
+ *
+ * WHAT WENT WRONG (SP-092): every notification tail here was spelled
+ * `void this.notifyEmail(...)` / `void this.autoScheduleFromOrder(...)`, i.e. a
+ * promise still pending when the action returned and the response flushed. On
+ * Vercel the runtime may freeze the instance at that moment, so the approval
+ * email was never handed to Resend, the linked schedule_events row was never
+ * inserted, and the schedule status sync never ran — silently, with no error
+ * anywhere. Fluid compute usually keeps the instance warm, which is why it
+ * mostly worked; at ~1 order/day there is frequently no other in-flight request
+ * to keep it warm, which is exactly when it would not. `after()` registers the
+ * work WITH the request, and the platform waits for it (the same reason
+ * actions/auth.ts wraps its new-device alert).
+ *
+ * WHY THE try/catch: `after` throws synchronously — "`after` was called outside
+ * a request scope" (next/dist/server/after/after.js) — whenever this service is
+ * driven from a script, a cron worker or vitest. There is no response to
+ * outlive in those contexts, so plain fire-and-forget is the correct fallback
+ * rather than an exception that would fail the caller's mutation.
+ *
+ * Deliberately NOT applied to `dispatchEvent`: that writes a durable
+ * integration_deliveries row first and a cron drains it, so it is already
+ * at-least-once (see integration-events.ts).
+ */
+function defer(fn: () => Promise<unknown>): void {
+  // Errors are swallowed on purpose — every caller is best-effort tail work
+  // that must never turn a committed mutation into a failed request. The
+  // helpers themselves log/report.
+  const run = () => fn().catch(() => {});
+  try {
+    after(run);
+  } catch {
+    void run();
   }
 }
 
@@ -706,8 +752,15 @@ export class OrderRequestsService {
       this.ctx.supabase
         .from('order_request_lines')
         .select(
+          // `created_at` is NOT decoration: pickSlipStale below compares it
+          // against pick_slip_generated_at. It used to be missing from this
+          // select (and from the flattening step), so the predicate read
+          // `undefined` on every line and the "items were added after the pick
+          // slip was printed" banner never rendered for anyone — bug-pattern #5,
+          // filtering on a column the query did not ask for.
           `id, order_request_id, item_id, quantity_requested,
            quantity_fulfilled, quantity_picked, returned_quantity, unit_cost_at_request, notes,
+           created_at,
            item:inventory_items!item_id (
              id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields, tracking_type,
              charter_id, charter:charters!charter_id ( name, code )
@@ -772,6 +825,7 @@ export class OrderRequestsService {
         returned_quantity: Number(r.returned_quantity) || 0,
         unit_cost_at_request: Number(r.unit_cost_at_request) || 0,
         notes: (r.notes as string | null) ?? null,
+        created_at: (r.created_at as string | null) ?? null,
         item,
       };
     });
@@ -836,12 +890,20 @@ export class OrderRequestsService {
         ? pickerProfile.fullName?.trim() || pickerProfile.email?.trim() || null
         : null,
       // Any line created after the slip was printed makes that slip stale.
-      pickSlipStale:
-        h.pick_slip_generated_at != null &&
-        flatLines.some((l) => {
-          const created = (l as { created_at?: string | null }).created_at;
-          return created != null && created > (h.pick_slip_generated_at as string);
-        }),
+      // Compared as instants, not strings: PostgREST can hand back either
+      // "+00:00" or "Z" offsets and a lexicographic ">" would mis-order the
+      // two spellings of the same moment.
+      pickSlipStale: (() => {
+        const printedAt = h.pick_slip_generated_at as string | null;
+        if (printedAt == null) return false;
+        const printed = Date.parse(printedAt);
+        if (Number.isNaN(printed)) return false;
+        return flatLines.some((l) => {
+          if (l.created_at == null) return false;
+          const created = Date.parse(l.created_at);
+          return !Number.isNaN(created) && created > printed;
+        });
+      })(),
     };
   }
 
@@ -994,7 +1056,7 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
-    void this.notifyEmail(row, 'submitted');
+    defer(() => this.notifyEmail(row, 'submitted'));
     // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
     // the org has no endpoints; cron backstops delivery).
     void dispatchEvent(this.ctx.organizationId, 'order.created', {
@@ -1881,13 +1943,13 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
-    void this.notifyEmail(row, 'cancelled');
+    defer(() => this.notifyEmail(row, 'cancelled'));
     void dispatchEvent(this.ctx.organizationId, 'order.cancelled', {
       id,
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       cancelledBy: this.ctx.userId,
     });
-    void syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId);
+    defer(() => syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId));
     return row;
   }
 
@@ -1900,13 +1962,36 @@ export class OrderRequestsService {
     // request's warehouse before flipping its status. The RPC's
     // has_org_role check covers role; this covers scope.
     await this.requireWarehouseAccess(id, 'write');
-    if (internalNotes !== undefined) {
-      const { error } = await this.ctx.supabase
+    // SP-130 — internal notes were being ERASED by every ordinary approval.
+    //
+    // Both callers spell this optional argument `internalNotes ?? null` (the
+    // server action at actions/order-requests.ts and the /api/v1 transition
+    // route), so "the manager just clicked Approve" arrived here as `null`,
+    // not `undefined`. The old `!== undefined` gate treated that as "clear the
+    // notes" and wrote NULL — so notes a manager had saved on a pending order
+    // (the panel's own notes box + "Save notes" button) vanished the moment
+    // anyone approved it. Only an actual string is a note to write now;
+    // clearing notes is what setInternalNotes() is for, and no caller asks
+    // approve() to clear.
+    //
+    // Row-proof (bug-pattern #2): a bare `.update().eq()` reports success on a
+    // 0-row RLS miss, so the action would toast "saved" with nothing written.
+    // Kept BEFORE the RPC on purpose: a fail-closed throw here happens before
+    // anything has been mutated, whereas throwing after a committed approval
+    // would report failure for an order that IS approved. The cost is that a
+    // note typed alongside an approval that the RPC then refuses (short stock)
+    // survives — which is the same thing "Save notes" would have done, and
+    // means the manager does not retype it before their second attempt.
+    if (typeof internalNotes === 'string') {
+      const { data: noted, error } = await this.ctx.supabase
         .from('order_requests')
-        .update({ internal_notes: internalNotes ?? null })
+        .update({ internal_notes: internalNotes })
         .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id);
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
       if (error) throw new ServiceError('internal_error', error.message);
+      if (!noted) throw new ServiceError('internal_error', 'Could not save the internal notes.');
     }
     const { data, error } = await this.ctx.supabase.rpc('approve_order_request', {
       p_id: id,
@@ -1940,13 +2025,13 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
-    void this.notifyEmail(row, 'approved');
+    defer(() => this.notifyEmail(row, 'approved'));
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
-    void this.autoScheduleFromOrder(row);
+    defer(() => this.autoScheduleFromOrder(row));
     return row;
   }
 
@@ -1966,13 +2051,35 @@ export class OrderRequestsService {
       const admin = createAdminClient();
       const so = formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase();
       const requester = (row.requester_name as string | null) ?? null;
+      // SP-043: the "Needed by …" sentence used to be built with a bare
+      // `toLocaleString('en-US')`, i.e. the SERVER's zone — and Vercel Node
+      // functions run in UTC. A 2026-09-10 19:00 Pacific deadline printed as
+      // "9/11/2026, 2:00:00 AM": a different clock AND a different calendar
+      // day from the event's own start time, which the schedule page and the
+      // T-24h/T-1h reminder emails render in the org zone right beside this
+      // string. Read the org's zone and format through core's one formatter so
+      // both halves of the reminder agree. Admin client because the approver
+      // may not be able to read the organizations row; a missing/failed read
+      // degrades through resolveOrgTimezone's default rather than throwing out
+      // of this best-effort tail.
+      const { data: orgRow } = await admin
+        .from('organizations')
+        .select('timezone')
+        .eq('id', row.organization_id)
+        .maybeSingle();
+      const tz = resolveOrgTimezone((orgRow as { timezone?: string | null } | null)?.timezone);
+      const neededByDisplay = formatOrgDateTime(
+        row.needed_by,
+        { dateStyle: 'medium', timeStyle: 'short' },
+        tz,
+      );
       const { error } = await admin.from('schedule_events').insert({
         organization_id: row.organization_id,
         title: `${so} ${row.fulfillment_type === 'delivery' ? 'delivery' : 'pickup'}${requester ? ` — ${requester}` : ''}`,
         starts_at: row.needed_by,
         warehouse_id: row.warehouse_id,
         requester_name: requester,
-        details: `Auto-created from order ${so}. Needed by ${new Date(row.needed_by).toLocaleString('en-US')}.`,
+        details: `Auto-created from order ${so}. Needed by ${neededByDisplay}.`,
         status: 'scheduled',
         order_request_id: row.id,
         assigned_user_id:
@@ -2025,13 +2132,13 @@ export class OrderRequestsService {
       { event: 'order_request.approved', entityType: 'order_request', entityId: id },
       this.ctx,
     );
-    void this.notifyEmail(row, 'approved');
+    defer(() => this.notifyEmail(row, 'approved'));
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
-    void this.autoScheduleFromOrder(row);
+    defer(() => this.autoScheduleFromOrder(row));
     return row;
   }
 
@@ -2053,6 +2160,13 @@ export class OrderRequestsService {
         'Pick slip can only be generated from an approved order.',
       );
     }
+    // Compare-and-set (SP-069). The status check above ran in a SEPARATE
+    // SELECT, and the transition trigger short-circuits a same-status write
+    // (0289: `if v_old is not distinct from v_new then return new`), so two
+    // overlapping requests both passed the check and both writes landed —
+    // re-stamping pick_slip_generated_at, which silently un-stales an
+    // already-stale slip. Pin the expected status ON the write and refuse when
+    // it matched no row; `deny()` has used this shape all along.
     const { data: updated, error: updErr } = await this.ctx.supabase
       .from('order_requests')
       .update({
@@ -2062,9 +2176,12 @@ export class OrderRequestsService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
+      .eq('status', 'approved')
       .select('*')
-      .single();
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!updated)
+      throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     await audit(
       { event: 'order.pick_slip_generated', entityType: 'order_request', entityId: id },
       this.ctx,
@@ -2453,7 +2570,7 @@ export class OrderRequestsService {
           status: 'backordered',
         });
       } else if (row.status === 'completed') {
-        void syncOrderScheduleEvent(id, 'completed', this.ctx.organizationId);
+        defer(() => syncOrderScheduleEvent(id, 'completed', this.ctx.organizationId));
         if (priorFulfilled > 0) {
           await notifyRequesterBackorderShipped({
             organizationId: this.ctx.organizationId,
@@ -2469,7 +2586,7 @@ export class OrderRequestsService {
         }
         // Completion receipt to the requester (notifyEmail honors prefs +
         // public-link tokens itself).
-        void this.notifyEmail(row, 'completed');
+        defer(() => this.notifyEmail(row, 'completed'));
         // Return-prompt email (returns-access Unit A): a paper hand-over
         // completes the order without the sign route, so send the same
         // one-time self-service return link from here. Marker-deduped
@@ -2568,7 +2685,7 @@ export class OrderRequestsService {
     // Notify the newly-assigned picker (push + bell), unless they assigned
     // themselves.
     if (pickerUserId !== this.ctx.userId) {
-      void this.notifyPickerAssignment(pickerUserId, id, row.requester_name);
+      defer(() => this.notifyPickerAssignment(pickerUserId, id, row.requester_name));
     }
     void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
@@ -2679,7 +2796,7 @@ export class OrderRequestsService {
     // Owner decision 2026-07-20: the formerly-latent "being packaged" email
     // is live (requires ES_LATENT_ORDER_EMAILS=1 — sendOrderRequestEmail
     // fails closed without it). Honors email_order_status_changed prefs.
-    void this.notifyEmail(updated as OrderRequestRow, 'packing_slip_generated');
+    defer(() => this.notifyEmail(updated as OrderRequestRow, 'packing_slip_generated'));
     return updated as OrderRequestRow;
   }
 
@@ -2693,7 +2810,9 @@ export class OrderRequestsService {
 
     const { data: row, error } = await this.ctx.supabase
       .from('order_requests')
-      .select('status, fulfillment_type')
+      // picking_completed_at scopes the NULL-picked guard below — see the long
+      // note there. Selecting it is load-bearing (bug-pattern #5).
+      .select('status, fulfillment_type, picking_completed_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -2721,11 +2840,32 @@ export class OrderRequestsService {
     // never see ambiguous state. Guard here anyway — orders predating
     // 0121 may still have NULL lines, and a fresh service-layer check
     // gives a clearer error than letting a downstream consumer crash.
-    const { count: unpickedCount, error: unpickedErr } = await this.ctx.supabase
+    //
+    // SCOPED TO LINES THAT PREDATE THE PICK (SP-082). addLines is allowed all
+    // the way up to shipping (SHIPPED_OR_CLOSED is only in_transit / completed
+    // / denied / cancelled) and inserts rows with no quantity_picked, so an
+    // item added at picking_complete or packing_slip_generated left a NULL
+    // line behind and this guard then refused to stage the order AT ALL. The
+    // only escape was reopen_picking, which reverses every picked line's stock
+    // draw and forces a re-pick — an expensive recovery for adding one item.
+    // A line created after picking finished is 0-picked by construction, which
+    // is exactly how confirm_signature (coalesce(quantity_picked,0)), the
+    // cancel restock and reopen already treat it, and identical to what adding
+    // the same item one status later already does. So only lines that existed
+    // when picking completed can make an order unstageable. When
+    // picking_completed_at is null (the pre-0121 orders this guard was written
+    // for) the count stays unscoped and the original protection is unchanged.
+    const pickingCompletedAt =
+      (row as { picking_completed_at?: string | null }).picking_completed_at ?? null;
+    let unpickedQuery = this.ctx.supabase
       .from('order_request_lines')
       .select('id', { count: 'exact', head: true })
       .eq('order_request_id', id)
       .is('quantity_picked', null);
+    if (pickingCompletedAt) {
+      unpickedQuery = unpickedQuery.lte('created_at', pickingCompletedAt);
+    }
+    const { count: unpickedCount, error: unpickedErr } = await unpickedQuery;
     if (unpickedErr) throw new ServiceError('internal_error', unpickedErr.message);
     if ((unpickedCount ?? 0) > 0) {
       throw new ServiceError(
@@ -2734,6 +2874,9 @@ export class OrderRequestsService {
       );
     }
 
+    // Compare-and-set (SP-069) — pin the status the SELECT above validated,
+    // not the target, so a second overlapping stage cannot re-fire the
+    // "your order is ready" email and the order.status_changed webhook.
     const { data: updated, error: updErr } = await this.ctx.supabase
       .from('order_requests')
       .update({
@@ -2743,9 +2886,12 @@ export class OrderRequestsService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
+      .eq('status', 'packing_slip_generated')
       .select('*')
-      .single();
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!updated)
+      throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     await audit(
       {
         event:
@@ -2768,7 +2914,7 @@ export class OrderRequestsService {
     // is delivery-shaped; pickup staging stays email-free). Fails closed
     // without ES_LATENT_ORDER_EMAILS=1.
     if (target === 'staged_for_delivery') {
-      void this.notifyEmail(updated as OrderRequestRow, 'staged_for_delivery');
+      defer(() => this.notifyEmail(updated as OrderRequestRow, 'staged_for_delivery'));
     }
     return updated as OrderRequestRow;
   }
@@ -2829,12 +2975,14 @@ export class OrderRequestsService {
       this.ctx,
     );
     // Bell/toast for the assignee (gated by their push pref).
-    void this.notifyAssignment(deliveryUserId, id, (updated as OrderRequestRow).requester_name);
+    defer(() =>
+      this.notifyAssignment(deliveryUserId, id, (updated as OrderRequestRow).requester_name),
+    );
     // Keep the auto-created schedule event pointed at the current driver so
     // reminder pushes/emails reach the right person. Fire-and-forget; awaited
     // internally (bug-pattern #22: a bare void on a BUILDER is a no-op, so
     // this wraps the builder in a real async fn).
-    void (async () => {
+    defer(async () => {
       try {
         await createAdminClient()
           .from('schedule_events')
@@ -2846,7 +2994,7 @@ export class OrderRequestsService {
           organizationId: this.ctx.organizationId,
         });
       }
-    })();
+    });
     return updated as OrderRequestRow;
   }
 
@@ -2894,6 +3042,13 @@ export class OrderRequestsService {
       }
     }
 
+    // Compare-and-set (SP-069). The driver's phone retrying a timed-out
+    // mark_in_transit, or a second manager clicking within the same second,
+    // used to write in_transit twice: two "on its way" emails to the
+    // requester, two order.in_transit deliveries to every webhook endpoint,
+    // and in_transit_at re-stamped to the later time. Nothing downstream
+    // dedupes (integration_deliveries has no at-most-once key, and the email
+    // has no sent marker), so the refusal has to happen here.
     const { data: updated, error } = await this.ctx.supabase
       .from('order_requests')
       .update({
@@ -2903,13 +3058,16 @@ export class OrderRequestsService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
+      .eq('status', 'staged_for_delivery')
       .select('*')
-      .single();
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!updated)
+      throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     const finalRow = updated as OrderRequestRow;
     await audit({ event: 'order.in_transit', entityType: 'order_request', entityId: id }, this.ctx);
     // Best-effort: notify requester the order is on the way.
-    void this.notifyEmail(finalRow, 'in_transit');
+    defer(() => this.notifyEmail(finalRow, 'in_transit'));
     void dispatchEvent(this.ctx.organizationId, 'order.in_transit', {
       id,
       orderNumber: formatOrderNumber(finalRow.order_number) ?? id.slice(0, 8).toUpperCase(),
@@ -2950,14 +3108,14 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
-    void this.notifyEmail(row, 'denied');
+    defer(() => this.notifyEmail(row, 'denied'));
     void dispatchEvent(this.ctx.organizationId, 'order.denied', {
       id,
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       reason,
       deniedBy: this.ctx.userId,
     });
-    void syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId);
+    defer(() => syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId));
 
     // Zendesk shell: a denied order is an "order problem" ticket (best-effort).
     try {
@@ -2990,12 +3148,20 @@ export class OrderRequestsService {
     // READ a warehouse should be able to annotate its requests even
     // without write privileges on the warehouse itself.
     await this.requireWarehouseAccess(id, 'read');
-    const { error } = await this.ctx.supabase
+    // Row-proof (bug-pattern #2): without `.select().maybeSingle()` a 0-row
+    // update — RLS miss, or the order deleted mid-request — returns HTTP 204
+    // with error === null and the UI happily shows notes that were never
+    // stored. Here an explicit null IS a clear: this is the dedicated
+    // notes editor, unlike approve()'s optional argument above.
+    const { data: updated, error } = await this.ctx.supabase
       .from('order_requests')
       .update({ internal_notes: notes })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!updated) throw new ServiceError('not_found', 'Order request not found');
   }
 
   // ── Helper ──────────────────────────────────────────────────────

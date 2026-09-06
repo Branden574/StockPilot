@@ -7,16 +7,43 @@ import { createClient } from '@/lib/supabase/client';
 import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 import { revalidateInventoryViewAction } from '@/server/actions/revalidate-inventory-view';
 
+type InventoryRealtimeTable =
+  | 'inventory_items'
+  | 'stock_movements'
+  | 'purchase_orders'
+  | 'rentals'
+  | 'po_imports';
+
+/**
+ * Module-scope so the default is ONE stable array identity for the whole
+ * app lifetime. It used to be an inline default parameter
+ * (`tables = [...]`), which JS re-evaluates to a brand new array on every
+ * render — and that array was in the subscribe effect's dependency list,
+ * so the effect tore the channel down and re-joined on every re-render
+ * (every client navigation, and every RSC refresh this component itself
+ * triggered). See the effect's dependency comment below.
+ *
+ * po_imports joined 2026-07-18 (mig 0276 published it): a MOBILE
+ * approve/cancel/re-parse via /api/v1/po-imports/[id]/* must live-refresh
+ * an open web imports/POs page, same as every other cross-surface write.
+ */
+const DEFAULT_TABLES: readonly InventoryRealtimeTable[] = [
+  'inventory_items',
+  'stock_movements',
+  'purchase_orders',
+  'rentals',
+  'po_imports',
+];
+
 interface InventoryRealtimeProps {
   organizationId: string;
   /**
    * Which tables to listen to. The default is the dashboard-relevant set;
    * pages that only care about a subset can pass a narrower list to keep
-   * subscriptions cheap.
+   * subscriptions cheap. Safe to pass inline — the effect keys off the
+   * joined VALUE, not the array identity.
    */
-  tables?: Array<
-    'inventory_items' | 'stock_movements' | 'purchase_orders' | 'rentals' | 'po_imports'
-  >;
+  tables?: readonly InventoryRealtimeTable[];
 }
 
 /**
@@ -58,13 +85,16 @@ const THROTTLE_MS = 250;
 
 export function InventoryRealtime({
   organizationId,
-  // po_imports joined 2026-07-18 (mig 0276 published it): a MOBILE
-  // approve/cancel/re-parse via /api/v1/po-imports/[id]/* must live-refresh
-  // an open web imports/POs page, same as every other cross-surface write.
-  tables = ['inventory_items', 'stock_movements', 'purchase_orders', 'rentals', 'po_imports'],
+  tables = DEFAULT_TABLES,
 }: InventoryRealtimeProps) {
   const router = useRouter();
   const pathname = usePathname();
+  // Key the effect on the joined VALUE, not the array reference. A caller
+  // that builds its list inline (`tables={['inventory_items']}`) hands us a
+  // fresh identity every render; keying on the string means an unchanged
+  // list keeps the existing channel, while a genuinely different list still
+  // re-subscribes.
+  const tablesKey = tables.join(',');
   // Short-circuit on routes that don't need realtime — no WebSocket opens.
   const skip = React.useMemo(
     () => REALTIME_SKIP_PREFIXES.some((p) => pathname?.startsWith(p)),
@@ -135,7 +165,10 @@ export function InventoryRealtime({
         }, THROTTLE_MS - since);
       }
 
-      for (const table of tables) {
+      // Rebuilt from the key so the effect closes over nothing whose
+      // identity churns per render.
+      const watched = (tablesKey ? tablesKey.split(',') : []) as InventoryRealtimeTable[];
+      for (const table of watched) {
         channel.on(
           'postgres_changes',
           {
@@ -169,7 +202,15 @@ export function InventoryRealtime({
       }
       for (const fn of cleanup) fn();
     };
-  }, [organizationId, router, tables, skip]);
+    // DEPENDENCIES ARE LOAD-BEARING: everything here must be identity-stable
+    // across renders. `tables` (the array) used to be listed, and because it
+    // was an inline default parameter it changed identity on every render —
+    // so this cleanup (removeChannel + auth-listener unsubscribe +
+    // clearTimeout of the pending throttled refresh) ran on every
+    // navigation and on every RSC refresh. The dropped trailing refresh
+    // left the page showing stale stock until an unrelated event arrived.
+    // Use `tablesKey` (a string), never the array.
+  }, [organizationId, router, tablesKey, skip]);
 
   return null;
 }

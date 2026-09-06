@@ -999,6 +999,35 @@ export function InventoryTable({
   // no "(searching…)" hedge — one complete answer per keystroke. The
   // dedicated effect below keeps the URL in sync via shallow
   // replaceState instead.
+  //
+  // The exact set of URL params the search fetch below sends, flattened to
+  // a string so the effect can DEPEND on it. The effect used to end with
+  // `}, [q, instantMode])` while its body read cat/loc/type/status/stock/
+  // sort/rack/expected off `params` — so in SERVER MODE (only orgs over the
+  // 2000-item instant cap) ticking a category chip during an active search
+  // never re-ran the fetch. `displayed = instantRows ?? serverHits ??
+  // localMatches` prefers serverHits whenever it is non-null, and it is
+  // cleared ONLY when q empties or the fetch fails, so the table kept
+  // rendering the PREVIOUS, unfiltered hits (and the SKU partial-total
+  // marker kept using the stale serverHitsTotal) until the user edited the
+  // search text — the chip looked dead. Keying on this string re-fetches
+  // the cross-page matches under the new filters instead of dropping them.
+  // A plain `params` dep would churn on unrelated param edits (?page, ?view);
+  // this narrows to what the request actually carries.
+  const serverSearchParamKey = React.useMemo(() => {
+    const key = new URLSearchParams();
+    for (const k of ['type', 'status', 'stock', 'sort', 'rack', 'expected']) {
+      const v = params.get(k);
+      if (v) key.set(k, v);
+    }
+    for (const v of params.getAll('cat')) key.append('cat', v);
+    for (const v of params.getAll('loc')) key.append('loc', v);
+    // The books tab forces type=book below when the URL didn't set one, so
+    // it belongs in the key too.
+    if (showBookFields) key.set('books', '1');
+    return key.toString();
+  }, [params, showBookFields]);
+
   React.useEffect(() => {
     // Streamed default view (instantPromise pending, not yet adopted):
     // the table is still in server mode here, so keystrokes take today's
@@ -1099,8 +1128,12 @@ export function InventoryTable({
       ctrl.abort();
       clearTimeout(timer);
     };
+    // serverSearchParamKey (see above) makes a settled filter/sort change
+    // re-run the search; the rest of the body's reads (params for the URL
+    // rewrite, router, basePath, pageSize) are intentionally not deps —
+    // re-running on those would fire a fetch per unrelated param edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, instantMode]);
+  }, [q, instantMode, serverSearchParamKey]);
 
   // INSTANT-MODE URL SYNC for the search box: mirror server mode's URL
   // shape (?q=needle, ?page dropped on any q change) with a debounced

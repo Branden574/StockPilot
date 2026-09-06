@@ -62,10 +62,19 @@ describe('cycle-count/[id].tsx — post error wiring (0339)', () => {
     'utf8',
   );
 
-  it('the post alert goes through the mapper, not the raw error.message', () => {
+  // SP-055 moved posting off `supabase.rpc('post_cycle_count')` and onto the
+  // Bearer twin, so the failure now arrives as a thrown ApiError rather than an
+  // `{ error }` envelope. The route already returns mapped copy; this mapper
+  // stays as the FALLBACK for a raw code, and the pin follows the new call
+  // shape — the property under test (never the raw message straight to the
+  // alert) is unchanged.
+  it('the post alert goes through the mapper, not the raw error message', () => {
     expect(screen).toContain("import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';");
-    expect(screen).toContain("Alert.alert('Could not post', postCycleCountErrorMessage(error.message));");
+    expect(screen).toContain(
+      "postCycleCountErrorMessage(e instanceof Error ? e.message : null),",
+    );
     expect(screen).not.toContain("Alert.alert('Could not post', error.message);");
+    expect(screen).not.toContain("Alert.alert('Could not post', e.message);");
   });
 
   it('the list explains what Expected means under the 0339 rule', () => {

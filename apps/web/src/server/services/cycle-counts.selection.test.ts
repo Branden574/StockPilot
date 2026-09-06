@@ -63,7 +63,7 @@ describe('CycleCountsService.start (selection scope)', () => {
       itemIds: ['i1', 'i2'],
     });
 
-    expect(result).toEqual({ id: 'cc-1', lineCount: 2, skipped: 0 });
+    expect(result).toEqual({ id: 'cc-1', lineCount: 2, skipped: 0, assignedTo: null });
 
     // Header + lines are inserted ATOMICALLY inside the RPC (no separate
     // cycle_counts / cycle_count_lines writes that could orphan a header).
@@ -103,7 +103,7 @@ describe('CycleCountsService.start (selection scope)', () => {
     });
 
     // requested = 2 de-duped picks, RPC snapshotted 1 → 1 skipped.
-    expect(result).toEqual({ id: 'cc-1', lineCount: 1, skipped: 1 });
+    expect(result).toEqual({ id: 'cc-1', lineCount: 1, skipped: 1, assignedTo: null });
     // The RPC re-selects exactly the validated active pick.
     const rpc = stub.rpcCalls.find((c) => c.name === 'start_cycle_count');
     expect(rpc?.args).toMatchObject({ p_item_ids: ['i1'] });
@@ -156,6 +156,9 @@ describe('CycleCountsService.start (selection scope)', () => {
         data: [{ id: 'i1', warehouse_id: 'wh-a' }],
         error: null,
       },
+      // start() now pre-validates the assignee's membership before it
+      // snapshots anything (SP-123), so an accepted-member row is required.
+      'organization_members.select': { data: { id: 'm1' }, error: null },
       'rpc:start_cycle_count': {
         data: [{ cycle_count_id: 'cc-1', line_count: 1 }],
         error: null,
@@ -190,7 +193,7 @@ describe('CycleCountsService.start (warehouse scope)', () => {
     const result = await svc.start({ scope: 'warehouse', warehouseId: 'wh-a' });
 
     // Warehouse scope never "skips" — the snapshot IS the scope.
-    expect(result).toEqual({ id: 'cc-9', lineCount: 12345, skipped: 0 });
+    expect(result).toEqual({ id: 'cc-9', lineCount: 12345, skipped: 0, assignedTo: null });
     // No item PRE-FETCH and no per-row line insert — the RPC does INSERT…SELECT.
     expect(stub.fromCalls).not.toContain('inventory_items');
     expect(stub.fromCalls).not.toContain('cycle_count_lines');
@@ -320,5 +323,93 @@ describe('CycleCountsService.itemsInScopeCount', () => {
     expect(n).toBe(0);
     // It must not even query inventory_items for a selection count.
     expect(stub.fromCalls).not.toContain('inventory_items');
+  });
+});
+
+/**
+ * SP-123: `start({ assignedTo })` used to call assign() inside a bare
+ * `try { … } catch {}` (recurring bug pattern #28 — a swallowed error is not
+ * "best effort", it is unmonitored). A non-member assignee therefore produced
+ * a 201 with an UNASSIGNED count, and an unassigned count is exactly what the
+ * 0282 line policy leaves open to every staffer (`or cc.assigned_to is null`)
+ * — the opposite of the lock the caller asked for, with nobody notified.
+ */
+describe('CycleCountsService.start — assignedTo is validated, never swallowed', () => {
+  it('refuses a non-member assignee BEFORE creating the count', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'i1', warehouse_id: 'wh-a' }], error: null },
+      // Not an accepted member of this org.
+      'organization_members.select': { data: null, error: null },
+      'rpc:start_cycle_count': {
+        data: [{ cycle_count_id: 'cc-1', line_count: 1 }],
+        error: null,
+      },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.start({
+        scope: 'selection',
+        warehouseId: null,
+        itemIds: ['i1'],
+        assignedTo: 'ghost-user',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+
+    // No orphan count: the snapshot RPC never ran.
+    expect(stub.rpcCalls.find((c) => c.name === 'start_cycle_count')).toBeUndefined();
+  });
+
+  it('reports the assignment outcome to the caller', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'i1', warehouse_id: 'wh-a' }], error: null },
+      'organization_members.select': { data: { id: 'm1' }, error: null },
+      'cycle_counts.select': {
+        data: { status: 'in_progress', assigned_to: null, assignment_version: 0 },
+        error: null,
+      },
+      'rpc:start_cycle_count': {
+        data: [{ cycle_count_id: 'cc-1', line_count: 1 }],
+        error: null,
+      },
+      'rpc:assign_cycle_count': { data: { id: 'cc-1', assigned_to: 'u-2' }, error: null },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client));
+
+    const result = await svc.start({
+      scope: 'selection',
+      warehouseId: null,
+      itemIds: ['i1'],
+      assignedTo: 'u-2',
+    });
+    expect(result.assignedTo).toBe('u-2');
+  });
+
+  it('says assignedTo: null when the post-create assign fails (no silent lie)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'i1', warehouse_id: 'wh-a' }], error: null },
+      'organization_members.select': { data: { id: 'm1' }, error: null },
+      'cycle_counts.select': {
+        data: { status: 'in_progress', assigned_to: null, assignment_version: 0 },
+        error: null,
+      },
+      'rpc:start_cycle_count': {
+        data: [{ cycle_count_id: 'cc-1', line_count: 1 }],
+        error: null,
+      },
+      // Transient failure AFTER the count exists — the count is kept (deleting
+      // it would lose the snapshot) but the caller is told it is unassigned.
+      'rpc:assign_cycle_count': { data: null, error: { message: 'deadlock detected' } },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client));
+
+    const result = await svc.start({
+      scope: 'selection',
+      warehouseId: null,
+      itemIds: ['i1'],
+      assignedTo: 'u-2',
+    });
+    expect(result.id).toBe('cc-1');
+    expect(result.assignedTo).toBeNull();
   });
 });

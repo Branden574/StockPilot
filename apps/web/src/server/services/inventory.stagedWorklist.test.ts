@@ -531,3 +531,157 @@ describe('readStagingBarcode', () => {
     expect(readStagingBarcode({})).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PostgREST clamps EVERY response to `[api] max_rows = 1000` with no error
+// (pattern #3). stagedWorklist ran all three of its reads un-ranged and
+// un-chunked, so:
+//   • step 1 (item_stock_levels) silently HID staged holdings past row 1000 —
+//     they never reach /dashboard/inventory/staging or the mobile Staging tab,
+//     and Select-all places only what it can see;
+//   • step 2 (receive_po movements, newest-first) dropped the OLDEST receipts,
+//     i.e. exactly the rows the Stale badge exists for.
+// The sibling itemMovementHistory doc already names this trap for the movement
+// query; the worklist itself was left on the raw builder.
+// ---------------------------------------------------------------------------
+function stagedRow(i: number) {
+  return {
+    id: `lvl-${i}`,
+    item_id: `filler-${i}`,
+    location_id: `stg-${i}`,
+    quantity: 1,
+    locations: { id: `stg-${i}`, kind: 'staging', warehouse_id: 'wh-1' },
+    inventory_items: {
+      id: `filler-${i}`,
+      name: `Filler ${i}`,
+      sku: `SP-${i}`,
+      item_type: 'product',
+      deleted_at: null,
+    },
+  };
+}
+
+/** Page 1 fills the cap; page 2 carries the row under test. */
+function pagedStub<T>(pageTwo: T[], pageOne: T[]) {
+  let call = 0;
+  return () => {
+    call += 1;
+    return call === 1 ? { data: pageOne, error: null } : { data: pageTwo, error: null };
+  };
+}
+
+describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () => {
+  it('returns staged holdings past row 1000 instead of silently truncating the worklist', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': pagedStub(
+        [
+          {
+            id: 'lvl-1001',
+            item_id: STAGING_ITEM,
+            location_id: 'stg-last',
+            quantity: 4,
+            locations: { id: 'stg-last', kind: 'staging', warehouse_id: 'wh-1' },
+            inventory_items: {
+              id: STAGING_ITEM,
+              name: 'The invisible one',
+              sku: 'SP-LAST',
+              item_type: 'product',
+              deleted_at: null,
+            },
+          },
+        ],
+        Array.from({ length: 1000 }, (_, i) => stagedRow(i)),
+      ),
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const rows = await svc.stagedWorklist();
+
+    expect(rows).toHaveLength(1001);
+    expect(rows.some((r) => r.itemId === STAGING_ITEM)).toBe(true);
+  });
+
+  it("keeps the source PO/age of the OLDEST staged item when its receive_po movement falls past the cap", async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': {
+        data: [
+          {
+            id: 'lvl-old',
+            item_id: STAGING_ITEM,
+            location_id: 'stg-loc',
+            quantity: 20,
+            locations: { id: 'stg-loc', kind: 'staging', warehouse_id: 'wh-1' },
+            inventory_items: {
+              id: STAGING_ITEM,
+              name: 'Sat here since June',
+              sku: 'SP-OLD',
+              item_type: 'product',
+              deleted_at: null,
+            },
+          },
+        ],
+        error: null,
+      },
+      // Newest-first: 1000 fresher movements for OTHER items fill page 1, so
+      // the only movement that explains this item's stock is on page 2.
+      'stock_movements.select': pagedStub(
+        [
+          {
+            id: 'mv-1001',
+            item_id: STAGING_ITEM,
+            created_at: '2026-06-01T00:00:00Z',
+            notes: 'receipt-old',
+            movement_type: 'receive_po',
+          },
+        ],
+        Array.from({ length: 1000 }, (_, i) => ({
+          id: `mv-${i}`,
+          item_id: `filler-${i}`,
+          created_at: '2026-08-01T00:00:00Z',
+          notes: `receipt-${i}`,
+          movement_type: 'receive_po',
+        })),
+      ),
+      'receipts.select': {
+        data: [
+          {
+            id: 'receipt-old',
+            receipt_number: 'R-OLD',
+            received_at: '2026-06-01T00:00:00Z',
+            status: 'posted',
+            purchase_orders: { po_number: 'PO-OLD' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const row = (await svc.stagedWorklist()).find((r) => r.itemId === STAGING_ITEM)!;
+
+    // Without paging, the stalest stock is exactly the stock that loses its
+    // source — and with it the Stale badge and the Age=Stale filter.
+    expect(row.sourcePoNumber).toBe('PO-OLD');
+    expect(row.receiptNumber).toBe('R-OLD');
+    expect(row.ageDays).not.toBeNull();
+  });
+
+  it('chunks the source-movement .in("item_id", …) so a big worklist is not truncated by id count', async () => {
+    const levels = Array.from({ length: 501 }, (_, i) => stagedRow(i));
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': { data: levels, error: null },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.stagedWorklist();
+
+    const inArgs = (stub.chainArgsAll.get('stock_movements.select') ?? [])
+      .flat()
+      .filter((a) => a[0] === 'item_id' && Array.isArray(a[1]));
+    expect(inArgs.length).toBeGreaterThan(0);
+    for (const a of inArgs) expect((a[1] as string[]).length).toBeLessThanOrEqual(500);
+    // 501 ids must have been split — one chunk would be the un-fixed shape.
+    expect(inArgs.length).toBeGreaterThanOrEqual(2);
+  });
+});

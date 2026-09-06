@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
+
 import { makeServiceContext, makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 // Full-access warehouse mock — the counts under test are org-wide
@@ -335,5 +337,66 @@ describe('CycleCountsService.getDetailPage — server-paginated detail', () => {
     const calls = stub.rpcCalls.filter((c) => c.name === 'cycle_count_lines_page');
     expect(calls).toHaveLength(2);
     expect(calls[1]?.args).toMatchObject({ p_limit: 1, p_offset: 0 });
+  });
+});
+
+/**
+ * SP-091: getLineSetForAiScan built the vision prompt's "only consider these
+ * titles" set from a bare `.select()` on cycle_count_lines. PostgREST clamps
+ * that to `[api] max_rows = 1000` (pattern #3), so on a bigger count every
+ * book past row 1000 was invisible to the model — scanning its shelf returned
+ * "not in this count" and the line stayed uncounted. Its sibling read in this
+ * same file (get()) has been paginated since the count-sheet fix above.
+ */
+describe('CycleCountsService.getLineSetForAiScan — no 1000-row cap', () => {
+  const aiModules = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'ai_shelf_scan']);
+
+  function bookLine(i: number) {
+    return {
+      id: `ln-${i}`,
+      item: {
+        sku: `SKU-${String(i).padStart(5, '0')}`,
+        name: `Book ${i}`,
+        barcode: '9780000000001',
+        item_type: 'book',
+        custom_fields: { author: 'A. Author' },
+      },
+    };
+  }
+
+  it('pages past the cap so a title on line 1200 is still offered to the model', async () => {
+    let call = 0;
+    const stub = makeSupabaseStub({
+      // warehouse_id set → assertSessionAccess takes the early return and does
+      // not spend any cycle_count_lines pages of its own.
+      'cycle_counts.select': {
+        data: [
+          {
+            id: 'cc-1',
+            organization_id: 'org-test',
+            warehouse_id: 'wh-a',
+            status: 'in_progress',
+            assigned_to: null,
+          },
+        ],
+        error: null,
+      },
+      'cycle_count_lines.select': () => {
+        call += 1;
+        if (call === 1) {
+          return { data: Array.from({ length: 1000 }, (_, i) => bookLine(i)), error: null };
+        }
+        return { data: Array.from({ length: 500 }, (_, i) => bookLine(1000 + i)), error: null };
+      },
+    });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, { enabledModules: aiModules }),
+    );
+
+    const lines = await svc.getLineSetForAiScan('cc-1');
+
+    expect(lines.length).toBe(1500);
+    expect(call).toBeGreaterThanOrEqual(2);
+    expect(lines[lines.length - 1]?.sku).toBe('SKU-01499');
   });
 });

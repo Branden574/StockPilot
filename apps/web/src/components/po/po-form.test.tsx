@@ -119,3 +119,64 @@ describe('PoForm — "Add size run" toast (review fix: pure setLines updater)', 
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PoForm — "Add size run" quantities survive an RSC refresh (SP-048)', () => {
+  it('keeps typed per-size quantities when items/groupItems/productGroups arrive as fresh identities', async () => {
+    // /dashboard/purchase-orders is inside the org-wide InventoryRealtime
+    // nudge, so a colleague receiving a PO triggers router.refresh(). The
+    // Server Component rebuilds `items`/`groupItems`/`productGroups` on every
+    // render, so the buyer's OPEN size-run dialog sees a brand-new `runs`
+    // array identity while nothing about the run set actually changed.
+    const props = {
+      items: cappedItems,
+      groupItems: uncappedGroupItems,
+      productGroups: { g1: shoeGroup },
+      suppliers: [],
+      locations: [],
+      charters: [],
+    } satisfies Parameters<typeof PoForm>[0];
+
+    const user = userEvent.setup();
+    const { rerender } = render(<PoForm {...props} />);
+    await user.click(screen.getByRole('button', { name: /add size run/i }));
+    await user.type(screen.getByLabelText('Quantity for size 9'), '5');
+    expect(screen.getByLabelText('Quantity for size 9')).toHaveValue(5);
+
+    // Same data, all-new object identities — exactly what an RSC refresh hands
+    // the client component.
+    rerender(
+      <PoForm
+        {...props}
+        items={cappedItems.map((i) => ({ ...i }))}
+        groupItems={uncappedGroupItems.map((i) => ({ ...i }))}
+        productGroups={{ g1: { ...shoeGroup } }}
+      />,
+    );
+
+    expect(screen.getByLabelText('Quantity for size 9')).toHaveValue(5);
+  });
+
+  it('still clears quantities when the dialog is closed and re-opened', async () => {
+    // Guards the ORIGINAL reason the reset exists: a previous run's numbers
+    // must never leak into the next open and order stock nobody asked for.
+    // The SP-048 fix narrowed the effect's deps to [open]; this proves it did
+    // not narrow away the reset itself.
+    const user = userEvent.setup();
+    render(
+      <PoForm
+        items={cappedItems}
+        groupItems={uncappedGroupItems}
+        productGroups={{ g1: shoeGroup }}
+        suppliers={[]}
+        locations={[]}
+        charters={[]}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /add size run/i }));
+    await user.type(screen.getByLabelText('Quantity for size 9'), '5');
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await user.click(screen.getByRole('button', { name: /add size run/i }));
+
+    expect(screen.getByLabelText('Quantity for size 9')).toHaveValue(null);
+  });
+});

@@ -69,7 +69,7 @@ describe('CycleCountsService.start (group scope)', () => {
       groupIds: ['grp-pegasus'],
     });
 
-    expect(result).toEqual({ id: 'cc-1', lineCount: 3, skipped: 0 });
+    expect(result).toEqual({ id: 'cc-1', lineCount: 3, skipped: 0, assignedTo: null });
 
     // The RPC is called with the PERSISTED scope, never 'group'.
     const rpc = stub.rpcCalls.find((c) => c.name === 'start_cycle_count');
