@@ -21,24 +21,70 @@ const sessionState = {
   role: 'admin' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
 };
 
+/**
+ * SP-129 — the org-less user. Every auth helper in lib/auth/session.ts answers
+ * an account with no accepted membership by `redirect('/onboarding')`, and Next
+ * implements redirect() by THROWING an error whose `digest` names the
+ * destination. These knobs let a test put the module under exactly that
+ * condition instead of the permanently-org-1 world the original mocks
+ * described (which is why the org-less branch was never exercised).
+ */
+const { authState, mfaState, redirectError } = vi.hoisted(() => ({
+  mfaState: {
+    /** Org policy leg (withContext). Default: nothing required. */
+    orgPolicyRequires: false,
+    satisfied: true,
+    enrolled: false,
+    /** Session leg (supabase.auth.mfa.*), which is all an org-less user has. */
+    totp: [] as Array<{ status: string }>,
+    currentLevel: 'aal1' as 'aal1' | 'aal2',
+  },
+  authState: {
+    /** No accepted membership: getSessionMemberships() -> [] and every
+     *  org-resolving helper redirects to /onboarding. */
+    orgLess: false,
+    /** Signed out: requireSession() redirects to /signin. */
+    signedOut: false,
+  },
+  redirectError: (path: string): Error & { digest: string } => {
+    const e = new Error('NEXT_REDIRECT') as Error & { digest: string };
+    // Byte-shape of a real next/navigation redirect throw:
+    // `NEXT_REDIRECT;<replace|push>;<destination>;<status>;`
+    e.digest = `NEXT_REDIRECT;replace;${path};307;`;
+    return e;
+  },
+}));
+
 vi.mock('@/lib/auth/session', () => ({
-  requireSession: vi.fn(async () => ({
-    userId: 'user-1',
-    email: 'u@e.com',
-    fullName: null,
-    avatarUrl: null,
-    defaultOrganizationId: 'org-1',
-  })),
-  requireOrgContext: vi.fn(async () => ({
-    userId: 'user-1',
-    email: 'u@e.com',
-    fullName: null,
-    avatarUrl: null,
-    defaultOrganizationId: 'org-1',
-    organizationId: 'org-1',
-    organizationName: 'Test',
-    role: sessionState.role,
-  })),
+  requireSession: vi.fn(async () => {
+    if (authState.signedOut) throw redirectError('/signin');
+    return {
+      userId: 'user-1',
+      email: 'u@e.com',
+      fullName: null,
+      avatarUrl: null,
+      defaultOrganizationId: authState.orgLess ? null : 'org-1',
+    };
+  }),
+  requireOrgContext: vi.fn(async () => {
+    if (authState.signedOut) throw redirectError('/signin');
+    if (authState.orgLess) throw redirectError('/onboarding');
+    return {
+      userId: 'user-1',
+      email: 'u@e.com',
+      fullName: null,
+      avatarUrl: null,
+      defaultOrganizationId: 'org-1',
+      organizationId: 'org-1',
+      organizationName: 'Test',
+      role: sessionState.role,
+    };
+  }),
+  getSessionMemberships: vi.fn(async () =>
+    authState.orgLess
+      ? []
+      : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }],
+  ),
 }));
 
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
@@ -59,19 +105,30 @@ vi.mock('@/lib/supabase/server', () => ({
  * test. `logoStorage.body` is what the prefix read returns (null = the object
  * does not exist); the prefix/remove spies are asserted directly.
  */
-const { logoStorage, fetchObjectPrefixMock } = vi.hoisted(() => ({
-  logoStorage: {
-    body: null as Uint8Array | null,
-    remove: vi.fn(),
-  },
-  fetchObjectPrefixMock: vi.fn(),
-}));
+const { logoStorage, fetchObjectPrefixMock, adminAuth, revokeAllSessionsForUserMock, reportErrorMock } =
+  vi.hoisted(() => ({
+    logoStorage: {
+      body: null as Uint8Array | null,
+      remove: vi.fn(),
+    },
+    fetchObjectPrefixMock: vi.fn(),
+    /** SP-008 — the auth delete is the step that can fail on its own (a dead
+     *  service-role key 401s here while every user-authed read stays up, the
+     *  2026-07-21 incident). Hoisted so a test can make it fail. */
+    adminAuth: {
+      deleteUser: vi.fn(async (_userId: string) => ({
+        error: null as { message: string } | null,
+      })),
+    },
+    revokeAllSessionsForUserMock: vi.fn(async () => ({ ok: true, sessionIds: [] as string[] })),
+    reportErrorMock: vi.fn(async () => undefined),
+  }));
 
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({
     auth: {
       admin: {
-        deleteUser: vi.fn(async () => ({ error: null })),
+        deleteUser: adminAuth.deleteUser,
       },
     },
     storage: {
@@ -90,20 +147,41 @@ vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
+vi.mock('@/server/services/platform/sessions', () => ({
+  revokeAllSessionsForUser: revokeAllSessionsForUserMock,
+}));
+
+// Only reportError is stubbed — isNextControlFlowError is REAL, because the
+// redirect-rethrow assertions below depend on its actual digest matching.
+vi.mock('@/lib/error-reporter', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/error-reporter')>(
+    '@/lib/error-reporter',
+  );
+  return { ...actual, reportError: reportErrorMock };
+});
+
 vi.mock('@/server/services/context', async () => {
   const actual = await vi.importActual<typeof import('@/server/services/context')>(
     '@/server/services/context',
   );
   return {
     ...actual,
-    withContext: vi.fn(async () => ({
-      organizationId: 'org-1',
-      userId: 'user-1',
-      role: sessionState.role,
-      supabase: stubHolder.stub!.client,
-      mfaRequired: false,
-      mfaSatisfied: true,
-    })),
+    withContext: vi.fn(async () => {
+      // The real withContext() calls requireOrgContext(), which redirects an
+      // org-less session to /onboarding — i.e. it THROWS. Modelling that is the
+      // whole point of SP-129.
+      if (authState.signedOut) throw redirectError('/signin');
+      if (authState.orgLess) throw redirectError('/onboarding');
+      return {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: sessionState.role,
+        supabase: stubHolder.stub!.client,
+        mfaRequired: mfaState.orgPolicyRequires,
+        mfaSatisfied: mfaState.satisfied,
+        mfaEnrolled: mfaState.enrolled,
+      };
+    }),
   };
 });
 
@@ -120,6 +198,22 @@ import {
 
 const AVATAR_PREFIX =
   'https://supa.example.com/storage/v1/object/public/user-avatars/user-1/';
+
+// The auth/MFA knobs are module-level and mutable, so reset them before EVERY
+// test (this runs ahead of each describe's own beforeEach) — a leaked
+// `orgLess: true` would silently rewrite the world for the next file's worth
+// of assertions.
+beforeEach(() => {
+  authState.orgLess = false;
+  authState.signedOut = false;
+  mfaState.orgPolicyRequires = false;
+  mfaState.satisfied = true;
+  mfaState.enrolled = false;
+  mfaState.totp = [];
+  mfaState.currentLevel = 'aal1';
+  adminAuth.deleteUser.mockImplementation(async () => ({ error: null }));
+  revokeAllSessionsForUserMock.mockImplementation(async () => ({ ok: true, sessionIds: [] }));
+});
 
 describe('updateProfileNameAction', () => {
   beforeEach(() => {
@@ -356,6 +450,15 @@ describe('deleteOwnAccountAction', () => {
       'organization_members.select': { data: [], error: null },
       'user_profiles.update': { data: null, error: null },
     });
+    // The session MFA legs (all an org-less user has — there is no org policy
+    // to consult) are driven from mfaState.
+    stubHolder.stub.client.auth.mfa.listFactors.mockImplementation(async () => ({
+      data: { all: mfaState.totp, totp: mfaState.totp },
+      error: null,
+    }));
+    stubHolder.stub.client.auth.mfa.getAuthenticatorAssuranceLevel.mockImplementation(
+      async () => ({ data: { currentLevel: mfaState.currentLevel }, error: null }),
+    );
   });
 
   it('rejects without the typed DELETE confirmation', async () => {
@@ -388,5 +491,149 @@ describe('deleteOwnAccountAction', () => {
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('forbidden');
+  });
+
+  it('does not revoke sessions on the happy path', async () => {
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result.ok).toBe(true);
+    expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * SP-129 — a user with NO accepted membership (abandoned /onboarding, or
+   * removed from their only org by TeamService.removeMember, which deletes the
+   * membership and leaves the auth user + profile intact) must still be able to
+   * delete their own account: App Store 5.1.1(v) and GDPR both require it.
+   *
+   * The gate used to be `withContext()`, which calls requireOrgContext(), which
+   * answers an org-less session with `redirect('/onboarding')` — a THROW. The
+   * catch-all then reported it as internal_error 'NEXT_REDIRECT' (recurring
+   * pattern #23) and the account could never be deleted.
+   */
+  describe('without an org (SP-129)', () => {
+    beforeEach(() => {
+      authState.orgLess = true;
+    });
+
+    it('deletes the account instead of dying on the org gate', async () => {
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      const args = stubHolder.stub!.chainArgs.get('user_profiles.update');
+      expect((args?.[0]?.[0] as { deleted_at?: string }).deleted_at).toBeDefined();
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'user.deactivated' }),
+      );
+      expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('still enforces an ENROLLED factor (HI-6): aal1 is refused with aal2_required', async () => {
+      // Losing the org must not lose the enrollment escalation — a verified
+      // factor has to be satisfied whatever (or whether) an org policy says.
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal1';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('forbidden');
+        expect((result.error.details as { reason?: string } | undefined)?.reason).toBe(
+          'aal2_required',
+        );
+      }
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('lets an enrolled user through once the session is at aal2', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+    });
+
+    it('fails CLOSED when the factor list cannot be read', async () => {
+      // Mirrors resolveMfaState in services/context.ts: an unreadable MFA state
+      // must never be treated as "no MFA required" on a destructive action.
+      stubHolder.stub!.client.auth.mfa.listFactors.mockImplementation(async () => {
+        throw new Error('network');
+      });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('forbidden');
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps the org MFA policy for a member WHO HAS an org', async () => {
+    // Behaviour pin: the org-less path must not become a way around the org's
+    // own mfa_policy. A member still goes through withContext().
+    mfaState.orgPolicyRequires = true;
+    mfaState.satisfied = false;
+    mfaState.enrolled = true;
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect((result.error.details as { reason?: string } | undefined)?.reason).toBe(
+        'aal2_required',
+      );
+    }
+    expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a redirect instead of reporting it as internal_error', async () => {
+    // Recurring pattern #23: a page-only auth helper answers a signed-out
+    // session by THROWING NEXT_REDIRECT. Swallowing it into the catch-all
+    // turned "you are signed out" into "internal error: NEXT_REDIRECT".
+    authState.signedOut = true;
+    await expect(deleteOwnAccountAction({ confirm: 'DELETE' })).rejects.toMatchObject({
+      digest: 'NEXT_REDIRECT;replace;/signin;307;',
+    });
+  });
+
+  /**
+   * SP-008 — `admin.auth.admin.deleteUser` failing used to be logged and
+   * reported as SUCCESS, on the premise that "the profile tombstone already
+   * prevents login". That premise is false: no identity funnel reads
+   * user_profiles.deleted_at (loadSessionAndContext selects disabled_at,
+   * ACCOUNT_STATUS_COLUMNS is 'disabled_at', 0310's is_org_member checks
+   * disabled_at). So the user was told their account was gone while the auth
+   * user, memberships and sessions all stayed live.
+   */
+  describe('when the auth delete fails (SP-008)', () => {
+    beforeEach(() => {
+      adminAuth.deleteUser.mockImplementation(async () => ({
+        error: { message: 'Invalid API key' },
+      }));
+    });
+
+    it('reports the failure instead of a false success', async () => {
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('internal_error');
+        // Never the raw admin error text — but not a fake success either.
+        expect(result.error.message).not.toContain('Invalid API key');
+      }
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it('revokes the live sessions and reports the error', async () => {
+      await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'account.delete.auth_delete_failed' }),
+      );
+    });
+
+    it('still fails the delete when the session revoke also fails', async () => {
+      // A dead service-role key breaks BOTH admin calls — the revoke is
+      // best-effort, so it must not turn the refusal into a throw or a success.
+      revokeAllSessionsForUserMock.mockImplementation(async () => {
+        throw new Error('service role dead');
+      });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('internal_error');
+    });
   });
 });

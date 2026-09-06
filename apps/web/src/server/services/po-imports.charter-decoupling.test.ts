@@ -143,7 +143,11 @@ function makeStub(opts: { sibling?: { id: string } | null; locationRow?: { id: s
     'purchase_order_charges.insert': { data: null, error: null },
     'inventory_items.update': { data: null, error: null },
     'po_import_lines.update': { data: { id: 'line-1' }, error: null },
-    'po_imports.update': { data: null, error: null },
+    // approve() CLAIMS the import (conditional update) before it inserts
+    // the PO, and stamps approved_po_id afterwards. Both are checked
+    // writes, so the stub has to answer with a ROW or every approval
+    // reads as a lost race.
+    'po_imports.update': { data: { id: IMPORT_ID }, error: null },
   });
 }
 

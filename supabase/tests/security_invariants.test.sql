@@ -48,6 +48,8 @@
 --   * INV-12 create a policy whose predicate contains `x.organization_id =
 --            x.organization_id`.
 --   * INV-15 add a `*_path` column to a table in public with no CHECK.
+--   * INV-27 create a function in public without `set search_path = public`
+--            (or `alter function ... reset search_path` on an existing one).
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -56,7 +58,7 @@
 
 begin;
 
-select plan(26);
+select plan(28);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -130,9 +132,17 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
 --
 -- Everything listed here is a READ-ONLY predicate that RLS policies and other
 -- functions evaluate AS THE USER, so `authenticated` must keep EXECUTE, and
--- each exposes at most a boolean (or, for _cycle_count_location_facts, four
--- attributes) about a caller-supplied uuid. None writes. Adding a name here
--- must be defended in `why`; a function that WRITES must never appear.
+-- each exposes at most a BOOLEAN about a caller-supplied uuid. None writes.
+-- Adding a name here must be defended in `why`; a function that WRITES must
+-- never appear.
+--
+-- _cycle_count_location_facts was the one entry that exposed ATTRIBUTES rather
+-- than a boolean (org, warehouse, kind, deleted_at for any location uuid) and
+-- it is gone from this list: 0350 gave it post_cycle_count's own has_org_role
+-- gate, so INV-25 now judges it on its body like everything else. The
+-- exemption it held is the reason to distrust attribute-returning entries —
+-- "reading past RLS is the point" justified the SECURITY DEFINER, never the
+-- missing authorization check.
 create temporary table _sec_inv_auth_secdef_nogate_allow (proname text primary key, why text not null);
 insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('item_in_org',                 'boolean FK-org predicate used by write RLS (0201-0206); null-tolerant by design'),
@@ -148,8 +158,7 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('org_can_enable_module',       'boolean entitlement read (plan tier) used by module settings'),
   ('org_effective_tier',          'returns the org plan tier string; no tenant data'),
   ('user_can_access_inventory',   'boolean warehouse/charter access predicate used by inventory RLS'),
-  ('user_can_access_warehouse',   'boolean warehouse access predicate used by RLS'),
-  ('_cycle_count_location_facts', 'returns org/warehouse/kind/deleted_at of a caller-supplied location uuid so post_cycle_count can refuse a FOREIGN location loudly (0342) — reading past RLS is the point; exposes no quantities');
+  ('user_can_access_warehouse',   'boolean warehouse access predicate used by RLS');
 
 -- ── B. Tables in `public` allowed to run without RLS ───────────────────────
 -- Intentionally EMPTY. Every table in this schema has RLS enabled today, and
@@ -730,6 +739,67 @@ select is(
          and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M')),
   0,
   'INV-26: allowlist E has no stale entry and no entry whose body writes'
+);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 9. EVERY FIRST-PARTY FUNCTION PINS search_path
+--
+-- An unpinned function resolves unqualified names through the CALLER's
+-- search_path. For a SECURITY DEFINER function that is a privilege-escalation
+-- primitive; for an invoker one it is still a correctness hazard the moment a
+-- body stops schema-qualifying something.
+--
+-- 0329 pinned "every remaining unpinned first-party function" and proved it by
+-- NAMING 22 of them. A name list cannot see the function it forgot:
+-- next_po_number (0005) was never on it and stayed unpinned until 0350, and
+-- the next `create function` that omits the pin would have been equally
+-- invisible. This sweep replaces the enumeration with the property.
+--
+-- Extension members are excluded on purpose and this is the one exclusion that
+-- must never be relaxed: citext lives in `public` because 0001 created it
+-- there, and ALTERing an extension's member functions diverges them from the
+-- extension's shipped state and breaks dump/restore and extension upgrades
+-- (0329's header states this; its test #42 pins it from the other side).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-27. The sweep.
+select is(
+  (select count(*)::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and not exists (select 1 from pg_depend d
+                       where d.objid = p.oid and d.deptype = 'e')
+      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
+                       where c like 'search_path=%')),
+  0,
+  'INV-27: every first-party function in public pins search_path'
+);
+
+-- INV-28. VACUITY CONTROL, both halves of the detector.
+--   * The population is non-empty — if the pg_depend exclusion ever matched
+--     everything, INV-27 would pass having judged nothing.
+--   * The unpinned test still FIRES on something known to be unpinned. The
+--     citext members are exactly that population (deliberately never ALTERed,
+--     so their proconfig is NULL); if a catalog change broke the proconfig
+--     probe so that it reported every function as pinned, this half goes red
+--     instead of INV-27 going quietly green.
+select ok(
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and not exists (select 1 from pg_depend d
+                       where d.objid = p.oid and d.deptype = 'e')) > 20
+  and
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and exists (select 1 from pg_depend d
+                   where d.objid = p.oid and d.deptype = 'e')
+      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
+                       where c like 'search_path=%')) > 0,
+  'INV-28 control: the search_path sweep has first-party functions to judge, and its unpinned detector still fires on the (excluded) extension members'
 );
 
 select * from finish();

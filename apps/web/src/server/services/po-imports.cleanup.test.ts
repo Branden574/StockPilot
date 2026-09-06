@@ -160,7 +160,11 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
       'purchase_orders.insert': { data: { id: 'new-po' }, error: null },
       'purchase_order_items.insert': { data: null, error: null },
       'inventory_items.update': { data: null, error: null },
-      'po_imports.update': { data: null, error: null },
+      // approve() CLAIMS the import (conditional update) before it inserts
+      // the PO, and stamps approved_po_id afterwards. Both are checked
+      // writes, so the stub has to answer with a ROW or every approval
+      // reads as a lost race.
+      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
     });
   }
 

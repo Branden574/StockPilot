@@ -54,6 +54,12 @@ interface FoundItem {
   sku: string;
   barcode: string | null;
   quantity_on_hand: number;
+  /** 'active' | 'archived' (or null on an old row). Carried ONLY so the
+   *  quick-adjust buttons can hide on an archived item: the service refuses
+   *  the adjustment outright ("Cannot adjust stock on an archived item.
+   *  Unarchive it first."), and this screen used to offer the tap anyway
+   *  because it filtered on deleted_at alone. */
+  status: string | null;
   reorder_point: number;
   retail_price: number;
   unit_cost: number;
@@ -180,7 +186,7 @@ export default function Scan() {
     const { data: row } = await supabase
       .from('inventory_items')
       .select(
-        `id, name, sku, barcode, quantity_on_hand, reorder_point,
+        `id, name, sku, barcode, quantity_on_hand, status, reorder_point,
          retail_price, unit_cost, bin_location, item_type, custom_fields,
          primary_location:locations!primary_location_id (name)`,
       )
@@ -246,6 +252,7 @@ export default function Scan() {
       sku: r.sku as string,
       barcode: (r.barcode as string | null) ?? null,
       quantity_on_hand: Number(r.quantity_on_hand) || 0,
+      status: (r.status as string | null) ?? null,
       reorder_point: Number(r.reorder_point) || 0,
       retail_price: Number(r.retail_price) || 0,
       unit_cost: Number(r.unit_cost) || 0,
@@ -433,23 +440,66 @@ export default function Scan() {
     setScanning(true);
   }
 
+  /**
+   * Quick adjust (±1 / +5 / +25).
+   *
+   * ═══ WHY THIS IS AN API CALL AND NOT THE adjust-stock RPC ═══
+   * (spelled out here rather than as the literal call, because the wiring
+   *  guard in src/lib/scan-quick-adjust-wiring.test.ts greps this file for
+   *  that exact call shape and a quoted example would defeat it)
+   *
+   * It used to be the raw RPC with `p_location_id: null`. That RPC checks only
+   * the staff-ROLE floor (`has_org_role(org,'staff')`, 0327) while the web
+   * adjustment runs through InventoryService.adjustStock, which asserts the
+   * 'stock:adjust' PERMISSION — and the stock_movements write policy is
+   * ADDITIVE (staff-role OR the permission, 0321), so an admin revoking
+   * stock:adjust from a staffer (a 0207 override) bound on web and bound at RLS
+   * nowhere: every tap on this screen still succeeded. It is the exact hole the
+   * remove-stock route's own header warns about ("Mobile MUST go through the
+   * service, or a member without stock:adjust could remove stock by calling the
+   * RPC directly").
+   *
+   * Three more things the service does and the RPC does not:
+   *   • a null-location POSITIVE delta lands in STAGING (0341), so a manual +1
+   *     from the phone showed up in the put-away worklist as if it were an
+   *     unprocessed receipt; the service resolves the item's rack/Unplaced.
+   *   • a null-location REMOVAL needs draw mode 'any' or it raises
+   *     `insufficient_placed_stock` for an item whose only unit sits in Staging
+   *     after a return (L4L, 2026-08-17) — and the phone showed that raw string.
+   *   • it refuses ARCHIVED items, writes the audit row and fires stock.low.
+   *
+   * The route returns the AUTHORITATIVE new quantity from the atomic RPC, so we
+   * take that over local arithmetic (which drifts when two people adjust the
+   * same item) and only fall back to the optimistic sum if it is absent.
+   */
   async function adjust(delta: number) {
     if (!item) return;
     setBusy(true);
-    const { error } = await supabase.rpc('adjust_stock', {
-      p_item_id: item.id,
-      p_quantity_change: delta,
-      p_movement_type: delta > 0 ? 'add' : 'remove',
-      p_location_id: null,
-      p_reason: 'Mobile scan',
-      p_notes: null,
-    });
-    setBusy(false);
-    if (error) {
-      Alert.alert('Could not adjust', error.message);
-      return;
+    try {
+      const res = (await api(`/api/v1/items/${item.id}/adjust`, {
+        method: 'POST',
+        body: {
+          quantityChange: delta,
+          movementType: delta > 0 ? 'add' : 'remove',
+          reason: 'Mobile scan',
+        },
+      })) as { quantityOnHand?: number } | null;
+      // State updated only AFTER the write lands — an optimistic update next to
+      // a failed write hides the failure completely (recurring pattern #22).
+      setItem({
+        ...item,
+        quantity_on_hand:
+          typeof res?.quantityOnHand === 'number'
+            ? res.quantityOnHand
+            : item.quantity_on_hand + delta,
+      });
+    } catch (e) {
+      // `api()` has already reduced a non-2xx to the server's friendly message
+      // (and never echoes a raw HTML error page), so this is safe to show.
+      Alert.alert('Could not adjust', e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setBusy(false);
     }
-    setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
   }
 
   /**
@@ -763,6 +813,20 @@ export default function Scan() {
   const crateHex = getCrateColor(storage?.crateColor)?.hex ?? null;
   const lowStock =
     item && item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
+  /**
+   * The quick-adjust row's gate — COSMETIC only (the /adjust route asserts
+   * 'stock:adjust' server-side), but a button that can only ever 403 is a
+   * support ticket. Two conditions, matching web exactly:
+   *   • the member actually holds stock:adjust (showWriteCta falls back to
+   *     SHOWING while permissions are still loading, same as every other CTA
+   *     on this screen — the API is the real gate);
+   *   • the item is not ARCHIVED. The service refuses an archived item
+   *     ("Unarchive it first"), and this screen's lookup filters on
+   *     deleted_at only, so an archived item scans fine and used to offer
+   *     four adjustment buttons that could never succeed.
+   */
+  const canQuickAdjust =
+    showWriteCta(permissions, 'stock:adjust') && item?.status !== 'archived';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -939,12 +1003,14 @@ export default function Scan() {
               </View>
             )}
 
-            <View style={styles.actions}>
-              <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
-              <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
-              <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
-              <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
-            </View>
+            {canQuickAdjust && (
+              <View style={styles.actions}>
+                <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
+                <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
+                <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
+                <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
+              </View>
+            )}
 
             <View style={styles.secondaryActions}>
               <Pressable

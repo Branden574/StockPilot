@@ -337,6 +337,19 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   purchase orders (mig 0208); items/stock/locations/categories/suppliers/
   //   orders (mig 0212). Granting any of these to a role/user is fully
   //   effective end-to-end.
+  //
+  //   'orders:approve' was HALF true here from 0212 until 0348. 0212 migrated
+  //   the order_requests RLS, so Deny (a plain UPDATE) honoured a grant — but
+  //   every approval path is a SECURITY DEFINER RPC (approve_order_request,
+  //   approve_partial, close_partial, resume_fulfillment, reopen_picking,
+  //   assign_picking, cancel_order_request) and those still gated on
+  //   has_org_role('manager'), a pure role-rank lookup that never reads the
+  //   override tables. A granted staff member saw the Approve button (this set
+  //   suppresses the matrix's "Grant rolling out" badge) and got "Only
+  //   managers can approve requests". Migration 0348 gives all seven
+  //   `has_org_role('manager') OR has_permission(org,'orders:approve')`, so the
+  //   claim this comment makes is now true for it. Before adding a permission
+  //   to this set, check the RPCs the feature calls, not just its table RLS.
   'purchase_orders:manage',
   'items:create',
   'items:update',

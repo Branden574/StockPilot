@@ -479,6 +479,34 @@ describe('PurchaseOrderPdf', () => {
     expect(cell).toBeDefined();
   });
 
+  // "Expected delivery" is a CALENDAR DATE, not an instant. The PO form's
+  // <Input type="date"> yields 'YYYY-MM-DD', which `new Date(x).toISOString()`
+  // parses as UTC, so purchase_orders.expected_at holds midnight UTC of the
+  // day the buyer typed. Rendering that in America/Los_Angeles (the PDF
+  // default) walks it back 7-8 hours into the PREVIOUS day, so the supplier
+  // copy of the PO said the 9th when the buyer meant the 10th. This asserts
+  // the printed day equals the typed day.
+  it('prints the expected-delivery day the buyer typed, not the day before', () => {
+    const nodes = render({ header: { expectedAt: '2026-09-10T00:00:00.000Z' } });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('Sep 10, 2026');
+    expect(allText).not.toContain('Sep 09');
+  });
+
+  // Sibling guard: createdAt and receivedAt ARE real instants (server-stamped
+  // now()), so they must KEEP rendering in the org-local zone. A blanket
+  // "format every PDF date in UTC" edit would break this one.
+  it('keeps createdAt on the org-local clock (a true instant, not a calendar date)', () => {
+    // 2026-05-02T03:00Z is still May 1 at 20:00 Pacific. The created stamp
+    // rides on BrandedHeader's `subtitle` PROP, not in the children, so read
+    // the prop rather than the flattened text.
+    const nodes = render({ header: { createdAt: '2026-05-02T03:00:00.000Z' } });
+    const subtitles = nodes
+      .map((n) => n.props.subtitle)
+      .filter((v): v is string => typeof v === 'string');
+    expect(subtitles).toContain('Created May 01, 2026');
+  });
+
   it('does not blow up when the type guard helper sees plain elements', () => {
     // Sanity check on the flatten helper itself — the test suite depends on
     // it walking past primitive children (numbers, strings) without throwing.

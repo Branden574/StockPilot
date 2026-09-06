@@ -32,8 +32,18 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => lastAdminClient,
 }));
 
+// rentals_update's RLS floor is warehouse 'write' (0131) while rentals_select
+// only needs 'read', so the service asserts write access explicitly. Stubbed
+// permissive by default; the refusal cases below make it throw.
+vi.mock('@/lib/auth/warehouse', () => ({
+  assertWarehouseAccess: vi.fn(async () => undefined),
+  ForbiddenError: class ForbiddenError extends Error {},
+}));
+
 import { RentalsService } from './rentals';
 import { audit } from './audit';
+import { sendRentalReturnedEmail } from '@/lib/email/rentals';
+import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 
 // ---------------------------------------------------------------------------
 // Mock builder
@@ -61,12 +71,25 @@ interface MakeCtxOpts {
   }>;
   /** rows returned by from('rentals').select('*, lines:rental_lines(*)') */
   rentalListRows?: Array<Record<string, unknown>>;
+  /**
+   * Row the status UPDATE's `.select('id').maybeSingle()` row-proof returns.
+   * `null` models an RLS-refused / no-match update (0 rows, error null) —
+   * the fail-open shape that released reservations for a rental that never
+   * flipped status.
+   */
+  updatedRentalRow?: { id: string } | null;
+  /** ACTIVE (released_at IS NULL) stock_reservations for the create availability guard */
+  activeReservations?: Array<{ id?: string; item_id: string; quantity: number }>;
 }
 
 function makeCtx(opts: MakeCtxOpts = {}) {
   const insertedRentalId = 'rental-id-1';
   // Tracks rollback: which rental ids were deleted via .delete().eq('id', x).
   const deletedRentalIds: string[] = [];
+  // Tracks the service-role reservation release: which rental_ids were released.
+  const releasedRentalIds: string[] = [];
+  // Counts rentals-header inserts, so a refusal can assert nothing was written.
+  const rentalInsertCalls: unknown[] = [];
 
   const supabase = {
     from(table: string) {
@@ -114,7 +137,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
             return self;
           },
           // insert chain: .insert({...}).select('id').single()
-          insert(_row: unknown) {
+          insert(row: unknown) {
+            rentalInsertCalls.push(row);
             return {
               select(_cols: string) {
                 return {
@@ -126,13 +150,29 @@ function makeCtx(opts: MakeCtxOpts = {}) {
               },
             };
           },
-          // update chain: .update({...}).eq('id', id)
+          // update chain: .update({...}).eq(...)…[.select('id').maybeSingle()]
+          // `then` is kept so the OLD (row-proof-less) shape still resolves —
+          // that way the regression test below fails against unfixed code for
+          // the right reason (fail-open success) rather than a mock TypeError.
           update(_patch: unknown) {
-            return {
-              eq(_col: string, _val: string) {
-                return Promise.resolve({ error: opts.rentalUpdateError ?? null });
-              },
+            const self: Record<string, unknown> = {
+              eq: (_col: string, _val: unknown) => self,
+              select: (_cols: string) => ({
+                maybeSingle: async () => ({
+                  data: opts.rentalUpdateError
+                    ? null
+                    : opts.updatedRentalRow !== undefined
+                      ? opts.updatedRentalRow
+                      : { id: 'rental-id-1' },
+                  error: opts.rentalUpdateError ?? null,
+                }),
+              }),
+              then: (
+                resolve: (v: { error: unknown }) => unknown,
+                _reject?: unknown,
+              ) => Promise.resolve({ error: opts.rentalUpdateError ?? null }).then(resolve),
             };
+            return self;
           },
           // delete chain (rollback): .delete().eq('id', id)
           delete() {
@@ -165,10 +205,35 @@ function makeCtx(opts: MakeCtxOpts = {}) {
           insert(_rows: unknown) {
             return Promise.resolve({ error: opts.reservationInsertError ?? null });
           },
+          // Availability read (create): .select().eq().in().is().order().range()
+          // — paginated via fetchAllRows, so the window is a thenable.
+          select(_cols: string) {
+            const self: Record<string, unknown> = {
+              eq: (_c: string, _v: unknown) => self,
+              in: (_c: string, _v: unknown) => self,
+              is: (_c: string, _v: unknown) => self,
+              order: (_c: string, _o?: unknown) => self,
+              range: (_from: number, _to: number) => self,
+              then: (
+                resolve: (v: { data: unknown[]; error: null }) => unknown,
+                _reject?: unknown,
+              ) =>
+                Promise.resolve({
+                  data: (opts.activeReservations ?? []).map((r, i) => ({
+                    id: r.id ?? `resv-${i}`,
+                    item_id: r.item_id,
+                    quantity: r.quantity,
+                  })),
+                  error: null,
+                }).then(resolve),
+            };
+            return self;
+          },
           // Release chain: .update({...}).eq('rental_id', id).is('released_at', null)
           update(_patch: unknown) {
             return {
-              eq(_col: string, _val: string) {
+              eq(_col: string, val: string) {
+                releasedRentalIds.push(val);
                 return {
                   is(_col2: string, _val2: null) {
                     return Promise.resolve({ error: null });
@@ -250,6 +315,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
     } as unknown as ConstructorParameters<typeof RentalsService>[0],
     insertedRentalId,
     deletedRentalIds,
+    releasedRentalIds,
+    rentalInsertCalls,
   };
 }
 
@@ -356,6 +423,89 @@ describe('RentalsService.create', () => {
     warnSpy.mockRestore();
   });
 
+  // SP-052: v1 shipped `// TODO availability check — for v1 we trust the picker
+  // UI's filter`, but the picker's '+' caps at quantity_on_hand and ignores
+  // reservations, so 5 on hand with 3 already rented out accepted 5 MORE —
+  // 8 units reserved against 5 physical ones, two borrowers holding the same
+  // stock. The service now counts ACTIVE reservations itself.
+  it('refuses a line that exceeds availability once active reservations are counted', async () => {
+    const { ctx, rentalInsertCalls, deletedRentalIds } = makeCtx({
+      inventoryItems: [
+        {
+          id: '00000000-0000-0000-0000-000000000001',
+          is_rental: true,
+          warehouse_id: '00000000-0000-0000-0000-000000000099',
+          quantity_on_hand: 5,
+        },
+      ],
+      activeReservations: [
+        { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3 },
+      ],
+    });
+    const svc = new RentalsService(ctx);
+    await expect(
+      svc.create({
+        ...validCreateInput,
+        lines: [
+          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 5, notes: null },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    // Refused BEFORE any write — no header, no rollback needed.
+    expect(rentalInsertCalls).toHaveLength(0);
+    expect(deletedRentalIds).toHaveLength(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+
+  it('allows a line that fits the remaining availability', async () => {
+    const { ctx } = makeCtx({
+      inventoryItems: [
+        {
+          id: '00000000-0000-0000-0000-000000000001',
+          is_rental: true,
+          warehouse_id: '00000000-0000-0000-0000-000000000099',
+          quantity_on_hand: 5,
+        },
+      ],
+      activeReservations: [
+        { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3 },
+      ],
+    });
+    const svc = new RentalsService(ctx);
+    await expect(
+      svc.create({
+        ...validCreateInput,
+        lines: [
+          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 2, notes: null },
+        ],
+      }),
+    ).resolves.toMatchObject({ id: 'rental-id-1' });
+  });
+
+  it('sums duplicate lines for the same item against one availability pool', async () => {
+    const { ctx, rentalInsertCalls } = makeCtx({
+      inventoryItems: [
+        {
+          id: '00000000-0000-0000-0000-000000000001',
+          is_rental: true,
+          warehouse_id: '00000000-0000-0000-0000-000000000099',
+          quantity_on_hand: 5,
+        },
+      ],
+    });
+    const svc = new RentalsService(ctx);
+    await expect(
+      svc.create({
+        ...validCreateInput,
+        lines: [
+          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
+          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(rentalInsertCalls).toHaveLength(0);
+  });
+
   it('rejects items that are not rental items', async () => {
     const { ctx } = makeCtx({
       inventoryItems: [
@@ -394,6 +544,53 @@ describe('RentalsService.markReturned', () => {
     // The test passes as long as no error is thrown. The mock's stock_reservations
     // update chain is called silently. Deeper verification would require spy tracking.
     expect(true).toBe(true);
+  });
+
+  // SP-023: the status UPDATE used to be `.eq('id', …)` with only an error
+  // guard. RLS refusing the write (rentals_update needs warehouse 'write';
+  // rentals_select only 'read') returns 0 rows and error null — so the service
+  // sailed on and released every reservation via the SERVICE ROLE, audited the
+  // return and emailed the borrower while rentals.status stayed 'out'.
+  it('refuses when the status UPDATE matches no row — releases nothing, no audit, no email', async () => {
+    const { ctx, releasedRentalIds } = makeCtx({
+      rentalRow: {
+        status: 'out',
+        expected_return_at: futureDate,
+        warehouse_id: '00000000-0000-0000-0000-000000000099',
+      },
+      updatedRentalRow: null,
+    });
+    const svc = new RentalsService(ctx);
+    await expect(svc.markReturned({ id: 'rental-id-1' })).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(releasedRentalIds).toHaveLength(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(vi.mocked(sendRentalReturnedEmail)).not.toHaveBeenCalled();
+  });
+
+  it("asserts WRITE access to the rental's warehouse before touching anything", async () => {
+    vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(
+      new ForbiddenError('Read-only auditor cannot perform write operations.'),
+    );
+    const { ctx, releasedRentalIds } = makeCtx({
+      rentalRow: {
+        status: 'out',
+        expected_return_at: futureDate,
+        warehouse_id: '00000000-0000-0000-0000-000000000099',
+      },
+    });
+    const svc = new RentalsService(ctx);
+    await expect(svc.markReturned({ id: 'rental-id-1' })).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(vi.mocked(assertWarehouseAccess)).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000099',
+      'write',
+      ctx,
+    );
+    expect(releasedRentalIds).toHaveLength(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 
   it('is idempotent — already-returned rental returns silently', async () => {
@@ -452,6 +649,20 @@ describe('RentalsService.cancel', () => {
     const svc = new RentalsService(ctx);
     await svc.cancel({ id: 'rental-id-1', reason: 'Test reason' });
     expect(true).toBe(true);
+  });
+
+  // Same fail-open shape as markReturned (SP-023).
+  it('refuses when the status UPDATE matches no row — releases nothing, no audit', async () => {
+    const { ctx, releasedRentalIds } = makeCtx({
+      rentalRow: { status: 'out', warehouse_id: '00000000-0000-0000-0000-000000000099' },
+      updatedRentalRow: null,
+    });
+    const svc = new RentalsService(ctx);
+    await expect(
+      svc.cancel({ id: 'rental-id-1', reason: 'Changed mind' }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(releasedRentalIds).toHaveLength(0);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 
   it('emits rental.cancelled audit event with reason', async () => {

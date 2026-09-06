@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
@@ -34,6 +34,24 @@ function secretsEqual(a: string, b: string): boolean {
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
 }
+/**
+ * The Monday (UTC) that starts the run's week, as `YYYY-MM-DD`. This is the
+ * week bucket of the at-most-once send key: every invocation inside one
+ * cron week — the scheduled 14:00 UTC Monday run, a manual re-run on the
+ * Wednesday — derives the SAME bucket, so only the first one sends. The
+ * next scheduled run is always >= 7 days later, so it lands in a new bucket
+ * and sends normally. Date.UTC normalizes a negative day-of-month (Monday
+ * of a week that started in the previous month), so no manual rollover.
+ */
+// (module-private: a route file may only export the handler + route config)
+function digestWeekKey(d: Date): string {
+  const daysSinceMonday = (d.getUTCDay() + 6) % 7; // getUTCDay: 0 = Sunday
+  const monday = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysSinceMonday),
+  );
+  return monday.toISOString().slice(0, 10);
+}
+
 // Vercel default function timeout is 10s for Hobby. The cron iterates orgs
 // + sends emails sequentially; bump generously since each Resend send is
 // a network round trip.
@@ -227,6 +245,62 @@ export async function GET(req: Request) {
             skipped += 1;
             continue;
           }
+          // ═══ AT-MOST-ONCE PER (org, user, week) ═══
+          //
+          // This cron had no send marker of ANY kind, so a second
+          // invocation inside the same week re-sent the identical digest
+          // (same subject dateline) to every opted-in user. Two reachable
+          // paths: a manual `curl -H "Authorization: Bearer $CRON_SECRET"`
+          // / the Vercel dashboard "Run" button after a deploy, and the
+          // honest operational case — a fleet large enough to blow
+          // maxDuration=60 gets cut off mid-loop with no resume point, so
+          // the natural operator response (re-run to finish the list)
+          // re-mails everyone already served.
+          //
+          // The claim rides the generic idempotency_keys table (mig 0013).
+          // Its UNIQUE (organization_id, scope, key) makes claiming ATOMIC
+          // — a read-then-write marker would still double-send under two
+          // overlapping runs — and needs no new column.
+          //
+          // The key is per (org, user, week), NOT per user: a user who
+          // belongs to two orgs legitimately receives two digests every
+          // Monday (this loop fans out per membership), so a per-user key
+          // would silently suppress the second org's digest.
+          //
+          // Claimed BEFORE the send, like schedule-reminders' stamp-first
+          // write: losing one digest to a crash between claim and send
+          // beats re-spamming the fleet.
+          const claimKey = `${userId}:${digestWeekKey(runStartedAt)}`;
+          const { error: claimErr } = await admin.from('idempotency_keys').insert({
+            organization_id: orgId,
+            scope: 'weekly_digest',
+            key: claimKey,
+            // request_hash is NOT NULL on the table; the "payload" of a
+            // digest send is exactly its (org, user, week) identity.
+            request_hash: createHash('sha256').update(`${orgId}:${claimKey}`).digest('hex'),
+            status: 'completed',
+          });
+          if (claimErr) {
+            const duplicate =
+              claimErr.code === '23505' ||
+              (claimErr.message ?? '').includes('duplicate key value');
+            if (duplicate) {
+              // Already sent this week — the whole point.
+              skipped += 1;
+              continue;
+            }
+            // Any OTHER claim failure fails OPEN on the MARKER, never on
+            // the send: a missing table/permission blip must degrade to a
+            // possible duplicate, not a fleet-wide digest outage (the
+            // deploy-before-migrate class — see the account-disable
+            // landmine). Reported so a silent duplicate-forever state is
+            // visible.
+            void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
+              tag: 'cron.weekly-digest.claim',
+              extra: { orgId, userId },
+            });
+          }
+
           const html = renderWeeklyDigestHtml(payload, {
             ...opts,
             recipientName: name,

@@ -3,8 +3,9 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
@@ -12,6 +13,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
+import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 import { err, ok, UNSAFE_DISPLAY_NAME_CHARS, type ActionResult } from '@stockpilot/core';
 
@@ -56,6 +58,97 @@ async function gateMfa(): Promise<void> {
   }
 }
 
+/**
+ * The MFA posture of the COOKIE SESSION alone — no org involved.
+ *
+ * `gateMfa()` above answers "what does this user's ORG demand?", which is the
+ * right question for every org-scoped mutation here. It is the wrong question,
+ * and an unanswerable one, for a user who has no org: `withContext()` resolves
+ * through `requireOrgContext()`, which answers a membership-less session with
+ * `redirect('/onboarding')` — a throw, not a value (see SP-129 below).
+ *
+ * So this reads the same two facts `resolveMfaState` reads, straight off the
+ * session: is a factor VERIFIED, and is the session at aal2. Enrollment still
+ * escalates (HI-6) — losing your org must not lose the rule that a factor you
+ * enrolled has to be satisfied. Shaped like `ServiceContext`'s MFA triple so
+ * `mfaGateError` picks the same error shape in both paths.
+ */
+async function resolveSessionMfaPosture(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  try {
+    const { data: factors, error } = await supabase.auth.mfa.listFactors();
+    if (error) throw new Error(error.message);
+    const enrolled = (factors?.totp ?? []).some((f) => f.status === 'verified');
+    if (!enrolled) return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    return {
+      mfaRequired: true,
+      mfaSatisfied: aal?.currentLevel === 'aal2',
+      mfaEnrolled: true,
+    };
+  } catch (e) {
+    // Fail CLOSED, byte-for-byte the posture `resolveMfaState` takes in
+    // services/context.ts: an unreadable factor list must never read as "no
+    // MFA required" on a destructive action. The unenrolled shape is chosen
+    // deliberately — we do not KNOW there is a factor, and telling someone
+    // with no factor to "re-authenticate with MFA" fires a step-up modal they
+    // can never satisfy.
+    console.error('[profile] session MFA posture read failed:', e);
+    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
+  }
+}
+
+/**
+ * SP-129 — the MFA gate for SELF-SERVICE account actions, which must work for
+ * a user who has NO accepted membership.
+ *
+ * That cohort is real and not small: every signup that abandons /onboarding,
+ * and everyone removed from their last org by `TeamService.removeMember`
+ * (which deletes the membership row and leaves the auth user + profile alive).
+ * For them `gateMfa()` -> `withContext()` -> `requireOrgContext()` throws
+ * NEXT_REDIRECT, which the catch-all below used to translate into
+ * `internal_error: 'NEXT_REDIRECT'` (recurring pattern #23) — so the one
+ * action App Store 5.1.1(v) and GDPR require to always work was the one action
+ * they could never complete.
+ *
+ * A member keeps the org gate EXACTLY as before: this is not a way around an
+ * org's mfa_policy, only an answer for the case where there is no org to ask.
+ */
+async function gateMfaForSelfService(): Promise<void> {
+  // Shares loadSessionAndContext's single membership query with requireSession
+  // (React.cache), so this costs no extra round trip.
+  const memberships = await getSessionMemberships();
+  if (memberships.length > 0) {
+    await gateMfa();
+    return;
+  }
+  const supabase = await createClient();
+  const posture = await resolveSessionMfaPosture(supabase);
+  if (posture.mfaRequired && !posture.mfaSatisfied) throw mfaGateError(posture);
+}
+
+/**
+ * The one translation from a thrown error to an ActionResult, shared by every
+ * action in this file.
+ *
+ * Two things it must do that the four hand-rolled catch blocks did not:
+ *
+ *  1. RETHROW Next control-flow errors. `redirect()` is implemented as a THROW
+ *     carrying a `digest`; catching it turned "you are signed out, go to
+ *     /signin" into `internal_error: 'NEXT_REDIRECT'` — a dead end for the
+ *     user and a false error for the logs (recurring pattern #23).
+ *  2. Forward `ServiceError.details`. `mfaGateError` puts `reason:
+ *     'aal2_required'` there precisely so an ENROLLED user gets the step-up
+ *     modal instead of an "enroll in MFA" message; dropping details silently
+ *     undid that choice (email-routing-settings.ts surfaces it the same way).
+ */
+function actionErrorFrom(e: unknown): ActionResult<never> {
+  if (isNextControlFlowError(e)) throw e;
+  if (e instanceof ServiceError) return err(e.code, e.message, e.details);
+  return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+}
+
 export async function updateProfileNameAction(input: {
   fullName: string | null;
 }): Promise<ActionResult<void>> {
@@ -95,8 +188,7 @@ export async function updateProfileNameAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorFrom(e);
   }
 }
 
@@ -226,8 +318,7 @@ export async function setAvatarUrlAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorFrom(e);
   }
 }
 
@@ -366,8 +457,7 @@ export async function setOrgLogoUrlAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorFrom(e);
   }
 }
 
@@ -396,7 +486,9 @@ export async function deleteOwnAccountAction(input: {
   }
   try {
     const session = await requireSession();
-    await gateMfa();
+    // SP-129 — NOT gateMfa(): a user with no membership must still be able to
+    // delete their account. See gateMfaForSelfService.
+    await gateMfaForSelfService();
     const supabase = await createClient();
 
     // Find every org this user owns. If any of them have another
@@ -451,17 +543,56 @@ export async function deleteOwnAccountAction(input: {
     const admin = createAdminClient();
     const { error: authErr } = await admin.auth.admin.deleteUser(session.userId);
     if (authErr) {
-      // Log but don't throw — the profile tombstone already prevents
-      // login through the app, and the cascade will fire on the next
-      // admin retry. Surfacing the error to the user produces a
-      // half-deleted state UX they can't act on.
-      console.error('[deleteOwnAccount] auth.admin.deleteUser failed:', authErr.message);
+      // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
+      //
+      // This used to log the failure and return ok(). The comment justifying
+      // that said "the profile tombstone already prevents login through the
+      // app, and the cascade will fire on the next admin retry". BOTH halves
+      // were false, and had always been:
+      //
+      //   • NOTHING in any identity funnel reads user_profiles.deleted_at.
+      //     loadSessionAndContext selects `disabled_at`; ACCOUNT_STATUS_COLUMNS
+      //     is `'disabled_at'`; isAccountDisabled (packages/core) reads only
+      //     disabled_at; 0310's is_org_member checks only disabled_at. 0171
+      //     added the column with no trigger and no policy. The tombstoned user
+      //     signs straight back in with every membership intact.
+      //   • There is no retry. No cron, no queue, no admin tool re-attempts
+      //     this delete.
+      //
+      // So the failure mode was: deleteUser 401s (exactly the 2026-07-21
+      // service-role key outage, where every createAdminClient path failed
+      // while user-authed reads stayed up), the action returns ok, the UI says
+      // "Your account has been deleted." and the audit log records
+      // 'user.deactivated' — while the account is entirely alive. That is a
+      // false promise under App Store 5.1.1(v) / GDPR and a false audit row.
+      //
+      // Now: report it, end the live sessions best-effort, and TELL the user it
+      // failed. `deleted_at` is deliberately left stamped — it is the marker an
+      // operator (or a future retry) uses to find the half-deleted account, and
+      // it is inert for login precisely because nothing reads it.
+      await reportError(new Error(authErr.message), {
+        tag: 'account.delete.auth_delete_failed',
+        extra: { userId: session.userId, source: 'web' },
+      });
+      try {
+        // Not silent (pattern #28): revokeAllSessionsForUser reports its own
+        // failure and returns { ok: false } rather than throwing. The try/catch
+        // is only for the case where the admin client itself is unusable — the
+        // same dead key that broke the delete above — which must not turn a
+        // reported refusal into an unhandled throw.
+        await revokeAllSessionsForUser(session.userId);
+      } catch (revokeErr) {
+        console.error('[deleteOwnAccount] session revoke failed:', revokeErr);
+      }
+      return err(
+        'internal_error',
+        'Your account could not be deleted right now. Please try again.',
+      );
     }
 
     revalidatePath('/', 'layout');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorFrom(e);
   }
 }

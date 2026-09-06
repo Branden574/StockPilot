@@ -174,6 +174,24 @@ export function PoAttachments({ poId }: { poId: string }) {
         Alert.alert('Upload failed', up.error);
         return;
       }
+      // ⚠️ KNOWN GAP (SP-018, unfixed — needs a server route this file
+      // cannot add): this insert goes straight to PostgREST, so the
+      // finalize-time gate every other attachment surface runs —
+      // PoAttachmentsService.add() → verifyStoredDocumentOrDelete(), which
+      // sniffs the real magic bytes AND scans the object for active content
+      // (a PDF carrying /OpenAction /Launch), deleting it on failure — never
+      // runs for a file attached from the phone. `contentType` below is the
+      // client's word (pickDocument passes asset.mimeType raw), and it is
+      // what the row records and every downstream reader trusts: the web
+      // panel signs it for the whole org and api/purchase-orders/[id]/
+      // attachments.zip bundles it. Closing this needs (1) a Bearer twin
+      // POST /api/v1/purchase-orders/[id]/attachments calling
+      // PoAttachmentsService.add(), (2) this call site switched to it, then
+      // (3) a migration dropping the authenticated INSERT policy (0211)
+      // once the old-binary audience has moved. Same shape in
+      // apps/mobile/app/order/[id].tsx:1319 (order_request_attachments) and
+      // the mobile item_images inserts. See lib/storage-path.ts's
+      // poAttachmentPathShape note, which documents the same bypass.
       const { error: rowErr } = await supabase.from('po_attachments').insert({
         organization_id: orgId,
         purchase_order_id: poId,

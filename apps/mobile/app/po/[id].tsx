@@ -18,6 +18,7 @@ import type { CountingUnit, SizeScaleValueOrder } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { useAuth } from '@/lib/auth-context';
+import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { buildReceiptRequestHash } from '@/lib/receipt-request-hash';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
@@ -484,7 +485,23 @@ export default function PoReceiveScreen() {
     submittingRef.current = false;
 
     if (error) {
-      Alert.alert('Receive failed', error.message);
+      // A failure is NOT automatically retryable with this key. `mapPostReceiptError`
+      // decides: `idempotency_conflict` means the FIRST attempt committed
+      // server-side (its ack was lost) and these edited lines were refused —
+      // keeping the key would raise that same conflict forever, and clearing it
+      // without re-reading the PO would post the already-received quantities a
+      // second time. So the conflict arm retires the intent AND reloads, which
+      // also reseeds `draft`, leaving the receiver looking at what is genuinely
+      // still outstanding. Every other raise string rolls the whole RPC back,
+      // so the same key stays correct for a straight retry.
+      const action = mapPostReceiptError(error);
+      if (action.resetIntent) idemKeyRef.current = null;
+      if (action.reload) {
+        setLoading(true);
+        setLoadError(null);
+        void load();
+      }
+      Alert.alert(action.title, action.body);
       return;
     }
     // Posted: retire the key so a later receive against this PO is a new intent.
