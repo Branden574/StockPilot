@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { withApiContext } from '@/lib/auth/api-context';
 import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from '@/lib/inventory-export';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
+import { ServiceError } from '@/server/services/context';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
@@ -202,5 +203,58 @@ describe('GET /api/inventory/export.csv — ?warehouseId scoping', () => {
     const res = await GET(buildRequest('?warehouseId='));
     expect(res.status).toBe(200);
     expect(lastFilters()?.warehouseId).toBeNull();
+  });
+});
+
+/**
+ * SP-110. The catch block flattened EVERY `ServiceError` to HTTP 500, even the
+ * codes that mean "your request was refused", not "we broke". The shared
+ * `serviceErrorStatus()` mapper (server/services/context.ts) has existed since
+ * 2026-05-29; this route (and four siblings) predate it and never adopted it.
+ *
+ * Why it matters even though `buildInventoryExportRows` only throws
+ * `internal_error` TODAY: a 500 tells an HTTP client "transient, retry me" and
+ * fires Vercel's 5xx alerting, so the day the export path grows a module gate
+ * or a filter validator, a permanent user-side refusal becomes a retry storm
+ * plus a false page. The status is a contract of the ROUTE, not of whichever
+ * service happens to sit behind it this month — so it gets pinned here.
+ *
+ * The `internal_error` case is pinned alongside deliberately: it guards
+ * against over-correcting the mapping into "never 500".
+ */
+describe('GET /api/inventory/export.csv — ServiceError status mapping (SP-110)', () => {
+  it('maps module_disabled to 403, not 500', async () => {
+    vi.mocked(buildInventoryExportRows).mockRejectedValueOnce(
+      new ServiceError('module_disabled', 'Module not enabled for this organization: inventory'),
+    );
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'module_disabled' });
+  });
+
+  it('maps validation_error to 400, not 500', async () => {
+    vi.mocked(buildInventoryExportRows).mockRejectedValueOnce(
+      new ServiceError('validation_error', 'bad filter'),
+    );
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'validation_error' });
+  });
+
+  it('maps not_found to 404, not 500', async () => {
+    vi.mocked(buildInventoryExportRows).mockRejectedValueOnce(
+      new ServiceError('not_found', 'gone'),
+    );
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(404);
+  });
+
+  it('still returns 500 for internal_error (no over-correction)', async () => {
+    vi.mocked(buildInventoryExportRows).mockRejectedValueOnce(
+      new ServiceError('internal_error', 'boom'),
+    );
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ error: 'internal_error' });
   });
 });

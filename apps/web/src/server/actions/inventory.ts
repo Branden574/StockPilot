@@ -137,23 +137,31 @@ export async function updateItemAction(
   }
 }
 
-export async function archiveItemAction(
-  id: string,
-  // Deliberate archive-with-stock (a discontinued line written off wholesale).
-  // Omitted/false is the safe default: the service refuses and names the stock.
-  opts: { acknowledgeStock?: boolean } = {},
-): Promise<ActionResult<void>> {
-  try {
-    const svc = await InventoryService.forCurrentUser();
-    await svc.archive(id, { acknowledgeStock: opts.acknowledgeStock === true });
-    revalidatePath('/dashboard/inventory');
-    revalidatePath(`/dashboard/inventory/${id}`);
-    await revalidateInventoryListForCurrentOrg();
-    return ok(undefined);
-  } catch (e) {
-    return toResult(e);
-  }
-}
+/*
+ * REMOVED (SP-120, 2026-09): `archiveItemAction` and `deleteItemAction`.
+ *
+ * Both were scaffold-era exports with ZERO callers anywhere in apps/, packages/
+ * or scripts/ — but in a `'use server'` module every export compiles to a
+ * server reference the runtime will execute if it is invoked by ID, so they
+ * were live, unmaintained surface.
+ *
+ * Worse, `archiveItemAction` was a SECOND archive path: it called
+ * `InventoryService.archive` (guarded by `assertArchivableOrThrow`), while the
+ * archive the UI actually performs — components/inventory/bulk-actions.tsx,
+ * including archiving a single selected item — goes through
+ * `bulkUpdateInventoryAction` -> `svc.bulkUpdate`, guarded by that method's own
+ * "bulk twin" of the same check. Two guard implementations for one rule, one of
+ * them reachable only through dead code: recurring bug pattern #26, where the
+ * next behaviour fix lands on one copy and the other silently keeps the old
+ * semantics.
+ *
+ * If a single-item archive or delete ever needs its own entry point again, wire
+ * it to a caller in the same change, and reuse the service guard rather than
+ * growing a third copy of it.
+ *
+ * `src/server/actions/actions-are-reachable.test.ts` now fails on any exported
+ * action with no caller, so this cannot silently come back.
+ */
 
 export async function removeStockFromLocationAction(
   input: z.input<typeof removeStockFromLocationSchema>,
@@ -233,18 +241,6 @@ export async function removeStockFromLocationAction(
         ? { crateSyncCratePreserved: true }
         : {}),
     });
-  } catch (e) {
-    return toResult(e);
-  }
-}
-
-export async function deleteItemAction(id: string): Promise<ActionResult<void>> {
-  try {
-    const svc = await InventoryService.forCurrentUser();
-    await svc.softDelete(id);
-    revalidatePath('/dashboard/inventory');
-    await revalidateInventoryListForCurrentOrg();
-    return ok(undefined);
   } catch (e) {
     return toResult(e);
   }

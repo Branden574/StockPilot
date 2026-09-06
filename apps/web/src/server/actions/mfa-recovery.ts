@@ -98,7 +98,20 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // to force a re-enrollment lockout. 5 attempts / 15 minutes is
     // generous for a real user who made a typo and tight enough that
     // brute force is impractical against the 80-bit code space.
-    const rl = await checkRateLimit(`mfa-recovery:${session.userId}`, 5, 15 * 60_000);
+    //
+    // 'closed' is load-bearing: checkRateLimit defaults to mode 'open', which
+    // answers `allowed: true` whenever the increment_rate_limit RPC errors —
+    // and it reaches that RPC through createAdminClient, so the whole ceiling
+    // evaporated during the 2026-07-21 service-key outage with nothing louder
+    // than a console.warn. This limiter is also the ONLY throttle on the
+    // password check below (verify-password.ts leaves rate-limiting to its
+    // callers), so failing open here silently costs a whole defence layer on
+    // the flow that strips every MFA factor off an account. Every sibling auth
+    // front door (generate above, mfa.ts enroll-verify, auth.ts sign-in and
+    // change-password, email-change request/resend) already passes 'closed';
+    // this one had been missing it. The trade — a limiter outage blocks
+    // recovery-code use for its duration — is the one they all already make.
+    const rl = await checkRateLimit(`mfa-recovery:${session.userId}`, 5, 15 * 60_000, 'closed');
     if (!rl.allowed) {
       return err(
         'validation_error',

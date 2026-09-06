@@ -256,9 +256,28 @@ export async function setMeta(key: string, value: string): Promise<void> {
 
 /**
  * Clears every per-org cached data table (items, warehouses, POs + lines,
- * cycle counts + lines, bundles + components) and resets the sync cursor
- * (`last_synced_at`) plus the persisted `enabled_modules` set. Shared by
- * `deleteOrgData` (org switch) and `wipeForSignOut` (sign-out).
+ * cycle counts + lines, bundles + components) and every org-scoped `meta`
+ * key sync.ts persists on a pull: the sync cursor (`last_synced_at`), the
+ * `enabled_modules` set, the `effective_permissions` set and the
+ * `warehouse_scope`. Shared by `deleteOrgData` (org switch) and
+ * `wipeForSignOut` (sign-out).
+ *
+ * WHY the last two are here: they were omitted, so an org switch left Org A's
+ * permission set and warehouse scope persisted under Org B. The post-switch
+ * pull that would overwrite them is fire-and-forget (use-workspace.ts
+ * `void syncNow(true)`), so with no network the stale values simply stood —
+ * the Items screen banner read "You're viewing <Org A's warehouse> only" for
+ * Org B, and the drawer was gated by Org A's permissions. Cosmetic (the API
+ * and RLS enforce both server-side — see the notes in use-effective-
+ * permissions.ts and warehouse-scope.ts) but false, and it survived relaunches
+ * because these are persisted, not in-memory, values. Cleared here rather than
+ * at the call site so the sign-out path gets it too: on a shared device the
+ * next user would otherwise inherit the previous user's persisted scope until
+ * their first pull. Both readers treat "absent" as not-loaded-yet and fall
+ * back to their documented defaults (static role permissions; no banner).
+ *
+ * The keys are pinned against sync.ts's writers by
+ * db-clear-keys.wiring.test.ts — add a key there, clear it here.
  *
  * Deliberately does NOT touch `pending_actions` — see the note on
  * `deleteOrgData` for the org-keying limitation. Callers that truly want a
@@ -276,6 +295,8 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
     delete from bundle_components;
     delete from meta where key = 'last_synced_at';
     delete from meta where key = 'enabled_modules';
+    delete from meta where key = 'effective_permissions';
+    delete from meta where key = 'warehouse_scope';
   `);
 }
 
@@ -289,8 +310,17 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
  * items/POs/counts/bundles, and the `?since` cursor is wrong (it belongs to
  * the prior org's timeline).
  *
- * Also clears the persisted `enabled_modules` so the drawer/tab gating
- * re-derives from the new org's snapshot rather than the prior org's set.
+ * Also clears the persisted `enabled_modules`, `effective_permissions` and
+ * `warehouse_scope` so the drawer/tab gating and the Items scoped-view banner
+ * re-derive from the new org's snapshot rather than the prior org's values.
+ *
+ * NOTE for callers: clearing the persisted values is only half of an
+ * in-session switch. `useEffectivePermissions()` / `useWarehouseScope()` hold
+ * the last value in React state and re-read only when notified, so a caller
+ * switching orgs should call `refreshEffectivePermissions()` and
+ * `refreshWarehouseScope()` after this returns; otherwise the stale banner
+ * lingers on screen (though no longer on disk) until the forced pull lands or
+ * the app is relaunched.
  *
  * KNOWN LIMITATION — pending_actions are NOT org-keyed: the table has no
  * organization_id column, so we cannot reliably know which org a queued

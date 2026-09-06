@@ -1,3 +1,8 @@
+// Type-only (erased at build), so this stays the one shared declaration of the
+// four placement fields instead of a second copy that can drift from the
+// server's again.
+import type { NewLocationFields } from '@stockpilot/core';
+
 import { api } from './api';
 
 /**
@@ -23,15 +28,37 @@ import { api } from './api';
  * (mint_placement_location, migration 0340; owner decision D1).
  */
 /**
- * The inline-created destination. RACK **XOR** CRATE — the server refuses a
- * body carrying both (packages/core/src/inventory/new-location.ts), because
- * "rack A1 + crate 9" has no honest name and guessing one is what minted a
- * surprise "Crate #9" from a sheet that had confirmed "Create new rack A1?".
- * A crate is identified by its NUMBER; the colour is optional.
+ * The inline-created destination — the four fields exactly as the transfer
+ * route reads them, which is to say core's `NewLocationFields` and nothing of
+ * this file's own invention.
+ *
+ * ═══ IT USED TO SAY "RACK **XOR** CRATE". THAT WAS WRONG ═══
+ *
+ * This type declared two mutually exclusive branches (`crateNumber?: never` on
+ * the rack side, `rackNumber?: never` on the crate side) and claimed the server
+ * refuses a body carrying both. The server does the OPPOSITE: A CRATE SITS ON A
+ * RACK, so the rack pair alongside crate fields is that crate's POSITION and
+ * both halves are kept — see the header of
+ * packages/core/src/inventory/new-location.ts, where the `rack_and_crate`
+ * problem was deliberately deleted and marked "do not reintroduce", and the
+ * route at apps/web/src/app/api/v1/items/[id]/transfer/route.ts which validates
+ * with `newLocationFieldsShape` + `refineNewLocation`.
+ *
+ * Nothing was broken on the wire, because the sheet already sends both fields
+ * (`newLocationFields()` in move-stock-form.ts) through an `as NewRack` cast,
+ * and a cast is erased before the request is built. That is precisely what made
+ * the drift survive: the only reader who could have caught it was told to look
+ * away. The live risk was the NEXT caller — one typing its body against this
+ * type would find a positioned crate unexpressible and settle for a
+ * position-less "Crate #9", which does not dedupe against "Crate #9 on rack A1"
+ * (migration 0270's key) and so mints the duplicate location that the whole
+ * shared planner exists to prevent (REPRO A).
+ *
+ * Kept as a named alias rather than deleted: the sheet imports `NewRack` by
+ * name in five places. stock-api.types.test.ts pins it to core's shape in BOTH
+ * directions, so re-narrowing it here fails the test rather than the warehouse.
  */
-export type NewRack =
-  | { rackNumber: string; rackRow?: string; crateColor?: never; crateNumber?: never }
-  | { crateNumber: string; crateColor?: string; rackNumber?: never; rackRow?: never };
+export type NewRack = NewLocationFields;
 
 export interface TransferStockBody {
   fromLocationId: string;

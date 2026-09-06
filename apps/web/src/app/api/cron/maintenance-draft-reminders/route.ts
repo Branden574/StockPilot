@@ -182,7 +182,21 @@ export async function GET(req: Request) {
         userId: row.requester_user_id,
         type: 'maintenance_request',
         title: `Reminder: finish your ${handle} draft`,
-        body: `Your maintenance request ${handle} was saved, but no email draft has been opened yet. Open it in StockPilot to finish sending it to DC4.`,
+        // TENANT-NEUTRAL COPY (2026-09, fix of a 0337 leftover). This
+        // sentence used to end "...to finish sending it to DC4." — DC4 is
+        // L4L's Fresno warehouse, and this loop runs for EVERY org with the
+        // maintenance_requests module enabled. Migration 0337 made the
+        // maintenance recipients per-org data
+        // (`organizations.email_routing`), and
+        // packages/core/src/email/cc-notice.ts purged the same hardcoded
+        // name from the compose notices for exactly this reason — this emit
+        // point was missed, so a second tenant's requester was told to mail
+        // another tenant's warehouse. Naming the mailbox here would mean a
+        // per-row read of the org's routing (which fails CLOSED when the
+        // value is absent or invalid, so the neutral sentence would be the
+        // fallback anyway); the destination is already shown on the page the
+        // link opens, so the reminder just points there and names nobody.
+        body: `Your maintenance request ${handle} was saved, but no email draft has been opened yet. Open it in StockPilot to finish sending it.`,
         link: `/dashboard/maintenance/${row.id}`,
         metadata: { request_id: row.id, event: 'draft_reminder' },
       });

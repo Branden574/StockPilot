@@ -39,6 +39,20 @@ import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
 
 const PW = 'correct horse battery staple';
 
+/**
+ * The consume gate runs in `'closed'` mode, so it treats a limiter that
+ * returns nothing as a denial. supabase-mock's default for an un-stubbed RPC
+ * is `{ data: null }` — every case that expects to get PAST the gate has to
+ * stub the bucket increment explicitly. (Before SP-100 the gate was open-mode
+ * and silently swallowed that null, which is exactly what hid the bug.)
+ */
+const LIMITER_OK = {
+  'rpc:increment_rate_limit': {
+    data: [{ allowed: true, count: 1, reset_at: null }],
+    error: null,
+  },
+} as const;
+
 function attachAdminMfa(
   stub: ReturnType<typeof makeSupabaseStub>,
   factors: Array<{ id: string; factor_type: string }>,
@@ -67,6 +81,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
 
   it('rejects when no password is provided (mandatory re-confirm)', async () => {
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': { data: true, error: null },
     });
     const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
@@ -86,6 +101,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
       message: 'Incorrect password.',
     } as Awaited<ReturnType<typeof verifyPasswordSideChannel>>);
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': { data: true, error: null },
     });
     const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
@@ -99,6 +115,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
 
   it('returns validation_error when the recovery code is invalid', async () => {
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': { data: false, error: null },
     });
     const result = await consumeMfaRecoveryCodeAction({ code: 'bad-code', password: PW });
@@ -108,6 +125,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
 
   it('returns internal_error when the rpc itself errors', async () => {
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': {
         data: null,
         error: { message: 'sql blew up' },
@@ -120,6 +138,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
 
   it('deletes every TOTP factor and returns the unenrolled count', async () => {
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': { data: true, error: null },
     });
     const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
@@ -141,6 +160,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
 
   it('does not count factors whose delete returns an error', async () => {
     stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
       'rpc:consume_mfa_recovery_code': { data: true, error: null },
     });
     const calls: Array<{ id: string }> = [];
@@ -161,5 +181,55 @@ describe('consumeMfaRecoveryCodeAction', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.unenrolled).toBe(1);
     expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * SP-100 — the consume gate must fail CLOSED.
+   *
+   * `checkRateLimit` defaults to `mode: 'open'`: on an RPC error (the
+   * rate_limit_buckets table missing, or the service-role key dying the way it
+   * did on 2026-07-21 — checkRateLimit talks through createAdminClient) it
+   * returns `allowed: true`. This action's limiter is the ONLY brute-force
+   * ceiling on its password check (verify-password.ts leaves throttling to the
+   * caller), so an open failure mode silently drops the layer that stops a
+   * stolen AAL1 cookie from hammering recovery codes. Every sibling auth front
+   * door — generate above, mfa.ts enroll-verify, auth.ts sign-in/pwchange,
+   * email-change request/resend — already passes 'closed'.
+   */
+  it('refuses when the rate limiter is unavailable (closed mode)', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:increment_rate_limit': { data: null, error: { message: 'limiter down' } },
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+    ]);
+
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    // Nothing past the gate may run: no password attempt to time, no code
+    // burned, no factor stripped.
+    expect(verifyPasswordSideChannel).not.toHaveBeenCalled();
+    expect(
+      stubHolder.stub.rpcCalls.some((c) => c.name === 'consume_mfa_recovery_code'),
+    ).toBe(false);
+    expect(deleteFactor).not.toHaveBeenCalled();
+  });
+
+  it('keys the consume gate on the user with a 5-per-15-minutes budget', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    attachAdminMfa(stubHolder.stub, [{ id: 'f1', factor_type: 'totp' }]);
+
+    await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(stubHolder.stub.rpcCalls[0]).toEqual({
+      name: 'increment_rate_limit',
+      args: { p_key: 'mfa-recovery:user-1', p_limit: 5, p_window_ms: 15 * 60_000 },
+    });
   });
 });

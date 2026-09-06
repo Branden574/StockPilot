@@ -95,21 +95,6 @@ async function getLowStock(
   supabase: SupabaseClient,
   orgId: string,
 ): Promise<DigestLowStockGroup[]> {
-  // Pull the lowest-quantity active items, then JS-filter to those at or
-  // below reorder_point (or qty <= 0). PostgREST can't compare two
-  // columns in a single filter, so we over-pull and narrow.
-  const { data, error } = await supabase
-    .from('inventory_items')
-    .select(
-      'id, sku, name, quantity_on_hand, reorder_point, warehouse_id, warehouse:warehouses!warehouse_id (name)',
-    )
-    .eq('organization_id', orgId)
-    .eq('status', 'active')
-    .is('deleted_at', null)
-    .order('quantity_on_hand', { ascending: true })
-    .limit(150);
-  if (error) throw new ServiceError('internal_error', error.message);
-
   type Row = {
     id: string;
     sku: string;
@@ -120,13 +105,53 @@ async function getLowStock(
     warehouse: { name: string } | { name: string }[] | null;
   };
 
-  const filtered = (data ?? []).filter((r) => {
-    const row = r as Row;
-    return (
+  // PostgREST can't compare two columns in a single filter, so the
+  // `quantity_on_hand <= reorder_point` half of the predicate has to run in JS
+  // over a candidate pull.
+  //
+  // WHY PAGINATED, NOT `.limit(150)` (bug SP-132): the old query took the 150
+  // LOWEST-quantity active items and only then narrowed. Whether a genuinely
+  // low item made that window depended on how many OTHER items sat below it by
+  // raw quantity, not on whether it was below its own reorder point — so an org
+  // with >150 healthy slow movers at qty 1-5 (plain books are exactly that
+  // shape) could have a fast mover at qty 300 / reorder_point 500 and get a
+  // digest reporting NO low stock at all. Nothing about the data warned you;
+  // the section just came back empty. Pattern #7 (silent caps that bound
+  // coverage) and #3 (any candidate SELECT must paginate — PostgREST clamps
+  // every response to 1000 rows, so raising the limit would not have fixed it).
+  //
+  // Two changes stop it: `.or(...)` narrows the pull server-side to rows that
+  // COULD qualify (qty <= 0, or a reorder point is set at all), and
+  // fetchAllRows walks 1000-row windows so no candidate is left behind. The
+  // rendered slice is still LOW_STOCK_LIMIT, but it is now the 20 lowest of the
+  // real low-stock set rather than of an arbitrary window.
+  //
+  // NB the `.or` is NULL-safe by construction: `reorder_point.gt.0` drops rows
+  // whose reorder_point is NULL (pattern #23), but such a row can only qualify
+  // via `quantity_on_hand <= 0`, which the first disjunct already keeps. The
+  // column is `not null default 0` (0002_inventory.sql) anyway.
+  const rows = await fetchAllRows<Row>((from, to) =>
+    supabase
+      .from('inventory_items')
+      .select(
+        'id, sku, name, quantity_on_hand, reorder_point, warehouse_id, warehouse:warehouses!warehouse_id (name)',
+      )
+      .eq('organization_id', orgId)
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .or('quantity_on_hand.lte.0,reorder_point.gt.0')
+      // Quantity-ascending keeps the neediest items in the rendered slice; the
+      // id tiebreak is what makes the paging windows stable (see paginate.ts).
+      .order('quantity_on_hand', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+
+  const filtered = rows.filter(
+    (row) =>
       row.quantity_on_hand <= 0 ||
-      (row.reorder_point > 0 && row.quantity_on_hand <= row.reorder_point)
-    );
-  }) as Row[];
+      (row.reorder_point > 0 && row.quantity_on_hand <= row.reorder_point),
+  );
 
   // Group by warehouse (or "Unassigned" when null).
   const groups = new Map<string, DigestLowStockGroup>();

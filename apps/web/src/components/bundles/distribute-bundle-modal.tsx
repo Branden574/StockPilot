@@ -77,14 +77,23 @@ export function DistributeBundleModal({
   const [previewing, setPreviewing] = React.useState(false);
 
   React.useEffect(() => {
+    // Both early returns must clear `previewing`, not just `preview`. A previous
+    // run may already have flipped the flag on and armed the 200ms debounce; if
+    // the input goes invalid (or the dialog closes) inside that window, the
+    // cleanup below aborts the timer, so the callback that would have called
+    // setPreviewing(false) never runs. Leaving the flag set stranded
+    // PreviewBlock on "Calculating preview…" forever — e.g. type 5, clear the
+    // box within 200ms, and the empty box spins until a valid quantity resolves.
     if (!open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setPreview(null);
+      setPreviewing(false);
       return;
     }
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0 || !warehouseId) {
       setPreview(null);
+      setPreviewing(false);
       return;
     }
     setPreviewing(true);

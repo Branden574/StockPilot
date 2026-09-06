@@ -36,6 +36,9 @@
 # success. A security gate that can quietly stop checking things is worse than no
 # gate, so the pre-check turns that into a red build.
 #
+# A second pre-check covers the other direction — a security suite that was
+# written but never LISTED. See "PRE-CHECK 2" below for why it is apps/web only.
+#
 # ENVIRONMENT
 # -----------
 #   SECURITY_TEST_SKIP_DB=1   Skip the pgTAP section. Prints a loud SKIPPED line.
@@ -91,6 +94,10 @@ PGTAP_TESTS=(
   supabase/tests/0300_product_group_org_immutable.test.sql
   supabase/tests/0321_movement_read_scope_and_attribution.test.sql
   supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql
+  # AR-2 — the warehouse-scope RLS floor, and the org-level location scope that
+  # decides which locations a scoped counter may even see.
+  supabase/tests/0331_ar2_warehouse_scope.test.sql
+  supabase/tests/0343_cycle_count_org_level_location_scope.test.sql
 
   # Authorization, permissions, privilege escalation.
   supabase/tests/0207_permission_overrides.test.sql
@@ -107,6 +114,12 @@ PGTAP_TESTS=(
 
   # Function privilege posture (the P0 class).
   supabase/tests/0318_secdef_grants.test.sql
+  supabase/tests/0329_function_grants_and_search_path.test.sql
+  # 0341 also carries the behaviour change, but the SECURITY DEFINER
+  # self-authorization inside publish_outbox is the security property: before it,
+  # every non-admin's outbox event was silently dropped by RLS inside a
+  # best-effort try/catch, so connectors only ever heard admins.
+  supabase/tests/0341_manual_writeoff_any_mode_and_outbox_secdef.test.sql
 
   # Account disable / session revocation.
   supabase/tests/0308_account_disable.test.sql
@@ -125,10 +138,13 @@ PGTAP_TESTS=(
   supabase/tests/0142_order_attachments_read_floor.test.sql
   supabase/tests/0315_maintenance_photos_bucket.test.sql
   supabase/tests/0323_storage_path_shape_constraints.test.sql
+  supabase/tests/0324_validate_storage_path_and_nonneg_constraints.test.sql
+  supabase/tests/0326_storage_path_floor_completion.test.sql
 
   # Auth material and trusted writers.
   supabase/tests/0025_notification_writers.test.sql
   supabase/tests/0027_mfa_recovery_codes.test.sql
+  supabase/tests/0330_share_token_hash_at_rest.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -146,6 +162,16 @@ WEB_TESTS=(
   src/server/services/item-images.test.ts
   src/server/services/public-items.test.ts
 
+  # Declared-type spoofing: the bytes decide the type, never the caller's word.
+  # The 2026-08-21 wave (see project_upload_security_hardening) — a sniffer, a
+  # PDF/zip threat scanner, and the three write paths that must consult them.
+  # A regression here re-opens "upload an HTML/JS payload as image/png".
+  src/lib/file-signature.test.ts
+  src/lib/document-threat-scan.test.ts
+  src/server/services/attachment-byte-guard.test.ts
+  src/server/services/capture-byte-guard.test.ts
+  src/server/services/po-imports.scan-byte-verification.test.ts
+
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts
   src/lib/ai/untrusted.test.ts
@@ -153,6 +179,9 @@ WEB_TESTS=(
   src/app/api/books/extract-isbns-ai/route.gates.test.ts
   src/app/api/v1/items/upc-lookup/route.gates.test.ts
   src/lib/ssrf-guard.test.ts
+  # The book-cover rehost is the one place the server fetches a caller-supplied
+  # URL and stores the bytes; these pin the host allowlist and redirect posture.
+  src/server/services/books-import.ssrf.test.ts
 
   # Authorization gates on server actions and routes.
   src/app/api/orders/[id]/signature/route.test.ts
@@ -170,6 +199,10 @@ WEB_TESTS=(
 
   # Identity, MFA, sessions, API keys.
   src/lib/auth/api-context.aal.test.ts
+  # HI-6 pinned on BOTH auth paths: an ENROLLED user under an 'optional' org
+  # policy still requires AAL2, so a stolen password alone cannot pass the gates.
+  # context.mfa.test.ts below is the web twin — keep the pair together.
+  src/lib/auth/api-context.mfa.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts
@@ -192,6 +225,19 @@ WEB_TESTS=(
   src/server/security/monitors.test.ts
   src/server/services/maintenance-share-links.test.ts
   'src/app/m/[token]/photo/[n]/route.test.ts'
+  # MED-26 / migration 0330 — a /r or /m share token is a bearer credential, so
+  # only its hash may exist at rest; the plaintext column is gone and the value
+  # is shown once. The DB half is 0330 in MANIFEST 1.
+  src/server/services/public-links-token-hash.test.ts
+  # Signed storage URLs, tokens and keys must never reach a log line or an
+  # error payload.
+  src/lib/redact-urls.test.ts
+  # MED-24 — attribute-context escaping in the shared email components. These
+  # templates interpolate org- and user-supplied text into href/style contexts.
+  src/lib/email/es/components.escaping.test.ts
+  # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
+  # COOP, CORP. Asserted as properties, not as the literal strings.
+  src/test/security-headers.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -246,6 +292,77 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   exit 1
 fi
 pass "$(( ${#PGTAP_TESTS[@]} + ${#WEB_TESTS[@]} + ${#MOBILE_TESTS[@]} + ${#CORE_TESTS[@]} )) manifest entries all present"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PRE-CHECK 2 — the apps/web manifest must also be COMPLETE.
+#
+# WHY THIS EXISTS (2026-09, audit finding SP-029)
+# -----------------------------------------------
+# The pre-check above only catches manifest entries that DISAPPEAR. It says
+# nothing about security suites that were never added, and between #92 and this
+# audit nine of them accumulated unlisted — the byte-verification wave
+# (file-signature, document-threat-scan, the three byte guards), the /r token
+# hash, the api-context MFA inversion, the books-import SSRF properties, and URL
+# redaction. Each one still ran under `pnpm test`, so CI went red on a
+# regression, but the step named "Security invariants" stayed GREEN — and this
+# script's whole reason to exist (see the header) is that the LABEL on a red
+# build decides whether it gets merged around. A gate that silently stops
+# growing rots exactly as fast as one that silently shrinks.
+#
+# This is a DISCOVERY check, not a selection glob. The manifests above are still
+# explicit paths; nothing is ever run because it matched a pattern. All this
+# does is refuse to let a file that announces itself as a security suite sit
+# outside the manifest unnoticed.
+#
+# WEB ONLY, DELIBERATELY. The same idea over supabase/tests/ is useless: the
+# words that mark a pgTAP file as security-relevant ('RLS', 'security definer',
+# 'grants', 'search_path') appear in the first 40 lines of 81 of the 145 files
+# there, because almost every table in this schema has RLS and almost every
+# fixture mentions it. That check would demand classifying half the suite and
+# would be turned off within a week. pgTAP additions stay a human decision.
+#
+# It is a FLOOR, not a ceiling. Most of WEB_TESTS matches no pattern at all and
+# was added by judgement; five of the nine suites this audit added (the sniffer,
+# the threat scanner, two byte guards, the api-context MFA twin) do not match
+# this marker either. Passing it does not mean the manifest is complete — it
+# means nothing that ANNOUNCED itself was ignored.
+#
+# If this fails on a file that is NOT a security-property suite, the answer is
+# to reword its header comment, not to weaken the pattern. Do not extend the
+# marker to the filename conventions listed in the header above: `*-guard`
+# alone pulls in rack-shape.inventory-guard.test.ts, which is a warehouse
+# labelling regression guard with no security content.
+# ═══════════════════════════════════════════════════════════════════════════
+WEB_SECURITY_MARKER='Security (wave|MED-|HI-|invariant)|SSRF|token hash at rest|byte guard'
+
+UNLISTED=()
+while IFS= read -r abs; do
+  rel="${abs#apps/web/}"
+  # Exact-element membership: every entry is a bare `src/...` path, so padding
+  # both sides with spaces cannot match a prefix of a longer path.
+  case " ${WEB_TESTS[*]} " in
+    *" $rel "*) continue ;;
+  esac
+  UNLISTED+=("$rel")
+done < <(
+  find apps/web/src \( -name '*.test.ts' -o -name '*.test.tsx' \) -print \
+    | sort \
+    | while IFS= read -r f; do
+        head -40 "$f" | grep -qE "$WEB_SECURITY_MARKER" && printf '%s\n' "$f"
+      done
+)
+
+if [ ${#UNLISTED[@]} -gt 0 ]; then
+  fail "${#UNLISTED[@]} apps/web suite(s) announce themselves as security tests but are not in WEB_TESTS:"
+  for f in "${UNLISTED[@]}"; do say "       $f"; done
+  say ""
+  say "Add each to the WEB_TESTS manifest in scripts/security-test.sh, under the"
+  say "section that matches the property it pins. If one of these is not really a"
+  say "security-property suite, reword its header comment — do not loosen the"
+  say "marker pattern, because that turns this check off for everything."
+  exit 1
+fi
+pass "no unlisted apps/web security suites"
 
 FAILED=()
 

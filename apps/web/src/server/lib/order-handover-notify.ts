@@ -36,6 +36,26 @@ function shortDate(d: Date = new Date()): string {
 }
 
 /**
+ * SP-102: the printed handle for an order.
+ *
+ * These notices used to label every order by `orderId.slice(0,8)` while every
+ * OTHER event on the same order — order.approved, order.cancelled, the packing
+ * slip, the physical-signature webhooks — used the SO number
+ * (`formatOrderNumber(order_number)`). A requester's bell said
+ * "Order #7F3A2B1C" while the orders list said SO-000049, and an integration
+ * subscribed to both order.approved and order.completed got two different
+ * handles for one order and could not correlate them.
+ *
+ * Callers now pass the already-formatted SO number (they hold the row). The
+ * id-prefix fallback stays for orders with no `order_number` (legacy rows, and
+ * any caller that has not been threaded yet) so the label is never empty.
+ */
+function orderLabel(orderId: string, orderNumber?: string | null): string {
+  const trimmed = orderNumber?.trim();
+  return trimmed ? trimmed : `#${orderId.slice(0, 8).toUpperCase()}`;
+}
+
+/**
  * Per-line items for the partial/receipt tables — best-effort admin read
  * (the templates render without the table when this comes back empty).
  */
@@ -95,10 +115,12 @@ export async function notifyRequesterBackordered(args: {
   requested: number;
   owed: number;
   emailOptedOut: boolean;
+  /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
+  orderNumber?: string | null;
 }): Promise<void> {
-  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const orderNo = orderLabel(args.orderId, args.orderNumber);
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
-  const title = `Order #${orderNo}: partially fulfilled`;
+  const title = `Order ${orderNo}: partially fulfilled`;
   const body = `${args.provided} of ${args.requested} provided — ${args.owed} backordered. We'll ship the rest when stock arrives.`;
   try {
     if (args.requesterUserId) {
@@ -125,7 +147,7 @@ export async function notifyRequesterBackordered(args: {
       });
       const items = await fetchOrderLineItems(args.orderId);
       const rendered = renderPartialFulfilledEmail({
-        orderNumber: `#${orderNo}`,
+        orderNumber: orderNo,
         recipientFirstName: args.requesterName,
         recipientEmail: args.requesterEmail,
         delivered: args.provided,
@@ -165,10 +187,12 @@ export async function notifyRequesterBackorderShipped(args: {
    * totalFulfilled − priorFulfilled). Optional/additive — display only.
    */
   unitsShipped?: number | null;
+  /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
+  orderNumber?: string | null;
 }): Promise<void> {
-  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const orderNo = orderLabel(args.orderId, args.orderNumber);
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
-  const title = `Order #${orderNo}: backordered items shipped`;
+  const title = `Order ${orderNo}: backordered items shipped`;
   const body = 'The remaining items on your order have shipped — it is now fully fulfilled.';
   try {
     if (args.requesterUserId) {
@@ -189,7 +213,7 @@ export async function notifyRequesterBackorderShipped(args: {
         isAccountHolder: Boolean(args.requesterUserId),
       });
       const rendered = renderBackorderShippedEmail({
-        orderNumber: `#${orderNo}`,
+        orderNumber: orderNo,
         recipientFirstName: args.requesterName,
         recipientEmail: args.requesterEmail,
         unitsShipped: args.unitsShipped ?? null,
@@ -227,8 +251,10 @@ export async function sendPartialReceiptEmail(args: {
   unitsTotal: number;
   unitsPending: number;
   appUrl: string;
+  /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
+  orderNumber?: string | null;
 }): Promise<void> {
-  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const orderNo = orderLabel(args.orderId, args.orderNumber);
   const signedAt = new Date().toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -242,7 +268,7 @@ export async function sendPartialReceiptEmail(args: {
     fetchOrderLineItems(args.orderId),
   ]);
   const rendered = renderPartialReceiptEmail({
-    orderNumber: `#${orderNo}`,
+    orderNumber: orderNo,
     supplierName: orgName,
     signerName: args.signerName,
     signedAt,

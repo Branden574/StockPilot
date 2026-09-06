@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+// Test-only cross-app import — see the "agrees with the web classifier" guard
+// below for why the phone's copy is pinned against the web's ONE definition.
+import {
+  PLACEMENT_KINDS as WEB_PLACEMENT_KINDS,
+  PLACEMENT_TYPES as WEB_PLACEMENT_TYPES,
+  SYSTEM_KINDS as WEB_SYSTEM_KINDS,
+  isSiteLocation as webIsSiteLocation,
+} from '../../../web/src/lib/locations/groups';
+
 import {
   actionsForStatus,
   buildApproveCharterFields,
@@ -191,6 +200,69 @@ describe('isSiteLocation', () => {
     expect(isSiteLocation({ type: null, kind: 'area' })).toBe(false);
     expect(isSiteLocation({ type: 'shelf', kind: null })).toBe(false);
     expect(isSiteLocation({ type: 'bin', kind: null })).toBe(false);
+  });
+});
+
+/**
+ * Cross-app agreement guard (recurring bug pattern #26: "a fix applied to ONE
+ * copy of a duplicated function is not a fix").
+ *
+ * `isSiteLocation` in po-import-approve.ts is a hand-copy of the web's
+ * apps/web/src/lib/locations/groups.ts, and the phone's PO receiving-destination
+ * picker (app/po-import/[id].tsx) is the ONLY consumer — it reads every
+ * `locations` row straight from Supabase and filters client-side, because there
+ * is no /api/v1 locations endpoint with a sitesOnly filter. So if someone adds a
+ * new placement kind (say 'zone') to the web's PLACEMENT_KINDS, the web pickers
+ * stop offering zones while the phone keeps treating them as sites and staff
+ * receive a PO into a zone the web then hides.
+ *
+ * Until the classifier lives in @stockpilot/core (see the note in
+ * po-import-approve.ts), these tests drive BOTH implementations off the WEB's
+ * exported constants, so a kind/type added on the web side turns red here
+ * instead of silently diverging. The import is test-only and reaches across
+ * apps deliberately; groups.ts is dependency-free by contract (its own header
+ * says so) precisely so anything can consume it.
+ */
+describe('isSiteLocation agrees with the web classifier', () => {
+  it('rejects every kind/type the WEB classifies as system or placement', () => {
+    for (const kind of [...WEB_SYSTEM_KINDS, ...WEB_PLACEMENT_KINDS]) {
+      expect(isSiteLocation({ type: null, kind })).toBe(false);
+      expect(isSiteLocation({ type: 'other', kind })).toBe(false);
+    }
+    for (const type of WEB_PLACEMENT_TYPES) {
+      expect(isSiteLocation({ type, kind: null })).toBe(false);
+    }
+  });
+
+  it('returns the same verdict as the web for every fixture row', () => {
+    const rows: Array<{ type: string | null; kind: string | null }> = [
+      // Real prod shapes: DC4 = {warehouse,null}; a room; a rack; a bin;
+      // Staging/Unplaced; plus the null/unknown catch-alls.
+      { type: 'warehouse', kind: null },
+      { type: 'room', kind: null },
+      { type: 'vehicle', kind: null },
+      { type: 'jobsite', kind: null },
+      { type: null, kind: null },
+      { type: 'future_site_type', kind: null },
+      { type: 'shelf', kind: 'rack' },
+      // Every kind and type the web currently knows about, in both slots, so a
+      // new entry on either web list is exercised here automatically.
+      ...[...WEB_SYSTEM_KINDS, ...WEB_PLACEMENT_KINDS].flatMap((kind) => [
+        { type: null, kind },
+        { type: 'other', kind },
+        { type: 'warehouse', kind },
+      ]),
+      ...WEB_PLACEMENT_TYPES.flatMap((type) => [
+        { type, kind: null },
+        { type, kind: 'rack' },
+      ]),
+    ];
+    for (const row of rows) {
+      expect({ row, site: isSiteLocation(row) }).toEqual({
+        row,
+        site: webIsSiteLocation(row),
+      });
+    }
   });
 });
 

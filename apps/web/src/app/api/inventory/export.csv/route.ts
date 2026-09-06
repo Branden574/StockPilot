@@ -11,7 +11,7 @@ import {
   type InventoryExportFilters,
 } from '@/lib/inventory-export';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { type ItemListSort } from '@/server/services/inventory';
 
 import { can } from '@stockpilot/core';
@@ -143,8 +143,19 @@ export async function GET(request: Request) {
     // controls — those are fine to surface. Anything else gets
     // funneled into the error reporter; the client only sees a
     // stable slug so DB internals don't leak.
+    //
+    // SP-110: map the code to its real HTTP status instead of flattening every
+    // ServiceError to 500. This route predates `serviceErrorStatus()` (shared
+    // since 2026-05-29) and was one of five that never adopted it. A 500 tells
+    // an HTTP client "transient, retry me" and fires Vercel's 5xx alerting, so
+    // a permanent user-side refusal (module_disabled / validation_error /
+    // not_found) became a retry storm plus a false page. `internal_error` and
+    // anything unmapped still return 500 — the mapper's default.
     if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'inventory.export-csv' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

@@ -88,6 +88,14 @@ function makeCtx(opts: MakeCtxOpts = {}) {
   const deletedRentalIds: string[] = [];
   // Tracks the service-role reservation release: which rental_ids were released.
   const releasedRentalIds: string[] = [];
+  // SP-094: the full record of each service-role reservation release — the
+  // patch AND both filters. `releasedRentalIds` alone only proves *something*
+  // was released; the release tests need to prove WHAT and BY WHICH COLUMN.
+  const reservationReleases: Array<{
+    patch: Record<string, unknown>;
+    eq: [string, string];
+    is: [string, unknown];
+  }> = [];
   // Counts rentals-header inserts, so a refusal can assert nothing was written.
   const rentalInsertCalls: unknown[] = [];
 
@@ -230,12 +238,27 @@ function makeCtx(opts: MakeCtxOpts = {}) {
             return self;
           },
           // Release chain: .update({...}).eq('rental_id', id).is('released_at', null)
-          update(_patch: unknown) {
+          //
+          // SP-094: this stub used to throw away every argument, so the two
+          // 'releases all stock_reservations for this rental' tests could
+          // only assert `expect(true).toBe(true)`. Deleting the release
+          // block outright — or filtering it on `id` instead of `rental_id`,
+          // which matches nothing — left both tests green while returned and
+          // cancelled rentals kept their reservations forever: available-to-
+          // promise stays depressed and order approval refuses stock that is
+          // physically on the shelf. Record patch + both filters so the
+          // assertions below can actually see a regression.
+          update(patch: Record<string, unknown>) {
             return {
-              eq(_col: string, val: string) {
+              eq(col: string, val: string) {
                 releasedRentalIds.push(val);
                 return {
-                  is(_col2: string, _val2: null) {
+                  is(col2: string, val2: unknown) {
+                    reservationReleases.push({
+                      patch,
+                      eq: [col, val],
+                      is: [col2, val2],
+                    });
                     return Promise.resolve({ error: null });
                   },
                 };
@@ -316,6 +339,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
     insertedRentalId,
     deletedRentalIds,
     releasedRentalIds,
+    reservationReleases,
     rentalInsertCalls,
   };
 }
@@ -535,15 +559,28 @@ describe('RentalsService.markReturned', () => {
     await expect(svc.markReturned({ id: 'rental-id-1' })).resolves.toBeUndefined();
   });
 
+  // SP-094: this assertion used to be `expect(true).toBe(true)` with the note
+  // "deeper verification would require spy tracking" — so the release block in
+  // markReturned could be deleted, or repointed at `.eq('id', ...)` (which
+  // matches no reservation row), and the suite stayed green. A returned rental
+  // that keeps its reservations depresses available-to-promise forever. The
+  // mock now records the call; pin every part of it.
   it('releases all stock_reservations for this rental', async () => {
-    const { ctx } = makeCtx({
+    const { ctx, reservationReleases } = makeCtx({
       rentalRow: { status: 'out', expected_return_at: futureDate },
     });
     const svc = new RentalsService(ctx);
     await svc.markReturned({ id: 'rental-id-1' });
-    // The test passes as long as no error is thrown. The mock's stock_reservations
-    // update chain is called silently. Deeper verification would require spy tracking.
-    expect(true).toBe(true);
+    expect(reservationReleases).toHaveLength(1);
+    const release = reservationReleases[0]!;
+    expect(release.patch).toMatchObject({ released_reason: 'rental_returned' });
+    expect(typeof release.patch.released_at).toBe('string');
+    expect(Number.isNaN(Date.parse(release.patch.released_at as string))).toBe(false);
+    // Filtered by rental_id — the whole rental's reservations, not one row.
+    expect(release.eq).toEqual(['rental_id', 'rental-id-1']);
+    // `.is('released_at', null)` — only still-active rows, so an earlier
+    // release is never re-stamped with a later timestamp/reason.
+    expect(release.is).toEqual(['released_at', null]);
   });
 
   // SP-023: the status UPDATE used to be `.eq('id', …)` with only an error
@@ -642,13 +679,21 @@ describe('RentalsService.cancel', () => {
     ).resolves.toBeUndefined();
   });
 
+  // SP-094: same vacuous `expect(true).toBe(true)` as the markReturned twin —
+  // see the comment there. Cancel stamps a different reason, so pin that too.
   it('releases all stock_reservations for this rental', async () => {
-    const { ctx } = makeCtx({
+    const { ctx, reservationReleases } = makeCtx({
       rentalRow: { status: 'out' },
     });
     const svc = new RentalsService(ctx);
     await svc.cancel({ id: 'rental-id-1', reason: 'Test reason' });
-    expect(true).toBe(true);
+    expect(reservationReleases).toHaveLength(1);
+    const release = reservationReleases[0]!;
+    expect(release.patch).toMatchObject({ released_reason: 'rental_cancelled' });
+    expect(typeof release.patch.released_at).toBe('string');
+    expect(Number.isNaN(Date.parse(release.patch.released_at as string))).toBe(false);
+    expect(release.eq).toEqual(['rental_id', 'rental-id-1']);
+    expect(release.is).toEqual(['released_at', null]);
   });
 
   // Same fail-open shape as markReturned (SP-023).

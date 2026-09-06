@@ -829,13 +829,50 @@ export class ItemImagesService {
       throw new ServiceError('validation_error', 'invalid_image');
     }
 
+    // SP-135 — the THUMB got the same treatment, because it is the object
+    // most surfaces actually render. Until this, `opts.thumbPath` was only
+    // shape-checked: createUploadUrl mints a SECOND signed upload URL for
+    // `{uuid}-thumb.webp`, the client PUTs whatever it likes there (the
+    // bucket's 0046 allowlist only reads the client's own Content-Type
+    // header), and the row recorded that path unverified — so a renamed
+    // non-image sat on our storage origin behind a 30-day signed URL,
+    // served as `image/webp` into every list tile. Verifying only the
+    // master left the half that gets rendered unchecked.
+    //
+    // Three outcomes, and the middle one is load-bearing:
+    //   - no object at that path (head === null): the client skipped the
+    //     thumb PUT. That is NORMAL — the web uploader already sends
+    //     thumbPath: null when its thumb PUT fails, and mobile uploads the
+    //     master only. Record the row with NO thumb and let the existing
+    //     master fallback render it. Never fail the upload over a thumb.
+    //   - object present but not an allowed image: the same verify-or-delete
+    //     shape as the master — remove BOTH objects, write no row, so we
+    //     never leave an unverified object with a row pointing at it.
+    //   - object present and a real image: keep the path.
+    let verifiedThumbPath: string | null = opts.thumbPath ?? null;
+    if (verifiedThumbPath) {
+      const thumbHead = await fetchObjectPrefix(bucket, verifiedThumbPath);
+      if (!thumbHead) {
+        verifiedThumbPath = null;
+      } else {
+        const thumbSniffed = sniffImage(thumbHead.prefix);
+        if (
+          !thumbSniffed ||
+          !isSniffedKindAllowedInBucket(thumbSniffed.kind, 'item-images')
+        ) {
+          await bucket.remove([storagePath, opts.thumbPath as string]);
+          throw new ServiceError('validation_error', 'invalid_image');
+        }
+      }
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('item_images')
       .insert({
         organization_id: this.ctx.organizationId,
         item_id: itemId,
         storage_path: storagePath,
-        thumb_path: opts.thumbPath ?? null,
+        thumb_path: verifiedThumbPath,
         lqip: opts.lqip ?? null,
         is_primary: isFirst,
       })
@@ -862,15 +899,25 @@ export class ItemImagesService {
 
   async remove(imageId: string) {
     assertPermission(this.ctx, 'items:update');
+    // SP-135 — `thumb_path` is SELECTed here for a reason: it used not to be,
+    // so the delete below could only ever see the master and every image
+    // removal on web left its `-thumb.webp` sidecar in the bucket forever
+    // (there is no orphan-sweep cron). A column you don't select is a column
+    // you can't clean up.
     const { data: img } = await this.ctx.supabase
       .from('item_images')
-      .select('storage_path, item_id')
+      .select('storage_path, thumb_path, item_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', imageId)
       .maybeSingle();
     if (!img) throw new ServiceError('not_found', 'Image not found');
 
-    await this.ctx.supabase.storage.from('item-images').remove([img.storage_path as string]);
+    // Remove master AND thumb in the one storage call. Legacy rows (and rows
+    // whose thumb PUT never landed) have thumb_path null — pass only what
+    // exists rather than a null the storage client would stringify.
+    const objects = [img.storage_path as string];
+    if (img.thumb_path) objects.push(img.thumb_path as string);
+    await this.ctx.supabase.storage.from('item-images').remove(objects);
     const { error } = await this.ctx.supabase
       .from('item_images')
       .delete()

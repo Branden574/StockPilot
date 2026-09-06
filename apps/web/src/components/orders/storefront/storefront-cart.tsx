@@ -26,6 +26,31 @@ import type { CatalogItem } from '../v2/types';
 import { CharterTag, QtyField, SfPhoto } from './storefront-cards';
 import { availableOf, cartTotals } from './storefront-logic';
 
+/**
+ * Format a Date as the "YYYY-MM-DDTHH:mm" string an
+ * `<input type="datetime-local">` speaks — from LOCAL components.
+ *
+ * ═══ WHY NOT toISOString().slice(0, 16) ═══
+ *
+ * A datetime-local input reads BOTH its value and its `min` as local wall
+ * time, but toISOString() emits UTC. The "Needed by" floor below used the
+ * ISO slice, so west of UTC the date part ran ahead: a Pacific requester at
+ * 16:30 got min = tomorrow 00:30 local, and the native calendar greyed out
+ * every remaining hour of TODAY — no same-evening deadline was pickable
+ * after 17:00 PT. East of UTC the mirror image: the min landed in the past
+ * and bounded nothing. Typing a time still worked (the submit is a
+ * type="button", so the browser never runs constraint validation), which
+ * made the picker's refusal look arbitrary rather than a rule.
+ *
+ * Same shape as `isoToLocalInput` in components/schedule/schedule-event-form.tsx,
+ * which already had this right. The submitted value is unaffected — the
+ * storefront still converts with `new Date(local).toISOString()`.
+ */
+function localDateTimeInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export interface CartSuggestion {
   itemId: string;
   name: string;
@@ -263,7 +288,7 @@ export function CartRail({
           id="sf-needed-by-input"
           type="datetime-local"
           value={state.neededBy}
-          min={new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)}
+          min={localDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000))}
           onChange={(e) => dispatch({ type: 'set-needed-by', value: e.target.value })}
         />
         {state.neededBy !== '' && (

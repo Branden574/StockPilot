@@ -131,6 +131,25 @@ describe('notifyRequesterBackordered (partial)', () => {
     expect(createNotificationMock).toHaveBeenCalledTimes(1);
   });
 
+  // SP-102: every other event on the same order (order.approved, cancelled,
+  // staged, the physical-signature webhooks) labels it with the SO number, so
+  // the hand-over notice must too when the caller knows it.
+  it('labels the notice with the SO number when the caller passes one', async () => {
+    await notifyRequesterBackordered(backorderedArgs({ orderNumber: 'SO-000049' }));
+    const notif = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(notif.title).toBe('Order SO-000049: partially fulfilled');
+    const args = sendEmailMock.mock.calls[0]![0] as { subject: string };
+    expect(args.subject).toBe('Order SO-000049: partially fulfilled');
+  });
+
+  it('falls back to the id prefix when the caller has no order_number', async () => {
+    // Legacy/unnumbered orders (order_number null) keep the old handle rather
+    // than printing an empty label.
+    await notifyRequesterBackordered(backorderedArgs({ orderNumber: null }));
+    const notif = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(notif.title).toBe(`Order ${ORDER_NO}: partially fulfilled`);
+  });
+
   it('no requester email → no send (public order with no address)', async () => {
     await notifyRequesterBackordered(backorderedArgs({ requesterEmail: null }));
     expect(sendEmailMock).not.toHaveBeenCalled();
@@ -189,6 +208,14 @@ describe('notifyRequesterBackorderShipped (back-shipped)', () => {
     expect(createNotificationMock).toHaveBeenCalledTimes(1);
   });
 
+  it('SP-102: labels the back-shipped notice with the SO number when supplied', async () => {
+    await notifyRequesterBackorderShipped(shippedArgs({ orderNumber: 'SO-000049' }));
+    const notif = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(notif.title).toBe('Order SO-000049: backordered items shipped');
+    const args = sendEmailMock.mock.calls[0]![0] as { subject: string };
+    expect(args.subject).toBe('Order SO-000049: backordered items shipped');
+  });
+
   it('works without unitsShipped (older callers)', async () => {
     await notifyRequesterBackorderShipped(shippedArgs({ unitsShipped: undefined }));
     const args = sendEmailMock.mock.calls[0]![0] as { html: string };
@@ -230,6 +257,12 @@ describe('sendPartialReceiptEmail (partial-receipt)', () => {
     expect(args.html).toContain('M. Okafor');
     expect(args.html).toContain('12 of 20');
     expect(args.html).toContain('L4L North Region &middot; via StockPilot');
+  });
+
+  it('SP-102: the signer receipt carries the SO number when supplied', async () => {
+    await sendPartialReceiptEmail({ ...receiptArgs(), orderNumber: 'SO-000049' });
+    const args = sendEmailMock.mock.calls[0]![0] as { subject: string };
+    expect(args.subject).toBe('Order SO-000049: partial delivery receipt');
   });
 
   it('falls back to the plain StockPilot sender when the org name is unavailable', async () => {

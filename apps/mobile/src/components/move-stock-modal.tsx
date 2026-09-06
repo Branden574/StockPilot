@@ -45,6 +45,10 @@ import {
   type NewLocationKind,
   type NewRackInput,
 } from '@/lib/move-stock-form';
+import {
+  destinationAllowedForSource,
+  placementDestinationsForSource,
+} from '@/components/move-stock-destinations';
 import { transferStock, type NewRack } from '@/lib/stock-api';
 import {
   bookCrateAcknowledgementsMatch,
@@ -421,10 +425,29 @@ export function MoveStockModal({
 
   // Existing destinations exclude the chosen source rack (can't move to itself)
   // and, for put-away, anything outside the FIXED source holding's warehouse.
-  const destChoices = moveDestinationChoices(destinations, {
-    excludeLocationId: fromId,
-    scope: source ? moveDestinationScope(source) : { kind: 'none' },
-  });
+  // ═══ AND NOT UNPLACED, WHEN THE SOURCE IS STILL WAITING FOR PUT-AWAY ═══
+  // SP-053. Free-form Move lists Staging and Unplaced among the FROM chips (see
+  // the mode note at the top — choosing which pile to move IS the point), and
+  // the destination list carries the Unplaced bucket for the rack 100-A repair.
+  // Together that made "Staging · 40" → "Unplaced" two taps: nothing gets
+  // shelved, the row loses its "Received (staged)" reading, and the units sit
+  // in a bucket with no bin label. Web cannot express that move at all
+  // (transferableHoldings drops staging/unplaced SOURCES), and the transfer
+  // route only ever refused a staging DESTINATION, so the server said yes.
+  // The exclusion keys on the SOURCE KIND, never on the mode — a rack source
+  // must keep its Unplaced chip, because that is the whole repair path.
+  // Applied at RENDER rather than at the destinations query above: in free-form
+  // mode the source changes with every chip tap, so a query that had already
+  // dropped the Unplaced row would strand the repair whenever the sheet
+  // happened to open on a staged holding.
+  const destChoices = placementDestinationsForSource(
+    moveDestinationChoices(destinations, {
+      excludeLocationId: fromId,
+      scope: source ? moveDestinationScope(source) : { kind: 'none' },
+    }),
+    selected,
+    { fixedPutAway: !!putAwaySourceLocationId },
+  );
   const selectedChip = isBook ? (destChoices.find((d) => d.id === toId) ?? null) : null;
   // Derived from what is ACTUALLY on screen, not from the mode, so the heading
   // can never promise a chip the list does not contain (or omit one it does).
@@ -807,7 +830,27 @@ export function MoveStockModal({
                             // chosen holding (always 1 — the whole-holding
                             // default belongs to put-away, which has no chips).
                             setQty(initialMoveQuantity(h.quantity, { wholeHolding: false }));
-                            if (toId === h.locationId) setToId('');
+                            // Drop a destination the NEW source no longer
+                            // allows. Two cases: moving into itself, and — the
+                            // SP-053 half — an Unplaced pick left armed from a
+                            // rack source while the user switches FROM to the
+                            // Staging pile. The chip disappears from the list
+                            // either way, but `toId` alone still satisfies
+                            // destChosen, so submit would have sent the very
+                            // move the filter above exists to forbid.
+                            // NEW_RACK is exempt: it always resolves to a rack,
+                            // which every source may move into, and it has no
+                            // row in `destinations` to look up.
+                            const stale =
+                              toId === h.locationId ||
+                              (!!toId &&
+                                toId !== NEW_RACK &&
+                                !destinationAllowedForSource(
+                                  destinations.find((d) => d.id === toId),
+                                  h,
+                                  { fixedPutAway: !!putAwaySourceLocationId },
+                                ));
+                            if (stale) setToId('');
                           }}
                         />
                       ))}

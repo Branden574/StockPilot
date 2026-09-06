@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { countItemsByCategory } from '@/lib/category-counts';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -16,7 +17,10 @@ interface Category {
   description: string | null;
   color: string | null;
   parent_id: string | null;
-  itemCount: number;
+  /** null = the tally could not be read (see load()). Rendered as an em dash,
+   *  never as `0` — a confident zero next to a category that plainly has stock
+   *  is worse than admitting the number is unknown. */
+  itemCount: number | null;
 }
 
 interface HierarchyRow extends Category {
@@ -84,20 +88,24 @@ export default function Categories() {
       .is('deleted_at', null)
       .order('name', { ascending: true });
 
-    // Count items per category in one round trip so the row tells the
-    // user how big each category is. RLS limits to their org.
-    const { data: counts } = await supabase
-      .from('inventory_items')
-      .select('category_id')
-      .eq('organization_id', orgId)
-      .is('deleted_at', null);
-    const byCat = new Map<string, number>();
-    for (const r of (counts ?? []) as Array<{ category_id: string | null }>) {
-      if (r.category_id) byCat.set(r.category_id, (byCat.get(r.category_id) ?? 0) + 1);
-    }
+    // Count items per category so the row tells the user how big each
+    // category is. RLS limits to their org.
+    //
+    // SP-072: this used to be ONE un-ranged `.select('category_id')` over the
+    // whole org, tallied here. PostgREST clamps every response to
+    // `[api] max_rows = 1000` with no error and no marker, so past 1000 live
+    // items the badges silently undercounted and categories whose rows sorted
+    // past the cap showed `0`. countItemsByCategory() walks 1000-row windows
+    // and fails CLOSED, so we either get the whole tally or none of it.
+    const { data: counts } = await countItemsByCategory(supabase, orgId);
 
     setRows(
-      ((data ?? []) as Category[]).map((c) => ({ ...c, itemCount: byCat.get(c.id) ?? 0 })),
+      ((data ?? []) as Omit<Category, 'itemCount'>[]).map((c) => ({
+        ...c,
+        // `counts` is null only when the read failed or the org is past the
+        // page ceiling; `?? 0` there would invent a wrong number for every row.
+        itemCount: counts ? (counts.get(c.id) ?? 0) : null,
+      })),
     );
     setLoading(false);
   }, [orgId]);
@@ -175,8 +183,8 @@ function CategoryCard({ category, depth = 0 }: { category: Category; depth?: num
               </Body>
             ) : null}
           </View>
-          <Mono size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
-            {category.itemCount}
+          <Mono size={14} color={category.itemCount === null ? c.ink3 : c.ink} style={{ fontFamily: FONT.display }}>
+            {category.itemCount ?? '—'}
           </Mono>
         </View>
       </Card>

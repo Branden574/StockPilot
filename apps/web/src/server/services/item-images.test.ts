@@ -585,3 +585,160 @@ describe('ItemImagesService.remove — audit capture', () => {
     );
   });
 });
+
+// SP-135 — the client-uploaded `-thumb.webp` SIDECAR was never verified.
+// record() sniffed only the master; createUploadUrl mints a SECOND signed
+// upload URL for `{uuid}-thumb.webp` that the client fills with whatever it
+// likes, and the row recorded that path unverified. The thumb is what every
+// list/tile actually renders, served from our own storage origin behind a
+// 30-day signed URL — so a renamed non-image sat there as `image/webp`.
+// And remove() deleted only the master, orphaning the thumb object forever
+// (there is no orphan-sweep cron). These tests pin both halves.
+describe('ItemImagesService.record — thumb sidecar verification (SP-135)', () => {
+  const MASTER = 'org-1/items/item-1/x.jpg';
+  const THUMB = 'org-1/items/item-1/x-thumb.webp';
+
+  /** makeSupabaseStub's `storage.from` returns a FRESH bucket object per
+   *  call, so a `remove` spy taken from it can never be asserted against.
+   *  Pin one bucket for the whole call. */
+  function pinBucket(stub: ReturnType<typeof makeSupabaseStub>) {
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const bucket = {
+      remove,
+      createSignedUrl: vi.fn(async () => ({
+        data: { signedUrl: 'https://mock/signed' },
+        error: null,
+      })),
+    };
+    stub.client.storage.from = vi.fn(() => bucket);
+    return remove;
+  }
+
+  it('rejects a thumb whose BYTES are not an image, removes BOTH objects and writes no row', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { id: 'item-1' }, error: null },
+      'item_images.insert': {
+        data: { id: 'img-1', storage_path: MASTER, sort_order: 0, is_primary: true },
+        error: null,
+      },
+    });
+    const remove = pinBucket(stub);
+    const png = mockPngPrefix();
+    const html = new TextEncoder().encode('<html><script>alert(1)</script></html>');
+    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) =>
+      path === THUMB
+        ? { prefix: html, totalSize: html.byteLength }
+        : { prefix: png, totalSize: png.byteLength },
+    );
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+
+    await expect(
+      svc.record('item-1', MASTER, true, { thumbPath: THUMB }),
+    ).rejects.toThrow();
+
+    expect(remove).toHaveBeenCalledWith([MASTER, THUMB]);
+    expect(stub.chains.has('item_images.insert')).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('treats a MISSING thumb object as "no thumb" — records thumb_path null and still succeeds', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { id: 'item-1' }, error: null },
+      'item_images.insert': {
+        data: { id: 'img-1', storage_path: MASTER, sort_order: 0, is_primary: true },
+        error: null,
+      },
+    });
+    const remove = pinBucket(stub);
+    const png = mockPngPrefix();
+    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) =>
+      path === THUMB ? null : { prefix: png, totalSize: png.byteLength },
+    );
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+
+    await svc.record('item-1', MASTER, true, { thumbPath: THUMB });
+
+    const insertArgs = stub.chainArgs.get('item_images.insert');
+    expect(insertArgs?.[0]?.[0]).toMatchObject({
+      storage_path: MASTER,
+      thumb_path: null,
+    });
+    // A client that skipped the thumb PUT must not lose its master.
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('accepts a thumb that really is an image', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { id: 'item-1' }, error: null },
+      'item_images.insert': {
+        data: { id: 'img-1', storage_path: MASTER, sort_order: 0, is_primary: true },
+        error: null,
+      },
+    });
+    const remove = pinBucket(stub);
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+
+    await svc.record('item-1', MASTER, true, { thumbPath: THUMB });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(stub.chainArgs.get('item_images.insert')?.[0]?.[0]).toMatchObject({
+      thumb_path: THUMB,
+    });
+  });
+});
+
+describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
+  it('removes the thumb object alongside the master', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: {
+          storage_path: 'org-1/items/item-1/x.jpg',
+          thumb_path: 'org-1/items/item-1/x-thumb.webp',
+          item_id: 'item-1',
+        },
+        error: null,
+      },
+      'item_images.delete': { data: null, error: null },
+    });
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    stub.client.storage.from = vi.fn(() => ({ remove }));
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+
+    await svc.remove('img-1');
+
+    expect(remove).toHaveBeenCalledWith([
+      'org-1/items/item-1/x.jpg',
+      'org-1/items/item-1/x-thumb.webp',
+    ]);
+    // thumb_path must actually be SELECTed — it was not, which is why the
+    // orphan was invisible to the code that was supposed to delete it.
+    expect(stub.chainArgs.get('item_images.select')?.[0]?.[0]).toContain('thumb_path');
+  });
+
+  it('removes only the master when the row has no thumb', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: { storage_path: 'org-1/items/item-1/x.jpg', thumb_path: null, item_id: 'item-1' },
+        error: null,
+      },
+      'item_images.delete': { data: null, error: null },
+    });
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    stub.client.storage.from = vi.fn(() => ({ remove }));
+    const svc = new ItemImagesService(
+      makeServiceContext(stub.client, { organizationId: 'org-1' }),
+    );
+
+    await svc.remove('img-1');
+
+    expect(remove).toHaveBeenCalledWith(['org-1/items/item-1/x.jpg']);
+  });
+});

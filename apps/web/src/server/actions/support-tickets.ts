@@ -9,6 +9,11 @@ import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  OBJECT_FILENAME_SEGMENT,
+  escapeRegExpLiteral,
+  isValidStoragePath,
+} from '@/lib/storage-path';
+import {
   TICKET_CATEGORIES,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
@@ -91,6 +96,35 @@ const dashboardSchema = z.object({
 export type DashboardTicketResult = { ok: true } | { ok: false; error: string };
 
 /**
+ * `{userId}/{file}` — the ONLY shape a support screenshot is ever minted as,
+ * on either platform:
+ *   web    `${userId}/${crypto.randomUUID()}.${ext}`  support-ticket-form.tsx
+ *   mobile `${user.id}/${base36x12}.${ext}`           (drawer)/support.tsx
+ *
+ * Two segments, like `orgLogoPathShape` — a support attachment has no parent
+ * entity below the user. Not exported: a `'use server'` module may only export
+ * async functions.
+ *
+ * WHY A SHAPE AND NOT A PREFIX (SP-142): this gate used to be
+ * `attachmentPath.startsWith(`${ctx.userId}/`)`, which is exactly the negative
+ * prefix check `lib/storage-path.ts` exists to eradicate (security wave D,
+ * HI-8). A prefix check asserts what the FRONT of the string looks like and
+ * says nothing about the rest, so
+ *   `${uid}/../../item-images/<victim-org>/<item>/cover.jpg`
+ * passed it and was persisted verbatim onto the ticket row. It was not
+ * exploitable at the time — the platform console signs these with the PLURAL
+ * `createSignedUrls`, which carries paths in the JSON body where no WHATWG
+ * URL parser resolves the `..` — but the singular `createSignedUrl`/
+ * `download` DO normalise before the request leaves Node, so one refactor
+ * (sign per row, or download the screenshot to embed in an email) would have
+ * turned a stored row into a service-role-signed read of another org's
+ * object in another bucket. Store only paths that cannot mean that.
+ */
+function supportAttachmentPathShape(userId: string): RegExp {
+  return new RegExp(`^${escapeRegExpLiteral(userId)}/${OBJECT_FILENAME_SEGMENT}$`);
+}
+
+/**
  * In-app "Support & feedback" submission. Unlike the public marketing action
  * above, the caller is authenticated: identity (org + user + email) comes from
  * the server session — NEVER from the client. Plain `{ ok, error }` result;
@@ -109,8 +143,15 @@ export async function submitDashboardTicketAction(
 
   // The storage policy (mig 0260) only lets a user upload under their own
   // auth-uid folder; re-assert the same invariant here so a forged path can
-  // never attach someone else's upload to this ticket.
-  if (data.attachmentPath && !data.attachmentPath.startsWith(`${ctx.userId}/`)) {
+  // never attach someone else's upload to this ticket. Positive SHAPE, not a
+  // prefix — see supportAttachmentPathShape above for why (SP-142 / HI-8).
+  // `isValidStoragePath` also runs the character/segment denylist layer, so
+  // `%`, `\`, control chars and empty segments are refused even if the shape
+  // regex were ever loosened.
+  if (
+    data.attachmentPath &&
+    !isValidStoragePath(data.attachmentPath, supportAttachmentPathShape(ctx.userId))
+  ) {
     return { ok: false, error: 'Invalid attachment. Please re-upload your screenshot.' };
   }
 

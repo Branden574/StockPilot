@@ -184,6 +184,21 @@ export interface LocationLike {
 // is a site". A PO's receiving destination is a SITE (warehouse/room/vehicle/
 // job site), never a rack/shelf/crate/bin/area nor the staging/unplaced
 // system buckets. Catch-all on unknown types so new site types keep working.
+//
+// WHY THIS COPY IS DANGEROUS, AND WHAT NOW STOPS IT: this is a hand-copy, and
+// recurring bug pattern #26 says a duplicated function drifts silently. The
+// concrete drift: add a placement kind (say 'zone') to the web's
+// PLACEMENT_KINDS and the web pickers stop offering zones while THIS list still
+// calls them sites — so app/po-import/[id].tsx (which reads every `locations`
+// row from Supabase and filters here, because no /api/v1 locations endpoint
+// exposes a sitesOnly filter) lets staff receive a PO into a zone the web then
+// hides. po-import-approve.test.ts now drives these three sets off the WEB's
+// exported constants, so any addition on that side turns the mobile suite red
+// instead of diverging quietly. Proper fix (deferred — it touches
+// packages/core/src/index.ts and the web module, outside this change's reach):
+// lift groups.ts into packages/core/src/locations and have BOTH apps import it,
+// after which this block becomes a re-export and the guard can assert function
+// identity instead.
 const SYSTEM_KINDS = new Set(['staging', 'unplaced']);
 const PLACEMENT_KINDS = new Set(['rack', 'crate', 'area']);
 const PLACEMENT_TYPES = new Set(['shelf', 'bin']);

@@ -151,14 +151,39 @@ export function buildViaStockPilotFrom(orgName: string | null | undefined): stri
 
 // ── Local helpers ───────────────────────────────────────────────────
 
+/**
+ * First word of whatever the caller handed us — idempotent on a name that
+ * is ALREADY a first name.
+ *
+ * WHY this family splits and the sibling family does not: every live
+ * caller of these renderers passes a FULL name. server/lib/order-handover
+ * -notify.ts sends `args.requesterName` and server/email/return-prompt.ts
+ * sends `order.requester_name`, both into `recipientFirstName`. The
+ * sibling es/families/maintenance.ts greeting takes the WHOLE string on
+ * purpose (its callers pre-split with their own local `firstNameOf`), so
+ * the two shapes look like drift but are not interchangeable: aligning
+ * this family to that one would greet real people "Hi Jane Doe —" in
+ * every handover and return-prompt email. Do not "simplify" it — the
+ * greeting-contract tests in fulfillment.test.ts fail if you do.
+ *
+ * Single-sourced because the html and text greetings were two separate
+ * copies of this line (recurring pattern #26: a fix or a change applied
+ * to one copy of a duplicated function is not applied at all — the text
+ * half in particular had no test covering it).
+ */
+function firstNameOf(name: string | null | undefined): string {
+  return (name ?? '').trim().split(/\s+/)[0] ?? '';
+}
+
 /** "Hi Reggie —" / "Hi —" greeting (constraint: no first name → "Hi —"). */
 function greeting(firstName: string | null | undefined): string {
-  const first = (firstName ?? '').trim().split(/\s+/)[0] ?? '';
+  const first = firstNameOf(firstName);
   return first ? `Hi ${escapeHtml(first)} —` : 'Hi —';
 }
 
+/** Plain-text twin of `greeting` — same name rule, no escaping. */
 function greetingText(firstName: string | null | undefined): string {
-  const first = (firstName ?? '').trim().split(/\s+/)[0] ?? '';
+  const first = firstNameOf(firstName);
   return first ? `Hi ${first} —` : 'Hi —';
 }
 

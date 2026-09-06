@@ -201,7 +201,7 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     expect(createNotificationMock).not.toHaveBeenCalled();
   });
 
-  it('notification copy matches the brief verbatim (sweep: no "Email sent", no "ticket")', async () => {
+  it('notification copy matches the brief verbatim (sweep: no "Email sent", no "ticket", no tenant name)', async () => {
     const createdAt = new Date(Date.now() - 30 * 60 * 60 * 1000);
     const rows = [draftRow({ id: 'mr-9', request_number: 7, created_at: createdAt.toISOString() })];
     const stub = stubFor(rows);
@@ -214,13 +214,21 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     const call = createNotificationMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(call.title).toBe(`Reminder: finish your ${handle} draft`);
     expect(call.body).toBe(
-      `Your maintenance request ${handle} was saved, but no email draft has been opened yet. Open it in StockPilot to finish sending it to DC4.`,
+      `Your maintenance request ${handle} was saved, but no email draft has been opened yet. Open it in StockPilot to finish sending it.`,
     );
     expect(call.link).toBe('/dashboard/maintenance/mr-9');
     expect(call.body).not.toMatch(/email sent/i);
     expect(call.body).not.toMatch(/ticket/i);
     expect(call.title).not.toMatch(/email sent/i);
     expect(call.title).not.toMatch(/ticket/i);
+    // Tenant-neutrality guard (the same rule cc-notice.ts enforces for the
+    // compose notices): 0337 made the maintenance recipients PER-ORG data, so
+    // no emit point may name one tenant's warehouse. This cron said "finish
+    // sending it to DC4" for EVERY org — a second tenant's requester was told
+    // to mail L4L's Fresno warehouse. The literal assertion above is the
+    // real pin; this is the revert-proof that names the class.
+    expect(call.body).not.toMatch(/DC4/i);
+    expect(call.title).not.toMatch(/DC4/i);
   });
 
   it('mutes a requester with push_maintenance_draft_reminder=false', async () => {
