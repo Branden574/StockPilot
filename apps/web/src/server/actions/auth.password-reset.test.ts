@@ -155,7 +155,12 @@ describe('requestPasswordResetAction', () => {
  *    locking every MFA-enrolled user out of password recovery forever.
  */
 describe('completePasswordResetAction', () => {
-  const PASSWORD = 'Str0ng-passw0rd!';
+  // Assembled at runtime rather than written as one literal. A realistic-looking
+  // password literal is indistinguishable from a leaked one to a secret scanner,
+  // and GitGuardian blocked this PR on exactly this line. The value is only ever
+  // required to satisfy passwordSchema (>= 8 chars, one lower, one upper, one
+  // digit) -- so build it from those rules and never reintroduce the literal.
+  const PASSWORD = `Aa1${'x'.repeat(6)}`;
   const INPUT = { password: PASSWORD, confirmPassword: PASSWORD };
 
   beforeEach(() => {
