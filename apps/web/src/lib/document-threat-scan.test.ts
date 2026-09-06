@@ -242,6 +242,75 @@ describe('scanDocumentBytes — resource bounds are verdicts, not shrugs', () =>
     expect(expectThreat(doc, 'pdf').code).toBe('pdf_scan_limit');
   });
 
+  // ═══ THE SECOND HOLE: THE TOTAL BUDGET, NOT THE PER-STREAM ONE ═══
+
+  it('REFUSES once the TOTAL inflate budget is spent — a payload behind eight cap-sized streams cannot hide', () => {
+    // Eight streams that each inflate to exactly the per-stream ceiling spend
+    // the whole 256 MiB document budget without any single one tripping it.
+    // The ninth stream — the JavaScript — then arrived at zlib with
+    // `maxOutputLength: 0`, which Node rejects with ERR_OUT_OF_RANGE, and the
+    // old catch filed that under "not Flate" and moved on: the scanner
+    // reported CLEAN on a file whose active content it never read.
+    // Reproduced 2026-09-02 against the real module. The verdict must be the
+    // same refusal the per-stream cap gives: we did not look, so we do not
+    // say clean.
+    const filler = deflateSync(Buffer.alloc(32 * 1024 * 1024, 0x20));
+    expect(filler.byteLength).toBeLessThan(64 * 1024);
+    const fillers = Array.from({ length: 8 }, (_, i) =>
+      concat(
+        ascii(`${i + 1} 0 obj\n<< /Filter /FlateDecode >>\nstream\n`),
+        new Uint8Array(filler),
+        ascii('\nendstream\nendobj\n'),
+      ),
+    );
+    const js = deflateSync(Buffer.from('<< /S /JavaScript /JS (app.alert(1)) >>', 'latin1'));
+    const doc = concat(
+      ascii('%PDF-1.7\n'),
+      ...fillers,
+      ascii('9 0 obj\n<< /Filter /FlateDecode >>\nstream\n'),
+      new Uint8Array(js),
+      ascii('\nendstream\nendobj\n%%EOF\n'),
+    );
+    expect(expectThreat(doc, 'pdf').code).toBe('pdf_scan_limit');
+  });
+
+  it('still SEES a payload while budget remains — the refusal above is not over-eager', () => {
+    // Seven cap-sized fillers leave 32 MiB of budget; the JavaScript stream
+    // must be inflated and found, not refused. This pins the boundary so a
+    // future "refuse if budget is low" cannot quietly reject honest documents.
+    const filler = deflateSync(Buffer.alloc(32 * 1024 * 1024, 0x20));
+    const fillers = Array.from({ length: 7 }, (_, i) =>
+      concat(
+        ascii(`${i + 1} 0 obj\n<< /Filter /FlateDecode >>\nstream\n`),
+        new Uint8Array(filler),
+        ascii('\nendstream\nendobj\n'),
+      ),
+    );
+    const js = deflateSync(Buffer.from('<< /S /JavaScript /JS (app.alert(1)) >>', 'latin1'));
+    const doc = concat(
+      ascii('%PDF-1.7\n'),
+      ...fillers,
+      ascii('8 0 obj\n<< /Filter /FlateDecode >>\nstream\n'),
+      new Uint8Array(js),
+      ascii('\nendstream\nendobj\n%%EOF\n'),
+    );
+    expect(expectThreat(doc, 'pdf').code).toBe('pdf_javascript');
+  });
+
+  it('a truncated Flate run is still "not Flate", not a refusal', () => {
+    // Z_BUF_ERROR is the honest skip: nothing was concealed, the deflate run
+    // simply ends early (a chopped object, a keyword match inside binary).
+    // Keeping this a skip is what stops the fail-closed catch from rejecting
+    // ordinary PDFs whose binary happens to contain the word "stream".
+    const truncated = deflateSync(Buffer.alloc(5000, 0x20)).subarray(0, 10);
+    const doc = concat(
+      ascii('%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n'),
+      new Uint8Array(truncated),
+      ascii('\nendstream\n2 0 obj\n<< /Type /Page >>\nendobj\n%%EOF\n'),
+    );
+    expect(scanDocumentBytes(doc, 'pdf')).toBeNull();
+  });
+
   it('still skips silently over data that is simply not Flate', () => {
     // A /DCTDecode JPEG, a font program, or the word "endstream" landing
     // inside binary data. Nothing was concealed — there was nothing to
