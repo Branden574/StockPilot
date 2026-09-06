@@ -598,6 +598,23 @@ export class TeamService {
         }
       }
 
+      // Drop the removed user's stale default-org preference. Leaving it set
+      // to an org they are no longer in is what let requireOrgContext build a
+      // context for THIS org out of a membership somewhere else (fixed in
+      // lib/auth/session.ts). Belt to that braces: the session resolver no
+      // longer trusts the column, and the column no longer lies. Best-effort
+      // and scoped — only this org, only this user.
+      const { error: defaultOrgErr } = await admin
+        .from('user_profiles')
+        .update({ default_organization_id: null })
+        .eq('id', removedUserId)
+        .eq('default_organization_id', this.ctx.organizationId);
+      if (defaultOrgErr) {
+        console.warn(
+          `[team.removeMember] could not clear default_organization_id for ${removedUserId}: ${defaultOrgErr.message}`,
+        );
+      }
+
       // Kill the removed user's auth sessions — but ONLY when this org was
       // their last one.
       //
