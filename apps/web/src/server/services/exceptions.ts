@@ -9,6 +9,7 @@ import {
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 /**
  * The Exception Center's read model.
@@ -32,6 +33,40 @@ import { assertPermission, ServiceError, withContext, type ServiceContext } from
  * the result and the page says so.
  */
 const PER_RULE_CAP = 100;
+
+/**
+ * ═══ THE SOURCE READ HAS ITS OWN CAP, AND IT IS ALSO REPORTED ═══
+ *
+ * PER_RULE_CAP bounds what is RENDERED. It cannot bound what is READ, and for
+ * a while nothing did: `placementRules` ran one bare `.select()` over every
+ * positive holding in the org, and PostgREST clamps any single response to
+ * `[api] max_rows = 1000` (supabase/config.toml) with no error and no marker.
+ * Past a thousand holdings the rules were being evaluated against an arbitrary
+ * subset — an archived-location holding on row 1,001 was simply never listed,
+ * and `truncatedRules` stayed EMPTY because `capped()` only ever sees rows
+ * PostgREST returned. Worse, `labelMismatches` compares an item's label
+ * against the SET of its rack holdings built from those same rows, so a
+ * dropped rack row turned a correctly-shelved item into a FALSE
+ * "labelled 41-C, stock is on 40-B". The screen built to catch undetected
+ * wrongness was quietly wrong itself. Now the read pages to exhaustion
+ * (fetchAllRows, catalogue pattern #3).
+ *
+ * Exhaustion still needs a ceiling so one enormous org cannot pull an
+ * unbounded set into memory on a server render — but an undisclosed ceiling
+ * would reintroduce the exact lie above, so hitting it marks EVERY rule this
+ * query feeds as truncated. Prod's largest org holds ~405 positive holdings,
+ * so in practice the loop makes one round trip and stops.
+ */
+const HOLDINGS_SOURCE_CAP = 20_000;
+
+/** The rules `placementRules` derives from the shared holdings read; all four
+ *  are incomplete together if that read is capped. */
+const PLACEMENT_RULES = [
+  'orphaned_stock',
+  'stale_staging',
+  'long_unplaced',
+  'label_mismatch',
+] as const;
 
 /** Staging is a transit bucket; two days is a normal put-away, a week is not. */
 const STALE_STAGING_DAYS = 7;
@@ -97,18 +132,25 @@ export class ExceptionsService {
    * alternative reads `item_stock_levels` four times for the same rows.
    */
   private async placementRules(warehouseIds: string[] | null): Promise<ExceptionsResult> {
-    let q = this.ctx.supabase
-      .from('item_stock_levels')
-      .select(
-        'quantity, updated_at, item_id, inventory_items!inner(name, sku, bin_location), locations!inner(id, name, kind, warehouse_id, deleted_at)',
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .gt('quantity', 0);
-    if (warehouseIds) q = q.in('locations.warehouse_id', warehouseIds);
-
-    const { data, error } = await q;
-    if (error) throw new ServiceError('internal_error', error.message);
-    const rows = (data ?? []) as unknown as HoldingRow[];
+    // Every filter is rebuilt INSIDE buildPage, so page 2 is scoped exactly
+    // like page 1 — a warehouse filter applied only to the first window would
+    // leak another site's stock onto a scoped auditor's page (pattern #10).
+    // The `.order('id')` is required by fetchAllRows: without a stable sort a
+    // row can land on two pages or on none.
+    const rows = (await fetchAllRows<Record<string, unknown>>(
+      (from, to) => {
+        let q = this.ctx.supabase
+          .from('item_stock_levels')
+          .select(
+            'quantity, updated_at, item_id, inventory_items!inner(name, sku, bin_location), locations!inner(id, name, kind, warehouse_id, deleted_at)',
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .gt('quantity', 0);
+        if (warehouseIds) q = q.in('locations.warehouse_id', warehouseIds);
+        return q.order('id', { ascending: true }).range(from, to);
+      },
+      { cap: HOLDINGS_SOURCE_CAP },
+    )) as unknown as HoldingRow[];
 
     const now = Date.now();
     const orphaned: WarehouseException[] = [];
@@ -155,9 +197,14 @@ export class ExceptionsService {
 
     const mismatched = this.labelMismatches(rows, rackNamesByItem);
 
-    const truncatedRules: string[] = [];
+    const truncated = new Set<string>();
+    // The source read stopped at its ceiling, so any of these four rules may
+    // be short. Erring toward over-disclosure (exactly CAP rows could also be
+    // the whole set) is the safe direction: a page that warns needlessly is
+    // recoverable, a page that looks complete and is not cannot be detected.
+    if (rows.length >= HOLDINGS_SOURCE_CAP) for (const r of PLACEMENT_RULES) truncated.add(r);
     const capped = (list: WarehouseException[], rule: string) => {
-      if (list.length > PER_RULE_CAP) truncatedRules.push(rule);
+      if (list.length > PER_RULE_CAP) truncated.add(rule);
       return list.slice(0, PER_RULE_CAP);
     };
 
@@ -168,7 +215,7 @@ export class ExceptionsService {
         ...capped(unplaced, 'long_unplaced'),
         ...capped(mismatched, 'label_mismatch'),
       ],
-      truncatedRules,
+      truncatedRules: [...truncated],
     };
   }
 

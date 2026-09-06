@@ -19,6 +19,8 @@ import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT, RADIUS } from '@/lib/theme';
@@ -30,17 +32,54 @@ interface WarehouseRow {
 }
 
 /**
- * Mobile MVP for rental checkout. Creates a `rentals` row scoped to
- * the org + warehouse, with borrower name/email + expected return.
- * Same insert path the web's RentalCheckoutForm uses, just a phone-
- * shaped UI on top of it. Real check-in/return flow still lives on
- * web (multi-asset, custom fields, deposit handling).
+ * Mobile MVP for rental checkout: a `rentals` HEADER row scoped to the org +
+ * warehouse, with borrower name/email + expected return. Deliberately reduced
+ * scope, disclosed on screen — but read this before changing it (SP-012).
+ *
+ * THIS IS NOT THE WEB PATH. The docstring here used to claim this was the same
+ * insert path as the web checkout form and named a component that has never
+ * existed in this repo; that false parity claim is why the divergence went
+ * unquestioned for so long. Web goes through RentalsService.create
+ * (apps/web/src/server/services/rentals.ts), which does eight things this
+ * screen cannot:
+ *   • asserts the configurable `rentals:create` permission,
+ *   • refuses items that are not is_rental / not in the rental warehouse,
+ *   • refuses over-lending (SP-052 availability = on hand − open reservations),
+ *   • writes `rental_lines` — this screen writes NONE, so the rental carries
+ *     no inventory linkage, and there is no add-line path anywhere to attach
+ *     items to it later,
+ *   • writes `stock_reservations` through a SERVICE-ROLE client, because that
+ *     table is service-role only (migs 0119/0263) — a direct-Supabase client
+ *     can never reserve, so an asset checked out from the phone stays fully
+ *     available-to-promise and can be rented again from web,
+ *   • writes the audit row, sends the checkout email, and stamps
+ *     borrower_user_id for team-member borrowers.
+ * RLS does not catch any of that: 0131 rentals_insert gates on
+ * user_can_access_warehouse(..., 'write') only, so the bare row is accepted.
+ *
+ * THE REAL FIX is a Bearer twin at apps/web/src/app/api/v1/rentals (parity
+ * rule: mobile writes go through /api/v1, never straight to a table) plus a
+ * rental-item picker here, POSTing createRentalSchema with lines. Until that
+ * route exists this screen keeps the honest, disclosed, notes-only record —
+ * do NOT deepen the divergence by inserting rental_lines from the client, as
+ * that would make the rental LOOK complete while nothing is reserved.
  */
 export default function NewRental() {
   const router = useRouter();
   const { user } = useAuth();
   const { orgId } = useOrg();
   const { c } = useTheme();
+  // The rentals list already hides its '+' for members without rentals:create
+  // (src/screens/rentals.tsx), but this route is reachable directly — and
+  // unlike every other mobile write, NOTHING behind it re-checks: the insert
+  // goes straight to the table, and RLS 0131 gates on warehouse write access
+  // alone, never on the configurable permission. So the screen re-checks it
+  // itself. Client-side, therefore NOT a security boundary (showWriteCta even
+  // fails OPEN while the permission set is still loading, matching every other
+  // screen) — it stops the honest deep link, not a determined caller. The real
+  // gate arrives with the /api/v1/rentals route described in the header.
+  const perms = useEffectivePermissions();
+  const canCreate = showWriteCta(perms, 'rentals:create');
   const [warehouses, setWarehouses] = React.useState<WarehouseRow[]>([]);
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
   const [borrowerName, setBorrowerName] = React.useState('');
@@ -73,6 +112,7 @@ export default function NewRental() {
   }, [returnDays]);
 
   const canSubmit =
+    canCreate &&
     Boolean(orgId) &&
     Boolean(warehouseId) &&
     borrowerName.trim().length > 0 &&
@@ -81,6 +121,17 @@ export default function NewRental() {
 
   async function submit() {
     if (!orgId || !warehouseId || !user) return;
+    // Defense in depth with the disabled button above: a disabled Button is a
+    // rendering detail, this is the last thing between a member without
+    // rentals:create and a table the RLS policy would happily accept the row
+    // into (see the permission comment above).
+    if (!canCreate) {
+      Alert.alert(
+        'Not allowed',
+        'You do not have permission to check out rentals. Ask an admin for the rentals:create permission.',
+      );
+      return;
+    }
     if (!expectedReturn) {
       Alert.alert('Expected return required', 'Enter the number of days until return.');
       return;
@@ -220,10 +271,24 @@ export default function NewRental() {
             />
           </FormSection>
 
+          {/*
+            Says what the record actually is. The old copy disclosed the missing
+            item linkage but not the consequence the warehouse feels: nothing is
+            reserved, so the asset still counts as available and web will let
+            someone rent the same unit again (SP-012). Check out from the web
+            when that matters.
+          */}
           <Body size={12.5} muted style={{ marginTop: 8 }}>
-            This creates a rental checkout record. Linking specific inventory items and automatic
-            return-to-stock are managed on the web.
+            This creates a rental checkout record only. It does not link inventory items and does
+            not reserve stock — the asset stays available to rent elsewhere until someone records
+            the checkout on the web. Item linking and automatic return-to-stock are managed there.
           </Body>
+
+          {!canCreate ? (
+            <Body size={12.5} muted>
+              You do not have permission to check out rentals.
+            </Body>
+          ) : null}
 
           <Button block onPress={submit} disabled={!canSubmit} style={{ marginTop: 12 }}>
             {busy ? 'Saving…' : 'Check out'}

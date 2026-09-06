@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from '@/lib/inventory-export';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
@@ -81,11 +82,18 @@ function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer' = 'ad
   return makeServiceContext(stub.client, { role });
 }
 
-function buildRequest(): Request {
-  return new Request('https://test.local/api/inventory/export.csv', { method: 'GET' });
+function buildRequest(query = ''): Request {
+  return new Request(`https://test.local/api/inventory/export.csv${query}`, { method: 'GET' });
+}
+
+/** The `filters` object the route handed buildInventoryExportRows. */
+function lastFilters() {
+  const call = vi.mocked(buildInventoryExportRows).mock.calls.at(-1);
+  return (call?.[1] as { filters?: { warehouseId?: string | null } } | undefined)?.filters;
 }
 
 beforeEach(() => {
+  vi.mocked(getActiveWarehouseFilterFor).mockResolvedValue(null);
   vi.mocked(withApiContext).mockResolvedValue(buildCtx('admin'));
   vi.mocked(buildInventoryExportRows).mockResolvedValue({
     headers: [...INVENTORY_EXPORT_HEADERS],
@@ -142,5 +150,57 @@ describe('GET /api/inventory/export.csv — column and charter fidelity', () => 
     const dataLine = (await res.text()).split('\n')[1]!;
     expect(dataLine.split(',')[CHARTER_COLUMN_INDEX]).toBe('');
     expect(dataLine).not.toMatch(/Generic/);
+  });
+});
+
+/**
+ * SP-119b. The AI `exportInventory` tool could only ever hand the user a link
+ * to THIS route, and the route read its warehouse from the dashboard cookie
+ * alone — so a tool that had narrowed its count probe to one warehouse linked
+ * a file covering every warehouse ("[Download 413 items]" over an all-org
+ * CSV). The route now accepts an explicit `?warehouseId=` so a non-browser
+ * caller can scope the download the same way the selector does.
+ */
+describe('GET /api/inventory/export.csv — ?warehouseId scoping', () => {
+  const WH = '11111111-2222-3333-4444-555555555555';
+
+  it('passes an explicit ?warehouseId through to the export query', async () => {
+    const res = await GET(buildRequest(`?warehouseId=${WH}`));
+    expect(res.status).toBe(200);
+    expect(lastFilters()?.warehouseId).toBe(WH);
+  });
+
+  it('an explicit ?warehouseId wins over the dashboard cookie', async () => {
+    vi.mocked(getActiveWarehouseFilterFor).mockResolvedValue('99999999-9999-9999-9999-999999999999');
+    await GET(buildRequest(`?warehouseId=${WH}`));
+    expect(lastFilters()?.warehouseId).toBe(WH);
+  });
+
+  it('falls back to the cookie filter when the param is absent (unchanged behaviour)', async () => {
+    vi.mocked(getActiveWarehouseFilterFor).mockResolvedValue(WH);
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(200);
+    expect(lastFilters()?.warehouseId).toBe(WH);
+  });
+
+  it('exports unfiltered when neither the param nor the cookie is set', async () => {
+    const res = await GET(buildRequest());
+    expect(res.status).toBe(200);
+    expect(lastFilters()?.warehouseId).toBeNull();
+  });
+
+  it('refuses a non-uuid ?warehouseId with 400 rather than silently exporting everything', async () => {
+    const before = vi.mocked(buildInventoryExportRows).mock.calls.length;
+    const res = await GET(buildRequest('?warehouseId=north'));
+    expect(res.status).toBe(400);
+    // Refuse, never fall back to "no filter" — a silent fallback is exactly
+    // how the caller ends up promising one warehouse and shipping all of them.
+    expect(vi.mocked(buildInventoryExportRows).mock.calls.length).toBe(before);
+  });
+
+  it('treats an empty ?warehouseId= as absent, not as invalid', async () => {
+    const res = await GET(buildRequest('?warehouseId='));
+    expect(res.status).toBe(200);
+    expect(lastFilters()?.warehouseId).toBeNull();
   });
 });

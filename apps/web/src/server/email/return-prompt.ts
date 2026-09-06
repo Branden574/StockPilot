@@ -10,6 +10,7 @@ import {
   renderReturnPromptEmail,
 } from '@/lib/email/es/families/fulfillment';
 import { sendEmail } from '@/lib/email/resend';
+import { normalizeUnsubscribeEmail } from '@/lib/email/unsubscribe';
 import { reportError } from '@/lib/error-reporter';
 
 /**
@@ -35,7 +36,9 @@ import { reportError } from '@/lib/error-reporter';
  *   • a requester_email on file;
  *   • `return_prompt_sent_at` (0278) still NULL (marker = email sent; an
  *     email-less completion leaves it untouched, so if an email is added
- *     later a subsequent completion path can still prompt once).
+ *     later a subsequent completion path can still prompt once);
+ *   • for a PUBLIC (account-less) requester, no recorded opt-out in
+ *     public_email_unsubscribes — see the suppression note at the guard.
  *
  * RACE POSTURE — at-most-once. The marker is claimed FIRST via a guarded
  * update (`.is('return_prompt_sent_at', null).select(...)`): of any number of
@@ -61,6 +64,7 @@ export type ReturnPromptResult =
         | 'not_completed'
         | 'no_requester_email'
         | 'already_sent'
+        | 'suppressed'
         | 'module_disabled'
         | 'zero_fulfilled'
         | 'no_token'
@@ -161,6 +165,36 @@ export async function maybeSendReturnPrompt(
     // Cheap pre-check; the guarded update below is the authoritative gate.
     if (order.return_prompt_sent_at) return { sent: false, reason: 'already_sent' };
 
+    // SP-076 — HONOR THE ONE-CLICK UNSUBSCRIBE WE OURSELVES ADVERTISE.
+    // For a public (account-less) requester this email ships RFC 8058
+    // headers (buildPrefEmailDelivery → 'List-Unsubscribe-Post:
+    // List-Unsubscribe=One-Click'), and the /unsubscribe POST records the
+    // opt-out in public_email_unsubscribes (0222) while promising "you'll
+    // no longer get emails when your order requests change status". Until
+    // now nothing on this path read that table — a requester who clicked
+    // Unsubscribe on the 'approved' email still got the return prompt at
+    // completion, re-advertising one-click each time. Mail sent after a
+    // recorded one-click opt-out is a complaint signal against orders@
+    // under the Gmail/Yahoo bulk-sender rules.
+    //
+    // Mirrors the order-request choke point exactly (lib/email/
+    // order-requests.ts sendOrderRequestEmail): the list governs PUBLIC
+    // recipients only — signed-in requesters have notification prefs
+    // instead, and their footer link is the in-app settings page (no
+    // one-click header), so a stray public row must not mute their mail.
+    //
+    // Placed AFTER the cheap marker pre-check (no lookup for an order
+    // already prompted) and BEFORE the guarded claim below, so a
+    // suppressed address never BURNS the one-shot 0278 marker: suppression
+    // is a property of the ADDRESS, so if it is ever lifted the requester
+    // can still be prompted once.
+    if (
+      !order.requester_user_id &&
+      (await isPublicAddressUnsubscribed(admin, order.requester_email))
+    ) {
+      return { sent: false, reason: 'suppressed' };
+    }
+
     // Claim the send BEFORE sending — only the winner of this guarded update
     // proceeds (at-most-once; see the race-posture note above).
     const { data: claimed } = await admin
@@ -199,6 +233,42 @@ export async function maybeSendReturnPrompt(
       /* reporting is itself best-effort */
     }
     return { sent: false, reason: 'error' };
+  }
+}
+
+/**
+ * True when this address recorded a public one-click opt-out (mig 0222).
+ *
+ * Reads through the SERVICE-ROLE client the caller already handed us (this
+ * runs on service-role completion paths with no ServiceContext, exactly like
+ * the organization_modules check above) rather than minting another admin
+ * client.
+ *
+ * FAIL-OPEN on any read error — same posture as the order-request choke
+ * point's isPublicEmailUnsubscribed: silently dropping a transactional
+ * email on a DB blip (or in a dev environment without the table) is worse
+ * than one extra send. Note this is the deliberate exception to the
+ * "reads fail CLOSED" house rule: here "closed" would mean sending, and the
+ * safe default for a SUPPRESSION check is the status quo behaviour.
+ *
+ * The lookup uses normalizeUnsubscribeEmail — the same canonical lowercased
+ * spelling /unsubscribe stores — so a case-variant address can never dodge
+ * the list.
+ */
+async function isPublicAddressUnsubscribed(
+  admin: SupabaseClient,
+  email: string,
+): Promise<boolean> {
+  try {
+    const { data, error } = await admin
+      .from('public_email_unsubscribes')
+      .select('email')
+      .eq('email', normalizeUnsubscribeEmail(email))
+      .maybeSingle();
+    if (error) return false;
+    return data != null;
+  } catch {
+    return false;
   }
 }
 

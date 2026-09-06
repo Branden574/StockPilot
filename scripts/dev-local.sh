@@ -1,32 +1,50 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────
-# dev-local.sh — point the web app at the local Supabase Docker stack.
+# dev-local.sh — run the web app against the local Supabase Docker stack.
 #
-# Idempotent. Safe to run any time:
-#   • Backs up the current apps/web/.env.local to .env.local.prod if no
-#     backup exists yet.
 #   • Boots `supabase start` (no-op if already running).
-#   • Writes apps/web/.env.local for the local stack, preserving the
-#     real third-party API keys (Gemini / Resend / Stripe) so AI + email
-#     features keep working.
-#   • Starts `pnpm --filter @stockpilot/web dev`.
+#   • Reads the local stack's anon + service-role keys from
+#     `supabase status`.
+#   • EXPORTS them (plus the localhost app URL) and execs
+#     `pnpm --filter @stockpilot/web dev`.
 #
-# To return to hosted prod, run scripts/dev-prod.sh.
+# It writes NOTHING to disk. Stop the dev server and the override is gone.
+#
+# ── WHY THIS SCRIPT NO LONGER TOUCHES ANY .env FILE (SP-030) ─────────────
+# apps/web/.env.local and apps/web/.env.local.prod are SYMLINKS into
+# ~/Developer/stockpilot-env — the env files moved outside the repo on
+# 2026-06-26, and this script predates that move.
+#
+# The previous version did `cat > "$WEB_ENV"`, which FOLLOWS the symlink and
+# rewrote the CANONICAL env file with only the ten keys its heredoc and its
+# five-name whitelist knew about. Everything else was silently deleted:
+# ANTHROPIC_API_KEY (Claude is the primary AI provider), GOOGLE_BOOKS_API_KEY,
+# STOCKPILOT_PLATFORM_ADMIN_EMAILS (the /platform console) and
+# VERCEL_OIDC_TOKEN. There was no safety net either — the backup step is
+# guarded by `[ ! -f "$WEB_ENV_PROD" ]`, and `-f` follows the symlink to a
+# prod backup that has existed since June, so the backup self-skipped. One
+# run cost you four secrets with nothing to restore from.
+#
+# The replacement works because @next/env (node_modules/@next/env, function
+# `processEnv`) only adopts a key from a .env file when that key is NOT
+# already present in the initial process.env snapshot. Exporting here
+# therefore overrides .env.local for THIS dev server only, while every other
+# key in the canonical file keeps loading normally. Verified in
+# node_modules, not from memory (bug-pattern #12).
+#
+# Guarded by apps/web/src/test/dev-local-script.test.ts, which runs this
+# script against a throwaway repo whose env files are symlinks and asserts
+# the canonical file comes out byte-identical. If you ever reintroduce a
+# write here, that test fails.
+#
+# NOTE: scripts/dev-prod.sh is no longer needed to "switch back" — just run
+# the normal dev command. Be aware it still does `cp .env.local.prod
+# .env.local`, which DOES write through the symlink and would replace your
+# canonical env file with the stale ten-key backup.
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WEB_ENV="$ROOT/apps/web/.env.local"
-WEB_ENV_PROD="$ROOT/apps/web/.env.local.prod"
-
-if [ ! -f "$WEB_ENV_PROD" ]; then
-  if [ -f "$WEB_ENV" ]; then
-    echo "→ Backing up current $WEB_ENV to $WEB_ENV_PROD"
-    cp "$WEB_ENV" "$WEB_ENV_PROD"
-  else
-    echo "⚠  No existing $WEB_ENV to back up. dev-prod.sh will fail until you write one."
-  fi
-fi
 
 echo "→ Ensuring Docker daemon is up"
 if ! docker info >/dev/null 2>&1; then
@@ -38,52 +56,39 @@ echo "→ supabase start (no-op if already running)"
 cd "$ROOT"
 supabase start
 
-# Pull the local anon + service-role JWT keys from supabase status —env so
-# we always write the values matching the running stack (Supabase rotates
-# them per project_id).
-STATUS_ENV="$(supabase status --output env 2>/dev/null)"
-LOCAL_ANON="$(echo "$STATUS_ENV" | grep '^ANON_KEY=' | sed 's/^ANON_KEY=//;s/^"//;s/"$//')"
-LOCAL_SERVICE="$(echo "$STATUS_ENV" | grep '^SERVICE_ROLE_KEY=' | sed 's/^SERVICE_ROLE_KEY=//;s/^"//;s/"$//')"
+# Pull the local anon + service-role JWT keys from `supabase status --output
+# env` so we always use the values matching the running stack (Supabase
+# rotates them per project_id).
+#
+# `|| true` on each pipeline: under `set -euo pipefail` a non-matching grep
+# would abort the script here with no explanation, skipping the friendly
+# error below.
+STATUS_ENV="$(supabase status --output env 2>/dev/null || true)"
+LOCAL_ANON="$(echo "$STATUS_ENV" | grep '^ANON_KEY=' | sed 's/^ANON_KEY=//;s/^"//;s/"$//' || true)"
+LOCAL_SERVICE="$(echo "$STATUS_ENV" | grep '^SERVICE_ROLE_KEY=' | sed 's/^SERVICE_ROLE_KEY=//;s/^"//;s/"$//' || true)"
 
 if [ -z "$LOCAL_ANON" ] || [ -z "$LOCAL_SERVICE" ]; then
   echo "✗ Failed to read local Supabase keys from 'supabase status --output env'."
   exit 1
 fi
 
-# Pull third-party keys from the prod backup so AI / email keep working.
-THIRD_PARTY_KEYS=""
-if [ -f "$WEB_ENV_PROD" ]; then
-  for k in GEMINI_API_KEY RESEND_API_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY; do
-    v="$(grep "^${k}=" "$WEB_ENV_PROD" 2>/dev/null | sed "s/^${k}=//")"
-    THIRD_PARTY_KEYS+="${k}=${v}"$'\n'
-  done
-fi
-
-echo "→ Writing $WEB_ENV pointing at local Supabase"
-cat > "$WEB_ENV" <<EOF
-# ============================================================================
-# LOCAL DEV — generated by scripts/dev-local.sh. Re-run that script to
-# refresh the Supabase keys after 'supabase stop' + 'supabase start'.
-# Hosted prod credentials live in .env.local.prod (run dev-prod.sh to swap).
-# ============================================================================
-
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-NEXT_PUBLIC_SITE_NAME=StockPilot
-
-# ── Supabase local stack (Docker, 127.0.0.1) ──────────────────────────────
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_ANON}
-SUPABASE_SERVICE_ROLE_KEY=${LOCAL_SERVICE}
-
-# ── Third-party APIs — copied from .env.local.prod, still hit real services ──
-${THIRD_PARTY_KEYS}
-EOF
+# Only these four are overridden. Every other key (Anthropic, Google Books,
+# Resend, Stripe, platform-admin emails, …) still comes from .env.local,
+# untouched and unread by this script. Values are never echoed.
+export NEXT_PUBLIC_SUPABASE_URL="http://127.0.0.1:54321"
+export NEXT_PUBLIC_SUPABASE_ANON_KEY="$LOCAL_ANON"
+export SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE"
+export NEXT_PUBLIC_APP_URL="http://localhost:3000"
 
 echo ""
-echo "✓ Local dev ready."
+echo "✓ Local dev ready — Supabase overridden in this process only, no file written."
 echo "  Supabase Studio:  http://127.0.0.1:54323"
 echo "  Mail catcher:     http://127.0.0.1:54324  (Supabase Auth emails land here)"
 echo "  Web app:          http://localhost:3000"
+echo ""
+echo "  To go back to hosted Supabase: stop this server and run"
+echo "  'pnpm --filter @stockpilot/web dev' normally. Do NOT run"
+echo "  scripts/dev-prod.sh — it overwrites your canonical .env.local."
 echo ""
 echo "→ Starting pnpm --filter @stockpilot/web dev"
 exec pnpm --filter @stockpilot/web dev

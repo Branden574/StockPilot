@@ -2,8 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
+// Typed explicitly: inferring from an all-empty literal makes readableIds
+// `never[]`, so a test that scopes an auditor to a real warehouse id cannot
+// even be written.
 const { mockAccess } = vi.hoisted(() => ({
-  mockAccess: vi.fn(async () => ({ hasAllAccess: true, readableIds: [], writableIds: [] })),
+  mockAccess: vi.fn(
+    async (): Promise<{ hasAllAccess: boolean; readableIds: string[]; writableIds: string[] }> => ({
+      hasAllAccess: true,
+      readableIds: [],
+      writableIds: [],
+    }),
+  ),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({ getWarehouseAccess: mockAccess }));
 
@@ -40,6 +49,19 @@ function holding(o: {
   };
 }
 
+function ctxFor(client: unknown): ServiceContext {
+  return {
+    supabase: client,
+    organizationId: ORG,
+    userId: 'u1',
+    role: 'admin',
+    permissions: new Set(['items:read']),
+    mfaRequired: false,
+    mfaSatisfied: true,
+    enabledModules: new Set(),
+  } as unknown as ServiceContext;
+}
+
 function svcWith(opts: {
   holdings?: unknown[];
   reservations?: unknown[];
@@ -50,17 +72,7 @@ function svcWith(opts: {
     'stock_reservations.select': { data: opts.reservations ?? [], error: null },
     'inventory_items.select': { data: opts.items ?? [], error: null },
   });
-  const ctx = {
-    supabase: stub.client,
-    organizationId: ORG,
-    userId: 'u1',
-    role: 'admin',
-    permissions: new Set(['items:read']),
-    mfaRequired: false,
-    mfaSatisfied: true,
-    enabledModules: new Set(),
-  } as unknown as ServiceContext;
-  return new ExceptionsService(ctx);
+  return new ExceptionsService(ctxFor(stub.client));
 }
 
 beforeEach(() => {
@@ -218,5 +230,119 @@ describe('ExceptionsService — scope and caps', () => {
       holdings: [holding({ kind: 'unplaced', age: 60, locName: 'Unplaced' })],
     }).list();
     expect(r.truncatedRules).toEqual([]);
+  });
+});
+
+describe('ExceptionsService — the SOURCE read is paginated', () => {
+  /**
+   * A stub that behaves like PostgREST: it honours `.range(from, to)` and
+   * NEVER returns more than `[api] max_rows = 1000` rows in one response —
+   * including when no `.range()` was asked for at all, which is exactly the
+   * silent clamp that made exceptions vanish.
+   */
+  function rangeAwareHoldings(rows: unknown[]) {
+    const holder: { stub?: ReturnType<typeof makeSupabaseStub> } = {};
+    const rangeCalls: Array<[number, number]> = [];
+    const MAX_ROWS = 1000;
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': () => {
+        const chain = holder.stub!.chains.get('item_stock_levels.select') ?? [];
+        const args = holder.stub!.chainArgs.get('item_stock_levels.select') ?? [];
+        const i = chain.indexOf('range');
+        if (i === -1) return { data: rows.slice(0, MAX_ROWS), error: null };
+        const [from, to] = args[i] as [number, number];
+        rangeCalls.push([from, to]);
+        return { data: rows.slice(from, Math.min(to + 1, from + MAX_ROWS)), error: null };
+      },
+      'stock_reservations.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+    });
+    holder.stub = stub;
+    return { stub, rangeCalls };
+  }
+
+  it('finds exceptions living past the PostgREST 1000-row cap', async () => {
+    // 1,000 healthy rack holdings followed by 50 long-unplaced ones. A single
+    // unpaginated select returns only the first window, so every one of the 50
+    // real findings disappears — and `truncatedRules` stays EMPTY, because the
+    // per-rule cap only ever sees rows PostgREST actually returned. The page
+    // built to catch undetected wrongness would itself be silently wrong.
+    const head = Array.from({ length: 1000 }, (_, i) =>
+      holding({ item: `h${i}`, loc: `hl${i}`, kind: 'rack', locName: 'Rack 1-A' }),
+    );
+    const tail = Array.from({ length: 50 }, (_, i) =>
+      holding({ item: `t${i}`, loc: `tl${i}`, kind: 'unplaced', age: 60, locName: 'Unplaced' }),
+    );
+    const { stub, rangeCalls } = rangeAwareHoldings([...head, ...tail]);
+
+    const r = await new ExceptionsService(ctxFor(stub.client)).list();
+
+    expect(r.exceptions.filter((e) => e.rule === 'long_unplaced')).toHaveLength(50);
+    // Nothing was actually dropped, so nothing may claim to be truncated.
+    expect(r.truncatedRules).toEqual([]);
+    // Negative pin: a build that ignores `.range` (or asks only once) cannot
+    // satisfy this, so the pagination cannot be quietly reverted.
+    expect(rangeCalls).toContainEqual([0, 999]);
+    expect(rangeCalls).toContainEqual([1000, 1999]);
+  });
+
+  it('SAYS SO when the source read itself hits its ceiling', async () => {
+    // Paging to exhaustion still needs a ceiling, and an undisclosed ceiling is
+    // the original bug wearing a bigger number: the rules would be evaluated
+    // against a subset while the page claimed to be complete. Hitting it marks
+    // all four holdings-derived rules truncated, even though none of them
+    // individually exceeded PER_RULE_CAP.
+    const head = Array.from({ length: 20_000 }, (_, i) =>
+      holding({ item: `h${i}`, loc: `hl${i}`, kind: 'rack', locName: 'Rack 1-A' }),
+    );
+    const tail = Array.from({ length: 50 }, (_, i) =>
+      holding({ item: `t${i}`, loc: `tl${i}`, kind: 'unplaced', age: 60, locName: 'Unplaced' }),
+    );
+    const { stub } = rangeAwareHoldings([...head, ...tail]);
+
+    const r = await new ExceptionsService(ctxFor(stub.client)).list();
+
+    expect(r.truncatedRules).toEqual(
+      expect.arrayContaining([
+        'orphaned_stock',
+        'stale_staging',
+        'long_unplaced',
+        'label_mismatch',
+      ]),
+    );
+    // Each rule is named ONCE even when the source cap and the per-rule cap
+    // both fire, so the page cannot render a duplicated warning.
+    expect(new Set(r.truncatedRules).size).toBe(r.truncatedRules.length);
+  });
+
+  it('orders by a stable key so a row cannot land on two pages or none', async () => {
+    // fetchAllRows' documented contract: without a deterministic sort the
+    // window boundaries shift under concurrent writes and the accumulated set
+    // is corrupt — silently, and differently on every load.
+    const { stub } = rangeAwareHoldings([holding({ kind: 'rack' })]);
+    await new ExceptionsService(ctxFor(stub.client)).list();
+    const chain = stub.chains.get('item_stock_levels.select') ?? [];
+    const args = stub.chainArgs.get('item_stock_levels.select') ?? [];
+    expect(chain).toContain('order');
+    expect(args[chain.indexOf('order')]![0]).toBe('id');
+  });
+
+  it('warehouse scoping survives pagination — every page keeps the filter', async () => {
+    // A filter applied to page 1 only would leak another warehouse's stock
+    // into an auditor's page from page 2 onward (pattern #10: a refetch must
+    // repeat EVERY filter the first read applied).
+    mockAccess.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: [],
+    });
+    const rows = Array.from({ length: 1050 }, (_, i) =>
+      holding({ item: `x${i}`, loc: `xl${i}`, kind: 'rack', locName: 'Rack 1-A' }),
+    );
+    const { stub } = rangeAwareHoldings(rows);
+    await new ExceptionsService(ctxFor(stub.client)).list();
+    const all = stub.chainsAll.get('item_stock_levels.select') ?? [];
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    for (const chain of all) expect(chain).toContain('in');
   });
 });

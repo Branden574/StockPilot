@@ -667,9 +667,26 @@ function assembleInventoryRows(
       });
       placedHoldingsByItem.set(lvl.item_id, byLoc);
     }
-    // The placement LINES coalesce NULL → 'unplaced' — exactly (and
-    // only) where the live placementBreakdown() coalesces.
-    const kind = rawKind ?? 'unplaced';
+    // The placement LINES coalesce a NULL kind to 'site' — mirroring
+    // InventoryService.placementBreakdown, the OTHER copy of this decision
+    // (this loader serves the cached default view, the service serves every
+    // filtered/live view; whichever answered decided what the page said).
+    //
+    // A NULL `locations.kind` IS the Site encoding — 0292/0331 and
+    // reference_locations_kind_null_is_a_site: Site rows are created without a
+    // kind and are NEVER backfilled (L4L's DC4 holds hundreds of units that
+    // way; most of Demo Co's active locations are NULL-kind). Coalescing NULL
+    // to 'unplaced' printed the word "Unplaced" for stock the SAME row's
+    // summary counts as PLACED (the branch above adds a NULL-kind holding to
+    // neither staged nor unplaced), and anything keyed on kind === 'unplaced'
+    // — the amber "awaiting put-away" chip — fired on stock that was correctly
+    // recorded. A manager then "fixes" it by moving stock that never needed
+    // moving. 'site' is its own kind, labelled with the location's real name
+    // and ranked with the racks below.
+    //
+    // Pattern #26: the sibling is InventoryService.placementBreakdown — change
+    // one and inventory-list.test.ts's line-for-line parity guard fails.
+    const kind = rawKind ?? 'site';
     const label =
       kind === 'staging' ? 'Staging' : kind === 'unplaced' ? 'Unplaced' : lvl.locations.name;
     (placement[lvl.item_id] ??= []).push({
@@ -679,8 +696,8 @@ function assembleInventoryRows(
       quantity: qty,
     });
   }
-  // Same ordering as placementBreakdown: racks/crates A→Z, then
-  // Staging, then Unplaced.
+  // Same ordering as placementBreakdown: racks/crates/SITES A→Z (rank 0),
+  // then Staging, then Unplaced.
   const rank = (k: string) => (k === 'staging' ? 1 : k === 'unplaced' ? 2 : 0);
   for (const lines of Object.values(placement)) {
     lines.sort((a, b) => rank(a.kind) - rank(b.kind) || a.label.localeCompare(b.label));

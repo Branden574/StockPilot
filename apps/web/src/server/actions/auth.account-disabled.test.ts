@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
 import { isBannedUserAuthError } from './auth-error-classify';
@@ -38,21 +35,16 @@ describe('isBannedUserAuthError', () => {
   });
 });
 
-describe('signInAction branches on the classifier before the generic collapse', () => {
-  const src = readFileSync(join(__dirname, 'auth.ts'), 'utf8');
-
-  it('checks the ban BEFORE returning invalid email or password', () => {
-    // Anchored on the CALL SITE, not the bare identifier: the identifier also
-    // appears in the import at the top of the file, so matching it would pass
-    // even if the ban branch were placed after the generic return — or omitted.
-    const banIdx = src.indexOf('if (isBannedUserAuthError(');
-    const genericIdx = src.indexOf("'Invalid email or password'");
-    expect(banIdx).toBeGreaterThan(-1);
-    expect(genericIdx).toBeGreaterThan(-1);
-    expect(banIdx).toBeLessThan(genericIdx);
-  });
-
-  it('returns the shared copy, not a retyped sentence', () => {
-    expect(src).toContain('ACCOUNT_DISABLED_MESSAGE');
-  });
-});
+/**
+ * The signInAction half of this file used to be a SOURCE-TEXT grep: it read
+ * auth.ts and asserted that `if (isBannedUserAuthError(` appeared before
+ * `'Invalid email or password'`. That is satisfied by a ban branch sitting in
+ * dead or unreachable code, so it proved nothing about behaviour (SP-051).
+ *
+ * It was replaced by real calls in `auth.sign-in.test.ts`, which drives
+ * signInAction with a `user_banned` error and asserts the returned code,
+ * message and audit reason — and, in the mirror case, that a genuine
+ * credential mismatch still collapses to the generic sentence so the form
+ * never becomes an account-status oracle. Keep the two files together: this
+ * one pins the CLASSIFIER, that one pins the ACTION that consumes it.
+ */

@@ -30,6 +30,7 @@ import {
   buildPublicUnsubscribeUrl,
   normalizeUnsubscribeEmail,
 } from './unsubscribe';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
@@ -1146,7 +1147,36 @@ function renderText(a: TemplateArgs): string {
 
 // ─── Public entry ────────────────────────────────────────────────────
 
-export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
+/**
+ * Outcome of one order-request email dispatch.
+ *
+ * SP-046: this function used to return `void`. `sendEmail` NEVER throws
+ * — on a Resend refusal (rotated RESEND_API_KEY, a domain block, a 5xx)
+ * it resolves `{ ok: false, error }` (lib/email/resend.ts) — so dropping
+ * the result made a dead send indistinguishable from a delivered one at
+ * every call site, and all three call sites wrap this in a best-effort
+ * `try/catch` that could therefore only ever catch a render/prefs error.
+ * Callers can now branch on `ok`.
+ *
+ * `skipped` distinguishes "we chose not to send" (kill-switch, public
+ * unsubscribe list) from "the send failed": a suppression is a success,
+ * and must never read as an outage.
+ */
+export interface OrderRequestEmailResult {
+  /** False only when Resend refused or failed the send. */
+  ok: boolean;
+  /** Resend message id, when the send landed. */
+  id?: string;
+  /** Resend's error body, when `ok` is false. */
+  error?: string;
+  /** True when nothing was sent on purpose. `ok` stays true. */
+  skipped?: boolean;
+  skipReason?: 'kill_switch' | 'unsubscribed';
+}
+
+export async function sendOrderRequestEmail(
+  input: SendInput,
+): Promise<OrderRequestEmailResult> {
   const {
     kind,
     request,
@@ -1171,7 +1201,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     console.warn(
       `[order-requests] email kind "${kind}" suppressed by the ES_LATENT_ORDER_EMAILS=0 kill-switch.`,
     );
-    return;
+    return { ok: true, skipped: true, skipReason: 'kill_switch' };
   }
 
   // Public-recipient suppression list (migration 0222). Anonymous
@@ -1185,7 +1215,9 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
   // they DO confirm. Signed-in requesters are governed by their in-app
   // prefs instead (OrderRequestsService.wantsEmail).
   if (!request.requester_user_id && kind !== 'confirm_request') {
-    if (await isPublicEmailUnsubscribed(recipientEmail)) return;
+    if (await isPublicEmailUnsubscribed(recipientEmail)) {
+      return { ok: true, skipped: true, skipReason: 'unsubscribed' };
+    }
   }
 
   const summary = await fetchSummary(request);
@@ -1233,7 +1265,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
   // page behind login that ignores POSTs — advertising one-click there
   // would make Gmail POST into the void and report success, so those
   // recipients get the plain header only.
-  await sendEmail({
+  const result = await sendEmail({
     to: recipientEmail,
     subject,
     html,
@@ -1246,9 +1278,63 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
         }
       : { 'List-Unsubscribe': `<${unsubscribe.url}>` },
   });
+
+  if (!result.ok) {
+    // SP-046 / recurring pattern #28 — "a swallowed error is not
+    // best-effort, it is unmonitored". `sendEmail` resolves
+    // `{ ok: false }` instead of throwing, and all three callers
+    // (OrderRequestsService.notifyEmail, the public submit route, the
+    // sign route) wrap this call in a catch that only console.warns.
+    // console.* never leaves the Vercel logs; reportError is the ONLY
+    // path to ERROR_WEBHOOK_URL. So before this, a total order-email
+    // outage — the 2026-07-21 key-rotation shape, or a Resend domain
+    // block — produced zero alerts while public submissions silently
+    // stranded at pending_confirmation.
+    //
+    // Raised HERE, at the single choke point every order-request email
+    // flows through, rather than at each caller: pattern #26 says a fix
+    // applied to one copy of a duplicated concern is not a fix.
+    //
+    // Awaited, not voided: on Vercel the function can freeze the moment
+    // the response is returned, and a floating promise would be dropped.
+    // reportError is documented never to throw (it catches its own
+    // webhook post) and self-caps at a 2s timeout.
+    //
+    // No PII on the payload, per the error-reporter convention: the
+    // recipient address stays out — kind + order id locate the row.
+    await reportError(
+      new Error(`order-request email send failed: ${maskEmails(result.error ?? 'unknown error')}`),
+      {
+        tag: 'orders.email',
+        level: 'error',
+        organizationId: request.organization_id ?? null,
+        extra: { kind, orderId: request.id },
+      },
+    );
+  }
+
+  return result;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Masks any email address inside a string, and caps its length.
+ *
+ * Resend error bodies ECHO the request: a 422 on a malformed `to` comes
+ * back with the recipient address in the JSON. That body is the only
+ * detail worth alerting on, but ERROR_WEBHOOK_URL is usually a Slack
+ * channel and the error-reporter's own redaction strips signed-URL
+ * TOKENS, not addresses (see lib/error-reporter.ts MED-1). So mask here,
+ * before the string leaves this module — the reporter's own convention
+ * is "no PII fields". The cap keeps a stray HTML error page (a proxy 502
+ * rather than a Resend JSON body) from flooding the channel.
+ */
+function maskEmails(s: string): string {
+  return s
+    .replace(/[^\s"'<>,;:()[\]{}]+@[^\s"'<>,;:()[\]{}]+\.[A-Za-z]{2,}/g, '[email]')
+    .slice(0, 500);
+}
 
 function sanitizePlainText(s: string): string {
   return s.replace(/[\r\n]+/g, ' ').trim();

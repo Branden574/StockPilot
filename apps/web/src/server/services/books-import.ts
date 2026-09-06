@@ -664,13 +664,36 @@ export class BooksImportService {
         .from('stock_movements')
         .insert(movementInserts);
       if (movementErr) {
-        // The inventory rows are already in. Don't fail the whole import
-        // for an audit-trail row failure — log via the failed[] channel so
-        // the UI surfaces it, but keep result.created as-is.
-        result.failed.push({
-          isbn: 'batch:stock_movements',
-          reason: `Initial stock movement insert failed: ${movementErr.message}`,
-        });
+        // WAS: push one `batch:stock_movements` line into result.failed[] and
+        // "keep result.created as-is", on the reading that stock_movements is
+        // an audit-trail nicety. It is not — it is THE ledger, and the invariant
+        // SUM(stock_movements.quantity_change) = quantity_on_hand is absolute.
+        // Reporting success here left N books each holding defaultQty that no
+        // movement anywhere explains: the item Activity feed shows stock from
+        // nowhere, the Movements report undercounts inbound by the whole import,
+        // and every reconciliation that sums the ledger is wrong for those books
+        // forever — while the operator reads the single failed line as one bad
+        // ISBN. Worse, `trg_seed_initial_level` (0199, AFTER INSERT) has ALREADY
+        // written an item_stock_levels holding per book by this point, so the
+        // phantom stock is PLACED and pickable.
+        //
+        // Not merely a transient hazard. The two RLS floors differ:
+        // inventory_items_insert (0212) admits `items:create` — the permission
+        // this import gates on — while stock_movements_insert (0321) requires
+        // staff or `stock:adjust`. A viewer granted items:create through
+        // configurable permissions therefore lands here on EVERY import
+        // (pattern #4 + #28).
+        //
+        // So: compensate, then fail loudly — the same decision the sibling
+        // InventoryService create/bulkCreate/bulkCreateSizedVariants paths make
+        // via their private compensateOpeningStockOrThrow(). Cover rehosting
+        // (Phase 4) is skipped by the throw; the books keep
+        // custom_fields.thumbnail_url as the list-image fallback and
+        // backfillCovers() repairs them without a re-import.
+        await this.compensateOpeningStockOrThrow(
+          inserted.map((row) => row.id),
+          movementErr,
+        );
       }
     }
 
@@ -704,6 +727,107 @@ export class BooksImportService {
     }
 
     return result;
+  }
+
+  /**
+   * THE LEDGER INVARIANT IS ABSOLUTE: for every item,
+   * SUM(stock_movements.quantity_change) = quantity_on_hand.
+   *
+   * Called when the opening ('initial') movement insert FAILED for book rows
+   * that are already committed with stock. It compensates, then always throws.
+   *
+   * DELIBERATE MIRROR of InventoryService.compensateOpeningStockOrThrow
+   * (server/services/inventory.ts) — same two writes, same order, same proof.
+   * That method is `private` on a different service, so this path cannot call
+   * it; extracting one shared helper for both is the right end state
+   * (pattern #26: a fix applied to one copy of a duplicated decision is not a
+   * fix). Until then, ANY change here must be made there too — the failure
+   * mode of drift is exactly the one this function exists to prevent.
+   *
+   * TWO INVARIANTS, NOT ONE. `trg_seed_initial_level` (0199) is an AFTER INSERT
+   * trigger on inventory_items: by the time the movement insert is attempted it
+   * has already written one item_stock_levels row per stocked book, at the same
+   * quantity. Nothing syncs levels on UPDATE, so zeroing only
+   * `quantity_on_hand` would leave Σlevels = N against on_hand = 0 — PHANTOM
+   * PLACED STOCK, which the archive guard (max(on_hand, Σholdings)) refuses to
+   * archive forever and the placed draw-down happily picks straight into a
+   * negative on-hand. Both are restored: levels 0 = on_hand 0 = no movements.
+   *
+   * ORDER: levels FIRST. If the second write then fails, the intermediate is
+   * "stock on the row, not placed" — the pre-0199 shape, which blocks picking
+   * and is caught by that same max(). The reverse order's intermediate is the
+   * phantom-placed one, which picks negative.
+   *
+   * Rolling the BOOKS back instead would be a hard DELETE on a table whose whole
+   * convention is soft-delete, and a fail-open `.delete().eq()` under RLS would
+   * leave the worst of both. The books survive with correct SKUs, barcodes and
+   * metadata; the operator re-enters quantities as a stock adjustment, which
+   * writes its own movement.
+   */
+  private async compensateOpeningStockOrThrow(
+    stockedIds: string[],
+    movementErr: { message: string },
+  ): Promise<never> {
+    // (a) The PLACEMENTS the 0199 trigger seeded.
+    const { error: levelErr } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .update({ quantity: 0 })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', stockedIds);
+
+    // (b) The row quantity. `.update().eq()` is FAIL-OPEN under RLS — no error,
+    // no row (pattern #2) — so take the row-count proof from `.select('id')`.
+    const { data: zeroed, error: zeroErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', stockedIds)
+      .select('id');
+    const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+
+    // (c) PROVE the placements are gone. Both writes above are filtered updates,
+    // so "no error" is not evidence anything was matched — and the level write
+    // cannot use the returned-row trick, because ZERO level rows is a legitimate
+    // outcome (the 0199 trigger swallows its own failures by design). A re-read
+    // is the only unambiguous answer, and it is the answer that matters: any
+    // surviving placement is exactly the phantom-stock state this exists to
+    // prevent.
+    const { data: leftovers, error: verifyErr } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', stockedIds)
+      .gt('quantity', 0);
+    const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
+
+    if (
+      levelErr ||
+      zeroErr ||
+      verifyErr ||
+      compensated !== stockedIds.length ||
+      survivingPlacements > 0
+    ) {
+      console.error('[booksImport] opening movements failed AND the rollback failed', {
+        movementError: movementErr.message,
+        levelError: levelErr?.message,
+        rollbackError: zeroErr?.message,
+        verifyError: verifyErr?.message,
+        survivingPlacements,
+        stockedIds,
+      });
+      throw new ServiceError(
+        'internal_error',
+        'These books were created, but their opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving, picking or counting against them.',
+      );
+    }
+    console.error('[booksImport] opening movements failed; on-hand and placements rolled back to 0', {
+      movementError: movementErr.message,
+      stockedIds,
+    });
+    throw new ServiceError(
+      'internal_error',
+      'These books were created, but their opening stock could not be recorded, so they were saved with zero on hand. Add the quantities with a stock adjustment.',
+    );
   }
 
   /**

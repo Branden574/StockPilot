@@ -153,8 +153,20 @@ export function MovementsInstantTable({
             </TableHeader>
             <TableBody>
               {visible.map((m) => {
-                const isTransfer = m.movementType === 'transfer';
+                // Amount rule, mirroring packages/core movement-history.ts
+                // formatHistoryMovement: show the signed delta whenever there
+                // IS one, otherwise the physical moved qty, otherwise nothing.
+                // Deliberately NOT keyed off movementType === 'transfer'.
+                // adjust_stock writes an order pick (0306 complete_picking) and
+                // a manager reopen-reversal (0289) as movement_type='transfer'
+                // with a real signed quantity_change and NO moved_quantity —
+                // only transfer_stock (0231/0327) stamps moved_quantity. The
+                // old type-keyed cell therefore rendered '—' for every pick
+                // while the After column visibly dropped, hiding five units
+                // leaving the building on an audit surface.
                 const change = m.quantityChange;
+                const hasDelta = change !== 0;
+                const moved = m.movedQuantity;
                 return (
                   <TableRow key={m.id}>
                     <TableCell className="text-muted-foreground text-xs">
@@ -168,16 +180,21 @@ export function MovementsInstantTable({
                     <TableCell
                       className={
                         'text-right font-mono tabular-nums ' +
-                        (isTransfer ? '' : change > 0 ? 'text-success' : change < 0 ? 'text-destructive' : '')
+                        // Colour follows the DELTA, so a pick reads red and a
+                        // reopen reads green; a net-zero location move keeps
+                        // the neutral tone it has always had.
+                        (hasDelta ? (change > 0 ? 'text-success' : 'text-destructive') : '')
                       }
                     >
-                      {isTransfer ? (
-                        m.movedQuantity != null ? formatNumber(m.movedQuantity) : '—'
-                      ) : (
+                      {hasDelta ? (
                         <>
                           {change > 0 ? '+' : ''}
                           {formatNumber(change)}
                         </>
+                      ) : moved != null ? (
+                        formatNumber(moved)
+                      ) : (
+                        '—'
                       )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">

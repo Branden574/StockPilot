@@ -10,6 +10,25 @@ import {
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 
+/**
+ * Escape LIKE metacharacters so a user's needle is matched LITERALLY by
+ * PostgREST `.ilike()` (recurring pattern #16). PostgREST hands the pattern
+ * to Postgres unmodified, so `_` stays "any single char" and `%` stays "any
+ * run" unless escaped here — tracing lot `LOT_1` used to also report the
+ * receipts and order picks of `LOT11` and `LOT-1` as consumption of LOT_1,
+ * and a needle ending in `\` left the pattern ending in the escape char
+ * (Postgres error -> internal_error). Lot numbers may legally contain all
+ * three (core/schemas/receipts.ts allows any string up to 120 chars).
+ *
+ * Byte-identical siblings live in procedures.ts, vendor-item-mappings.ts,
+ * po-imports.ts and movements.ts. Extracting the one shared helper touches
+ * files owned elsewhere in this wave, so it stays a follow-up (pattern #26):
+ * when that lands, delete this copy and import it instead.
+ */
+function escapeIlike(q: string): string {
+  return q.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
 export interface AgingLotRow {
   itemId: string;
   itemName: string;
@@ -249,6 +268,8 @@ export class LotsService {
     assertModuleEnabled(this.ctx, 'lot_serial');
     const term = lotNumber.trim();
     if (!term) throw new ServiceError('validation_error', 'Enter a lot number to trace.');
+    // Search literally: `term` is raw operator input from the lot-trace box.
+    const needle = `%${escapeIlike(term)}%`;
 
     const { data: lotRows, error: lotErr } = await this.ctx.supabase
       .from('receipt_line_lots')
@@ -264,7 +285,7 @@ export class LotsService {
       // Only trace through posted receipts — reversed/canceled receipts leave
       // their receipt_line_lots rows behind and would otherwise show as live.
       .eq('receipt_lines.receipts.status', 'posted')
-      .ilike('lot_number', `%${term}%`);
+      .ilike('lot_number', needle);
     if (lotErr) throw new ServiceError('internal_error', lotErr.message);
 
     // The parent order's number rides along: lot_pick_events snapshots no order
@@ -278,7 +299,7 @@ export class LotsService {
          order_request:order_requests!order_request_id (order_number)`,
       )
       .eq('organization_id', this.ctx.organizationId)
-      .ilike('lot_number', `%${term}%`);
+      .ilike('lot_number', needle);
     if (pickErr) throw new ServiceError('internal_error', pickErr.message);
 
     return {

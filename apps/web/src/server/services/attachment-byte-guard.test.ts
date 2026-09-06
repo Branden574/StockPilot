@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // ---------------------------------------------------------------------------
@@ -60,13 +61,57 @@ const SVG = ascii('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')
 const PE = new Uint8Array([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]); // MZ
 
 let remove: ReturnType<typeof vi.fn>;
+let download: ReturnType<typeof vi.fn>;
 
+/**
+ * The SMALL-object arming: the prefix read returns the whole file, because the
+ * whole file fits inside the 4 KB sniff window.
+ *
+ * `download` is armed here too — and armed to FAIL — on purpose. When the
+ * prefix already is the entire object there is nothing left to re-read, so a
+ * change that made the finalize gate download unconditionally would both blow
+ * up these tests' accept path AND be named by the explicit
+ * `expect(download).not.toHaveBeenCalled()` below. Before this spy existed the
+ * stub had no `download` at all, so the whole-object branch was not merely
+ * unasserted — it was unreachable without a TypeError.
+ */
 function armStorage(body: Uint8Array | null) {
   fetchObjectPrefixMock.mockImplementation(async () =>
     body ? { prefix: body, totalSize: body.byteLength } : null,
   );
   remove = vi.fn(async () => ({ data: null, error: null }));
-  const api = { remove, createSignedUrl: vi.fn(async () => ({ data: null, error: null })) };
+  download = vi.fn(async () => ({
+    data: null,
+    error: { message: 'download() must not be called when the prefix IS the whole object' },
+  }));
+  const api = {
+    remove,
+    download,
+    createSignedUrl: vi.fn(async () => ({ data: null, error: null })),
+  };
+  createAdminClientMock.mockReturnValue({ storage: { from: vi.fn(() => api) } } as never);
+}
+
+/**
+ * The LARGE-object arming: the object is bigger than the sniff window, so the
+ * prefix read returns only the leading 4 KB and the real full size — exactly
+ * the shape `fetchObjectPrefix` produces in production for anything over
+ * 4096 bytes. That is what forces `verifyStoredDocumentOrDelete` down its
+ * re-download branch, which is the branch the scanner's whole-file contract
+ * depends on.
+ */
+function armStorageLarge(full: Uint8Array, downloadResult: unknown) {
+  fetchObjectPrefixMock.mockImplementation(async () => ({
+    prefix: full.subarray(0, 4096),
+    totalSize: full.byteLength,
+  }));
+  remove = vi.fn(async () => ({ data: null, error: null }));
+  download = vi.fn(async () => downloadResult);
+  const api = {
+    remove,
+    download,
+    createSignedUrl: vi.fn(async () => ({ data: null, error: null })),
+  };
   createAdminClientMock.mockReturnValue({ storage: { from: vi.fn(() => api) } } as never);
 }
 
@@ -194,5 +239,151 @@ describe('OrderAttachmentsService.add — finalize byte guard', () => {
     const err = await svc.add(base).catch((e: unknown) => e);
     expect((err as ServiceError).message).toMatch(/failed our security checks/i);
     expect((err as ServiceError).message).not.toMatch(/magic|signature|MZ|sniff/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WHOLE-OBJECT SCAN — the half of the guard the sniff tests cannot reach.
+//
+// `sniffFile` decides from the leading 4 KB; `scanDocumentBytes` REQUIRES the
+// whole file, because a PDF's catalog — and therefore its `/OpenAction` and
+// any `/Launch` it points at — is written near the END. So
+// `verifyStoredDocumentOrDelete` re-downloads the object whenever the prefix
+// is not already all of it, and every test above stubs
+// `totalSize === prefix.byteLength`, which means every test above takes the
+// "prefix IS the whole object" shortcut and none of them has ever exercised
+// the re-download.
+//
+// That gap was not merely unasserted, it was unfalsifiable: the storage stub
+// had no `download` method at all, so `head.totalSize > head.prefix.byteLength`
+// could be quietly changed to `>=`, or the download dropped entirely, and all
+// nine tests stayed green while a 60 KB invoice carrying
+// `/OpenAction << /S /Launch >>` past byte 4096 was scanned CLEAN, rowed, and
+// then signed and served to whoever opened the PO.
+//
+// These tests pin the branch by its consequences: the big file is refused with
+// the SPECIFIC threat message, the object is deleted, no row is written — and
+// an object that becomes unreadable between the prefix read and the full read
+// fails CLOSED rather than being accepted on the prefix we did manage to see.
+// ---------------------------------------------------------------------------
+
+/** A PDF whose only active content sits PAST the 4 KB sniff window: valid
+ *  header, 4200 bytes of harmless filler, then a catalog whose open-action
+ *  launches an external program. The prefix alone is clean; the file is not. */
+const LAUNCH_PDF = (() => {
+  const head = ascii('%PDF-1.7\n1 0 obj\n');
+  const filler = new Uint8Array(4200).fill(0x20); // spaces — nothing to find
+  const tail = ascii(
+    '<< /Type /Catalog /OpenAction << /S /Launch /F (calc.exe) >> >>\ntrailer\n%%EOF\n',
+  );
+  const out = new Uint8Array(head.byteLength + filler.byteLength + tail.byteLength);
+  out.set(head, 0);
+  out.set(filler, head.byteLength);
+  out.set(tail, head.byteLength + filler.byteLength);
+  return out;
+})();
+
+describe('finalize byte guard — whole-object scan', () => {
+  it('FIXTURE PROOF: the leading window is clean and only the full file is not', () => {
+    // Without this the tests below could pass for the wrong reason — a payload
+    // that happened to land inside the prefix would prove nothing about the
+    // re-download. Asserted against the real scanner, not a stub.
+    expect(LAUNCH_PDF.byteLength).toBeGreaterThan(4096);
+    expect(scanDocumentBytes(LAUNCH_PDF.subarray(0, 4096), 'pdf')).toBeNull();
+    expect(scanDocumentBytes(LAUNCH_PDF, 'pdf')).toEqual({
+      code: 'pdf_launch_action',
+      detail: '/Launch action',
+    });
+  });
+
+  it('PO: re-downloads the object and REJECTS a /Launch action hidden past the prefix', async () => {
+    armStorageLarge(LAUNCH_PDF, { data: new Blob([LAUNCH_PDF]), error: null });
+    const { stub, svc } = poSvc();
+
+    const err = await svc.add(poInput()).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('validation_error');
+    // The SPECIFIC message: the uploader is a manager holding a real invoice,
+    // and this one names the problem and the way out.
+    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
+    // The re-read actually happened, against the same object.
+    expect(download).toHaveBeenCalledWith(poInput().storagePath);
+    // No row, and the bytes do not survive the rejection.
+    expect(stub.fromCalls).not.toContain('po_attachments');
+    expect(remove).toHaveBeenCalledWith([poInput().storagePath]);
+  });
+
+  it('PO: fails CLOSED when the object is readable at prefix time but not at full-read time', async () => {
+    // A transient storage failure must NOT degrade to "accept on what we saw".
+    // We have not inspected this object, so it does not get a row.
+    armStorageLarge(LAUNCH_PDF, { data: null, error: { message: 'boom' } });
+    const { stub, svc } = poSvc();
+
+    const err = await svc.add(poInput()).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).message).toBe('This file could not be verified.');
+    expect(stub.fromCalls).not.toContain('po_attachments');
+    expect(remove).toHaveBeenCalledWith([poInput().storagePath]);
+  });
+
+  it('PO: ACCEPTS a big PDF that is clean all the way to the end', async () => {
+    // The re-download is a check, not a rejection: the same oversized shape
+    // with no active content must still attach, or the guard has broken the
+    // normal workflow for every invoice over 4 KB — i.e. most of them.
+    const clean = (() => {
+      const head = ascii('%PDF-1.7\n1 0 obj\n');
+      const filler = new Uint8Array(4200).fill(0x20);
+      const tail = ascii('<< /Type /Catalog /Pages 2 0 R >>\ntrailer\n%%EOF\n');
+      const out = new Uint8Array(head.byteLength + filler.byteLength + tail.byteLength);
+      out.set(head, 0);
+      out.set(filler, head.byteLength);
+      out.set(tail, head.byteLength + filler.byteLength);
+      return out;
+    })();
+    armStorageLarge(clean, { data: new Blob([clean]), error: null });
+    const { stub, svc } = poSvc();
+
+    await expect(svc.add(poInput())).resolves.toEqual({ id: 'poa-1' });
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(stub.fromCalls).toContain('po_attachments');
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('PO: does NOT re-download when the prefix already is the whole object', async () => {
+    // The skip is deliberate (see upload-verification.ts): a small document is
+    // fully inspected by the prefix read alone, so a second round-trip would
+    // be pure cost. Pinned so the skip stays a size decision and never becomes
+    // a "scan less" decision.
+    armStorage(PDF);
+    const { svc } = poSvc();
+    await expect(svc.add(poInput())).resolves.toEqual({ id: 'poa-1' });
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('ORDER: the same re-download and refusal, on the other caller', async () => {
+    // Pattern #26: the two callers share ONE gate now, but the sibling is
+    // asserted anyway — a future divergence in either service is the exact
+    // failure this file exists to catch.
+    armStorageLarge(LAUNCH_PDF, { data: new Blob([LAUNCH_PDF]), error: null });
+    const { stub, svc } = orderSvc();
+    const path = `${ORG}/${ENTITY}/${FILE}.pdf`;
+
+    const err = await svc
+      .add({
+        orderRequestId: ENTITY,
+        storagePath: path,
+        fileName: 'proof.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 999,
+        kind: 'dropoff_photo' as const,
+      })
+      .catch((e: unknown) => e);
+
+    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
+    expect(download).toHaveBeenCalledWith(path);
+    expect(stub.fromCalls).not.toContain('order_request_attachments');
+    expect(remove).toHaveBeenCalledWith([path]);
   });
 });

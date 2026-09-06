@@ -58,6 +58,7 @@ import {
 } from '@/server/services/lib/item-trends';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { getItemTrends } from '@/server/services/movements';
+import { InventoryService } from '@/server/services/inventory';
 
 import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
 
@@ -266,6 +267,17 @@ const baseItem = {
   updated_at: '2026-01-02T00:00:00Z',
 };
 
+/**
+ * One holdings fixture fed to BOTH placement-line implementations (the loader's
+ * assembleInventoryRows and InventoryService.placementBreakdown) so neither can
+ * drift alone — recurring pattern #26.
+ */
+const SITE_HOLDINGS_FIXTURE = [
+  { item_id: 'i1', location_id: 'L1', quantity: 4, locations: { name: 'DC4', kind: null } },
+  { item_id: 'i1', location_id: 'L2', quantity: 3, locations: { name: 'Stage', kind: 'staging' } },
+  { item_id: 'i1', location_id: 'L3', quantity: 2, locations: { name: '1-A', kind: 'rack' } },
+];
+
 const emptyModuleGate = {
   organization_modules: { data: { enabled: false }, error: null },
   organizations: { data: { all_modules_comp: false }, error: null },
@@ -316,7 +328,12 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(signedUrlsMock).not.toHaveBeenCalled();
   });
 
-  it('kind-NULL holdings: row-summary math uses the RAW kind (live list() parity); only the placement lines coalesce NULL → unplaced (live placementBreakdown() parity)', async () => {
+  // UPDATED with the placementBreakdown parity fix: this test used to assert the
+  // lines coalesced NULL → 'unplaced'/"Unplaced". That was parity with the OLD
+  // service; wave 2 changed placementBreakdown to treat NULL as the Site
+  // encoding, and this loader is its sibling copy. The ROW-SUMMARY half of the
+  // assertion is untouched and still guards the (unchanged) list() parity.
+  it('kind-NULL holdings: row-summary math uses the RAW kind (live list() parity); the placement lines label NULL as the SITE (live placementBreakdown() parity)', async () => {
     createAdminClientMock.mockReturnValue(
       makeAdmin({
         ...emptyModuleGate,
@@ -353,12 +370,75 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(row.placed_racks).toEqual([]);
     expect(row.rackHoldingsCount).toBe(0);
 
-    // Live placementBreakdown(): NULL kind IS coalesced for the lines,
-    // and staging ranks before unplaced.
+    // Live placementBreakdown(): a NULL kind is the SITE encoding — the line
+    // carries the site's own name and ranks with the racks, ahead of Staging.
     expect(payload.placement['i1']).toEqual([
+      { locationId: 'L1', label: 'Mystery', kind: 'site', quantity: 4 },
       { locationId: 'L2', label: 'Staging', kind: 'staging', quantity: 3 },
-      { locationId: 'L1', label: 'Unplaced', kind: 'unplaced', quantity: 4 },
     ]);
+  });
+
+  // ── NULL locations.kind IS the Site encoding (pattern #26 sibling) ───────
+  // InventoryService.placementBreakdown was fixed to label a NULL-kind SITE
+  // holding with the site NAME under a distinct 'site' kind. This loader
+  // computes the SAME lines from the SAME rows for the cached default view,
+  // and still printed "Unplaced" — so which of the two paths served the page
+  // decided whether L4L's DC4 stock looked misplaced. See the fix comment in
+  // assembleInventoryRows.
+  it('labels a NULL-kind SITE holding with the site NAME and a distinct "site" kind (parity with placementBreakdown)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: { data: SITE_HOLDINGS_FIXTURE, error: null },
+        item_images: { data: [], error: null },
+      }),
+    );
+
+    const payload = await loadInventoryList('org-1', 'all', 'items');
+    const row = payload.items[0]!;
+
+    // Row-summary math is UNCHANGED — a NULL-kind holding still counts toward
+    // neither staged nor unplaced nor placed_racks (live list() parity).
+    expect(row.staged_quantity).toBe(3);
+    expect(row.unplaced_quantity).toBe(0);
+    expect(row.placed_racks).toEqual(['1-A']);
+
+    expect(payload.placement['i1']).toEqual([
+      { locationId: 'L3', label: '1-A', kind: 'rack', quantity: 2 },
+      { locationId: 'L1', label: 'DC4', kind: 'site', quantity: 4 },
+      { locationId: 'L2', label: 'Staging', kind: 'staging', quantity: 3 },
+    ]);
+    // The exact string that made a manager "put away" stock that was already
+    // correctly recorded must not appear for a site holding.
+    expect(payload.placement['i1']!.map((l) => l.label)).not.toContain('Unplaced');
+  });
+
+  // Pattern #26 guard: ONE fixture, BOTH copies of the placement-line
+  // decision, asserted to agree. Mutating either copy alone fails this.
+  it('agrees line-for-line with InventoryService.placementBreakdown on the same holdings', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: { data: SITE_HOLDINGS_FIXTURE, error: null },
+        item_images: { data: [], error: null },
+      }),
+    );
+    const payload = await loadInventoryList('org-1', 'all', 'items');
+
+    // The service reads the same rows through fetchAllRows (mocked here).
+    vi.mocked(fetchAllRows).mockResolvedValue(SITE_HOLDINGS_FIXTURE as never[]);
+    try {
+      const svc = new InventoryService({
+        supabase: {},
+        organizationId: 'org-1',
+      } as unknown as ServiceContext);
+      const serviceLines = (await svc.placementBreakdown(['i1'])).get('i1');
+      expect(serviceLines).toEqual(payload.placement['i1']);
+    } finally {
+      vi.mocked(fetchAllRows).mockResolvedValue([] as never[]);
+    }
   });
 
   it('cross-warehouse split (same rack NAME, two distinct location_ids): placed_racks collapses to one name, but rackHoldingsCount stays 2 — matching the server\'s by-location_id split gate', async () => {

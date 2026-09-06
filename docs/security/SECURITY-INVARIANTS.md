@@ -6,7 +6,18 @@
      reproducible with the query printed beside it. Claims about production row
      counts are quoted from the migration that recorded them and have NOT been
      independently re-read here; re-run the query against production before
-     using one in an attestation. -->
+     using one in an attestation.
+
+     AMENDED 2026-09-06 (SP-028b): section 2 was retitled and INV-B3 added,
+     because the document described this class as the anon posture only while
+     the test file had grown a matching `authenticated` sweep (INV-25/26 with
+     controls INV-29/30, shipped with migration 0346). The figures in INV-B3 —
+     the 14 allowlist-E entries, the four functions the 0345 sweep named —
+     were read out of supabase/tests/security_invariants.test.sql and migrations
+     0346/0350 as they stand at that date, NOT out of a live catalog; the
+     reproduce query beside INV-B3 is how you check them against one. The
+     assertion counts in section 10 were re-derived from `select plan(30)` in
+     the same file. Nothing else in this document was re-verified. -->
 
 # Security invariants
 
@@ -154,7 +165,7 @@ true)`.
 
 ---
 
-## 2. The anon / PUBLIC EXECUTE posture — the P0 of this program
+## 2. The EXECUTE posture on `SECURITY DEFINER` functions — the P0 of this program
 
 ### The mechanism, stated plainly
 
@@ -182,6 +193,53 @@ were anon-executable, **15** genuinely exploitable. Migration
 [`0318`](../../supabase/migrations/0318_revoke_anon_execute_secdef.sql) closed
 those 15 with grants only — zero function bodies changed — so the privilege delta
 stayed small and reviewable.
+
+### The other half of the same mechanism — `authenticated` is not a gate either
+
+`anon` is the loud half of this class, not the whole of it. A `SECURITY
+DEFINER` body bypasses RLS for a signed-in stranger from another tenant exactly
+as thoroughly as it does for an unauthenticated one — and here `EXECUTE`
+usually **cannot** be taken away from `authenticated`. The pattern this
+repository uses for privileged arithmetic is a `SECURITY INVOKER` RPC that runs
+as the user and calls a definer helper as the user (`post_cycle_count` →
+0342's `apply_cycle_count_location_delta`; `post_receipt_v2` → the `ensure_*`
+bucket seeders). Revoking the grant takes the legitimate caller down with the
+attacker; INV-C1 in section 3 is that same fact stated from the availability
+side.
+
+**When `EXECUTE` cannot be the control, the body has to be.** A definer
+function that any signed-in user may call and that authorizes nothing is a
+cross-tenant primitive at `POST /rest/v1/rpc/<name>`, reachable by anyone
+holding any account on the platform. No exploit is involved: the caller
+supplies a uuid.
+
+That is not a projection either. A catalog sweep of the 0345 head found
+**four** functions in exactly that shape, and on 2026-09-02 each was reproduced
+from a foreign tenant's session, in a rolled-back transaction:
+
+- `apply_cycle_count_location_delta` (0342) wrote `item_stock_levels` with no
+  `auth.uid()`, `has_org_role`, `item_in_org` or `location_in_org` check. A
+  **viewer in a different organization** — who could not `SELECT` the holding at
+  all — inflated a victim rack from 10 to 5010 and then drained it to 0, leaving
+  `inventory_items.quantity_on_hand` at 10 and **zero `stock_movements` rows**.
+  Cross-tenant stock corruption with no ledger trail — finding **SP-001**, this
+  program's most recent P0.
+- `ensure_org_placement_locations` and `ensure_warehouse_placement_locations`
+  (0188/0194) let any signed-in user insert `locations` rows into an arbitrary
+  tenant, and tell a real warehouse uuid from an unknown one — finding
+  **SP-059**.
+- `_cycle_count_location_facts` (0342) resolved **any** location uuid to its
+  owning organization, warehouse, kind and `deleted_at` for any signed-in
+  caller — a read RLS denies. Closed by migration
+  [`0350`](../../supabase/migrations/0350_location_facts_gate_and_catalog_metadata.sql).
+
+The first three are closed by migration
+[`0346`](../../supabase/migrations/0346_gate_secdef_stock_helpers.sql). All four
+shipped green: every per-migration test passed, `pnpm security:test`
+passed, and this file's own sweep passed — because until INV-25 there was not
+one `has_function_privilege('authenticated', …)` probe anywhere in it. Reading
+section 2 as "the anon posture" is what let 0342's helper stand from 0342 to
+0346. The rule is the one below, and it is stated for both roles.
 
 ### INV-B1 — no ungated SECURITY DEFINER function is anon-executable
 
@@ -251,6 +309,92 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   judged is non-empty. Current state: 19 such policies — 16 gated, 3 explicit
   denies (the `mfa_recovery_codes_no_*` idiom that makes that table
   trigger-write-only).
+
+### INV-B3 — no ungated SECURITY DEFINER function is authenticated-executable
+
+- **Invariant**: every `SECURITY DEFINER` function in `public` that can be
+  invoked as an RPC and that `authenticated` can execute either names an
+  authorization gate (`auth.uid()`, `has_org_role`, `has_permission`,
+  `is_org_member`) inside its own body, or is on **allowlist E** — the
+  `_sec_inv_auth_secdef_nogate_allow` table in the invariant test, every entry
+  of which is a read-only predicate that writes nothing. (Go by the table name:
+  the test file currently letters two blocks `E`, this one and the storage
+  path-gap list.)
+- **Why it matters**: it is INV-B1's failure one role along, and it produced
+  this program's most recent P0 — SP-001, described above: a cross-tenant
+  `item_stock_levels` write, with no movement row, callable by a viewer in
+  another organization. If anything the authenticated half is the worse of the
+  two: `anon` held no `EXECUTE` on any of those four functions, so the only role
+  that could reach them was the one every signup hands out.
+- **Enforced by**: an in-body gate, written the way 0331, 0341, 0346 and 0350
+  write it. `auth.uid() is null` means a `service_role`/`postgres` connection
+  and keeps the historical behaviour unchanged. That branch is not reachable
+  from the internet only because each of these migrations also re-states
+  `revoke all ... from public, anon` — the null-`auth.uid()` shortcut is exactly
+  as safe as that revoke and no safer. Every authenticated caller must then pass
+  an explicit role or ownership check. 0346's
+  arithmetic helper needs **both** halves — `has_org_role(p_org_id, 'manager')`
+  *and* `item_in_org`/`location_in_org` — because a role check on the
+  caller-supplied org alone still lets a manager of org B write a row tagged
+  org B against org A's item and rack. 0350's `_cycle_count_location_facts`
+  takes no org argument at all, so it gates on the org of the **location it
+  looked up**.
+
+  Grants are not the mechanism here and must not be pressed into being one:
+  revoking `EXECUTE` from `authenticated` breaks the `SECURITY INVOKER` RPC
+  that legitimately calls the helper (INV-C1). That is why each of these
+  migrations re-states its `grant execute ... to authenticated, service_role`
+  unchanged and puts the entire fix in the body.
+- **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
+  stale entry, and no entry whose body has grown an `INSERT`/`UPDATE`/`DELETE`),
+  with INV-29 and INV-30 as the controls. Those two plant their own probes
+  inside the rolled-back transaction — an ungated definer function granted to
+  `authenticated`, a stale allowlist row, and an allowlist row naming a
+  function known to write — so INV-25 and INV-26 are proven able to fail on
+  *every* run rather than once at review time. Per-function posture is pinned
+  in
+  [`0346_gate_secdef_stock_helpers.test.sql`](../../supabase/tests/0346_gate_secdef_stock_helpers.test.sql)
+  and
+  [`0350_location_facts_gate_and_catalog_metadata.test.sql`](../../supabase/tests/0350_location_facts_gate_and_catalog_metadata.test.sql).
+
+Two design points in that pair of assertions are load-bearing, the same way
+the trigger-return exclusion and the self-policing allowlist are under INV-B1.
+
+**The allowlist cannot be used as a bypass, and it is not a place to park a
+writer.** Its 14 entries are read-only predicates — the `*_in_org` FK-org
+guards, `user_can_access_inventory`/`user_can_access_warehouse`,
+`module_enabled`, `org_can_enable_module`, `org_effective_tier` — that RLS
+policies and other function bodies evaluate *as the user*, which is precisely
+why INV-C1 requires them to keep `authenticated` `EXECUTE`. Each answers a
+boolean about a caller-supplied uuid — `assert_location_in_org` returns void and
+raises instead, which is the same answer with a different calling convention —
+and the single exception, `org_effective_tier`, returns the org's plan-tier
+string, which is not tenant data. **None writes**, and that is the property the
+exemption is bought with: INV-26 withdraws it the day one of them grows a write,
+and INV-30 proves INV-26 can still see that happen.
+
+**An attribute-returning entry is a smell, not a category.**
+`_cycle_count_location_facts` was the single allowlist-E entry that returned
+attributes rather than a boolean — org, warehouse, kind and `deleted_at` for
+any location uuid — and it leaked all four across tenants. It is no longer
+exempt: 0350 gave it `post_cycle_count`'s own `has_org_role` gate, so INV-25
+now judges it on its body like everything else. "Reading past RLS is the point"
+justifies the `SECURITY DEFINER`; it never justified the missing authorization
+check.
+
+Reproduce (the `authenticated` twin of the INV-B1 query above):
+
+```sql
+select p.proname,
+       pg_get_function_identity_arguments(p.oid) as args,
+       (p.prosrc ~* '(auth\.uid|has_org_role|has_permission|is_org_member)')
+         as gated_in_body
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.prosecdef
+   and p.prorettype <> 'trigger'::regtype
+   and has_function_privilege('authenticated', p.oid, 'execute')
+ order by 3, 1;
+```
 
 ---
 
@@ -714,8 +858,16 @@ checked.
   A-E. The P0 (anon `EXECUTE` on ungated `SECURITY DEFINER` functions) is closed
   by migration 0318 for all 15 exploitable functions, and the class — not just
   those 15 — is now covered by an allowlist-based sweep.
+- **The same class recurred once on the `authenticated` role** and is closed:
+  SP-001, SP-059 and the `_cycle_count_location_facts` leak (section 2, INV-B3)
+  — four definer functions any signed-in user could execute with no
+  authorization in their bodies — closed by migrations 0346 and 0350 and swept
+  from then on by INV-25/26. It is recorded on its own line rather than folded
+  into the one above because it is the counterexample to reading that line as
+  permanent: the sweep that would have caught it did not exist on the day the
+  first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 23 class-wide assertions in
+  invariants**: 30 class-wide assertions in
   `supabase/tests/security_invariants.test.sql`, plus 38 security-focused pgTAP
   files and 56 security-focused vitest files, gated together as
   `pnpm security:test` and wired into CI.
@@ -725,8 +877,11 @@ checked.
   traversal floor (INV-D2). They are in the test's allowlist, so they are visible
   in every CI run rather than forgotten.
 - **The tests have been mutation-checked**: a deliberate violation of six
-  distinct invariants turned 10 of the 23 assertions red, and the database was
-  restored afterwards. The recipes for repeating that are in the test header.
+  distinct invariants turned 10 of the 23 assertions that existed at the time
+  red, and the database was restored afterwards. The recipes for repeating that
+  are in the test header. INV-25 and INV-26, added later, do not rely on that
+  one-off exercise: INV-29 and INV-30 plant the violating probes themselves, so
+  those two assertions are mutation-checked on every run.
 - **What this does not establish**: no third-party penetration test has been
   performed, there is no SOC 2 or ISO 27001 process, and there is no bug bounty
   (`SECURITY.md`, "Things we haven't done"). Coverage of the invariants above is

@@ -1,5 +1,6 @@
 import { unstable_rethrow } from 'next/navigation';
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -36,6 +37,19 @@ const VALID_SORTS = new Set<ItemListSort>([
   'created_asc',
 ]);
 
+// SP-119b: a browser gets its warehouse from the dashboard selector cookie,
+// but a non-browser caller (the AI `exportInventory` tool, a bookmarked link,
+// a script) has no cookie to set — so a caller that had narrowed its own count
+// to one warehouse could only link a CSV covering the whole org, labelling an
+// all-warehouse file "413 items". An explicit `?warehouseId=` closes that gap.
+// This is a VIEW filter only: it can narrow but never widen, because
+// InventoryService.list() forces warehouse-scoped users onto their assigned
+// warehouses regardless of what the query string says, and RLS keeps the org
+// boundary. Validated as a uuid so a typo REFUSES (400) instead of silently
+// degrading to "every warehouse" — a silent fallback here is the same lie the
+// finding was about.
+const warehouseIdSchema = z.string().uuid();
+
 const VALID_STATUS = new Set(['active', 'archived', 'discontinued', 'all']);
 const VALID_TYPES = new Set(['product', 'book', 'asset', 'consumable', 'all']);
 
@@ -57,6 +71,13 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const params = url.searchParams;
+
+    // Absent OR empty means "no explicit filter" (fall back to the cookie);
+    // present-but-malformed is an error, never a silent whole-org export.
+    const rawWarehouseId = params.get('warehouseId')?.trim() || null;
+    if (rawWarehouseId !== null && !warehouseIdSchema.safeParse(rawWarehouseId).success) {
+      return NextResponse.json({ error: 'invalid_warehouse_id' }, { status: 400 });
+    }
 
     const scope = params.get('scope') === 'all' ? 'all' : 'filtered';
     const rawType = params.get('type') ?? '';
@@ -87,7 +108,9 @@ export async function GET(request: Request) {
               : 'updated_desc',
             categoryIds: params.getAll('cat').filter(Boolean),
             locationIds: params.getAll('loc').filter(Boolean),
-            warehouseId: await getActiveWarehouseFilterFor(ctx),
+            // Explicit param wins; otherwise the dashboard selector cookie
+            // (Bearer/tool callers carry no cookies, so that resolves null).
+            warehouseId: rawWarehouseId ?? (await getActiveWarehouseFilterFor(ctx)),
           }
         : undefined;
 
