@@ -312,11 +312,19 @@ export class RecurringPoTemplatesService {
   // ── runDueTemplates ───────────────────────────────────────────────────────
 
   /**
-   * Daily-cron entry point. Creates one PO per due template (next_run_at <= now),
-   * optionally auto-sends within the configured cap + org approval threshold,
-   * then advances the schedule. Per-template fail-open. Money-safe: auto-send
-   * requires send_mode==='send' AND non-null cap AND total <= cap AND total <
-   * approval threshold. A failed threshold-read BLOCKS all auto-sends (fail-closed).
+   * Daily-cron entry point. CLAIMS each due template (next_run_at <= now) by
+   * advancing its schedule conditionally, then — only if the claim won — creates
+   * one PO and optionally auto-sends it within the configured cap + org approval
+   * threshold. Per-template fail-open. Money-safe: auto-send requires
+   * send_mode==='send' AND non-null cap AND total <= cap AND total < approval
+   * threshold. A failed threshold-read BLOCKS all auto-sends (fail-closed).
+   *
+   * Claim-BEFORE-create is what makes the run at-most-once per due period even
+   * when two invocations overlap (a manual "Run" or an operator curl with
+   * CRON_SECRET while the daily cron is still in the loop): nothing downstream
+   * dedupes — PurchaseOrdersService.create has no idempotency key, and the
+   * `purchase_order.ordered` outbox dedupe key is per-PO-id, so two POs mean two
+   * connector pushes and real duplicate spend.
    */
   async runDueTemplates(now: Date): Promise<{
     created: number;
@@ -362,10 +370,56 @@ export class RecurringPoTemplatesService {
     let failures = 0;
 
     for (const tpl of templates) {
-      let createdOk = false;
+      // ── CLAIM ────────────────────────────────────────────────────────────
+      // Advance the schedule for EVERY due template BEFORE doing any work, so
+      // it fires at most once per due period: no double-fire on a re-run, no
+      // catch-up burst for an overdue/dormant template, and no infinite retry of
+      // a failing one. Advance until strictly in the future.
+      //
+      // The `.eq('next_run_at', tpl.next_run_at)` predicate is the claim itself
+      // (compare-and-swap on the value we read). Without it a SECOND overlapping
+      // invocation — the cron route has no lock, any caller with CRON_SECRET can
+      // start one mid-run — would select the same template, create a second PO
+      // and, in send mode under the cap, auto-order it too. 0 rows matched means
+      // the other invocation owns this period: skip SILENTLY, it is not a
+      // failure. `enabled` is re-checked here too so a template disabled between
+      // the select and the claim never spends money.
+      let claimed = false;
       try {
-        // Parse line items from jsonb — fail-closed: malformed/empty → skip (and
-        // still advance the schedule below so a bad template can't retry forever).
+        let nextRun = new Date(tpl.next_run_at);
+        for (let guard = 0; nextRun.getTime() <= now.getTime() && guard < 1000; guard += 1) {
+          nextRun = nextRunAt(
+            tpl.cadence as RecurringCadence,
+            nextRun,
+            tpl.custom_days ?? undefined,
+          );
+        }
+        const { data: advanced, error: advErr } = await this.ctx.supabase
+          .from('recurring_po_templates')
+          .update({
+            next_run_at: nextRun.toISOString(),
+            last_run_at: now.toISOString(),
+            updated_by: this.ctx.userId,
+          })
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('id', tpl.id)
+          .eq('enabled', true)
+          .eq('next_run_at', tpl.next_run_at)
+          .select('id')
+          .maybeSingle();
+        // An ERROR is a failure worth surfacing in the cron summary; a clean
+        // 0-row match is a lost race and stays silent.
+        if (advErr) throw advErr;
+        claimed = Boolean(advanced);
+      } catch {
+        failures += 1;
+      }
+      if (!claimed) continue;
+
+      try {
+        // Parse line items from jsonb — fail-closed: malformed/empty → skip. The
+        // schedule was already advanced by the claim above, so a bad template
+        // can't retry forever.
         const rawLines = Array.isArray(tpl.line_items) ? tpl.line_items : [];
         const lines = rawLines
           .map((l: unknown) => {
@@ -426,43 +480,13 @@ export class RecurringPoTemplatesService {
               heldForReview++;
             }
           }
-          createdOk = true;
         }
       } catch {
+        // The claim already stamped last_run_at / next_run_at, so this template
+        // will NOT retry inside the same period — same as the previous
+        // "advance for every attempted template" contract. The failures counter
+        // is what the cron summary reports it by.
         failures++;
-      }
-
-      // Advance the schedule for EVERY attempted template (success OR failure) so
-      // it fires at most once per due period: no double-fire on a re-run, no
-      // catch-up burst for an overdue/dormant template, and no infinite retry of
-      // a failing one. Advance until strictly in the future. Rowcount-checked —
-      // a template that DID create a PO but failed to advance could re-fire (and
-      // re-send) next run, so surface that as a failure for the cron summary.
-      try {
-        let nextRun = new Date(tpl.next_run_at);
-        for (let guard = 0; nextRun.getTime() <= now.getTime() && guard < 1000; guard += 1) {
-          nextRun = nextRunAt(
-            tpl.cadence as RecurringCadence,
-            nextRun,
-            tpl.custom_days ?? undefined,
-          );
-        }
-        const { data: advanced, error: advErr } = await this.ctx.supabase
-          .from('recurring_po_templates')
-          .update({
-            next_run_at: nextRun.toISOString(),
-            last_run_at: now.toISOString(),
-            updated_by: this.ctx.userId,
-          })
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('id', tpl.id)
-          .select('id')
-          .maybeSingle();
-        if (advErr || !advanced) {
-          throw advErr ?? new Error('recurring template schedule advance matched 0 rows');
-        }
-      } catch {
-        if (createdOk) failures += 1;
       }
     }
 

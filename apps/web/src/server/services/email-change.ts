@@ -61,6 +61,39 @@ import type { AuditEvent } from '@/server/services/audit';
  * Until BOTH links are used, auth.users.email, the projection, every
  * notification and every sign-in keep the current address. The unverified
  * address receives exactly one thing: its own confirmation link.
+ *
+ * ═══ THE EXISTENCE ORACLE (SP-101) — KNOWN, MEASURED, KEPT ═══
+ *
+ * requestEmailChange answers `conflict` when the target address already has
+ * an account, so a signed-in user can learn whether an address is registered.
+ * The rest of the product deliberately avoids that (sign-up disabled, reset
+ * always returns ok, sign-in says "Invalid email or password"), so this was
+ * raised as an inconsistency. It is kept, and NOT because we forgot:
+ *
+ *  1. Answering 200 with the success shape does not hide anything here.
+ *     Pending state is read straight back from GoTrue by the very next
+ *     render — the settings card calls router.refresh() the instant the
+ *     request resolves, the server page re-reads getEmailChangeStatus, and
+ *     /api/v1/account/email/status does the same for mobile. A fabricated
+ *     success shows a pending row that vanishes within the second, which is
+ *     the same bit of information, delivered as a UI glitch. resendEmailChange
+ *     would then answer not_found for it — a third copy of the same bit.
+ *  2. Making the two cases genuinely indistinguishable means keeping a decoy
+ *     pending change that status/resend/cancel all play along with. That is
+ *     deception machinery inside the one module that owns account identity,
+ *     and it strands an honest typo in a "pending" state that can never
+ *     complete. Not worth it for this threat.
+ *  3. The exposure is already narrow: caller must be signed in, must pass the
+ *     MFA posture check, must supply their OWN current password, and is held
+ *     to 3 attempts / 15 min per user AND per target address (both closed).
+ *     The product is invite-only, so there is no unauthenticated path to it.
+ *
+ * So the posture is DETECT, not conceal: the refusal writes a
+ * `user.email.change_requested` audit row with `outcome: 'target_exists'`
+ * (the delivered path writes `outcome: 'sent'`), which makes a run of probes
+ * from one user visible in the audit log. If this is ever revisited, the fix
+ * has to change request AND status AND resend AND both UIs together — a
+ * service-only change is a UX regression that leaks the same bit.
  */
 
 /** Production `mailer_otp_exp` is 3600s. */
@@ -365,6 +398,19 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     throw new ServiceError('internal_error', existsError.message);
   }
   if (exists === true) {
+    // SP-101 — this refusal IS an account-existence oracle for a signed-in
+    // user, and we keep it deliberately. See "THE EXISTENCE ORACLE" in the
+    // module header for why concealing it here does not conceal it. What we
+    // do instead is make probing VISIBLE: audit the refusal with the same
+    // event as a real request so an operator can see one user producing a run
+    // of `target_exists` rows. Before this, the throw came before writeAudit
+    // and a probe left no trace at all.
+    await writeAudit('user.email.change_requested', args.userId, guard.organizationId, {
+      from: currentEmail,
+      to: newEmail,
+      source: args.source,
+      outcome: 'target_exists',
+    });
     throw new ServiceError('conflict', 'This email address cannot be used.');
   }
 
@@ -375,6 +421,9 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     from: currentEmail,
     to: newEmail,
     source: args.source,
+    // Paired with the `target_exists` row above: both refusal and delivery
+    // write this event, so `outcome` is what tells them apart in the log.
+    outcome: 'sent',
   });
 
   return { pendingEmail: newEmail, sentAt: links.sentAt, expiresAt: isoPlus(links.sentAt, EMAIL_CHANGE_LINK_TTL_MS) };

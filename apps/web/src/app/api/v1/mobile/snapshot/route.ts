@@ -103,8 +103,20 @@ export const GET = handler;
  *     openCycleCounts: [{ id, status, warehouse_id, started_at, lines: [...] }],
  *     bundles: [{ id, name, sku, components: [{ item_id, qty, optional }],
  *                 phantom_qty, preassembly_enabled }],
- *     deletedItemIds: string[]                  // for delta cleanup (future)
+ *     removedItemIds?: string[],   // delta pulls only — items that LEFT scope
+ *     activeBundleIds?: string[]   // the COMPLETE active-bundle id set
  *   }
+ *
+ * Removals (SP-081b): `items` and `bundles` are `since`-filtered, so a delta
+ * response is a list of ADDITIONS/CHANGES and has no way to say "this row is
+ * gone". Archived/soft-deleted items and deactivated bundles therefore lived
+ * on in the handset's SQLite until the next FULL resync (org switch or
+ * sign-out) — staff kept opening a kit from the cached Bundles list and
+ * enqueueing a distribute the server then refused. The two fields above give
+ * a delta pull the vocabulary to remove. Both are ADDITIVE and OPTIONAL: a
+ * binary that predates them ignores unknown JSON keys and behaves exactly as
+ * before, and an absent field means "the server told us nothing to remove"
+ * (never "remove everything").
  */
 async function snapshotGET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -336,6 +348,86 @@ async function snapshotGET(req: NextRequest) {
     phantomById.set(p.id, { quantity_on_hand: p.quantity_on_hand, warehouse_id: p.warehouse_id });
   }
 
+  // ── Removals ────────────────────────────────────────────────────
+  // See the "Removals (SP-081b)" note on the doc block above for WHY.
+  //
+  // Both reads FAIL CLOSED by omitting their field: the client treats an
+  // absent list as "no instruction" (today's behaviour), whereas a short or
+  // empty list built from a failed read would delete rows the phone should
+  // still hold. Run together — neither depends on the other.
+  const [removedItemIds, activeBundleIds] = await Promise.all([
+    // (a) Items that left scope since the cursor. Delta pulls ONLY: without
+    // `since` this would enumerate every item the org ever archived, and a
+    // full pull is already reconciled client-side by sweeping the rows it
+    // did not receive.
+    //
+    // Deliberately NOT expressed as the inverse predicate in PostgREST
+    // (`.neq('status','active')` drops NULL status, `.not('deleted_at',
+    // 'is',null)` is another NULL trap — recurring bug pattern #23). Instead
+    // ask for the ids of EVERY non-bundle row that changed since the cursor
+    // and subtract the ones the payload above actually delivered: whatever
+    // the in-scope query filters on, changed-but-not-delivered means "no
+    // longer in scope", and the two sets can never drift apart.
+    //
+    // Residual gap, on purpose: a row that left the caller's RLS visibility
+    // entirely (moved to an unreadable warehouse, or into a hidden category)
+    // is invisible to this read too, so it is not reported. Closing that
+    // needs a service-role read; the full-pull sweep still catches it.
+    (async (): Promise<string[] | undefined> => {
+      if (!since) return undefined;
+      const delivered = new Set((items ?? []).map((i) => i.id));
+      try {
+        const changed = await fetchAllRows<{ id: string }>((from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            // is_bundle rows are a different species (a bundle's phantom
+            // stock row), excluded from `items` structurally rather than by
+            // lifecycle — they were never delivered, so reporting them as
+            // "removed" would be pure payload noise on every sync tick.
+            .eq('is_bundle', false)
+            .gte('updated_at', since)
+            .order('id', { ascending: true })
+            .range(from, to),
+        );
+        return changed.map((r) => r.id).filter((id) => !delivered.has(id));
+      } catch (err) {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'mobile.snapshot.removed_items',
+          organizationId: ctx.organizationId,
+        });
+        return undefined;
+      }
+    })(),
+    // (b) The org's COMPLETE active-bundle id set, independent of `since`.
+    // The client treats it as authoritative and deletes any cached bundle
+    // absent from it, so it MUST be complete: paged through fetchAllRows
+    // because a single .select() is silently clamped to PostgREST's
+    // max_rows (1000) and a truncated list would wipe live bundles.
+    (async (): Promise<string[] | undefined> => {
+      try {
+        const rows = await fetchAllRows<{ id: string }>((from, to) =>
+          ctx.supabase
+            .from('bundles')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('is_active', true)
+            .is('archived_at', null)
+            .order('id', { ascending: true })
+            .range(from, to),
+        );
+        return rows.map((r) => r.id);
+      } catch (err) {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'mobile.snapshot.active_bundle_ids',
+          organizationId: ctx.organizationId,
+        });
+        return undefined;
+      }
+    })(),
+  ]);
+
   return NextResponse.json({
     serverTime,
     since,
@@ -441,5 +533,12 @@ async function snapshotGET(req: NextRequest) {
         })),
       };
     }),
+    // Spread-conditional so a failed removal read OMITS the key rather than
+    // sending `null`/`[]` — the client's `Array.isArray()` guard must see
+    // "absent", which is its no-op path. An EMPTY array is still sent when
+    // the read succeeded and there is genuinely nothing active/removed:
+    // that is a real instruction, not a failure.
+    ...(removedItemIds ? { removedItemIds } : {}),
+    ...(activeBundleIds ? { activeBundleIds } : {}),
   });
 }

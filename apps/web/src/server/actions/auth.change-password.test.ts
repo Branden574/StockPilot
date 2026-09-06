@@ -19,7 +19,19 @@ const listFactors = vi.fn();
 const getAuthenticatorAssuranceLevel = vi.fn();
 const updateUser = vi.fn();
 const signOut = vi.fn();
+const getSession = vi.fn();
 const maybeSingle = vi.fn();
+const broadcastToChannel = vi.fn();
+// vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
+// above the module body), so a plain `const` would still be in its temporal
+// dead zone when the factory runs.
+const { verifyPasswordSideChannel } = vi.hoisted(() => ({
+  verifyPasswordSideChannel: vi.fn(),
+}));
+
+// A real (unsigned) access token whose payload carries the session id, so the
+// keepId below is produced by the REAL sessionIdFromJwt rather than a mock.
+const ACCESS_TOKEN = `h.${Buffer.from(JSON.stringify({ session_id: 'sess-1' })).toString('base64url')}.s`;
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
@@ -29,7 +41,24 @@ vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/server', () => ({ after: vi.fn() }));
 vi.mock('@/lib/auth/login-device', () => ({ noteLoginDevice: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
-vi.mock('@/lib/realtime/broadcast', () => ({ broadcastToChannel: vi.fn() }));
+vi.mock('@/lib/realtime/broadcast', () => ({
+  broadcastToChannel: (...args: unknown[]) => broadcastToChannel(...args),
+}));
+// Spy that DELEGATES to the real helper unless a test stubs a return value:
+// the signInWithPassword assertions below keep working (the real helper drives
+// the same mocked @supabase/supabase-js client), while the spy proves
+// change-password re-confirms the password through the SHARED helper instead
+// of its own inlined copy of it. Delegating per CALL rather than via
+// mockImplementation survives the vi.clearAllMocks() in each beforeEach.
+vi.mock('@/lib/auth/verify-password', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/verify-password')>();
+  return {
+    verifyPasswordSideChannel: (...args: [string, string]) => {
+      const stubbed = verifyPasswordSideChannel(...args);
+      return stubbed === undefined ? actual.verifyPasswordSideChannel(...args) : stubbed;
+    },
+  };
+});
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
 vi.mock('@/lib/env', () => ({
   env: {
@@ -53,6 +82,7 @@ vi.mock('@/lib/supabase/server', () => ({
       getUser,
       updateUser,
       signOut,
+      getSession,
       mfa: { listFactors, getAuthenticatorAssuranceLevel },
     },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
@@ -83,6 +113,7 @@ describe('changePasswordAction — account status', () => {
     getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
+    getSession.mockResolvedValue({ data: { session: { access_token: ACCESS_TOKEN } } });
     // Default: ACTIVE account.
     maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
   });
@@ -135,5 +166,86 @@ describe('changePasswordAction — account status', () => {
     expect(res.ok).toBe(true);
     expect(signInWithPassword).toHaveBeenCalledTimes(1);
     expect(updateUser).toHaveBeenCalledWith({ password: INPUT.newPassword });
+  });
+});
+
+/**
+ * SP-045 — `signOut({ scope: 'others' })` only revokes REFRESH tokens. Every
+ * other browser keeps rendering RSC pages and writing through PostgREST with
+ * its still-valid cookie JWT for up to an hour, and the mobile app keeps its
+ * direct PostgREST reads. Both platforms already run a session-revocation
+ * listener for exactly this window (see signOutAction and
+ * completePasswordResetAction, which both broadcast) — change-password simply
+ * never told it. A user who changes their password because a device was
+ * compromised believes that device is out; it is not.
+ *
+ * SP-097 — the current-password re-confirm must go through the SHARED
+ * verifyPasswordSideChannel helper, whose docstring names change-password as
+ * its first intended caller. An inlined copy silently misses every future
+ * hardening applied to the helper.
+ */
+describe('changePasswordAction — session revocation + shared password check', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
+    checkRateLimit.mockResolvedValue({ allowed: true });
+    signInWithPassword.mockResolvedValue({ error: null });
+    listFactors.mockResolvedValue({ data: { totp: [] } });
+    getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
+    updateUser.mockResolvedValue({ error: null });
+    signOut.mockResolvedValue({ error: null });
+    getSession.mockResolvedValue({ data: { session: { access_token: ACCESS_TOKEN } } });
+    maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
+  });
+
+  it('broadcasts the revoke to other devices, keeping the current session alive', async () => {
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    expect(signOut).toHaveBeenCalledWith({ scope: 'others' });
+    expect(broadcastToChannel).toHaveBeenCalledWith('user:u-1:sessions', 'revoked', {
+      keepId: 'sess-1',
+    });
+  });
+
+  it('skips the broadcast when the current session id cannot be derived', async () => {
+    // A `keepId: null` payload means "evict EVERY session" (signOutAction's
+    // semantics) — broadcasting that here would sign the user out of the very
+    // tab they just changed their password in.
+    getSession.mockResolvedValue({ data: { session: null } });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('re-confirms the current password through the shared side-channel helper', async () => {
+    await changePasswordAction(INPUT);
+
+    expect(verifyPasswordSideChannel).toHaveBeenCalledTimes(1);
+    expect(verifyPasswordSideChannel).toHaveBeenCalledWith(
+      'u@example.com',
+      INPUT.currentPassword,
+    );
+  });
+
+  it('refuses a wrong current password without rotating or revoking anything', async () => {
+    verifyPasswordSideChannel.mockResolvedValueOnce({
+      ok: false,
+      reason: 'invalid_password',
+      message: 'Password is incorrect.',
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('forbidden');
+      expect(res.error.message).toBe('Current password is incorrect');
+    }
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 });

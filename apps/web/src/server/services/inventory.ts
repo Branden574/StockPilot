@@ -800,6 +800,17 @@ export interface BookCrateSyncResult {
   cratePreservedItemIds: string[];
 }
 
+/**
+ * How many item ids may ride in ONE `.in('item_id', …)` filter.
+ *
+ * NOT a row cap — a REQUEST cap. PostgREST echoes the whole request path back
+ * in the `Content-Location` response header, so a single `.in()` carrying ~395+
+ * uuids overflows Node's 16KB header limit and the supabase-js call fails as a
+ * bare `TypeError: fetch failed` (measured against prod with this exact select
+ * string). 300 leaves headroom for the rest of the query string.
+ */
+const HOLDINGS_ID_CHUNK = 300;
+
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1208,16 +1219,33 @@ export class InventoryService {
     // holdings, matching rackHoldingsCount rather than placed_racks.
     const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
     if (ids.length > 0) {
-      const { data: levels } = await this.ctx.supabase
-        .from('item_stock_levels')
-        .select('item_id, location_id, quantity, locations!inner(name, kind)')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('item_id', ids)
-        .gt('quantity', 0);
+      // CHUNKED + PAGED (see holdingsForItemIds). `ids` is the whole page and
+      // `limit` clamps at 1000, so a 1000-item export page with more than one
+      // holding apiece used to blow straight through the PostgREST row cap and
+      // report staged/unplaced/placed_racks as 0 for the overflow — silently.
+      //
+      // FAIL-CLOSED, NOT SILENT (pattern #1 + #28): a read error degrades the
+      // placement columns rather than throwing the whole page, but it is now
+      // LOGGED. The old `const { data: levels }` discarded the error, so a
+      // failing read and an item with no stock were indistinguishable.
+      let levels: unknown[] = [];
+      try {
+        levels = await this.holdingsForItemIds<unknown>(
+          ids,
+          'item_id, location_id, quantity, locations!inner(name, kind)',
+        );
+      } catch (e) {
+        // `internalDetail` carries the raw PostgREST text; ServiceError's public
+        // `message` is sanitized for internal_error (S13) and would log nothing
+        // diagnosable.
+        console.error('[inventory list] placement holdings read failed — rows degrade to no placement', {
+          error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+        });
+      }
       // `locations` is a to-one embed → a single object at runtime; the
       // generated PostgREST types model it as an array, so cast via unknown
       // (same convention as placements() below).
-      for (const lvl of (levels ?? []) as unknown as Array<{
+      for (const lvl of levels as unknown as Array<{
         item_id: string;
         location_id: string;
         quantity: number;
@@ -1829,13 +1857,25 @@ export class InventoryService {
     >();
     if (itemIds.length === 0) return out;
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(name, kind)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .gt('quantity', 0);
-    if (error || !data) return out;
+    // CHUNKED + PAGED through the same helper as list()'s placement read — the
+    // two are siblings computing the same thing from the same table, and fixing
+    // only one of a duplicated read is not a fix (pattern #26).
+    let data: unknown[];
+    try {
+      data = await this.holdingsForItemIds<unknown>(
+        itemIds,
+        'item_id, location_id, quantity, locations!inner(name, kind)',
+      );
+    } catch (e) {
+      // Fail-closed, as documented above: an empty map, so the list degrades to
+      // no placement lines rather than throwing the whole page. Logged, because
+      // the old `if (error || !data) return out` was indistinguishable from
+      // "this item has no holdings".
+      console.error('[placementBreakdown] holdings read failed — no placement lines rendered', {
+        error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+      });
+      return out;
+    }
 
     for (const row of data as unknown as Array<{
       item_id: string;
@@ -1843,7 +1883,18 @@ export class InventoryService {
       quantity: number;
       locations: { name: string; kind: string | null };
     }>) {
-      const kind = row.locations?.kind ?? 'unplaced';
+      // A NULL `locations.kind` IS the Site encoding — 0292/0331 and
+      // reference_locations_kind_null_is_a_site: Site rows are created without a
+      // kind and are NEVER backfilled (L4L's DC4 holds hundreds of units that
+      // way; most of Demo Co's active locations are NULL-kind). Coalescing NULL
+      // to 'unplaced' here printed the word "Unplaced" for stock the SAME row's
+      // summary counts as PLACED (derivePlacement subtracts only staged +
+      // unplaced), and anything keyed on kind === 'unplaced' — the amber
+      // "awaiting put-away" chip — fired on stock that was correctly recorded.
+      // A manager then "fixes" it by moving stock that never needed moving.
+      // 'site' is its own kind, labelled with the location's real name and
+      // ranked with the racks below.
+      const kind = row.locations?.kind ?? 'site';
       const label =
         kind === 'staging' ? 'Staging' : kind === 'unplaced' ? 'Unplaced' : row.locations.name;
       const arr = out.get(row.item_id) ?? [];
@@ -1851,7 +1902,7 @@ export class InventoryService {
       out.set(row.item_id, arr);
     }
 
-    // racks/crates first (A→Z), then Staging, then Unplaced.
+    // racks/crates/sites first (A→Z), then Staging, then Unplaced.
     const rank = (k: string) => (k === 'staging' ? 1 : k === 'unplaced' ? 2 : 0);
     for (const arr of out.values()) {
       arr.sort((a, b) => rank(a.kind) - rank(b.kind) || a.label.localeCompare(b.label));
@@ -2206,7 +2257,13 @@ export class InventoryService {
     }
 
     if (input.quantityOnHand && input.quantityOnHand > 0) {
-      await this.ctx.supabase.from('stock_movements').insert({
+      // The result USED TO BE DISCARDED — no destructuring at all — so an
+      // 'initial' movement that RLS or a pooler timeout refused left the item
+      // carrying stock that no movement anywhere explains, and create() returned
+      // success. See compensateOpeningStockOrThrow for why that is not an
+      // acceptable "recoverable audit gap". Compensated BEFORE the auto-place
+      // block below, so no placement ever runs on stock that no longer exists.
+      const { error: movementErr } = await this.ctx.supabase.from('stock_movements').insert({
         organization_id: this.ctx.organizationId,
         item_id: data.id,
         movement_type: 'initial',
@@ -2216,6 +2273,13 @@ export class InventoryService {
         user_id: this.ctx.userId,
         to_location_id: input.primaryLocationId ?? null,
       });
+      if (movementErr) {
+        await this.compensateOpeningStockOrThrow([data.id as string], movementErr, {
+          tag: '[create]',
+          subject: 'This item was',
+          pronoun: 'its',
+        });
+      }
     }
 
     // ── Manual auto-place (owner request 2026-08-04) ────────────────────────
@@ -2999,71 +3063,13 @@ export class InventoryService {
         .from('stock_movements')
         .insert(movementRows);
       if (movementErr) {
-        const stockedIds = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
-
-        // (a) The PLACEMENTS the 0199 trigger seeded.
-        const { error: levelErr } = await this.ctx.supabase
-          .from('item_stock_levels')
-          .update({ quantity: 0 })
-          .eq('organization_id', this.ctx.organizationId)
-          .in('item_id', stockedIds);
-
-        // (b) The row quantity.
-        const { data: zeroed, error: zeroErr } = await this.ctx.supabase
-          .from('inventory_items')
-          .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
-          .eq('organization_id', this.ctx.organizationId)
-          .in('id', stockedIds)
-          .select('id');
-        // .update().eq() is FAIL-OPEN under RLS: no error, no row. A partial
-        // compensation is still a broken ledger, so it is treated as a failure.
-        const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
-
-        // (c) PROVE the placements are gone. Both writes above are filtered
-        // updates, so "no error" is not evidence that anything was matched —
-        // and the level write cannot even use the returned-row trick, because
-        // zero level rows is a LEGITIMATE outcome (the 0199 trigger swallows
-        // its own failures by design). A re-read is the only unambiguous
-        // answer, and it is the answer that matters: any surviving placement is
-        // exactly the phantom-stock state this compensation exists to prevent.
-        const { data: leftovers, error: verifyErr } = await this.ctx.supabase
-          .from('item_stock_levels')
-          .select('id')
-          .eq('organization_id', this.ctx.organizationId)
-          .in('item_id', stockedIds)
-          .gt('quantity', 0);
-        const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
-
-        if (
-          levelErr ||
-          zeroErr ||
-          verifyErr ||
-          compensated !== stockedIds.length ||
-          survivingPlacements > 0
-        ) {
-          console.error(
-            '[bulkCreateSizedVariants] opening movements failed AND the rollback failed',
-            {
-              movementError: movementErr.message,
-              levelError: levelErr?.message,
-              rollbackError: zeroErr?.message,
-              verifyError: verifyErr?.message,
-              survivingPlacements,
-              stockedIds,
-            },
-          );
-          throw new ServiceError(
-            'internal_error',
-            'These variants were created, but their opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving, picking or counting against them.',
-          );
-        }
-        console.error(
-          '[bulkCreateSizedVariants] opening movements failed; on-hand and placements rolled back to 0',
-          { movementError: movementErr.message, stockedIds },
-        );
-        throw new ServiceError(
-          'internal_error',
-          'These variants were created, but their opening stock could not be recorded, so they were saved with zero on hand. Add the quantities with a stock adjustment.',
+        // The compensation itself now lives in compensateOpeningStockOrThrow —
+        // create() and bulkCreate() were making the OPPOSITE decision on the
+        // same failure (pattern #26). It always throws.
+        await this.compensateOpeningStockOrThrow(
+          inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id),
+          movementErr,
+          { tag: '[bulkCreateSizedVariants]', subject: 'These variants were', pronoun: 'their' },
         );
       }
     }
@@ -3144,6 +3150,118 @@ export class InventoryService {
           ? { rackName: placement.rackName, count: placement.failedItemIds.length }
           : null,
     };
+  }
+
+  /**
+   * THE LEDGER INVARIANT IS ABSOLUTE: for every item,
+   * SUM(stock_movements.quantity_change) = quantity_on_hand.
+   *
+   * Call this when an opening ('initial') movement insert FAILED for rows that
+   * were already committed with stock. It compensates, then always throws.
+   *
+   * WHY IT EXISTS IN ONE PLACE (pattern #26). This decision was made once, for
+   * bulkCreateSizedVariants, and its two siblings kept the old one:
+   * `create()` never even destructured the insert result, and `bulkCreate()`
+   * console.warn'd "the audit gap is recoverable" and returned success. That
+   * was true of the ROWS and false of the BOOKS — the item Activity feed, the
+   * 14-day sparklines, the dashboard history reconstruction (currentQty − SUM
+   * of later deltas) and every reconciliation that sums the ledger are then
+   * wrong for those items, forever, with nothing logged.
+   *
+   * Not merely a transient hazard, either: the two RLS floors differ.
+   * inventory_items_insert (0212) admits `items:create`; stock_movements_insert
+   * (0321) requires staff or `stock:adjust`. A viewer granted items:create
+   * through configurable permissions creates stocked items whose ledger row is
+   * refused EVERY time (pattern #4 + #28).
+   *
+   * TWO INVARIANTS, NOT ONE. `trg_seed_initial_level` (0199) is an AFTER INSERT
+   * trigger on inventory_items: by the time the movement insert is even
+   * attempted it has ALREADY written one item_stock_levels row per stocked row,
+   * at the same quantity. Nothing syncs levels on UPDATE, so zeroing only
+   * `quantity_on_hand` would leave Σlevels = N against on_hand = 0 — PHANTOM
+   * PLACED STOCK, which the archive guard (max(on_hand, Σholdings)) refuses to
+   * archive forever and the placed draw-down happily picks straight into a
+   * negative on-hand. So both are restored: levels 0 = on_hand 0 = no movements.
+   *
+   * ORDER: levels FIRST. If the second write then fails the intermediate is
+   * "stock on the row, not placed" — the pre-0199 shape, which blocks picking
+   * and is caught by the same max(). The reverse order's intermediate is the
+   * phantom-placed one, which picks negative.
+   *
+   * Rolling the ITEMS back instead would be a hard DELETE on a table whose whole
+   * convention is soft-delete, and a fail-open `.delete().eq()` under RLS would
+   * leave the worst of both.
+   */
+  private async compensateOpeningStockOrThrow(
+    stockedIds: string[],
+    movementErr: { message: string },
+    opts: { tag: string; subject: string; pronoun: 'its' | 'their' },
+  ): Promise<never> {
+    // (a) The PLACEMENTS the 0199 trigger seeded.
+    const { error: levelErr } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .update({ quantity: 0 })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', stockedIds);
+
+    // (b) The row quantity.
+    const { data: zeroed, error: zeroErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', stockedIds)
+      .select('id');
+    // .update().eq() is FAIL-OPEN under RLS: no error, no row (pattern #2). A
+    // partial compensation is still a broken ledger, so it counts as a failure.
+    const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+
+    // (c) PROVE the placements are gone. Both writes above are filtered updates,
+    // so "no error" is not evidence that anything was matched — and the level
+    // write cannot even use the returned-row trick, because ZERO level rows is a
+    // legitimate outcome (the 0199 trigger swallows its own failures by design).
+    // A re-read is the only unambiguous answer, and it is the answer that
+    // matters: any surviving placement is exactly the phantom-stock state this
+    // compensation exists to prevent.
+    const { data: leftovers, error: verifyErr } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', stockedIds)
+      .gt('quantity', 0);
+    const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
+
+    if (
+      levelErr ||
+      zeroErr ||
+      verifyErr ||
+      compensated !== stockedIds.length ||
+      survivingPlacements > 0
+    ) {
+      console.error(`${opts.tag} opening movements failed AND the rollback failed`, {
+        movementError: movementErr.message,
+        levelError: levelErr?.message,
+        rollbackError: zeroErr?.message,
+        verifyError: verifyErr?.message,
+        survivingPlacements,
+        stockedIds,
+      });
+      throw new ServiceError(
+        'internal_error',
+        `${opts.subject} created, but ${opts.pronoun} opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving, picking or counting against them.`,
+      );
+    }
+    console.error(`${opts.tag} opening movements failed; on-hand and placements rolled back to 0`, {
+      movementError: movementErr.message,
+      stockedIds,
+    });
+    throw new ServiceError(
+      'internal_error',
+      `${opts.subject} created, but ${opts.pronoun} opening stock could not be recorded, so ${
+        opts.pronoun === 'its' ? 'it was' : 'they were'
+      } saved with zero on hand. Add ${
+        opts.pronoun === 'its' ? 'the quantity' : 'the quantities'
+      } with a stock adjustment.`,
+    );
   }
 
   async bulkCreate(input: {
@@ -3336,12 +3454,18 @@ export class InventoryService {
       const { error: movementErr } = await this.ctx.supabase
         .from('stock_movements')
         .insert(movementRows);
-      // Don't roll back the items insert on a movement-log failure —
-      // the items exist, the audit gap is recoverable. Log and continue.
+      // This used to console.warn and return `created: N` — "the items exist,
+      // the audit gap is recoverable". It is not: 500 stocked rows with no
+      // ledger break every history-derived view for those items permanently,
+      // and the sibling sized-variants path had already reversed that decision.
+      // COMPENSATE, then fail loudly (the helper always throws).
       if (movementErr) {
-        console.warn(
-          '[bulkCreate] stock_movements insert failed after inventory_items insert',
-          movementErr.message,
+        await this.compensateOpeningStockOrThrow(
+          (inserted ?? [])
+            .filter((r: { quantity_on_hand: number }) => r.quantity_on_hand > 0)
+            .map((r: { id: string }) => r.id),
+          movementErr,
+          { tag: '[bulkCreate]', subject: 'These items were', pronoun: 'their' },
         );
       }
     }
@@ -3976,22 +4100,108 @@ export class InventoryService {
    * a multi-item batch names the count of affected items. FAIL-CLOSED: a read
    * error blocks the batch rather than risk orphaning stock.
    */
+  /**
+   * Every positive `item_stock_levels` holding for `ids` — the only shape that
+   * is safe at scale.
+   *
+   * PostgREST clamps EVERY response to `[api] max_rows = 1000`
+   * (supabase/config.toml) and says NOTHING when it does (pattern #3). Three
+   * callers used to hand a whole page of item ids to one un-ranged
+   * `.in('item_id', …)`, so past 1000 holdings:
+   *   - the bulk archive guard stopped seeing the items that still held stock
+   *     and archived them anyway — precisely the silent orphan it exists to
+   *     prevent;
+   *   - bulk "Set rack" wrote the rack LABEL, never moved the stock, and
+   *     reported `0 failed` (the `label_mismatch` the Exception Center flags);
+   *   - list() reported staged/unplaced/placed_racks as empty for the overflow.
+   *
+   * So: CHUNK the ids (HOLDINGS_ID_CHUNK — a request-size limit, not a row one)
+   * and PAGE each chunk through fetchAllRows with the stable `.order('id')` the
+   * helper requires.
+   *
+   * THROWS on a read error, because fetchAllRows does. That is deliberate: each
+   * caller must DECIDE (the archive guard fails closed, list() logs and
+   * degrades, the placement pass reports every item as failed). What none of
+   * them may do any more is what the old `const { data }` did — read a failed
+   * query as "this item has no holdings".
+   */
+  /**
+   * Runs an id-filtered read in `.in()` chunks and concatenates the rows.
+   *
+   * Same request-size limit as holdingsForItemIds (see HOLDINGS_ID_CHUNK): a
+   * single `.in()` carrying ~395+ uuids fails on the Node runtime as a bare
+   * `TypeError: fetch failed`, which meant bulkUpdate's advertised "500 items
+   * at a time" was a lie — the batch died on its FIRST read, before any guard
+   * ran. One row per id, so no row-cap paging is needed on top.
+   *
+   * Throws ServiceError('internal_error') on a page error: these reads decide
+   * which items a bulk op may touch, so a partial answer is not an answer.
+   */
+  private async chunkedItemRead<Row>(
+    ids: readonly string[],
+    build: (chunk: string[]) => PromiseLike<{
+      data: Row[] | null;
+      error: { message: string } | null;
+    }>,
+  ): Promise<Row[]> {
+    const out: Row[] = [];
+    for (const chunk of chunkIdsForInFilter(ids, HOLDINGS_ID_CHUNK)) {
+      const { data, error } = await build(chunk);
+      if (error) throw new ServiceError('internal_error', error.message);
+      for (const r of data ?? []) out.push(r);
+    }
+    return out;
+  }
+
+  private async holdingsForItemIds<Row>(
+    ids: readonly string[],
+    select: string,
+  ): Promise<Row[]> {
+    if (ids.length === 0) return [];
+    const out: Row[] = [];
+    for (const chunk of chunkIdsForInFilter(ids, HOLDINGS_ID_CHUNK)) {
+      const page = await fetchAllRows<Row>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('item_stock_levels')
+            .select(select)
+            .eq('organization_id', this.ctx.organizationId)
+            .in('item_id', chunk as string[])
+            .gt('quantity', 0)
+            .order('id')
+            .range(from, to) as unknown as PromiseLike<{
+            data: Row[] | null;
+            error: { message: string } | null;
+          }>,
+      );
+      for (const r of page) out.push(r);
+    }
+    return out;
+  }
+
   private async assertBulkArchivableOrThrow(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    const { data, error } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(id, name, kind)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', ids)
-      .gt('quantity', 0);
-    if (error) {
+    // CHUNKED + PAGED (see holdingsForItemIds). This read used to be one
+    // un-ranged `.in()` over up to 500 ids, and an item can hold several rows
+    // (staging + unplaced + rack + crate). Past the 1000-row cap the overflow
+    // items simply vanished from `byItem`, `byItem.size === 0` read as "clean",
+    // and they archived while still holding stock — with no error anywhere.
+    let data: unknown[];
+    try {
+      data = await this.holdingsForItemIds<unknown>(
+        ids,
+        'item_id, location_id, quantity, locations!inner(id, name, kind)',
+      );
+    } catch {
+      // FAIL-CLOSED, unchanged: a read error blocks the batch rather than risk
+      // orphaning stock.
       throw new ServiceError(
         'internal_error',
         'Could not verify these items have no stock before archiving. Please try again.',
       );
     }
     const byItem = new Map<string, Array<{ label: string; quantity: number }>>();
-    for (const row of (data ?? []) as unknown as Array<{
+    for (const row of data as unknown as Array<{
       item_id: string;
       quantity: number;
       locations: { name: string; kind: string | null };
@@ -4168,13 +4378,19 @@ export class InventoryService {
       );
     }
 
-    const { data: rows, error: loadErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, warehouse_id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', input.ids)
-      .is('deleted_at', null);
-    if (loadErr) throw new ServiceError('internal_error', loadErr.message);
+    // CHUNKED: one `.in()` of all 500 ids never even reached the server (see
+    // chunkedItemRead) — this read is what produces `allowedIds`, so a
+    // truncated or failed answer silently narrows every guard below it.
+    const rows = await this.chunkedItemRead<{ id: string; warehouse_id: string | null }>(
+      input.ids,
+      (chunk) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, warehouse_id')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('id', chunk)
+          .is('deleted_at', null),
+    );
 
     const access = await getWarehouseAccess(this.ctx);
     const writableSet = new Set(access.writableIds);
@@ -4229,15 +4445,16 @@ export class InventoryService {
       // Batch-read the OLD rack label before the RPC overwrites it, so the
       // per-item audit rows below can carry a real before→after diff
       // instead of just the new value.
-      const { data: oldRackRows } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, bin_location')
-        .in('id', allowedIds);
+      // CHUNKED for the same request-size reason; still BEST-EFFORT (this only
+      // enriches the audit diff, so a failure leaves the before-value null
+      // rather than blocking the op).
+      const oldRackRows = await this.chunkedItemRead<{ id: string; bin_location: string | null }>(
+        allowedIds,
+        (chunk) =>
+          this.ctx.supabase.from('inventory_items').select('id, bin_location').in('id', chunk),
+      ).catch(() => [] as Array<{ id: string; bin_location: string | null }>);
       const oldBinById = new Map(
-        ((oldRackRows ?? []) as Array<{ id: string; bin_location: string | null }>).map((r) => [
-          r.id,
-          r.bin_location ?? null,
-        ]),
+        oldRackRows.map((r) => [r.id, r.bin_location ?? null]),
       );
 
       const { data: updatedCount, error } = await this.ctx.supabase.rpc(
@@ -4604,24 +4821,45 @@ export class InventoryService {
     itemId: string,
     warehouseId: string | null,
   ): Promise<string | null> {
+    // ONE query, with the location EMBEDDED, because the two-query version got
+    // two things wrong that only the embed makes obvious:
+    //
+    //  (a) the `locations` lookup had no `.is('deleted_at', null)` — although
+    //      the Unplaced fallback three lines below does. LocationsService.archive
+    //      deliberately permits archiving a rack that still holds stock
+    //      (`acknowledgeStock`) and its own doc calls the survivors
+    //      "simultaneously counted and unreachable". Rack 100-A (2026-07-23) was
+    //      archived with 22 units still on it, so a later location-less +10 on
+    //      that item routed ten MORE units into a location hidden from every
+    //      picker and transfer source. adjust_stock accepts the destination —
+    //      assert_location_in_org checks org membership, not deleted_at — so
+    //      nothing downstream catches it.
+    //
+    //  (b) it accepted only kind 'rack'|'crate'. `area` is equally a placement
+    //      (PLACEMENT_KINDS in lib/locations/groups), and a NULL kind IS the
+    //      Site encoding (0292/0331 — never backfilled). Both were pushed into
+    //      Unplaced, SPLITTING one holding into two for no reason.
+    //
+    // The rule is therefore the simple one the doc above already states: keep
+    // the added units in the item's dominant holding, wherever that is, unless
+    // it is a system bucket (Staging is reserved for PO receipts; Unplaced is
+    // the fallback anyway) or archived.
     const { data: levels } = await this.ctx.supabase
       .from('item_stock_levels')
-      .select('location_id, quantity')
+      .select('location_id, quantity, locations!inner(kind, type, deleted_at)')
       .eq('item_id', itemId)
       .gt('quantity', 0);
-    const rows = (levels ?? []) as Array<{ location_id: string; quantity: number }>;
+    const rows = (levels ?? []) as unknown as Array<{
+      location_id: string;
+      quantity: number;
+      locations: { kind: string | null; type: string | null; deleted_at: string | null } | null;
+    }>;
     if (rows.length > 0) {
-      const { data: locs } = await this.ctx.supabase
-        .from('locations')
-        .select('id, kind')
-        .in('id', rows.map((r) => r.location_id));
-      const kindById = new Map(
-        ((locs ?? []) as Array<{ id: string; kind: string | null }>).map((l) => [l.id, l.kind]),
-      );
       const placed = rows
         .filter((r) => {
-          const k = kindById.get(r.location_id);
-          return k === 'rack' || k === 'crate';
+          const loc = r.locations;
+          if (!loc || loc.deleted_at != null) return false;
+          return !isSystemLocation(loc);
         })
         .sort((a, b) => Number(b.quantity) - Number(a.quantity))[0];
       if (placed) return placed.location_id;
@@ -4926,6 +5164,14 @@ export class InventoryService {
 
   async transferStock(input: TransferStockInput) {
     assertPermission(this.ctx, 'stock:transfer');
+    // The RPC raises `same_location` for this, but nothing app-side stopped it
+    // reaching the DB — so the round-trip existed only to produce an error.
+    if (input.fromLocationId === input.toLocationId) {
+      throw new ServiceError(
+        'validation_error',
+        'Source and destination are the same location.',
+      );
+    }
     const { data, error } = await this.ctx.supabase.rpc('transfer_stock', {
       p_item_id: input.itemId,
       p_from_location_id: input.fromLocationId,
@@ -4933,7 +5179,46 @@ export class InventoryService {
       p_quantity: input.quantity,
       p_notes: input.notes ?? null,
     });
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      // EVERY RPC error used to become internal_error, so a permission or state
+      // problem surfaced as an HTTP 500 "An internal error occurred" — which the
+      // mobile client RETRIES, and which buries real 500s in the logs. Pattern
+      // #28(b): enumerate the RPC's `raise exception` strings (0327) and map
+      // each one, SPECIFIC BEFORE GENERAL.
+      //
+      // `insufficient_stock` deliberately stays internal_error. Three callers
+      // (transferStockAction, placeStockAction, and /api/v1/items/[id]/transfer)
+      // each rescue it by substring to print their OWN copy — "Can't transfer…",
+      // "Can't place…", "Can't move more than is available in the source
+      // location." Mapping it here would flatten three deliberate messages into
+      // one; that belongs in a sweep that updates all three call sites together.
+      const detail = error.message.toLowerCase();
+      if (detail.includes('same_location')) {
+        throw new ServiceError(
+          'validation_error',
+          'Source and destination are the same location.',
+        );
+      }
+      // item_deleted first: a concurrent archive is the realistic case (the
+      // callers pre-read only the SOURCE LOCATION, never the item).
+      if (detail.includes('item_deleted')) {
+        throw new ServiceError('not_found', 'That item has been archived or deleted.');
+      }
+      if (detail.includes('item_not_found')) {
+        throw new ServiceError('not_found', 'Item not found.');
+      }
+      if (detail.includes('quantity_must_be_positive')) {
+        throw new ServiceError('validation_error', 'Enter a quantity greater than zero.');
+      }
+      // The app gate (stock:transfer) is LOOSER than the RPC's floor: the
+      // function requires has_org_role(org, 'staff'), so a VIEWER granted
+      // stock:transfer through user_permission_overrides passes
+      // assertPermission and is then refused by the DB — pattern #4.
+      if (detail.includes('forbidden')) {
+        throw new ServiceError('forbidden', 'Permission denied');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
 
     // Capture-gap fix (Task 1d): same rationale as adjustStock above — this
     // event is suppressed from the item feed (Task 2) since the movement
@@ -6276,12 +6561,18 @@ export class InventoryService {
   ): Promise<{ placed: number; failedItemIds: string[] }> {
     if (itemIds.length === 0 || !num) return { placed: 0, failedItemIds: [] };
 
-    const { data: items } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, warehouse_id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds);
-    const rows = (items ?? []) as Array<{ id: string; warehouse_id: string | null }>;
+    // CHUNKED (see chunkedItemRead): an item missing from this map resolves no
+    // destination warehouse and is reported as failed to place, so a truncated
+    // read would manufacture failures for stock that was fine.
+    const rows = await this.chunkedItemRead<{ id: string; warehouse_id: string | null }>(
+      itemIds,
+      (chunk) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, warehouse_id')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('id', chunk),
+    );
     const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
 
     // ONE query covers both cases above — the `locations` embed carries
@@ -6291,18 +6582,39 @@ export class InventoryService {
     // PHYSICALLY in, not necessarily the item's declared warehouse_id).
     // Deliberately NO `.in('locations.kind', …)` filter here — see the
     // method doc: that pattern silently drops NULL-kind (site) rows.
-    const { data: holdings } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(kind, type, warehouse_id)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .gt('quantity', 0);
-    const allHoldings = (holdings ?? []) as unknown as Array<{
+    //
+    // CHUNKED + PAGED (see holdingsForItemIds), and its error is no longer
+    // DISCARDED. Both mattered: `const { data: holdings }` made a failed read
+    // indistinguishable from "no holdings", and an un-ranged `.in()` over up to
+    // 500 items with 2-3 holdings each ran straight into the PostgREST 1000-row
+    // cap. Either way the label RPC above had already written
+    // `book_rack_number`, so the items that fell off the end were reported as
+    // `placed N / 0 failed` while their stock never moved — the tool minting
+    // the `label_mismatch` the Exception Center exists to flag. Worse, dropping
+    // ONE of a split item's two rack holdings makes `hs.length !== 1` below
+    // stop protecting it, so the method would physically move a holding it
+    // promises never to move.
+    //
+    // On a read failure NOTHING can be claimed, so nothing is: every requested
+    // item is reported as failed to place and the caller surfaces
+    // `placeFailed`. Never continue as if there were no holdings.
+    let allHoldings: Array<{
       item_id: string;
       location_id: string;
       quantity: number;
       locations: { kind: string | null; type: string | null; warehouse_id: string | null } | null;
     }>;
+    try {
+      allHoldings = (await this.holdingsForItemIds<unknown>(
+        itemIds,
+        'item_id, location_id, quantity, locations!inner(kind, type, warehouse_id)',
+      )) as unknown as typeof allHoldings;
+    } catch (e) {
+      console.error('[set_rack place] holdings read failed — no item can be claimed as placed', {
+        error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+      });
+      return { placed: 0, failedItemIds: [...itemIds] };
+    }
 
     const isAlreadyPlaced = (h: (typeof allHoldings)[number]) =>
       h.locations != null && isRackShelfLocation(h.locations);
@@ -6716,22 +7028,47 @@ export class InventoryService {
     bookStorage: BookStorageInfo | null;
   }>> {
     // 1. Not-yet-placed levels (qty>0) joined to item + the staging/unplaced location.
-    let q = this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('locations.kind', ['staging', 'unplaced'])
-      .gt('quantity', 0);
-    if (opts.warehouseId) q = q.eq('locations.warehouse_id', opts.warehouseId);
-    if (opts.itemType === 'book') q = q.eq('inventory_items.item_type', 'book');
-    if (opts.itemType === 'non-book') q = q.neq('inventory_items.item_type', 'book');
-    // Exclude soft-deleted items at the DB (works with the inventory_items!inner embed)
-    // so they're never fetched over the wire.
-    q = q.is('inventory_items.deleted_at', null);
-    const { data: levels, error } = await q;
-    if (error || !levels) return [];
+    //
+    // PAGED. This read used to be a bare `await q`, and PostgREST clamps every
+    // response to `[api] max_rows = 1000` without an error (pattern #3): past
+    // 1000 not-yet-placed holdings the rest simply never reached the Staging
+    // screen or the mobile Staging tab, Select-all placed only the visible
+    // subset, and the Stale badge never fired for what it could not see. One
+    // CSV/opening-stock import (every row lands in Unplaced) is enough to get
+    // there. `.order('id')` is the stable sort fetchAllRows requires — the table
+    // sorts client-side, so nothing visible changes.
+    //
+    // The query is BUILT PER PAGE rather than re-filtered: a supabase-js builder
+    // is mutable, so calling `.order()` on one shared instance in a loop appends
+    // `order=id,id,…` to the URL a page at a time.
+    const buildLevelsPage = (from: number, to: number) => {
+      let q = this.ctx.supabase
+        .from('item_stock_levels')
+        .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('locations.kind', ['staging', 'unplaced'])
+        .gt('quantity', 0);
+      if (opts.warehouseId) q = q.eq('locations.warehouse_id', opts.warehouseId);
+      if (opts.itemType === 'book') q = q.eq('inventory_items.item_type', 'book');
+      if (opts.itemType === 'non-book') q = q.neq('inventory_items.item_type', 'book');
+      // Exclude soft-deleted items at the DB (works with the inventory_items!inner
+      // embed) so they're never fetched over the wire.
+      q = q.is('inventory_items.deleted_at', null);
+      return q.order('id').range(from, to);
+    };
+    let levels: Array<Record<string, any>>;
+    try {
+      levels = await fetchAllRows<Record<string, any>>(buildLevelsPage);
+    } catch (e) {
+      // Unchanged contract: this method NEVER throws — the screen degrades to
+      // "nothing staged" rather than crashing. Logged so it is diagnosable.
+      console.error('staging worklist: holdings read failed', {
+        error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+      });
+      return [];
+    }
 
-    const rows = (levels as Array<Record<string, any>>).filter((r) => r.inventory_items);
+    const rows = levels.filter((r) => r.inventory_items);
     if (rows.length === 0) return [];
     // De-dupe: an item with BOTH a staging and an unplaced holding contributes
     // two rows but only needs one movement/receipt lookup.
@@ -6758,17 +7095,41 @@ export class InventoryService {
     //
     // Note: post_receipt_v2 (mig 0190) passes receipts.id as `notes` (p_notes arg),
     // not as reference_id — so we read from sm.notes to get the source receipt ID.
-    const { data: moves, error: movesErr } = await this.ctx.supabase
-      .from('stock_movements')
-      .select('item_id, created_at, notes, movement_type')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('movement_type', 'receive_po')
-      .in('item_id', itemIds)
-      .order('created_at', { ascending: false });
-    // Graceful degradation: a source-lookup failure still returns the staged items
-    // (just without the source/age badge) — log so the silent failure is diagnosable.
-    if (movesErr) console.error('staging worklist: source-movement lookup failed', { error: movesErr.message });
-    const candidates = (moves ?? []) as Array<Record<string, any>>;
+    //
+    // CHUNKED + PAGED, for the reason the sibling doc below already spells out:
+    // an un-ranged newest-first window truncated at 1000 rows drops the OLDEST
+    // receipts, so an item whose last receipt was months ago loses its source
+    // and its ageDays — i.e. the stalest stock is exactly the stock that
+    // disappears from the Stale view, and nothing is logged because the query
+    // did not error. Chunks are BY ITEM ID, so every one of an item's movements
+    // stays inside one chunk and the newest-first walk in step 4 remains
+    // correct. `.order('id')` is only the tiebreaker fetchAllRows needs for a
+    // stable page boundary. The `movement_type = 'receive_po'` filter is NOT
+    // widened — widening it was itself a past regression (see the doc below).
+    const candidates: Array<Record<string, any>> = [];
+    for (const chunk of chunkIdsForInFilter(itemIds, HOLDINGS_ID_CHUNK)) {
+      try {
+        const page = await fetchAllRows<Record<string, any>>((from, to) =>
+          this.ctx.supabase
+            .from('stock_movements')
+            .select('item_id, created_at, notes, movement_type')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('movement_type', 'receive_po')
+            .in('item_id', chunk)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(from, to),
+        );
+        for (const m of page) candidates.push(m);
+      } catch (e) {
+        // Graceful degradation: a source-lookup failure still returns the staged
+        // items (just without the source/age badge) — log so the silent failure
+        // is diagnosable.
+        console.error('staging worklist: source-movement lookup failed', {
+          error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+        });
+      }
+    }
 
     // 3. Resolve receipt -> status / PO number / receipt number. Every candidate
     //    receipt is fetched (not just one per item) because the status decides
@@ -6777,16 +7138,29 @@ export class InventoryService {
       candidates.map((m) => (m.notes as string | null)?.trim() || null).filter(Boolean),
     )] as string[];
     const receiptMeta = new Map<string, { poNumber: string | null; receiptNumber: string | null; receivedAt: string | null; status: string | null }>();
-    if (candidateReceiptIds.length > 0) {
-      const { data: receipts, error: receiptsErr } = await this.ctx.supabase
-        .from('receipts')
-        .select('id, receipt_number, received_at, status, purchase_orders(po_number)')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', candidateReceiptIds);
-      // Graceful degradation: a receipt/PO-lookup failure still returns the staged
-      // items (without PO/receipt numbers) — log so it's diagnosable.
-      if (receiptsErr) console.error('staging worklist: receipt/PO lookup failed', { error: receiptsErr.message });
-      for (const r of (receipts ?? []) as Array<Record<string, any>>) {
+    // CHUNKED + PAGED for the same reason as the movement query above: the
+    // receipt STATUS is what decides which candidate movement wins, so a
+    // truncated lookup silently demotes real posted receipts to "no source".
+    for (const chunk of chunkIdsForInFilter(candidateReceiptIds, HOLDINGS_ID_CHUNK)) {
+      let receipts: Array<Record<string, any>> = [];
+      try {
+        receipts = await fetchAllRows<Record<string, any>>((from, to) =>
+          this.ctx.supabase
+            .from('receipts')
+            .select('id, receipt_number, received_at, status, purchase_orders(po_number)')
+            .eq('organization_id', this.ctx.organizationId)
+            .in('id', chunk)
+            .order('id')
+            .range(from, to),
+        );
+      } catch (e) {
+        // Graceful degradation: a receipt/PO-lookup failure still returns the staged
+        // items (without PO/receipt numbers) — log so it's diagnosable.
+        console.error('staging worklist: receipt/PO lookup failed', {
+          error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+        });
+      }
+      for (const r of receipts) {
         receiptMeta.set(r.id, {
           poNumber: r.purchase_orders?.po_number ?? null,
           receiptNumber: r.receipt_number ?? null,

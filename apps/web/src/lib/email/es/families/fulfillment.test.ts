@@ -448,6 +448,112 @@ describe('return-prompt (Return Prompt)', () => {
   });
 });
 
+/**
+ * Greeting contract — the ONE thing every live caller depends on.
+ *
+ * All three greeting-bearing renderers are fed a FULL name in prod:
+ * order-handover-notify.ts passes `args.requesterName` to
+ * renderPartialFulfilledEmail/renderBackorderShippedEmail, and
+ * return-prompt.ts passes `order.requester_name` as
+ * `recipientFirstName`. The family therefore takes the first word
+ * itself — the sibling family lib/email/es/families/maintenance.ts uses
+ * the WHOLE string (its callers pre-split with their own firstNameOf),
+ * so "simplifying" this family to match that one would start greeting
+ * real people as "Hi Jane Doe —" in every handover and return email.
+ *
+ * Only the HTML of `partial` was pinned before; the text half and the
+ * other two templates were free to drift. Every greeting surface is
+ * pinned here so that drift fails a test instead of a customer's inbox.
+ */
+describe('greeting contract: a full name is always greeted by first name', () => {
+  it('partial greets by first name in BOTH html and text', () => {
+    const r = samplePartial(); // recipientFirstName: 'Dana Fulton'
+    expect(r.html).toContain('Hi Dana —');
+    expect(r.html).not.toContain('Hi Dana Fulton');
+    expect(r.text).toContain('Hi Dana —');
+    expect(r.text).not.toContain('Hi Dana Fulton');
+  });
+
+  it('back-shipped greets by first name in BOTH html and text', () => {
+    const r = renderBackorderShippedEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: 'Dana Fulton',
+      recipientEmail: 'dana@example.com',
+      unitsShipped: 8,
+      warehouse: 'DCIV — Fresno',
+      shipDate: 'May 8',
+      method: 'ground',
+      destination: 'CVW — Manchester',
+      trackUrl: 'https://app.example.com/dashboard/orders/abc',
+      urls: URLS,
+    });
+    expect(r.html).toContain('Hi Dana —');
+    expect(r.html).not.toContain('Hi Dana Fulton');
+    expect(r.text).toContain('Hi Dana —');
+    expect(r.text).not.toContain('Hi Dana Fulton');
+    expectClean(r);
+  });
+
+  it('return-prompt greets by first name in BOTH html and text', () => {
+    const r = renderReturnPromptEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: 'Dana Fulton',
+      recipientEmail: 'dana@example.com',
+      deliveredOn: 'Apr 29',
+      returnBy: 'May 27, 2026',
+      destination: 'CVW — Manchester',
+      startUrl: 'https://app.example.com/returns/request/tok123',
+      urls: URLS,
+    });
+    expect(r.html).toContain('Hi Dana —');
+    expect(r.html).not.toContain('Hi Dana Fulton');
+    expect(r.text).toContain('Hi Dana —');
+    expect(r.text).not.toContain('Hi Dana Fulton');
+    expectClean(r);
+  });
+
+  it('extra whitespace and a middle name still yield the first word', () => {
+    const r = renderReturnPromptEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: '  Dana  Mae Fulton ',
+      recipientEmail: 'dana@example.com',
+      deliveredOn: 'Apr 29',
+      startUrl: 'https://app.example.com/returns/request/tok123',
+      urls: URLS,
+    });
+    expect(r.html).toContain('Hi Dana —');
+    expect(r.text).toContain('Hi Dana —');
+  });
+
+  it('a name that is only whitespace falls back to "Hi —" in html and text', () => {
+    const r = renderReturnPromptEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: '   ',
+      recipientEmail: 'dana@example.com',
+      deliveredOn: 'Apr 29',
+      startUrl: 'https://app.example.com/returns/request/tok123',
+      urls: URLS,
+    });
+    expect(r.html).toContain('Hi — ');
+    expect(r.text).toContain('Hi —');
+    expectClean(r);
+  });
+
+  it('the html greeting escapes a hostile first name; the text one does not double-escape', () => {
+    const r = renderReturnPromptEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: '<script>alert(1)</script> Fulton',
+      recipientEmail: 'dana@example.com',
+      deliveredOn: 'Apr 29',
+      startUrl: 'https://app.example.com/returns/request/tok123',
+      urls: URLS,
+    });
+    expect(r.html).not.toContain('<script>');
+    expect(r.html).toContain('&lt;script&gt;');
+    expect(r.text).toContain('Hi <script>alert(1)</script> —');
+  });
+});
+
 describe('senders + delivery helpers', () => {
   it('orders sender matches the registry byte-form', () => {
     expect(FULFILLMENT_ORDERS_FROM).toBe('StockPilot <orders@stockpilotusa.com>');

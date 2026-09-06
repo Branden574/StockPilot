@@ -6,6 +6,49 @@ import * as React from 'react';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 /**
+ * DEAD CODE — retained deliberately, pending an owner decision. READ THIS BEFORE
+ * DELETING ANYTHING NEAR IT.
+ *
+ * `ScrollyLanding` has ZERO importers. It was the second of three landing
+ * generations (sections → this scroll-canvas → `StockPilotLanding` in
+ * components/marketing/landing/, which is what `/` renders today). It is kept as
+ * a revert target; `app/(marketing)/page.tsx` calls that "a one-line revert",
+ * which is now two generations stale — reverting to this file would also drop
+ * the branded intro that mounts on top of the live landing.
+ *
+ * The whole zero-importer set, so a future sweep does the CLASS and not one file:
+ * scrolly-landing, scrolly-pipeline, scrolly-shelf-scan, scrolly-warehouse, hero,
+ * hero-frame-parallax, sample-data, feature-grid, stat-band, marquee-strip,
+ * comparison-table, enterprise-comparison, privacy-section, cta-final — plus
+ * lib/hooks/use-in-view.ts and use-scrolly-progress.ts (imported only by this
+ * set) and the unused `.scrolly-pin`/`.scrolly-section` rules in globals.css.
+ * NOTE `hero.tsx` here is NOT the live hero: `landing/index.tsx`'s
+ * `import { Hero } from './hero'` resolves to landing/hero.tsx, a different file.
+ * header, footer, support-form, json-ld, app-entry-button and hide-on-home in
+ * this directory ARE live — do not sweep them up.
+ *
+ * ── TWO LANDMINES ──
+ *
+ * 1. DO NOT DELETE public/landing/frames-hi OR frames-lo WITH THESE COMPONENTS.
+ *    page.tsx says "Scrollytelling survives; the frame sequence does not". That
+ *    is true of this component's canvas and FALSE of the footage: landing/film.ts
+ *    still streams `/landing/frames-hi` (frames 1-420 and 421-546) and
+ *    `/landing/frames-lo` inside its HI/LO segment lists. Those directories are
+ *    live homepage film. film.test.ts pins only the URL strings frameUrl builds,
+ *    so deleting the JPEGs used to pass the entire suite — landing/film-assets.test.ts
+ *    now asserts the bytes are on disk and is what fails if this goes wrong.
+ *
+ * 2. `BrandGlyph` below is a STALE THIRD COPY of the brand mark. The live
+ *    protected geometry is `BrandGlyph` in landing/brand.tsx, and
+ *    landing-intro/mark.tsx keeps a byte-identical copy for the intro's
+ *    shared-element handoff — but mark.tsx's comment still names THIS dead file
+ *    as its source of truth. Re-point that comment at landing/brand.tsx before
+ *    deleting this file, or the handoff's byte-identity requirement loses its
+ *    stated reference. lib/landing-intro/timeline.ts:15 cites this file the same
+ *    way for the `ink: '#0b0c0a'` hero background.
+ *
+ * ── what it was ──
+ *
  * Scroll-scrubbed cinematic landing page.
  *
  * A fixed full-bleed <canvas> backdrop plays a ~30s warehouse "film" — a

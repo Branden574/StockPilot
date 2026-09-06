@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import {
+  emailSchema,
   planAllowsB2bPortal,
   resolvePortalPricingMode,
   type OrgBillingState,
@@ -351,7 +352,17 @@ export class CustomersService {
     this.gate();
     await this.assertPlanAllows();
     const normalized = email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    // SP-136: this used to be a hand-rolled `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`, a
+    // looser rule than the core `emailSchema` (zod) every action schema in front
+    // of this service parses with — it accepted 'j.doe@school.c',
+    // 'john..smith@acme.com', '.lead@acme.com' and a 500-char local part that
+    // the action layer refuses. Two rules meant the answer to "is this a valid
+    // address?" depended on which door you came through. One rule now: the same
+    // schema object, so a future caller without a zod-parsing action in front of
+    // it cannot mint a magic link for an address the rest of the app rejects.
+    // (emailSchema also lowercases + trims; we normalize first so a padded
+    // '  A@b.com  ' is judged on the same string we go on to use.)
+    if (!emailSchema.safeParse(normalized).success) {
       throw new ServiceError('validation_error', 'Enter a valid email address.');
     }
     // Never a dashboard member of THIS org — the two principals must not mix.

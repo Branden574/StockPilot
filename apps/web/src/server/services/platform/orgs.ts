@@ -120,25 +120,33 @@ export async function listOrgsForPlatform(
   const page = capped ? rows.slice(0, LIMIT) : rows;
   const ids = page.map((r) => r.id as string);
 
-  // Counts in two grouped passes (head+count per org would be N+1). Use the
-  // admin client + a single in() select, then tally client-side. Bounded by
-  // the ≤500 org cap above.
-  const [members, items] = await Promise.all([
-    admin
-      .from('organization_members')
-      .select('organization_id')
-      .in('organization_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null), // exclude temporary "act as" grants
-    admin
-      .from('inventory_items')
-      .select('organization_id')
-      .in('organization_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
-      .is('deleted_at', null),
+  // EXACT per-org counts (see countPerOrg for why these are head-counts and
+  // not one grouped select). The filters here are deliberately identical to
+  // the ones getOrgOverview uses for the same two numbers, so the directory
+  // row and the detail page can never disagree.
+  const [memberCounts, itemCounts] = await Promise.all([
+    countPerOrg(
+      ids,
+      (orgId) =>
+        admin
+          .from('organization_members')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', orgId)
+          .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null), // exclude temporary "act as" grants
+      'members',
+    ),
+    countPerOrg(
+      ids,
+      (orgId) =>
+        admin
+          .from('inventory_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', orgId)
+          .is('deleted_at', null),
+      'items',
+    ),
   ]);
-
-  const memberCounts = tally((members.data ?? []) as Array<{ organization_id: string }>);
-  const itemCounts = tally((items.data ?? []) as Array<{ organization_id: string }>);
 
   const orgs: PlatformOrgSummary[] = page.map((r) => {
     const id = r.id as string;
@@ -169,16 +177,66 @@ export async function listOrgsForPlatform(
 }
 
 /**
- * Counts grouped rows by organization_id. The select is capped by the ≤500
- * org filter, but a busy org could itself exceed PostgREST's 1000-row cap on
- * the members/items selects. We accept undercounting on the directory summary
- * (a display nicety, not an enforcement number) rather than paginating here;
- * the per-org detail page (Phase 1) shows exact counts.
+ * How many count round-trips are in flight at once. The directory lists up to
+ * 500 orgs and asks for two numbers each, so a bare Promise.all would fire
+ * 1000 simultaneous requests at PostgREST from a single page render. A small
+ * pool keeps the page snappy without stampeding the API.
  */
-function tally(rows: Array<{ organization_id: string }>): Map<string, number> {
-  const m = new Map<string, number>();
-  for (const r of rows) m.set(r.organization_id, (m.get(r.organization_id) ?? 0) + 1);
-  return m;
+const COUNT_CONCURRENCY = 8;
+
+/**
+ * EXACT row counts per organization, one `head: true` count request per org,
+ * run through a bounded pool.
+ *
+ * WHY NOT the one grouped `in()` select this replaced: it read every
+ * members/items ROW for the listed orgs and tallied them client-side, under a
+ * comment claiming the read was "bounded by the ≤500 org cap". It was not —
+ * what that select returns is members/items across ALL listed orgs, so once
+ * their combined row count passed PostgREST's `max_rows = 1000`
+ * (supabase/config.toml) the response was silently truncated and the per-org
+ * counts undercounted arbitrarily, with NO error anywhere and no hint on the
+ * page (which orgs lost rows depended purely on planner order). The old
+ * docstring acknowledged that as an accepted "display nicety" — but the cost
+ * of being exact turns out to be small, so we are exact instead. See recurring
+ * pattern #3 (every aggregation SELECT must paginate — or not fetch rows at
+ * all).
+ *
+ * WHY NOT fetchAllRows(): paginating the grouped select would also be exact,
+ * but it drags every inventory row on the platform over the wire (one
+ * load-test-sized org alone is 50 pages of 1000 rows) to produce two integers.
+ * `head: true` transfers no rows at all, so this spends round trips instead of
+ * bandwidth.
+ */
+async function countPerOrg(
+  ids: string[],
+  buildCount: (
+    orgId: string,
+  ) => PromiseLike<{ count: number | null; error: { message: string } | null }>,
+  label: string,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= ids.length) return;
+      const orgId = ids[index]!;
+      const { count, error } = await buildCount(orgId);
+      if (error) {
+        // Fail CLOSED on ONE display number rather than throwing: there is no
+        // error.tsx under (platform), so a single flaky count must not take
+        // the whole org directory down. Logged, so it is degraded and not
+        // silent.
+        console.warn(`[platform/orgs] ${label} count failed for org ${orgId}: ${error.message}`);
+        continue;
+      }
+      counts.set(orgId, count ?? 0);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(COUNT_CONCURRENCY, ids.length) }, () => worker()),
+  );
+  return counts;
 }
 
 // ── Per-org detail reads (Phase 1) — all read-only, service-role, gated ──────

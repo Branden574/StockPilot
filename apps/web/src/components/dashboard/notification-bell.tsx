@@ -68,14 +68,18 @@ export function NotificationBell({ userId, organizationId, initialUnread }: Prop
 
   // Fetch the latest unread rows and pop a toast for each row id we
   // haven't seen yet this mount. Cheap when there's nothing new (the
-  // ORDER + LIMIT 20 puts the active set in one page).
+  // ORDER + LIMIT 20 puts the active set in one page). The badge total
+  // is counted separately from that page — see setCount below.
   const surfaceUnread = React.useCallback(async () => {
     const supabase = supabaseRef.current;
     if (!supabase) return;
     try {
-      const { data, error } = await supabase
+      const { data, error, count: unreadTotal } = await supabase
         .from('notifications')
-        .select('id, type, title, body, link, created_at')
+        // `count: 'exact'` rides along on the SAME request (PostgREST puts the
+        // total in the Content-Range header), so the badge gets the true
+        // unread total while the rows stay capped at the 20 we toast from.
+        .select('id, type, title, body, link, created_at', { count: 'exact' })
         .eq('user_id', userId)
         // Scope to the ACTIVE workspace. Without this, a user in several
         // orgs gets other workspaces' rows in the badge/toasts (and their
@@ -85,10 +89,18 @@ export function NotificationBell({ userId, organizationId, initialUnread }: Prop
         .order('created_at', { ascending: false })
         .limit(20);
       if (error || !data) return;
-      // Update the badge from the actual unread set instead of a
-      // separate count() query — saves a round trip and keeps the
-      // two values in lockstep.
-      setCount(data.length);
+      // Badge = the EXACT unread total, not the size of this page.
+      //
+      // SP-117: this used to be `setCount(data.length)` off a LIMIT 20 query.
+      // The server-rendered seed in (dashboard)/layout.tsx is a real
+      // `count: 'exact', head: true` head count, so a user with 35 unread
+      // watched the badge drop 35 -> 20 the moment the first client refetch
+      // landed (the pathname effect runs it on mount), and the `99+` label
+      // below was unreachable forever. The count now comes from the same
+      // round trip as the rows, so page size and badge stay independent.
+      // `data.length` remains the fallback for the (shouldn't-happen) case
+      // where PostgREST omits the count header.
+      setCount(unreadTotal ?? data.length);
 
       // On the first mount, just seed seenIds with everything that's
       // already unread. The user came to the dashboard expecting the

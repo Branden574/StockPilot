@@ -174,10 +174,122 @@ export async function setOrderNeededByAction(
 }
 
 /**
+ * Wall-clock <-> UTC for a named IANA zone, without pulling in a date library.
+ *
+ * WHY THIS EXISTS (2026-09, SP-047). `suggestNeededByAction` used to tell the
+ * model to emit "a full ISO-8601 datetime with -07:00 offset
+ * (America/Los_Angeles)". That is wrong twice over: -07:00 is Pacific DAYLIGHT
+ * time, so any winter deadline came back an hour early (a January "1pm" landed
+ * at 12:00 PST), and every org that is not in California got Pacific
+ * wall-clock times outright (3-4 hours off for America/New_York). The suggested
+ * value is applied verbatim by setOrderNeededByAction, and approve() then
+ * builds the schedule event + reminder cron from `needed_by`, so the drift
+ * propagates into the ping the requester actually receives.
+ *
+ * The model now returns a ZONE-LESS wall clock ("2027-01-15T13:00") and the
+ * server converts it in the ORG's timezone (resolveOrgTimezone, the one
+ * expression of that decision — never re-defaulted here).
+ *
+ * Intl is the whole implementation: format an instant in the target zone, read
+ * the parts back as if they were UTC, and the difference IS that zone's offset
+ * at that instant. Two passes because the offset we need is the one in effect
+ * at the ANSWER, not at the guess — they differ across a DST boundary.
+ *
+ * This runs on the Node server (full ICU), so named zones always resolve; the
+ * Hermes/reduced-ICU caveat in core's org-timezone.ts is a mobile concern and
+ * does not apply to this file.
+ */
+interface ZonedParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+}
+
+function zonedParts(utcMs: number, zone: string): ZonedParts {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(new Date(utcMs));
+  const get = (type: string) => Number(parts.find((x) => x.type === type)?.value ?? '0');
+  // `hour12: false` yields hour "24" for midnight on some ICU builds (the h24
+  // cycle); normalise it or Date.UTC rolls the day forward by one.
+  const hour = get('hour') % 24;
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour,
+    minute: get('minute'),
+  };
+}
+
+/** Milliseconds the given zone is ahead of UTC at that instant. */
+function zoneOffsetMs(utcMs: number, zone: string): number {
+  const p = zonedParts(utcMs, zone);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - Math.floor(utcMs / 60000) * 60000;
+}
+
+/** "YYYY-MM-DDTHH:mm" as rendered in `zone` — the exact shape the model is asked for. */
+function formatWallClock(utcMs: number, zone: string): string {
+  const p = zonedParts(utcMs, zone);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+// Zone-less wall clock. Seconds/fractions tolerated (and ignored); a bare date
+// is allowed so a date-only answer does not fall through to `new Date('2027-01-15')`,
+// which JS parses as UTC MIDNIGHT — the exact off-by-a-timezone this fix removes.
+const WALL_CLOCK_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?)?$/;
+// Anything the model returns carrying its own zone (…Z or …±HH:MM) is already
+// an absolute instant — accept it as-is rather than re-interpreting it.
+const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * Resolve the model's answer to an absolute epoch-ms, interpreting a zone-less
+ * value in `zone`. Returns null when it is not a datetime we recognise.
+ */
+function resolveSuggestedInstant(raw: string, zone: string): number | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (HAS_OFFSET_RE.test(value)) {
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const m = WALL_CLOCK_RE.exec(value);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m;
+  // Date-only answers default to 09:00 local, matching what the prompt asks for.
+  const wallAsUtc = Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    h === undefined ? 9 : Number(h),
+    mi === undefined ? 0 : Number(mi),
+  );
+  if (!Number.isFinite(wallAsUtc)) return null;
+  // Pass 1 guesses with the offset in effect at the wall time read as UTC;
+  // pass 2 re-resolves with the offset in effect at that guess, which is what
+  // makes a spring-forward / fall-back deadline land on the right instant.
+  const firstGuess = wallAsUtc - zoneOffsetMs(wallAsUtc, zone);
+  const t = wallAsUtc - zoneOffsetMs(firstGuess, zone);
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
  * Manager: ask Claude to extract a needed-by datetime from the requester's
  * free-text note ("needed by 7/15 @ 1pm"). SUGGESTION ONLY — the manager
  * applies it explicitly; nothing is written here. Returns null when no
  * parseable deadline, no AI key, or on any error (fail quiet).
+ *
+ * The extracted time is a WALL CLOCK in the ORG's timezone — see
+ * `resolveSuggestedInstant` above for the incident this closes.
  */
 export async function suggestNeededByAction(
   orderId: string,
@@ -198,11 +310,25 @@ export async function suggestNeededByAction(
       .maybeSingle();
     const note = (row?.notes as string | null)?.trim();
     if (!row || row.needed_by || !note) return ok({ iso: null });
+    // The org's operational zone, through the ONE resolver (getCachedOrgTimezone
+    // already wraps resolveOrgTimezone) so a missing/invalid stored value
+    // degrades exactly the way every other surface degrades.
+    const { getCachedOrgTimezone } = await import('@/lib/dashboard/cached-org');
+    const zone = await getCachedOrgTimezone(ctx.organizationId);
+    const now = Date.now();
+    const submittedMs = new Date(row.created_at as string).getTime();
     const { claudeGenerateJson } = await import('@/lib/ai/claude');
     const out = await claudeGenerateJson<{ iso: string | null }>({
       system:
-        'You extract an explicit "needed by" deadline from a warehouse order note. Return iso as a full ISO-8601 datetime with -07:00 offset (America/Los_Angeles). If the note names a date without a time, use 09:00. If there is NO explicit deadline in the note, return iso: null. NEVER guess or invent a date.',
-      prompt: `Order submitted at: ${row.created_at}\nRequester note:\n${note.slice(0, 1500)}`,
+        'You extract an explicit "needed by" deadline from a warehouse order note. Return iso as a LOCAL wall-clock datetime formatted exactly YYYY-MM-DDTHH:mm, with NO timezone offset and NO trailing Z — the server interprets it in the warehouse timezone given in the prompt. If the note names a date without a time, use 09:00. Resolve relative wording ("tomorrow", "next Friday") against the current local date and time given in the prompt. If there is NO explicit deadline in the note, return iso: null. NEVER guess or invent a date.',
+      prompt: [
+        `Warehouse timezone: ${zone}`,
+        `Current local date and time: ${formatWallClock(now, zone)}`,
+        `Order submitted (local): ${
+          Number.isFinite(submittedMs) ? formatWallClock(submittedMs, zone) : 'unknown'
+        }`,
+        `Requester note:\n${note.slice(0, 1500)}`,
+      ].join('\n'),
       schema: {
         type: 'object',
         properties: { iso: { type: 'string' } },
@@ -214,8 +340,13 @@ export async function suggestNeededByAction(
     const iso = typeof out?.iso === 'string' ? out.iso : null;
     // Trust nothing: must parse, must be within 1h..1y from now.
     if (!iso) return ok({ iso: null });
-    const t = new Date(iso).getTime();
-    if (!Number.isFinite(t) || t < Date.now() || t > Date.now() + 365 * 24 * 3600 * 1000) {
+    const t = resolveSuggestedInstant(iso, zone);
+    if (
+      t === null ||
+      !Number.isFinite(t) ||
+      t < Date.now() ||
+      t > Date.now() + 365 * 24 * 3600 * 1000
+    ) {
       return ok({ iso: null });
     }
     return ok({ iso: new Date(t).toISOString() });

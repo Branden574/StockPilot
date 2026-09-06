@@ -107,6 +107,21 @@ export function PoReceiveDialog({
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [notes, setNotes] = React.useState('');
+  /**
+   * Persistent, in-dialog failure message (recurring pattern #20).
+   *
+   * A Sonner toast renders bottom-right OUTSIDE this modal and auto-dismisses
+   * in ~4s, so a receiver watching the form saw "clicked, nothing happened"
+   * when `post_receipt_v2` refused the receipt (0296 raises po_already_closed,
+   * forbidden — the RPC requires manager — idempotency_conflict, not_found,
+   * negative_quantity). The dialog stays open on failure, unchanged, with the
+   * button re-enabled, so the two things they could do next were both wrong:
+   * click again, or close the dialog believing 40 lines of stock had landed.
+   * Every failure branch now ALSO writes here, and it is cleared the moment
+   * the next attempt starts so a stale message can never describe an
+   * in-flight retry. Same shape as stock-transfer-dialog.tsx.
+   */
+  const [serverError, setServerError] = React.useState<string | null>(null);
   const [entries, setEntries] = React.useState<Record<string, LineEntry>>(() =>
     Object.fromEntries(
       lines.map((l) => [l.id, blankEntry()]),
@@ -142,6 +157,7 @@ export function PoReceiveDialog({
       setIdempotencyKey(crypto.randomUUID());
       setEntries(Object.fromEntries(linesRef.current.map((l) => [l.id, blankEntry()])));
       setNotes('');
+      setServerError(null);
     }
     // `lines` is deliberately NOT a dependency — see the comment above; it is
     // read through linesRef so a new array identity from an RSC refresh cannot
@@ -155,36 +171,50 @@ export function PoReceiveDialog({
     }));
   }
 
+  /**
+   * Every refusal goes through here: the toast (unchanged, it is what a user
+   * who has already looked away notices) PLUS the inline alert that stays put
+   * inside the dialog the receiver is actually looking at.
+   */
+  function fail(message: string) {
+    setServerError(message);
+    toast.error(message);
+  }
+
   async function submit() {
+    // Clear the previous attempt's message up front — an error left on screen
+    // while a retry is in flight cannot be told apart from a fresh one.
+    setServerError(null);
+
     const submittable = lines
       .map((l) => ({ line: l, entry: entries[l.id] ?? blankEntry() }))
       .filter(({ entry }) => entry.received > 0);
     if (submittable.length === 0) {
-      toast.error('Enter at least one received quantity to post the receipt.');
+      fail('Enter at least one received quantity to post the receipt.');
       return;
     }
 
     // Per-line validation
     for (const { line, entry } of submittable) {
       if (entry.accepted + entry.rejected > entry.received + 0.0001) {
-        toast.error(`Line "${line.name}": accepted + rejected can't exceed received.`);
+        fail(`Line "${line.name}": accepted + rejected can't exceed received.`);
         return;
       }
 
       if (line.trackingType === 'lot' && entry.accepted > 0) {
         if (entry.lots.length === 0) {
-          toast.error(`Line "${line.name}" is lot-tracked. Add at least one lot.`);
+          fail(`Line "${line.name}" is lot-tracked. Add at least one lot.`);
           return;
         }
         const lotSum = entry.lots.reduce((s, l) => s + (Number(l.qtyBase) || 0), 0);
         if (Math.abs(lotSum - entry.accepted) > 0.0001) {
-          toast.error(
+          fail(
             `Line "${line.name}": lot quantities sum to ${lotSum}, must equal accepted (${entry.accepted}).`,
           );
           return;
         }
         if (entry.lots.some((l) => !l.lotNumber.trim())) {
-          toast.error(`Line "${line.name}": all lots need a lot number.`);
+          fail(`Line "${line.name}": all lots need a lot number.`);
           return;
         }
       }
@@ -198,17 +228,17 @@ export function PoReceiveDialog({
 
         if (serialsRequired(line.trackingType)) {
           if (entry.serials.length !== entry.accepted) {
-            toast.error(
+            fail(
               `Line "${line.name}": expected ${entry.accepted} serials, got ${entry.serials.length}.`,
             );
             return;
           }
           if (entry.serials.some((s) => !s.trim())) {
-            toast.error(`Line "${line.name}": every serial number must be non-empty.`);
+            fail(`Line "${line.name}": every serial number must be non-empty.`);
             return;
           }
         } else if (filled.length > entry.accepted) {
-          toast.error(
+          fail(
             `Line "${line.name}": ${filled.length} serials entered but only ${entry.accepted} units accepted.`,
           );
           return;
@@ -220,7 +250,7 @@ export function PoReceiveDialog({
         // 23505). Compared over the non-blank entries so that untagged units
         // in a serial_optional grid do not read as duplicates of each other.
         if (new Set(filled).size !== filled.length) {
-          toast.error(`Line "${line.name}": duplicate serials in the list.`);
+          fail(`Line "${line.name}": duplicate serials in the list.`);
           return;
         }
       }
@@ -259,7 +289,7 @@ export function PoReceiveDialog({
     });
     setSubmitting(false);
     if (!res.ok) {
-      toast.error(res.error.message);
+      fail(res.error.message);
       return;
     }
     toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}.`);
@@ -412,6 +442,16 @@ export function PoReceiveDialog({
           <Label>Notes</Label>
           <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
+        {/*
+          The failure surface for this dialog. Lives INSIDE the modal and
+          persists until the next attempt — see the serverError comment above
+          for the "clicked, nothing happened" bug this closes.
+        */}
+        {serverError && (
+          <p role="alert" className="text-sm text-destructive">
+            {serverError}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
             Cancel

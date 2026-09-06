@@ -7,6 +7,7 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Toggle } from '@/components/ui/toggle';
 import { Body, Mono } from '@/components/ui/text';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
@@ -35,12 +36,26 @@ const CADENCE_LABEL: Record<string, string> = {
 
 /**
  * Recurring PO templates — mobile twin of /dashboard/purchase-orders/recurring.
- * Lists the org's templates with pause/resume + delete. Reads/writes go direct
- * to Supabase: RLS is member read / manager+ write, the same floor the web
- * service enforces, and the daily cron re-checks the org's plan tier before
- * generating POs — so nothing here can unlock what the plan forbids.
+ * Lists the org's templates with pause/resume + delete. The LIST read goes
+ * direct to Supabase: RLS is member read, the same floor the web service
+ * enforces, and the daily cron re-checks the org's plan tier before generating
+ * POs — so nothing here can unlock what the plan forbids.
  * Template CREATION stays on web (line-item picker is desktop work); the drawer
  * entry is gated to purchase_orders:manage like the web sidebar link.
+ *
+ * WRITES DO NOT (SP-122). Pause/resume and delete used to be direct PostgREST
+ * writes too. RLS accepted them (manager+ / purchase_orders:manage — the same
+ * floor again), so the gap was never authorization: it was the AUDIT TRAIL.
+ * `audit_logs` is written by app code only (web's server/services/audit.ts,
+ * through the service-role client) — there is no DB trigger, and the table's
+ * only policy is SELECT — so a template paused or deleted from a phone left no
+ * trace, while the same action on web left one. This org reads that log ON THE
+ * PHONE (app/(drawer)/admin/audit.tsx), so "why did the monthly PO stop?" had
+ * an answer on web and a blank here. Both writes now go through
+ * PATCH/DELETE /api/v1/recurring-pos/[id] → RecurringPoTemplatesService
+ * .setEnabled/remove, which audits with the bearer ctx and stamps updated_by
+ * (the direct write never did). Same rule as the Staging screen: a mobile
+ * write goes through the shared service, never a second query.
  */
 export default function RecurringPosScreen() {
   const { user } = useAuth();
@@ -77,24 +92,25 @@ export default function RecurringPosScreen() {
 
   async function toggleEnabled(row: TemplateRow, next: boolean) {
     setBusyId(row.id);
-    // Await the builder — a voided supabase builder never sends the request.
-    // Optimistic state only after the write lands (recurring-bug pattern #22).
-    const { error, data } = await supabase
-      .from('recurring_po_templates')
-      .update({ enabled: next })
-      .eq('id', row.id)
-      .eq('organization_id', activeOrgId ?? '')
-      .select('id')
-      .maybeSingle();
-    setBusyId(null);
-    if (error || !data) {
+    try {
+      // The route (not PostgREST) is what reaches the audited service; api()
+      // throws on any non-2xx, so the write is still fail-CLOSED and the
+      // permission/plan refusals arrive as a sentence we can show.
+      await api(`/api/v1/recurring-pos/${row.id}`, {
+        method: 'PATCH',
+        body: { enabled: next },
+      });
+      // Optimistic state only after the write lands (recurring-bug pattern #22):
+      // a list updated next to a refused write hides the failure completely.
+      setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)));
+    } catch (e) {
       Alert.alert(
         'Could not update',
-        error?.message ?? 'You need manager access to change recurring POs.',
+        e instanceof Error ? e.message : 'You need manager access to change recurring POs.',
       );
-      return;
+    } finally {
+      setBusyId(null);
     }
-    setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)));
   }
 
   function confirmDelete(row: TemplateRow) {
@@ -109,22 +125,21 @@ export default function RecurringPosScreen() {
           onPress: () => {
             void (async () => {
               setBusyId(row.id);
-              const { error, data } = await supabase
-                .from('recurring_po_templates')
-                .delete()
-                .eq('id', row.id)
-                .eq('organization_id', activeOrgId ?? '')
-                .select('id')
-                .maybeSingle();
-              setBusyId(null);
-              if (error || !data) {
+              try {
+                // Same reason as the toggle: the service behind this route is
+                // the only writer of the 'recurring_po_template.deleted' event.
+                await api(`/api/v1/recurring-pos/${row.id}`, { method: 'DELETE' });
+                setRows((prev) => prev.filter((r) => r.id !== row.id));
+              } catch (e) {
                 Alert.alert(
                   'Could not delete',
-                  error?.message ?? 'You need manager access to change recurring POs.',
+                  e instanceof Error
+                    ? e.message
+                    : 'You need manager access to change recurring POs.',
                 );
-                return;
+              } finally {
+                setBusyId(null);
               }
-              setRows((prev) => prev.filter((r) => r.id !== row.id));
             })();
           },
         },

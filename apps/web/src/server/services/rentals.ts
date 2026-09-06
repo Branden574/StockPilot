@@ -1,9 +1,11 @@
 import 'server-only';
 
+import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -137,13 +139,16 @@ export class RentalsService {
     const itemIds = input.lines.map((l) => l.itemId);
     const { data: rentalItems } = await this.ctx.supabase
       .from('inventory_items')
-      .select('id, is_rental, warehouse_id, quantity_on_hand')
+      // `name` is here for the availability refusal message below — an operator
+      // who is told "Projector B: only 2 available" can go find the open rental.
+      .select('id, name, is_rental, warehouse_id, quantity_on_hand')
       .eq('organization_id', this.ctx.organizationId)
       .in('id', itemIds);
     const itemsById = new Map(
       (
         (rentalItems ?? []) as Array<{
           id: string;
+          name: string | null;
           is_rental: boolean;
           warehouse_id: string;
           quantity_on_hand: number;
@@ -159,8 +164,55 @@ export class RentalsService {
         throw new ServiceError('validation_error', 'All items must be in the rental warehouse.');
     }
 
-    // TODO availability check — for v1 we trust the picker UI's filter.
-    // Defense in depth could query stock_reservations + subtract here.
+    // Availability guard (SP-052). v1 shipped `TODO availability check — for
+    // v1 we trust the picker UI's filter`, and the picker does NOT enforce it:
+    // it computes `quantityOnHand - reservedQuantity` for its filter/sort chips
+    // but caps the cart's '+' at quantity_on_hand alone. So an item with 5 on
+    // hand and 3 already out on another rental displayed "2 avail" and happily
+    // accepted 5 — 8 units reserved against 5 physical ones, two borrowers
+    // recorded as holding the same stock, and nothing ever refused it (posting
+    // the server action directly was even easier: the only bound was the
+    // schema's max 10_000). Rentals RESERVE rather than decrement on-hand, so
+    // this sum IS the availability model — there is no other layer to catch it
+    // (no DB constraint bounds stock_reservations against on-hand).
+    //
+    // Paginated per recurring-pattern #3: PostgREST clamps ANY select to 1000
+    // rows, and a long-lived item accumulates reservation rows from orders AND
+    // rentals; a truncated read would UNDERCOUNT reservations and wave the
+    // over-lend straight through. fetchAllRows throws on a read error, which is
+    // the right posture here — this read guards a WRITE, so it fails closed.
+    const requestedByItem = new Map<string, number>();
+    for (const line of input.lines) {
+      requestedByItem.set(line.itemId, (requestedByItem.get(line.itemId) ?? 0) + line.quantity);
+    }
+    const activeReservations = await fetchAllRows<{ item_id: string; quantity: number | null }>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('stock_reservations')
+          .select('id, item_id, quantity')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('item_id', itemIds)
+          .is('released_at', null)
+          .order('id')
+          .range(from, to),
+    );
+    const reservedByItem = new Map<string, number>();
+    for (const r of activeReservations) {
+      reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + (r.quantity ?? 0));
+    }
+    for (const [itemId, requested] of requestedByItem) {
+      const it = itemsById.get(itemId)!;
+      const onHand = it.quantity_on_hand ?? 0;
+      const reserved = reservedByItem.get(itemId) ?? 0;
+      const available = Math.max(0, onHand - reserved);
+      if (requested > available) {
+        throw new ServiceError(
+          'validation_error',
+          `${it.name ?? 'Item'}: only ${available} available to rent ` +
+            `(${onHand} on hand, ${reserved} already reserved) — ${requested} requested.`,
+        );
+      }
+    }
 
     // Insert rental header.
     const { data: rentalRow, error: rentalErr } = await this.ctx.supabase
@@ -255,19 +307,42 @@ export class RentalsService {
 
     const { data: row } = await this.ctx.supabase
       .from('rentals')
-      .select('status, expected_return_at')
+      // warehouse_id feeds the write-access assert below — the SELECT that
+      // fetched this row only needed 'read' on that warehouse.
+      .select('status, expected_return_at, warehouse_id')
       .eq('id', input.id)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
     if (!row) throw new ServiceError('not_found', 'Rental not found.');
-    const rental = row as { status: RentalStatus; expected_return_at: string };
+    const rental = row as {
+      status: RentalStatus;
+      expected_return_at: string;
+      warehouse_id: string;
+    };
     if (rental.status !== 'out') {
       // Idempotent — no-op for already-returned/cancelled rentals.
       return;
     }
 
+    // SP-023 / recurring pattern #4: match the app gate to the RLS floor.
+    // 0131 gives rentals_select `user_can_access_warehouse(..,'read')` but
+    // rentals_update `..'write'`, and 0310 grants an assigned VIEWER read
+    // only. `rentals:create` is per-user grantable (configurable permissions,
+    // 0207/0208), so a viewer holding it passed assertPermission, passed the
+    // SELECT, and then hit a write the DB silently refused. Assert write
+    // access here so that user gets an honest refusal instead.
+    await this.assertRentalWriteAccess(rental.warehouse_id);
+
     const now = new Date();
-    const { error: updateErr } = await this.ctx.supabase
+    // Row-proof the status flip (recurring pattern #2). A 0-row UPDATE — RLS
+    // refusing the write, or a concurrent return/cancel already having moved
+    // it off 'out' — comes back as `error === null` with NO rows. The old
+    // `if (updateErr) throw` guard read that as success and sailed on to
+    // release every reservation via the SERVICE ROLE, write the audit row and
+    // email the borrower "thanks for returning", while rentals.status stayed
+    // 'out': availability over-stated (over-rentable) AND the overdue cron
+    // kept nagging. Nothing downstream may run unless a row actually changed.
+    const { data: updatedRow, error: updateErr } = await this.ctx.supabase
       .from('rentals')
       .update({
         status: 'returned',
@@ -275,8 +350,20 @@ export class RentalsService {
         returned_by: this.ctx.userId,
         return_notes: input.returnNotes ?? null,
       })
-      .eq('id', input.id);
+      .eq('id', input.id)
+      .eq('organization_id', this.ctx.organizationId)
+      // Optimistic claim: only the caller who moves it OFF 'out' proceeds, so
+      // two simultaneous returns cannot both release + email.
+      .eq('status', 'out')
+      .select('id')
+      .maybeSingle();
     if (updateErr) throw new ServiceError('internal_error', updateErr.message);
+    if (!updatedRow) {
+      throw new ServiceError(
+        'forbidden',
+        'Could not mark this rental returned — you may not have write access to its warehouse, or someone else just closed it.',
+      );
+    }
 
     // Release all reservations for this rental (service-role — RLS-locked).
     await createAdminClient()
@@ -314,17 +401,25 @@ export class RentalsService {
 
     const { data: row } = await this.ctx.supabase
       .from('rentals')
-      .select('status')
+      // warehouse_id feeds the write-access assert below (read ≠ write, 0131).
+      .select('status, warehouse_id')
       .eq('id', input.id)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
     if (!row) throw new ServiceError('not_found', 'Rental not found.');
-    if ((row as { status: RentalStatus }).status !== 'out') {
+    const rental = row as { status: RentalStatus; warehouse_id: string };
+    if (rental.status !== 'out') {
       return; // Idempotent
     }
 
+    // Same RLS floor as markReturned (SP-023) — see the comment there.
+    await this.assertRentalWriteAccess(rental.warehouse_id);
+
     const now = new Date();
-    const { error: updateErr } = await this.ctx.supabase
+    // Row-proof the status flip — see markReturned. Without it a write RLS
+    // refused still released every reservation via the service role and
+    // audited a cancellation that never happened.
+    const { data: updatedRow, error: updateErr } = await this.ctx.supabase
       .from('rentals')
       .update({
         status: 'cancelled',
@@ -332,8 +427,18 @@ export class RentalsService {
         cancelled_by: this.ctx.userId,
         cancellation_reason: input.reason,
       })
-      .eq('id', input.id);
+      .eq('id', input.id)
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('status', 'out')
+      .select('id')
+      .maybeSingle();
     if (updateErr) throw new ServiceError('internal_error', updateErr.message);
+    if (!updatedRow) {
+      throw new ServiceError(
+        'forbidden',
+        'Could not cancel this rental — you may not have write access to its warehouse, or someone else just closed it.',
+      );
+    }
 
     // Release all reservations for this rental (service-role — RLS-locked).
     await createAdminClient()
@@ -351,5 +456,23 @@ export class RentalsService {
       },
       this.ctx,
     );
+  }
+
+  /**
+   * Warehouse WRITE gate for the rental status flips, translated into a
+   * ServiceError. `assertWarehouseAccess` throws ForbiddenError (a different
+   * class from ServiceError), which the rentals server actions would surface
+   * as a generic `internal_error` — so map it here, the way cycle-counts.ts
+   * does at its own warehouse asserts.
+   */
+  private async assertRentalWriteAccess(warehouseId: string): Promise<void> {
+    try {
+      await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+    } catch (e) {
+      if (e instanceof ForbiddenError) {
+        throw new ServiceError('forbidden', e.message);
+      }
+      throw e;
+    }
   }
 }

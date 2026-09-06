@@ -7,7 +7,7 @@
  * the one thing that must be provable is that the dialog still emits the exact
  * same `p_lines` recordset shape — grouped or not.
  */
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -268,5 +268,68 @@ describe('PoReceiveDialog — serial capture survives inside a run', () => {
     expect(toast.error).toHaveBeenCalledWith(
       expect.stringContaining('every serial number must be non-empty'),
     );
+  });
+});
+
+describe('PoReceiveDialog — a failed post must be visible INSIDE the dialog', () => {
+  // Recurring pattern #20: a modal submit whose only failure feedback is a
+  // Sonner toast is a silent failure. The toast renders bottom-right OUTSIDE
+  // the dialog and auto-dismisses in ~4s while the receiver is looking at the
+  // form; the dialog stays open, unchanged, with the button re-enabled, so
+  // "clicked, nothing happened" — and a receiver with 40 lines typed either
+  // clicks again or closes the dialog believing the stock was received.
+  // post_receipt_v2 (0296) can refuse for reasons the receiver must SEE:
+  // po_already_closed, forbidden (manager floor), idempotency_conflict.
+  it('renders the server error inline and keeps the dialog open', async () => {
+    const { toast } = await import('sonner');
+    postReceiptAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'This PO is already closed and cannot accept further receipts.',
+      },
+    });
+
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await user.click(screen.getByRole('button', { name: /^all$/i }));
+    await user.click(screen.getByRole('button', { name: /post receipt/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/already closed/i);
+    // The dialog must NOT close on failure — the typed quantities are still there.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(5);
+    // The toast stays as well (existing behaviour, belt and braces).
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('already closed'));
+  });
+
+  it('clears the previous failure the moment the next attempt starts', async () => {
+    // A stale error left on screen while a retry is in flight is its own lie:
+    // the receiver cannot tell whether the message describes the attempt they
+    // just made or the one before it.
+    let resolveSecond: ((v: unknown) => void) | undefined;
+    postReceiptAction
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'conflict', message: 'This PO is already closed.' },
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const user = await openDialog([line({ id: 'a', quantityOrdered: 5 })]);
+    await user.click(screen.getByRole('button', { name: /^all$/i }));
+    await user.click(screen.getByRole('button', { name: /post receipt/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already closed/i);
+
+    // Second attempt, still in flight: the old message must already be gone.
+    await user.click(screen.getByRole('button', { name: /post receipt|loading/i }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+    resolveSecond?.({ ok: true, data: { receiptNumber: 'RC-9' } });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });

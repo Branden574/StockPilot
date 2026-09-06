@@ -172,3 +172,85 @@ describe('GET /api/cron/weekly-digest — recipient address follows the profile 
     expect(sendEmailMock.mock.calls[0]![0].to).not.toBe('old@acme.test');
   });
 });
+
+describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', () => {
+  it('does not re-send when the same week is run twice', async () => {
+    // The claim row is the at-most-once key. The stub models the UNIQUE
+    // (organization_id, scope, key) index: the first insert wins, every
+    // later insert for the same week comes back 23505.
+    let claims = 0;
+    const stub = makeSupabaseStub({
+      'user_profiles.select': {
+        data: [recipientRow('user-a', 'a@acme.test')],
+        error: null,
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z' },
+        error: null,
+      },
+      'idempotency_keys.insert': () =>
+        claims++ === 0
+          ? { data: { id: 'claim-1' }, error: null }
+          : {
+              data: null,
+              error: {
+                message: 'duplicate key value violates unique constraint "idempotency_keys_..."',
+                code: '23505',
+              },
+            },
+    });
+    adminHolder.client = stub.client;
+
+    const first = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await first.json()).toMatchObject({ ok: true, sent: 1 });
+
+    const second = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await second.json()).toMatchObject({ ok: true, sent: 0, skipped: 1 });
+
+    // The digest went out exactly once across both invocations.
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+
+    // And the claim is scoped per (org, user, week) — not per user, so a
+    // user in two orgs still gets both orgs' digests in the same week.
+    const insertArgs = stub.chainArgsAll.get('idempotency_keys.insert')?.[0]?.[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(insertArgs).toBeTruthy();
+    expect(insertArgs!.organization_id).toBe('org-1');
+    expect(insertArgs!.scope).toBe('weekly_digest');
+    expect(String(insertArgs!.key)).toContain('user-a');
+  });
+
+  it('still sends when the claim write itself errors (deploy-before-migrate)', async () => {
+    // Fail OPEN on the marker, never on the send: if the claim table is
+    // unreachable the worst case must be a possible duplicate, not a
+    // fleet-wide digest outage.
+    const stub = makeSupabaseStub({
+      'user_profiles.select': {
+        data: [recipientRow('user-a', 'a@acme.test')],
+        error: null,
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z' },
+        error: null,
+      },
+      'idempotency_keys.insert': {
+        data: null,
+        error: { message: 'relation "idempotency_keys" does not exist', code: '42P01' },
+      },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1 });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+  });
+});

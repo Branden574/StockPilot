@@ -42,6 +42,38 @@ export async function verifyPasswordSideChannel(
     if (error) {
       return { ok: false, reason: 'invalid_password', message: 'Password is incorrect.' };
     }
+
+    // Revoke the session this check just minted — otherwise it is a GHOST.
+    //
+    // `persistSession: false` (above) only suppresses CLIENT-side storage; it
+    // does NOT stop GoTrue's password grant from inserting a real
+    // `auth.sessions` row with a live refresh token. `list_my_sessions`
+    // (migs 0213/0214) returns EVERY auth.sessions row for auth.uid() with no
+    // filter, so every email-change request, ownership transfer, MFA
+    // enroll-verify and recovery-code consume was adding a phantom entry to
+    // Settings → Security — indistinguishable from the user's real web
+    // sessions (server.ts forwards no User-Agent, so SSR sign-ins log as
+    // 'node' too). Users seeing a device they didn't create reasonably press
+    // "Sign out other devices" and evict their own phone. Prod had 24 such
+    // server-originated rows, 10 never refreshed.
+    //
+    // scope 'local' is deliberate: auth-js still POSTs /logout?scope=local
+    // with THIS client's own access token (GoTrueClient._signOut calls
+    // admin.signOut for every scope), so GoTrue deletes exactly the session
+    // just created and nothing else. 'global'/'others' would evict the
+    // caller's SSR cookie session and their real devices mid-flow.
+    //
+    // Best-effort: the password IS verified at this point. A GoTrue /logout
+    // blip must not turn a correct password into "Password is incorrect" and
+    // lock the user out of email change / MFA enroll — a leaked ghost is the
+    // pre-fix status quo, so failing here degrades to exactly the old
+    // behaviour instead of a new outage.
+    try {
+      await client.auth.signOut({ scope: 'local' });
+    } catch (e) {
+      console.warn('[verifyPasswordSideChannel] ghost-session cleanup failed:', e);
+    }
+
     return { ok: true };
   } catch (e) {
     return {

@@ -118,3 +118,72 @@ describe('OrderRequestsService.get requester resolution', () => {
     expect(detail.requesterEmail).toBeNull();
   });
 });
+
+/**
+ * SP-025 (bug-pattern #5 — filtering on a column the select omitted).
+ *
+ * The order detail page renders an amber "Items were added after the pick slip
+ * was printed" banner off `detail.pickSlipStale`. The staleness test compares
+ * each line's `created_at` against `pick_slip_generated_at`, but the lines
+ * select never asked for `created_at` and the flattening step built an explicit
+ * object literal that could not carry it — so the predicate read `undefined` on
+ * every line and the banner had never rendered for anyone since it shipped.
+ */
+describe('OrderRequestsService.get pickSlipStale', () => {
+  const PRINTED_AT = '2026-07-22T18:00:00+00:00';
+
+  function stubWithLines(lines: Array<Record<string, unknown>>, printedAt: string | null) {
+    return makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: baseHeader({ pick_slip_generated_at: printedAt }),
+        error: null,
+      },
+      'order_request_lines.select': { data: lines, error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'warehouses.select.maybeSingle': { data: { name: 'Main WH' }, error: null },
+      'user_profiles.select.maybeSingle': { data: null, error: null },
+    });
+  }
+
+  const line = (id: string, createdAt: string) => ({
+    id,
+    order_request_id: 'ord-1',
+    item_id: 'item-1',
+    quantity_requested: 1,
+    quantity_fulfilled: 0,
+    quantity_picked: null,
+    returned_quantity: 0,
+    unit_cost_at_request: 0,
+    notes: null,
+    created_at: createdAt,
+    item: null,
+  });
+
+  it('is true when a line was created after the pick slip was printed', async () => {
+    const stub = stubWithLines(
+      [line('l1', '2026-07-22T17:00:00+00:00'), line('l2', '2026-07-22T18:05:00+00:00')],
+      PRINTED_AT,
+    );
+    expect((await svc(stub).get('ord-1')).pickSlipStale).toBe(true);
+  });
+
+  it('is false when every line predates the printed slip', async () => {
+    const stub = stubWithLines(
+      [line('l1', '2026-07-22T17:00:00+00:00'), line('l2', '2026-07-22T17:59:59+00:00')],
+      PRINTED_AT,
+    );
+    expect((await svc(stub).get('ord-1')).pickSlipStale).toBe(false);
+  });
+
+  it('is false when no pick slip has been printed', async () => {
+    const stub = stubWithLines([line('l1', '2026-07-22T18:05:00+00:00')], null);
+    expect((await svc(stub).get('ord-1')).pickSlipStale).toBe(false);
+  });
+
+  it('asks the database for created_at (the column the predicate reads)', async () => {
+    const stub = stubWithLines([line('l1', '2026-07-22T17:00:00+00:00')], PRINTED_AT);
+    await svc(stub).get('ord-1');
+    const selectArgs = (stub.chainArgs.get('order_request_lines.select') ?? [])[0]?.[0];
+    expect(String(selectArgs)).toMatch(/\bcreated_at\b/);
+  });
+});

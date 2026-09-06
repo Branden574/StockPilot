@@ -104,7 +104,99 @@ interface SnapshotResponse {
     phantomWarehouseId: string | null;
     components: { itemId: string; quantity: number; isOptional: boolean }[];
   }[];
+  /**
+   * Ids of items that LEFT scope since `since` (archived, deleted, or moved
+   * out of the caller's warehouse access). The snapshot route documents this
+   * as `deletedItemIds` "(future)" and does not emit it yet — the reader below
+   * accepts it under this name and treats a missing/malformed value as "the
+   * server told us nothing", which is exactly today's behaviour. See the
+   * reconciliation block in pullSnapshot for why a delta response otherwise
+   * cannot express a removal.
+   */
+  removedItemIds?: string[];
+  /**
+   * The org's COMPLETE active-bundle id list, independent of `since`. Also not
+   * emitted yet. When present it is authoritative: anything local and absent
+   * from it was deactivated/archived and is deleted, even on a delta pull.
+   */
+  activeBundleIds?: string[];
 }
+
+/**
+ * The snapshot route's own `.limit(50)` on open cycle counts, mirrored here as
+ * a TRUNCATION guard (see the reconciliation block). If the route ever raises
+ * its limit this stays conservative — we prune less, never more.
+ */
+const SNAPSHOT_CYCLE_COUNT_LIMIT = 50;
+
+/**
+ * PostgREST clamps every response to `[api] max_rows = 1000`, and the
+ * snapshot's bundles query has no explicit limit of its own — so a 1000-row
+ * bundle payload may be a truncated page rather than the whole set. Same
+ * truncation guard.
+ */
+const POSTGREST_MAX_ROWS = 1000;
+
+/*
+ * ── Removal SQL (SP-081) ───────────────────────────────────────────────────
+ *
+ * Exported so the statements can be exercised against a real SQLite in
+ * sync.snapshot-removals.test.ts — the same posture as
+ * cycle-count-snapshot-sql.ts: the SQL is where this bug lives, so the SQL is
+ * what the test runs.
+ *
+ * `not in (select value from json_each(?))` is NULL-safe here because every id
+ * compared is a NOT NULL primary key and json_each never yields NULL for a
+ * string array — a NULL anywhere in a NOT IN list would make the whole
+ * predicate false and quietly disable the delete.
+ */
+
+/** Params: (json array of the count ids the server still lists). */
+export const STALE_CYCLE_COUNT_LINES_DELETE_SQL = `
+  delete from cycle_count_lines
+   where count_id not in (select value from json_each(?))
+     and count_id not in (
+       select count_id from cycle_count_lines where local_dirty = 1
+     )`;
+
+/** Params: (json array of the count ids the server still lists). */
+export const STALE_CYCLE_COUNTS_DELETE_SQL = `
+  delete from cycle_counts
+   where id not in (select value from json_each(?))
+     and id not in (
+       select count_id from cycle_count_lines where local_dirty = 1
+     )`;
+
+/** Params: (json array of the bundle ids that are still active). */
+export const STALE_BUNDLE_COMPONENTS_DELETE_SQL = `
+  delete from bundle_components
+   where bundle_id not in (select value from json_each(?))`;
+
+/** Params: (json array of the bundle ids that are still active). */
+export const STALE_BUNDLES_DELETE_SQL = `
+  delete from bundles where id not in (select value from json_each(?))`;
+
+/** Params: (json array of item ids the server says are gone). */
+export const REMOVED_ITEMS_DELETE_SQL = `
+  delete from items where id in (select value from json_each(?))`;
+
+/*
+ * Full-pull sweeps. Every row a pull writes gets `last_synced_at = now`, so
+ * after a FULL pull anything still carrying an older stamp is a row the server
+ * did not return — i.e. it left scope. Cheaper and safer than shipping a
+ * 50k-id JSON array as a query parameter.
+ */
+
+/** Params: (this pull's `now`). */
+export const STALE_ITEMS_SWEEP_SQL = `delete from items where last_synced_at < ?`;
+
+/** Params: (this pull's `now`). Run BEFORE the bundles sweep — it reads them. */
+export const STALE_BUNDLE_COMPONENTS_SWEEP_SQL = `
+  delete from bundle_components
+   where bundle_id in (select id from bundles where last_synced_at < ?)`;
+
+/** Params: (this pull's `now`). */
+export const STALE_BUNDLES_SWEEP_SQL = `delete from bundles where last_synced_at < ?`;
 
 export async function isOnline(): Promise<boolean> {
   try {
@@ -256,6 +348,74 @@ export async function pullSnapshot(
         );
       }
     }
+
+    // ── Reconcile REMOVALS (SP-081) ────────────────────────────────────
+    //
+    // Everything above only ever UPSERTS. A row that leaves the server's
+    // scope — an item archived or deleted, a count posted or cancelled, a
+    // bundle deactivated — simply stops appearing in the payload, and the
+    // only local delete in the whole app was clearOrgScopedTables (org
+    // switch / sign-out). So the phone kept showing an archived bundle in
+    // the Bundles list; a staffer opened it, enqueued a distribute, and the
+    // server refused it ("This bundle is archived or inactive.") — terminal
+    // work parked in Unsent work, from a row that should not have been on
+    // the device at all.
+    //
+    // What may be reconciled depends on what the payload PROVES:
+    //
+    //   • openCycleCounts carries NO `since` filter server-side (the route
+    //     builds it from status='in_progress' + warehouse scope only), so
+    //     every pull returns the caller's COMPLETE open list. Absence IS
+    //     proof of removal — reconcile on every pull.
+    //   • items / openPOs / bundles ARE `since`-filtered: on a delta pull an
+    //     untouched row is simply not in the payload, so absence proves
+    //     nothing. They are reconciled only against a FULL pull, or against
+    //     the explicit removal lists once the route emits them.
+    //   • POs are deliberately left alone: the route filters them by status
+    //     AND caps them at 200, so its response is not a complete set under
+    //     either rule.
+
+    // Cycle counts. A count still holding a local_dirty line is the
+    // operator's own unsynced work waiting on the outbox — never delete it
+    // here (same rule CYCLE_COUNT_STALE_LINES_DELETE_SQL already encodes for
+    // lines); the outbox settles it and a later pull removes it.
+    if (snap.openCycleCounts.length < SNAPSHOT_CYCLE_COUNT_LIMIT) {
+      const openCountIds = JSON.stringify(snap.openCycleCounts.map((c) => c.id));
+      await db.runAsync(STALE_CYCLE_COUNT_LINES_DELETE_SQL, [openCountIds]);
+      await db.runAsync(STALE_CYCLE_COUNTS_DELETE_SQL, [openCountIds]);
+    }
+
+    // Items the server explicitly reported as gone (delta-safe; no-op until
+    // the route emits the field).
+    if (Array.isArray(snap.removedItemIds) && snap.removedItemIds.length > 0) {
+      await db.runAsync(REMOVED_ITEMS_DELETE_SQL, [
+        JSON.stringify(snap.removedItemIds.filter((id) => typeof id === 'string')),
+      ]);
+    }
+
+    // The authoritative active-bundle list, when the server sends one.
+    if (Array.isArray(snap.activeBundleIds)) {
+      const activeIds = JSON.stringify(
+        snap.activeBundleIds.filter((id) => typeof id === 'string'),
+      );
+      await db.runAsync(STALE_BUNDLE_COMPONENTS_DELETE_SQL, [activeIds]);
+      await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
+    }
+
+    // Full pull: everything the server returned was just stamped with `now`,
+    // so an older stamp means "the server no longer lists this row".
+    if (since === null) {
+      // items are fetched with fetchAllRows server-side (paged past the
+      // PostgREST 1000-row cap), so an items payload is never truncated.
+      await db.runAsync(STALE_ITEMS_SWEEP_SQL, [now]);
+      // bundles are ONE query with no explicit limit: at exactly max_rows we
+      // cannot tell a complete set from a truncated page, and sweeping a
+      // truncated page would delete live bundles on every full pull.
+      if (snap.bundles.length < POSTGREST_MAX_ROWS && !Array.isArray(snap.activeBundleIds)) {
+        await db.runAsync(STALE_BUNDLE_COMPONENTS_SWEEP_SQL, [now]);
+        await db.runAsync(STALE_BUNDLES_SWEEP_SQL, [now]);
+      }
+    }
   });
 
   await setMeta('last_synced_at', snap.serverTime);
@@ -372,16 +532,16 @@ async function sendOne(
       });
       return;
     }
-    case 'record_count': {
-      const countId = String(payload.cycleCountId ?? '');
-      const lineId = String(payload.lineId ?? '');
-      if (!countId || !lineId) throw new Error('record_count: missing ids');
-      await api(`/api/v1/cycle-counts/${countId}/lines/${lineId}/record`, {
-        method: 'POST',
-        body: payload,
-      });
-      return;
-    }
+    // There is deliberately NO 'record_count' case here. drainQueue skips
+    // those rows (see the `continue` above) so this branch was unreachable —
+    // and it had already DRIFTED from the live sender, CycleCountSyncEngine's
+    // sendRecordCount in cycle-count-sync.ts, which coerces countedQuantity,
+    // refuses a non-finite or negative value and passes an AbortSignal. This
+    // copy did none of that. Two copies of one send, one of them dead, is how
+    // a future fix (an idempotency key, a client counted_at) lands in the copy
+    // nobody runs — recurring pattern #26. A record_count row reaching sendOne
+    // now hits `default:` and is marked failed, loudly, instead of taking a
+    // second, weaker path to the server.
     case 'distribute_bundle': {
       const bundleId = String(payload.bundleId ?? '');
       if (!bundleId) throw new Error('distribute_bundle: missing bundleId');

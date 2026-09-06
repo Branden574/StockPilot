@@ -99,3 +99,46 @@ describe('CustomersService.inviteUser — es portal-invite wiring', () => {
     });
   });
 });
+
+// SP-136: email validity used to be decided by a hand-rolled regex here
+// (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`) while every action schema that fronts this
+// service parses with core `emailSchema` (zod). The two rules disagree, so the
+// service accepted addresses the rest of the app refuses — a second entry point
+// (or a future caller without a zod-parsing action in front of it) would have
+// minted a magic link for an address no other layer considers valid. One rule
+// now: core emailSchema, the same object the action schemas use.
+describe('CustomersService.inviteUser — email validity is the core emailSchema rule', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendEmail.mockResolvedValue({ ok: true, id: 'test' });
+    generateLink.mockResolvedValue({
+      data: { properties: { hashed_token: 'hash999' }, user: { id: 'auth-user-1' } },
+      error: null,
+    });
+  });
+
+  // Each of these PASSES the old hand regex and FAILS zod's email rule.
+  it.each([
+    ['single-letter TLD', 'j.doe@school.c'],
+    ['consecutive dots in the local part', 'john..smith@acme.com'],
+    ['leading dot in the local part', '.lead@acme.com'],
+    ['local part past 254 chars', `${'a'.repeat(300)}@acme.com`],
+  ])('refuses %s (%s) before minting a link', async (_label, email) => {
+    const { svc } = makeService();
+    await expect(svc.inviteUser('cust-1', email)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    // No auth user created, no mail sent for an address the app calls invalid.
+    expect(generateLink).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a normal address (guards against an over-strict rule)', async () => {
+    const { svc } = makeService();
+    await expect(svc.inviteUser('cust-1', '  Maya.Ortiz+orders@Harbor-Pine.example  ')).resolves.toBeUndefined();
+    expect(generateLink).toHaveBeenCalledWith({
+      type: 'invite',
+      email: 'maya.ortiz+orders@harbor-pine.example',
+    });
+  });
+});

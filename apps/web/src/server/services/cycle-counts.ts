@@ -3,6 +3,7 @@ import 'server-only';
 import { isManagerOrAbove } from '@stockpilot/core';
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -120,6 +121,14 @@ export type CycleCountLineFilter = 'all' | 'uncounted' | 'variance';
  * clear + recount of that line, never a silent double-count. Mobile
  * posts through the RPC directly and mirrors these strings in
  * app/cycle-count/[id].tsx.
+ *
+ * 0342/0343 add two more: cycle_count_location_out_of_org (42501) and
+ * cycle_count_location_out_of_scope (22023), raised when a line's
+ * trigger-derived counted_location_id lands outside the org / the count's
+ * warehouse scope. The mobile twin lives in
+ * apps/mobile/src/lib/cycle-count-post-errors.ts and mirrors this map; it does
+ * NOT yet carry these two codes, so a mobile post still alerts the raw
+ * Postgres string for them (owed follow-up — keep the two files in step).
  */
 export function mapPostCycleCountError(message: string): ServiceError {
   if (message.includes('cycle_count_not_found')) {
@@ -153,6 +162,24 @@ export function mapPostCycleCountError(message: string): ServiceError {
     return new ServiceError(
       'validation_error',
       'Posting would take an item below zero because stock moved out after it was counted. Recount that line, then post again.',
+    );
+  }
+  // 0342/0343 counted-location validation. NOTE the substring trap that hid
+  // these for a release (pattern #28b): `item_out_of_scope` is NOT a substring
+  // of `cycle_count_location_out_of_scope`, and neither location code contains
+  // any of the codes above — so both fell through to internal_error and the
+  // operator saw a generic "internal error" with no idea which line to fix.
+  // Keep these BEFORE the fallthrough; enumerate every raise the RPC can emit.
+  if (message.includes('cycle_count_location_out_of_scope')) {
+    return new ServiceError(
+      'validation_error',
+      'A line was counted at a location outside this count\'s warehouse. Clear and recount that line, then post again.',
+    );
+  }
+  if (message.includes('cycle_count_location_out_of_org')) {
+    return new ServiceError(
+      'validation_error',
+      'A line was counted at a location that does not belong to this organization. Clear and recount that line, then post again.',
     );
   }
   return new ServiceError('internal_error', message);
@@ -217,10 +244,24 @@ export class CycleCountsService {
   async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     // Warehouse-scoped users (staff/viewer with assignments) only see
-    // counts for warehouses they can write to. Managers+ have
-    // hasAllAccess and see every count. Org-wide counts (warehouse_id
-    // is null) only surface for full-access users since those sessions
-    // span any warehouse.
+    // counts for warehouses they can write to — PLUS any null-warehouse
+    // count assigned to them personally. Managers+ have hasAllAccess and
+    // see every count.
+    //
+    // Why the null arm exists (SP-127): a count's header warehouse is null
+    // both for a true org-wide count AND for a manager's SELECTION whose
+    // picks span two warehouses (start() only labels the header when every
+    // pick shares one warehouse). This filter used to be a bare
+    // `.in('warehouse_id', writableIds)`, which PostgREST compiles to
+    // `= ANY(...)` — NULL is never a member of that list, so the row was
+    // DROPPED (recurring bug pattern #23(b)). The assignee could open the
+    // count from her notification link (getDetailPage skips the warehouse
+    // gate for a null header) and record lines (assertSessionAccess gates
+    // on the LINES' warehouses, which she can write) — and her phone listed
+    // it, because the mobile list reads under org-member RLS. Only the web
+    // list said she had no work. The arm is narrow on purpose: null header
+    // AND assigned to the caller — it does not widen to counts in
+    // warehouses she cannot read.
     const access = await getWarehouseAccess(this.ctx);
 
     let query = this.ctx.supabase
@@ -235,7 +276,12 @@ export class CycleCountsService {
 
     if (!access.hasAllAccess) {
       if (access.writableIds.length === 0) return [];
-      query = query.in('warehouse_id', access.writableIds);
+      // `or` ANDs with every other filter on this query (organization_id,
+      // and the assigned_to filter below), so this only ever narrows.
+      query = query.or(
+        `warehouse_id.in.(${access.writableIds.join(',')}),` +
+          `and(warehouse_id.is.null,assigned_to.eq.${this.ctx.userId})`,
+      );
     }
 
     if (filters.assignedTo === null) {
@@ -250,6 +296,35 @@ export class CycleCountsService {
   }
 
   /**
+   * Cross-org tampering check: an assignee must be an accepted member of THIS
+   * organization, otherwise a caller could route a count to a user_id they
+   * happen to know but who isn't on the team. RLS on organization_members
+   * enforces org scope on the select, so this query is safe.
+   *
+   * `assign_cycle_count` (0282) re-checks the same thing and raises
+   * `invalid_assignee`; this pre-check exists for the clean message AND so
+   * start() can refuse a bad assignee BEFORE it snapshots a whole count
+   * (SP-123). ONE implementation on purpose — pattern #26: two copies of a
+   * rule drift, and this one decides who may touch a count.
+   */
+  private async assertAcceptedMember(userId: string): Promise<void> {
+    const { data: member, error } = await this.ctx.supabase
+      .from('organization_members')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', userId)
+      .not('accepted_at', 'is', null)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!member) {
+      throw new ServiceError(
+        'validation_error',
+        'That user is not an active member of this organization.',
+      );
+    }
+  }
+
+  /**
    * Manager+ only — point a cycle count at a specific person on the team
    * (or clear with null). The role gate is the new 'cycle_counts:assign'
    * permission added in the same change set; staff and viewers will get a
@@ -259,6 +334,20 @@ export class CycleCountsService {
    * check: if someone else changed the assignee in the meantime, we
    * surface a validation error so the caller knows their toolbar state
    * was stale. Pass undefined to skip the check.
+   *
+   * SP-108: the ASSIGN path now goes through 0282's `assign_cycle_count`
+   * RPC instead of writing `assigned_to` directly. The direct update skipped
+   * the migration's bookkeeping — assignment_claimed_at / _by and the
+   * assignment_version "optimistic-lock token so a stale mobile screen cannot
+   * act on a since-reassigned count" — so a web assign left provenance blank
+   * and the version stale, while release()/forceReassign() (already on their
+   * RPCs) bumped it. Same role floor either way: the cycle_counts UPDATE
+   * policy (0140/0203) requires manager, exactly like the RPC's
+   * has_org_role(...,'manager'); the RPC additionally re-checks warehouse
+   * WRITE access for a warehouse-scoped count, matching start()'s gate.
+   * UNASSIGN stays a direct update — the RPC cannot express it (its target
+   * must be an accepted member) — and clears/bumps the same three columns
+   * by hand so the token never goes backwards.
    */
   async assign(
     id: string,
@@ -275,54 +364,95 @@ export class CycleCountsService {
     // error code distinct from a stale-assignee conflict.
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('cycle_counts')
-      .select('status')
+      .select('status, assigned_to, assignment_version')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Cycle count not found.');
-    if ((header as { status: CycleCountStatus }).status !== 'in_progress') {
+    const current = header as {
+      status: CycleCountStatus;
+      assigned_to: string | null;
+      assignment_version: number | null;
+    };
+    if (current.status !== 'in_progress') {
       throw new ServiceError(
         'conflict',
         'This cycle count is closed — assignment can\'t be changed.',
       );
     }
 
-    // Cross-org tampering check: the assignee must be an accepted
-    // member of THIS organization, otherwise a malicious caller could
-    // route a count to a user_id they happen to know but who isn't on
-    // the team. RLS on organization_members enforces org scope on the
-    // select, so this query is safe.
-    if (assignedTo) {
-      const { data: member, error: mErr } = await this.ctx.supabase
-        .from('organization_members')
-        .select('id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('user_id', assignedTo)
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      if (mErr) throw new ServiceError('internal_error', mErr.message);
-      if (!member) {
-        throw new ServiceError(
-          'validation_error',
-          'That user is not an active member of this organization.',
-        );
-      }
+    // Optimistic-concurrency check. It used to ride on the UPDATE itself
+    // (`.eq('assigned_to', expected)` → 0 rows → error), which was race-free;
+    // reading it here opens a one-round-trip TOCTOU window. Acceptable: the
+    // RPC takes a row lock, so concurrent assigns still serialize — the only
+    // thing that can slip through is a same-instant reassign, which the loser
+    // sees on the next render.
+    if (expectedAssignee !== undefined && current.assigned_to !== (expectedAssignee ?? null)) {
+      throw new ServiceError(
+        'validation_error',
+        'Cycle count not found, or its assignee changed since you opened this page.',
+      );
     }
 
-    let query = this.ctx.supabase
-      .from('cycle_counts')
-      .update({ assigned_to: assignedTo })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (expectedAssignee === null) {
-      query = query.is('assigned_to', null);
-    } else if (typeof expectedAssignee === 'string') {
-      query = query.eq('assigned_to', expectedAssignee);
+    let row: unknown;
+    if (assignedTo) {
+      // Pre-check for the clean message; the RPC re-checks and raises
+      // invalid_assignee if the membership changed in between.
+      await this.assertAcceptedMember(assignedTo);
+      // 0282 RPC: row-locks the count, re-checks manager role + warehouse
+      // write, re-checks accepted membership, and stamps
+      // assigned_to / assignment_claimed_at / assignment_claimed_by /
+      // assignment_version in one statement. It updates assigned_to, so
+      // trg_cycle_counts_assigned (0042) still fires and the assignee still
+      // gets the in-app + push notification.
+      const { data, error } = await this.ctx.supabase.rpc('assign_cycle_count', {
+        p_count_id: id,
+        p_user_id: assignedTo,
+      });
+      if (error) {
+        const msg = error.message ?? '';
+        if (msg.includes('invalid_assignee'))
+          throw new ServiceError(
+            'validation_error',
+            'That user is not an active member of this organization.',
+          );
+        if (msg.includes('invalid_status_transition'))
+          throw new ServiceError(
+            'conflict',
+            'This cycle count is closed — assignment can\'t be changed.',
+          );
+        if (msg.includes('cycle_count_not_found'))
+          throw new ServiceError('not_found', 'Cycle count not found.');
+        if (msg.includes('forbidden') || msg.includes('unauthenticated'))
+          throw new ServiceError(
+            'forbidden',
+            'You do not have permission to assign this cycle count.',
+          );
+        throw new ServiceError('internal_error', msg);
+      }
+      row = Array.isArray(data) ? data[0] : data;
+    } else {
+      // Unassign. `assign_cycle_count` can't do this (its target must be an
+      // accepted member), so the direct update stays — but it now clears the
+      // claim columns and bumps the version by hand, so a client holding
+      // version N can still tell the assignment moved under it.
+      const { data, error } = await this.ctx.supabase
+        .from('cycle_counts')
+        .update({
+          assigned_to: null,
+          assignment_claimed_at: null,
+          assignment_claimed_by: null,
+          assignment_version: (current.assignment_version ?? 0) + 1,
+        })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      row = data;
     }
-    const { data, error } = await query.select('*').maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
-    if (!data) {
+    if (!row) {
       throw new ServiceError(
         'validation_error',
         'Cycle count not found, or its assignee changed since you opened this page.',
@@ -337,7 +467,7 @@ export class CycleCountsService {
       },
       this.ctx,
     );
-    return data as unknown as CycleCountRow;
+    return row as CycleCountRow;
   }
 
   /**
@@ -796,7 +926,16 @@ export class CycleCountsService {
     groupIds?: string[];
     notes?: string | null;
     assignedTo?: string | null;
-  }): Promise<{ id: string; lineCount: number; skipped: number }> {
+  }): Promise<{
+    id: string;
+    lineCount: number;
+    skipped: number;
+    /** Who the count actually ended up assigned to. Null = unassigned —
+     *  either none was requested, or the post-create assign failed (see the
+     *  assignment block at the end of this method). Callers MUST believe this
+     *  over what they asked for. */
+    assignedTo: string | null;
+  }> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     // The cycle_counts INSERT RLS requires manager-level access. Gate on the
     // SAME permission assign() uses for header mutation so a staff caller gets
@@ -805,6 +944,11 @@ export class CycleCountsService {
     // it's the floor for the line writes + the downstream post() this enables.
     assertPermission(this.ctx, 'cycle_counts:assign');
     assertPermission(this.ctx, 'stock:adjust');
+    // Validate the assignee BEFORE the snapshot (SP-123). Doing it after
+    // start_cycle_count would leave a real, unassigned — and therefore
+    // wide-open (0282 `or cc.assigned_to is null`) — count behind whenever
+    // the assignee is bogus. Refusing here creates nothing.
+    if (input.assignedTo) await this.assertAcceptedMember(input.assignedTo);
     const requestedScope = input.scope ?? 'warehouse';
 
     // Expand groups to their variants BEFORE anything else, then fall through
@@ -970,15 +1114,35 @@ export class CycleCountsService {
     const ccId = row.cycle_count_id;
     const lineCount = Number(row.line_count) || 0;
 
-    // Assign as a SEPARATE update so trg_cycle_counts_assigned (0042)
+    // Assign as a SEPARATE step so trg_cycle_counts_assigned (0042)
     // fires and the assignee gets the in-app + push notification — the
-    // RPC's inserts wouldn't trip an AFTER UPDATE OF assigned_to trigger.
+    // snapshot RPC's inserts wouldn't trip an AFTER UPDATE OF assigned_to
+    // trigger.
+    //
+    // SP-123: this used to be `try { … } catch {}`. A bad assignee (e.g. a
+    // user_id that never accepted the invite, which only an API caller can
+    // send) made assign() throw, the throw was swallowed, and the caller got
+    // a 201 for a count with assigned_to NULL — which the 0282 line policy
+    // deliberately leaves OPEN to every staffer (`or cc.assigned_to is null`),
+    // the exact opposite of the lock that was asked for, with nobody
+    // notified. Recurring bug pattern #28: a swallowed error is not
+    // "best-effort", it is unmonitored. Now: the membership is validated
+    // BEFORE the snapshot (above, so no orphan count is created), and a
+    // residual failure here is reported AND told to the caller through
+    // `assignedTo` in the result.
+    let assignedTo: string | null = null;
     if (input.assignedTo) {
       try {
-        await this.assign(ccId, input.assignedTo);
-      } catch {
-        // Non-fatal: the count exists; the assignment just didn't stick.
-        // The starter can re-assign from the detail page.
+        const assigned = await this.assign(ccId, input.assignedTo);
+        assignedTo = assigned.assigned_to ?? input.assignedTo;
+      } catch (e) {
+        // The count is KEPT: deleting it would throw away the snapshot the
+        // operator just took. The caller learns it is unassigned instead.
+        void reportError(e, {
+          tag: 'cycle_counts.start.assign_failed',
+          level: 'warning',
+          extra: { cycleCountId: ccId },
+        });
       }
     }
 
@@ -1007,6 +1171,7 @@ export class CycleCountsService {
       // skips picks that were archived / deleted / left the org.
       lineCount,
       skipped: scope === 'selection' ? requested - lineCount : 0,
+      assignedTo,
     };
   }
 
@@ -1040,14 +1205,25 @@ export class CycleCountsService {
     // to: the cycle_count_lines RLS is org-wide, not warehouse-scoped, so
     // the DB won't catch it. Items with no warehouse require full
     // (manager+) access, same as start().
-    const { data: lineRows, error: lErr } = await this.ctx.supabase
-      .from('cycle_count_lines')
-      .select('warehouse_id')
-      .eq('cycle_count_id', cycleCountId);
-    if (lErr) throw new ServiceError('internal_error', lErr.message);
+    //
+    // PAGINATED ON PURPOSE (SP-062): a bare select here is silently clamped
+    // to `[api] max_rows = 1000` (pattern #3), which for a >1000-line count
+    // turned this gate into "evaluate an ARBITRARY 1000-row subset". If the
+    // other warehouse's lines happened to sit past the cap, the gate saw only
+    // the caller's own warehouse, passed, and the org-wide line RLS let the
+    // write through — the exact hole the paragraph above says this code
+    // closes. An authorization check may never read a truncated input.
+    const lineRows = await fetchAllRows<{ warehouse_id: string | null }>((from, to) =>
+      this.ctx.supabase
+        .from('cycle_count_lines')
+        .select('warehouse_id')
+        .eq('cycle_count_id', cycleCountId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
     const distinctWh = new Set<string>();
     let hasNullWh = false;
-    for (const r of (lineRows ?? []) as Array<{ warehouse_id: string | null }>) {
+    for (const r of lineRows) {
       if (r.warehouse_id) distinctWh.add(r.warehouse_id);
       else hasNullWh = true;
     }
@@ -1202,16 +1378,36 @@ export class CycleCountsService {
       );
     }
 
-    const { data, error } = await this.ctx.supabase
-      .from('cycle_count_lines')
-      .select(
-        `id,
+    // PAGINATED (SP-091): this set becomes the vision prompt's "only consider
+    // these titles" list, and the parser drops any SKU that isn't in it. A
+    // bare select is clamped to `[api] max_rows = 1000` (pattern #3), so on a
+    // bigger count every book past row 1000 was invisible to the model —
+    // scanning its shelf answered "not in this count" and the line silently
+    // stayed uncounted. get() in this same file has been paged since the
+    // count-sheet fix; this sibling read was missed.
+    type AiScanItem = {
+      sku: string;
+      name: string;
+      barcode: string | null;
+      item_type: string | null;
+      custom_fields: Record<string, unknown> | null;
+    };
+    const data = await fetchAllRows<{
+      id: string;
+      item: AiScanItem | AiScanItem[] | null;
+    }>((from, to) =>
+      this.ctx.supabase
+        .from('cycle_count_lines')
+        .select(
+          `id,
          item:inventory_items!item_id (
            sku, name, barcode, item_type, custom_fields
          )`,
-      )
-      .eq('cycle_count_id', cycleCountId);
-    if (error) throw new ServiceError('internal_error', error.message);
+        )
+        .eq('cycle_count_id', cycleCountId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
 
     const out: Array<{
       lineId: string;
@@ -1220,25 +1416,7 @@ export class CycleCountsService {
       isbn: string | null;
       author: string | null;
     }> = [];
-    for (const row of (data ?? []) as Array<{
-      id: string;
-      item:
-        | {
-            sku: string;
-            name: string;
-            barcode: string | null;
-            item_type: string | null;
-            custom_fields: Record<string, unknown> | null;
-          }
-        | Array<{
-            sku: string;
-            name: string;
-            barcode: string | null;
-            item_type: string | null;
-            custom_fields: Record<string, unknown> | null;
-          }>
-        | null;
-    }>) {
+    for (const row of data) {
       const item = Array.isArray(row.item) ? row.item[0] : row.item;
       if (!item) continue;
       // Books-only filter for v1.
@@ -1424,7 +1602,8 @@ export class CycleCountsService {
       // Map stable PG raise codes to user-friendly ServiceErrors.
       // post_cycle_count emits: cycle_count_not_found, cycle_count_not_open,
       // forbidden, item_out_of_scope (v2 0079), cycle_count_stale_line,
-      // cycle_count_negative_result (v4 0339).
+      // cycle_count_negative_result (v4 0339), cycle_count_location_out_of_org
+      // and cycle_count_location_out_of_scope (0342/0343).
       throw mapPostCycleCountError(error.message);
     }
     await audit(

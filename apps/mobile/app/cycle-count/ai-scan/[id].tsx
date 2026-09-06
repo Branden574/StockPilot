@@ -25,6 +25,7 @@ import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
   getCycleCount,
+  outboxAck,
   updateLocalLine,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
@@ -86,7 +87,9 @@ type Phase =
  * record endpoint (online; the AI scan is online-only by design),
  * with `aiScanId` set so the audit trail traces back to the scan.
  * The local SQLite cache is updated in lockstep so the cycle-count
- * detail screen reflects the new counts immediately.
+ * detail screen reflects the new counts immediately — and the outbox row
+ * that mirror creates is acked on the spot, because the server already
+ * has the write (see the SP-036 note in onConfirm).
  */
 export default function AiScanScreen() {
   const router = useRouter();
@@ -308,7 +311,33 @@ export default function AiScanScreen() {
           }
           // Mirror into the local SQLite cache so the detail screen reflects
           // the new count without waiting for a sync round-trip.
-          await updateLocalLine(w.lineId, w.count);
+          //
+          // ═══ AND ACK IT IMMEDIATELY (SP-036) ═══
+          // `updateLocalLine` is the OFFLINE edit path: besides writing
+          // `counted` it sets local_dirty=1 and enqueues a `record_count`
+          // outbox row carrying {cycleCountId, lineId, countedQuantity} —
+          // and NOTHING ELSE. The server has already accepted this exact
+          // count one statement above, so letting that row replay (the
+          // `forceSync()` at the end of this function drains it seconds
+          // later) did two kinds of damage:
+          //
+          //   1. the replay POSTs this same route WITHOUT aiScanId, and the
+          //      route records a missing aiScanId as NULL — wiping the
+          //      ai_scan_id the direct write just set, so the audit link
+          //      from the count back to the scan photo was lost on every
+          //      AI-confirmed line;
+          //   2. it doubled request volume (N direct + N replays) against
+          //      the route's 120/min per-user rate limit, so a ~60-line
+          //      confirm tripped 429s → rows to 'failed' with backoff →
+          //      "Sync issue · retrying" and posting blocked by hasPending.
+          //
+          // `outboxAck` is exactly the "the server has this" bookkeeping:
+          // it deletes the outbox row and clears local_dirty in ONE
+          // transaction. Nothing is lost by acking — this screen is
+          // online-only by design, so there is no offline edit to preserve,
+          // and the count itself is already durable server-side.
+          const mirrored = await updateLocalLine(w.lineId, w.count);
+          if (mirrored) await outboxAck(mirrored.outboxId);
         } catch (lineErr) {
           console.warn('[cycle-count] line save failed', w.lineId, lineErr);
           failed.push(w.lineId);

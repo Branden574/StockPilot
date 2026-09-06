@@ -18,6 +18,23 @@ const registerSchema = z.object({
  * `token` (push_tokens.token has a unique constraint), so the mobile
  * app can call this on every app open without piling up rows.
  *
+ * WHY THIS GOES THROUGH AN RPC AND NOT A DIRECT UPSERT (SP-073, mig 0348).
+ * This used to be `ctx.supabase.from('push_tokens').upsert(..., { onConflict:
+ * 'token' })` on the USER-authed client. push_tokens carries exactly one
+ * policy — push_tokens_self (0003_rls.sql) `using (user_id = auth.uid())` —
+ * and Postgres evaluates ON CONFLICT DO UPDATE against the EXISTING row's
+ * USING expression. On a SHARED warehouse device the existing row still
+ * belongs to the person who signed out (nothing deletes it), so user B's
+ * registration hit 42501 "new row violates row-level security policy (USING
+ * expression)" — reproduced on local Postgres 2026-09-05 — this route
+ * answered 500, and the Expo token stayed bound to user A for up to 120 days
+ * (the dispatch window in 0028/0313). A's order approvals and low-stock
+ * alerts kept landing on the device B was holding, and B got none.
+ *
+ * `register_push_token` (0348) is SECURITY DEFINER: it authorizes itself on
+ * auth.uid(), drops any binding of that token to a DIFFERENT user, then
+ * writes the caller's own row. RLS on push_tokens is unchanged.
+ *
  * Body: { token, platform, deviceId? }
  */
 export async function POST(req: NextRequest) {
@@ -42,18 +59,11 @@ export async function POST(req: NextRequest) {
 
   const { token, platform, deviceId } = parsed.data;
 
-  const { error } = await ctx.supabase
-    .from('push_tokens')
-    .upsert(
-      {
-        user_id: ctx.userId,
-        token,
-        platform,
-        device_id: deviceId ?? null,
-        last_used_at: new Date().toISOString(),
-      },
-      { onConflict: 'token' },
-    );
+  const { error } = await ctx.supabase.rpc('register_push_token', {
+    p_token: token,
+    p_platform: platform,
+    p_device_id: deviceId ?? null,
+  });
   if (error) {
     void reportError(new Error(error.message), {
       tag: 'push.register',

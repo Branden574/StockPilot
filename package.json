@@ -14,8 +14,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "format": "prettier --write \"**/*.{ts,tsx,md,json,sql,css}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,sql,css}\"",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,css}\"",
     "clean": "turbo run clean && rm -rf node_modules .turbo",
     "db:types": "supabase gen types typescript --linked > packages/core/src/types/database.ts",
     "db:types:local": "supabase gen types typescript --local > packages/core/src/types/database.ts",
@@ -43,7 +43,7 @@
       "prettier --write",
       "eslint --fix"
     ],
-    "*.{json,md,sql,css}": [
+    "*.{json,md,css}": [
       "prettier --write"
     ]
   },

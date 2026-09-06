@@ -259,3 +259,47 @@ describe('LotsService.traceLot', () => {
     expect(res.picks[0]).toMatchObject({ orderRequestId: 'o1', orderNumber: null });
   });
 });
+
+// Pattern #16: a needle handed straight to PostgREST `.ilike()` keeps its
+// LIKE metacharacters. Lot numbers legitimately contain `_` and `%`
+// (core/schemas/receipts.ts allows any string), so tracing 'LOT_1' used to
+// also report the receipts and picks of 'LOT11'/'LOT-1' as consumption of
+// LOT_1 — a recall/expiry report naming the wrong lots — and a needle ending
+// in a backslash produced an invalid LIKE pattern (Postgres error → 500).
+describe('LotsService.traceLot wildcard escaping', () => {
+  const ilikeArg = (stub: ReturnType<typeof makeSupabaseStub>, table: string) => {
+    const chain = stub.chains.get(`${table}.select`) ?? [];
+    const idx = chain.indexOf('ilike');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    return stub.chainArgs.get(`${table}.select`)?.[idx];
+  };
+
+  const emptyStub = () =>
+    makeSupabaseStub({
+      'receipt_line_lots.select': { data: [], error: null },
+      'lot_pick_events.select': { data: [], error: null },
+    });
+
+  it('escapes an underscore so LOT_1 does not match LOT11', async () => {
+    const stub = emptyStub();
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    await svc.traceLot('LOT_1');
+    expect(ilikeArg(stub, 'receipt_line_lots')).toEqual(['lot_number', '%LOT\\_1%']);
+    expect(ilikeArg(stub, 'lot_pick_events')).toEqual(['lot_number', '%LOT\\_1%']);
+  });
+
+  it('escapes percent and backslash', async () => {
+    const stub = emptyStub();
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    await svc.traceLot('50%\\');
+    expect(ilikeArg(stub, 'receipt_line_lots')).toEqual(['lot_number', '%50\\%\\\\%']);
+    expect(ilikeArg(stub, 'lot_pick_events')).toEqual(['lot_number', '%50\\%\\\\%']);
+  });
+
+  it('still reports the raw needle back to the caller', async () => {
+    const stub = emptyStub();
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    const res = await svc.traceLot('  LOT_1  ');
+    expect(res.lotNumber).toBe('LOT_1');
+  });
+});

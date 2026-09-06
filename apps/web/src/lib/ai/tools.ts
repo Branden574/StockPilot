@@ -11,6 +11,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, type ServiceContext } from '@/server/services/context';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
 import {
@@ -19,7 +20,10 @@ import {
 } from '@/server/services/forecasting';
 import { BundlesService } from '@/server/services/bundles';
 import { InventoryService } from '@/server/services/inventory';
-import { OrderRequestsService } from '@/server/services/order-requests';
+import {
+  OrderRequestsService,
+  type OrderRequestStatus,
+} from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import {
   getDashboardActions,
@@ -29,6 +33,8 @@ import {
 } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
+
+import { ORDER_STATUS_KEYS, isOrderStatusKey } from '@stockpilot/core';
 
 import type { MovementType } from '@stockpilot/core';
 
@@ -110,6 +116,160 @@ function compactItem(i: Record<string, unknown>) {
         }
       : {}),
   };
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Scale helpers for the aggregation tools (SP-040).
+//
+// WHY: PostgREST clamps EVERY response to `[api] max_rows = 1000`
+// (supabase/config.toml), so a `.select().limit(50_000)` returns at most
+// 1000 rows with `error === null` — no truncation signal at all. That is
+// recurring bug pattern #3, and it already bit prod once (size-counts
+// reported 2,171 rows as 1,000). The AI tools were summing warehouse /
+// category valuations over "whatever the first 1000 rows happened to be"
+// and quoting the result back to the user as fact.
+//
+// Fix: page with the shared `fetchAllRows` helper (stable `.order('id')`
+// + 1000-row `.range()` windows) and DISCLOSE the cap when we hit it, so
+// the model can tell the user the number is partial instead of asserting
+// it. Never silently truncate a number a human will act on.
+// ──────────────────────────────────────────────────────────────────
+
+/** Upper bound on rows any single AI aggregation will pull. Above this the
+ *  honest answer is "too big to total here" — see `truncated` in each
+ *  result. A Postgres GROUP BY RPC is the real answer for catalogs this
+ *  large; until then the model must not pretend the sum is complete. */
+const AI_AGGREGATION_ROW_CAP = 20_000;
+
+/**
+ * Page every active, non-rental, non-deleted `inventory_items` row this org
+ * owns, selecting only the columns the aggregation needs.
+ *
+ * Shared by the three tools that used to issue one `.limit(50_000)` select —
+ * keeping ONE implementation means the org/soft-delete/status/rental filter set
+ * cannot drift between them (pattern #26).
+ */
+async function fetchAggregationItems<Row>(
+  ctx: ServiceContext,
+  select: string,
+  opts: { itemType?: string | null } = {},
+): Promise<{ rows: Row[]; truncated: boolean }> {
+  const rows = await fetchAllRows<Row>(
+    (from, to) => {
+      let q = ctx.supabase
+        .from('inventory_items')
+        .select(select)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .eq('is_rental', false);
+      if (opts.itemType) q = q.eq('item_type', opts.itemType);
+      // `.order('id')` is REQUIRED: without a deterministic sort the same
+      // row can land on two pages (or none) and corrupt the total.
+      return q.order('id').range(from, to) as unknown as PromiseLike<{
+        data: Row[] | null;
+        error: { message: string } | null;
+      }>;
+    },
+    { cap: AI_AGGREGATION_ROW_CAP },
+  );
+  return { rows, truncated: rows.length >= AI_AGGREGATION_ROW_CAP };
+}
+
+/** Page size for the movement analytics readers — one PostgREST window, which
+ *  is also the hard ceiling `MovementsService.list` clamps `limit` to. */
+const MOVEMENT_PAGE_SIZE = 1000;
+/** Bound on movements pulled into one AI turn (10 pages). Matches the intent
+ *  of the old `limit: 10_000` — which the service silently clamped to 1000. */
+const MOVEMENT_ROW_CAP = 10_000;
+
+type AnalyticsMovement = {
+  id: string;
+  item_id: string;
+  quantity_change: number;
+  created_at: string;
+  item: { name: string | null; sku: string | null } | null;
+};
+
+/**
+ * Read the movements in a window for the analytics tools, paging past the
+ * 1000-row ceiling `MovementsService.list` enforces (`Math.min(limit, 1000)`).
+ *
+ * WHY this pages through the SERVICE rather than querying stock_movements
+ * directly: `list()` owns the warehouse-access scoping (getWarehouseAccess),
+ * the soft-delete filter and the legacy reference resolution. Duplicating that
+ * here would be recurring pattern #26 — a second copy that drifts. The cost is
+ * that `list()` sorts by `created_at desc` only, so rows sharing a timestamp
+ * (every movement written inside one transaction shares `now()`) can shuffle
+ * between offset windows. We therefore DEDUPE BY MOVEMENT ID; a row inserted
+ * concurrently mid-page can still shift the window by one, which perturbs a
+ * count by one row rather than by the 300+ rows the clamp was dropping.
+ *
+ * The clean fix is a stable-ordered, column-only paged reader on
+ * MovementsService itself — noted as a follow-up.
+ */
+async function fetchMovementsForAnalytics(
+  ctx: ServiceContext,
+  params: { since: string; warehouseId?: string },
+): Promise<{ rows: AnalyticsMovement[]; truncated: boolean }> {
+  const svc = new MovementsService(ctx);
+  const byId = new Map<string, AnalyticsMovement>();
+  let truncated = false;
+  for (let offset = 0; offset < MOVEMENT_ROW_CAP; offset += MOVEMENT_PAGE_SIZE) {
+    const page = (await svc.list({
+      since: params.since,
+      warehouseId: params.warehouseId,
+      limit: MOVEMENT_PAGE_SIZE,
+      offset,
+    })) as unknown as AnalyticsMovement[];
+    for (const r of page) byId.set(r.id, r);
+    if (page.length < MOVEMENT_PAGE_SIZE) return { rows: [...byId.values()], truncated };
+    if (offset + MOVEMENT_PAGE_SIZE >= MOVEMENT_ROW_CAP) truncated = true;
+  }
+  return { rows: [...byId.values()], truncated };
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Order status validation for the AI order tools (SP-133).
+//
+// WHY: `order_requests.status` is TEXT with a CHECK constraint, and the CHECK
+// only rejects WRITES. A SELECT `.in('status', ['shipped'])` returns [] with
+// `error === null` — so an invalid status the model invented is
+// indistinguishable from a genuinely empty window, and the assistant says
+// "no orders in that window" over a queue full of them.
+//
+// Two things were wrong, in two copies of the same logic (pattern #26):
+//   getRecentOrders   cast the raw model string through `as any` — no
+//                     validation at all.
+//   listOrderRequests allow-listed against a hand-copied 7-key Set, so VALID
+//                     keys (in_transit, backordered, picking_*) fell through
+//                     to `undefined` and the tool returned EVERY order.
+//
+// Both now share ONE validator driven by the canonical ORDER_STATUS_KEYS
+// tuple in @stockpilot/core, and both DESCRIBE themselves from that same
+// tuple so the documented set can never drift from the accepted set again.
+// An unknown key returns an explicit error the model can retry from, rather
+// than an answer computed over the wrong set.
+// ──────────────────────────────────────────────────────────────────
+
+/** Human-readable list of every canonical order status, for tool declarations. */
+const ORDER_STATUS_LIST = ORDER_STATUS_KEYS.join(' | ');
+
+type StatusArgResult =
+  | { ok: true; status: OrderRequestStatus | undefined }
+  | { ok: false; payload: { error: 'unknown_status'; received: string; allowed: string[] } };
+
+function resolveOrderStatusArg(raw: unknown): StatusArgResult {
+  if (typeof raw !== 'string' || raw.length === 0) return { ok: true, status: undefined };
+  if (!isOrderStatusKey(raw)) {
+    return {
+      ok: false,
+      payload: { error: 'unknown_status', received: raw, allowed: [...ORDER_STATUS_KEYS] },
+    };
+  }
+  // isOrderStatusKey narrows to the core OrderStatusKey union, which is kept
+  // in lockstep with OrderRequestStatus by order-status.ts's own contract.
+  return { ok: true, status: raw as OrderRequestStatus };
 }
 
 const searchInventoryTool: ToolExecutor = {
@@ -382,21 +542,31 @@ const listCategoriesTool: ToolExecutor = {
     // that was 100 HTTPS calls per AI turn just to count items.
     //
     // PostgREST doesn't expose a true GROUP BY, but this payload is
-    // tiny (~40 bytes/row, ≤500 rows max = 20KB) and the network cost
-    // of one query is dramatically lower than 100 round-trips even
-    // when parallelized through the Supabase connection pool.
-    const { data: itemRows } = await ctx.supabase
-      .from('inventory_items')
-      .select('category_id')
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      .limit(50_000);
+    // tiny (~40 bytes/row) and the network cost of one paged read is
+    // dramatically lower than 100 round-trips even when parallelized
+    // through the Supabase connection pool.
+    //
+    // SP-040: this used to be a single `.limit(50_000)` whose comment
+    // assumed "≤500 rows max". PostgREST clamps to 1000, so every org
+    // above 1,000 items got per-category counts computed from an
+    // arbitrary first-1000 slice — undercounts with no error (pattern
+    // #3). Now paged; `itemCountsTruncated` discloses the cap.
+    let countsTruncated = false;
     const countByCat = new Map<string, number>();
-    for (const row of (itemRows ?? []) as Array<{ category_id: string | null }>) {
-      if (!row.category_id) continue;
-      countByCat.set(row.category_id, (countByCat.get(row.category_id) ?? 0) + 1);
+    try {
+      const { rows: itemRows, truncated: capped } = await fetchAggregationItems<{
+        category_id: string | null;
+      }>(ctx, 'id, category_id');
+      countsTruncated = capped;
+      for (const row of itemRows) {
+        if (!row.category_id) continue;
+        countByCat.set(row.category_id, (countByCat.get(row.category_id) ?? 0) + 1);
+      }
+    } catch {
+      // Reads fail CLOSED (pattern #1): the counts are a nice-to-have on top
+      // of the category list. A read error must not take down the whole tool
+      // call — but it must not be reported as "0 items" either, so flag it.
+      countsTruncated = true;
     }
 
     return {
@@ -407,6 +577,9 @@ const listCategoriesTool: ToolExecutor = {
       })),
       total: all.length,
       truncated,
+      /** True when the per-category item counts are incomplete — say so
+       *  rather than quoting them as exact. */
+      itemCountsTruncated: countsTruncated,
     };
   },
 };
@@ -512,21 +685,16 @@ const inventoryByWarehouseTool: ToolExecutor = {
         ? args.itemType
         : null;
 
-    let q = ctx.supabase
-      .from('inventory_items')
-      .select('warehouse_id, quantity_on_hand, unit_cost')
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      // Explicit cap. The aggregation is computed in JS so the row
-      // count drives the payload size and Lambda memory directly.
-      // 50k is enough headroom for the biggest realistic single-org
-      // catalogs; anything larger and we'd want a Postgres GROUP BY.
-      .limit(50_000);
-    if (itemType) q = q.eq('item_type', itemType);
-    const { data: items, error } = await q;
-    if (error) throw new Error(error.message);
+    // SP-040: this was one `.select().limit(50_000)`. PostgREST clamps every
+    // response to max_rows = 1000, so the "50k headroom" the old comment
+    // promised never existed — an org with 1,500 items got its warehouse
+    // valuation summed over an arbitrary 1,000 of them, with no error, and
+    // the assistant quoted the wrong winner as fact. Paged + disclosed now.
+    const { rows: items, truncated } = await fetchAggregationItems<{
+      warehouse_id: string | null;
+      quantity_on_hand: number;
+      unit_cost: number;
+    }>(ctx, 'id, warehouse_id, quantity_on_hand, unit_cost', { itemType });
 
     const { data: warehouses } = await ctx.supabase
       .from('warehouses')
@@ -545,11 +713,7 @@ const inventoryByWarehouseTool: ToolExecutor = {
       totalValue: number;
     };
     const byWh = new Map<string | null, Bucket>();
-    for (const i of (items ?? []) as Array<{
-      warehouse_id: string | null;
-      quantity_on_hand: number;
-      unit_cost: number;
-    }>) {
+    for (const i of items) {
       const key = i.warehouse_id;
       const acc =
         byWh.get(key) ??
@@ -576,6 +740,10 @@ const inventoryByWarehouseTool: ToolExecutor = {
         totalUnits: rows.reduce((s, r) => s + r.totalUnits, 0),
         totalValue: rows.reduce((s, r) => s + r.totalValue, 0),
       },
+      /** True when the catalog exceeded AI_AGGREGATION_ROW_CAP — the totals
+       *  are a lower bound, not the answer. Tell the user. */
+      truncated,
+      ...(truncated ? { truncationNote: `Totals cover the first ${AI_AGGREGATION_ROW_CAP} items only — say so before quoting them.` } : {}),
     };
   },
 };
@@ -588,22 +756,18 @@ const inventoryByCategoryTool: ToolExecutor = {
     parameters: { type: SchemaType.OBJECT, properties: {} },
   },
   async execute(_args, ctx) {
-    const [{ data: items, error }, { data: cats }] = await Promise.all([
-      ctx.supabase
-        .from('inventory_items')
-        .select('category_id, quantity_on_hand, unit_cost')
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        // Explicit cap — same rationale as inventoryByWarehouse above.
-        .limit(50_000),
+    // SP-040 — paged, same rationale as inventoryByWarehouse above.
+    const [{ rows: items, truncated }, { data: cats }] = await Promise.all([
+      fetchAggregationItems<{
+        category_id: string | null;
+        quantity_on_hand: number;
+        unit_cost: number;
+      }>(ctx, 'id, category_id, quantity_on_hand, unit_cost'),
       ctx.supabase
         .from('categories')
         .select('id, name')
         .eq('organization_id', ctx.organizationId),
     ]);
-    if (error) throw new Error(error.message);
 
     const nameById = new Map<string, string>();
     for (const c of (cats ?? []) as Array<{ id: string; name: string }>) {
@@ -618,11 +782,7 @@ const inventoryByCategoryTool: ToolExecutor = {
       totalValue: number;
     };
     const byCat = new Map<string | null, Bucket>();
-    for (const i of (items ?? []) as Array<{
-      category_id: string | null;
-      quantity_on_hand: number;
-      unit_cost: number;
-    }>) {
+    for (const i of items) {
       const key = i.category_id;
       const acc =
         byCat.get(key) ??
@@ -648,6 +808,8 @@ const inventoryByCategoryTool: ToolExecutor = {
         totalUnits: rows.reduce((s, r) => s + r.totalUnits, 0),
         totalValue: rows.reduce((s, r) => s + r.totalValue, 0),
       },
+      truncated,
+      ...(truncated ? { truncationNote: `Totals cover the first ${AI_AGGREGATION_ROW_CAP} items only — say so before quoting them.` } : {}),
     };
   },
 };
@@ -1067,7 +1229,8 @@ const exportInventoryTool: ToolExecutor = {
         },
         warehouseId: {
           type: SchemaType.STRING,
-          description: 'UUID of a specific warehouse. Empty = no filter.',
+          description:
+            'UUID of a specific warehouse. NOTE: the CSV endpoint cannot be scoped to a warehouse from here — passing this returns a `warning` you MUST relay to the user instead of silently promising a single-warehouse file.',
         },
       },
     },
@@ -1089,6 +1252,20 @@ const exportInventoryTool: ToolExecutor = {
         ? args.status
         : 'active';
 
+    // SP-119: the CSV route (api/inventory/export.csv) takes its warehouse
+    // from the cookie-backed getActiveWarehouseFilterFor — it reads NO
+    // warehouse query param, and an AI tool cannot set a browser cookie. So
+    // the requested warehouse CANNOT reach the download. Probing WITH it
+    // produced a count that labelled a file containing something else
+    // ("[Download 413 items]" over an all-warehouse CSV). The probe now
+    // matches what the link will actually return, and the constraint is
+    // surfaced to the model as a `warning` it can pass on — an empty
+    // `if` block, which is what stood here, tells nobody anything.
+    const warehouseRequested =
+      typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+        ? args.warehouseId
+        : null;
+
     // Cheap count probe — don't materialize all rows just to know how many.
     const svc = new InventoryService(ctx);
     const probe = await svc.list({
@@ -1101,10 +1278,8 @@ const exportInventoryTool: ToolExecutor = {
       itemType,
       lowStock: Boolean(args.lowStock),
       outOfStock: Boolean(args.outOfStock),
-      warehouseId:
-        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
-          ? args.warehouseId
-          : null,
+      // Deliberately NOT `warehouseRequested` — see the note above.
+      warehouseId: null,
       limit: 1,
     });
 
@@ -1120,16 +1295,20 @@ const exportInventoryTool: ToolExecutor = {
     }
     if (args.lowStock) params.set('stock', 'low');
     else if (args.outOfStock) params.set('stock', 'out');
-    if (typeof args.warehouseId === 'string' && args.warehouseId.length > 0) {
-      // The list endpoint reads warehouseId from the cookie-backed
-      // getActiveWarehouseFilter, not a query param. AI tool can't set
-      // that cookie; surface the constraint to the model so it warns
-      // the user.
-    }
 
     const base = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
     const url = `${base}/api/inventory/export.csv?${params.toString()}`;
-    return { count: probe.total, url };
+    return {
+      count: probe.total,
+      url,
+      ...(warehouseRequested
+        ? {
+            warehouseFilterApplied: false,
+            warning:
+              'The warehouse filter could NOT be applied to this export — the CSV endpoint follows the warehouse selector in the dashboard, which this tool cannot set. The count above and the downloaded file cover every warehouse the user can read. Tell the user to switch the dashboard warehouse selector first, or to export from the Items page, if they need a single-warehouse file.',
+          }
+        : {}),
+    };
   },
 };
 
@@ -1810,8 +1989,7 @@ const listOrderRequestsTool: ToolExecutor = {
       properties: {
         status: {
           type: SchemaType.STRING,
-          description:
-            "Optional status filter. One of 'pending_approval', 'approved', 'packing_slip_generated', 'staged_for_delivery', 'completed', 'denied', 'cancelled'. Empty = all statuses.",
+          description: `Optional status filter. One of: ${ORDER_STATUS_LIST}. Empty = all statuses. Anything else is REFUSED with { error: 'unknown_status' }.`,
         },
         requesterEmail: {
           type: SchemaType.STRING,
@@ -1826,26 +2004,14 @@ const listOrderRequestsTool: ToolExecutor = {
     },
   },
   async execute(args, ctx) {
-    const allowedStatuses = new Set([
-      'pending_approval',
-      'approved',
-      'packing_slip_generated',
-      'staged_for_delivery',
-      'completed',
-      'denied',
-      'cancelled',
-    ]);
-    const status =
-      typeof args.status === 'string' && allowedStatuses.has(args.status)
-        ? (args.status as
-            | 'pending_approval'
-            | 'approved'
-            | 'packing_slip_generated'
-            | 'staged_for_delivery'
-            | 'completed'
-            | 'denied'
-            | 'cancelled')
-        : undefined;
+    // SP-133 / pattern #26: this hand-copied 7-key Set had gone stale against
+    // the canonical 14. A VALID key it didn't list (in_transit, backordered,
+    // picking_*) silently became `undefined`, so "show me the in-transit
+    // orders" returned EVERY order and the model presented them all as
+    // in-transit. Now the same tuple-driven validator getRecentOrders uses.
+    const statusArg = resolveOrderStatusArg(args.status);
+    if (!statusArg.ok) return statusArg.payload;
+    const status = statusArg.status;
     const requesterEmail =
       typeof args.requesterEmail === 'string' && args.requesterEmail.length > 0
         ? args.requesterEmail
@@ -2313,19 +2479,25 @@ const getRecentOrdersTool: ToolExecutor = {
         until: { type: SchemaType.STRING },
         sinceDaysAgo: { type: SchemaType.NUMBER },
         untilDaysAgo: { type: SchemaType.NUMBER },
-        status: { type: SchemaType.STRING, description: "Single status filter (pending_approval/approved/packing_slip_generated/staged_for_delivery/completed/denied/cancelled)." },
+        status: {
+          type: SchemaType.STRING,
+          description: `Single status filter. One of: ${ORDER_STATUS_LIST}. Anything else is REFUSED with { error: 'unknown_status' } — retry with a listed key rather than reporting an empty result.`,
+        },
         warehouseId: { type: SchemaType.STRING },
         limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
       },
     },
   },
   async execute(args, ctx) {
+    // SP-133: this was `as any`. An invented status matched zero rows with no
+    // error, so "no orders in that window" was reported over a full queue.
+    const statusArg = resolveOrderStatusArg(args.status);
+    if (!statusArg.ok) return statusArg.payload;
     const svc = new OrderRequestsService(ctx);
     const list = await svc.list({
       since: resolveSince(args),
       until: resolveUntil(args),
-       
-      status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
+      status: statusArg.status,
       warehouseId:
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId
@@ -2369,14 +2541,15 @@ const getDailyMovementCountsTool: ToolExecutor = {
   async execute(args, ctx) {
     const days = Math.min(90, Math.max(1, Number(args.days) || 30));
     const since = new Date(Date.now() - days * 86400_000).toISOString();
-    const svc = new MovementsService(ctx);
-    const rows = await svc.list({
+    // SP-040: `limit: 10_000` was silently clamped to 1000 by
+    // MovementsService.list, so a busy org's "busiest days" only ever
+    // covered the newest 1,000 movements of the window.
+    const { rows, truncated } = await fetchMovementsForAnalytics(ctx, {
       since,
       warehouseId:
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId
           : undefined,
-      limit: 10_000,
     });
     const bucket: Record<string, number> = {};
     for (const r of rows) {
@@ -2395,6 +2568,14 @@ const getDailyMovementCountsTool: ToolExecutor = {
       averagePerDay: Math.round((total / days) * 10) / 10,
       busiestDays: busiest,
       perDay: sorted,
+      /** True when the window held more movements than one AI turn reads —
+       *  the counts are a lower bound. */
+      truncated,
+      ...(truncated
+        ? {
+            truncationNote: `Only the newest ${MOVEMENT_ROW_CAP} movements in the window were counted — narrow the window before quoting these as totals.`,
+          }
+        : {}),
     };
   },
 };
@@ -2419,14 +2600,16 @@ const getTopMoversTool: ToolExecutor = {
     const since = new Date(Date.now() - days * 86400_000).toISOString();
     const limit = Math.min(50, Math.max(1, Number(args.limit) || 10));
     const order = args.order === 'least' ? 'least' : 'most';
-    const svc = new MovementsService(ctx);
-    const rows = await svc.list({
+    // SP-040 — paged; see fetchMovementsForAnalytics. `order: 'least'` was the
+    // worst casualty: an item whose movements all sat past the 1000-row clamp
+    // did not appear at all, so the "slow movers" ranking was built from the
+    // busiest slice of the ledger.
+    const { rows, truncated } = await fetchMovementsForAnalytics(ctx, {
       since,
       warehouseId:
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId
           : undefined,
-      limit: 10_000,
     });
     const agg = new Map<
       string,
@@ -2456,6 +2639,12 @@ const getTopMoversTool: ToolExecutor = {
         movementCount: r.count,
         totalAbsDelta: r.absDelta,
       })),
+      truncated,
+      ...(truncated
+        ? {
+            truncationNote: `Ranked over the newest ${MOVEMENT_ROW_CAP} movements only — a 'least' ranking in particular may be missing genuinely quiet items.`,
+          }
+        : {}),
     };
   },
 };
@@ -2478,17 +2667,29 @@ const getStaleItemsTool: ToolExecutor = {
     const days = Math.min(365, Math.max(7, Number(args.days) || 90));
     const since = new Date(Date.now() - days * 86400_000).toISOString();
     const limit = Math.min(100, Math.max(1, Number(args.limit) || 25));
-    const movementsSvc = new MovementsService(ctx);
-    const recent = await movementsSvc.list({
-      since,
-      warehouseId:
-        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
-          ? args.warehouseId
-          : undefined,
-      limit: 10_000,
-    });
+    // SP-040 — THE reason this tool needed paging. `movedIds` is an EXCLUSION
+    // set: every movement the clamp dropped turned a live item into a false
+    // "zero movements in N days" cleanup candidate. An org with >1,000
+    // movements in the window had its 60-day-old activity erased, and the
+    // assistant recommended writing off stock that is actively moving.
+    const { rows: recent, truncated: movementsTruncated } = await fetchMovementsForAnalytics(
+      ctx,
+      {
+        since,
+        warehouseId:
+          typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+            ? args.warehouseId
+            : undefined,
+      },
+    );
     const movedIds = new Set(recent.map((r) => r.item_id));
     const inventorySvc = new InventoryService(ctx);
+    // Candidate window: the 200 least-recently-updated items. This is a
+    // SECOND cap of the same class — it bounds which items can ever be
+    // NAMED here (not the movement history behind them). Disclosed below
+    // rather than raised: sorted updated_asc, the truly dormant items are
+    // exactly the ones at the front, so 200 is a sound candidate pool.
+    const CANDIDATE_WINDOW = 200;
     const result = await inventorySvc.list({
       itemType: 'all',
       warehouseId:
@@ -2496,7 +2697,7 @@ const getStaleItemsTool: ToolExecutor = {
           ? args.warehouseId
           : undefined,
       sort: 'updated_asc',
-      limit: 200,
+      limit: CANDIDATE_WINDOW,
     });
     const stale = result.items
       .filter((i) => !movedIds.has(i.id as string))
@@ -2505,6 +2706,18 @@ const getStaleItemsTool: ToolExecutor = {
       windowDays: days,
       since,
       candidateCount: stale.length,
+      /** True when the movement history behind `movedIds` was itself capped —
+       *  some listed items may HAVE moved. Never present these as certain
+       *  dead stock while this is true. */
+      truncated: movementsTruncated,
+      ...(movementsTruncated
+        ? {
+            truncationNote: `Only the newest ${MOVEMENT_ROW_CAP} movements in the window were checked, so an item listed here may actually have moved. Verify before recommending write-offs.`,
+          }
+        : {}),
+      /** How many items were considered at all (least-recently-updated first). */
+      candidatesScanned: result.items.length,
+      candidateWindow: CANDIDATE_WINDOW,
       items: stale.map((i) => ({
         id: i.id,
         name: dataTag(i.name),

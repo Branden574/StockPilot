@@ -241,14 +241,28 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(stub.fromCalls.includes('purchase_orders')).toBe(false);
   });
 
-  it('schedule-advance failure on a created PO: surfaced as a failure (no silent double-fire)', async () => {
-    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const };
+  it('lost claim: a template whose conditional advance matches 0 rows is skipped without creating a PO', async () => {
+    // Two invocations of the runner overlapped (an operator hit the cron route
+    // manually, or Vercel retried, while the daily run was still going). The
+    // OTHER invocation already advanced this template, so our conditional claim
+    // -- .eq('next_run_at', <the value we read>) -- matches 0 rows. That means
+    // "someone else owns this period": skip silently and, above all, do NOT
+    // create (or auto-send) a second PO for it.
+    const template = {
+      ...TEMPLATE_BASE,
+      send_mode: 'send' as const,
+      max_auto_send_cents: 20000,
+    };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // 0 rows matched — another invocation already advanced the schedule.
+      'recurring_po_templates.update': { data: null, error: null },
       'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
       'purchase_order_items.insert': { data: [], error: null },
-      // The schedule-advance update matches 0 rows / errors → must be surfaced.
-      'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
+      'organization_modules.select': {
+        data: { settings: { approvalThresholdAmount: 500 } },
+        error: null,
+      },
       'rpc:next_po_number': { data: 'PO-100', error: null },
       'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
@@ -256,10 +270,46 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     const svc = new RecurringPoTemplatesService(ctx as never);
     const result = await svc.runDueTemplates(NOW);
 
-    // PO was created, but the schedule didn't advance → flagged as a failure so
-    // the cron summary/notification surfaces the duplicate-spend risk.
-    expect(result.created).toBe(1);
+    expect(result.created).toBe(0);
+    expect(result.sent).toBe(0);
+    expect(result.heldForReview).toBe(0);
+    // A lost claim is not an error — the other invocation is doing the work.
+    expect(result.failures).toBe(0);
+    // Nothing was even attempted against purchase_orders.
+    expect(stub.fromCalls.includes('purchase_orders')).toBe(false);
+
+    // The claim MUST carry the next_run_at predicate — without it the update
+    // matches unconditionally and both invocations sail past it.
+    const claimChain = stub.chainsAll.get('recurring_po_templates.update')?.[0] ?? [];
+    const claimArgs = stub.chainArgsAll.get('recurring_po_templates.update')?.[0] ?? [];
+    const eqFilters = claimChain
+      .map((method, idx) => ({ method, args: claimArgs[idx] }))
+      .filter((c) => c.method === 'eq')
+      .map((c) => c.args);
+    expect(eqFilters).toContainEqual(['next_run_at', TEMPLATE_BASE.next_run_at]);
+  });
+
+  it('claim failure: schedule advance errors before create — no PO, surfaced as a failure', async () => {
+    // Previously the PO was created FIRST and a failed advance was merely
+    // counted; that left a real PO behind that the next run would re-create.
+    // Now the claim comes first: if it errors we cannot guarantee at-most-once,
+    // so we create nothing and report the failure for the cron summary.
+    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const };
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.select': { data: [template], error: null },
+      'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
+      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
+      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+    const result = await svc.runDueTemplates(NOW);
+
+    expect(result.created).toBe(0);
     expect(result.failures).toBe(1);
+    expect(stub.fromCalls.includes('purchase_orders')).toBe(false);
   });
 
   it('seedFromPo copies supplier_id and line items from an existing PO', async () => {

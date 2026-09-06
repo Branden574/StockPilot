@@ -459,7 +459,26 @@ export function PurchaseOrderPdf({
           </View>
           <View style={pdfStyles.col}>
             <Text style={pdfStyles.sectionTitle}>Expected delivery</Text>
-            <Text>{formatDateForPdf(po.expectedAt)}</Text>
+            {/*
+             * 'UTC' is deliberate and is NOT a missing org-timezone thread.
+             * expected_at is a CALENDAR DATE, not an instant: the PO form
+             * (components/po/po-form.tsx) and the import approval screens use
+             * an <Input type="date"> whose 'YYYY-MM-DD' value goes through
+             * `new Date(v).toISOString()`, and ECMAScript parses a date-only
+             * string as UTC — so the column holds midnight UTC of the day the
+             * buyer typed. formatDateForPdf's default zone
+             * (America/Los_Angeles) walks that back 7-8 hours into the
+             * PREVIOUS day, so a PO expected 2026-09-10 printed
+             * "Sep 09, 2026" on the copy staff forward to the supplier, while
+             * the edit form (which slices the UTC date back out) still showed
+             * 09/10 — nobody could see why the supplier got the wrong day.
+             * Reading it back in UTC returns the typed day unchanged.
+             *
+             * createdAt (BrandedHeader subtitle) and receipt receivedAt are
+             * server-stamped INSTANTS and correctly stay on the org clock —
+             * do not "consistency"-convert them to UTC.
+             */}
+            <Text>{formatDateForPdf(po.expectedAt, 'UTC')}</Text>
           </View>
         </View>
 

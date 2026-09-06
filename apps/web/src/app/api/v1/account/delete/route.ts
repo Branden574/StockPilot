@@ -114,12 +114,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await audit({
-      event: 'user.deactivated',
-      entityType: 'user',
-      entityId: ctx.userId,
-      reason: 'self_deletion_mobile',
-    });
+    // Bearer/API callers MUST pass their ServiceContext to audit(). Without it
+    // audit() falls back to withContext() -> requireOrgContext(), which calls
+    // redirect('/signin') on any /api request (the proxy never sets the session
+    // header for /api, so the session is always null there). The resulting
+    // NEXT_REDIRECT was swallowed by audit()'s own best-effort catch, so every
+    // MOBILE self-deletion tombstoned + hard-deleted the account while writing
+    // NO 'user.deactivated' row -- and audit_logs is the only record that
+    // survives the auth.users cascade. The web action (deleteOwnAccountAction)
+    // has a cookie session so its fallback worked, which is why the two
+    // surfaces diverged silently. Mirrors v1/movements/[id]/note.
+    await audit(
+      {
+        event: 'user.deactivated',
+        entityType: 'user',
+        entityId: ctx.userId,
+        reason: 'self_deletion_mobile',
+      },
+      ctx,
+    );
 
     const admin = createAdminClient();
     const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);

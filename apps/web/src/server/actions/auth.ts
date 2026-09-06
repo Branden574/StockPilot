@@ -1,14 +1,14 @@
 'use server';
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { noteLoginDevice } from '@/lib/auth/login-device';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
-import { env } from '@/lib/env';
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -29,7 +29,6 @@ import {
   type ActionResult,
   type ChangePasswordInput,
   type CompletePasswordResetInput,
-  type Database,
   type RequestPasswordResetInput,
   type SignInInput,
   type SignUpInput,
@@ -386,8 +385,24 @@ export async function requestPasswordResetAction(
   return ok({ ok: true });
 }
 
+/**
+ * Normalises a TOTP code typed into the reset form. Authenticator apps render
+ * the code as `123 456`, and phone keyboards happily add a trailing space, so
+ * strip whitespace before the shape check rather than rejecting a code the
+ * user copied correctly.
+ */
+function normalizeTotpCode(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const code = raw.replace(/\s/g, '');
+  return /^\d{6}$/.test(code) ? code : null;
+}
+
 export async function completePasswordResetAction(
-  input: CompletePasswordResetInput,
+  // `totpCode` is additive and optional: the emailed recovery link and the
+  // form both keep working without it, and it is read off the raw input rather
+  // than through completePasswordResetSchema so this fix stays inside the
+  // action layer. See the MFA step-up block below for why it exists.
+  input: CompletePasswordResetInput & { totpCode?: string },
 ): Promise<ActionResult<{ next: string }>> {
   const parsed = completePasswordResetSchema.safeParse(input);
   if (!parsed.success) {
@@ -410,6 +425,72 @@ export async function completePasswordResetAction(
   const {
     data: { user: preUser },
   } = await supabase.auth.getUser();
+
+  // MFA STEP-UP. GoTrue refuses `updateUser({ password })` outright when the
+  // user has a verified factor and the calling session is not AAL2 — "AAL2
+  // session is required to update email or password when MFA is enabled."
+  // (internal/api/user.go; there is NO recovery-type exemption). The session
+  // minted for a recovery link is AAL1: /auth/confirm calls verifyOtp
+  // (type=recovery), and only mfa/verify ever raises a session to AAL2.
+  //
+  // So before this block, every TOTP-enrolled user — i.e. every admin in an
+  // `admins_required` org, the highest-value accounts we have — was
+  // PERMANENTLY unable to finish a password reset: the form showed GoTrue's
+  // raw AAL2 message on every retry and the only way back in was an admin
+  // stripping their factor. changePasswordAction already documents this exact
+  // rule (see its WHY comment) for the signed-in flow; recovery never did.
+  //
+  // The fix keeps the second factor MANDATORY on recovery (challenge + verify
+  // the user's own TOTP code to raise THIS session to AAL2) rather than
+  // routing around GoTrue with the service-role admin API, which would make a
+  // single intercepted reset link enough to take over an MFA-protected
+  // account.
+  const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
+  if (factorsError) {
+    // Deliberately NOT fail-closed: GoTrue itself is the enforcement point, so
+    // an unreadable factor list must not block an UNENROLLED user's reset on a
+    // transient blip. A genuinely enrolled user is still refused by updateUser
+    // one step below — this branch only decides whether we can ask for a code.
+    console.warn('[completePasswordResetAction] listFactors failed:', factorsError.message);
+  }
+  const totpFactorId =
+    (factorsData?.totp ?? []).find((f) => f.status === 'verified')?.id ?? null;
+  if (totpFactorId) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.currentLevel !== 'aal2') {
+      const code = normalizeTotpCode(input.totpCode);
+      if (!code) {
+        // `details.reason` lets the reset form reveal its code field instead of
+        // showing a dead end. Same vocabulary as the API gate's aal2_required.
+        return err(
+          'forbidden',
+          'Enter the 6-digit code from your authenticator app to finish resetting your password.',
+          { reason: 'aal2_required' },
+        );
+      }
+      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
+        factorId: totpFactorId,
+      });
+      if (chErr || !challenge) {
+        return err('internal_error', 'Could not start the authenticator check. Please try again.');
+      }
+      const { error: verifyErr } = await supabase.auth.mfa.verify({
+        factorId: totpFactorId,
+        challengeId: challenge.id,
+        code,
+      });
+      if (verifyErr) {
+        // Generic on purpose: never let the caller distinguish "wrong code"
+        // from "wrong/expired link" — and never echo GoTrue's message, which
+        // can carry factor/challenge identifiers.
+        return err(
+          'forbidden',
+          'That code is not valid. Check your authenticator app and try again.',
+          { reason: 'aal2_required' },
+        );
+      }
+    }
+  }
 
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return err('internal_error', error.message);
@@ -510,22 +591,22 @@ export async function changePasswordAction(
   }
 
   // Side-channel password check — does NOT persist a session anywhere.
-  const checkClient = createSupabaseClient<Database>(
-    env.NEXT_PUBLIC_SUPABASE_URL,
-    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-      },
-    },
-  );
-  const { error: pwError } = await checkClient.auth.signInWithPassword({
-    email: user.email,
-    password: parsed.data.currentPassword,
-  });
-  if (pwError) {
+  //
+  // This used to be an inlined copy of lib/auth/verify-password.ts, which is
+  // the SHARED implementation of this dance and whose docstring names
+  // change-password as its first intended caller. The copy landed first and
+  // the helper was extracted five days later without migrating this site, so
+  // four flows (MFA enroll-verify, MFA recovery consume, team, email-change)
+  // moved on and this one silently would not have followed any hardening
+  // applied there. One implementation, one place to harden.
+  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword);
+  if (!pw.ok) {
+    // Keep the two failure shapes distinct: a wrong password is the user's to
+    // fix, a thrown client is ours. (The inline copy let a thrown client
+    // escape the action entirely.)
+    if (pw.reason === 'internal_error') {
+      return err('internal_error', 'Could not verify your current password. Please try again.');
+    }
     return err('forbidden', 'Current password is incorrect');
   }
 
@@ -559,6 +640,38 @@ export async function changePasswordAction(
     await supabase.auth.signOut({ scope: 'others' });
   } catch (e) {
     console.warn('[changePasswordAction] signOut others failed:', e);
+  }
+
+  // The revoke above only kills REFRESH tokens. Every other live client coasts
+  // on its current ACCESS token for up to ~1h: another browser's middleware
+  // verifies the JWT locally (getClaims) and its RSC reads / Server Action
+  // writes go to PostgREST, which honours the token until `exp`; the mobile app
+  // keeps its direct PostgREST calls the same way. So a user who changes their
+  // password precisely BECAUSE a device may be compromised believes that device
+  // is out when it is not. Both platforms already run a session-revocation
+  // listener for this window — the same one signOutAction and
+  // completePasswordResetAction drive — it just was never told from here.
+  //
+  // keepId spares the tab that made the change. A `keepId: null` payload means
+  // "evict EVERY session" (signOutAction's semantics), so when the current
+  // session id can't be derived we SKIP the broadcast rather than send a null
+  // we don't mean and bounce the user to /signin mid-flow.
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const keepId = session?.access_token ? sessionIdFromJwt(session.access_token) : null;
+    if (keepId) {
+      await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
+    } else {
+      console.warn(
+        '[changePasswordAction] could not derive current session id — skipped revocation broadcast',
+      );
+    }
+  } catch (e) {
+    // Best-effort, exactly like the signOut above: the password IS changed and
+    // refresh tokens ARE revoked; the broadcast only shortens the eviction lag.
+    console.warn('[changePasswordAction] revocation broadcast failed:', e);
   }
 
   await audit({

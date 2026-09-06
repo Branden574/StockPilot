@@ -48,6 +48,14 @@
 --   * INV-12 create a policy whose predicate contains `x.organization_id =
 --            x.organization_id`.
 --   * INV-15 add a `*_path` column to a table in public with no CHECK.
+--   * INV-25 create a SECURITY DEFINER function in public, grant EXECUTE to
+--            `authenticated`, and write a body with no auth.uid()/has_org_role/
+--            has_permission/is_org_member in it (this is the 0342 shape).
+--   * INV-27 create a function in public without `set search_path = public`
+--            (or `alter function ... reset search_path` on an existing one).
+--
+-- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
+-- the standing proof that INV-25/26 can still fail.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -56,7 +64,7 @@
 
 begin;
 
-select plan(26);
+select plan(30);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -130,9 +138,17 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
 --
 -- Everything listed here is a READ-ONLY predicate that RLS policies and other
 -- functions evaluate AS THE USER, so `authenticated` must keep EXECUTE, and
--- each exposes at most a boolean (or, for _cycle_count_location_facts, four
--- attributes) about a caller-supplied uuid. None writes. Adding a name here
--- must be defended in `why`; a function that WRITES must never appear.
+-- each exposes at most a BOOLEAN about a caller-supplied uuid. None writes.
+-- Adding a name here must be defended in `why`; a function that WRITES must
+-- never appear.
+--
+-- _cycle_count_location_facts was the one entry that exposed ATTRIBUTES rather
+-- than a boolean (org, warehouse, kind, deleted_at for any location uuid) and
+-- it is gone from this list: 0350 gave it post_cycle_count's own has_org_role
+-- gate, so INV-25 now judges it on its body like everything else. The
+-- exemption it held is the reason to distrust attribute-returning entries —
+-- "reading past RLS is the point" justified the SECURITY DEFINER, never the
+-- missing authorization check.
 create temporary table _sec_inv_auth_secdef_nogate_allow (proname text primary key, why text not null);
 insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('item_in_org',                 'boolean FK-org predicate used by write RLS (0201-0206); null-tolerant by design'),
@@ -148,8 +164,7 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('org_can_enable_module',       'boolean entitlement read (plan tier) used by module settings'),
   ('org_effective_tier',          'returns the org plan tier string; no tenant data'),
   ('user_can_access_inventory',   'boolean warehouse/charter access predicate used by inventory RLS'),
-  ('user_can_access_warehouse',   'boolean warehouse access predicate used by RLS'),
-  ('_cycle_count_location_facts', 'returns org/warehouse/kind/deleted_at of a caller-supplied location uuid so post_cycle_count can refuse a FOREIGN location loudly (0342) — reading past RLS is the point; exposes no quantities');
+  ('user_can_access_warehouse',   'boolean warehouse access predicate used by RLS');
 
 -- ── B. Tables in `public` allowed to run without RLS ───────────────────────
 -- Intentionally EMPTY. Every table in this schema has RLS enabled today, and
@@ -731,6 +746,163 @@ select is(
   0,
   'INV-26: allowlist E has no stale entry and no entry whose body writes'
 );
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 9. EVERY FIRST-PARTY FUNCTION PINS search_path
+--
+-- An unpinned function resolves unqualified names through the CALLER's
+-- search_path. For a SECURITY DEFINER function that is a privilege-escalation
+-- primitive; for an invoker one it is still a correctness hazard the moment a
+-- body stops schema-qualifying something.
+--
+-- 0329 pinned "every remaining unpinned first-party function" and proved it by
+-- NAMING 22 of them. A name list cannot see the function it forgot:
+-- next_po_number (0005) was never on it and stayed unpinned until 0350, and
+-- the next `create function` that omits the pin would have been equally
+-- invisible. This sweep replaces the enumeration with the property.
+--
+-- Extension members are excluded on purpose and this is the one exclusion that
+-- must never be relaxed: citext lives in `public` because 0001 created it
+-- there, and ALTERing an extension's member functions diverges them from the
+-- extension's shipped state and breaks dump/restore and extension upgrades
+-- (0329's header states this; its test #42 pins it from the other side).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-27. The sweep.
+select is(
+  (select count(*)::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and not exists (select 1 from pg_depend d
+                       where d.objid = p.oid and d.deptype = 'e')
+      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
+                       where c like 'search_path=%')),
+  0,
+  'INV-27: every first-party function in public pins search_path'
+);
+
+-- INV-28. VACUITY CONTROL, both halves of the detector.
+--   * The population is non-empty — if the pg_depend exclusion ever matched
+--     everything, INV-27 would pass having judged nothing.
+--   * The unpinned test still FIRES on something known to be unpinned. The
+--     citext members are exactly that population (deliberately never ALTERed,
+--     so their proconfig is NULL); if a catalog change broke the proconfig
+--     probe so that it reported every function as pinned, this half goes red
+--     instead of INV-27 going quietly green.
+select ok(
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and not exists (select 1 from pg_depend d
+                       where d.objid = p.oid and d.deptype = 'e')) > 20
+  and
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and exists (select 1 from pg_depend d
+                   where d.objid = p.oid and d.deptype = 'e')
+      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
+                       where c like 'search_path=%')) > 0,
+  'INV-28 control: the search_path sweep has first-party functions to judge, and its unpinned detector still fires on the (excluded) extension members'
+);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 10. THE `authenticated` SWEEP MUST STILL BE ABLE TO FAIL
+--
+-- INV-25/26 shipped with 0346 and were green the day they landed, which is
+-- also exactly what a check that has quietly stopped checking looks like.
+-- Every other sweep in this file carries a control for that reason (INV-21,
+-- INV-23, INV-28); these two arrived without one, and the defect class they
+-- police — a SECURITY DEFINER helper holding `authenticated` EXECUTE with no
+-- authorization gate in its body — is the one that kept a cross-org stock-write
+-- primitive (apply_cycle_count_location_delta, 0342) reachable at
+-- POST /rest/v1/rpc/ for twelve migrations while 55 green per-migration tests
+-- and `pnpm security:test` reported success.
+--
+-- Both controls RESTATE the predicate they exercise instead of sharing one
+-- expression with the assertion above, matching what INV-28 does for INV-27: a
+-- control that reads the same object as the thing it controls cannot notice
+-- that object being deleted.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-29. VACUITY + MUTATION CONTROL for INV-25, both halves of the detector.
+--   * The population is non-empty. `has_function_privilege('authenticated', …)`
+--     is the fragile clause — a grants-posture change that emptied it would
+--     leave INV-25 passing having judged nothing at all.
+--   * The detector still FIRES. The probe below is created with exactly the
+--     shape 0346 closed: SECURITY DEFINER, non-trigger return type, EXECUTE to
+--     `authenticated`, and not one authorization token anywhere in its body.
+--     INV-25's predicate must pick it out. The count is narrowed to the probe's
+--     own name so this control stays truthful (and diagnostic) on a day when
+--     INV-25 is legitimately red for some other function.
+--
+-- A bare `create function` grants EXECUTE to PUBLIC, which would make the probe
+-- an anon-reachable definer function — the very thing INV-1 exists to catch —
+-- so it is revoked immediately, then dropped once judged. The enclosing
+-- `rollback` is the second belt on that.
+create function public._sec_inv_probe_ungated_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$ select 1 $probe$;
+revoke all on function public._sec_inv_probe_ungated_secdef() from public, anon;
+grant execute on function public._sec_inv_probe_ungated_secdef() to authenticated;
+
+select ok(
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+      and p.prorettype <> 'trigger'::regtype
+      and has_function_privilege('authenticated', p.oid, 'execute')) > 20
+  and
+  (select count(*)::int
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+      and p.prorettype <> 'trigger'::regtype
+      and has_function_privilege('authenticated', p.oid, 'execute')
+      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)
+      and p.proname = '_sec_inv_probe_ungated_secdef') = 1,
+  'INV-29 control: the authenticated sweep has definer functions to judge, and its ungated-body detector still fires on a planted probe'
+);
+
+drop function public._sec_inv_probe_ungated_secdef();
+
+-- INV-30. MUTATION CONTROL for INV-26, both of ITS detectors. INV-26 is what
+-- stops allowlist E from becoming a place to hide: an entry naming a function
+-- that no longer exists (or was never a definer function) is stale, and an
+-- entry whose body has grown a write is an exemption that was granted for a
+-- read-only predicate and no longer describes one. Two probe rows are planted
+-- here — one absent name, one real function known to INSERT — and both must be
+-- caught. The count is narrowed to the probe names for the same reason as
+-- INV-29. The rows are deleted immediately after so nothing downstream sees a
+-- doctored allowlist.
+insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_absent_function',   'control probe: stale entry; deleted two statements below'),
+  ('apply_cycle_count_location_delta', 'control probe: allowlisted body that WRITES; deleted two statements below');
+
+select is(
+  (select count(*)::int
+     from _sec_inv_auth_secdef_nogate_allow a
+    where a.proname in ('_sec_inv_probe_absent_function', 'apply_cycle_count_location_delta')
+      and (
+        not exists (
+          select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = a.proname and p.prosecdef)
+        or exists (
+          select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
+             and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M'))),
+  2,
+  'INV-30 control: the allowlist-E audit still catches both a stale entry and an entry whose body writes'
+);
+
+delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
 
 select * from finish();
 rollback;

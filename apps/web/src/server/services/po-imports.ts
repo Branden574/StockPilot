@@ -1,4 +1,5 @@
 import 'server-only';
+import { reportError } from '@/lib/error-reporter';
 
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -1350,6 +1351,12 @@ export class PoImportsService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const { header, lines } = await this.get(input.poImportId);
+    // A read-then-act check: it gives the common case a clear message and
+    // avoids doing the expensive line/charter work for nothing. It is NOT the
+    // guard against a double approval — two overlapping calls both read
+    // 'parsed'. The real gate is the conditional CLAIM immediately before the
+    // purchase_orders insert below; `header.status` is also what that claim
+    // restores if the insert fails.
     if (header.status !== 'parsed' && header.status !== 'needs_review') {
       throw new ServiceError(
         'conflict',
@@ -1609,9 +1616,20 @@ export class PoImportsService {
       }
     }
 
-    const { data: nextNum } = await this.ctx.supabase.rpc('next_po_number', {
-      p_org_id: this.ctx.organizationId,
-    });
+    // Same discarded-error trap as PurchaseOrdersService.create — see the note
+    // there. The fallback stays (an approve must never fail for want of a
+    // number) but a missing/failing RPC is now reported instead of silently
+    // producing `PO-<epoch>`.
+    const { data: nextNum, error: nextNumErr } = await this.ctx.supabase.rpc(
+      'next_po_number',
+      { p_org_id: this.ctx.organizationId },
+    );
+    if (nextNumErr) {
+      void reportError(new Error(`next_po_number failed: ${nextNumErr.message}`), {
+        tag: 'po-imports.next_po_number',
+        organizationId: this.ctx.organizationId,
+      });
+    }
     const poNumber = (nextNum as string | null) ?? `PO-${Date.now()}`;
 
     const subtotal = inventoryLines.reduce(
@@ -1646,6 +1664,72 @@ export class PoImportsService {
       input.locationId ?? null,
     );
 
+    // ATOMIC CLAIM — the last gate before a receivable PO exists.
+    //
+    // The status read at the top of this method is a plain read-then-act
+    // check, and every path funnels here: the web action, the Bearer
+    // /api/v1 approve route (maxDuration 60s) and the mobile screen (whose
+    // client gives up at 20s and lets the user retry). A large import can
+    // outlive the client, so "two approvals in flight for one import" is an
+    // ordinary Tuesday — the retry, or a second manager — and both used to
+    // read 'parsed', pass, and INSERT their own purchase_orders row. Two
+    // receivable POs for one vendor document: receivable twice, spend
+    // threshold cleared twice, and the orphan referenced by no import so
+    // cancel-cleanup never touches it.
+    //
+    // This conditional UPDATE is the serialization point. Postgres applies it
+    // to at most one of the racers: `in('status', …)` matches only while the
+    // import is still claimable, and `.select().maybeSingle()` turns the
+    // fail-OPEN 0-row update (pattern #2) into a visible miss. The loser is
+    // refused BEFORE it can mint a PO. Once claimed the import also reads as
+    // 'approved' to cancel(), whose own `not in (approved,canceled)` filter
+    // then refuses to cancel it out from under this call.
+    const claimedAt = new Date().toISOString();
+    const { data: claimed, error: claimErr } = await this.ctx.supabase
+      .from('po_imports')
+      .update({
+        status: 'approved',
+        approved_at: claimedAt,
+        approved_by: this.ctx.userId,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', input.poImportId)
+      .in('status', ['parsed', 'needs_review'])
+      .select('id')
+      .maybeSingle();
+    if (claimErr) throw new ServiceError('internal_error', claimErr.message);
+    if (!claimed) {
+      throw new ServiceError(
+        'conflict',
+        'This import was just approved (or cancelled) by another request. Refresh to see its purchase order.',
+      );
+    }
+
+    /**
+     * Give the claim back. Only ever called while NO purchase order exists —
+     * once one does, the import must stay claimed or the next Approve mints a
+     * duplicate. Conditional on the claim still being ours (status approved,
+     * no PO stamped) so it can never undo somebody else's approval.
+     */
+    const releaseClaim = async (): Promise<void> => {
+      const { error: relErr } = await this.ctx.supabase
+        .from('po_imports')
+        .update({ status: header.status, approved_at: null, approved_by: null })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', input.poImportId)
+        .eq('status', 'approved')
+        .is('approved_po_id', null)
+        .select('id')
+        .maybeSingle();
+      if (relErr) {
+        // Don't mask the original failure with this one — but say it out loud:
+        // the import is now sitting 'approved' with no PO behind it.
+        console.error(
+          `[po-imports] approve: could not release the claim on import ${input.poImportId}: ${relErr.message}`,
+        );
+      }
+    };
+
     const { data: po, error: poErr } = await this.ctx.supabase
       .from('purchase_orders')
       .insert({
@@ -1666,7 +1750,13 @@ export class PoImportsService {
       })
       .select('id')
       .single();
-    if (poErr) throw new ServiceError('internal_error', poErr.message);
+    if (poErr) {
+      // No PO was created, so the import must become approvable again —
+      // otherwise one failed insert strands the document as permanently
+      // "approved" with nothing to receive against.
+      await releaseClaim();
+      throw new ServiceError('internal_error', poErr.message);
+    }
 
     if (inventoryLines.length > 0) {
       const { error: lineErr } = await this.ctx.supabase
@@ -1716,15 +1806,30 @@ export class PoImportsService {
         .in('id', createdItemIds);
     }
 
-    await this.ctx.supabase
+    // Link the import to the PO it produced. status/approved_at/approved_by
+    // were already written by the CLAIM above — this write only carries the id.
+    //
+    // It used to be an unchecked, unscoped `.update().eq('id', …)` whose result
+    // was not even destructured, so a stamp that matched zero rows (RLS
+    // refusal, the 8s statement timeout under load) reported success: the PO
+    // was live, the import still said 'parsed', and the next Approve minted a
+    // second PO for the same invoice. Checked and org-scoped now (pattern #2);
+    // a failure here is surfaced, and because the claim is NOT released once a
+    // PO exists, no re-approval can duplicate it.
+    const { data: stamped, error: stampErr } = await this.ctx.supabase
       .from('po_imports')
-      .update({
-        status: 'approved',
-        approved_at: new Date().toISOString(),
-        approved_by: this.ctx.userId,
-        approved_po_id: po.id as string,
-      })
-      .eq('id', input.poImportId);
+      .update({ approved_po_id: po.id as string })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', input.poImportId)
+      .select('id')
+      .maybeSingle();
+    if (stampErr) throw new ServiceError('internal_error', stampErr.message);
+    if (!stamped) {
+      throw new ServiceError(
+        'internal_error',
+        `Purchase order ${poNumber} was created but could not be linked back to this import. Open the purchase order to continue receiving.`,
+      );
+    }
 
     await audit(
       {

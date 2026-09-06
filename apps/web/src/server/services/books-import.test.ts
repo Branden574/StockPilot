@@ -84,6 +84,12 @@ function execStub(opts: {
   currentItemCount?: number;
   insertedItems?: Array<{ id: string; barcode: string }>;
   insertError?: { message: string; code?: string } | null;
+  /** Fail the opening `stock_movements` batch insert (RLS refusal, transient). */
+  movementError?: { message: string; code?: string } | null;
+  /** Rows the compensating `inventory_items.update` reports it actually zeroed. */
+  zeroedItems?: Array<{ id: string }>;
+  /** Placements still carrying quantity > 0 after the compensation re-read. */
+  survivingPlacements?: Array<{ id: string }>;
 } = {}) {
   return makeSupabaseStub({
     // Preview: rows that already exist by barcode.
@@ -99,7 +105,14 @@ function execStub(opts: {
     'inventory_items.insert': opts.insertError
       ? { data: null, error: opts.insertError }
       : { data: opts.insertedItems ?? [], error: null },
-    'stock_movements.insert': { data: null, error: null },
+    'stock_movements.insert': opts.movementError
+      ? { data: null, error: opts.movementError }
+      : { data: null, error: null },
+    // Compensation path (opening-movement failure): zero the 0199-seeded
+    // placements, zero the row quantity, then re-read for survivors.
+    'item_stock_levels.update': { data: null, error: null },
+    'inventory_items.update': { data: opts.zeroedItems ?? [], error: null },
+    'item_stock_levels.select': { data: opts.survivingPlacements ?? [], error: null },
     'item_images.insert': { data: null, error: null },
   });
 }
@@ -220,6 +233,89 @@ describe('BooksImportService.execute', () => {
     // we never reached that phase.
     const movementCalls = stub.fromCalls.filter((t) => t === 'stock_movements').length;
     expect(movementCalls).toBe(0);
+  });
+
+  // ── Opening-ledger invariant (SP-084) ────────────────────────────────────
+  // SUM(stock_movements.quantity_change) MUST equal quantity_on_hand for every
+  // item. The import used to push a single 'batch:stock_movements' line into
+  // result.failed[] and report the books as created, leaving N books holding
+  // stock that no movement anywhere explains (and, via the 0199 trigger, N
+  // placed holdings too).
+  it('opening-movement failure: compensates on-hand + the 0199 placements, then throws', async () => {
+    const stub = execStub({
+      insertedItems: [
+        { id: 'item-1', barcode: ISBN_A },
+        { id: 'item-2', barcode: ISBN_B },
+      ],
+      // The reachable-every-time case: a viewer granted items:create passes the
+      // inventory_items insert and is refused by stock_movements RLS.
+      movementError: {
+        message: 'new row violates row-level security policy for table "stock_movements"',
+        code: '42501',
+      },
+      zeroedItems: [{ id: 'item-1' }, { id: 'item-2' }],
+      survivingPlacements: [],
+    });
+
+    const svc = new BooksImportService(makeServiceContext(stub.client));
+
+    let caught: unknown = null;
+    try {
+      await svc.execute([ISBN_A, ISBN_B], {
+        warehouseId: WAREHOUSE_ID,
+        defaultQuantity: 1,
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    // Fails LOUDLY — never "created 2 books, one failed ISBN".
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).code).toBe('internal_error');
+    // `internal_error` REDACTS the public message by design (S13), so the
+    // operator-facing sentence lives on internalDetail — same as the sibling
+    // InventoryService compensation.
+    expect((caught as ServiceError).internalDetail).toMatch(/stock adjustment/i);
+
+    // (a) Placements the 0199 AFTER-INSERT trigger seeded are zeroed FIRST.
+    const levelUpdates = stub.chainArgs.get('item_stock_levels.update') ?? [];
+    expect(levelUpdates[0]![0]).toEqual({ quantity: 0 });
+
+    // (b) The row quantity is zeroed, with .select('id') row-proof (pattern #2).
+    const itemUpdates = stub.chainArgs.get('inventory_items.update') ?? [];
+    expect(itemUpdates[0]![0]).toMatchObject({ quantity_on_hand: 0 });
+    expect(stub.chains.get('inventory_items.update')).toContain('select');
+
+    // (c) Survivors are re-read — "no error" is not proof anything matched.
+    expect(stub.chains.get('item_stock_levels.select')).toContain('gt');
+  });
+
+  it('opening-movement failure whose rollback is incomplete escalates to contact-support', async () => {
+    const stub = execStub({
+      insertedItems: [
+        { id: 'item-1', barcode: ISBN_A },
+        { id: 'item-2', barcode: ISBN_B },
+      ],
+      movementError: { message: 'boom', code: '42501' },
+      // Only ONE of the two rows was actually zeroed — a partial compensation
+      // is still a broken ledger, so it counts as a failure.
+      zeroedItems: [{ id: 'item-1' }],
+    });
+
+    const svc = new BooksImportService(makeServiceContext(stub.client));
+
+    let caught: unknown = null;
+    try {
+      await svc.execute([ISBN_A, ISBN_B], {
+        warehouseId: WAREHOUSE_ID,
+        defaultQuantity: 1,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).code).toBe('internal_error');
+    expect((caught as ServiceError).internalDetail).toMatch(/Contact support/i);
   });
 
   it('routes ISBNs already in the org to result.skipped without touching the insert path', async () => {

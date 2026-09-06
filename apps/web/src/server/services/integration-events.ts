@@ -76,6 +76,14 @@ export type EndpointType = 'webhook' | 'slack' | 'teams';
 
 const MAX_ATTEMPTS = 6;
 const DELIVERY_TIMEOUT_MS = 8000;
+/**
+ * How long a claimed delivery is reserved for (SP-067). Long enough to cover
+ * the whole outbound attempt (8s timeout) plus the finalize round trip, so a
+ * cron tick that lands mid-flight sees the row as not-yet-due and leaves it
+ * alone. Short enough that a worker killed mid-send (a frozen serverless
+ * invocation) frees the row within seconds instead of stranding it.
+ */
+const CLAIM_LEASE_MS = DELIVERY_TIMEOUT_MS + 5_000;
 /** Backoff: ~1m, 2m, 4m, 8m, 16m, capped at 30m. */
 function backoffMs(attempt: number): number {
   return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempt - 1));
@@ -258,8 +266,58 @@ async function deliverFetch(
   return safeFetch(endpoint.url, init as Parameters<typeof safeFetch>[1]);
 }
 
+/**
+ * Reserve one pending delivery for THIS worker before anything is sent.
+ *
+ * WHY (SP-067): there used to be no claim step at all. `dispatchEvent` fires an
+ * immediate attempt on a row whose `next_attempt_at` defaults to `now()`
+ * (0169), and the drain cron selects exactly that predicate — so a cron tick
+ * landing during the 8s send window POSTed the same row a second time and the
+ * org's Slack/Teams channel got the event twice. (Signed webhooks can dedupe on
+ * `envelope.id`; a chat post cannot.) Two overlapping cron runs did the same.
+ *
+ * The compare-and-set is on `status` + `attempts`, NOT on a client-supplied
+ * `next_attempt_at <= now` timestamp: the immediate path's row carries the
+ * DB clock's `now()`, which can be a hair AHEAD of this process's clock, and a
+ * timestamp CAS would then reject every immediate delivery and push all alerts
+ * onto the 10-minute cron. `attempts` is read from the row we already hold, so
+ * the check is clock-independent: under READ COMMITTED the loser re-evaluates
+ * the predicate after the winner commits, sees the bumped counter and matches
+ * zero rows.
+ *
+ * Returns the claimed attempt number, or null when another worker owns the row
+ * (or the claim itself errored — we fail CLOSED and skip the send rather than
+ * risk a duplicate).
+ */
+async function claimDelivery(admin: Admin, delivery: DeliveryRow): Promise<number | null> {
+  const attempts = delivery.attempts + 1;
+  const { data, error } = await admin
+    .from('integration_deliveries')
+    .update({
+      attempts,
+      // Hold the row for the length of the attempt so a concurrent drain's
+      // `next_attempt_at <= now` window no longer selects it.
+      next_attempt_at: new Date(Date.now() + CLAIM_LEASE_MS).toISOString(),
+    })
+    .eq('id', delivery.id)
+    .eq('status', 'pending')
+    .eq('attempts', delivery.attempts)
+    .select('id')
+    .maybeSingle(); // row-proof: a 0-row update is fail-OPEN otherwise (pattern #2)
+  if (error || !data) return null;
+  return attempts;
+}
+
 // ── Send one delivery + update its row ──────────────────────────────────────
-async function attemptDelivery(admin: Admin, endpoint: EndpointRow, delivery: DeliveryRow): Promise<boolean> {
+/** `claimed:false` = another worker owns this row; nothing was sent. */
+async function attemptDelivery(
+  admin: Admin,
+  endpoint: EndpointRow,
+  delivery: DeliveryRow,
+): Promise<{ claimed: boolean; ok: boolean }> {
+  const attempts = await claimDelivery(admin, delivery);
+  if (attempts === null) return { claimed: false, ok: false };
+
   const envelope = {
     id: delivery.id,
     event: delivery.event_type,
@@ -286,21 +344,30 @@ async function attemptDelivery(admin: Admin, endpoint: EndpointRow, delivery: De
     // SSRF block is terminal (don't retry a poisoned URL); network errors retry.
     errorMsg = e instanceof Error ? e.message : 'delivery failed';
     if (e instanceof SsrfBlockedError) {
-      await finalize(admin, endpoint, delivery, { ok: false, code: null, error: errorMsg, dead: true });
-      return false;
+      await finalize(admin, endpoint, delivery, { ok: false, code: null, error: errorMsg, dead: true }, attempts);
+      return { claimed: true, ok: false };
     }
   }
-  await finalize(admin, endpoint, delivery, { ok, code, error: errorMsg, dead: false });
-  return ok;
+  await finalize(admin, endpoint, delivery, { ok, code, error: errorMsg, dead: false }, attempts);
+  return { claimed: true, ok };
 }
 
+/**
+ * Write the outcome of ONE claimed attempt.
+ *
+ * `attempts` is the number `claimDelivery` actually stamped on the row — not
+ * `delivery.attempts + 1` recomputed from the in-memory copy. Before SP-067 the
+ * latter, combined with an unconditioned `.update().eq('id', …)`, let a late
+ * finalize (e.g. an immediate attempt that timed out) overwrite another
+ * worker's `success` with `pending`/`attempts=1`, re-queuing a THIRD delivery.
+ */
 async function finalize(
   admin: Admin,
   endpoint: EndpointRow,
   delivery: DeliveryRow,
   r: { ok: boolean; code: number | null; error: string | null; dead: boolean },
+  attempts: number,
 ): Promise<void> {
-  const attempts = delivery.attempts + 1;
   const nowIso = new Date().toISOString();
   const status = r.ok
     ? 'success'
@@ -315,7 +382,18 @@ async function finalize(
     delivered_at: r.ok ? nowIso : null,
     next_attempt_at: r.ok || r.dead ? nowIso : new Date(Date.now() + backoffMs(attempts)).toISOString(),
   };
-  await admin.from('integration_deliveries').update(patch).eq('id', delivery.id);
+  // CAS on the state we claimed. If our lease expired and another worker has
+  // already re-claimed (attempts moved) or settled (status moved) this row, we
+  // match 0 rows and write NOTHING — a stale result must never win.
+  const { data: settled } = await admin
+    .from('integration_deliveries')
+    .update(patch)
+    .eq('id', delivery.id)
+    .eq('status', 'pending')
+    .eq('attempts', attempts)
+    .select('id')
+    .maybeSingle();
+  if (!settled) return;
   await admin
     .from('integration_endpoints')
     .update({ last_delivery_at: nowIso, last_status: r.ok ? 'success' : (r.error ?? 'failed') })
@@ -369,7 +447,7 @@ export async function dispatchEvent(
     await Promise.allSettled(
       (rows as DeliveryRow[]).map((row) => {
         const ep = epById.get(row.endpoint_id);
-        return ep ? attemptDelivery(admin, ep, row) : Promise.resolve(false);
+        return ep ? attemptDelivery(admin, ep, row) : Promise.resolve({ claimed: false, ok: false });
       }),
     );
   } catch (e) {
@@ -426,8 +504,11 @@ export async function drainIntegrationDeliveries(
     const results = await Promise.allSettled(
       live.map((d) => attemptDelivery(admin, epById.get(d.endpoint_id)!, d)),
     );
-    attempted = live.length;
-    delivered = results.filter((r) => r.status === 'fulfilled' && r.value === true).length;
+    // Count only rows we actually CLAIMED. A row another worker is mid-flight
+    // on is skipped, not attempted — reporting it would make the cron summary
+    // claim deliveries this tick never made (SP-067).
+    attempted = results.filter((r) => r.status === 'fulfilled' && r.value.claimed).length;
+    delivered = results.filter((r) => r.status === 'fulfilled' && r.value.ok).length;
   } catch (e) {
     void reportError(e, { tag: 'integration-events.drain' });
   }

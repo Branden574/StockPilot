@@ -30,6 +30,53 @@ export const dynamic = 'force-dynamic';
 const TOKEN_RE = /^[0-9a-f]{64}$/i;
 const DATA_URL_RE = /^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/;
 
+/**
+ * Resolve WHO to email for this order's requester.
+ *
+ * SP-020: `OrderRequestsService.create()` fills `requester_name` /
+ * `requester_email` ONLY for on-behalf-of (external) orders — a member who
+ * submits their own order gets `requester_user_id` set and BOTH name/email
+ * columns NULL. This route used to read the columns directly, so every
+ * internal requester silently dropped out of the recipient set: no completion
+ * receipt, no "partially fulfilled" notice, no "backordered items shipped"
+ * notice, and their `email_order_completed` opt-out was never even read
+ * (the read was gated on the always-NULL email column). The PAPER signature
+ * path did email them, because it goes through the service's
+ * `resolveRecipient()` -> `user_profiles` lookup. This mirrors that
+ * resolution so both hand-over paths behave identically.
+ *
+ * Fails CLOSED-safe: if the profile read errors we return no address, which
+ * degrades to the old in-app-notification-only behaviour rather than failing
+ * a signature that the DB has already recorded.
+ */
+async function resolveRequesterContact(
+  admin: ReturnType<typeof createAdminClient>,
+  order: {
+    requester_user_id: string | null;
+    requester_name: string | null;
+    requester_email: string | null;
+  },
+): Promise<{ email: string | null; name: string | null }> {
+  if (order.requester_email) {
+    return { email: order.requester_email, name: order.requester_name ?? null };
+  }
+  if (!order.requester_user_id) return { email: null, name: null };
+  try {
+    const { data } = await admin
+      .from('user_profiles')
+      .select('email, full_name')
+      .eq('id', order.requester_user_id)
+      .maybeSingle();
+    const profile = data as { email?: string | null; full_name?: string | null } | null;
+    return {
+      email: profile?.email ?? null,
+      name: profile?.full_name ?? order.requester_name ?? null,
+    };
+  } catch {
+    return { email: null, name: order.requester_name ?? null };
+  }
+}
+
 const submitSchema = z.object({
   token: z.string().regex(TOKEN_RE),
   signerName: z.string().trim().min(1).max(120),
@@ -216,13 +263,22 @@ export async function POST(req: NextRequest) {
     /* non-fatal */
   }
 
+  // WHO the requester is, resolved ONCE (see resolveRequesterContact): the
+  // row's own columns for an external/on-behalf-of order, else the member's
+  // user_profiles row. Every requester-facing notice below uses THIS, never
+  // the raw column — internal requesters have a NULL email column.
+  const requester = await resolveRequesterContact(admin, order);
+
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the
   // backorder notices — a requester who muted order emails stays muted for the
   // partial / backorder-shipped notices too. External requesters (no user row)
   // can't opt out and always get transactional mail.
+  // SP-020: gated on requester_user_id ALONE. The old `&& order.requester_email`
+  // conjunct made this a dead branch for exactly the population that CAN opt
+  // out (internal members, whose email column is always NULL).
   let requesterEmailOptedOut = false;
-  if (order.requester_user_id && order.requester_email) {
+  if (order.requester_user_id) {
     const { data: prefRow } = await admin
       .from('notification_preferences')
       .select('email_order_completed')
@@ -257,8 +313,8 @@ export async function POST(req: NextRequest) {
       organizationId: order.organization_id,
       orderId: order.id,
       requesterUserId: order.requester_user_id,
-      requesterEmail: order.requester_email,
-      requesterName: order.requester_name,
+      requesterEmail: requester.email,
+      requesterName: requester.name,
       appUrl: env.NEXT_PUBLIC_APP_URL,
       provided: totalFulfilled,
       requested: totalRequested,
@@ -271,8 +327,7 @@ export async function POST(req: NextRequest) {
     // actually SENT: an opted-out requester who signs still gets their
     // transactional receipt (matching the completed path's semantics).
     const signerIsRequester =
-      parsed.data.signerEmail.toLowerCase() ===
-      (order.requester_email ?? '').toLowerCase();
+      parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
     if (!signerIsRequester || requesterEmailOptedOut) {
       try {
         // es `partial-receipt` template: external-recipient receipt from
@@ -311,8 +366,8 @@ export async function POST(req: NextRequest) {
         organizationId: order.organization_id,
         orderId: order.id,
         requesterUserId: order.requester_user_id,
-        requesterEmail: order.requester_email,
-        requesterName: order.requester_name,
+        requesterEmail: requester.email,
+        requesterName: requester.name,
         appUrl: env.NEXT_PUBLIC_APP_URL,
         emailOptedOut: requesterEmailOptedOut,
         // Display-only: how many units the remainder batch carried.
@@ -323,20 +378,29 @@ export async function POST(req: NextRequest) {
       // Completion receipt. Honors the requester's email_order_completed opt-out
       // (computed once above); the physical signer always gets a transactional
       // receipt of the signature they just submitted.
-      const recipients = new Set<string>();
-      if (order.requester_email && !requesterEmailOptedOut) {
-        recipients.add(order.requester_email);
+      // Keyed by LOWERCASED address so a requester who signs her own delivery
+      // but types a differently-cased address gets exactly ONE receipt — a
+      // plain Set of raw strings treated "Alice@Site.org" and "alice@site.org"
+      // as two people. The stored value keeps the original casing for the send.
+      const recipients = new Map<string, { email: string; name: string | null }>();
+      if (requester.email && !requesterEmailOptedOut) {
+        recipients.set(requester.email.toLowerCase(), {
+          email: requester.email,
+          name: requester.name,
+        });
       }
-      recipients.add(parsed.data.signerEmail);
-      for (const recipient of recipients) {
+      if (!recipients.has(parsed.data.signerEmail.toLowerCase())) {
+        recipients.set(parsed.data.signerEmail.toLowerCase(), {
+          email: parsed.data.signerEmail,
+          name: parsed.data.signerName,
+        });
+      }
+      for (const recipient of recipients.values()) {
         await sendOrderRequestEmail({
           kind: 'completed',
           request: fullRow as Parameters<typeof sendOrderRequestEmail>[0]['request'],
-          recipientEmail: recipient,
-          recipientName:
-            recipient === order.requester_email
-              ? order.requester_name
-              : parsed.data.signerName,
+          recipientEmail: recipient.email,
+          recipientName: recipient.name,
           appUrl: env.NEXT_PUBLIC_APP_URL,
         });
       }

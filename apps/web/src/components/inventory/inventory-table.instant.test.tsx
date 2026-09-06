@@ -2304,3 +2304,73 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     expect(screen.queryByText('Stapler')).not.toBeInTheDocument();
   });
 });
+
+// SERVER-MODE SEARCH vs FILTER CHANGES (SP-074). Over the instant cap
+// (>2000 items) the search box routes to /api/items/search and the answer
+// is held in `serverHits`, which `displayed` prefers over the page's own
+// rows. The fetch effect READS the URL's filter params (cat/loc/type/
+// status/stock/sort/rack/expected) but used to be keyed on [q, instantMode]
+// only — so ticking a category chip while a search was active re-ran the
+// server component with the new filter and left the PREVIOUS server hits
+// (and the stale serverHitsTotal behind the footer's partial marker) on
+// screen. The chip looked dead until the user edited the search text.
+// Instant mode never reaches this path (the effect early-returns), which is
+// why no existing customer org could reproduce it.
+describe('InventoryTable server-mode search re-fetches when the filters change', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', fetchSpy);
+    window.localStorage.clear();
+  });
+
+  it('a settled category filter re-runs /api/items/search and drops the stale off-page hit', async () => {
+    const user = userEvent.setup();
+    // 'Zulu Cable' exists ONLY in the first server answer — it is the
+    // cross-page hit that must disappear once the category narrows.
+    const electronics = item({ id: 'e1', name: 'Alpha Cable', category_id: 'c1' });
+    const zulu = item({ id: 'z1', name: 'Zulu Cable', category_id: 'c2' });
+    fetchSpy.mockImplementation((input: unknown) => {
+      const url = String(input);
+      const rows = url.includes('cat=c1') ? [electronics] : [electronics, zulu];
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: rows, total: rows.length }),
+      });
+    });
+
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const tree = (items: InstantDatasetItem[]) => (
+      <InventoryTable
+        items={items}
+        lookups={EMPTY_LOOKUPS}
+        total={600}
+        pageSize={30}
+        rowLinkPrefix="/dashboard/inventory"
+        basePath="/dashboard/inventory"
+      />
+    );
+    const { rerender } = render(tree([electronics]));
+
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'cable');
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    // The cross-page hit is on screen from the unfiltered answer.
+    expect(await screen.findByRole('link', { name: 'Zulu Cable' })).toBeInTheDocument();
+
+    // The chip settles: the URL gains ?cat=c1 and the server component
+    // re-renders with the narrowed page rows.
+    getSearchParams('q=cable&cat=c1');
+    rerender(tree([electronics]));
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(String(fetchSpy.mock.calls[1]![0])).toContain('cat=c1');
+    });
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('link', { name: 'Zulu Cable' })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('link', { name: 'Alpha Cable' })).toBeInTheDocument();
+  });
+});

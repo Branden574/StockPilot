@@ -15,7 +15,10 @@ import { maybeSendReturnPrompt } from './return-prompt';
  *   • every skip guard (status, requester_email, module, marker) is silent;
  *   • best-effort: a failing send or a throwing DB read RESOLVES (never
  *     rejects), so the caller's completion transition can never fail on it —
- *     and the marker stays set after a failed send (at-most-once posture).
+ *     and the marker stays set after a failed send (at-most-once posture);
+ *   • SP-076: a public (account-less) requester who used the RFC 8058
+ *     one-click unsubscribe THIS email advertises is suppressed — and the
+ *     0278 marker is not burned on that skip, while the lookup fails OPEN.
  */
 
 const sendEmailMock = vi.hoisted(() => vi.fn());
@@ -234,6 +237,85 @@ describe('maybeSendReturnPrompt', () => {
     const mintArgs = updates[0]!;
     expect(mintArgs).toContainEqual(['return_token', null]); // guarded mint
     expect(mintArgs).not.toContainEqual(['return_prompt_sent_at', null]); // no marker claim
+  });
+
+  it('SUPPRESSED: a public requester who used one-click unsubscribe gets no prompt, and the marker is NOT burned', async () => {
+    // SP-076: this email advertises RFC 8058 one-click unsubscribe to
+    // public (account-less) requesters, so a recorded opt-out in
+    // public_email_unsubscribes must actually stop it.
+    const stub = makeStub({
+      'public_email_unsubscribes.select.maybeSingle': {
+        data: { email: 'requester@example.com' },
+        error: null,
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+
+    expect(res).toEqual({ sent: false, reason: 'suppressed' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    // The 0278 marker must stay NULL: suppression is a property of the
+    // ADDRESS, not of the order, so a later un-suppression (or a corrected
+    // address) can still prompt exactly once.
+    expect(stub.chains.get('order_requests.update')).toBeUndefined();
+    // Looked the address up in its canonical (lowercased) spelling.
+    expect(stub.chainArgs.get('public_email_unsubscribes.select')).toContainEqual([
+      'email',
+      'requester@example.com',
+    ]);
+  });
+
+  it('SUPPRESSION is case-insensitive (canonical lowercased lookup)', async () => {
+    const stub = makeStub({
+      'order_requests.select': {
+        data: [{ ...COMPLETED_ORDER, requester_email: '  Requester@Example.COM ' }],
+        error: null,
+      },
+      'public_email_unsubscribes.select.maybeSingle': {
+        data: { email: 'requester@example.com' },
+        error: null,
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: false, reason: 'suppressed' });
+    expect(stub.chainArgs.get('public_email_unsubscribes.select')).toContainEqual([
+      'email',
+      'requester@example.com',
+    ]);
+  });
+
+  it('the public suppression list does NOT govern account holders (their prefs do)', async () => {
+    // Mirrors the order-request choke point: signed-in requesters get the
+    // in-app settings link (no one-click header), so a stray public row for
+    // their address must not silently mute their transactional mail.
+    const stub = makeStub({
+      'order_requests.select': {
+        data: [{ ...COMPLETED_ORDER, requester_user_id: 'user-1' }],
+        error: null,
+      },
+      'public_email_unsubscribes.select.maybeSingle': {
+        data: { email: 'requester@example.com' },
+        error: null,
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: true });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    // Account holders never get the one-click header pair.
+    const headers = (sendEmailMock.mock.calls[0]![0] as { headers: Record<string, string> })
+      .headers;
+    expect(headers['List-Unsubscribe-Post']).toBeUndefined();
+  });
+
+  it('SUPPRESSION fails OPEN: a lookup error still sends (a DB blip must not drop the prompt)', async () => {
+    const stub = makeStub({
+      'public_email_unsubscribes.select.maybeSingle': {
+        data: null,
+        error: { message: 'relation does not exist' },
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: true });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
   });
 
   it('skips when the returns module is disabled for the org', async () => {

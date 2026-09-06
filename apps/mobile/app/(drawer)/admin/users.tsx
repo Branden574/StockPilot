@@ -17,6 +17,8 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { canChangeMemberRoles, interpretMemberRoleWrite } from '@/lib/member-role-write';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
@@ -68,7 +70,12 @@ const ROLE_DESCRIPTION: Record<AssignableRole, string> = {
 export default function UsersAdmin() {
   const { user } = useAuth();
   const { orgId } = useOrg();
-  const { isAdmin, loading: roleLoading } = useRole();
+  const { role, isAdmin, loading: roleLoading } = useRole();
+  // Effective (override-aware) permission set — the same source the drawer
+  // gates its nav on. See canChangeMemberRoles for why the role is the
+  // fallback while it loads.
+  const permissions = useEffectivePermissions();
+  const canChangeRoles = canChangeMemberRoles(role, permissions);
   const [rows, setRows] = React.useState<UserRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
@@ -188,23 +195,43 @@ export default function UsersAdmin() {
       );
       return;
     }
-    const prevRole = member.role;
-    setRows((prev) =>
-      prev.map((r) => (r.user_id === member.user_id ? { ...r, role: nextRole } : r)),
-    );
+    // Parity with the web service's assertPermission(ctx, 'members:update_role').
+    // The table's RLS (0140) only asks for the admin ROLE, so an admin whose
+    // members:update_role was revoked by a 0207 override is refused on web and
+    // used to succeed here. This gate is app-layer parity, not enforcement —
+    // see member-role-write.ts for what closing it properly requires.
+    if (!canChangeRoles) {
+      Alert.alert(
+        'Not allowed',
+        'Your account does not have permission to change member roles.',
+      );
+      setEditing(null);
+      return;
+    }
     setEditing(null);
-    const { error } = await supabase
+    // ROW-PROOF (recurring pattern #2). PostgREST answers a row-count-0 UPDATE
+    // with 204 and error === null, so the previous `const { error } = await …`
+    // treated an RLS refusal — or a member removed a moment earlier — as
+    // success. `.select('user_id').maybeSingle()` makes the returned row the
+    // proof, and the list is painted only after that proof arrives: the old
+    // code painted the new role BEFORE the write, so a silent failure stayed on
+    // screen looking saved.
+    const written = await supabase
       .from('organization_members')
       .update({ role: nextRole })
       .eq('organization_id', orgId)
-      .eq('user_id', member.user_id);
-    if (error) {
-      console.warn('[admin/users] role update failed:', error.message);
-      Alert.alert('Could not change role', error.message);
-      setRows((prev) =>
-        prev.map((r) => (r.user_id === member.user_id ? { ...r, role: prevRole } : r)),
-      );
+      .eq('user_id', member.user_id)
+      .select('user_id')
+      .maybeSingle();
+    const result = interpretMemberRoleWrite(written);
+    if (!result.ok) {
+      console.warn('[admin/users] role update failed:', result.message);
+      Alert.alert('Could not change role', result.message);
+      return;
     }
+    setRows((prev) =>
+      prev.map((r) => (r.user_id === member.user_id ? { ...r, role: nextRole } : r)),
+    );
   }
 
   return (
@@ -225,6 +252,9 @@ export default function UsersAdmin() {
           <UserCard
             user={u}
             isSelf={u.user_id === user?.id}
+            // Same gate changeRole enforces — an admin without
+            // members:update_role should not be offered the picker at all.
+            canChangeRoles={canChangeRoles}
             onPress={() => setEditing(u)}
           />
         )}
@@ -248,10 +278,12 @@ export default function UsersAdmin() {
 function UserCard({
   user,
   isSelf,
+  canChangeRoles,
   onPress,
 }: {
   user: UserRow;
   isSelf: boolean;
+  canChangeRoles: boolean;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -274,7 +306,7 @@ function UserCard({
   const pill = ROLE_PILL[user.role] ?? { label: user.role.toUpperCase(), status: 'default' as const };
   // Owner role and self both block role editing — owner needs the
   // transferOwnership flow, self-edit is blocked to avoid lockout.
-  const canEdit = user.role !== 'owner' && !isSelf;
+  const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;
   return (
     <Pressable
       onPress={canEdit ? onPress : undefined}

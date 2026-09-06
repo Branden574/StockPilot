@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Read-only rendering contract (auditor visibility): a visitor holding
 // cycle_counts:read but NOT stock:adjust gets canAdjust=false, which must
@@ -22,6 +22,11 @@ vi.mock('@/server/actions/cycle-counts', () => ({
   postCycleCountAction: vi.fn(),
   recordCycleCountLineAction: vi.fn(),
 }));
+
+import {
+  clearCycleCountLineAction,
+  recordCycleCountLineAction,
+} from '@/server/actions/cycle-counts';
 
 import { CycleCountDetail } from './cycle-count-detail';
 
@@ -173,5 +178,98 @@ describe('CycleCountDetail — variant identity', () => {
     expect(screen.getByText('Widget')).toBeInTheDocument();
     expect(screen.queryByText(/^Size /)).toBeNull();
     expect(screen.queryByText(/^#/)).toBeNull();
+  });
+});
+
+/**
+ * A FAILED save must not leave the row looking counted.
+ *
+ * The row's input is blur-to-save and the box resyncs from the server value
+ * only via an effect keyed on `line.counted_quantity`. When the action fails
+ * that prop never changes, so without an explicit revert the box keeps the
+ * typed number AND the variance cell renders it exactly like a saved line —
+ * while the DB still holds null, the header stats disagree, and post() skips
+ * it. The only feedback was a 4s toast (recurring pattern #20: toast-only is
+ * a silent failure), so the counter walks 200 lines believing they saved.
+ *
+ * Reachable in production: the row is enabled by `!open || !canAdjust` alone,
+ * while the service refuses a non-manager on a count assigned to someone else
+ * (assertAssignee -> 'forbidden') and refuses cancelled/RLS-blocked lines.
+ */
+describe('CycleCountDetail — failed line save', () => {
+  const failure = {
+    ok: false as const,
+    error: {
+      code: 'forbidden',
+      message: 'This cycle count is assigned to another employee.',
+    },
+  };
+
+  function rowFor(name: string): HTMLElement {
+    const row = screen.getByText(name).closest('tr');
+    if (!row) throw new Error(`no row for ${name}`);
+    return row as HTMLElement;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reverts the box, drops the variance, and shows an inline alert', async () => {
+    vi.mocked(recordCycleCountLineAction).mockResolvedValue(failure as never);
+
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+
+    // Gadget: expected 2, counted null (uncounted).
+    const row = rowFor('Gadget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(within(row).getByRole('alert')).toHaveTextContent(
+        'This cycle count is assigned to another employee.',
+      );
+    });
+    // (a) the box is back to the server value (empty = uncounted)
+    expect(input.value).toBe('');
+    // (b) the variance cell shows no variance, not '+5'
+    expect(within(row).queryByText('+5')).toBeNull();
+    expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('—');
+  });
+
+  it('restores the saved count when CLEARING the line fails', async () => {
+    vi.mocked(clearCycleCountLineAction).mockResolvedValue(failure as never);
+
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+
+    // Widget: counted 4, expected 5.
+    const row = rowFor('Widget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(within(row).getByRole('alert')).toBeInTheDocument();
+    });
+    expect(input.value).toBe('4');
+    expect(row.querySelector('td:nth-child(5)')?.textContent).toBe('-1');
+  });
+
+  it('keeps the typed value and shows no alert when the save succeeds', async () => {
+    vi.mocked(recordCycleCountLineAction).mockResolvedValue({ ok: true } as never);
+
+    render(<CycleCountDetail {...baseProps} canAdjust />);
+
+    const row = rowFor('Gadget');
+    const input = within(row).getByPlaceholderText('—') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(recordCycleCountLineAction).toHaveBeenCalled();
+    });
+    expect(input.value).toBe('7');
+    expect(within(row).queryByRole('alert')).toBeNull();
   });
 });

@@ -254,6 +254,48 @@ describe('requestEmailChange — refusal order (each stops before the next spend
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
+  /**
+   * SP-101. The refusal above answers a question ("does this address have an
+   * account?") that a signed-in user is not otherwise entitled to ask, and
+   * concealing the answer is not achievable here (see the service header).
+   * The mitigation we CAN offer is that every probe leaves a trail: the
+   * refusal writes the same audit event as a real request, tagged with the
+   * outcome, so repeated `target_exists` rows from one user are visible to an
+   * operator. Before this, the exists branch threw before writeAudit and the
+   * probe was completely invisible.
+   */
+  it('audits the refused duplicate target so enumeration attempts are detectable', async () => {
+    rpc.mockImplementation(async (name: string) =>
+      name === 'auth_user_exists_by_email' ? { data: true, error: null } : { data: null, error: null },
+    );
+    await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'conflict' });
+
+    const audit = inserts.filter((i) => i.table === 'audit_logs');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.payload).toMatchObject({
+      user_id: USER_ID,
+      organization_id: 'org-1',
+      event: 'user.email.change_requested',
+      metadata: expect.objectContaining({
+        from: OLD,
+        to: NEW,
+        source: 'web',
+        outcome: 'target_exists',
+      }),
+    });
+    // The refusal is still a refusal: nothing minted, nothing mailed.
+    expect(generateLink).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('tags the delivered request with outcome "sent" so the two audit rows are distinguishable', async () => {
+    await requestEmailChange(REQUEST);
+    expect(inserts.find((i) => i.table === 'audit_logs')?.payload).toMatchObject({
+      event: 'user.email.change_requested',
+      metadata: expect.objectContaining({ outcome: 'sent' }),
+    });
+  });
+
   it('a disabled or tombstoned account is refused before any budget is spent', async () => {
     tables.user_profiles = { ...tables.user_profiles!, disabled_at: '2026-08-01T00:00:00Z' };
     await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'forbidden' });

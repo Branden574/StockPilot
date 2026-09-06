@@ -119,6 +119,13 @@ export function CycleCountDetail({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [busyLine, setBusyLine] = React.useState<string | null>(null);
+  // Which line's last write FAILED, and why. A toast alone is a silent
+  // failure (recurring pattern #20): it renders bottom-right, auto-dismisses
+  // in ~4s, and a counter working down 200 rows never sees it — so the row
+  // itself has to say so, inline, until the next attempt.
+  const [lineError, setLineError] = React.useState<
+    { id: string; message: string } | null
+  >(null);
   const [postBusy, setPostBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
@@ -213,12 +220,23 @@ export function CycleCountDetail({
     return () => window.removeEventListener('beforeunload', handler);
   }, [hasPendingWork]);
 
-  async function saveCount(line: CycleCountLineWithItem, raw: string) {
+  // Both line writes return whether the value LANDED. The row owns a draft
+  // that resyncs only from `line.counted_quantity`; when a write fails that
+  // prop never changes, so the row must be told to put the server's value
+  // back — otherwise the box keeps an unsaved number and renders a variance
+  // that looks exactly like a saved line while the DB still says uncounted.
+  async function saveCount(
+    line: CycleCountLineWithItem,
+    raw: string,
+  ): Promise<boolean> {
     const value = Number(raw);
     if (!Number.isFinite(value) || value < 0) {
-      toast.error('Enter a non-negative number.');
-      return;
+      const message = 'Enter a non-negative number.';
+      toast.error(message);
+      setLineError({ id: line.id, message });
+      return false;
     }
+    setLineError((prev) => (prev?.id === line.id ? null : prev));
     setBusyLine(line.id);
     const r = await recordCycleCountLineAction({
       cycleCountId: header.id,
@@ -228,20 +246,34 @@ export function CycleCountDetail({
     setBusyLine(null);
     if (!r.ok) {
       toast.error(r.error.message);
-      return;
+      setLineError({ id: line.id, message: r.error.message });
+      // Refresh on failure too: the usual cause is that the count moved out
+      // from under this session (reassigned to someone else, or cancelled),
+      // and re-rendering turns the page read-only instead of letting the
+      // counter keep typing into rows the server will never accept.
+      router.refresh();
+      return false;
     }
     router.refresh();
+    return true;
   }
 
-  async function clearLine(line: CycleCountLineWithItem) {
+  async function clearLine(line: CycleCountLineWithItem): Promise<boolean> {
+    setLineError((prev) => (prev?.id === line.id ? null : prev));
     setBusyLine(line.id);
     const r = await clearCycleCountLineAction({
       cycleCountId: header.id,
       lineId: line.id,
     });
     setBusyLine(null);
-    if (!r.ok) toast.error(r.error.message);
-    else router.refresh();
+    if (!r.ok) {
+      toast.error(r.error.message);
+      setLineError({ id: line.id, message: r.error.message });
+      router.refresh();
+      return false;
+    }
+    router.refresh();
+    return true;
   }
 
   async function confirmCancel() {
@@ -389,6 +421,7 @@ export function CycleCountDetail({
                 disabled={!open || !canAdjust}
                 readOnly={!canAdjust}
                 busy={busyLine === l.id}
+                error={lineError?.id === l.id ? lineError.message : null}
                 onSave={(value) => saveCount(l, value)}
                 onClear={() => clearLine(l)}
               />
@@ -516,6 +549,7 @@ function CountRow({
   disabled,
   readOnly = false,
   busy,
+  error = null,
   onSave,
   onClear,
 }: {
@@ -526,9 +560,15 @@ function CountRow({
       at all. */
   readOnly?: boolean;
   busy: boolean;
-  onSave: (value: string) => void;
-  onClear: () => void;
+  /** Message from this row's last FAILED write, rendered inline under the
+      input. Null once the next attempt starts. */
+  error?: string | null;
+  /** Resolve TRUE only when the value actually landed in the DB. A false
+      result makes the row put the server's value back in the box. */
+  onSave: (value: string) => Promise<boolean>;
+  onClear: () => Promise<boolean>;
 }) {
+  const inputRef = React.useRef<HTMLInputElement>(null);
   const [draft, setDraft] = React.useState<string>(
     line.counted_quantity != null ? String(line.counted_quantity) : '',
   );
@@ -537,6 +577,19 @@ function CountRow({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- derived value, not state
     setDraft(line.counted_quantity != null ? String(line.counted_quantity) : '');
   }, [line.counted_quantity]);
+
+  // A FAILED write leaves the box holding a number the DB never accepted —
+  // and because the resync effect above is keyed on `line.counted_quantity`,
+  // which did NOT change, nothing else will ever put it right. The row would
+  // keep showing e.g. "7" with a red "-3" variance, identical to a saved
+  // line, while the header stats and post() both treat the line as uncounted.
+  // So on failure we snap the box back to the server's value ourselves.
+  function revertDraftToServerValue() {
+    // …unless the user has already clicked back into this box and started
+    // re-typing while the action was in flight — never yank live input.
+    if (inputRef.current && document.activeElement === inputRef.current) return;
+    setDraft(line.counted_quantity != null ? String(line.counted_quantity) : '');
+  }
 
   // Track the value currently IN the box (the draft), not just the saved
   // count — so an empty box reads as "uncounted" (variance —) instead of
@@ -581,21 +634,25 @@ function CountRow({
             {line.counted_quantity != null ? formatNumber(line.counted_quantity) : '—'}
           </span>
         ) : (
+        <>
         <Input
+          ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
+          onBlur={async () => {
             if (disabled) return;
             const trimmed = draft.trim();
             const current = line.counted_quantity;
             if (trimmed === '') {
               // Emptying the box uncounts the line (clears the variance too),
               // but only when it actually had a saved value to clear.
-              if (current != null) onClear();
+              if (current != null && !(await onClear())) revertDraftToServerValue();
               return;
             }
             const next = Number(trimmed);
-            if (Number.isFinite(next) && next !== current) onSave(trimmed);
+            if (Number.isFinite(next) && next !== current) {
+              if (!(await onSave(trimmed))) revertDraftToServerValue();
+            }
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -605,6 +662,14 @@ function CountRow({
           disabled={disabled || busy}
           className="ml-auto h-8 max-w-[110px] text-right text-[12.5px] tabular-nums"
         />
+        {/* Persistent inline failure notice. The toast is bottom-right and
+            gone in 4s; the counter is looking at THIS row. */}
+        {error && (
+          <p role="alert" className="text-destructive mt-1 text-[11px]">
+            {error}
+          </p>
+        )}
+        </>
         )}
       </TableCell>
       <TableCell

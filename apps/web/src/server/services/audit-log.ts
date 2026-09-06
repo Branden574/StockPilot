@@ -2,6 +2,8 @@ import 'server-only';
 
 import { can } from '@stockpilot/core';
 
+import { parseFromDateParam, parseToDateParam } from '@/lib/movements-filters';
+
 import { ServiceError, withContext, type ServiceContext } from './context';
 
 export interface AuditLogActor {
@@ -61,6 +63,47 @@ interface RawAuditRow {
         avatar_url: string | null;
       }
     | null;
+}
+
+/** `<input type="date">` shape — the only thing /dashboard/audit ever sends. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Normalises the `since`/`until` filters before they reach PostgREST.
+ *
+ * SP-042: the audit filter bar is two `<input type="date">` fields, so both
+ * bounds arrive as 'YYYY-MM-DD' and used to be handed straight to
+ * `.gte`/`.lte('created_at', …)`. Postgres casts a bare date to midnight UTC,
+ * so `created_at <= '2026-09-10'` kept ONLY rows stamped exactly at
+ * 00:00:00Z — picking Since = Until = one day rendered "No entries" while
+ * that day was full of events, and the only workaround (set Until to
+ * tomorrow) is one nobody would guess. So a date-only upper bound becomes an
+ * EXCLUSIVE next-midnight `lt`, which covers the whole selected day. This is
+ * exactly what the Movements page has always done — parseFrom/ToDateParam in
+ * lib/movements-filters.ts is that shared, pure helper, reused here rather
+ * than copied so the two pages can't drift (recurring pattern #26).
+ *
+ * A full ISO timestamp (no caller sends one today, but the filter type
+ * allows it) is left alone on an inclusive `lte`. Anything unparseable —
+ * '2026-13-45', a hand-edited '?until=garbage' — drops the bound instead of
+ * letting Postgres 500 the page on a bad cast, matching how the Movements
+ * page treats a mangled param.
+ *
+ * KNOWN LIMIT: the day boundary is UTC, not the viewer's timezone, so a
+ * late-evening US event lands on the next UTC day. Same caveat the Movements
+ * page carries; if a zone-aware helper lands (SP-079), use it here too.
+ */
+function normalizeSince(raw: string): string | undefined {
+  if (DATE_ONLY.test(raw)) return parseFromDateParam(raw);
+  return Number.isNaN(Date.parse(raw)) ? undefined : raw;
+}
+
+function normalizeUntil(raw: string): { op: 'lt' | 'lte'; value: string } | undefined {
+  if (DATE_ONLY.test(raw)) {
+    const exclusive = parseToDateParam(raw);
+    return exclusive ? { op: 'lt', value: exclusive } : undefined;
+  }
+  return Number.isNaN(Date.parse(raw)) ? undefined : { op: 'lte', value: raw };
 }
 
 const SELECT_COLUMNS =
@@ -130,8 +173,17 @@ export class AuditLogService {
     if (filters.entityId) {
       query = query.filter('metadata->>entity_id', 'eq', filters.entityId);
     }
-    if (filters.since) query = query.gte('created_at', filters.since);
-    if (filters.until) query = query.lte('created_at', filters.until);
+    if (filters.since) {
+      // See normalizeSince/normalizeUntil above (SP-042): a date-only bound
+      // must span the WHOLE day, so the upper bound is exclusive-of-next-day.
+      const since = normalizeSince(filters.since);
+      if (since) query = query.gte('created_at', since);
+    }
+    if (filters.until) {
+      const until = normalizeUntil(filters.until);
+      if (until?.op === 'lt') query = query.lt('created_at', until.value);
+      else if (until) query = query.lte('created_at', until.value);
+    }
 
     const { data, error, count } = await query;
     if (error) {

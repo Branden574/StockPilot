@@ -65,11 +65,40 @@ export class SessionsService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
+  /**
+   * Sign out ONE of the caller's own devices.
+   *
+   * `revoke_my_session` (mig 0213) is `delete from auth.sessions where id = $1
+   * and user_id = auth.uid()` and `returns integer` row_count precisely so the
+   * caller can tell "deleted" from "matched nothing" — its pgTAP pins 0 for
+   * another user's session and 1 for your own
+   * (supabase/tests/0213_user_sessions_management.test.sql:36-44).
+   *
+   * We used to discard that count and only check `error`, which is the
+   * fail-open-on-0-rows class (recurring pattern #2): a stale second tab, a
+   * double click, or any hand-crafted uuid returned ok() — and the action then
+   * wrote a `security.session_revoked` audit row and broadcast a force-logout
+   * for a session that was never revoked, quietly polluting the forensic trail.
+   * A numeric 0 now surfaces as not_found so the UI says so and the audit trail
+   * only records revocations that actually happened.
+   *
+   * Only a NUMERIC 0 is treated as "nothing was deleted". If the transport ever
+   * hands back a non-numeric payload for this scalar RPC (a signature change to
+   * `returns void`, say), we keep the old permissive behaviour rather than
+   * invent a user-facing "already signed out" error for a delete that most
+   * likely DID happen — an unreadable count must not break device sign-out.
+   *
+   * Sibling note: revokeOthers deliberately has no such check — 0 rows there is
+   * the legitimate "you have no other devices" answer.
+   */
   async revoke(sessionId: string): Promise<void> {
-    const { error } = await this.ctx.supabase.rpc('revoke_my_session', {
+    const { data, error } = await this.ctx.supabase.rpc('revoke_my_session', {
       p_session_id: sessionId,
     });
     if (error) throw new ServiceError('internal_error', error.message);
+    if (typeof data === 'number' && data === 0) {
+      throw new ServiceError('not_found', 'That device is already signed out.');
+    }
   }
 
   async revokeOthers(keepSessionId: string): Promise<void> {

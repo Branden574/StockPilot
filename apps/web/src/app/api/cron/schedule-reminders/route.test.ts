@@ -328,6 +328,79 @@ describe('GET /api/cron/schedule-reminders', () => {
     expect(sendEmailMock.mock.calls[0]![0].to).toBe('assignee@l4l.example');
   });
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // ACT-AS GRANTS ARE NOT RECIPIENTS (SP-141)
+  //
+  // Platform "act as" inserts a REAL organization_members row (role owner,
+  // accepted_at stamped, impersonation_expires_at set — see
+  // server/services/platform/impersonation.ts). This recipient query matched
+  // it exactly, so for the life of the grant every 10-minute run emailed and
+  // pushed that org's reminders to the platform admin's personal account.
+  // Ten sibling queries (daily-briefing, auto-reorder, recurring-pos, …)
+  // already filter it; this one did not.
+  // ═════════════════════════════════════════════════════════════════════════
+  it('excludes act-as impersonation memberships from the recipient query', async () => {
+    const stub = stubFor([eventIn(0.5)]);
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const chain = stub.chains.get('organization_members.select')!;
+    const args = stub.chainArgs.get('organization_members.select')!;
+    const i = chain.indexOf('is');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i]).toEqual(['impersonation_expires_at', null]);
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE ORG'S TIMEZONE, NOT PACIFIC (SP-035)
+  //
+  // The day word and the printed time were both built from a hard-coded
+  // America/Los_Angeles. organizations.timezone has existed since 0001 and is
+  // owner/admin-editable in Settings, so an East-coast org got a reminder that
+  // named the wrong DAY as well as the wrong hour: an event at 00:30 ET on the
+  // 25th is 21:30 PT on the 24th, i.e. "today, 9:30 PM" for a delivery that is
+  // tomorrow at half past midnight.
+  // ═════════════════════════════════════════════════════════════════════════
+  it('renders the day word and the time in the ORG timezone, not Pacific', async () => {
+    const stub = stubFor(
+      [eventIn(0, { starts_at: '2026-08-25T04:30:00.000Z' })],
+      {
+        'organizations.select': {
+          data: [{ id: 'org-1', timezone: 'America/New_York' }],
+          error: null,
+        },
+      },
+    );
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    // 00:30 ET on the 25th = tomorrow; in PT it is 21:30 on the 24th = today.
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string; body: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — tomorrow');
+    expect(push.body.startsWith('Tue, Aug 25, 12:30 AM')).toBe(true);
+
+    const s = sendEmailMock.mock.calls[0]![0];
+    expect(s.subject).toBe('Reminder: Cycle count — Aisle 4 — tomorrow');
+    // The day word and the printed time must come from the SAME zone — that
+    // disagreement is how "tomorrow" ends up over a time that reads today.
+    expect(s.html).toContain('Tomorrow, 12:30 AM');
+    expect(s.html).not.toContain('9:30 PM');
+  });
+
+  it('falls back to the documented default zone when the org row is missing', async () => {
+    // Read fails closed: no organizations row (RLS denial, deleted org, failed
+    // query) must degrade to resolveOrgTimezone's default, never throw.
+    const stub = stubFor([eventIn(0, { starts_at: '2026-08-25T04:30:00.000Z' })]);
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+    const push = createNotificationMock.mock.calls[0]![0] as { title: string };
+    expect(push.title).toBe('Reminder: Cycle count — Aisle 4 — today');
+  });
+
   it('respects an explicit email opt-out but keeps push (pref gating unchanged)', async () => {
     const stub = stubFor([eventIn(0.5)], {
       'notification_preferences.select': {

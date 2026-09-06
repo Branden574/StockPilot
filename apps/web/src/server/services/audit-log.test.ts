@@ -90,3 +90,52 @@ describe('AuditLogService.list eventPrefix filter (category chips)', () => {
     expect(eventEq).toEqual([['event', 'stock.adjusted']]);
   });
 });
+
+describe('AuditLogService.list date bounds (SP-042)', () => {
+  // The /dashboard/audit filter bar uses <input type="date">, so `since`/
+  // `until` arrive as 'YYYY-MM-DD'. Postgres casts a bare date to midnight
+  // UTC, so the original `.lte('created_at', until)` matched ONLY rows
+  // stamped exactly at 00:00:00Z — picking Since=Until=one day showed "no
+  // entries" while that day was full of events. These pin the normalisation.
+  async function runList(filters: Record<string, unknown>) {
+    const stub = makeSupabaseStub({
+      'audit_logs.select': { data: [], error: null, count: 0 },
+    });
+    ctxHolder.current = makeServiceContext(stub.client, { role: 'admin' });
+    const svc = await AuditLogService.forCurrentUser();
+    await svc.list(filters);
+    const chain = stub.chains.get('audit_logs.select') ?? [];
+    const args = stub.chainArgs.get('audit_logs.select') ?? [];
+    return { chain, args, at: (m: string) => args.filter((_arg, i) => chain[i] === m) };
+  }
+
+  it('a date-only `until` becomes an EXCLUSIVE next-midnight lt bound', async () => {
+    const { chain, at } = await runList({ until: '2026-09-10' });
+    expect(at('lt')).toEqual([['created_at', '2026-09-11T00:00:00.000Z']]);
+    expect(chain).not.toContain('lte');
+  });
+
+  it('a date-only `since` becomes an inclusive UTC-midnight gte bound', async () => {
+    const { at } = await runList({ since: '2026-09-10' });
+    expect(at('gte')).toEqual([['created_at', '2026-09-10T00:00:00.000Z']]);
+  });
+
+  it('a single-day range keeps both bounds so the whole day is covered', async () => {
+    const { at } = await runList({ since: '2026-09-10', until: '2026-09-10' });
+    expect(at('gte')).toEqual([['created_at', '2026-09-10T00:00:00.000Z']]);
+    expect(at('lt')).toEqual([['created_at', '2026-09-11T00:00:00.000Z']]);
+  });
+
+  it('a full ISO `until` passes through unchanged on lte', async () => {
+    const { at } = await runList({ until: '2026-09-10T15:30:00.000Z' });
+    expect(at('lte')).toEqual([['created_at', '2026-09-10T15:30:00.000Z']]);
+    expect(at('lt')).toEqual([]);
+  });
+
+  it('a mangled date param is ignored rather than 500ing the page', async () => {
+    const { chain } = await runList({ since: '2026-13-45', until: 'not-a-date' });
+    expect(chain).not.toContain('gte');
+    expect(chain).not.toContain('lt');
+    expect(chain).not.toContain('lte');
+  });
+});

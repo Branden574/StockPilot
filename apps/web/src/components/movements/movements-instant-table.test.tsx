@@ -62,3 +62,82 @@ describe('MovementsInstantTable pagination', () => {
     expect(screen.getByText('No movements match')).toBeTruthy();
   });
 });
+
+describe('MovementsInstantTable amount column', () => {
+  function transferRow(over: Partial<MovementDisplayRow>): MovementDisplayRow {
+    return {
+      ...makeRows(1)[0]!,
+      movementType: 'transfer',
+      ...over,
+    };
+  }
+
+  /** The Δ column is the 4th cell (When, Item, Type, Δ, After, By, Note). */
+  function deltaCellFor(itemName: string): HTMLElement {
+    const row = screen.getByText(itemName).closest('tr')!;
+    return row.querySelectorAll('td')[3] as HTMLElement;
+  }
+
+  // Regression: order picks and manager reopen-reversals are written by
+  // adjust_stock as movement_type='transfer' with a REAL signed
+  // quantity_change and NO moved_quantity (only transfer_stock stamps
+  // moved_quantity). Keying the cell off the TYPE blanked the amount to '—'
+  // for every pick while the After column visibly dropped — five units left
+  // the building with no number on the audit surface.
+  it('shows the signed delta for a pick-shaped transfer (no moved_quantity)', () => {
+    render(
+      <MovementsInstantTable
+        rows={[
+          transferRow({ id: 'm-pick', itemName: 'Picked Item', quantityChange: -5, movedQuantity: null, newQuantity: 95 }),
+        ]}
+      />,
+    );
+
+    const cell = deltaCellFor('Picked Item');
+    expect(cell.textContent).toBe('-5');
+    expect(cell.className).toContain('text-destructive');
+  });
+
+  it('shows the signed delta for a reopen-shaped transfer (positive, no moved_quantity)', () => {
+    render(
+      <MovementsInstantTable
+        rows={[
+          transferRow({ id: 'm-reopen', itemName: 'Reopened Item', quantityChange: 5, movedQuantity: null, newQuantity: 100 }),
+        ]}
+      />,
+    );
+
+    const cell = deltaCellFor('Reopened Item');
+    expect(cell.textContent).toBe('+5');
+    expect(cell.className).toContain('text-success');
+  });
+
+  // Revert-proof for genuine 0231 location moves: net-zero delta, a real
+  // moved_quantity — still the physical qty, still uncoloured.
+  it('keeps the moved quantity, neutrally, for a net-zero location transfer', () => {
+    render(
+      <MovementsInstantTable
+        rows={[
+          transferRow({ id: 'm-move', itemName: 'Moved Item', quantityChange: 0, movedQuantity: 10, newQuantity: 10 }),
+        ]}
+      />,
+    );
+
+    const cell = deltaCellFor('Moved Item');
+    expect(cell.textContent).toBe('10');
+    expect(cell.className).not.toContain('text-success');
+    expect(cell.className).not.toContain('text-destructive');
+  });
+
+  it('renders an em dash when there is neither a delta nor a moved quantity', () => {
+    render(
+      <MovementsInstantTable
+        rows={[
+          transferRow({ id: 'm-none', itemName: 'Silent Item', quantityChange: 0, movedQuantity: null, newQuantity: 10 }),
+        ]}
+      />,
+    );
+
+    expect(deltaCellFor('Silent Item').textContent).toBe('—');
+  });
+});

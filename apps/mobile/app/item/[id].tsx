@@ -61,6 +61,7 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
+import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
 import {
   MOVEMENT_SHADOWED_AUDIT_EVENTS,
   auditCapFor,
@@ -1161,29 +1162,28 @@ export default function ItemDetail() {
         Alert.alert('Upload failed', upErr.message);
         return;
       }
-      // Wipe any existing image rows + their storage files. Cleans up
-      // the legacy 0-byte uploads from before the arrayBuffer fix.
-      const { data: oldRows } = await supabase
-        .from('item_images')
-        .select('id, storage_path')
-        .eq('item_id', item.id);
-      const oldPaths = ((oldRows ?? []) as { storage_path: string | null }[])
-        .map((r) => r.storage_path)
-        .filter((p): p is string => !!p);
-      if (oldPaths.length > 0) {
-        await supabase.storage.from('item-images').remove(oldPaths);
-        await supabase.from('item_images').delete().eq('item_id', item.id);
-      }
-      const { error: insErr } = await supabase.from('item_images').insert({
-        organization_id: orgId,
-        item_id: item.id,
-        storage_path: path,
-        is_primary: true,
+      // SP-078 — this block USED to remove the old storage objects and delete
+      // every item_images row for the item BEFORE inserting the new row, with
+      // neither destructive result checked and no compensation if the insert
+      // failed. On a flaky warehouse link that lost the item's photo outright
+      // (delete succeeded, insert did not) or left rows pointing at deleted
+      // objects (row delete failed, insert ran anyway). The whole sequence now
+      // lives in replacePrimaryPhoto, which inserts FIRST with row proof and
+      // only then sweeps the PREVIOUS primary — see the WHY there, including
+      // why the legacy 0-byte bulk wipe is gone.
+      const outcome = await replacePrimaryPhoto({
+        supabase,
+        orgId,
+        itemId: item.id,
+        newPath: path,
       });
-      if (insErr) {
-        Alert.alert('Save failed', insErr.message);
+      if (!outcome.ok) {
+        Alert.alert('Save failed', outcome.error);
         return;
       }
+      // The photo IS saved at this point; cleanup trouble is logged, never
+      // reported as a failed save.
+      for (const w of outcome.warnings) console.warn('[item photo]', w);
       const signedUrl = await signItemImage(path);
       setItem({ ...item, imageUrl: signedUrl });
     } catch (e) {

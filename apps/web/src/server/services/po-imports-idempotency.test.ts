@@ -524,7 +524,11 @@ describe('PoImportsService.approve — the second call does not double the ledge
       'rpc:next_po_number': { data: 'PO-500', error: null },
       'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
       'purchase_order_items.insert': { data: null, error: null },
-      'po_imports.update': { data: null, error: null },
+      // approve() CLAIMS the import (conditional update) before it inserts
+      // the PO, and stamps approved_po_id afterwards. Both are checked
+      // writes, so the stub has to answer with a ROW or every approval
+      // reads as a lost race.
+      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
     });
 
     const APPROVE_INPUT = {

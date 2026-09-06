@@ -63,22 +63,32 @@ export async function enrollFactorAction(): Promise<
 const verifyEnrollmentSchema = z.object({
   factorId: z.string().min(1),
   code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code'),
-  password: z.string().min(1, 'Confirm your password').max(128).optional(),
+  password: z.string().min(1, 'Confirm your password').max(128),
 });
 
 /**
  * Confirms a freshly enrolled factor. After this succeeds the factor becomes
  * `verified` and counts toward the user's AAL2.
  *
- * Optional password re-confirm: when present, validated out-of-band so a
+ * Password re-confirm is MANDATORY (SP-066). It is validated out-of-band so a
  * stolen mid-enrollment session cookie alone can't finish enrolling an
- * attacker-controlled factor. Optional today for client-rollout safety;
- * the UI always sends it.
+ * attacker-controlled factor. It used to be `.optional()` "for client-rollout
+ * safety" and the check sat behind `if (parsed.data.password)` — so a direct
+ * POST of this Server Action that simply OMITTED the field skipped both the
+ * rate limit and the password check and still got the factor verified. That
+ * let a thief holding an AAL1 cookie enroll their own authenticator, after
+ * which the dashboard's enrolled-user hard gate ((dashboard)/layout.tsx, HI-6)
+ * bounces the real owner to /signin/mfa forever — they have no recovery codes
+ * and are locked out, while the attacker holds an AAL2-capable session.
+ * Required now: every caller must prove the account password. The only caller
+ * is components/settings/mfa-enrollment.tsx, which already always sends it
+ * (and blocks client-side without it). Same hole, same fix as the sibling
+ * consumeMfaRecoveryCodeAction in mfa-recovery.ts.
  */
 export async function verifyEnrollmentAction(input: {
   factorId: string;
   code: string;
-  password?: string;
+  password: string;
 }): Promise<ActionResult<void>> {
   const parsed = verifyEnrollmentSchema.safeParse(input);
   if (!parsed.success) {
@@ -88,29 +98,27 @@ export async function verifyEnrollmentAction(input: {
     const session = await requireSession();
     const supabase = await createClient();
 
-    if (parsed.data.password) {
-      const rl = await checkRateLimit(
-        `mfa-enroll-verify:${session.userId}`,
-        5,
-        15 * 60_000,
-        'closed',
+    // No `if (parsed.data.password)` wrapper: the schema now REQUIRES the
+    // password, so this gate is unconditional and a caller can no longer skip
+    // the rate limit + password proof by omitting the field (SP-066).
+    const rl = await checkRateLimit(
+      `mfa-enroll-verify:${session.userId}`,
+      5,
+      15 * 60_000,
+      'closed',
+    );
+    if (!rl.allowed) {
+      return err(
+        'validation_error',
+        'Too many enrollment confirmations. Try again in a few minutes.',
       );
-      if (!rl.allowed) {
-        return err(
-          'validation_error',
-          'Too many enrollment confirmations. Try again in a few minutes.',
-        );
-      }
-      const pwRes = await verifyPasswordSideChannel(
-        session.email,
-        parsed.data.password,
+    }
+    const pwRes = await verifyPasswordSideChannel(session.email, parsed.data.password);
+    if (!pwRes.ok) {
+      return err(
+        pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
+        pwRes.message,
       );
-      if (!pwRes.ok) {
-        return err(
-          pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
-          pwRes.message,
-        );
-      }
     }
 
     const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({

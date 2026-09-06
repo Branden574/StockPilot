@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { SizeCountsService } from '@/server/services/size-counts';
 import { ServiceError } from '@/server/services/context';
@@ -62,8 +63,45 @@ export async function POST(req: NextRequest) {
   }
 }
 
+/**
+ * The public sentence for any 500 out of the size-count routes. Byte-identical
+ * to the one ServiceError's constructor substitutes for an `internal_error`
+ * (context.ts, S13) so a caller cannot tell the two paths apart — and kept as a
+ * real sentence rather than dropping `message` entirely because the mobile
+ * client falls back to the `error` slug when `message` is absent, and would
+ * then show a person the literal words "internal_error" (api.ts `m ?? e`).
+ */
+const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
+
+/**
+ * Shared error mapper for all 8 size-count routes.
+ *
+ * S13: the non-ServiceError branch used to return `e.message` verbatim. Every
+ * raw Postgres/PostgREST failure that escaped the service — an RLS refusal
+ * ("new row violates row-level security policy for table …"), a
+ * deploy-before-migrate ("column … does not exist") — was therefore shipped to
+ * the phone, stored in the mobile outbox's last_error and forwarded by the
+ * crash reporter, handing table/column/policy names to anyone reading a crash
+ * report (the same leak mobile/snapshot's dbError() was written to stop).
+ * Now the caller gets a stable slug plus a generic sentence and the raw text
+ * goes to the error reporter instead. 4xx ServiceError messages stay verbatim:
+ * those are app-authored strings a screen is meant to render.
+ */
 export function sizeCountError(e: unknown): NextResponse {
   if (e instanceof ServiceError) {
+    // `internal_error` already arrives sanitized (the constructor swapped the
+    // public message and stashed the raw text in internalDetail) — report that
+    // detail so silencing it does not also make it invisible to us.
+    if (e.code === 'internal_error') {
+      void reportError(e, {
+        tag: 'size-counts.api',
+        extra: { detail: e.internalDetail ?? null },
+      });
+      return NextResponse.json(
+        { error: 'internal_error', message: GENERIC_500_MESSAGE },
+        { status: 500 },
+      );
+    }
     const status =
       e.code === 'forbidden'
         ? 403
@@ -78,8 +116,9 @@ export function sizeCountError(e: unknown): NextResponse {
                 : 500;
     return NextResponse.json({ error: e.code, message: e.message }, { status });
   }
+  void reportError(e, { tag: 'size-counts.api' });
   return NextResponse.json(
-    { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
+    { error: 'internal_error', message: GENERIC_500_MESSAGE },
     { status: 500 },
   );
 }

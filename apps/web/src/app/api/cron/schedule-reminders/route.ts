@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { resolveOrgTimezone } from '@stockpilot/core';
+
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import {
@@ -45,21 +47,39 @@ function secretsEqual(a: string, b: string): boolean {
  * List-Unsubscribe header) moved into the family.
  */
 
-/** The one display timezone every label in this file is built from. Named
- *  once so the day WORD and the printed TIME can never be computed against
- *  different zones — that disagreement is exactly how "tomorrow" ends up over
- *  a time that reads today. */
-const DISPLAY_TZ = 'America/Los_Angeles';
+/**
+ * THE DISPLAY ZONE IS THE ORG'S, RESOLVED ONCE PER RUN AND THREADED THROUGH.
+ *
+ * It used to be a file-level `const DISPLAY_TZ = 'America/Los_Angeles'` (plus a
+ * second hard-coded copy of the same string on the `when` label), written when
+ * the only pilot org was Californian. `organizations.timezone` has existed
+ * since 0001_init and is owner/admin-editable in Settings, so that constant was
+ * a silent lie for any org that changed it: an event at 00:30 ET on the 25th is
+ * 21:30 PT on the 24th, so the reminder named BOTH the wrong hour and the wrong
+ * DAY — "today, 9:30 PM" for a delivery that is tomorrow at half past midnight.
+ * A reminder that names the wrong day tells someone to stop looking for it
+ * today, which is worse than sending nothing.
+ *
+ * The zone is now a PARAMETER on every helper rather than ambient state, which
+ * keeps the invariant the old constant existed to protect: the day WORD and the
+ * printed TIME cannot be computed against different zones, because one `tz`
+ * value flows into all of them for a given event.
+ *
+ * Every read goes through `resolveOrgTimezone` (@stockpilot/core) — the ONE
+ * expression of "what zone do we print when the org's zone did not arrive" —
+ * so a missing org row or an unrecognised stored zone degrades to the
+ * documented default instead of throwing a RangeError out of the send loop.
+ */
 
-/** Format one field of a date in the org display timezone (PT). */
-function tzPart(d: Date, opts: Intl.DateTimeFormatOptions): string {
-  return d.toLocaleString('en-US', { ...opts, timeZone: DISPLAY_TZ });
+/** Format one field of a date in the org display timezone. */
+function tzPart(d: Date, opts: Intl.DateTimeFormatOptions, tz: string): string {
+  return d.toLocaleString('en-US', { ...opts, timeZone: tz });
 }
 
 /** The calendar date in the display zone as YYYY-MM-DD. en-CA is used purely
  *  because it formats that way; nothing here is locale-facing. */
-function tzDateKey(d: Date): string {
-  return d.toLocaleDateString('en-CA', { timeZone: DISPLAY_TZ });
+function tzDateKey(d: Date, tz: string): string {
+  return d.toLocaleDateString('en-CA', { timeZone: tz });
 }
 
 /**
@@ -75,9 +95,9 @@ function tzDateKey(d: Date): string {
  * Both keys are whole dates in the display zone, parsed at UTC midnight, so the
  * difference is whole days and a DST boundary cannot shift it.
  */
-function dayWordFor(startsAt: Date, now: Date): string {
-  const nowKey = tzDateKey(now);
-  const startKey = tzDateKey(startsAt);
+function dayWordFor(startsAt: Date, now: Date, tz: string): string {
+  const nowKey = tzDateKey(now, tz);
+  const startKey = tzDateKey(startsAt, tz);
   const days = Math.round(
     (Date.parse(`${startKey}T00:00:00Z`) - Date.parse(`${nowKey}T00:00:00Z`)) / 86_400_000,
   );
@@ -86,7 +106,7 @@ function dayWordFor(startsAt: Date, now: Date): string {
   // Unreachable through the 24h query window above, which can span at most one
   // calendar boundary. Named honestly rather than defaulted to a lie, so a
   // future caller with a wider window gets a true word instead of a wrong one.
-  return tzPart(startsAt, { weekday: 'long' });
+  return tzPart(startsAt, { weekday: 'long' }, tz);
 }
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -132,8 +152,32 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
+  // One batched read of the display zone for every org in this run's events.
+  // Batched rather than per-event because a single run can carry up to 500
+  // events across many orgs; `.in()` on at most 500 distinct ids stays well
+  // inside PostgREST's 1000-row clamp, so no pagination is needed here.
+  // Read fails CLOSED to the documented default (see resolveOrgTimezone): a
+  // missing row must degrade the printed zone, never skip the reminder.
+  const events = (data ?? []) as EventRow[];
+  const orgIds = [...new Set(events.map((e) => e.organization_id))];
+  const tzByOrg = new Map<string, string>();
+  if (orgIds.length > 0) {
+    const { data: orgs, error: orgErr } = await admin
+      .from('organizations')
+      .select('id, timezone')
+      .in('id', orgIds);
+    if (orgErr) {
+      void reportError(new Error(orgErr.message), {
+        tag: 'cron.schedule-reminders.org-timezone',
+      });
+    }
+    for (const o of (orgs ?? []) as { id: string; timezone: string | null }[]) {
+      tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
+    }
+  }
+
   let sent = 0;
-  for (const ev of (data ?? []) as EventRow[]) {
+  for (const ev of events) {
     try {
       const isOneHour = ev.starts_at <= in1h && !ev.reminded_1h_at;
       // 24h reminder is only meaningful BEFORE the 1h one. An event that
@@ -162,28 +206,42 @@ export async function GET(req: Request) {
         .select('user_id')
         .eq('organization_id', ev.organization_id)
         .in('role', ['owner', 'admin', 'manager'])
-        .not('accepted_at', 'is', null);
+        .not('accepted_at', 'is', null)
+        // Real memberships, not act-as grants. Platform "act as" inserts a
+        // REAL organization_members row (role owner, accepted_at stamped,
+        // impersonation_expires_at set — services/platform/impersonation.ts),
+        // which matched this query exactly, so for the life of the grant the
+        // platform admin's personal account received the org's reminder push
+        // AND email every 10 minutes. Ten sibling recipient queries
+        // (daily-briefing, auto-reorder, recurring-pos, …) already filter it.
+        .is('impersonation_expires_at', null);
       const userIds = new Set<string>((mgrs ?? []).map((m) => m.user_id as string));
       if (ev.assigned_user_id) userIds.add(ev.assigned_user_id);
       if (userIds.size === 0) continue;
 
-      const when = new Date(ev.starts_at).toLocaleString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles',
-      });
+      // ONE zone for this event's every label — see the block above tzPart.
+      const tz = tzByOrg.get(ev.organization_id) ?? resolveOrgTimezone(null);
+      const startsAt = new Date(ev.starts_at);
+      const when = tzPart(
+        startsAt,
+        {
+          weekday: 'short', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit',
+        },
+        tz,
+      );
       // The day-ahead word is COMPUTED, never assumed — see dayWordFor.
-      const dayWord = dayWordFor(new Date(ev.starts_at), new Date(now));
+      const dayWord = dayWordFor(startsAt, new Date(now), tz);
       const horizon = isOneHour ? 'in 1 hour' : dayWord;
       const title = `Reminder: ${ev.title} — ${horizon}`;
       const body = `${when}${ev.location_text ? ` · ${ev.location_text}` : ''}`;
       const link = `/dashboard/schedule/${ev.id}`;
 
-      // es-template merge labels, all in the display timezone (PT — same
-      // hard-coded zone as `when` above).
-      const startsAt = new Date(ev.starts_at);
-      const startTime = tzPart(startsAt, { hour: 'numeric', minute: '2-digit' });
+      // es-template merge labels, all in the SAME `tz` as `when` and the day
+      // word above — one resolved zone per event, never a second copy.
+      const startTime = tzPart(startsAt, { hour: 'numeric', minute: '2-digit' }, tz);
       const endTime = ev.ends_at
-        ? tzPart(new Date(ev.ends_at), { hour: 'numeric', minute: '2-digit' })
+        ? tzPart(new Date(ev.ends_at), { hour: 'numeric', minute: '2-digit' }, tz)
         : null;
       const timeLabel = ev.all_day
         ? 'All day'
@@ -195,9 +253,9 @@ export async function GET(req: Request) {
       const sharedParams = {
         eventTitle: ev.title,
         dayWord,
-        month: tzPart(startsAt, { month: 'short' }),
-        day: tzPart(startsAt, { day: 'numeric' }),
-        dow: tzPart(startsAt, { weekday: 'short' }),
+        month: tzPart(startsAt, { month: 'short' }, tz),
+        day: tzPart(startsAt, { day: 'numeric' }, tz),
+        dow: tzPart(startsAt, { weekday: 'short' }, tz),
         startTime,
         timeLabel,
         whenLabel: when,

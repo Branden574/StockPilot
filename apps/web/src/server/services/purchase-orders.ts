@@ -603,9 +603,25 @@ export class PurchaseOrdersService {
       }
       poNumber = suppliedPoNumber;
     } else {
-      const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
-        p_org_id: this.ctx.organizationId,
-      });
+      // ═══ THE FALLBACK MUST BE LOUD ═══
+      //
+      // This discarded the RPC error and fell back to `PO-${Date.now()}`. The
+      // function was MISSING from production from 2026-05-20 until 0350, so
+      // every auto-numbered PO silently got an epoch timestamp
+      // (27 of them, e.g. PO-1788277456195) and nobody could see why. The
+      // fallback still exists — a PO must never fail to get a number — but a
+      // failure is now reported, so the next time an RPC goes missing it is a
+      // Sentry event and not three months of ugly supplier-facing documents.
+      const { data: numberRpc, error: numberErr } = await this.ctx.supabase.rpc(
+        'next_po_number',
+        { p_org_id: this.ctx.organizationId },
+      );
+      if (numberErr) {
+        void reportError(new Error(`next_po_number failed: ${numberErr.message}`), {
+          tag: 'purchase-orders.next_po_number',
+          organizationId: this.ctx.organizationId,
+        });
+      }
       poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
     }
 
