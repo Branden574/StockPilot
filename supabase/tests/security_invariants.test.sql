@@ -56,7 +56,7 @@
 
 begin;
 
-select plan(24);
+select plan(26);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -117,6 +117,39 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
   ('set_default_bin',           'gates on has_permission for the target org'),
   -- Movement note edit (0274/0307).
   ('edit_movement_note',        'gates on has_permission for the movement''s org');
+
+-- ── E. SECURITY DEFINER functions in `public` that `authenticated` may execute
+--       WITHOUT an authorization gate in their own body ─────────────────────
+--
+-- 0346 closed the class that this list exists to police: three definer
+-- helpers (apply_cycle_count_location_delta, ensure_org_placement_locations,
+-- ensure_warehouse_placement_locations) were executable by every signed-in
+-- user with no in-body check — a viewer in another org could rewrite a victim
+-- rack's holding with no ledger row. INV-25/26 below now apply to
+-- `authenticated` the discipline INV-1..3 apply to anon.
+--
+-- Everything listed here is a READ-ONLY predicate that RLS policies and other
+-- functions evaluate AS THE USER, so `authenticated` must keep EXECUTE, and
+-- each exposes at most a boolean (or, for _cycle_count_location_facts, four
+-- attributes) about a caller-supplied uuid. None writes. Adding a name here
+-- must be defended in `why`; a function that WRITES must never appear.
+create temporary table _sec_inv_auth_secdef_nogate_allow (proname text primary key, why text not null);
+insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
+  ('item_in_org',                 'boolean FK-org predicate used by write RLS (0201-0206); null-tolerant by design'),
+  ('location_in_org',             'boolean FK-org predicate used by write RLS (0201-0206)'),
+  ('assert_location_in_org',      'raising variant of location_in_org used inside stock RPCs'),
+  ('category_in_org',             'boolean FK-org predicate used by write RLS'),
+  ('charter_in_org',              'boolean FK-org predicate used by write RLS'),
+  ('supplier_in_org',             'boolean FK-org predicate used by write RLS'),
+  ('warehouse_in_org',            'boolean FK-org predicate used by write RLS'),
+  ('purchase_order_in_org',       'boolean FK-org predicate used by write RLS'),
+  ('product_group_in_org',        'boolean FK-org predicate used by write RLS (0294+)'),
+  ('module_enabled',              'boolean entitlement read (organization_modules) evaluated inside RLS/RPCs'),
+  ('org_can_enable_module',       'boolean entitlement read (plan tier) used by module settings'),
+  ('org_effective_tier',          'returns the org plan tier string; no tenant data'),
+  ('user_can_access_inventory',   'boolean warehouse/charter access predicate used by inventory RLS'),
+  ('user_can_access_warehouse',   'boolean warehouse access predicate used by RLS'),
+  ('_cycle_count_location_facts', 'returns org/warehouse/kind/deleted_at of a caller-supplied location uuid so post_cycle_count can refuse a FOREIGN location loudly (0342) — reading past RLS is the point; exposes no quantities');
 
 -- ── B. Tables in `public` allowed to run without RLS ───────────────────────
 -- Intentionally EMPTY. Every table in this schema has RLS enabled today, and
@@ -662,6 +695,42 @@ select is(
 -- They are covered by targeted unit tests and by review; see the invariants
 -- document.
 -- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-25. The `authenticated` sweep (0346). Every SECURITY DEFINER function in
+-- `public` that `authenticated` can execute and that is RPC-invocable must
+-- either gate authorization inside its own body or be a defended read-only
+-- predicate in allowlist E. This is the check that would have failed on the
+-- 0342 head: apply_cycle_count_location_delta wrote stock for any signed-in
+-- caller with none of these tokens in its body.
+select is(
+  (select count(*)::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+      and p.prorettype <> 'trigger'::regtype
+      and has_function_privilege('authenticated', p.oid, 'execute')
+      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)),
+  0,
+  'INV-25: every authenticated-EXECUTE SECURITY DEFINER function in public gates in its body or is an allowlisted read-only predicate'
+);
+
+-- INV-26. No stale entry in allowlist E, and no entry that WRITES. A predicate
+-- that grows an INSERT/UPDATE/DELETE must lose its exemption the same day.
+select is(
+  (select count(*)::int
+     from _sec_inv_auth_secdef_nogate_allow a
+    where not exists (
+      select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = a.proname and p.prosecdef)
+       or exists (
+      select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
+         and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M')),
+  0,
+  'INV-26: allowlist E has no stale entry and no entry whose body writes'
+);
 
 select * from finish();
 rollback;
