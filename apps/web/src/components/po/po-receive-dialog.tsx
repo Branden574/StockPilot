@@ -116,18 +116,35 @@ export function PoReceiveDialog({
   // Idempotency key: one per dialog open. New key when re-opening (resets state).
   const [idempotencyKey, setIdempotencyKey] = React.useState(() => crypto.randomUUID());
 
+  // Latest `lines` without making it an effect dependency — see the reset
+  // effect below for why its identity must not trigger a reset.
+  const linesRef = React.useRef(lines);
+  React.useEffect(() => {
+    linesRef.current = lines;
+  }, [lines]);
+
+  // Reset ONLY on the open transition.
+  //
+  // `lines` used to be in the deps, and it is a fresh array on every render of
+  // the Server Component that owns it (purchase-orders/[id]/page.tsx rebuilds
+  // it with .map on each RSC pass). Any router.refresh() — the realtime nudge
+  // fires one whenever anybody touches the PO — therefore changed the dep
+  // identity WHILE the dialog was open and blanked every quantity the receiver
+  // had typed, plus the notes, plus the idempotency key. A receiver working
+  // through a 40-line delivery lost the lot with no warning.
+  //
+  // Entry lookup already falls back to blankEntry() for any line id absent
+  // from the map, so a line ADDED while the dialog is open still renders and
+  // submits correctly without this effect re-running.
   React.useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setIdempotencyKey(crypto.randomUUID());
-      setEntries(
-        Object.fromEntries(
-          lines.map((l) => [l.id, blankEntry()]),
-        ),
-      );
+      setEntries(Object.fromEntries(linesRef.current.map((l) => [l.id, blankEntry()])));
       setNotes('');
     }
-  }, [open, lines]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `lines` is read through a ref on purpose: a new array identity from an RSC refresh must NOT wipe in-progress entry.
+  }, [open]);
 
   function setField(lineId: string, patch: Partial<LineEntry>) {
     setEntries((m) => ({
