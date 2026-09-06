@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 /**
  * The PO-number RPC must never fail SILENTLY again.
@@ -17,15 +17,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * is what made the bug invisible.
  */
 
-const reportError = vi.fn(async () => undefined);
-vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
-
 const SOURCES = [
   'src/server/services/purchase-orders.ts',
   'src/server/services/po-imports.ts',
 ] as const;
-
-beforeEach(() => vi.clearAllMocks());
 
 describe('next_po_number callers report a failing RPC', () => {
   it.each(SOURCES)('%s destructures the rpc error and reports it', async (rel) => {
