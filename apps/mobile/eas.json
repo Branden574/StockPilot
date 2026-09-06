@@ -24,7 +24,8 @@
         "image": "macos-tahoe-26.5-xcode-26.6"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com"
+        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
     "preview": {
