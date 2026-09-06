@@ -18,6 +18,7 @@ import type { CountingUnit, SizeScaleValueOrder } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { useAuth } from '@/lib/auth-context';
+import { buildReceiptRequestHash } from '@/lib/receipt-request-hash';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   buildPoBlocks,
@@ -460,12 +461,23 @@ export default function PoReceiveScreen() {
     }
     const idempotencyKey = idemKeyRef.current;
 
+    // The hash is the REQUEST, not the key (0013 contract): a retry with the
+    // same key and the same lines returns the earlier receipt; a retry after
+    // the operator EDITED the lines must raise idempotency_conflict instead of
+    // silently returning the old receipt as success. Passing the key here as
+    // the hash made every retry match. See receipt-request-hash.ts.
+    const requestHash = buildReceiptRequestHash({
+      purchaseOrderId: id,
+      warehouseId: header.destination_warehouse_id,
+      notes: null,
+      lines: payloadLines,
+    });
     const { error } = await supabase.rpc('post_receipt_v2', {
       p_purchase_order_id: id,
       p_warehouse_id: header.destination_warehouse_id,
       p_lines: payloadLines,
       p_idempotency_key: idempotencyKey,
-      p_request_hash: idempotencyKey,
+      p_request_hash: requestHash,
       p_notes: null,
     });
     setPosting(false);

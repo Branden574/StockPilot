@@ -12,6 +12,7 @@ import {
   outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
 import { countRejected } from './queue';
 
@@ -214,7 +215,16 @@ class CycleCountSyncEngine {
       // drained by the legacy `sync.ts` worker.
       const cycleRows = due.filter((r) => r.kind === 'record_count');
 
-      for (const row of cycleRows) {
+      // Newest-wins per line: an older edit that a newer one has replaced
+      // is acked WITHOUT being sent, so a retry can never land it after the
+      // correction. outboxAck keeps the line dirty while the newer row is
+      // still live, so nothing shows as synced prematurely.
+      const { send, superseded } = latestRowsPerLine(cycleRows);
+      for (const stale of superseded) {
+        await outboxAck(stale.id);
+      }
+
+      for (const row of send) {
         const cancelled = !(await this.isOnline());
         if (cancelled) {
           this.status = 'offline';

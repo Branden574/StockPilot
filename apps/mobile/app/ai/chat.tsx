@@ -24,7 +24,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, orgHeader } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
@@ -88,6 +88,7 @@ export default function AIChat() {
         headers: {
           'Content-Type': 'application/json',
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
+          ...(await orgHeader()),
         },
         body: JSON.stringify({
           message: text,
@@ -227,6 +228,7 @@ export default function AIChat() {
         ],
         headers: {
           ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
+          ...(await orgHeader()),
         },
       });
       const json = (await res.json().catch(() => null)) as

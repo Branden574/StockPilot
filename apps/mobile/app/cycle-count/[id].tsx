@@ -346,7 +346,11 @@ export default function CycleCountDetail() {
       );
       return;
     }
-    if (syncSnapshot.pendingCount > 0 || pendingForThis > 0) {
+    // Only THIS count's unsynced edits block posting it. The engine's global
+    // pendingCount includes every kind on the device (a queued PO line, a
+    // bundle distribution, another count) — none of which this post depends
+    // on, and one permanently-refused row used to block every count forever.
+    if (pendingForThis > 0) {
       Alert.alert(
         'Sync first',
         'There are unsynced edits. Wait for sync to finish (or tap the badge to retry) before posting.',
@@ -387,7 +391,7 @@ export default function CycleCountDetail() {
   const countedCount = lines.filter((l) => l.counted !== null).length;
   const allCounted = countedCount === lines.length && lines.length > 0;
   const offline = syncSnapshot.status === 'offline';
-  const hasPending = syncSnapshot.pendingCount > 0 || pendingForThis > 0;
+  const hasPending = pendingForThis > 0;
   // Only open (in_progress) counts are editable/postable. Completed or
   // canceled counts are opened from history read-only.
   const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
