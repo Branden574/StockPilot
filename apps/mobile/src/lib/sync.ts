@@ -2,6 +2,11 @@ import * as Network from 'expo-network';
 
 import { getAccountDisabled } from './account-disabled-state';
 import { api } from './api';
+import {
+  CYCLE_COUNT_HEADER_UPSERT_SQL,
+  CYCLE_COUNT_LINE_UPSERT_SQL,
+  CYCLE_COUNT_STALE_LINES_DELETE_SQL,
+} from './cycle-count-snapshot-sql';
 import { getDb, getMeta, setMeta } from './db';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
@@ -192,22 +197,35 @@ export async function pullSnapshot(
       }
     }
 
-    // Cycle counts + lines (replace on count id)
+    // Cycle counts + lines — UPSERT, never replace. `insert or replace` is a
+    // DELETE + INSERT in SQLite and the delete-then-reinsert of lines was
+    // worse: together they wiped cached_at, warehouse_name, item names and —
+    // the real damage — local_dirty and the operator's unsynced counted value,
+    // every 60 s, on every open count. The statements and their rules are
+    // documented and tested in cycle-count-snapshot-sql.ts.
     for (const c of snap.openCycleCounts) {
-      await db.runAsync(
-        `insert or replace into cycle_counts
-         (id, status, warehouse_id, started_at, assigned_to, notes, last_synced_at)
-         values (?, ?, ?, ?, ?, ?, ?)`,
-        [c.id, c.status, c.warehouseId, c.startedAt, c.assignedTo, c.notes, now],
-      );
-      await db.runAsync('delete from cycle_count_lines where count_id = ?', [c.id]);
+      await db.runAsync(CYCLE_COUNT_HEADER_UPSERT_SQL, [
+        c.id,
+        c.status,
+        c.warehouseId,
+        c.startedAt,
+        c.assignedTo,
+        c.notes,
+        now,
+      ]);
       for (const l of c.lines) {
-        await db.runAsync(
-          `insert into cycle_count_lines (id, count_id, item_id, expected, counted)
-           values (?, ?, ?, ?, ?)`,
-          [l.id, c.id, l.itemId, l.expected, l.counted],
-        );
+        await db.runAsync(CYCLE_COUNT_LINE_UPSERT_SQL, [
+          l.id,
+          c.id,
+          l.itemId,
+          l.expected,
+          l.counted,
+        ]);
       }
+      await db.runAsync(CYCLE_COUNT_STALE_LINES_DELETE_SQL, [
+        c.id,
+        JSON.stringify(c.lines.map((l) => l.id)),
+      ]);
     }
 
     // Bundles + components (replace on bundle id)
@@ -367,9 +385,12 @@ async function sendOne(
     case 'distribute_bundle': {
       const bundleId = String(payload.bundleId ?? '');
       if (!bundleId) throw new Error('distribute_bundle: missing bundleId');
+      // The row's key is the same one the screen sent on its direct attempt
+      // (0347), so the server returns the original distribution if that
+      // attempt actually committed instead of drawing components again.
       await api(`/api/v1/bundles/${bundleId}/distribute`, {
         method: 'POST',
-        body: payload,
+        body: { ...payload, idempotencyKey },
       });
       return;
     }

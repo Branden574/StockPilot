@@ -232,7 +232,21 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
   const { session, orgRole, orgId: defaultOrgId, orgName } = await loadSessionAndContext();
   if (!session) redirect('/signin');
 
-  const targetOrgId = orgId ?? session.defaultOrganizationId ?? defaultOrgId;
+  // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
+  //
+  // `defaultOrgId` is the org of the membership the loader RESOLVED above: it
+  // already prefers the profile's `default_organization_id` when that is a
+  // real, accepted membership, and falls back to another one when it is not.
+  //
+  // Reading `session.defaultOrganizationId` here instead re-introduced the raw
+  // preference AFTER that resolution. Nothing clears the column when a member
+  // is removed (TeamService.removeMember only deletes membership + assignment
+  // rows), so a user removed from org A while still belonging to org B got a
+  // context with organizationId = A and the role, name and permissions of B.
+  // RLS blocks most reads for a non-member, but every service-role path scopes
+  // by ctx.organizationId — so writes were aimed at an org the user had been
+  // removed from, with a role they held somewhere else.
+  const targetOrgId = orgId ?? defaultOrgId;
   if (!targetOrgId) redirect('/onboarding');
 
   if (orgId && orgId !== defaultOrgId) {

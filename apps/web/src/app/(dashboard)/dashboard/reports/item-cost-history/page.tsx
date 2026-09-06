@@ -34,13 +34,29 @@ export default async function ItemCostHistoryPage({
 
   // ── Item picker: fetch all non-deleted org items ─────────────────────────
   // Org-scoped via RLS + explicit organization_id filter.
-  const { data: itemRows } = await supabase
+  //
+  // THE COLUMN IS `deleted_at`, NOT `is_deleted`. This filtered on
+  // `.eq('is_deleted', false)` — a column inventory_items has never had (0002
+  // defines `deleted_at timestamptz`). PostgREST answers an unknown column
+  // with 42703, so `data` was null on EVERY request and `itemRows ?? []`
+  // turned that into an empty picker: the report was unreachable for every
+  // org since it shipped, and the discarded `error` is why nobody saw a
+  // reason. Selecting an item by URL then hit the "not in this org"
+  // fail-closed branch below, which made it look like a permission problem.
+  const { data: itemRows, error: itemsError } = await supabase
     .from('inventory_items')
     .select('id, sku, name')
     .eq('organization_id', orgCtx.organizationId)
-    .eq('is_deleted', false)
+    .is('deleted_at', null)
     .order('name', { ascending: true })
     .limit(2000);
+
+  if (itemsError) {
+    // Reads fail CLOSED with a visible reason (recurring pattern #1): an empty
+    // picker that silently means "the query broke" is exactly how this bug
+    // survived. Never throw here — that would take the whole page down.
+    console.error('[item-cost-history] item picker query failed:', itemsError);
+  }
 
   const items = (itemRows ?? []).map((r) => ({
     id: r.id as string,

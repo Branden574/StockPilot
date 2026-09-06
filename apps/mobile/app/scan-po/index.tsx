@@ -22,7 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconChip } from '@/components/ui/row';
 import { useAuth } from '@/lib/auth-context';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, orgHeader } from '@/lib/api';
 import { scanDocumentPages } from '@/lib/document-scanner';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart, type MultipartFilePart } from '@/lib/multipart-upload';
@@ -324,7 +324,7 @@ export default function ScanPo() {
               ? [{ name: 'displayNames', value: JSON.stringify(displayNames) }]
               : []),
           ],
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, ...(await orgHeader()) },
           signal: ctrl.signal,
         });
       } finally {

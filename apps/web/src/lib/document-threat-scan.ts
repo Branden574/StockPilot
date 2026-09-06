@@ -331,16 +331,44 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
     searchFrom = end === -1 ? kw + 'stream'.length : end + 'endstream'.length;
     if (end === -1 || end <= start) continue;
 
+    // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
+    //
+    // Once the total inflate budget is spent, any further Flate stream is
+    // content we would not see. Refuse HERE, before touching zlib: passing
+    // `maxOutputLength: 0` to inflateSync throws ERR_OUT_OF_RANGE (Node
+    // requires >= 1), and the previous shape of this loop caught that in the
+    // generic "not Flate" branch below — so a document made of eight
+    // cap-sized streams followed by a /JavaScript stream scanned CLEAN: the
+    // payload was skipped as if it were a JPEG. Reproduced 2026-09-02 against
+    // the real module; the regression test builds exactly that file.
+    if (budget <= 0) {
+      return { code: 'pdf_scan_limit', detail: 'total inflate budget exhausted' };
+    }
+
     let inflated: Buffer;
     try {
       inflated = inflateSync(Buffer.from(data.subarray(start, end)), {
         maxOutputLength: Math.min(MAX_INFLATED_BYTES_PER_STREAM, budget),
       });
     } catch (e) {
-      if ((e as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') {
-        return { code: 'pdf_scan_limit', detail: 'a stream larger than we will decompress' };
+      const code = (e as { code?: string }).code;
+      // Only two outcomes mean "these bytes are not a Flate stream we could
+      // read": Z_DATA_ERROR (garbage / a JPEG / a font) and Z_BUF_ERROR (a
+      // truncated deflate run). Both are the honest skip. EVERYTHING else —
+      // ERR_BUFFER_TOO_LARGE (we chose to stop reading), ERR_OUT_OF_RANGE (an
+      // option we should never have produced), or a future zlib code — means
+      // content existed that we did not inspect, and a scanner that shrugs at
+      // its own errors reports clean on what it never looked at. Fail closed.
+      if (code === 'Z_DATA_ERROR' || code === 'Z_BUF_ERROR') {
+        continue; // not Flate — nothing was concealed here
       }
-      continue; // not Flate — nothing was concealed here
+      return {
+        code: 'pdf_scan_limit',
+        detail:
+          code === 'ERR_BUFFER_TOO_LARGE'
+            ? 'a stream larger than we will decompress'
+            : `decompression stopped (${code ?? 'unknown error'})`,
+      };
     }
 
     budget -= inflated.byteLength;

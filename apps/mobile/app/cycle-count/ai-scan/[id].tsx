@@ -21,7 +21,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
   getCycleCount,
@@ -178,7 +178,7 @@ export default function AiScanScreen() {
               contentType: 'image/jpeg',
             },
           ],
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
         },
       );
       if (!res.ok) {
@@ -294,6 +294,7 @@ export default function AiScanScreen() {
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${session.access_token}`,
+                ...(await orgHeader()),
               },
               body: JSON.stringify({
                 countedQuantity: w.count,
@@ -334,7 +335,7 @@ export default function AiScanScreen() {
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan/${scanId}/confirm`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: { Authorization: `Bearer ${session.access_token}`, ...(await orgHeader()) },
         },
       ).catch(() => null);
 

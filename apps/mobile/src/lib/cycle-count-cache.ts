@@ -66,6 +66,11 @@ export async function cacheCycleCount(
     status: string;
     startedAt: string;
     postedAt?: string | null;
+    /** Manager-set assignee. MUST round-trip through the cache: the detail
+     *  screen re-hydrates from getCycleCount() right after caching, so a
+     *  header cached without it un-locks the count for every non-assignee and
+     *  hides Release from the assignee (the 0282 lock was dead on mobile). */
+    assignedTo?: string | null;
   },
   lines: Array<{
     id: string;
@@ -85,8 +90,8 @@ export async function cacheCycleCount(
     await db.runAsync(
       `insert or replace into cycle_counts
          (id, organization_id, status, warehouse_id, warehouse_name,
-          started_at, posted_at, last_synced_at, cached_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          started_at, posted_at, assigned_to, last_synced_at, cached_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         header.id,
         header.organizationId,
@@ -95,6 +100,7 @@ export async function cacheCycleCount(
         header.warehouseName,
         header.startedAt,
         header.postedAt ?? null,
+        header.assignedTo ?? null,
         now,
         now,
       ],
@@ -160,10 +166,11 @@ export async function getCycleCount(
     warehouse_name: string | null;
     started_at: string | null;
     posted_at: string | null;
+    assigned_to: string | null;
     cached_at: number | null;
   }>(
     `select id, organization_id, status, warehouse_id, warehouse_name,
-            started_at, posted_at, cached_at
+            started_at, posted_at, assigned_to, cached_at
        from cycle_counts where id = ?`,
     [id],
   );
@@ -202,6 +209,7 @@ export async function getCycleCount(
       status: headerRow.status ?? 'in_progress',
       startedAt: headerRow.started_at ?? '',
       postedAt: headerRow.posted_at,
+      assignedTo: headerRow.assigned_to ?? null,
       cachedAt: headerRow.cached_at,
     },
     lines: lineRows.map((r) => ({
@@ -248,6 +256,22 @@ export async function updateLocalLine(
          set counted = ?, local_dirty = 1
        where id = ?`,
       [counted, lineId],
+    );
+    // ═══ ONE LIVE OUTBOX ROW PER LINE ═══
+    //
+    // Every edit used to append a fresh record_count row and the drain sent
+    // them oldest-first, so an operator who counted 5, then corrected to 7
+    // while offline, could have the 5 land AFTER the 7 when a retry
+    // reordered them — the correction was lost to the server. An edit
+    // supersedes every earlier queued edit for the same line; a row already
+    // 'sending' is in flight and must not be touched (the drain-side
+    // newest-wins check in cycle-count-sync covers that window).
+    await db.runAsync(
+      `delete from pending_actions
+        where kind = 'record_count'
+          and status in ('pending','failed')
+          and json_extract(payload_json, '$.lineId') = ?`,
+      [lineId],
     );
     const result = await db.runAsync(
       `insert into pending_actions
@@ -497,10 +521,11 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     warehouse_name: string | null;
     started_at: string | null;
     posted_at: string | null;
+    assigned_to: string | null;
     cached_at: number | null;
   }>(
     `select id, organization_id, status, warehouse_id, warehouse_name,
-            started_at, posted_at, cached_at
+            started_at, posted_at, assigned_to, cached_at
        from cycle_counts
       where status = 'in_progress' or status is null
       order by started_at desc`,
@@ -513,6 +538,7 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     status: r.status ?? 'in_progress',
     startedAt: r.started_at ?? '',
     postedAt: r.posted_at,
+    assignedTo: r.assigned_to ?? null,
     cachedAt: r.cached_at ?? 0,
   }));
 }

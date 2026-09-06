@@ -8,6 +8,7 @@ import {
   renderTeamInviteEmail,
 } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -296,13 +297,33 @@ export class TeamService {
       window: '7 days',
       appUrl: env.NEXT_PUBLIC_APP_URL,
     });
-    await sendEmail({
+    // sendEmail NEVER throws — it returns { ok: false, error } on a non-2xx
+    // Resend response or a network failure (lib/email/resend.ts). Discarding
+    // that made "Invite sent" a lie: the row existed, the admin was told it
+    // was delivered, and the person was never contacted. The invite is real,
+    // so the row stays and the message hands the admin the link.
+    const sent = await sendEmail({
       to: normalizedEmail,
       subject: message.subject,
       html: message.html,
       text: message.text,
       from: message.from,
     });
+    if (!sent.ok) {
+      void reportError(new Error(String(sent.error)), {
+        tag: 'team.invite.email',
+        organizationId: this.ctx.organizationId,
+      });
+      // NOT `internal_error`: that code's public message is genericised on
+      // purpose (S13 anti-recon), which would hide the one thing the admin
+      // needs — how to finish the job. `conflict` is the honest shape for a
+      // partially-completed write the caller must reconcile.
+      throw new ServiceError(
+        'conflict',
+        'The invite was created but the email could not be sent. Copy the invite link from Pending invites, or use Resend.',
+        { acceptUrl },
+      );
+    }
 
     return { id: invite.id as string, token: invite.token as string, acceptUrl };
   }
@@ -390,13 +411,27 @@ export class TeamService {
       expiresOn: formatInviteExpiry(newExpiresAt),
       appUrl: env.NEXT_PUBLIC_APP_URL,
     });
-    await sendEmail({
+    const sent = await sendEmail({
       to: invite.email as string,
       subject: message.subject,
       html: message.html,
       text: message.text,
       from: message.from,
     });
+    // Checked BEFORE the audit row: 'user.invited resent:true' is a claim that
+    // a message went out, and an audit trail that records sends which never
+    // happened is worse than no trail.
+    if (!sent.ok) {
+      void reportError(new Error(String(sent.error)), {
+        tag: 'team.invite.resend',
+        organizationId: this.ctx.organizationId,
+      });
+      throw new ServiceError(
+        'conflict',
+        'The invite could not be re-sent. Copy the invite link from Pending invites and share it directly.',
+        { acceptUrl },
+      );
+    }
     await audit(
       {
         event: 'user.invited',
@@ -561,6 +596,23 @@ export class TeamService {
         if (!clearErr) {
           assignmentsCleared = (cleared ?? []).length;
         }
+      }
+
+      // Drop the removed user's stale default-org preference. Leaving it set
+      // to an org they are no longer in is what let requireOrgContext build a
+      // context for THIS org out of a membership somewhere else (fixed in
+      // lib/auth/session.ts). Belt to that braces: the session resolver no
+      // longer trusts the column, and the column no longer lies. Best-effort
+      // and scoped — only this org, only this user.
+      const { error: defaultOrgErr } = await admin
+        .from('user_profiles')
+        .update({ default_organization_id: null })
+        .eq('id', removedUserId)
+        .eq('default_organization_id', this.ctx.organizationId);
+      if (defaultOrgErr) {
+        console.warn(
+          `[team.removeMember] could not clear default_organization_id for ${removedUserId}: ${defaultOrgErr.message}`,
+        );
       }
 
       // Kill the removed user's auth sessions — but ONLY when this org was

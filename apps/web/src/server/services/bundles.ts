@@ -141,6 +141,14 @@ export interface DistributeInput {
   scheduleEventId?: string | null;
   notes?: string | null;
   allowShortage?: boolean;
+  /**
+   * Client-minted UUID (0347). A retry that carries the SAME key returns the
+   * ORIGINAL distribution instead of drawing components again; the same key
+   * with a different quantity/warehouse/shortage/event is refused as a
+   * conflict. Mobile mints one before its first attempt and replays it from
+   * the offline outbox; the web modal sends none (historical path).
+   */
+  idempotencyKey?: string | null;
 }
 
 export class BundlesService {
@@ -670,9 +678,18 @@ export class BundlesService {
       p_allow_shortage: input.allowShortage ?? false,
       p_schedule_event_id: input.scheduleEventId ?? null,
       p_notes: input.notes ?? null,
+      p_idempotency_key: input.idempotencyKey ?? null,
     });
     if (error) {
       const msg = error.message ?? '';
+      if (msg.includes('idempotency_conflict')) {
+        // The same key arrived with a different request. The original attempt
+        // stands; this one must not be silently applied or silently dropped.
+        throw new ServiceError(
+          'conflict',
+          'This distribution was already submitted with different details. Start a new distribution.',
+        );
+      }
       if (msg.includes('insufficient_stock')) {
         throw new ServiceError(
           'validation_error',

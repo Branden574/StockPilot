@@ -81,6 +81,60 @@ beforeEach(() => {
   postReceiptAction.mockResolvedValue({ ok: true, data: { receiptNumber: 'RC-1' } });
 });
 
+describe('PoReceiveDialog — an RSC refresh must not wipe in-progress entry', () => {
+  it('keeps typed quantities when the page re-renders with a NEW `lines` array identity', async () => {
+    // THE BUG: the reset effect had `lines` in its deps. The Server Component
+    // that owns the PO page rebuilds that array with .map on every render, and
+    // the realtime nudge fires router.refresh() whenever anyone touches the
+    // PO — so a receiver part-way through a delivery had every quantity, the
+    // notes and the idempotency key silently blanked while the dialog stayed
+    // open. The array below is deliberately a NEW array of EQUIVALENT lines,
+    // which is exactly what an RSC refresh produces.
+    const user = userEvent.setup();
+    const first = [line({ id: 'a', quantityOrdered: 10 }), line({ id: 'b', quantityOrdered: 5 })];
+    const { rerender } = render(
+      <PoReceiveDialog poId="po-1" poNumber="PO-0001" warehouseId="wh-1" lines={first} />,
+    );
+    await user.click(screen.getByRole('button', { name: /receive items/i }));
+
+    // Flat (non-size-run) lines render one "Received now" spinbutton each.
+    await user.type(screen.getAllByRole('spinbutton')[0]!, '3');
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(3);
+
+    // The refresh: same data, brand-new array + brand-new objects.
+    rerender(
+      <PoReceiveDialog
+        poId="po-1"
+        poNumber="PO-0001"
+        warehouseId="wh-1"
+        lines={[line({ id: 'a', quantityOrdered: 10 }), line({ id: 'b', quantityOrdered: 5 })]}
+      />,
+    );
+
+    expect(
+      screen.getAllByRole('spinbutton')[0]!,
+      'the typed quantity must survive an RSC refresh',
+    ).toHaveValue(3);
+
+    // And it still posts what was typed.
+    await user.click(screen.getByRole('button', { name: /post receipt/i }));
+    expect(postReceiptAction).toHaveBeenCalledTimes(1);
+    const payload = postReceiptAction.mock.calls[0]![0] as { lines: { poLineId: string; qtyReceived: number }[] };
+    expect(payload.lines).toEqual([expect.objectContaining({ poLineId: 'a', qtyReceived: 3 })]);
+  });
+
+  it('DOES reset when the dialog is closed and re-opened', async () => {
+    const user = userEvent.setup();
+    const lines = [line({ id: 'a', quantityOrdered: 10 })];
+    render(<PoReceiveDialog poId="po-1" poNumber="PO-0001" warehouseId="wh-1" lines={lines} />);
+    await user.click(screen.getByRole('button', { name: /receive items/i }));
+    await user.type(screen.getAllByRole('spinbutton')[0]!, '4');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: /receive items/i }));
+    expect(screen.getAllByRole('spinbutton')[0]!).toHaveValue(null);
+  });
+});
+
 describe('PoReceiveDialog — payload shape', () => {
   it('emits the same per-line payload for a size run as for flat lines', async () => {
     const user = await openDialog(

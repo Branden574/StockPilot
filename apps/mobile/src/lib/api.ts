@@ -106,17 +106,29 @@ async function authHeader(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${session.access_token}` };
 }
 
+/**
+ * The active-workspace header, for the handful of screens that call `fetch`
+ * or `postMultipart` directly (multipart uploads, streaming chat) instead of
+ * `api()`. Without it the server falls back to the user's DEFAULT org, so a
+ * multi-org user's AI-scan counts, PO scans and chat questions resolved
+ * against the wrong workspace. Key MUST match ORG_STORAGE_KEY in
+ * use-workspace.ts ('workspace.activeOrgId') — kept as a literal here to avoid
+ * importing use-workspace (which would create a cycle: use-workspace → sync →
+ * api). Every raw call site is pinned to spread this by
+ * org-header-wiring.test.ts.
+ */
+export async function orgHeader(): Promise<Record<string, string>> {
+  const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
+  return orgId ? { 'X-Organization-Id': orgId } : {};
+}
+
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   // Scope every request to the active workspace org. The server (withApiContext)
-  // validates membership and 401s on a bad value. Key MUST match
-  // ORG_STORAGE_KEY in use-workspace.ts ('workspace.activeOrgId') — kept as a
-  // literal here to avoid importing use-workspace (which would create a cycle:
-  // use-workspace → sync → api).
-  const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
+  // validates membership and 401s on a bad value.
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(await authHeader()),
-    ...(orgId ? { 'X-Organization-Id': orgId } : {}),
+    ...(await orgHeader()),
   };
 
   // Internal timeout, composed with any caller-supplied signal. Either firing
