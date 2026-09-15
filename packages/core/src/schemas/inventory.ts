@@ -69,10 +69,7 @@ export const createItemSchema = z
         .optional(),
     ),
     barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
-    modelNumber: z.preprocess(
-      emptyToUndefined,
-      z.string().max(120).trim().nullable().optional(),
-    ),
+    modelNumber: z.preprocess(emptyToUndefined, z.string().max(120).trim().nullable().optional()),
     description: z.string().max(5000).nullable().optional(),
     categoryId: uuidSchema.nullable().optional(),
     supplierId: uuidSchema.nullable().optional(),
@@ -186,66 +183,72 @@ export type UpdateItemInput = z.infer<typeof updateItemSchema>;
  * system comes from the category's size scale, migration 0294), because a
  * client that picks them picks which physical stock its rows merge with.
  */
-export const bulkCreateSizedVariantsSchema = z.object({
-  baseName: z
-    .string({ invalid_type_error: 'Name is required.' })
-    .min(1, 'Name is required.')
-    .max(200, 'Name must be 200 characters or less.'),
-  baseSku: z.string().max(120, 'SKU must be 120 characters or less.').nullable(),
-  baseBarcode: z.string().max(120, 'Barcode must be 120 characters or less.').nullable(),
-  description: z.string().max(2000).nullable(),
-  categoryId: uuidSchema,
-  supplierId: uuidSchema.nullable(),
-  warehouseId: uuidSchema,
-  charterId: uuidSchema.nullable(),
-  primaryLocationId: uuidSchema.nullable(),
-  // 64, matching createItemSchema. `inventory_items.bin_location` is unbounded
-  // `text` (migration 0002), so the DB imposes no limit and the two schemas had
-  // simply picked different numbers — 64 here and 120 there for the same column
-  // on the same row. 64 is the tighter of the two and still comfortably clears
-  // every value this path can produce: bin_location is composed by
-  // `formatRackLabel` from rackNumber (max 50) + '-' + rackRow (max 10) = 61.
-  binLocation: z.string().max(64).nullable(),
-  retailPrice: z.coerce.number({ invalid_type_error: 'Enter a number.' }).min(0, 'Enter 0 or more.'),
-  unitCost: z.coerce.number({ invalid_type_error: 'Enter a number.' }).min(0, 'Enter 0 or more.'),
-  reorderPoint: z.coerce
-    .number({ invalid_type_error: 'Enter a number.' })
-    .int('Enter a whole number.')
-    .min(0, 'Enter 0 or more.'),
-  reorderQuantity: z.coerce
-    .number({ invalid_type_error: 'Enter a number.' })
-    .int('Enter a whole number.')
-    .min(0, 'Enter 0 or more.'),
-  // Optional: omitted means "take the category's counting unit", the same
-  // contract createItemSchema uses. An explicit value still wins.
-  unitOfMeasure: z.string().min(1).max(40).optional(),
-  rackNumber: z.string().max(50).nullable().optional(),
-  rackRow: z.string().max(10).nullable().optional(),
-  // Per-org custom field values applied to every created variant. The service
-  // strips reserved keys and runs the authoritative validator
-  // (assertCustomFieldsValid).
-  customFields: z.record(z.string(), z.unknown()).nullable().optional(),
-  // The product group these variants belong to. Optional; NULL keeps the run
-  // ungrouped, which is exactly the pre-sports behaviour.
-  groupId: uuidSchema.nullable().optional(),
-  variants: z
-    .array(
-      z.object({
-        // Free text, validated server-side against the category's size scale.
-        // It was a nine-value enum, which could not express a shoe run at all.
-        // 24 is the inventory_items_variant_size_check bound (0298).
-        size: z.string().min(1, 'Every size needs a value.').max(24, 'A size can be at most 24 characters.'),
-        quantity: z.coerce
-          .number({ invalid_type_error: 'Enter a number.' })
-          .int('Enter a whole number.')
-          .min(0, 'Enter 0 or more.'),
-      }),
-    )
-    .min(1, 'Pick at least one size.')
-    // Was .max(7), which silently rejected valid input: the form already
-    // offered NINE apparel sizes, and a shoe run is routinely 20+.
-    .max(60, 'A size run can cover at most 60 sizes.'),
-})
+export const bulkCreateSizedVariantsSchema = z
+  .object({
+    baseName: z
+      .string({ invalid_type_error: 'Name is required.' })
+      .min(1, 'Name is required.')
+      .max(200, 'Name must be 200 characters or less.'),
+    baseSku: z.string().max(120, 'SKU must be 120 characters or less.').nullable(),
+    baseBarcode: z.string().max(120, 'Barcode must be 120 characters or less.').nullable(),
+    description: z.string().max(2000).nullable(),
+    categoryId: uuidSchema,
+    supplierId: uuidSchema.nullable(),
+    warehouseId: uuidSchema,
+    charterId: uuidSchema.nullable(),
+    primaryLocationId: uuidSchema.nullable(),
+    // 64, matching createItemSchema. `inventory_items.bin_location` is unbounded
+    // `text` (migration 0002), so the DB imposes no limit and the two schemas had
+    // simply picked different numbers — 64 here and 120 there for the same column
+    // on the same row. 64 is the tighter of the two and still comfortably clears
+    // every value this path can produce: bin_location is composed by
+    // `formatRackLabel` from rackNumber (max 50) + '-' + rackRow (max 10) = 61.
+    binLocation: z.string().max(64).nullable(),
+    retailPrice: z.coerce
+      .number({ invalid_type_error: 'Enter a number.' })
+      .min(0, 'Enter 0 or more.'),
+    unitCost: z.coerce.number({ invalid_type_error: 'Enter a number.' }).min(0, 'Enter 0 or more.'),
+    reorderPoint: z.coerce
+      .number({ invalid_type_error: 'Enter a number.' })
+      .int('Enter a whole number.')
+      .min(0, 'Enter 0 or more.'),
+    reorderQuantity: z.coerce
+      .number({ invalid_type_error: 'Enter a number.' })
+      .int('Enter a whole number.')
+      .min(0, 'Enter 0 or more.'),
+    // Optional: omitted means "take the category's counting unit", the same
+    // contract createItemSchema uses. An explicit value still wins.
+    unitOfMeasure: z.string().min(1).max(40).optional(),
+    rackNumber: z.string().max(50).nullable().optional(),
+    rackRow: z.string().max(10).nullable().optional(),
+    // Per-org custom field values applied to every created variant. The service
+    // strips reserved keys and runs the authoritative validator
+    // (assertCustomFieldsValid).
+    customFields: z.record(z.string(), z.unknown()).nullable().optional(),
+    // The product group these variants belong to. Optional; NULL keeps the run
+    // ungrouped, which is exactly the pre-sports behaviour.
+    groupId: uuidSchema.nullable().optional(),
+    variants: z
+      .array(
+        z.object({
+          // Free text, validated server-side against the category's size scale.
+          // It was a nine-value enum, which could not express a shoe run at all.
+          // 24 is the inventory_items_variant_size_check bound (0298).
+          size: z
+            .string()
+            .min(1, 'Every size needs a value.')
+            .max(24, 'A size can be at most 24 characters.'),
+          quantity: z.coerce
+            .number({ invalid_type_error: 'Enter a number.' })
+            .int('Enter a whole number.')
+            .min(0, 'Enter 0 or more.'),
+        }),
+      )
+      .min(1, 'Pick at least one size.')
+      // Was .max(7), which silently rejected valid input: the form already
+      // offered NINE apparel sizes, and a shoe run is routinely 20+.
+      .max(60, 'A size run can cover at most 60 sizes.'),
+  })
   /**
    * The variant attributes SHARED by every row in one size run — a jersey
    * number is worn in M and in XL (regression R3), a colourway is one
@@ -293,11 +296,7 @@ export const adjustStockSchema = z.object({
   // can't pass Number.MAX_SAFE_INTEGER and either overflow the
   // numeric(14,4) column or push quantity_on_hand into nonsense
   // territory that downstream reports/aggregations choke on.
-  quantityChange: z.coerce
-    .number()
-    .finite()
-    .min(-1_000_000)
-    .max(1_000_000),
+  quantityChange: z.coerce.number().finite().min(-1_000_000).max(1_000_000),
   movementType: movementTypeSchema.default('adjust'),
   locationId: uuidSchema.nullable().optional(),
   reason: z.string().max(500).optional(),

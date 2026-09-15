@@ -5,7 +5,7 @@ import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { Controller, useForm, type Resolver } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
@@ -338,7 +338,12 @@ export function ItemForm({
     control,
     formState: { errors, isSubmitting },
   } = useForm<CreateItemInput>({
-    resolver: zodResolver(createItemSchema),
+    // @hookform/resolvers v5 infers the resolver's INPUT type from the schema,
+    // and createItemSchema's z.preprocess fields make that input `unknown`,
+    // which would untype every watch()/register() in this form and every child
+    // that takes UseFormRegister<CreateItemInput>. The runtime resolver is
+    // unchanged; only the inference is, so pin the type the form always had.
+    resolver: zodResolver(createItemSchema) as Resolver<CreateItemInput>,
     mode: 'onBlur',
     reValidateMode: 'onChange',
     defaultValues: {
@@ -404,23 +409,16 @@ export function ItemForm({
   }, [isEdit, defaults?.quantityOnHand, setValue]);
 
   const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
-  const cfDefault =
-    (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
-  const [author, setAuthor] = React.useState<string>(
-    isBook ? String(cfDefault.author ?? '') : '',
-  );
+  const cfDefault = (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
+  const [author, setAuthor] = React.useState<string>(isBook ? String(cfDefault.author ?? '') : '');
   // Rack number / row inputs. Books write to custom_fields.book_rack_*
   // (kept that way so historical data keeps matching); everything else
   // writes to neutral custom_fields.rack_* keys.
   const [rackNumber, setRackNumber] = React.useState<string>(
-    isBook
-      ? String(cfDefault.book_rack_number ?? '')
-      : String(cfDefault.rack_number ?? ''),
+    isBook ? String(cfDefault.book_rack_number ?? '') : String(cfDefault.rack_number ?? ''),
   );
   const [rackRow, setRackRow] = React.useState<string>(
-    isBook
-      ? String(cfDefault.book_rack_row ?? '')
-      : String(cfDefault.rack_row ?? ''),
+    isBook ? String(cfDefault.book_rack_row ?? '') : String(cfDefault.rack_row ?? ''),
   );
   // Snapshot of the rack-number input's value at mount (this session's
   // starting point). Rack number/row are plain useState, not registered
@@ -556,9 +554,9 @@ export function ItemForm({
   // An existing group the user explicitly picked from the preview's
   // candidate list (never automatic — requirement 6/13).
   const [linkedGroup, setLinkedGroup] = React.useState<{ id: string; name: string } | null>(null);
-  const [groupCandidates, setGroupCandidates] = React.useState<
-    Array<{ id: string; name: string }>
-  >([]);
+  const [groupCandidates, setGroupCandidates] = React.useState<Array<{ id: string; name: string }>>(
+    [],
+  );
   React.useEffect(() => {
     setSportsGroupFields(EMPTY_SPORTS_GROUP_FIELDS);
     setLinkedGroup(null);
@@ -635,9 +633,7 @@ export function ItemForm({
   const sizeChipOptions: string[] = React.useMemo(() => {
     const scaleId = selectedCategory?.size_scale_id ?? null;
     const scaleValues = scaleId ? sizeScales[scaleId] : undefined;
-    return scaleValues && scaleValues.length > 0
-      ? scaleValues.map((v) => v.value)
-      : [...ALL_SIZES];
+    return scaleValues && scaleValues.length > 0 ? scaleValues.map((v) => v.value) : [...ALL_SIZES];
   }, [selectedCategory, sizeScales]);
 
   // Display-only variant-identity preview (requirement: computed via the core
@@ -779,7 +775,11 @@ export function ItemForm({
       if (data.grade && !grade) setGrade(data.grade);
       toast.success('Book details filled in from ISBN lookup.');
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't look up this ISBN. Check your network and try again.");
+      toast.error(
+        e instanceof Error
+          ? e.message
+          : "Couldn't look up this ISBN. Check your network and try again.",
+      );
     } finally {
       setLookingUp(false);
     }
@@ -806,7 +806,7 @@ export function ItemForm({
         return;
       }
       if (!res.ok) {
-        toast.error("Lookup failed. Check your network and try again.");
+        toast.error('Lookup failed. Check your network and try again.');
         return;
       }
       const data = (await res.json()) as {
@@ -848,10 +848,7 @@ export function ItemForm({
 
   const watchedWarehouseId = watch('warehouseId') ?? forcedWarehouseId ?? null;
   const watchedCharterId = watch('charterId') ?? null;
-  const charterById = React.useMemo(
-    () => new Map(charters.map((c) => [c.id, c.name])),
-    [charters],
-  );
+  const charterById = React.useMemo(() => new Map(charters.map((c) => [c.id, c.name])), [charters]);
   const allowedCharterIds = React.useMemo(
     () =>
       new Set(
@@ -1020,11 +1017,7 @@ export function ItemForm({
     // routes back to the Inventory list (each variant gets its own
     // detail page so a single-item redirect would be wrong).
     const selectedCategoryAtSubmit = categories.find((c) => c.id === values.categoryId);
-    if (
-      !isEdit &&
-      selectedCategoryAtSubmit?.supports_sizes &&
-      selectedSizes.length > 0
-    ) {
+    if (!isEdit && selectedCategoryAtSubmit?.supports_sizes && selectedSizes.length > 0) {
       if (!values.categoryId || !values.warehouseId) {
         toast.error('Pick a category and warehouse before saving variants.');
         return;
@@ -1056,8 +1049,7 @@ export function ItemForm({
         // to every variant. The service strips reserved keys + runs the
         // authoritative required-field gate, so this path no longer silently
         // drops them. Pass undefined when empty to keep the payload lean.
-        customFields:
-          Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
+        customFields: Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
         variants: selectedSizes,
         // Sports: the group the preview promised, plus the attributes that are
         // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
@@ -1102,9 +1094,7 @@ export function ItemForm({
 
       const expected = staged.length * createdIds.length;
       if (expected === 0) {
-        toast.success(
-          `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
-        );
+        toast.success(`Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`);
       } else if (totalFailed === 0) {
         toast.success(
           `Created ${res.data.created} variants with ${staged.length} photo${staged.length === 1 ? '' : 's'} each.`,
@@ -1134,10 +1124,7 @@ export function ItemForm({
       // resolveListReturnHref reads sessionStorage written by the
       // list table on every render.
       router.push(
-        resolveListReturnHref(
-          isBook ? '/dashboard/books' : '/dashboard/inventory',
-          returnHref,
-        ),
+        resolveListReturnHref(isBook ? '/dashboard/books' : '/dashboard/inventory', returnHref),
       );
       return;
     }
@@ -1296,7 +1283,9 @@ export function ItemForm({
     if (!isEdit && staged.length > 0) {
       const { uploaded, failed } = await uploadStagedImages(res.data.id);
       if (failed > 0) {
-        toast.warning(`Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`);
+        toast.warning(
+          `Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`,
+        );
       } else {
         toast.success(`Item created with ${uploaded} photo${uploaded === 1 ? '' : 's'}.`);
       }
@@ -1312,9 +1301,8 @@ export function ItemForm({
     // `count: 1` because a single-item save places exactly one item; the shared
     // message builder uses it to choose between "its stock" and "the stock for
     // N of them", and the size-run twin above is the caller that passes more.
-    const placementFailed = (
-      res.data as { placementFailed?: { rackName: string; count?: number } }
-    ).placementFailed;
+    const placementFailed = (res.data as { placementFailed?: { rackName: string; count?: number } })
+      .placementFailed;
     // See the size-run twin above for why this is its own toast rather than
     // another branch of the photo tree.
     if (placementFailed) {
@@ -1338,17 +1326,12 @@ export function ItemForm({
       // the case where the user enters the edit page without a full
       // `?return=` chain (direct URL, autocomplete, cmd-click, etc).
       router.push(
-        resolveListReturnHref(
-          isBook ? '/dashboard/books' : '/dashboard/inventory',
-          returnHref,
-        ),
+        resolveListReturnHref(isBook ? '/dashboard/books' : '/dashboard/inventory', returnHref),
       );
     } else if (!isEdit) {
       // Rental items redirect to the rental-catalog item detail; regular
       // items redirect to the inventory item detail.
-      const detailBase = isRentalFixed
-        ? '/dashboard/rentals/items'
-        : '/dashboard/inventory';
+      const detailBase = isRentalFixed ? '/dashboard/rentals/items' : '/dashboard/inventory';
       router.push(`${detailBase}/${res.data.id}`);
     } else {
       router.refresh();
@@ -1359,14 +1342,18 @@ export function ItemForm({
     <form onSubmit={onSubmit} className="space-y-6" noValidate>
       {!isEdit && (
         <Section title="Photos">
-          <p className="text-xs text-muted-foreground">
-            Drop photos here. They'll upload after the item is created. PNG, JPG, WebP, AVIF — up to 10 MB each.
+          <p className="text-muted-foreground text-xs">
+            Drop photos here. They'll upload after the item is created. PNG, JPG, WebP, AVIF — up to
+            10 MB each.
           </p>
 
           {staged.length > 0 && (
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
               {staged.map((s, idx) => (
-                <div key={s.previewUrl} className="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
+                <div
+                  key={s.previewUrl}
+                  className="bg-muted group relative aspect-square overflow-hidden rounded-lg border"
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={s.previewUrl} alt="" className="h-full w-full object-cover" />
                   <button
@@ -1378,7 +1365,7 @@ export function ItemForm({
                     <X className="h-3.5 w-3.5" />
                   </button>
                   {idx === 0 && (
-                    <span className="absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-foreground">
+                    <span className="bg-primary text-primary-foreground absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
                       Primary
                     </span>
                   )}
@@ -1400,11 +1387,11 @@ export function ItemForm({
               if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
             }}
             className={cn(
-              'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-muted/20 px-6 py-6 transition-colors hover:border-primary/40 hover:bg-muted/40',
+              'border-border bg-muted/20 hover:border-primary/40 hover:bg-muted/40 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-6 transition-colors',
               dragOver && 'border-primary bg-primary/5',
             )}
           >
-            <ImagePlus className="h-5 w-5 text-muted-foreground" />
+            <ImagePlus className="text-muted-foreground h-5 w-5" />
             <p className="text-sm font-medium">Drop photos, or click to browse</p>
             <input
               id="item-form-photos"
@@ -1418,7 +1405,12 @@ export function ItemForm({
                 e.target.value = '';
               }}
             />
-            <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+            >
               <Upload className="h-3.5 w-3.5" /> Choose files
             </Button>
           </label>
@@ -1444,16 +1436,9 @@ export function ItemForm({
               </Button>
             </div>
           </Field>
-          <Field
-            label={isBook ? 'ISBN' : 'Barcode'}
-            error={errors.barcode?.message}
-            optional
-          >
+          <Field label={isBook ? 'ISBN' : 'Barcode'} error={errors.barcode?.message} optional>
             <div className="flex gap-2">
-              <Input
-                placeholder={isBook ? '978-…' : 'Scan or type'}
-                {...register('barcode')}
-              />
+              <Input placeholder={isBook ? '978-…' : 'Scan or type'} {...register('barcode')} />
               <Button
                 type="button"
                 variant="outline"
@@ -1477,22 +1462,14 @@ export function ItemForm({
                   disabled={lookingUp}
                   title="Fetch product info from UPC"
                 >
-                  {lookingUp ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    'Lookup'
-                  )}
+                  {lookingUp ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Lookup'}
                 </Button>
               )}
             </div>
           </Field>
         </div>
         {!isBook && (
-          <Field
-            label="Model number"
-            error={errors.modelNumber?.message}
-            optional
-          >
+          <Field label="Model number" error={errors.modelNumber?.message} optional>
             <Input
               placeholder="e.g. MX432LL/A (manufacturer's per-SKU code)"
               {...register('modelNumber')}
@@ -1511,7 +1488,7 @@ export function ItemForm({
             <div className="space-y-1.5">
               <Label>
                 Grade level
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Select
                 value={grade || '__none'}
@@ -1524,11 +1501,7 @@ export function ItemForm({
                   <SelectItem value="__none">—</SelectItem>
                   {GRADES.map((g) => (
                     <SelectItem key={g} value={g}>
-                      {g === 'K'
-                        ? 'Kindergarten'
-                        : /^\d{1,2}$/.test(g)
-                          ? `Grade ${g}`
-                          : g}
+                      {g === 'K' ? 'Kindergarten' : /^\d{1,2}$/.test(g) ? `Grade ${g}` : g}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1625,10 +1598,8 @@ export function ItemForm({
                           )
                         }
                         className={cn(
-                          'rounded border border-border px-2 py-1 text-xs transition-colors',
-                          picked
-                            ? 'bg-foreground text-background'
-                            : 'hover:bg-muted',
+                          'border-border rounded border px-2 py-1 text-xs transition-colors',
+                          picked ? 'bg-foreground text-background' : 'hover:bg-muted',
                         )}
                       >
                         {s}
@@ -1718,8 +1689,8 @@ export function ItemForm({
                   </SelectContent>
                 </Select>
                 <p className="text-muted-foreground text-[11px]">
-                  Only the modes this subcategory allows. The mode decides whether a unit
-                  needs a serial, so the server re-checks it on save.
+                  Only the modes this subcategory allows. The mode decides whether a unit needs a
+                  serial, so the server re-checks it on save.
                 </p>
               </div>
             )}
@@ -1743,10 +1714,10 @@ export function ItemForm({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">
-                &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even
-                when hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s
-                category to be public and a link that includes the public pool. Per-link
-                curation lives in Settings → Public request links.
+                &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even when
+                hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s category
+                to be public and a link that includes the public pool. Per-link curation lives in
+                Settings → Public request links.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -1759,8 +1730,8 @@ export function ItemForm({
                 onChange={(e) => setPublicDisplayName(e.target.value)}
               />
               <p className="text-muted-foreground text-[11px]">
-                Shown on public request links instead of the internal name. Leave blank to
-                use the item name.
+                Shown on public request links instead of the internal name. Leave blank to use the
+                item name.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -1773,8 +1744,8 @@ export function ItemForm({
                 onChange={(e) => setPublicDescription(e.target.value)}
               />
               <p className="text-muted-foreground text-[11px]">
-                Shown under the item on public request links. Internal notes and
-                description are never shown publicly.
+                Shown under the item on public request links. Internal notes and description are
+                never shown publicly.
               </p>
             </div>
           </>
@@ -1813,9 +1784,7 @@ export function ItemForm({
               placeholder="A"
               maxLength={4}
               value={rackRow}
-              onChange={(e) =>
-                setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
-              }
+              onChange={(e) => setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
             />
           </Field>
         </div>
@@ -1825,7 +1794,7 @@ export function ItemForm({
               <div className="space-y-1.5">
                 <Label>
                   Crate color
-                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
                 </Label>
                 <Select
                   value={crateColor || '__none'}
@@ -1854,7 +1823,7 @@ export function ItemForm({
               <div className="space-y-1.5">
                 <Label>
                   Crate number
-                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
                 </Label>
                 <Input
                   placeholder="e.g. 12"
@@ -1865,8 +1834,7 @@ export function ItemForm({
               </div>
             </div>
             <p className="text-muted-foreground text-xs">
-              A crate number is enough — the color is an optional label you can add
-              later.
+              A crate number is enough — the color is an optional label you can add later.
             </p>
           </>
         )}
@@ -1892,10 +1860,10 @@ export function ItemForm({
           <div className="space-y-1.5">
             <Label>{warehouseLabel}</Label>
             {forcedWarehouseId ? (
-              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <div className="bg-muted/30 rounded-md border px-3 py-2 text-sm">
                 {warehouses.find((w) => w.id === forcedWarehouseId)?.name ??
                   'Your assigned warehouse'}
-                <p className="text-[11px] text-muted-foreground mt-0.5">
+                <p className="text-muted-foreground mt-0.5 text-[11px]">
                   You can only create items at your assigned {warehouseLabel.toLowerCase()}.
                 </p>
               </div>
@@ -1921,13 +1889,11 @@ export function ItemForm({
           <div className="space-y-1.5">
             <Label>
               {charterLabel}
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Select
               value={watchedCharterId ?? '__generic'}
-              onValueChange={(v: string) =>
-                setValue('charterId', v === '__generic' ? null : v)
-              }
+              onValueChange={(v: string) => setValue('charterId', v === '__generic' ? null : v)}
               disabled={!watchedWarehouseId}
             >
               <SelectTrigger>
@@ -1944,9 +1910,9 @@ export function ItemForm({
                   Generic — any {charterLabel.toLowerCase()}
                 </SelectItem>
                 {allowedCharters.length === 0 && watchedWarehouseId ? (
-                  <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                    No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}
-                    {' '}yet — admins can configure them in Admin → {warehouseLabel}s.
+                  <div className="text-muted-foreground px-3 py-2 text-[12px]">
+                    No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}{' '}
+                    yet — admins can configure them in Admin → {warehouseLabel}s.
                   </div>
                 ) : (
                   allowedCharters.map((c) => (
@@ -1957,8 +1923,9 @@ export function ItemForm({
                 )}
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-muted-foreground">
-              Generic stock is shared across every {charterLabel.toLowerCase()} the {warehouseLabel.toLowerCase()} services.
+            <p className="text-muted-foreground text-[11px]">
+              Generic stock is shared across every {charterLabel.toLowerCase()} the{' '}
+              {warehouseLabel.toLowerCase()} services.
             </p>
           </div>
         </div>
@@ -2001,13 +1968,11 @@ export function ItemForm({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(() => {
             const sizedFlowActive =
-              !isEdit &&
-              Boolean(selectedCategory?.supports_sizes) &&
-              selectedSizes.length > 0;
+              !isEdit && Boolean(selectedCategory?.supports_sizes) && selectedSizes.length > 0;
             if (sizedFlowActive) {
               return (
                 <Field label="On hand">
-                  <p className="text-muted-foreground rounded-md border border-dashed border-border bg-muted/30 px-2.5 py-2 text-[11.5px]">
+                  <p className="text-muted-foreground border-border bg-muted/30 rounded-md border border-dashed px-2.5 py-2 text-[11.5px]">
                     Per-size qty is set above (Sizes).
                   </p>
                 </Field>
@@ -2039,9 +2004,11 @@ export function ItemForm({
                         />
                       )}
                     </div>
-                    <p className="mt-1.5 text-[11px] text-muted-foreground">
-                      <span className="font-medium text-foreground">This placement only</span>
-                      {' — quantity lives at this specific rack/charter, not other placements of this SKU.'}
+                    <p className="text-muted-foreground mt-1.5 text-[11px]">
+                      <span className="text-foreground font-medium">This placement only</span>
+                      {
+                        ' — quantity lives at this specific rack/charter, not other placements of this SKU.'
+                      }
                     </p>
                   </>
                 ) : (
@@ -2123,7 +2090,9 @@ export function ItemForm({
                   })
                 }
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
@@ -2140,7 +2109,8 @@ export function ItemForm({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-[11px]">
-                Lot-tracked items capture lot numbers + expiry at receiving and appear in aging / recall reports.
+                Lot-tracked items capture lot numbers + expiry at receiving and appear in aging /
+                recall reports.
               </p>
             </div>
             {watch('trackingType') === 'lot' && (
@@ -2153,9 +2123,13 @@ export function ItemForm({
                     step={1}
                     value={watch('shelfLifeDays') ?? ''}
                     onChange={(e) =>
-                      setValue('shelfLifeDays', e.target.value === '' ? null : Number(e.target.value), {
-                        shouldDirty: true,
-                      })
+                      setValue(
+                        'shelfLifeDays',
+                        e.target.value === '' ? null : Number(e.target.value),
+                        {
+                          shouldDirty: true,
+                        },
+                      )
                     }
                     placeholder="e.g. 30"
                   />
@@ -2168,10 +2142,14 @@ export function ItemForm({
                   <Select
                     value={watch('expiryPolicy') ?? 'warn'}
                     onValueChange={(v) =>
-                      setValue('expiryPolicy', v as 'none' | 'warn' | 'block', { shouldDirty: true })
+                      setValue('expiryPolicy', v as 'none' | 'warn' | 'block', {
+                        shouldDirty: true,
+                      })
                     }
                   >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Track only</SelectItem>
                       <SelectItem value="warn">Warn (default)</SelectItem>
@@ -2184,20 +2162,20 @@ export function ItemForm({
           </div>
         )}
         {isEdit && (
-          <p className="text-xs text-muted-foreground">
-            On hand is locked here so every change goes through a stock
-            movement (audit trail + dashboard math depends on it). Click
-            <span className="font-medium"> Adjust</span> next to the field
-            to add or remove stock without leaving this page.
+          <p className="text-muted-foreground text-xs">
+            On hand is locked here so every change goes through a stock movement (audit trail +
+            dashboard math depends on it). Click
+            <span className="font-medium"> Adjust</span> next to the field to add or remove stock
+            without leaving this page.
           </p>
         )}
       </Section>
 
       {tags.length > 0 && (
         <Section title="Tags">
-          <p className="text-xs text-muted-foreground">
-            Click any tag to apply or remove it. Tags stack on top of category
-            and show up in inventory filters and the bulk actions toolbar.
+          <p className="text-muted-foreground text-xs">
+            Click any tag to apply or remove it. Tags stack on top of category and show up in
+            inventory filters and the bulk actions toolbar.
           </p>
           <div className="flex flex-wrap gap-1.5">
             {tags.map((t) => {
@@ -2219,10 +2197,7 @@ export function ItemForm({
                 >
                   <span
                     aria-hidden
-                    className={cn(
-                      'h-2 w-2 rounded-full',
-                      on ? 'bg-white/80' : '',
-                    )}
+                    className={cn('h-2 w-2 rounded-full', on ? 'bg-white/80' : '')}
                     style={!on ? { backgroundColor: swatch } : undefined}
                   />
                   {t.name}
@@ -2236,18 +2211,14 @@ export function ItemForm({
       {(() => {
         if (!isEdit) return null;
         if (!selectedCategory?.supports_sizes) return null;
-        if (
-          !defaults?.categoryId ||
-          !defaults?.warehouseId
-        )
-          return null;
+        if (!defaults?.categoryId || !defaults?.warehouseId) return null;
         return (
-          <div className="flex items-center justify-between rounded-md border border-dashed border-border bg-muted/30 px-3 py-2.5 text-[12.5px]">
+          <div className="border-border bg-muted/30 flex items-center justify-between rounded-md border border-dashed px-3 py-2.5 text-[12.5px]">
             <div>
               <p className="font-medium">Add sibling sizes from this item</p>
               <p className="text-muted-foreground text-[11.5px]">
-                Copies supplier, category, warehouse, prices, and rack — you
-                pick the sizes + per-size qty.
+                Copies supplier, category, warehouse, prices, and rack — you pick the sizes +
+                per-size qty.
               </p>
             </div>
             <AddSizedVariantsButton
@@ -2268,10 +2239,7 @@ export function ItemForm({
                 reorderQuantity: Number(watch('reorderQuantity') ?? 0),
                 unitOfMeasure: watch('unitOfMeasure')?.trim() || undefined,
                 itemType: (watch('itemType') ?? itemType) as
-                  | 'product'
-                  | 'book'
-                  | 'asset'
-                  | 'consumable',
+                  'product' | 'book' | 'asset' | 'consumable',
               }}
             />
           </div>
@@ -2345,7 +2313,7 @@ export function ItemForm({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-muted-foreground">{title}</h3>
+      <h3 className="text-muted-foreground text-sm font-semibold">{title}</h3>
       <div className="space-y-3">{children}</div>
     </div>
   );
@@ -2364,8 +2332,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  */
 function SharedFieldsNote() {
   return (
-    <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-[11.5px] text-muted-foreground">
-      <span className="font-medium text-foreground">Shared across all placements of this SKU</span>
+    <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+      <span className="text-foreground font-medium">Shared across all placements of this SKU</span>
       {' — editing here updates every rack/charter this item lives in.'}
     </p>
   );
@@ -2373,10 +2341,11 @@ function SharedFieldsNote() {
 
 function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {
   return (
-    <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-[11.5px] text-muted-foreground">
-      <span className="font-medium text-foreground">This placement only</span>
+    <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+      <span className="text-foreground font-medium">This placement only</span>
       {' — '}
-      {children ?? 'changes here apply just to this rack/charter, not other placements of this SKU.'}
+      {children ??
+        'changes here apply just to this rack/charter, not other placements of this SKU.'}
     </p>
   );
 }
@@ -2396,12 +2365,10 @@ function Field({
     <div className="space-y-1.5">
       <Label>
         {label}
-        {optional && (
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-        )}
+        {optional && <span className="text-muted-foreground ml-1 font-normal">(optional)</span>}
       </Label>
       {children}
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p className="text-destructive text-xs">{error}</p>}
     </div>
   );
 }
@@ -2425,11 +2392,12 @@ function SelectField({
     <div className="space-y-1.5">
       <Label>
         {label}
-        {optional && (
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-        )}
+        {optional && <span className="text-muted-foreground ml-1 font-normal">(optional)</span>}
       </Label>
-      <Select value={value || '__none'} onValueChange={(v: string) => onChange(v === '__none' ? '' : v)}>
+      <Select
+        value={value || '__none'}
+        onValueChange={(v: string) => onChange(v === '__none' ? '' : v)}
+      >
         <SelectTrigger>
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>

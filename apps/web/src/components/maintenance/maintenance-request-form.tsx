@@ -9,13 +9,20 @@ import {
   maintenanceRequestFormSchema,
   MAINTENANCE_PRIORITIES,
   type MaintenanceRequestFormValues,
+  MaintenanceRequestFormInput,
 } from '@stockpilot/core';
 import { createMaintenanceRequestAction } from '@/server/actions/maintenance-requests';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface Props {
   /** Launch-point prefill (site, related record, subject) — never contact
@@ -39,7 +46,7 @@ const PRIORITY_LABELS: Record<(typeof MAINTENANCE_PRIORITIES)[number], string> =
 
 export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }: Props) {
   const [busy, setBusy] = useState(false);
-  const form = useForm<MaintenanceRequestFormValues>({
+  const form = useForm<MaintenanceRequestFormInput, unknown, MaintenanceRequestFormValues>({
     resolver: zodResolver(maintenanceRequestFormSchema),
     defaultValues: { priority: 'normal', ...defaults },
   });
@@ -79,18 +86,19 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
           {...form.register('subject')}
         />
         {form.formState.errors.subject ? (
-          <p className="text-sm text-destructive">{form.formState.errors.subject.message}</p>
+          <p className="text-destructive text-sm">{form.formState.errors.subject.message}</p>
         ) : null}
       </div>
 
       <div className="space-y-2">
         <Label htmlFor="mr-description">Describe the maintenance issue</Label>
-        <p className="text-sm text-muted-foreground">
-          Explain what is happening, when it started, and anything the maintenance team should know before arriving.
+        <p className="text-muted-foreground text-sm">
+          Explain what is happening, when it started, and anything the maintenance team should know
+          before arriving.
         </p>
         <Textarea id="mr-description" rows={6} {...form.register('description')} />
         {form.formState.errors.description ? (
-          <p className="text-sm text-destructive">{form.formState.errors.description.message}</p>
+          <p className="text-destructive text-sm">{form.formState.errors.description.message}</p>
         ) : null}
       </div>
 
@@ -119,7 +127,7 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
             id="mr-site"
             value={form.watch('charterId') ?? ''}
             onChange={(e) => form.setValue('charterId', e.target.value || null)}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base shadow-sm transition-colors sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="border-input bg-background focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 sm:text-sm"
           >
             <option value="">Select a site</option>
             {sites.map((s) => (
@@ -131,7 +139,10 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
         </div>
         <div className="space-y-2">
           <Label htmlFor="mr-category">Category</Label>
-          <Select value={form.watch('category') ?? ''} onValueChange={(v) => form.setValue('category', v || null)}>
+          <Select
+            value={form.watch('category') ?? ''}
+            onValueChange={(v) => form.setValue('category', v || null)}
+          >
             <SelectTrigger id="mr-category">
               <SelectValue placeholder="Select a category" />
             </SelectTrigger>
@@ -148,7 +159,9 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
           <Label htmlFor="mr-priority">Priority</Label>
           <Select
             value={priority}
-            onValueChange={(v) => form.setValue('priority', v as MaintenanceRequestFormValues['priority'])}
+            onValueChange={(v) =>
+              form.setValue('priority', v as MaintenanceRequestFormValues['priority'])
+            }
           >
             <SelectTrigger id="mr-priority" aria-label="Priority">
               <SelectValue />
@@ -162,9 +175,9 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
             </SelectContent>
           </Select>
           {priority === 'urgent' ? (
-            <p className="rounded-md border border-dashed p-2 text-sm text-muted-foreground">
-              For emergencies that put people in danger, follow your site emergency procedures first. StockPilot does
-              not replace them.
+            <p className="text-muted-foreground rounded-md border border-dashed p-2 text-sm">
+              For emergencies that put people in danger, follow your site emergency procedures
+              first. StockPilot does not replace them.
             </p>
           ) : null}
         </div>
@@ -195,7 +208,7 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
       </div>
 
       {hasLinkedRecord ? (
-        <p className="rounded-md border border-dashed p-2 text-sm text-muted-foreground">
+        <p className="text-muted-foreground rounded-md border border-dashed p-2 text-sm">
           {/* M3: this banner only reflects what was LAUNCHED WITH, never
               what the server actually kept — create() re-derives the id
               against this org (resolveRelatedId) and silently drops it to
@@ -203,8 +216,8 @@ export function MaintenanceRequestForm({ defaults, sites, categories, onSaved }:
               promise here can be wrong. "If it matches" makes that
               possibility explicit instead of guaranteeing an attach the
               server may not perform. */}
-          A related StockPilot record was pre-filled. If it matches a record in your organization, it will be
-          included in the email automatically.
+          A related StockPilot record was pre-filled. If it matches a record in your organization,
+          it will be included in the email automatically.
         </p>
       ) : null}
 

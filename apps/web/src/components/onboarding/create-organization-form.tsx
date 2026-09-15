@@ -11,7 +11,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createOrganizationAction } from '@/server/actions/organization';
 
-import { createOrganizationSchema, type CreateOrganizationInput } from '@stockpilot/core';
+import {
+  createOrganizationSchema,
+  type CreateOrganizationInput,
+  CreateOrganizationFormInput,
+} from '@stockpilot/core';
 
 const INDUSTRIES = [
   'Ecommerce',
@@ -33,7 +37,7 @@ export function CreateOrganizationForm() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<CreateOrganizationInput>({
+  } = useForm<CreateOrganizationFormInput, unknown, CreateOrganizationInput>({
     resolver: zodResolver(createOrganizationSchema),
     defaultValues: {
       name: '',
@@ -64,7 +68,7 @@ export function CreateOrganizationForm() {
           {...register('name')}
           aria-invalid={!!errors.name}
         />
-        {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
+        {errors.name && <p className="text-destructive text-xs">{errors.name.message}</p>}
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -73,7 +77,7 @@ export function CreateOrganizationForm() {
           <select
             id="industry"
             {...register('industry')}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="border-input bg-background focus-visible:ring-ring flex h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
           >
             <option value="">Select…</option>
             {INDUSTRIES.map((i) => (
@@ -88,7 +92,7 @@ export function CreateOrganizationForm() {
           <select
             id="size"
             {...register('size')}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="border-input bg-background focus-visible:ring-ring flex h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
           >
             <option value="">Select…</option>
             <option value="1">Just me</option>
