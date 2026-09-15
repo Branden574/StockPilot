@@ -3,6 +3,12 @@ import * as React from 'react';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Map as MlMap, Marker as MlMarker, StyleSpecification } from 'maplibre-gl';
 
+// maplibre-gl v6 runs its tile pipeline in a Worker that must be served from
+// public/ (see scripts/copy-maplibre-worker.mjs for why Turbopack cannot emit
+// it). This path is pinned to that script's destination by
+// delivery-map.worker-wiring.test.ts, so the two cannot drift apart silently.
+export const MAPLIBRE_WORKER_URL = '/maplibre/maplibre-gl-worker.mjs';
+
 interface LocationPayload {
   available: boolean;
   driver?: { lat: number; lng: number; heading: number | null; recordedAt: string };
@@ -67,7 +73,9 @@ export function DeliveryMap({ orderId, token, email }: { orderId: string; token:
     let disposed = false;
     void (async () => {
       try {
-        const maplibregl = (await import('maplibre-gl')).default;
+        // v6 is ESM-only with no default export: use the namespace.
+        const maplibregl = await import('maplibre-gl');
+        maplibregl.setWorkerUrl(MAPLIBRE_WORKER_URL);
         if (disposed || !mapRef.current) return;
         const d = payload.driver!;
         if (!mapObj.current) {
