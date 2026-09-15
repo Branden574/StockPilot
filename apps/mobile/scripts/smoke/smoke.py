@@ -33,6 +33,20 @@ Hard-won simulator facts baked in (each cost real debugging time):
   :3000. Both are preflight checks with explicit failure messages.
 - A notification detail sheet can overlay on launch; dismiss_overlays()
   runs before any flow asserts.
+- Xcode 27 removed SimulatorKit.framework. idb-companion < 1.5 could still
+  READ the accessibility tree but every tap/swipe/text failed with
+  "SimulatorKit is required for HID interactions" -- the suite looped for two
+  minutes and blamed the app. idb() now aborts on any failed HID command and
+  preflight gates on the companion version (>= 1.5.7 verified on Xcode 27.0).
+- iOS 27: a button half-covered by the keyboard ignores taps on its VISIBLE
+  half, keyboardShouldPersistTaps notwithstanding. _password_login dismisses
+  the keyboard (heading tap + wait for the 'q' key to leave the tree) before
+  pressing Sign in; the button's frame moves when the keyboard goes, so it is
+  re-read afterwards.
+- iOS 27 prompts "Open in StockPilot?" (Cancel / Open) for a custom-scheme
+  link opened from OUTSIDE the app (simctl openurl included). open_url()
+  presses Open when that sheet appears; before that every deep-link flow
+  timed out at its first landmark.
 - Deep links use the `stockpilot` scheme; after openurl the driver polls
   describe-all for a landmark label -- fixed sleeps are only ever brief
   inter-step settling, never the assertion wait.
@@ -97,8 +111,26 @@ def run(cmd, timeout=60):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
+HID_SUBCOMMANDS = {"tap", "swipe", "text", "key", "key-sequence", "button"}
+
+
 def idb(*args, timeout=60):
-    return run(["idb"] + list(args) + ["--udid", UDID], timeout=timeout)
+    p = run(["idb"] + list(args) + ["--udid", UDID], timeout=timeout)
+    # HID commands (tap/swipe/text/key) MUST fail loudly. Xcode 27 removed
+    # SimulatorKit.framework, which idb-companion < 1.5 used for every input
+    # event: each tap returned non-zero with "SimulatorKit is required for HID
+    # interactions" while describe-all kept working, so the suite looped for
+    # two minutes and then blamed the app for "no sign-in form". A harness
+    # that cannot press anything must abort blaming the harness.
+    if p.returncode != 0 and len(args) >= 2 and args[0] == "ui" and args[1] in HID_SUBCOMMANDS:
+        err = (p.stderr or "").strip()
+        hint = ""
+        if "SimulatorKit" in err:
+            hint = (" -- Xcode 27 removed SimulatorKit; upgrade with "
+                    "`brew upgrade idb-companion && pip3 install -U fb-idb` "
+                    "(idb-companion >= 1.5.7 drives Xcode 27 simulators).")
+        fail_hard(f"idb {' '.join(args)} failed (exit {p.returncode}): {err[-400:]}{hint}")
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +270,21 @@ def type_text(text, chunk=8):
 
 def open_url(url):
     run(["xcrun", "simctl", "openurl", UDID, url])
+    # iOS 27 asks before opening a custom-scheme link from outside the app:
+    # a system sheet "Open in \u201cStockPilot\u201d?" with Cancel / Open. Nothing
+    # navigates until Open is pressed, so every deep-link flow stalled at its
+    # first landmark wait and validate_gesture blamed the harness. Universal
+    # (https) links and notification taps do not prompt; only this path does.
+    end = time.time() + 6
+    while time.time() < end:
+        els = describe_all()
+        if any(label_of(e).startswith("Open in") for e in els):
+            btn = find_exact("Open", els)
+            if btn:
+                tap_element(btn[-1])
+                time.sleep(1.0)
+            return
+        time.sleep(0.5)
 
 
 def launch_app(fresh=True):
@@ -312,6 +359,7 @@ def preflight(ci=False):
                 "API. Start apps/web with the prod-Supabase env "
                 "(.env.local.prod) and re-run."
             )
+    check_idb_can_drive_this_xcode()
     if UDID not in run(["xcrun", "simctl", "list", "devices", "booted"]).stdout:
         print(f"Simulator {UDID} not booted; booting...")
         run(["xcrun", "simctl", "boot", UDID])
@@ -322,6 +370,38 @@ def preflight(ci=False):
     if not wait_for(pattern=r"\S", timeout=60):
         fail_hard("App launched but no accessibility elements appeared in 60s.")
     dismiss_overlays()
+
+
+def check_idb_can_drive_this_xcode():
+    """Xcode 27+ needs idb-companion >= 1.5: older companions load
+    SimulatorKit.framework for HID, and Xcode 27 no longer ships it. The
+    accessibility tree still reads fine on the old companion, which is
+    exactly why this was invisible: only input was dead. Gate on versions
+    here so the failure is one line at the top, not a two-minute loop.
+
+    `idb_companion --version` prints only a build date, so the version comes
+    from Homebrew (both the local install and the CI step use brew). If it
+    cannot be determined the gate warns and defers to idb(), which now aborts
+    on the first failed HID command anyway.
+    """
+    xc = re.search(r"Xcode (\d+)", run(["xcodebuild", "-version"]).stdout or "")
+    xcode_major = int(xc.group(1)) if xc else 0
+    if xcode_major < 27:
+        return
+    out = run(["brew", "list", "--versions", "idb-companion"]).stdout or ""
+    m = re.search(r"idb-companion (\d+)\.(\d+)\.(\d+)", out)
+    if not m:
+        print("preflight: idb-companion version unknown (not a brew install?); "
+              "relying on idb() to abort on the first failed HID command")
+        return
+    companion = tuple(int(g) for g in m.groups())
+    if companion < (1, 5, 0):
+        fail_hard(
+            f"Xcode {xcode_major} with idb-companion {'.'.join(map(str, companion))}: "
+            "input (tap/swipe/text) cannot work because Xcode 27 removed "
+            "SimulatorKit.framework. Run `brew upgrade idb-companion && "
+            "pip3 install -U fb-idb` (>= 1.5.7 verified on Xcode 27.0)."
+        )
 
 
 def dismiss_overlays():
@@ -367,6 +447,11 @@ def reset_state():
 
 def validate_gesture():
     open_url("stockpilot://orders")
+    # The "Save Password?" system alert is invisible to describe-all and, on
+    # iOS 27, lands AFTER the shell has rendered -- i.e. after
+    # ensure_signed_in() stopped looking for it. A swipe under that alert
+    # moves nothing, which read as a broken gesture. Clear it first.
+    dismiss_system_alert()
     anchor = wait_for(pattern=r"SO-\d+", timeout=30)
     if anchor is None:
         fail_hard(
@@ -581,11 +666,35 @@ def _password_login():
     if not pasted:
         return False, "could not paste the password (no Paste in the edit menu)"
 
+    # Dismiss the keyboard BEFORE pressing submit. On iOS 27 (iPhone 17
+    # simulator) the Sign in button sat with its lower half under the
+    # keyboard; a tap on its visible top half did nothing at all -- no
+    # request, no spinner, no error -- even though the screen sets
+    # keyboardShouldPersistTaps="handled". With the keyboard down the same
+    # tap signed in within two seconds. So: tap the heading (never a field,
+    # never the button), wait for the keyboard rows to leave the tree, then
+    # re-read the button's frame, which moves when the keyboard goes.
+    heading = find_exact("Sign in to StockPilot")
+    if heading:
+        tap_element(heading[0])
+    if not wait_gone_keyboard(timeout=6):
+        return False, "keyboard did not dismiss before submit"
     btn = find_exact("Sign in")
     if not btn:
         return False, "no Sign in button found"
     tap_element(btn[-1])
     return True, "submitted"
+
+
+def wait_gone_keyboard(timeout=6, interval=0.4):
+    """True once no keyboard key buttons are on screen ('q' is the canary)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        els = describe_all()
+        if not [e for e in els if e.get("type") == "Button" and label_of(e) == "q" and on_screen(e)]:
+            return True
+        time.sleep(interval)
+    return False
 
 
 def _field_value_containing(substr):
