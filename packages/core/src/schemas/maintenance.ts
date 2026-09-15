@@ -109,6 +109,8 @@ export const maintenanceRequestFormSchema = z
   .strict();
 
 export type MaintenanceRequestFormValues = z.infer<typeof maintenanceRequestFormSchema>;
+/** What the form holds BEFORE parsing (transforms/defaults not yet applied). */
+export type MaintenanceRequestFormInput = z.input<typeof maintenanceRequestFormSchema>;
 
 /**
  * The resolve() close-out contract (Maintenance Resolved spec §3.1). Shared

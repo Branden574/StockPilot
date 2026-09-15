@@ -16,7 +16,12 @@ import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { signInAction } from '@/server/actions/auth';
 
-import { ACCOUNT_DISABLED_PATH, signInSchema, type SignInInput } from '@stockpilot/core';
+import {
+  ACCOUNT_DISABLED_PATH,
+  signInSchema,
+  type SignInInput,
+  SignInFormInput,
+} from '@stockpilot/core';
 
 export function SignInForm() {
   const router = useRouter();
@@ -31,7 +36,7 @@ export function SignInForm() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<SignInInput>({
+  } = useForm<SignInFormInput, unknown, SignInInput>({
     resolver: zodResolver(signInSchema),
     mode: 'onBlur',
     reValidateMode: 'onChange',

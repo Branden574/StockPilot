@@ -13,6 +13,8 @@ export const createOrganizationSchema = z.object({
   currency: z.string().length(3).default('USD'),
 });
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
+/** What the form holds BEFORE parsing (defaults still optional). */
+export type CreateOrganizationFormInput = z.input<typeof createOrganizationSchema>;
 
 export const updateOrganizationSchema = z.object({
   name: z.string().min(2).max(120).trim().optional(),
@@ -71,9 +73,7 @@ export const setMemberWarehouseAccessSchema = z
     message: 'Pick a warehouse or choose all warehouses.',
     path: ['warehouseId'],
   });
-export type SetMemberWarehouseAccessInput = z.infer<
-  typeof setMemberWarehouseAccessSchema
->;
+export type SetMemberWarehouseAccessInput = z.infer<typeof setMemberWarehouseAccessSchema>;
 
 export const updateMemberRoleSchema = z.object({
   memberId: z.string().uuid(),

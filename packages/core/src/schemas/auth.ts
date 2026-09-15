@@ -15,6 +15,8 @@ export const signInSchema = z.object({
   rememberMe: z.boolean().default(true),
 });
 export type SignInInput = z.infer<typeof signInSchema>;
+/** What the form holds BEFORE parsing (defaults still optional). */
+export type SignInFormInput = z.input<typeof signInSchema>;
 
 export const requestPasswordResetSchema = z.object({
   email: emailSchema,
