@@ -5,6 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 
 /**
  * Public-API key auth. External systems send `Authorization: Bearer sk_live_…`.
@@ -97,14 +98,12 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
     return { ok: false, status: 401, error: 'API key expired.' };
   }
 
-  // Org must have the api_access module enabled (it's a premium module).
-  const { data: mod } = await admin
-    .from('organization_modules')
-    .select('enabled')
-    .eq('organization_id', row.organization_id)
-    .eq('module_id', 'api_access')
-    .maybeSingle();
-  if (!(mod as { enabled?: boolean } | null)?.enabled) {
+  // Org must have the api_access module (it's a premium module): an explicit
+  // enabled row, or the all-modules comp. This is an ACCESS question (an admin
+  // minted this key on purpose), so it follows the one rule. Without the comp
+  // here, a comped organization is offered the API keys panel and every key it
+  // mints is refused. Fails closed on either read.
+  if (!(await orgMayUseModule(admin, row.organization_id, 'api_access'))) {
     return { ok: false, status: 403, error: 'API access is not enabled for this organization.' };
   }
 

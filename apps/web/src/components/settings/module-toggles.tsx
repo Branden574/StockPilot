@@ -27,6 +27,12 @@ interface ModuleRow {
 interface ModuleTogglesProps {
   modules: ModuleRow[];
   enabledIds: ModuleId[];
+  /**
+   * The organization is comped: every module is usable whatever a switch says.
+   * The switches still decide what runs on its own, so they stay operable, and
+   * the copy stops calling an included module "disabled".
+   */
+  comped?: boolean;
 }
 
 interface PendingConfirm {
@@ -36,7 +42,7 @@ interface PendingConfirm {
   affected: ModuleId[];
 }
 
-export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
+export function ModuleToggles({ modules, enabledIds, comped = false }: ModuleTogglesProps) {
   const router = useRouter();
   const [enabled, setEnabled] = React.useState<Set<ModuleId>>(() => new Set(enabledIds));
   const [pending, startTransition] = React.useTransition();
@@ -77,7 +83,11 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
         // so it needs this soft RSC refresh to reflect the toggle live.
         router.refresh();
         toast.success(
-          next ? `${MODULE_REGISTRY[moduleId].title} enabled.` : `${MODULE_REGISTRY[moduleId].title} disabled.`,
+          next
+            ? `${MODULE_REGISTRY[moduleId].title} enabled.`
+            : comped
+              ? `${MODULE_REGISTRY[moduleId].title} switched off. It stays available in the app because every module is included.`
+              : `${MODULE_REGISTRY[moduleId].title} disabled.`,
         );
       } else {
         // Revert the optimistic update.
@@ -117,6 +127,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
           savingId={savingId}
           locked={locked}
           onToggle={handleToggle}
+          comped={comped}
         />
         <TierSection
           title="Optional"
@@ -126,16 +137,22 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
           savingId={savingId}
           locked={locked}
           onToggle={handleToggle}
+          comped={comped}
         />
         {premiumModules.length > 0 && (
           <TierSection
             title="Premium"
-            subtitle="Plan-gated modules. Contact us to upgrade."
+            subtitle={
+              comped
+                ? 'Included for your organization.'
+                : 'Plan-gated modules. Contact us to upgrade.'
+            }
             modules={premiumModules}
             enabled={enabled}
             savingId={savingId}
             locked={locked}
             onToggle={handleToggle}
+            comped={comped}
           />
         )}
       </div>
@@ -150,7 +167,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {confirm?.next ? 'Enable' : 'Disable'}{' '}
+              {confirm?.next ? 'Enable' : comped ? 'Switch off' : 'Disable'}{' '}
               {confirm ? MODULE_REGISTRY[confirm.moduleId].title : ''}?
             </DialogTitle>
             <DialogDescription asChild>
@@ -158,7 +175,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
                 <p>
                   This will also{' '}
                   <span className="font-medium">
-                    {confirm?.next ? 'enable' : 'disable'}
+                    {confirm?.next ? 'enable' : comped ? 'switch off' : 'disable'}
                   </span>
                   {': '}
                   {confirm?.affected
@@ -166,6 +183,12 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
                     .join(', ')}
                   .
                 </p>
+                {comped && !confirm?.next ? (
+                  <p>
+                    They stay available to your team in the app, because every module is included.
+                    What stops is what they run on their own.
+                  </p>
+                ) : null}
               </div>
             </DialogDescription>
           </DialogHeader>
@@ -207,9 +230,19 @@ interface TierSectionProps {
   /** True while any toggle is saving or a confirm is open — disables every switch. */
   locked: boolean;
   onToggle: (id: ModuleId, next: boolean) => void;
+  comped: boolean;
 }
 
-function TierSection({ title, subtitle, modules, enabled, savingId, locked, onToggle }: TierSectionProps) {
+function TierSection({
+  title,
+  subtitle,
+  modules,
+  enabled,
+  savingId,
+  locked,
+  onToggle,
+  comped,
+}: TierSectionProps) {
   if (modules.length === 0) return null;
   return (
     <section className="space-y-3">
@@ -236,6 +269,11 @@ function TierSection({ title, subtitle, modules, enabled, savingId, locked, onTo
                   {m.tier === 'premium' && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                       Premium
+                    </Badge>
+                  )}
+                  {comped && !isCore && !checked && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      Included
                     </Badge>
                   )}
                 </div>

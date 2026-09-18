@@ -84,6 +84,28 @@ describe('POST /api/public/v1/hooks (automation webhook subscribe)', () => {
     expect(res.status).toBe(403);
   });
 
+  it('accepts a COMPED organization whose integrations row is OFF, like the dashboard panel beside it', async () => {
+    authOk();
+    // Rows-only, this route refused a comped organization's Zapier subscribe call
+    // while the Webhooks panel accepted the very same URL.
+    adminStub({
+      'organization_modules.select': { data: { enabled: false }, error: null },
+      'organizations.select': { data: { all_modules_comp: true }, error: null },
+    });
+    const res = await POST(req({ target_url: 'https://ok.example/x', event_types: ['po.received'] }));
+    expect(res.status).not.toBe(403);
+  });
+
+  it('still refuses when the comp flag cannot be read (fails closed)', async () => {
+    authOk();
+    adminStub({
+      'organization_modules.select': { data: { enabled: false }, error: null },
+      'organizations.select': { data: null, error: { message: 'timeout' } },
+    });
+    const res = await POST(req({ target_url: 'https://ok.example/x', event_types: ['po.received'] }));
+    expect(res.status).toBe(403);
+  });
+
   it('propagates the auth failure response (e.g. missing scope)', async () => {
     const { NextResponse } = await import('next/server');
     vi.mocked(authorizePublicApi).mockResolvedValue({

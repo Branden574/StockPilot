@@ -146,6 +146,7 @@ PGTAP_TESTS=(
   # Per-person release state. Own-row RLS is the control, and its writer is
   # SECURITY INVOKER precisely so it has no power beyond those policies.
   supabase/tests/0353_user_release_state.test.sql
+  supabase/tests/0354_module_enabled_honours_comp.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

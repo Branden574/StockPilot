@@ -108,6 +108,25 @@ export default async function IntegrationsSettingsPage() {
     ? await ApiKeysService.forCurrentUser().then((s) => s.list())
     : [];
 
+  // A comped organization reaches this page through the comp, with no enabled
+  // `integrations` row. It can connect an accounting system, but the export
+  // drainer deliberately requires the explicit row (it is the export off switch;
+  // see lib/modules/effective-modules). Say so, or a finished connection that
+  // never exports looks like a bug. Best-effort: a failed read shows no note.
+  let exportsSwitchedOff = false;
+  if (showQbo) {
+    const supabase = await createClient();
+    const { data: integrationsRow, error: integrationsRowError } = await supabase
+      .from('organization_modules')
+      .select('enabled')
+      .eq('organization_id', ctx.organizationId)
+      .eq('module_id', 'integrations')
+      .maybeSingle();
+    exportsSwitchedOff =
+      !integrationsRowError &&
+      (integrationsRow as { enabled?: boolean } | null)?.enabled !== true;
+  }
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -123,6 +142,20 @@ export default async function IntegrationsSettingsPage() {
           the integration and never reads your data back.
         </p>
       </div>
+
+      {exportsSwitchedOff ? (
+        <div role="note" className="bg-muted/50 mb-6 rounded-md border px-4 py-3 text-sm leading-relaxed">
+          <p className="font-medium">Exports are switched off.</p>
+          <p className="text-muted-foreground mt-1">
+            Integrations is included for your organization, so you can connect an accounting system
+            here. StockPilot only sends it data while Integrations is switched on in{' '}
+            <Link href="/dashboard/settings/modules" className="text-foreground underline">
+              Modules
+            </Link>
+            .
+          </p>
+        </div>
+      ) : null}
 
       <IntegrationsPanel
         showQuickBooks={showQbo}
