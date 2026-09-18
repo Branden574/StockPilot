@@ -5,6 +5,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
+import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -134,19 +135,35 @@ async function resolveApiEnabledModules(
   supabase: any,
   organizationId: string,
 ): Promise<Set<ModuleId>> {
-  const { data: modRows, error } = await supabase
-    .from('organization_modules')
-    .select('module_id')
-    .eq('organization_id', organizationId)
-    .eq('enabled', true);
-  if (error) {
+  // Rows AND the comp flag, exactly as the dashboard resolves them. This read
+  // the rows alone until 2026-09, so a comped organization with no explicit
+  // rows had every module on the web and none through /api/v1: module-gated
+  // routes refused it, and the mobile snapshot hid its navigation.
+  const [mods, org] = await Promise.all([
+    supabase
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', organizationId)
+      .eq('enabled', true),
+    supabase
+      .from('organizations')
+      .select('all_modules_comp')
+      .eq('id', organizationId)
+      .maybeSingle(),
+  ]);
+  if (mods.error) {
     // Fail open for core / closed for optional (empty set). Log so a silent
     // empty set is distinguishable from "org genuinely has no optional modules".
-    console.error('[resolveApiEnabledModules] failed:', error);
+    console.error('[resolveApiEnabledModules] failed:', mods.error);
   }
-  return new Set(
-    ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
-  );
+  if (org.error) {
+    // An unreadable flag grants NOTHING: fall back to the explicit rows.
+    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error);
+  }
+  const comped = org.error
+    ? false
+    : (org.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
+  return effectiveModules(mods.data as Array<{ module_id: string }> | null, comped);
 }
 
 /**
