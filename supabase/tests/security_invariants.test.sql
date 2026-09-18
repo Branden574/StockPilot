@@ -160,7 +160,7 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('warehouse_in_org',            'boolean FK-org predicate used by write RLS'),
   ('purchase_order_in_org',       'boolean FK-org predicate used by write RLS'),
   ('product_group_in_org',        'boolean FK-org predicate used by write RLS (0294+)'),
-  ('module_enabled',              'boolean entitlement read (organization_modules) evaluated inside RLS/RPCs'),
+  ('module_enabled',              'boolean entitlement read (organization_modules row, OR organizations.all_modules_comp answered only to that org''s members, 0354) evaluated inside RLS/RPCs'),
   ('org_can_enable_module',       'boolean entitlement read (plan tier) used by module settings'),
   ('org_effective_tier',          'returns the org plan tier string; no tenant data'),
   ('user_can_access_inventory',   'boolean warehouse/charter access predicate used by inventory RLS'),

@@ -30,9 +30,12 @@ describe('effectiveModules', () => {
   });
 
   it('keeps explicit rows alongside the comp', () => {
-    const got = effectiveModules(rows('orders'), true);
-    expect(got.has('orders' as ModuleId)).toBe(true);
-    expect(got.size).toBeGreaterThanOrEqual(NON_CORE_MODULE_IDS.length);
+    // A row the comp does NOT add (a core id, which seed_org_modules writes).
+    // With 'orders' here this could not fail: the comp adds 'orders' anyway, so
+    // a version that threw the rows away for a comped organization stayed green.
+    const got = effectiveModules(rows('inventory'), true);
+    expect(got.has('inventory' as ModuleId)).toBe(true);
+    expect(got.size).toBe(NON_CORE_MODULE_IDS.length + 1);
   });
 
   it('grants NOTHING for a flag that is false, null or unknown: an unreadable comp fails closed', () => {

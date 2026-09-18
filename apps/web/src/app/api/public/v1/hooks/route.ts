@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 
 import { authorizePublicApi } from '@/lib/auth/public-api';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 import { PUBLIC_HOOK_EVENT_TYPES } from '@/server/services/integration-events';
 
 export const runtime = 'nodejs';
@@ -135,18 +136,20 @@ export async function POST(req: Request) {
 
 /**
  * Webhooks live in the `integrations` module; require it (separate from the
- * `api_access` module the key itself already gates on). Returns a 403 response
+ * `api_access` module the key itself already gates on).
+ *
+ * The ACCESS rule (enabled row OR the all-modules comp; lib/modules/
+ * effective-modules), the same answer the dashboard's Webhooks panel gives the
+ * same organization. Read rows-only, this route refused a comped organization's
+ * Zapier subscribe call with "Integrations is not enabled" while the panel
+ * beside it accepted the very same URL. The off switch for a webhook is the
+ * endpoint itself (its `enabled` flag, or DELETE), not the module switch:
+ * dispatch has never consulted the module. Returns a 403 response
  * to short-circuit, or null when enabled.
  */
 async function requireIntegrationsModule(organizationId: string): Promise<NextResponse | null> {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from('organization_modules')
-    .select('enabled')
-    .eq('organization_id', organizationId)
-    .eq('module_id', 'integrations')
-    .maybeSingle();
-  if (!(data as { enabled?: boolean } | null)?.enabled) {
+  if (!(await orgMayUseModule(admin, organizationId, 'integrations'))) {
     return NextResponse.json(
       { error: 'The Integrations module is not enabled for this organization.' },
       { status: 403 },

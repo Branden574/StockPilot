@@ -11,7 +11,10 @@ export interface ModuleAccess {
 /**
  * Server-side gate for a module's dashboard route. Core modules are always
  * enabled. For optional/premium, consults the canonical module_enabled() helper
- * for the caller's org. `canManage` is true for owner/admin (who can turn it on
+ * for the caller's org, which since migration 0354 answers with the ONE access
+ * rule (an enabled row OR the all-modules comp; see ./effective-modules). Before
+ * that it read the rows alone, so a comped organization was offered a module by
+ * the sidebar and told "not enabled" here. `canManage` is true for owner/admin (who can turn it on
  * in Settings → Modules). requireOrgContext is React-cached, so calling this at
  * the top of a page that also resolves context elsewhere costs no extra round-trip.
  */

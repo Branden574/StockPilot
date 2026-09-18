@@ -5,6 +5,7 @@ import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 import { audit } from '@/server/services/audit';
 import { putConnectionSecret } from '@/server/connectors/secret-store';
 
@@ -127,15 +128,14 @@ export async function GET(req: Request) {
     const connectionId = (conn as { id: string }).id;
     const organizationId = (conn as { organization_id: string }).organization_id;
 
-    // 2a. The integrations module must be enabled for this org.
-    const { data: moduleRow } = await supabase
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', organizationId)
-      .eq('module_id', 'integrations')
-      .eq('enabled', true)
-      .maybeSingle();
-    if (!moduleRow) {
+    // 2a. The organization must have the integrations module: an enabled row, or
+    // the all-modules comp. Connecting is something an admin chose to do, so it
+    // is an ACCESS question and follows the one rule (lib/modules/effective-modules).
+    // beginConnect already does; with the rows-only check that stood here, a
+    // comped organization could START a connection and never finish it. What
+    // the connection then EXPORTS is a different question: the drainer still
+    // requires the explicit enabled row, which is the export off switch.
+    if (!(await orgMayUseModule(supabase, organizationId, 'integrations'))) {
       return redirectWithError('module_disabled');
     }
 

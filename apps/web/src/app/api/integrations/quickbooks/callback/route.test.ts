@@ -86,7 +86,7 @@ function userClient(
       error: null,
     },
     'organization_modules.select': {
-      data: [{ module_id: 'integrations' }],
+      data: [{ module_id: 'integrations', enabled: true }],
       error: null,
     },
     'organization_members.select': {
@@ -259,6 +259,24 @@ describe('GET /api/integrations/quickbooks/callback', () => {
     // for an unrecognized state.
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(putConnectionSecret).not.toHaveBeenCalled();
+  });
+
+  it('a COMPED organization whose integrations row is OFF can FINISH the connect it was allowed to start', async () => {
+    // beginConnect passes on the comp. With a rows-only check here the admin
+    // consented at Intuit and bounced back to a card that still said "not
+    // connected", with no message. Exports are a separate question: the drainer
+    // still requires the explicit enabled row.
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'organization_modules.select': { data: [{ module_id: 'integrations', enabled: false }], error: null },
+        'organizations.select': { data: [{ all_modules_comp: true }], error: null },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'c', state: STATE, realmId: REALM_ID }));
+
+    expect(location(res).searchParams.get('error')).not.toBe('module_disabled');
+    expect(exchangeCode).toHaveBeenCalled();
   });
 
   it('redirects with error=module_disabled (and skips exchangeCode) when integrations is off', async () => {

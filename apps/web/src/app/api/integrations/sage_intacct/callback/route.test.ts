@@ -51,7 +51,7 @@ function userClient(
       ],
       error: null,
     },
-    'organization_modules.select': { data: [{ module_id: 'integrations' }], error: null },
+    'organization_modules.select': { data: [{ module_id: 'integrations', enabled: true }], error: null },
     'organization_members.select': { data: [{ role: 'admin' }], error: null },
     // Account status (0308). Default = ACTIVE.
     'user_profiles.select': { data: [{ disabled_at: null }], error: null },
