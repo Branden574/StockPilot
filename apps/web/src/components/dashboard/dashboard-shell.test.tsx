@@ -19,7 +19,7 @@ vi.mock('@/components/ui/sheet', () => ({
 vi.mock('@/components/dashboard/command-palette', () => ({ CommandPalette: () => null }));
 vi.mock('@/components/dashboard/edge-swipe-opener', () => ({ EdgeSwipeOpener: () => null }));
 vi.mock('@/components/dashboard/nav-progress-bar', () => ({ NavProgressBar: () => null }));
-vi.mock('@/components/version-notifier', () => ({ VersionNotifier: () => null }));
+vi.mock('@/components/updates/update-center', () => ({ UpdateCenter: () => null }));
 vi.mock('@/components/dashboard/notification-bell', () => ({ NotificationBell: () => null }));
 vi.mock('@/components/dashboard/user-menu', () => ({ UserMenu: () => null }));
 vi.mock('@/components/dashboard/warehouse-filter-picker', () => ({

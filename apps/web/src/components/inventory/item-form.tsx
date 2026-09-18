@@ -47,6 +47,7 @@ import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { resolveListReturnHref } from '@/lib/last-list-url';
+import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
 import {
   bulkCreateSizedVariantsAction,
@@ -292,6 +293,23 @@ export function ItemForm({
   const isEdit = Boolean(defaults?.id);
   const [staged, setStaged] = React.useState<StagedImage[]>([]);
   const [uploadingImages, setUploadingImages] = React.useState(false);
+
+  // UNSAVED WORK. This form persists nothing until it is submitted, and "Refresh
+  // to update" (components/updates) reloads the page, so it must be able to ask
+  // first. "Dirty" here means: the person has edited something since the form
+  // mounted, or has photos staged or uploading, and has not saved yet. It is
+  // deliberately coarse. Most of this form's state lives in plain useState
+  // outside react-hook-form (rack, crate, sizes, custom fields), and the form
+  // calls setValue programmatically, so RHF's isDirty is both incomplete and
+  // noisy here. A false positive costs one "Refresh anyway" click; a false
+  // negative costs someone their item.
+  const touchedRef = React.useRef(false);
+  const savedRef = React.useRef(false);
+  useUnsavedWork(
+    'item-form',
+    isEdit ? 'Edit item' : 'New item',
+    () => !savedRef.current && (touchedRef.current || staged.length > 0 || uploadingImages),
+  );
   /** Transported percentage for the staged-photo batch, null when idle. */
   const [uploadPercent, setUploadPercent] = React.useState<number | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -621,6 +639,7 @@ export function ItemForm({
   }, [sportsEnabled, profile, isEdit, linkedGroup, sportsGroupFields]);
 
   function handleUseGroupCandidate(id: string) {
+    touchedRef.current = true;
     const candidate = groupCandidates.find((c) => c.id === id);
     setValue('groupId', id, { shouldDirty: true });
     setLinkedGroup({ id, name: candidate?.name ?? 'Selected group' });
@@ -730,6 +749,7 @@ export function ItemForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTagIdsKey]);
   function toggleTag(id: string) {
+    touchedRef.current = true;
     setSelectedTagIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -739,6 +759,7 @@ export function ItemForm({
   }
 
   async function handleIsbnDetected(isbn: string) {
+    touchedRef.current = true;
     // The scan succeeded — surface the value immediately and keep it
     // populated whether or not the metadata lookup finds anything.
     // Educational/textbook publishers (HMH, Pearson, McGraw-Hill, etc.)
@@ -790,6 +811,7 @@ export function ItemForm({
   // already have their own ISBN flow via handleIsbnDetected above; this
   // is purely for the "regular product" path.
   async function handleUpcLookup() {
+    touchedRef.current = true;
     const code = (watch('barcode') ?? '').trim();
     if (!code) {
       toast.error('Type or scan a barcode first, then click Lookup.');
@@ -1287,9 +1309,11 @@ export function ItemForm({
           `Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`,
         );
       } else {
+        savedRef.current = true;
         toast.success(`Item created with ${uploaded} photo${uploaded === 1 ? '' : 's'}.`);
       }
     } else {
+      savedRef.current = true;
       toast.success(isEdit ? 'Item updated.' : 'Item created.');
     }
     // Independent of the photo outcome, and now set on BOTH paths. The edit
@@ -1339,7 +1363,30 @@ export function ItemForm({
   });
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6" noValidate>
+    <form
+      onSubmit={onSubmit}
+      // Any edit in any control (native inputs bubble change; Radix selects
+      // dispatch one through their hidden native control) marks the form as
+      // holding unsaved work. See useUnsavedWork below.
+      onChangeCapture={() => {
+        touchedRef.current = true;
+      }}
+      // ...and a change event is NOT the only way this form changes. Tags and
+      // size chips are buttons; Generate SKU, the barcode scanner and the two
+      // lookups write through setValue(). None of those fire `change`, so a
+      // form filled entirely by scanning and tapping read as untouched and
+      // "Refresh to update" reloaded over it without asking. Any control the
+      // person operates counts, except the submit button itself. React events
+      // bubble through portals, so popover and dialog content is covered.
+      onClickCapture={(e) => {
+        const control = (e.target as HTMLElement).closest<HTMLElement>(
+          'button, [role="option"], [role="checkbox"], [role="switch"], [role="radio"], [role="menuitemcheckbox"]',
+        );
+        if (control && (control as HTMLButtonElement).type !== 'submit') touchedRef.current = true;
+      }}
+      className="space-y-6"
+      noValidate
+    >
       {!isEdit && (
         <Section title="Photos">
           <p className="text-muted-foreground text-xs">

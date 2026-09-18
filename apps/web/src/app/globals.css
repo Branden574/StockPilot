@@ -817,3 +817,18 @@
   .auth-submit-done { animation: none; }
   .auth-stage[data-phase='submitting'] .af-rail { animation: none !important; opacity: 1; }
 }
+
+/* ── Product-update notice vs transient toasts ────────────────────────────────
+   Both live bottom-right, and sonner paints at z-index 999999999. While the
+   update notice is up, UpdateCenter sets data-sp-update-card on <html> and its
+   height in --sp-update-card-offset; this lifts sonner's stack by that much so
+   a toast lands ABOVE the notice, not over it. The extra attribute and element
+   selectors out-specify sonner's own injected rule without !important. */
+html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
+  bottom: calc(var(--offset-bottom) + var(--sp-update-card-offset, 0px));
+}
+@media (max-width: 600px) {
+  html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
+    bottom: calc(var(--mobile-offset-bottom) + var(--sp-update-card-offset, 0px));
+  }
+}

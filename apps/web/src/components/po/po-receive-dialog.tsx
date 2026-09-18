@@ -19,6 +19,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useUnsavedWork } from '@/lib/unsaved-work';
 import { postReceiptAction } from '@/server/actions/receiving';
 
 import {
@@ -127,6 +128,19 @@ export function PoReceiveDialog({
       lines.map((l) => [l.id, blankEntry()]),
     ),
   );
+
+  // UNSAVED WORK. Typed receipt quantities, lots and serials are a physical
+  // count someone just did at a dock, and they live only in this component's
+  // memory until the receipt posts. "Refresh to update" must ask before it
+  // reloads over them. Dirty = the dialog is open and anything differs from a
+  // blank entry, or a post is in flight (a reload mid-post would hide whether
+  // the stock landed).
+  useUnsavedWork('po-receive', `Receiving ${poNumber}`, () => {
+    if (!open) return false;
+    if (submitting || notes.trim().length > 0) return true;
+    const blank = JSON.stringify(blankEntry());
+    return Object.values(entries).some((e) => JSON.stringify(e) !== blank);
+  });
 
   // Idempotency key: one per dialog open. New key when re-opening (resets state).
   const [idempotencyKey, setIdempotencyKey] = React.useState(() => crypto.randomUUID());

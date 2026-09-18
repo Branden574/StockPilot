@@ -46,13 +46,22 @@ const sheetVariants = cva(
 );
 
 interface SheetContentProps
-  extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof sheetVariants> {}
+  extends
+    React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
+    VariantProps<typeof sheetVariants> {
+  /**
+   * Omit the built-in corner X so the caller can render its own close control
+   * (use <SheetClose asChild>). The built-in one is a 16px target, below the
+   * 24px minimum, which matters most where it is the only way out: a sheet that
+   * fills a phone screen. Default false, so every existing sheet is unchanged.
+   */
+  hideClose?: boolean;
+}
 
 export const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', className, children, ...props }, ref) => (
+>(({ side = 'right', className, children, hideClose = false, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
@@ -61,27 +70,26 @@ export const SheetContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
+      {hideClose ? null : (
+        <DialogPrimitive.Close className="focus:ring-ring absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      )}
     </DialogPrimitive.Content>
   </SheetPortal>
 ));
 SheetContent.displayName = DialogPrimitive.Content.displayName;
 
 export const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn('flex flex-col space-y-1 border-b p-6 text-left', className)}
-    {...props}
-  />
+  <div className={cn('flex flex-col space-y-1 border-b p-6 text-left', className)} {...props} />
 );
 SheetHeader.displayName = 'SheetHeader';
 
 export const SheetFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      'flex flex-col-reverse gap-2 border-t bg-muted/30 p-6 sm:flex-row sm:justify-end',
+      'bg-muted/30 flex flex-col-reverse gap-2 border-t p-6 sm:flex-row sm:justify-end',
       className,
     )}
     {...props}
@@ -107,7 +115,7 @@ export const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-muted-foreground', className)}
+    className={cn('text-muted-foreground text-sm', className)}
     {...props}
   />
 ));

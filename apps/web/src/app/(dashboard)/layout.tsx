@@ -22,7 +22,6 @@ import { createClient } from '@/lib/supabase/server';
 
 import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
-import { WhatsNew } from '@/components/onboarding/whats-new';
 
 // Override the root layout's marketing title for everything under
 // /dashboard. Without this, every dashboard page that doesn't export
@@ -218,7 +217,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         <ImpersonationBanner />
         {showMfaBanner && <MfaRequiredBanner />}
         {children}
-        <WhatsNew />
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves
             the browser, and the server stamps the session's own user and org. */}

@@ -143,6 +143,10 @@ PGTAP_TESTS=(
   # only, never an impersonation grant, never a disabled account) is the control.
   supabase/tests/0352_member_last_seen.test.sql
 
+  # Per-person release state. Own-row RLS is the control, and its writer is
+  # SECURITY INVOKER precisely so it has no power beyond those policies.
+  supabase/tests/0353_user_release_state.test.sql
+
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
   supabase/tests/0142_order_attachments_read_floor.test.sql

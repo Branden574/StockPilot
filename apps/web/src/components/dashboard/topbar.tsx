@@ -10,6 +10,7 @@ import { NotificationBell } from '@/components/dashboard/notification-bell';
 import { SidebarToggleButton } from '@/components/dashboard/sidebar-toggle-button';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
+import { WhatsNewButton } from '@/components/updates/whats-new-button';
 import { cn } from '@/lib/utils';
 
 import type { NavSection } from './nav';
@@ -133,6 +134,8 @@ export function Topbar({
         organizationId={organizationId}
         initialUnread={initialUnreadNotifications}
       />
+
+      <WhatsNewButton />
 
       <button
         type="button"

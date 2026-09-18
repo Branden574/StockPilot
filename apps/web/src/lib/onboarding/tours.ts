@@ -56,11 +56,12 @@ export const NEW_ITEM_TOUR: TourDefinition = {
     {
       target: 'input[name="sku"]',
       title: 'SKU',
-      body: "Your internal code for this product. Leave it blank and StockPilot generates one. Same product in a different charter or bin can be its own record with its own SKU.",
+      body: 'Your internal code for this product. Leave it blank and StockPilot generates one. Same product in a different charter or bin can be its own record with its own SKU.',
       optional: true,
     },
     {
-      target: 'input[name="quantity_on_hand"], input[name="quantityOnHand"], input[name="quantity"]',
+      target:
+        'input[name="quantity_on_hand"], input[name="quantityOnHand"], input[name="quantity"]',
       title: 'Quantity on hand',
       body: 'How many units physically exist right now. Orders reserve from this; picking and hand-over subtract from it — always with a movement trail.',
       optional: true,

@@ -43,6 +43,12 @@ const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
 // its href is only used for the rename lookup, never as a self-link.
 const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [/^\/dashboard$/, [OVERVIEW]],
+  // Release history. Not a sidebar item, so neither crumb can be renamed.
+  [
+    /^\/dashboard\/whats-new\/[^/]+$/,
+    [{ label: 'What’s new', href: '/dashboard/whats-new' }, { label: 'Release', href: null }],
+  ],
+  [/^\/dashboard\/whats-new$/, [{ label: 'What’s new', href: '/dashboard/whats-new' }]],
   // /import must precede /[^/]+ so it isn't caught by the detail catch-all
   [/^\/dashboard\/inventory\/new$/, [SECTION_INVENTORY, ITEMS_LIST, { label: 'New', href: null }]],
   [

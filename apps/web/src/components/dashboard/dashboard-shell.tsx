@@ -20,7 +20,7 @@ import {
 } from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
-import { VersionNotifier } from '@/components/version-notifier';
+import { UpdateCenter } from '@/components/updates/update-center';
 import { identify } from '@/lib/analytics';
 
 import type { ModuleId, NavOverrides, Permission, Role } from '@stockpilot/core';
@@ -304,7 +304,7 @@ export function DashboardShell({
         />
       )}
 
-      <VersionNotifier />
+      <UpdateCenter userId={userId} organizationId={organizationId} />
       <CommandPalette />
       <KeyboardShortcutsProvider />
     </div>

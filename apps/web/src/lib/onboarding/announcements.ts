@@ -1,10 +1,21 @@
 import type { Role } from '@stockpilot/core';
 
+import { RELEASES } from '@/lib/releases/registry';
+
 /**
- * What's New registry (owner PRD §5). Append-only: add new releases to the
- * TOP. A user sees an announcement once (viewed_announcements, mig 0259);
- * dismiss-all marks everything seen. `roles` limits who is told (never
- * announce features the viewer cannot reach); omitted = everyone.
+ * LEGACY VIEW of the release registry, kept for the mobile compatibility route
+ * (/api/v1/me/announcements) and the pure helpers in announcement-logic.ts.
+ *
+ * The source of truth moved to lib/releases/registry.ts. This module used to BE
+ * the registry; it now derives the old five-field shape from it so that nothing
+ * is written twice and the two can never drift. The ids are unchanged, because
+ * they key every person's seen-state on web and mobile
+ * (user_onboarding.viewed_announcements): renaming one re-announces it to
+ * everybody.
+ *
+ * `roles` carries only the role dimension of a release's audience. Reach is
+ * decided by lib/releases/logic.ts (roles AND permissions AND modules); this
+ * field is here for the legacy helper's signature, not as the gate.
  */
 export interface Announcement {
   /** Stable slug — stored in user_onboarding.viewed_announcements. */
@@ -17,48 +28,17 @@ export interface Announcement {
   roles?: Role[];
 }
 
-export const ANNOUNCEMENTS: Announcement[] = [
-  {
-    id: 'maintenance-requests-2026-08',
-    date: '2026-08-06',
-    title: 'Maintenance requests',
-    body: 'Report facilities and equipment issues from StockPilot. Your request is saved with a request number, and StockPilot prepares the complete Outlook email for you to review and send.',
-    cta: { href: '/dashboard/maintenance', label: 'Report an issue' },
+export const ANNOUNCEMENTS: Announcement[] = RELEASES.filter((r) => r.status === 'published').map(
+  (r) => {
+    const linked = r.entries.find((e) => e.link);
+    const roles = r.audience?.roles ?? linked?.audience?.roles;
+    return {
+      id: r.id,
+      date: r.publishedAt.slice(0, 10),
+      title: r.title,
+      body: r.summary,
+      ...(linked?.link ? { cta: { href: linked.link.href, label: linked.link.label } } : {}),
+      ...(roles ? { roles: [...roles] } : {}),
+    };
   },
-  {
-    id: 'support-feedback-2026-07',
-    date: '2026-07-12',
-    title: 'Support & feedback, right in the app',
-    body: 'Hit a bug, want a feature, or have a billing question? Open Support & feedback (workspace sidebar or the life-ring in the top bar), attach a screenshot, and send it straight to the StockPilot team — then track the status of everything you’ve submitted on the same page.',
-    cta: { href: '/dashboard/support', label: 'Open Support & feedback' },
-  },
-  {
-    id: 'onboarding-tours-2026-07',
-    date: '2026-07-11',
-    title: 'Interactive tours + Help center',
-    body: 'Every major page now has a “Tour” pill that walks you through what everything does, and the new Help & Learning center collects tours, step-by-step workflow guides, and shortcuts in one place.',
-    cta: { href: '/dashboard/help', label: 'Open Help & Learning' },
-  },
-  {
-    id: 'schedule-reminders-2026-07',
-    date: '2026-07-10',
-    title: 'Needed-by dates now schedule themselves',
-    body: 'Give an order a needed-by date and, on approval, a team Schedule event is created automatically — with reminders the day before and an hour ahead. You can tune reminder emails and pushes per person in notification settings.',
-    cta: { href: '/dashboard/schedule', label: 'See the Schedule' },
-  },
-  {
-    id: 'order-numbers-2026-07',
-    date: '2026-07-10',
-    title: 'Order numbers, everywhere',
-    body: 'Orders now carry short per-organization numbers like SO-000045 — on the list, pick slips, packing slips, emails, and the Schedule — so everyone can reference the same order unambiguously.',
-    cta: { href: '/dashboard/orders', label: 'View orders' },
-  },
-  {
-    id: 'backorders-2026-07',
-    date: '2026-07-09',
-    title: 'Partial fulfillment & backorders',
-    body: 'Short on stock? Hand over what you have — the order records fulfilled vs owed quantities and moves to Backordered until you resume fulfillment or close it. No more cancelling half-servable orders.',
-    cta: { href: '/dashboard/orders?status=backordered', label: 'Backordered tab' },
-    roles: ['owner', 'admin', 'manager'],
-  },
-];
+);
