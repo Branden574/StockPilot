@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The Users tab is the only surface that can disable or re-enable an account,
@@ -13,7 +13,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * page links that actually fetch the rest.
  */
 
-const h = vi.hoisted(() => ({ getOrgMembers: vi.fn() }));
+const h = vi.hoisted(() => ({
+  getOrgMembers: vi.fn(),
+  recordPlatformAudit: vi.fn(async () => true),
+}));
 
 vi.mock('@/lib/auth/platform-admin', () => ({
   requirePlatformAdmin: vi.fn(async () => {}),
@@ -23,7 +26,7 @@ vi.mock('@/lib/auth/session', () => ({
   requireSession: vi.fn(async () => ({ userId: 'god', email: 'god@stockpilotusa.com' })),
 }));
 vi.mock('@/server/services/platform/audit', () => ({
-  recordPlatformAudit: vi.fn(async () => true),
+  recordPlatformAudit: (...a: unknown[]) => h.recordPlatformAudit(...(a as [])),
 }));
 vi.mock('@/server/services/platform/orgs', () => ({
   DETAIL_PREVIEW_LIMIT: 100,
@@ -58,7 +61,7 @@ import PlatformOrgDetailPage from './page';
 
 const ORG = '11111111-1111-1111-1111-111111111111';
 
-function member(n: number) {
+function member(n: number, activity: Record<string, unknown> = {}) {
   return {
     userId: `u-${n}`,
     email: `user${n}@acme.test`,
@@ -66,10 +69,25 @@ function member(n: number) {
     role: 'staff',
     joinedAt: '2026-01-01T00:00:00Z',
     disabledAt: null,
+    lastSignInAt: null,
+    lastSessionAt: null,
+    lastActionAt: null,
+    lastActiveAt: null,
+    lastActiveSource: 'never',
+    ...activity,
   };
 }
 
-function armMembers(over: Partial<{ members: unknown[]; total: number; page: number; pageCount: number; search: string | null }>) {
+function armMembers(
+  over: Partial<{
+    members: unknown[];
+    total: number;
+    page: number;
+    pageCount: number;
+    search: string | null;
+    activityAvailable: boolean;
+  }>,
+) {
   h.getOrgMembers.mockResolvedValue({
     members: over.members ?? [member(1), member(2)],
     total: over.total ?? 150,
@@ -77,6 +95,7 @@ function armMembers(over: Partial<{ members: unknown[]; total: number; page: num
     pageSize: 50,
     pageCount: over.pageCount ?? 3,
     search: over.search ?? null,
+    activityAvailable: over.activityAvailable ?? true,
   });
 }
 
@@ -167,5 +186,161 @@ describe('platform org detail — Users tab reachability', () => {
     // Only the first value reaches the service — same "take the first
     // element" contract as the other firstParam call sites in the app.
     expect(h.getOrgMembers).toHaveBeenCalledWith(ORG, expect.objectContaining({ search: 'ada' }));
+  });
+});
+
+/**
+ * LAST ACTIVE. An operator may read this column when deciding that an account
+ * is dormant, on the one screen that can disable it. So what is pinned is not
+ * "a date renders" but the three ways the column could mislead: presenting a
+ * failed lookup as "Never", presenting a stale sign-in as a measurement, and
+ * taking the whole tab down over a cosmetic value.
+ */
+describe('platform org detail — Users tab last active', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const rowOf = (email: string) => within(screen.getByText(email).closest('tr')!);
+
+  it('adds the column between Joined and Actions', async () => {
+    await renderUsersTab();
+    expect(screen.getAllByRole('columnheader').map((n) => n.textContent)).toEqual([
+      'User',
+      'Role',
+      'Joined',
+      'Last active',
+      'Actions',
+    ]);
+  });
+
+  it('shows a coarse age, with every exact instant behind it in the title', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    armMembers({
+      members: [
+        member(1, {
+          lastSignInAt: '2026-07-22T08:00:00+00:00',
+          lastSessionAt: '2026-09-18T09:00:00+00:00',
+          lastActionAt: '2026-09-17T23:30:00+00:00',
+          lastActiveAt: '2026-09-18T09:00:00.000Z',
+          lastActiveSource: 'session',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    const cell = rowOf('user1@acme.test').getByText('3 hours ago');
+    expect(cell.getAttribute('title')).toBe(
+      'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, accurate to about an hour). ' +
+        'Last recorded action in this organization 17 Sep 2026, 23:30 UTC. ' +
+        'Last signed in 22 Jul 2026, 08:00 UTC.',
+    );
+  });
+
+  it('marks a value that is ONLY a sign-in, because that is when it is most likely stale', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    armMembers({
+      members: [
+        member(1, {
+          lastSignInAt: '2026-08-12T15:00:00+00:00',
+          lastActiveAt: '2026-08-12T15:00:00.000Z',
+          lastActiveSource: 'sign_in',
+        }),
+        member(2, {
+          lastSessionAt: '2026-09-15T12:00:00+00:00',
+          lastActiveAt: '2026-09-15T12:00:00.000Z',
+          lastActiveSource: 'session',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    const fallback = rowOf('user1@acme.test').getByText('Signed in 12 Aug 2026');
+    expect(fallback.getAttribute('title')).toContain('No open sign-ins on any device');
+    expect(fallback.getAttribute('title')).toContain('may have kept working after this');
+    // The measured row carries no such hedge.
+    expect(rowOf('user2@acme.test').getByText('3 days ago')).toBeInTheDocument();
+    expect(rowOf('user2@acme.test').queryByText(/signed in/i)).toBeNull();
+  });
+
+  it('says Never only for the member with no activity', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    armMembers({
+      members: [
+        member(1),
+        member(2, {
+          lastActionAt: '2026-09-18T11:30:00+00:00',
+          lastActiveAt: '2026-09-18T11:30:00.000Z',
+          lastActiveSource: 'action',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    expect(rowOf('user1@acme.test').getByText('Never').getAttribute('title')).toBe(
+      'This person has never signed in and has no recorded activity in this organization.',
+    );
+    expect(rowOf('user2@acme.test').queryByText('Never')).toBeNull();
+    expect(rowOf('user2@acme.test').getByText('Within the last hour')).toBeInTheDocument();
+  });
+
+  it('when the lookup failed it says so, never says Never, and every row keeps its actions', async () => {
+    armMembers({
+      activityAvailable: false,
+      members: [member(1, { lastActiveSource: null }), member(2, { lastActiveSource: null })],
+    });
+    await renderUsersTab();
+
+    expect(screen.queryByText('Never')).toBeNull();
+    expect(screen.getByText(/activity could not be loaded/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'actions u-1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'actions u-2' })).toBeInTheDocument();
+    expect(screen.getByText(/of 150/i)).toBeInTheDocument();
+  });
+
+  it('a member with the keys absent, or an unparseable value, cannot take the tab down', async () => {
+    const bare = {
+      userId: 'u-1',
+      email: 'user1@acme.test',
+      fullName: 'User 1',
+      role: 'staff',
+      joinedAt: '2026-01-01T00:00:00Z',
+      disabledAt: null,
+    };
+    armMembers({
+      members: [
+        bare,
+        member(2, {
+          lastActiveAt: 'not-a-date',
+          lastSessionAt: 'not-a-date',
+          lastActiveSource: 'session',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    expect(rowOf('user1@acme.test').getByText('Never')).toBeInTheDocument();
+    expect(rowOf('user2@acme.test').getByText('Never')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'actions u-2' })).toBeInTheDocument();
+  });
+
+  it('explains on the page what the number is and is not', async () => {
+    await renderUsersTab();
+    expect(screen.getByText(/accurate to about an hour/i)).toBeInTheDocument();
+  });
+
+  it('audits the view: this tab now shows per-person activity across a tenant boundary', async () => {
+    await renderUsersTab();
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.recordPlatformAudit).toHaveBeenCalledWith({
+      actorUserId: 'god',
+      actorEmail: 'god@stockpilotusa.com',
+      action: 'viewed_org',
+      targetOrganizationId: ORG,
+      detail: { name: 'Acme', tab: 'users' },
+    });
   });
 });
