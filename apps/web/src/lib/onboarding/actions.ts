@@ -4,8 +4,6 @@ import { z } from 'zod';
 
 import { withContext } from '@/server/services/context';
 
-import { computeSeenViewedMap, filterUnseenForClient } from './announcement-logic';
-
 /**
  * Onboarding state persistence (mig 0259, spec §13). Backend-stored so
  * progress survives refresh, sessions, and devices. RLS restricts every
@@ -58,75 +56,11 @@ export async function recordTourOutcomeAction(
   }
 }
 
-const announcementSeenSchema = z.object({
-  ids: z.array(z.string().min(1).max(80)).min(1).max(50),
-  outcome: z.enum(['seen', 'dismissed']),
-  /**
-   * Closing the modal means "I'm caught up": stamp EVERY registry
-   * announcement, not just the (capped) ones shown — otherwise the backlog
-   * drips one modal per page load.
-   */
-  all: z.boolean().optional(),
-});
-
-/**
- * Unseen announcements for the current user, role-filtered, newest first.
- * Fail-quiet to an empty list — What's New must never break the shell.
- */
-export async function getUnseenAnnouncementsAction(): Promise<
-  { id: string; date: string; title: string; body: string; cta?: { href: string; label: string } }[]
-> {
-  try {
-    const [{ ANNOUNCEMENTS }, ctx] = await Promise.all([
-      import('@/lib/onboarding/announcements'),
-      withContext(),
-    ]);
-    const { data } = await ctx.supabase
-      .from('user_onboarding')
-      .select('viewed_announcements')
-      .eq('user_id', ctx.userId)
-      .maybeSingle();
-    const viewed = (data?.viewed_announcements as Record<string, unknown> | null) ?? {};
-    return filterUnseenForClient(ANNOUNCEMENTS, viewed, ctx.role);
-  } catch {
-    return [];
-  }
-}
-
-export async function recordAnnouncementsSeenAction(
-  input: z.input<typeof announcementSeenSchema>,
-): Promise<void> {
-  const parsed = announcementSeenSchema.safeParse(input);
-  if (!parsed.success) return;
-  try {
-    const ctx = await withContext();
-    const { data: row } = await ctx.supabase
-      .from('user_onboarding')
-      .select('viewed_announcements')
-      .eq('user_id', ctx.userId)
-      .maybeSingle();
-    const current = (row?.viewed_announcements as Record<string, unknown> | null) ?? {};
-    const { ANNOUNCEMENTS } = await import('@/lib/onboarding/announcements');
-    const viewedMap = computeSeenViewedMap(
-      current,
-      parsed.data.ids,
-      parsed.data.outcome,
-      parsed.data.all ?? false,
-      ANNOUNCEMENTS.map((a) => a.id),
-      new Date().toISOString(),
-    );
-    await ctx.supabase.from('user_onboarding').upsert(
-      {
-        user_id: ctx.userId,
-        role_at_onboarding: ctx.role,
-        viewed_announcements: viewedMap,
-      },
-      { onConflict: 'user_id' },
-    );
-  } catch {
-    // Best-effort — a lost mark re-shows an announcement once.
-  }
-}
+// What's New no longer reads or writes through server actions. It is read by
+// tabs that are one deployment BEHIND, and a server action's id changes with
+// every build, so an old tab calling one gets "Failed to find Server Action".
+// See app/api/v1/me/releases/route.ts and lib/updates/update-store.ts. The
+// legacy seen-map that mobile uses is written by app/api/v1/me/announcements.
 
 export interface TourStateSnapshot {
   completed: Record<string, { v?: number } | undefined>;

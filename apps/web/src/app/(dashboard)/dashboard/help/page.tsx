@@ -3,7 +3,6 @@ import { BookOpen, CheckCircle2, Gift, Keyboard, Mail, Sparkles } from 'lucide-r
 import Link from 'next/link';
 
 import { getTourStateAction } from '@/lib/onboarding/actions';
-import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 import {
   AI_TOUR,
   DASHBOARD_TOUR,
@@ -146,26 +145,25 @@ export default async function HelpPage() {
         </div>
       </section>
 
+      {/* What's new used to be listed here by mapping the raw registry, with NO
+          audience filter, so copy about features a viewer could not reach was
+          rendered to every role. The history page filters on the server. */}
       <section className="mt-10">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
           <Gift className="text-primary size-4" /> What&apos;s new
         </h2>
-        <div className="mt-4 space-y-2">
-          {ANNOUNCEMENTS.map((a) => (
-            <div key={a.id} className="bg-card rounded-lg border p-3">
-              <p className="text-sm font-medium">
-                {a.title}
-                <span className="text-muted-foreground ml-2 text-xs font-normal">{a.date}</span>
-              </p>
-              <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{a.body}</p>
-              {a.cta && (
-                <Link href={a.cta.href} className="text-primary mt-1 inline-block text-xs font-medium hover:underline">
-                  {a.cta.label} →
-                </Link>
-              )}
-            </div>
-          ))}
-        </div>
+        <Link
+          href="/dashboard/whats-new"
+          className="bg-card hover:bg-muted/50 mt-4 flex items-center justify-between rounded-lg border p-3 transition-colors"
+        >
+          <span>
+            <span className="block text-sm font-medium">Release history</span>
+            <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
+              Every StockPilot release, what changed, and what it means for your work.
+            </span>
+          </span>
+          <span className="text-primary text-xs font-medium">Open →</span>
+        </Link>
       </section>
 
       <section className="mt-10 grid gap-4 sm:grid-cols-2">

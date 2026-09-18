@@ -67,9 +67,15 @@ describe('maintenance-requests onboarding registries (Task 23)', () => {
     expect(TOUR_ROUTES['maintenance-requests']).toBe('/dashboard/maintenance');
   });
 
-  it('the maintenance-requests announcement is FIRST in ANNOUNCEMENTS, titled "Maintenance requests"', () => {
-    expect(ANNOUNCEMENTS[0]?.id).toBe('maintenance-requests-2026-08');
-    expect(ANNOUNCEMENTS[0]?.title).toBe('Maintenance requests');
+  // This used to pin the entry at INDEX 0, which contradicted the registry's own
+  // "add new releases to the TOP" rule: the first release added above it failed
+  // the suite for a reason that had nothing to do with maintenance. What matters
+  // is that the entry exists under its permanent id with its title; its position
+  // relative to the other legacy entries is pinned by lib/releases/registry.test.ts.
+  it('the maintenance-requests announcement exists under its permanent id, titled "Maintenance requests"', () => {
+    const entry = ANNOUNCEMENTS.find((a) => a.id === 'maintenance-requests-2026-08');
+    expect(entry).toBeDefined();
+    expect(entry?.title).toBe('Maintenance requests');
   });
 
   it('the maintenance-requests announcement body is the exact brief copy', () => {

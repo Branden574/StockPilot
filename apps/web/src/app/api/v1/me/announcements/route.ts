@@ -2,11 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import {
-  computeSeenViewedMap,
-  filterUnseenForClient,
-} from '@/lib/onboarding/announcement-logic';
-import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
+import { computeSeenViewedMap } from '@/lib/onboarding/announcement-logic';
+import { legacyAnnouncementsFor } from '@/lib/releases/logic';
+import { RELEASES } from '@/lib/releases/registry';
+import { releaseViewerFor } from '@/server/services/releases';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,6 +19,21 @@ export const dynamic = 'force-dynamic';
  * before leaving the server, all:true stamps the ENTIRE registry, preserve-
  * don't-overwrite merge) — critical because both write the same
  * user_onboarding.viewed_announcements row.
+ *
+ * CONTENT now comes from the release registry (lib/releases/registry.ts) through
+ * legacyAnnouncementsFor, which returns EXACTLY the shape this route has always
+ * returned: { id, date, title, body, cta? }, every field a string, capped at 3,
+ * in registry order. Binaries already installed render those fields straight
+ * into <Text> with no validation, and an OTA cannot reach a binary on an older
+ * runtime, so this contract is frozen.
+ *
+ * Reach is now roles AND permissions AND enabled modules, not roles alone, so a
+ * phone is no longer told about a page that would bounce it home.
+ *
+ * "Seen" here is the legacy viewed_announcements map and stays separate from
+ * the web's read state (user_release_state) on purpose: every close on a phone
+ * posts all:true, which stamps the whole registry, and that must not mark
+ * everything read on the web.
  *
  * Role gating stays SERVER-SIDE: withApiContext re-derives ctx.role from
  * organization_members via the Bearer token, so role-gated announcement copy
@@ -40,7 +54,7 @@ export async function GET(req: Request): Promise<Response> {
       .maybeSingle();
     const viewed = (data?.viewed_announcements as Record<string, unknown> | null) ?? {};
     return NextResponse.json(
-      { items: filterUnseenForClient(ANNOUNCEMENTS, viewed, ctx.role) },
+      { items: legacyAnnouncementsFor(RELEASES, releaseViewerFor(ctx), viewed) },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch {
@@ -76,7 +90,7 @@ export async function POST(req: Request): Promise<Response> {
       parsed.data.ids,
       parsed.data.outcome,
       parsed.data.all ?? false,
-      ANNOUNCEMENTS.map((a) => a.id),
+      RELEASES.filter((r) => r.status === 'published').map((r) => r.id),
       new Date().toISOString(),
     );
     await ctx.supabase.from('user_onboarding').upsert(

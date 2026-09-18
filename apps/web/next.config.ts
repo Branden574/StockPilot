@@ -1,4 +1,36 @@
+import { createHash } from 'node:crypto';
+
 import type { NextConfig } from 'next';
+
+// ── Build identity (update detection) ────────────────────────────────────────
+// "Which build is THIS bundle?" has to be answered at BUILD time and baked into
+// the bundle, because every runtime source of it lies to an old tab:
+//   - the first /api/version poll answers from whichever deployment is live
+//     NOW, so a tab opened mid-deploy baselines on the NEW build and never
+//     learns it is stale (what the old VersionNotifier did);
+//   - a prop passed down from a layout is re-rendered by the NEW deployment on
+//     router.refresh(), which realtime listeners fire without any user action,
+//     handing the new id to the old bundle and erasing the difference;
+//   - Next deletes its own data-dpl-id from <html> at module init.
+// `env` below inlines these two values into the client bundle AND the server
+// bundle of the same build, so lib/build-info.ts and /api/version read ONE
+// constant and cannot disagree inside a deployment.
+//
+// It is a HASH on purpose. Vercel offers NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA for
+// free, but shipping the raw commit lets any visitor pin the exact deployed
+// revision and narrow the diff window for source recon; /api/version was
+// changed to a hash for exactly that reason and this must not undo it.
+//
+// The commit comes first so that redeploying the same commit is not announced
+// as an update: nothing changed. Empty outside Vercel, which disables the
+// detector in development instead of firing on every poll.
+const BUILD_SOURCE = process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_DEPLOYMENT_ID ?? '';
+const SP_BUILD = BUILD_SOURCE
+  ? createHash('sha256').update(BUILD_SOURCE).digest('hex').slice(0, 12)
+  : '';
+// Build time gives builds an ORDER that ids do not have. A served build OLDER
+// than the loaded one is a rollback, which must not be announced as "new".
+const SP_BUILT_AT = BUILD_SOURCE ? new Date().toISOString() : '';
 
 // ── Supabase origin pinning (security wave E, MED-27) ────────────────────────
 // The CSP used to allow `https://*.supabase.co` + `wss://*.supabase.co` (and
@@ -67,6 +99,11 @@ const CORP_EXEMPT_PREFIXES = ['email/', 'email-logo\\.png', 'opengraph-image'];
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // See "Build identity" at the top of this file.
+  env: {
+    NEXT_PUBLIC_SP_BUILD: SP_BUILD,
+    NEXT_PUBLIC_SP_BUILT_AT: SP_BUILT_AT,
+  },
   // PostHog reverse proxy. Analytics is routed through our OWN origin
   // (/ingest/*) instead of calling us.i.posthog.com directly. Two reasons:
   //   1. CSP — connect-src is a strict allowlist that (deliberately) does NOT

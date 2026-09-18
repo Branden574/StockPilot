@@ -11,3 +11,4 @@ export * from './procedures';
 export * from './duplicate-item';
 export * from './rentals';
 export * from './sports';
+export * from './releases';
