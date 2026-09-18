@@ -27,7 +27,8 @@ setup('authenticate', async ({ page }) => {
 
   await page.goto('/signin');
   await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/password/i).fill(password);
+  // Exact: the "Show password" toggle is labelled too, and a loose match hits both.
+  await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: /sign in/i }).click();
 
   // Either MFA prompt or dashboard. We bail if MFA is required —
