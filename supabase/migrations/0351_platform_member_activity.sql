@@ -28,18 +28,35 @@
 --   Each one is a floor with a different blind spot, so the function returns
 --   all three and the console shows the latest together with its source.
 --
--- AUTOMATION IS NOT ACTIVITY
---   Seven cron routes (restore points, auto-reorder, recurring POs, auto-archive,
---   auto-delete, schedule reminders, daily briefing) run under a per-org system
---   context that BORROWS an owner's or admin's user id, and audit() stamps that
---   id on the row. Counted naively, the nightly restore-point cron makes that
---   person look active every day forever. audit() also records the request's
---   user agent, and every cron-written row in production carries
---   'vercel-cron/1.0' (231 rows across exactly the three cron-driven events on
---   2026-09-18; every human row carries a browser or mobile agent). The audit
---   leg therefore ignores rows whose user agent is absent or starts with
---   'vercel-cron'. Both exclusions err toward UNDER-reporting, which is the safe
---   direction for a number an operator may use to decide an account is dormant.
+-- AUTOMATION IS NOT ACTIVITY, AND NEITHER IS A SIGN-IN
+--   Six cron routes (restore points, auto-reorder, recurring POs, auto-archive,
+--   auto-delete, daily briefing) run under a per-org system context that
+--   BORROWS an owner's or admin's user id, and audit() stamps that id on the
+--   row together with the request's user agent. Counted naively, the nightly
+--   restore-point cron makes that person look active every day forever.
+--
+--   The audit leg therefore counts a row only when its user agent is one a
+--   PERSON's client sends. Production on 2026-09-18 holds exactly two such
+--   shapes: browsers ('Mozilla/...', 3,245 rows) and the iOS app
+--   ('StockPilot/<build> CFNetwork/...', 63 rows). 'okhttp/' is what React
+--   Native sends on Android, which has not shipped yet; it is listed so that
+--   launch does not silently blank the column for Android-only users.
+--   Everything else is ignored: 'vercel-cron/1.0' (231 rows, exactly the three
+--   cron-driven events), no agent at all (13 rows, header-less background
+--   writes), and 'curl/...' or 'node' (8 rows: a cron route invoked by hand
+--   with the secret, or a script). An ALLOWLIST rather than a list of known
+--   automation, because the two fail in opposite directions: an unrecognised
+--   human client under-reports one person until it is added here, while an
+--   unrecognised automation would make a dormant owner look active, which is
+--   the mistake this number exists to prevent.
+--
+--   'user.signed_in' is excluded by name. The web sign-in action writes that
+--   row a few hundred milliseconds after GoTrue stamps last_sign_in_at, so it
+--   would always outrank the sign-in leg and relabel a bare sign-in as an
+--   "action", hiding the one case the console has to hedge. It carries no
+--   information last_sign_in_at does not. 'user.signed_out' IS counted: it
+--   marks the end of a working session and survives the sign-out that deletes
+--   the session rows.
 --
 -- refreshed_at IS `timestamp WITHOUT time zone`; every other column read here
 --   is timestamptz. GoTrue writes it as a UTC wall clock: in production it
@@ -51,9 +68,13 @@
 -- WHY THE MEMBERSHIP JOIN
 --   The caller already holds the ids of one page of one organization's
 --   members. The join makes that the function's CONTRACT rather than the
---   caller's promise: an id that is not an accepted member of p_org_id returns
---   no row, so a future caller bug cannot turn this into a lookup for
---   arbitrary users.
+--   caller's promise: an id that is not a real, accepted member of p_org_id
+--   returns no row, so a future caller bug cannot turn this into a lookup for
+--   arbitrary users. "Real" uses the same definition as every other member
+--   reader in the platform service: accepted, and NOT an impersonation grant.
+--   A platform admin acting as a tenant holds an accepted owner row with
+--   impersonation_expires_at set; without that clause their activity would be
+--   returned as if they worked there.
 --
 -- WHY NO NEW INDEX
 --   auth.sessions is already indexed on (user_id). The audit leg rides
@@ -96,6 +117,7 @@ as $$
       on om.user_id = u.id
      and om.organization_id = p_org_id
      and om.accepted_at is not null
+     and om.impersonation_expires_at is null
     left join lateral (
       select max(greatest(se.refreshed_at at time zone 'utc', se.created_at)) as last_session_at
         from auth.sessions se
@@ -106,8 +128,10 @@ as $$
         from public.audit_logs al
        where al.organization_id = p_org_id
          and al.user_id = u.id
-         and al.user_agent is not null
-         and al.user_agent not ilike 'vercel-cron%'
+         and al.event <> 'user.signed_in'
+         and (al.user_agent ilike 'Mozilla/%'
+              or al.user_agent ilike 'StockPilot/%'
+              or al.user_agent ilike 'okhttp/%')
     ) a on true
    where u.id = any(p_user_ids);
 $$;
@@ -116,4 +140,4 @@ revoke execute on function public.platform_member_activity(uuid, uuid[]) from pu
 grant execute on function public.platform_member_activity(uuid, uuid[]) to service_role;
 
 comment on function public.platform_member_activity(uuid, uuid[]) is
-  'Last sign-in, last session renewal and last human audit event for accepted members of one organization, for the platform super-admin console. service_role only. Read-only; every value is a floor, never a measurement.';
+  'Last sign-in, last session renewal and last audit event written from a person''s own client, for the real accepted members of one organization. For the platform super-admin console. service_role only. Read-only; every value is a floor, never a measurement.';

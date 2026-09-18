@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
-import { resolveLastActive, type LastActiveSource } from '@/lib/platform/last-active';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { resolveEffectivePlan, type EffectivePlan } from '@stockpilot/core';
@@ -446,23 +445,17 @@ export interface PlatformOrgMember {
    */
   disabledAt: string | null;
   /**
-   * The three activity signals from migration 0351, verbatim, so the surface
-   * can show WHICH one produced `lastActiveAt`. Each is a floor with a
-   * different blind spot; see lib/platform/last-active.ts. All null when the
-   * lookup failed (then `lastActiveSource` is null too) or knows nothing.
+   * The three activity signals from migration 0351, verbatim. Each is a floor
+   * with a different blind spot, so the SURFACE resolves them (latest, source,
+   * whether an open sign-in stands behind it) through lib/platform/last-active
+   * and this DTO deliberately carries no pre-resolved value: a label, a source
+   * and a tooltip derived from one input by one function cannot disagree.
+   * All null when the lookup knows nothing about this person, and also when it
+   * failed; `activityAvailable` on the page is what tells those apart.
    */
   lastSignInAt: string | null;
   lastSessionAt: string | null;
   lastActionAt: string | null;
-  /** The latest of the three as a normalised ISO instant. */
-  lastActiveAt: string | null;
-  /**
-   * Which signal won. 'never' is a SUCCESSFUL lookup that found nothing; null
-   * means the lookup itself failed (`activityAvailable` is false). The two
-   * must never render alike: "Never" on all fifty rows, on the screen that
-   * disables accounts, reads as "nobody uses this".
-   */
-  lastActiveSource: LastActiveSource | null;
 }
 
 /** How many members one page of the Users tab shows. */
@@ -482,6 +475,10 @@ export interface PlatformOrgMembersPage {
   /**
    * False when the activity lookup failed for this page. The members, their
    * status and their actions are unaffected; only the Last active column is.
+   * The surface MUST branch on this before reading a member's signals: three
+   * nulls mean "never" after a successful lookup and "unknown" after a failed
+   * one, and "Never" on all fifty rows of the screen that disables accounts
+   * reads as "nobody uses this".
    */
   activityAvailable: boolean;
 }
@@ -698,7 +695,6 @@ export async function getOrgMembers(
       lastSessionAt: null,
       lastActionAt: null,
     };
-    const resolved = resolveLastActive(signals);
 
     return {
       userId,
@@ -708,8 +704,6 @@ export async function getOrgMembers(
       joinedAt: (r.accepted_at as string | null) ?? null,
       disabledAt: p?.disabled_at ?? null,
       ...signals,
-      lastActiveAt: activityAvailable ? resolved.at : null,
-      lastActiveSource: activityAvailable ? resolved.source : null,
     };
   });
 

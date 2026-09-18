@@ -22,7 +22,7 @@
 
 begin;
 
-select plan(27);
+select plan(31);
 
 \set orgA   '\'03510000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03510000-0000-0000-0000-00000000000b\''
@@ -32,6 +32,9 @@ select plan(27);
 \set uOther '\'03510000-0000-0000-0000-0000000000a4\''
 \set uOwner '\'03510000-0000-0000-0000-0000000000a5\''
 \set uInvit '\'03510000-0000-0000-0000-0000000000a6\''
+\set uOut   '\'03510000-0000-0000-0000-0000000000a7\''
+\set uInOnl '\'03510000-0000-0000-0000-0000000000a8\''
+\set uPlat  '\'03510000-0000-0000-0000-0000000000a9\''
 \set uGhost '\'03510000-0000-0000-0000-0000000000ff\''
 \set sA1    '\'03510000-0000-0000-0000-0000000000b1\''
 \set sA2    '\'03510000-0000-0000-0000-0000000000b2\''
@@ -47,7 +50,10 @@ insert into auth.users (id, email, raw_user_meta_data, last_sign_in_at) values
   (:uNever, 'never-0351@test.local',  '{}'::jsonb, null),
   (:uOther, 'other-0351@test.local',  '{}'::jsonb, now() - interval '1 day'),
   (:uOwner, 'owner-0351@test.local',  '{}'::jsonb, now() - interval '40 days'),
-  (:uInvit, 'invite-0351@test.local', '{}'::jsonb, now() - interval '2 days')
+  (:uInvit, 'invite-0351@test.local', '{}'::jsonb, now() - interval '2 days'),
+  (:uOut,   'out-0351@test.local',    '{}'::jsonb, now() - interval '5 days'),
+  (:uInOnl, 'inonly-0351@test.local', '{}'::jsonb, now() - interval '1 day'),
+  (:uPlat,  'plat-0351@test.local',   '{}'::jsonb, now() - interval '10 minutes')
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -63,8 +69,17 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :uNever, 'viewer',  now()),
   (:orgA, :uOwner, 'owner',   now()),
   (:orgA, :uInvit, 'viewer',  null),
+  (:orgA, :uOut,   'viewer',  now()),
+  (:orgA, :uInOnl, 'viewer',  now()),
   (:orgB, :uA,     'viewer',  now()),
   (:orgB, :uOther, 'viewer',  now())
+on conflict do nothing;
+
+-- uPlat is a platform admin ACTING AS org A: startActingAs upserts an accepted
+-- owner row with impersonation_expires_at set. Every other member reader in the
+-- platform service excludes it; so must this function.
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:orgA, :uPlat, 'owner', now(), now() + interval '45 minutes')
 on conflict do nothing;
 
 -- refreshed_at is seeded as the UTC wall clock, which is what GoTrue writes.
@@ -75,20 +90,36 @@ insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at) va
   (:sO1, :uOther, now(),                      now(), now() at time zone 'utc');
 
 -- Audit trail. uA acted in org A three days ago and in org B one minute ago.
--- uOwner's newest rows in org A are the nightly cron and a header-less
--- background write; the newest HUMAN row is twenty days old. Assertion 24 pins
--- BOTH exclusions. Mutation note (2026-09-18): deleting the function's
--- `user_agent is not null` line alone is an EQUIVALENT mutant, because
--- `NULL not ilike ...` is NULL and already drops the row. The line stays so the
--- intent does not rest on three-valued logic; a "fix" to
--- `coalesce(user_agent, '') not ilike` would surface the one-hour-old row here.
+--
+-- uOwner is the member whose id the crons borrow. The newest row written from a
+-- PERSON's client is the twenty-day-old mobile approval; everything newer is
+-- automation or a script and must be ignored: Vercel's scheduler, the same
+-- agent in another case, a header-less background write, a cron route invoked
+-- by hand with curl, a node script, and the web sign-in row (which only
+-- restates last_sign_in_at). Assertion 24 pins all six at once; the mutation
+-- run deletes each clause in turn and each one turns it red.
 insert into public.audit_logs (organization_id, user_id, event, user_agent, created_at) values
-  (:orgA, :uA,     'stock.transferred',     'Mozilla/5.0 (Macintosh)',  now() - interval '3 days'),
-  (:orgA, :uA,     'inventory.item.updated','Mozilla/5.0 (Macintosh)',  now() - interval '9 days'),
-  (:orgB, :uA,     'order_request.created', 'Mozilla/5.0 (Macintosh)',  now() - interval '1 minute'),
-  (:orgA, :uOwner, 'order_request.approved','StockPilot/1.4.0 CFNetwork', now() - interval '20 days'),
-  (:orgA, :uOwner, 'restore_point.created', 'vercel-cron/1.0',          now() - interval '2 hours'),
-  (:orgA, :uOwner, 'inventory.item.updated', null,                      now() - interval '1 hour');
+  (:orgA, :uA,     'stock.transferred',      'Mozilla/5.0 (Macintosh)',                               now() - interval '3 days'),
+  (:orgA, :uA,     'inventory.item.updated', 'Mozilla/5.0 (Macintosh)',                               now() - interval '9 days'),
+  (:orgB, :uA,     'order_request.created',  'Mozilla/5.0 (Macintosh)',                               now() - interval '1 minute'),
+  (:orgA, :uOwner, 'order_request.approved', 'StockPilot/54 CFNetwork/3896.100.1.2.1 Darwin/27.0.0',  now() - interval '20 days'),
+  (:orgA, :uOwner, 'restore_point.created',  'vercel-cron/1.0',                                       now() - interval '2 hours'),
+  (:orgA, :uOwner, 'inventory.item.updated', null,                                                    now() - interval '1 hour'),
+  (:orgA, :uOwner, 'restore_point.created',  'curl/8.7.1',                                            now() - interval '50 minutes'),
+  (:orgA, :uOwner, 'inventory.item.deleted', 'node',                                                  now() - interval '40 minutes'),
+  (:orgA, :uOwner, 'purchase_order.created', 'Vercel-Cron/1.0',                                       now() - interval '30 minutes'),
+  (:orgA, :uOwner, 'user.signed_in',         'Mozilla/5.0 (Macintosh)',                               now() - interval '10 minutes'),
+  -- Android (React Native) sends okhttp. Not shipped yet; pinned so that launch
+  -- cannot silently blank the column for Android-only users.
+  (:orgA, :uB,     'stock.adjusted',         'okhttp/4.12.0',                                         now() - interval '6 hours'),
+  -- uOut signed in, only read, and signed out a day later. The sign-out row is
+  -- the last evidence of them and it outlives the session rows it deleted.
+  (:orgA, :uOut,   'user.signed_in',         'Mozilla/5.0 (Windows NT 10.0)',                         now() - interval '5 days'),
+  (:orgA, :uOut,   'user.signed_out',        'Mozilla/5.0 (Windows NT 10.0)',                         now() - interval '4 days'),
+  -- uInOnl has nothing but the sign-in row.
+  (:orgA, :uInOnl, 'user.signed_in',         'Mozilla/5.0 (X11; Linux)',                              now() - interval '1 day'),
+  -- uPlat's work while acting as org A.
+  (:orgA, :uPlat,  'inventory.item.updated', 'Mozilla/5.0 (Macintosh)',                               now() - interval '5 minutes');
 
 -- ── 1. Structure ────────────────────────────────────────────────────────────
 select has_function('public', 'platform_member_activity', array['uuid', 'uuid[]'],
@@ -190,7 +221,7 @@ select is(
 select is(
   (select last_action_at from public.platform_member_activity(:orgA, array[:uOwner]::uuid[])),
   now() - interval '20 days',
-  '0351/24: automation is not activity - the vercel-cron row and the agent-less row under a borrowed owner id are ignored');
+  '0351/24: automation is not activity - cron (either case), agent-less, curl, node and the sign-in row are all ignored; the mobile approval is the answer');
 select ok(
   (select last_sign_in_at is null and last_session_at is null and last_action_at is null
      from public.platform_member_activity(:orgA, array[:uNever]::uuid[])),
@@ -199,6 +230,23 @@ select is(
   (select last_session_at from public.platform_member_activity(:orgA, array[:uOwner]::uuid[])),
   null::timestamptz,
   '0351/26: a member with no surviving session reports a null last_session_at, not a guess');
+
+select is(
+  (select last_action_at from public.platform_member_activity(:orgA, array[:uB]::uuid[])),
+  now() - interval '6 hours',
+  '0351/27: an Android client (okhttp) counts as a person');
+select is(
+  (select last_action_at from public.platform_member_activity(:orgA, array[:uOut]::uuid[])),
+  now() - interval '4 days',
+  '0351/28: user.signed_out counts - it is the last evidence of someone who only read, and it survives the sign-out');
+select ok(
+  (select last_action_at is null and last_sign_in_at = now() - interval '1 day'
+     from public.platform_member_activity(:orgA, array[:uInOnl]::uuid[])),
+  '0351/29: user.signed_in does NOT count as an action - it would always outrank last_sign_in_at and hide the case the console must hedge');
+select is(
+  (select count(*)::int from public.platform_member_activity(:orgA, array[:uPlat]::uuid[])),
+  0,
+  '0351/30: a platform admin acting as the organization (impersonation grant) is not a member and returns no row');
 
 reset role;
 
@@ -210,7 +258,7 @@ set local role to 'service_role';
 select is(
   (select last_session_at from public.platform_member_activity(:orgA, array[:uA]::uuid[])),
   now() - interval '5 minutes',
-  '0351/27: the refreshed_at conversion does not depend on the session TimeZone');
+  '0351/31: the refreshed_at conversion does not depend on the session TimeZone');
 reset role;
 
 select * from finish();

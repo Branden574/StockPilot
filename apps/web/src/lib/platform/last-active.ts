@@ -4,14 +4,16 @@
  * Migration 0351 returns THREE timestamps per member and each one is a floor
  * with a different blind spot:
  *
- *   lastSessionAt  the newest sign-in renewal on any device. Moves about once
- *                  an hour while the app is open, so it is the best signal,
- *                  but the row is deleted on sign-out and on revocation and
- *                  the timestamp goes with it. A tab left open on an
- *                  unattended screen keeps it moving.
+ *   lastSessionAt  the newest sign-in renewal on any device, ACCOUNT-WIDE (a
+ *                  person in two organizations shows the same value in both).
+ *                  Moves about once an hour while the app is open, so it is
+ *                  the best signal, but the row is deleted on sign-out and on
+ *                  revocation and the timestamp goes with it. A tab left open
+ *                  on an unattended screen keeps it moving.
  *   lastActionAt   the newest audit row this person wrote IN THIS organization
- *                  (automation excluded). Survives sign-out. Blind to
- *                  read-only use.
+ *                  from their own client (automation and the sign-in row
+ *                  itself excluded). Survives sign-out. Blind to read-only
+ *                  use.
  *   lastSignInAt   when the current login STARTED. With sessions that live for
  *                  months it understates badly, so it is the fallback only.
  *
@@ -31,6 +33,23 @@ export interface ResolvedLastActive {
   /** Normalised ISO instant, or null when nothing is known. */
   at: string | null;
   source: LastActiveSource;
+  /**
+   * True when the value is only a LOWER BOUND: the sign-in it belongs to is no
+   * longer open, so the person may have kept using the product after it and
+   * left no trace (reading writes no audit row; sign-out, a password change and
+   * a platform disable all delete the session rows).
+   *
+   * Keyed on the EVIDENCE, not on which signal won. A months-old audit row
+   * with no session behind it is exactly as stale as a months-old sign-in, and
+   * hedging only the latter would present the former at full confidence.
+   *   session won                     measured (renewed hourly while open)
+   *   action won, a session survives  measured (at most an hour behind)
+   *   action won, no session          floor
+   *   sign-in won                     floor, even if an OLDER session on
+   *                                   another device survives: the session that
+   *                                   sign-in created is gone
+   */
+  floor: boolean;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -71,8 +90,13 @@ export function resolveLastActive(signals: LastActiveSignals): ResolvedLastActiv
     if (best === null || c.ms > best.ms) best = { source: c.source, ms: c.ms };
   }
 
-  if (best === null) return { at: null, source: 'never' };
-  return { at: new Date(best.ms).toISOString(), source: best.source };
+  if (best === null) return { at: null, source: 'never', floor: false };
+  const hasSession = toMillis(signals.lastSessionAt) !== null;
+  return {
+    at: new Date(best.ms).toISOString(),
+    source: best.source,
+    floor: best.source === 'sign_in' || !hasSession,
+  };
 }
 
 function utcDate(ms: number): string {
@@ -119,12 +143,14 @@ export function formatExactUtc(iso: string | null | undefined): string | null {
 
 /**
  * The cell's tooltip: every known signal with its exact instant, so the value
- * on screen can be checked against its parts. The sign-in-only case gets its
- * own wording because that is when the number is most likely to be badly
- * stale, and an operator may be reading it to decide an account is dormant.
+ * on screen can be checked against its parts. A floor gets one more sentence,
+ * because that is when the number is most likely to be badly stale and an
+ * operator may be reading it to decide an account is dormant. The wording
+ * avoids "signed out": a platform disable and a password change end a sign-in
+ * too, and the person did neither.
  */
 export function describeLastActive(signals: LastActiveSignals): string {
-  const { source } = resolveLastActive(signals);
+  const { source, floor } = resolveLastActive(signals);
   if (source === 'never') {
     return 'This person has never signed in and has no recorded activity in this organization.';
   }
@@ -135,14 +161,18 @@ export function describeLastActive(signals: LastActiveSignals): string {
 
   const parts: string[] = [];
   if (session) {
-    parts.push(`Sign-in last renewed ${session} (any device, accurate to about an hour).`);
+    parts.push(
+      `Sign-in last renewed ${session} (any device, any organization; accurate to about an hour).`,
+    );
   } else {
     parts.push('No open sign-ins on any device.');
   }
   if (action) parts.push(`Last recorded action in this organization ${action}.`);
   if (signIn) parts.push(`Last signed in ${signIn}.`);
-  if (source === 'sign_in') {
-    parts.push('They may have kept working after this and then signed out.');
+  if (floor) {
+    parts.push(
+      'The sign-in behind this value is no longer open, so they may have kept using the product after it.',
+    );
   }
   return parts.join(' ');
 }

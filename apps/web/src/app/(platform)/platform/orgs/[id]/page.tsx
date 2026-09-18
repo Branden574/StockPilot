@@ -8,7 +8,11 @@ import { RemoveOrgDialog } from '@/components/platform/remove-org-dialog';
 import { UserActionsMenu } from '@/components/platform/user-actions-menu';
 import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
-import { describeLastActive, formatLastActive } from '@/lib/platform/last-active';
+import {
+  describeLastActive,
+  formatLastActive,
+  resolveLastActive,
+} from '@/lib/platform/last-active';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   DETAIL_PREVIEW_LIMIT,
@@ -372,14 +376,19 @@ function lowerFirst(text: string): string {
  * only surface that can disable an account, which has no error boundary, so
  * absent keys and unparseable values must come out as "Never", not a throw.
  *
- * Three renderings that must never look alike:
+ * The label, the prefix and the tooltip are all derived from ONE resolution of
+ * the member's three signals, so they cannot disagree with each other.
+ *
+ * Renderings that must never look alike:
  *   unavailable  the lookup failed for this page: a dash, and a note above
  *                the table. NOT "Never" — fifty rows of "Never" on this
  *                screen reads as "nobody uses the product".
- *   sign_in      no session survives and nothing was audited, so the value is
- *                when the last login STARTED. Muted and prefixed "Signed in":
- *                a six-week-old sign-in is not six weeks of absence.
- *   otherwise    a coarse age; every exact instant is in the title.
+ *   floor        the sign-in behind the value is no longer open, so use after
+ *                it may be missing. Muted, and prefixed with the KIND of
+ *                evidence ("Signed in", "Last action") instead of being stated
+ *                as activity: a six-week-old sign-in is not six weeks of
+ *                absence, and neither is a six-week-old audit row.
+ *   measured     an open sign-in stands behind it: a coarse age, plain.
  */
 function LastActiveCell({
   member,
@@ -397,19 +406,20 @@ function LastActiveCell({
       </span>
     );
   }
-  const label = formatLastActive(member.lastActiveAt, now);
-  const title = describeLastActive(label === 'Never' ? {} : member);
-  if (label === 'Never') {
+  const resolved = resolveLastActive(member);
+  const title = describeLastActive(member);
+  if (resolved.source === 'never') {
     return (
       <span className="text-[var(--ed-ink-4)]" title={title}>
         Never
       </span>
     );
   }
-  if (member.lastActiveSource === 'sign_in') {
+  const label = formatLastActive(resolved.at, now);
+  if (resolved.floor) {
     return (
       <span className="text-[var(--ed-ink-4)]" title={title}>
-        Signed in {lowerFirst(label)}
+        {resolved.source === 'sign_in' ? 'Signed in' : 'Last action'} {lowerFirst(label)}
       </span>
     );
   }
@@ -445,7 +455,7 @@ function MembersTable({
               <th className="px-4 py-2.5 font-medium">Joined</th>
               <th
                 className="px-4 py-2.5 font-medium"
-                title="An estimate: the latest of a sign-in renewal on any device and a recorded action in this organization."
+                title="An estimate: the latest of a sign-in renewal (any device, any organization) and a recorded action in this organization."
               >
                 Last active
               </th>
@@ -522,10 +532,11 @@ function MembersTable({
         </table>
       </div>
       <p className="mt-2 max-w-[760px] text-[11.5px] leading-relaxed text-[var(--ed-ink-4)]">
-        Last active is an estimate, accurate to about an hour: the latest of a sign-in renewal on
-        any device and a recorded action in this organization. “Signed in” means no open sign-ins
-        remain, so work done after that sign-in may be missing. A browser tab left open on an
-        unattended screen can look active. Hover a value for the exact times.
+        Last active is an estimate. A plain value has an open sign-in behind it and is accurate to
+        about an hour; sign-ins are per person, so it covers every device and every organization
+        they belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on
+        record: that sign-in is no longer open, so use after it may be missing. A browser tab left
+        open on an unattended screen can look active. Hover a value for the exact times.
       </p>
     </>
   );

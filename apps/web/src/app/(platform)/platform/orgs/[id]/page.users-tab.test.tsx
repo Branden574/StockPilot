@@ -72,8 +72,6 @@ function member(n: number, activity: Record<string, unknown> = {}) {
     lastSignInAt: null,
     lastSessionAt: null,
     lastActionAt: null,
-    lastActiveAt: null,
-    lastActiveSource: 'never',
     ...activity,
   };
 }
@@ -197,11 +195,16 @@ describe('platform org detail — Users tab reachability', () => {
  * taking the whole tab down over a cosmetic value.
  */
 describe('platform org detail — Users tab last active', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+  });
   afterEach(() => {
     vi.useRealTimers();
   });
 
   const rowOf = (email: string) => within(screen.getByText(email).closest('tr')!);
+  const HEDGE = 'may have kept using the product after it';
 
   it('adds the column between Joined and Actions', async () => {
     await renderUsersTab();
@@ -214,69 +217,92 @@ describe('platform org detail — Users tab last active', () => {
     ]);
   });
 
-  it('shows a coarse age, with every exact instant behind it in the title', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+  it('a MEASURED value is a plain coarse age, with every exact instant behind it in the title', async () => {
     armMembers({
       members: [
         member(1, {
           lastSignInAt: '2026-07-22T08:00:00+00:00',
           lastSessionAt: '2026-09-18T09:00:00+00:00',
           lastActionAt: '2026-09-17T23:30:00+00:00',
-          lastActiveAt: '2026-09-18T09:00:00.000Z',
-          lastActiveSource: 'session',
         }),
       ],
     });
     await renderUsersTab();
 
-    const cell = rowOf('user1@acme.test').getByText('3 hours ago');
+    const row = rowOf('user1@acme.test');
+    const cell = row.getByText('3 hours ago');
     expect(cell.getAttribute('title')).toBe(
-      'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, accurate to about an hour). ' +
+      'Sign-in last renewed 18 Sep 2026, 09:00 UTC (any device, any organization; accurate to about an hour). ' +
         'Last recorded action in this organization 17 Sep 2026, 23:30 UTC. ' +
         'Last signed in 22 Jul 2026, 08:00 UTC.',
     );
+    expect(row.queryByText(/signed in|last action/i)).toBeNull();
   });
 
-  it('marks a value that is ONLY a sign-in, because that is when it is most likely stale', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
+  it('a bare sign-in is marked as evidence, not stated as activity', async () => {
+    armMembers({ members: [member(1, { lastSignInAt: '2026-08-12T15:00:00+00:00' })] });
+    await renderUsersTab();
+
+    const cell = rowOf('user1@acme.test').getByText('Signed in 12 Aug 2026');
+    expect(cell.getAttribute('title')).toContain('No open sign-ins on any device');
+    expect(cell.getAttribute('title')).toContain(HEDGE);
+  });
+
+  it('an ACTION with no open sign-in behind it is marked the same way', async () => {
+    // Signed in on 22 Jul, read daily, then signed out or was disabled: the
+    // newest evidence is an eight-week-old audit row. Stated plainly it would
+    // read as eight weeks of absence.
     armMembers({
       members: [
         member(1, {
-          lastSignInAt: '2026-08-12T15:00:00+00:00',
-          lastActiveAt: '2026-08-12T15:00:00.000Z',
-          lastActiveSource: 'sign_in',
-        }),
-        member(2, {
-          lastSessionAt: '2026-09-15T12:00:00+00:00',
-          lastActiveAt: '2026-09-15T12:00:00.000Z',
-          lastActiveSource: 'session',
+          lastSignInAt: '2026-07-22T08:00:00+00:00',
+          lastActionAt: '2026-07-22T15:00:00+00:00',
         }),
       ],
     });
     await renderUsersTab();
 
-    const fallback = rowOf('user1@acme.test').getByText('Signed in 12 Aug 2026');
-    expect(fallback.getAttribute('title')).toContain('No open sign-ins on any device');
-    expect(fallback.getAttribute('title')).toContain('may have kept working after this');
-    // The measured row carries no such hedge.
-    expect(rowOf('user2@acme.test').getByText('3 days ago')).toBeInTheDocument();
-    expect(rowOf('user2@acme.test').queryByText(/signed in/i)).toBeNull();
+    const cell = rowOf('user1@acme.test').getByText('Last action 22 Jul 2026');
+    expect(cell.getAttribute('title')).toContain(HEDGE);
+    expect(rowOf('user1@acme.test').queryByText('22 Jul 2026')).toBeNull();
+  });
+
+  it('reads naturally when the evidence is recent', async () => {
+    armMembers({
+      members: [
+        member(1, { lastSignInAt: '2026-09-18T11:30:00+00:00' }),
+        member(2, {
+          lastSignInAt: '2026-09-15T00:00:00+00:00',
+          lastActionAt: '2026-09-15T12:00:00+00:00',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    expect(
+      rowOf('user1@acme.test').getByText('Signed in within the last hour'),
+    ).toBeInTheDocument();
+    expect(rowOf('user2@acme.test').getByText('Last action 3 days ago')).toBeInTheDocument();
+  });
+
+  it('an action newer than the last hourly renewal is still measured: the sign-in is open', async () => {
+    armMembers({
+      members: [
+        member(1, {
+          lastSessionAt: '2026-09-18T09:00:00+00:00',
+          lastActionAt: '2026-09-18T09:40:00+00:00',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    const cell = rowOf('user1@acme.test').getByText('2 hours ago');
+    expect(cell.getAttribute('title')).not.toContain(HEDGE);
   });
 
   it('says Never only for the member with no activity', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
     armMembers({
-      members: [
-        member(1),
-        member(2, {
-          lastActionAt: '2026-09-18T11:30:00+00:00',
-          lastActiveAt: '2026-09-18T11:30:00.000Z',
-          lastActiveSource: 'action',
-        }),
-      ],
+      members: [member(1), member(2, { lastSessionAt: '2026-09-18T11:30:00+00:00' })],
     });
     await renderUsersTab();
 
@@ -288,10 +314,7 @@ describe('platform org detail — Users tab last active', () => {
   });
 
   it('when the lookup failed it says so, never says Never, and every row keeps its actions', async () => {
-    armMembers({
-      activityAvailable: false,
-      members: [member(1, { lastActiveSource: null }), member(2, { lastActiveSource: null })],
-    });
+    armMembers({ activityAvailable: false });
     await renderUsersTab();
 
     expect(screen.queryByText('Never')).toBeNull();
@@ -301,7 +324,7 @@ describe('platform org detail — Users tab last active', () => {
     expect(screen.getByText(/of 150/i)).toBeInTheDocument();
   });
 
-  it('a member with the keys absent, or an unparseable value, cannot take the tab down', async () => {
+  it('a member with the keys absent, or unparseable values, cannot take the tab down', async () => {
     const bare = {
       userId: 'u-1',
       email: 'user1@acme.test',
@@ -313,11 +336,7 @@ describe('platform org detail — Users tab last active', () => {
     armMembers({
       members: [
         bare,
-        member(2, {
-          lastActiveAt: 'not-a-date',
-          lastSessionAt: 'not-a-date',
-          lastActiveSource: 'session',
-        }),
+        member(2, { lastSessionAt: 'not-a-date', lastActionAt: 12345, lastSignInAt: '' }),
       ],
     });
     await renderUsersTab();
@@ -327,13 +346,30 @@ describe('platform org detail — Users tab last active', () => {
     expect(screen.getByRole('button', { name: 'actions u-2' })).toBeInTheDocument();
   });
 
-  it('explains on the page what the number is and is not', async () => {
+  it('explains on the page what the number is, and that it is per person, not per organization', async () => {
     await renderUsersTab();
-    expect(screen.getByText(/accurate to about an hour/i)).toBeInTheDocument();
+    expect(screen.getByText(/accurate to\s+about an hour/i)).toBeInTheDocument();
+    expect(screen.getByText(/every organization\s+they belong to/i)).toBeInTheDocument();
   });
+});
 
-  it('audits the view: this tab now shows per-person activity across a tenant boundary', async () => {
-    await renderUsersTab();
+/**
+ * The view is audited because this tab is reachable by deep link without ever
+ * passing the overview, and it now shows per-person activity across a tenant
+ * boundary. The other tabs are pinned too: a condition loosened to "any tab"
+ * would write a row for every inventory and billing render.
+ */
+describe('platform org detail — which views are audited', () => {
+  async function renderTab(tab: string) {
+    const tree = await PlatformOrgDetailPage({
+      params: Promise.resolve({ id: ORG }),
+      searchParams: Promise.resolve({ tab }),
+    });
+    return render(tree);
+  }
+
+  it('audits the Users tab, naming the tab', async () => {
+    await renderTab('users');
     expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
     expect(h.recordPlatformAudit).toHaveBeenCalledWith({
       actorUserId: 'god',
@@ -342,5 +378,22 @@ describe('platform org detail — Users tab last active', () => {
       targetOrganizationId: ORG,
       detail: { name: 'Acme', tab: 'users' },
     });
+  });
+
+  it('still audits the overview exactly as before', async () => {
+    await renderTab('overview');
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.recordPlatformAudit).toHaveBeenCalledWith({
+      actorUserId: 'god',
+      actorEmail: 'god@stockpilotusa.com',
+      action: 'viewed_org',
+      targetOrganizationId: ORG,
+      detail: { name: 'Acme' },
+    });
+  });
+
+  it.each(['inventory', 'orders', 'billing'])('does not audit the %s tab', async (tab) => {
+    await renderTab(tab);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
 });

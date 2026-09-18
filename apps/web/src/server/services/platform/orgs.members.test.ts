@@ -420,7 +420,7 @@ describe('getOrgMembers — last active', () => {
     });
   });
 
-  it('merges by user id, never by position, and resolves the latest signal per member', async () => {
+  it('merges by user id, never by position', async () => {
     state.rows = [row(1), row(2), row(3)];
     state.count = 3;
     // REVERSE order, and u-2 omitted entirely (no auth row came back).
@@ -447,24 +447,25 @@ describe('getOrgMembers — last active', () => {
 
     expect(page.activityAvailable).toBe(true);
     expect(byId['u-1']).toMatchObject({
-      lastActiveAt: '2026-09-18T09:00:00.000Z',
-      lastActiveSource: 'session',
       lastSignInAt: '2026-07-22T08:00:00+00:00',
       lastSessionAt: '2026-09-18T09:00:00+00:00',
       lastActionAt: '2026-09-17T23:30:00+00:00',
     });
     expect(byId['u-3']).toMatchObject({
-      lastActiveAt: '2026-08-12T15:00:00.000Z',
-      lastActiveSource: 'sign_in',
+      lastSignInAt: '2026-08-12T15:00:00+00:00',
+      lastSessionAt: null,
+      lastActionAt: null,
     });
-    // Omitted by the rpc: a SUCCESSFUL lookup that knows nothing is "never".
+    // Omitted by the rpc: a SUCCESSFUL lookup that knows nothing about them.
     expect(byId['u-2']).toMatchObject({
-      lastActiveAt: null,
-      lastActiveSource: 'never',
       lastSignInAt: null,
       lastSessionAt: null,
       lastActionAt: null,
     });
+    // The DTO carries signals only. Resolving them is the surface's job, so a
+    // label, a source and a tooltip can never be derived from different inputs.
+    expect(byId['u-1']).not.toHaveProperty('lastActiveAt');
+    expect(byId['u-1']).not.toHaveProperty('lastActiveSource');
   });
 
   it('degrades when the rpc returns an ERROR: every member still comes back, and it is reported', async () => {
@@ -496,8 +497,9 @@ describe('getOrgMembers — last active', () => {
       userId: 'u-1',
       email: 'a@acme.test',
       disabledAt: '2026-07-30T12:00:00Z',
-      lastActiveAt: null,
-      lastActiveSource: null,
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
     });
     expect(page.total).toBe(120);
     expect(page.pageCount).toBe(Math.ceil(120 / MEMBERS_PAGE_SIZE));
@@ -515,7 +517,7 @@ describe('getOrgMembers — last active', () => {
     expect(page.activityAvailable).toBe(false);
     expect(page.members).toHaveLength(1);
     expect(page.members[0]!.userId).toBe('u-1');
-    expect(page.members[0]!.lastActiveSource).toBeNull();
+    expect(page.members[0]!.lastSessionAt).toBeNull();
     expect(reportError).toHaveBeenCalledTimes(1);
   });
 
@@ -530,7 +532,7 @@ describe('getOrgMembers — last active', () => {
     const page = await getOrgMembers(ORG);
 
     expect(page.activityAvailable).toBe(false);
-    expect(page.members[0]!.lastActiveAt).toBeNull();
+    expect(page.members[0]!.lastSessionAt).toBeNull();
     expect(reportError).toHaveBeenCalledTimes(1);
   });
 
@@ -542,7 +544,11 @@ describe('getOrgMembers — last active', () => {
     const page = await getOrgMembers(ORG);
 
     expect(page.activityAvailable).toBe(true);
-    expect(page.members[0]).toMatchObject({ lastActiveAt: null, lastActiveSource: 'never' });
+    expect(page.members[0]).toMatchObject({
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
+    });
     expect(reportError).not.toHaveBeenCalled();
   });
 
@@ -565,7 +571,6 @@ describe('getOrgMembers — last active', () => {
     expect(page.members[0]).toMatchObject({
       lastSessionAt: null,
       lastActionAt: '2026-09-01T00:00:00Z',
-      lastActiveSource: 'action',
     });
   });
 
