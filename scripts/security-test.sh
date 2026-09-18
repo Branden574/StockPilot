@@ -133,6 +133,11 @@ PGTAP_TESTS=(
   # Account identity: verified self-service email change (projection pin + sync).
   supabase/tests/0345_verified_email_change.test.sql
 
+  # Platform console "Last active": a gate-less SECURITY DEFINER reader of the
+  # auth schema whose service_role-only EXECUTE grant is its entire control. An
+  # authenticated grant would be a cross-tenant login-activity oracle.
+  supabase/tests/0351_platform_member_activity.test.sql
+
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
   supabase/tests/0142_order_attachments_read_floor.test.sql

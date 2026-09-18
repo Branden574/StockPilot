@@ -8,6 +8,11 @@ import { RemoveOrgDialog } from '@/components/platform/remove-org-dialog';
 import { UserActionsMenu } from '@/components/platform/user-actions-menu';
 import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
+import {
+  describeLastActive,
+  formatLastActive,
+  resolveLastActive,
+} from '@/lib/platform/last-active';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   DETAIL_PREVIEW_LIMIT,
@@ -72,16 +77,23 @@ export default async function PlatformOrgDetailPage({
   const overview = await getOrgOverview(id);
   if (!overview) notFound();
 
-  // Record the cross-org view once, on the overview landing. (The layout
-  // already proved platform-admin; requireSession is cached + cheap.)
-  if (tab === 'overview') {
+  // Record the cross-org view on the overview landing, and on the Users tab.
+  // (The layout already proved platform-admin; requireSession is cached +
+  // cheap.) The Users tab is audited in its own right because it is reachable
+  // by deep link without ever passing the overview, and it shows per-person
+  // activity (last sign-in, last session, last action) across a tenant
+  // boundary — closer to monitoring data than the names and roles it used to
+  // be. `detail` is free-form jsonb, so the tab rides there: a NEW action
+  // value would need the CHECK constraint dropped and re-added with every
+  // existing value restated.
+  if (tab === 'overview' || tab === 'users') {
     const session = await requireSession();
     await recordPlatformAudit({
       actorUserId: session.userId,
       actorEmail: session.email,
       action: 'viewed_org',
       targetOrganizationId: id,
-      detail: { name: overview.name },
+      detail: tab === 'users' ? { name: overview.name, tab: 'users' } : { name: overview.name },
     });
   }
 
@@ -90,11 +102,11 @@ export default async function PlatformOrgDetailPage({
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
-      <Link href="/platform" className="text-[12px] text-[var(--ed-ink-4)] hover:text-foreground">
+      <Link href="/platform" className="hover:text-foreground text-[12px] text-[var(--ed-ink-4)]">
         ← Organizations
       </Link>
 
-      <div className="mt-2 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
+      <div className="border-border mt-2 flex flex-wrap items-start justify-between gap-4 border-b pb-4">
         <div>
           <h1 className="font-display text-[26px] font-medium tracking-[-0.025em]">
             {overview.name}
@@ -127,7 +139,7 @@ export default async function PlatformOrgDetailPage({
       </div>
 
       {/* Tab nav */}
-      <div className="mt-4 flex items-center gap-1 border-b border-border">
+      <div className="border-border mt-4 flex items-center gap-1 border-b">
         {TABS.map((t) => {
           const active = t.key === tab;
           return (
@@ -137,7 +149,7 @@ export default async function PlatformOrgDetailPage({
               className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors ${
                 active
                   ? 'border-foreground text-foreground'
-                  : 'border-transparent text-[var(--ed-ink-4)] hover:text-foreground'
+                  : 'hover:text-foreground border-transparent text-[var(--ed-ink-4)]'
               }`}
             >
               {t.label}
@@ -160,8 +172,8 @@ export default async function PlatformOrgDetailPage({
       </div>
 
       {/* ── Danger zone ──────────────────────────────────────────────── */}
-      <div className="mt-10 rounded-[10px] border border-destructive/40 bg-card p-4 sm:p-5">
-        <h2 className="font-display text-[15px] font-medium text-destructive">Danger zone</h2>
+      <div className="border-destructive/40 bg-card mt-10 rounded-[10px] border p-4 sm:p-5">
+        <h2 className="text-destructive font-display text-[15px] font-medium">Danger zone</h2>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-xl text-[12.5px] text-[var(--ed-ink-3)]">
             Permanently delete this organization and everything in it. Requires a fresh MFA step-up,
@@ -176,7 +188,7 @@ export default async function PlatformOrgDetailPage({
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-[10px] border border-border bg-card p-4">
+    <div className="border-border bg-card rounded-[10px] border p-4">
       <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">{label}</div>
       <div className="mt-1 font-mono text-[22px] tabular-nums">{value}</div>
     </div>
@@ -285,18 +297,18 @@ async function UsersTab({
           name="q"
           defaultValue={result.search ?? ''}
           placeholder="Search by name or email…"
-          className="h-9 w-full max-w-sm rounded-md border border-border bg-background px-3 text-[13px] outline-none focus:border-[var(--ed-line-strong)]"
+          className="border-border bg-background h-9 w-full max-w-sm rounded-md border px-3 text-[13px] outline-none focus:border-[var(--ed-line-strong)]"
         />
         <button
           type="submit"
-          className="h-9 rounded-md border border-border bg-card px-3 text-[13px] font-medium hover:border-[var(--ed-line-strong)]"
+          className="border-border bg-card h-9 rounded-md border px-3 text-[13px] font-medium hover:border-[var(--ed-line-strong)]"
         >
           Search
         </button>
         {result.search ? (
           <Link
             href={`/platform/orgs/${orgId}?tab=users`}
-            className="text-[12px] text-[var(--ed-ink-4)] hover:text-foreground"
+            className="hover:text-foreground text-[12px] text-[var(--ed-ink-4)]"
           >
             Clear
           </Link>
@@ -308,7 +320,7 @@ async function UsersTab({
           {result.search ? `No members match “${result.search}”.` : 'No members.'}
         </p>
       ) : (
-        <MembersTable members={members} />
+        <MembersTable members={members} activityAvailable={result.activityAvailable !== false} />
       )}
 
       {/*
@@ -354,91 +366,185 @@ async function UsersTab({
   );
 }
 
-function MembersTable({ members }: { members: PlatformOrgMember[] }) {
+/** "Within the last hour" reads wrong after "Signed in"; ages and dates do not. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/**
+ * One Last active cell. SYNCHRONOUS and total on purpose: it renders on the
+ * only surface that can disable an account, which has no error boundary, so
+ * absent keys and unparseable values must come out as "Never", not a throw.
+ *
+ * The label, the prefix and the tooltip are all derived from ONE resolution of
+ * the member's three signals, so they cannot disagree with each other.
+ *
+ * Renderings that must never look alike:
+ *   unavailable  the lookup failed for this page: a dash, and a note above
+ *                the table. NOT "Never" — fifty rows of "Never" on this
+ *                screen reads as "nobody uses the product".
+ *   floor        the sign-in behind the value is no longer open, so use after
+ *                it may be missing. Muted, and prefixed with the KIND of
+ *                evidence ("Signed in", "Last action") instead of being stated
+ *                as activity: a six-week-old sign-in is not six weeks of
+ *                absence, and neither is a six-week-old audit row.
+ *   measured     an open sign-in stands behind it: a coarse age, plain.
+ */
+function LastActiveCell({
+  member,
+  available,
+  now,
+}: {
+  member: PlatformOrgMember;
+  available: boolean;
+  now: Date;
+}) {
+  if (!available) {
+    return (
+      <span className="text-[var(--ed-ink-4)]" title="Activity could not be loaded for this page.">
+        —
+      </span>
+    );
+  }
+  const resolved = resolveLastActive(member);
+  const title = describeLastActive(member);
+  if (resolved.source === 'never') {
+    return (
+      <span className="text-[var(--ed-ink-4)]" title={title}>
+        Never
+      </span>
+    );
+  }
+  const label = formatLastActive(resolved.at, now);
+  if (resolved.floor) {
+    return (
+      <span className="text-[var(--ed-ink-4)]" title={title}>
+        {resolved.source === 'sign_in' ? 'Signed in' : 'Last action'} {lowerFirst(label)}
+      </span>
+    );
+  }
   return (
-    <div className="overflow-hidden rounded-[10px] border border-border">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr className="border-b border-border bg-card text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-            <th className="px-4 py-2.5 font-medium">User</th>
-            <th className="px-4 py-2.5 font-medium">Role</th>
-            <th className="px-4 py-2.5 font-medium">Joined</th>
-            <th className="px-4 py-2.5 font-medium text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((m, idx) => (
-            <tr key={m.userId ?? idx} className="border-b border-border last:border-0">
-              <td className="px-4 py-2.5">
-                <div className="flex items-center gap-2">
-                  <div>
-                    <div className="font-medium">{m.fullName ?? '—'}</div>
-                    <div className="text-[11.5px] text-[var(--ed-ink-4)]">{m.email ?? '—'}</div>
-                  </div>
-                  {m.disabledAt ? (
-                    <span
-                      title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
-                      className="inline-flex rounded-full border border-red-500/40 px-2 py-0.5 text-[11px] font-medium text-red-600"
-                    >
-                      Disabled
-                    </span>
-                  ) : null}
-                </div>
-              </td>
-              <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{m.role}</td>
-              <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
-                {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
-              </td>
-              <td className="px-4 py-2.5 text-right">
-                {m.userId ? (
-                  <UserActionsMenu
-                    userId={m.userId}
-                    email={m.email}
-                    disabledAt={m.disabledAt}
-                    // COSMETIC ONLY — this decides whether the menu item is
-                    // drawn, never whether the disable is allowed.
-                    //
-                    // It reads user_profiles.email, which is NOT the verified
-                    // auth email the real gate uses: the service resolves the
-                    // target's email from GoTrue (auth.admin.getUserById) and
-                    // refuses a protected admin there. Resolving it here too
-                    // would cost one GoTrue round-trip per row — up to
-                    // DETAIL_PREVIEW_LIMIT (100) per render — and supabase-js
-                    // offers no batched id→email lookup, so this tab reads the
-                    // column instead and accepts a bounded inaccuracy:
-                    //
-                    //   * migration 0177 pins user_profiles.email against any
-                    //     UPDATE, so a member cannot rewrite it to an
-                    //     allowlisted address to make themselves look
-                    //     protected — the escalation this guards against;
-                    //   * the auth→profile sync (0001_init) is INSERT-only, so
-                    //     the two can diverge if an auth email changes later.
-                    //     No product flow changes an auth email today, and
-                    //     GoTrue refuses to move one onto an address already
-                    //     registered, so the reachable divergence is an
-                    //     ex-admin whose profile still shows the old address:
-                    //     Disable is wrongly HIDDEN, never wrongly permitted.
-                    //
-                    // The allowlist itself never crosses to the client — only
-                    // this boolean does.
-                    protectedAdmin={isPlatformAdmin(m.email)}
-                  />
-                ) : (
-                  <span className="text-[11.5px] text-[var(--ed-ink-4)]">—</span>
-                )}
-              </td>
+    <span className="text-[var(--ed-ink-3)]" title={title}>
+      {label}
+    </span>
+  );
+}
+
+function MembersTable({
+  members,
+  activityAvailable,
+}: {
+  members: PlatformOrgMember[];
+  activityAvailable: boolean;
+}) {
+  // One clock read per render, so every row on the page ages from the same instant.
+  const now = new Date();
+  return (
+    <>
+      {!activityAvailable ? (
+        <p className="mb-2 text-[12px] text-amber-600">
+          Activity could not be loaded for this page. Members, status and actions are unaffected.
+        </p>
+      ) : null}
+      <div className="border-border overflow-hidden rounded-[10px] border">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="border-border bg-card border-b text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+              <th className="px-4 py-2.5 font-medium">User</th>
+              <th className="px-4 py-2.5 font-medium">Role</th>
+              <th className="px-4 py-2.5 font-medium">Joined</th>
+              <th
+                className="px-4 py-2.5 font-medium"
+                title="An estimate: the latest of a sign-in renewal (any device, any organization) and a recorded action in this organization."
+              >
+                Last active
+              </th>
+              <th className="px-4 py-2.5 text-right font-medium">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {members.map((m, idx) => (
+              <tr key={m.userId ?? idx} className="border-border border-b last:border-0">
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <div className="font-medium">{m.fullName ?? '—'}</div>
+                      <div className="text-[11.5px] text-[var(--ed-ink-4)]">{m.email ?? '—'}</div>
+                    </div>
+                    {m.disabledAt ? (
+                      <span
+                        title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
+                        className="inline-flex rounded-full border border-red-500/40 px-2 py-0.5 text-[11px] font-medium text-red-600"
+                      >
+                        Disabled
+                      </span>
+                    ) : null}
+                  </div>
+                </td>
+                <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{m.role}</td>
+                <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
+                  {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
+                </td>
+                <td className="px-4 py-2.5 text-[12px]">
+                  <LastActiveCell member={m} available={activityAvailable} now={now} />
+                </td>
+                <td className="px-4 py-2.5 text-right">
+                  {m.userId ? (
+                    <UserActionsMenu
+                      userId={m.userId}
+                      email={m.email}
+                      disabledAt={m.disabledAt}
+                      // COSMETIC ONLY — this decides whether the menu item is
+                      // drawn, never whether the disable is allowed.
+                      //
+                      // It reads user_profiles.email, which is NOT the verified
+                      // auth email the real gate uses: the service resolves the
+                      // target's email from GoTrue (auth.admin.getUserById) and
+                      // refuses a protected admin there. Resolving it here too
+                      // would cost one GoTrue round-trip per row — up to
+                      // DETAIL_PREVIEW_LIMIT (100) per render — and supabase-js
+                      // offers no batched id→email lookup, so this tab reads the
+                      // column instead and accepts a bounded inaccuracy:
+                      //
+                      //   * migration 0177 pins user_profiles.email against any
+                      //     UPDATE, so a member cannot rewrite it to an
+                      //     allowlisted address to make themselves look
+                      //     protected — the escalation this guards against;
+                      //   * the auth→profile sync (0001_init) is INSERT-only, so
+                      //     the two can diverge if an auth email changes later.
+                      //     No product flow changes an auth email today, and
+                      //     GoTrue refuses to move one onto an address already
+                      //     registered, so the reachable divergence is an
+                      //     ex-admin whose profile still shows the old address:
+                      //     Disable is wrongly HIDDEN, never wrongly permitted.
+                      //
+                      // The allowlist itself never crosses to the client — only
+                      // this boolean does.
+                      protectedAdmin={isPlatformAdmin(m.email)}
+                    />
+                  ) : (
+                    <span className="text-[11.5px] text-[var(--ed-ink-4)]">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 max-w-[760px] text-[11.5px] leading-relaxed text-[var(--ed-ink-4)]">
+        Last active is an estimate. A plain value has an open sign-in behind it and is accurate to
+        about an hour; sign-ins are per person, so it covers every device and every organization
+        they belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on
+        record: that sign-in is no longer open, so use after it may be missing. A browser tab left
+        open on an unattended screen can look active. Hover a value for the exact times.
+      </p>
+    </>
   );
 }
 
 async function OrdersTab({ orgId }: { orgId: string }) {
   const orders = await getOrgOrders(orgId);
-  if (orders.length === 0)
-    return <p className="text-[13px] text-[var(--ed-ink-4)]">No orders.</p>;
+  if (orders.length === 0) return <p className="text-[13px] text-[var(--ed-ink-4)]">No orders.</p>;
   return (
     <>
       <PreviewTable
@@ -459,8 +565,7 @@ async function BillingTab({ orgId }: { orgId: string }) {
   const b = await getOrgBillingState(orgId);
   if (!b) return <p className="text-[13px] text-[var(--ed-ink-4)]">Org not found.</p>;
   const tierName = b.effective.tier.charAt(0).toUpperCase() + b.effective.tier.slice(1);
-  const effectiveLabel =
-    b.arrangement !== 'standard' ? `${tierName} · ${b.arrangement}` : tierName;
+  const effectiveLabel = b.arrangement !== 'standard' ? `${tierName} · ${b.arrangement}` : tierName;
   return (
     <BillingPanel
       organizationId={orgId}
@@ -481,10 +586,10 @@ async function BillingTab({ orgId }: { orgId: string }) {
 
 function PreviewTable({ head, rows }: { head: string[]; rows: string[][] }) {
   return (
-    <div className="overflow-hidden rounded-[10px] border border-border">
+    <div className="border-border overflow-hidden rounded-[10px] border">
       <table className="w-full text-[13px]">
         <thead>
-          <tr className="border-b border-border bg-card text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+          <tr className="border-border bg-card border-b text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
             {head.map((h) => (
               <th key={h} className="px-4 py-2.5 font-medium">
                 {h}
@@ -494,7 +599,7 @@ function PreviewTable({ head, rows }: { head: string[]; rows: string[][] }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} className="border-b border-border last:border-0">
+            <tr key={i} className="border-border border-b last:border-0">
               {r.map((c, j) => (
                 <td key={j} className="px-4 py-2.5 text-[var(--ed-ink-3)]">
                   {c}

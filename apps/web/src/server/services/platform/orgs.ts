@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { resolveEffectivePlan, type EffectivePlan } from '@stockpilot/core';
@@ -309,8 +310,9 @@ export async function getOrgOverview(
       .maybeSingle(),
   ]);
 
-  const ownerProfile = (owner.data as { user_profiles: { email: string } | { email: string }[] | null } | null)
-    ?.user_profiles;
+  const ownerProfile = (
+    owner.data as { user_profiles: { email: string } | { email: string }[] | null } | null
+  )?.user_profiles;
   const ownerEmail = Array.isArray(ownerProfile)
     ? (ownerProfile[0]?.email ?? null)
     : (ownerProfile?.email ?? null);
@@ -442,6 +444,18 @@ export interface PlatformOrgMember {
    * menu offers Disable or Re-enable.
    */
   disabledAt: string | null;
+  /**
+   * The three activity signals from migration 0351, verbatim. Each is a floor
+   * with a different blind spot, so the SURFACE resolves them (latest, source,
+   * whether an open sign-in stands behind it) through lib/platform/last-active
+   * and this DTO deliberately carries no pre-resolved value: a label, a source
+   * and a tooltip derived from one input by one function cannot disagree.
+   * All null when the lookup knows nothing about this person, and also when it
+   * failed; `activityAvailable` on the page is what tells those apart.
+   */
+  lastSignInAt: string | null;
+  lastSessionAt: string | null;
+  lastActionAt: string | null;
 }
 
 /** How many members one page of the Users tab shows. */
@@ -458,6 +472,82 @@ export interface PlatformOrgMembersPage {
   pageCount: number;
   /** The applied search term, normalised — null when none. */
   search: string | null;
+  /**
+   * False when the activity lookup failed for this page. The members, their
+   * status and their actions are unaffected; only the Last active column is.
+   * The surface MUST branch on this before reading a member's signals: three
+   * nulls mean "never" after a successful lookup and "unknown" after a failed
+   * one, and "Never" on all fifty rows of the screen that disables accounts
+   * reads as "nobody uses this".
+   */
+  activityAvailable: boolean;
+}
+
+interface MemberActivity {
+  lastSignInAt: string | null;
+  lastSessionAt: string | null;
+  lastActionAt: string | null;
+}
+
+/**
+ * Activity for ONE page of members (migration 0351, service_role only).
+ *
+ * Returns null when the lookup failed, and NEVER throws. This feeds a cosmetic
+ * column on the only surface that can disable or re-enable an account, and
+ * (platform) has no error boundary, so a missing function (code deployed ahead
+ * of the migration: PGRST202), a transient network error or an unexpected
+ * payload must cost the column and nothing else. It is REPORTED every time:
+ * `Database = any`, so a typo in the function name or an argument key would
+ * otherwise compile, 404 and be swallowed here forever.
+ *
+ * The result is keyed by user id. The rpc returns rows in arbitrary order and
+ * omits anyone with no auth row, so a positional merge would attribute one
+ * person's activity to another.
+ */
+async function fetchMemberActivity(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  userIds: string[],
+): Promise<Map<string, MemberActivity> | null> {
+  if (userIds.length === 0) return new Map();
+
+  const fail = async (err: unknown) => {
+    await reportError(err instanceof Error ? err : new Error(String(err)), {
+      tag: 'platform.member-activity',
+      level: 'warning',
+      extra: { orgId, requested: userIds.length },
+    });
+    return null;
+  };
+
+  try {
+    const { data, error } = await admin.rpc('platform_member_activity', {
+      p_org_id: orgId,
+      p_user_ids: userIds,
+    });
+    if (error) return await fail(new Error(error.message));
+
+    const rows = (data ?? []) as unknown;
+    if (!Array.isArray(rows)) {
+      return await fail(new Error('platform_member_activity returned a non-array payload'));
+    }
+
+    const iso = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+    const byUser = new Map<string, MemberActivity>();
+    for (const raw of rows) {
+      if (raw === null || typeof raw !== 'object') continue;
+      const r = raw as Record<string, unknown>;
+      if (typeof r.user_id !== 'string') continue;
+      byUser.set(r.user_id, {
+        lastSignInAt: iso(r.last_sign_in_at),
+        lastSessionAt: iso(r.last_session_at),
+        lastActionAt: iso(r.last_action_at),
+      });
+    }
+    return byUser;
+  } catch (err) {
+    return await fail(err);
+  }
 }
 
 /**
@@ -530,14 +620,16 @@ export async function getOrgMembers(
 
   const runDataQuery = (pageToFetch: number) => {
     const from = (pageToFetch - 1) * pageSize;
-    return baseQuery({ head: false })
-      .order('accepted_at', { ascending: true })
-      // Tiebreaker. Bulk-invited members share an accepted_at to the
-      // microsecond; without a stable second key Postgres may order those ties
-      // differently for the page-1 and page-2 queries, which drops a member out
-      // of both — the same invisible loss, one layer down.
-      .order('user_id', { ascending: true })
-      .range(from, from + pageSize - 1);
+    return (
+      baseQuery({ head: false })
+        .order('accepted_at', { ascending: true })
+        // Tiebreaker. Bulk-invited members share an accepted_at to the
+        // microsecond; without a stable second key Postgres may order those ties
+        // differently for the page-1 and page-2 queries, which drops a member out
+        // of both — the same invisible loss, one layer down.
+        .order('user_id', { ascending: true })
+        .range(from, from + pageSize - 1)
+    );
   };
 
   // COUNT-FIRST: clamp the requested page against a REAL total before it is
@@ -579,17 +671,39 @@ export async function getOrgMembers(
   // a fallback for the (should-never-happen) case a driver returns no count
   // on the second query.
   const total = count ?? total0;
-  const members = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+
+  // Activity is fetched AFTER, and OUTSIDE, the two queries above on purpose:
+  // their errors still throw (a broken members list must be loud), while this
+  // lookup can only ever cost its own column. Null user ids are dropped — a
+  // membership whose profile row is missing still lists, but has no one to
+  // look up.
+  const pageUserIds = rows
+    .map((r) => r.user_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const activity = await fetchMemberActivity(admin, orgId, pageUserIds);
+  const activityAvailable = activity !== null;
+
+  const members = rows.map((r): PlatformOrgMember => {
     type Profile = { email: string; full_name: string | null; disabled_at: string | null };
     const prof = r.user_profiles as Profile | Profile[] | null;
     const p = Array.isArray(prof) ? (prof[0] ?? null) : prof;
+    const userId = (r.user_id as string | null) ?? null;
+
+    const signals: MemberActivity = (userId ? activity?.get(userId) : undefined) ?? {
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
+    };
+
     return {
-      userId: (r.user_id as string | null) ?? null,
+      userId,
       email: p?.email ?? null,
       fullName: p?.full_name ?? null,
       role: r.role as string,
       joinedAt: (r.accepted_at as string | null) ?? null,
       disabledAt: p?.disabled_at ?? null,
+      ...signals,
     };
   });
 
@@ -608,6 +722,7 @@ export async function getOrgMembers(
     pageSize,
     pageCount,
     search,
+    activityAvailable,
   };
 }
 

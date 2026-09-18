@@ -63,8 +63,20 @@ const state: {
   selectCalls: [],
 };
 
+/**
+ * The activity lookup (migration 0351). Defaults to SUCCESS with no rows in
+ * beforeEach, deliberately: getOrgMembers must treat a failing rpc as
+ * non-fatal, so a fake WITHOUT rpc would send every test in this file through
+ * the failure branch and the suite would certify "no activity data" as normal.
+ */
+const rpc = vi.fn();
+// Rest-typed so the pass-through wrapper spreads into it cleanly under tsc.
+const reportError = vi.fn(async (..._args: unknown[]) => {});
+
+vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
+    rpc: (...a: unknown[]) => rpc(...a),
     from: () => {
       // Thenable at every link so the service can terminate the chain wherever
       // it likes — the real builder does exactly that.
@@ -118,6 +130,9 @@ beforeEach(() => {
   state.responses = null;
   state.rangeCalls = [];
   state.selectCalls = [];
+  rpc.mockReset();
+  rpc.mockResolvedValue({ data: [], error: null });
+  reportError.mockClear();
 });
 
 describe('getOrgMembers — account status', () => {
@@ -176,10 +191,7 @@ describe('getOrgMembers — reachability in a large org', () => {
   it('pages with range(), so members past the first page are fetchable', async () => {
     state.count = 150;
     const page = await getOrgMembers(ORG, { page: 3 });
-    expect(state.rec.range).toEqual([
-      2 * MEMBERS_PAGE_SIZE,
-      3 * MEMBERS_PAGE_SIZE - 1,
-    ]);
+    expect(state.rec.range).toEqual([2 * MEMBERS_PAGE_SIZE, 3 * MEMBERS_PAGE_SIZE - 1]);
     expect(page.page).toBe(3);
   });
 
@@ -309,9 +321,7 @@ describe('getOrgMembers — out-of-range page', () => {
     expect(page.pageCount).toBe(2);
     expect(page.page).toBeLessThanOrEqual(page.pageCount);
     // offset === total (100) was never requested — only page 2's offset (50).
-    expect(state.rangeCalls).toEqual([
-      [1 * MEMBERS_PAGE_SIZE, 2 * MEMBERS_PAGE_SIZE - 1],
-    ]);
+    expect(state.rangeCalls).toEqual([[1 * MEMBERS_PAGE_SIZE, 2 * MEMBERS_PAGE_SIZE - 1]]);
   });
 
   it('falls back to page 1 if the data query STILL 416s despite the count-first clamp (residual race)', async () => {
@@ -325,7 +335,10 @@ describe('getOrgMembers — out-of-range page', () => {
       {
         rows: [],
         count: null,
-        error: { message: 'An offset of 50 was requested, but there are only 5 rows.', code: 'PGRST103' },
+        error: {
+          message: 'An offset of 50 was requested, but there are only 5 rows.',
+          code: 'PGRST103',
+        },
       }, // data at clamped page 2: still out of range
       {
         rows: [
@@ -368,5 +381,204 @@ describe('getOrgMembers — out-of-range page', () => {
     // Exactly one data-query attempt — a non-PGRST103 error must not
     // trigger the retry.
     expect(state.rangeCalls).toHaveLength(1);
+  });
+});
+
+/**
+ * CONTRACT 3 — LAST ACTIVE (migration 0351).
+ *
+ * The auth schema is not reachable over PostgREST, so activity arrives from a
+ * separate service_role-only rpc for the ids on THIS page. Three ways that can
+ * go wrong are pinned here, in order of how much damage they do:
+ *
+ *   1. It takes the tab down. This is the only surface that can disable an
+ *      account and (platform) has no error boundary, so a cosmetic column
+ *      must never be able to throw past getOrgMembers.
+ *   2. It fails SILENTLY FOREVER. `Database = any`, so a typo in the function
+ *      name or the argument key compiles, 404s at PostgREST and is swallowed
+ *      by the degrade path. The exact-call pin and the reporter pin are what
+ *      stand between that and an empty column nobody ever questions.
+ *   3. It attributes one person's activity to another, on the screen where
+ *      accounts get disabled.
+ */
+describe('getOrgMembers — last active', () => {
+  const row = (n: number, userId: string | null = `u-${n}`) => ({
+    user_id: userId,
+    role: 'viewer',
+    accepted_at: '2026-01-01T00:00:00Z',
+    user_profiles: { email: `user${n}@acme.test`, full_name: `User ${n}`, disabled_at: null },
+  });
+
+  it('asks platform_member_activity for exactly this org and the user ids on this page', async () => {
+    state.rows = [row(1), row(2), row(3, null)];
+    state.count = 3;
+    await getOrgMembers(ORG);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('platform_member_activity', {
+      p_org_id: ORG,
+      p_user_ids: ['u-1', 'u-2'],
+    });
+  });
+
+  it('merges by user id, never by position', async () => {
+    state.rows = [row(1), row(2), row(3)];
+    state.count = 3;
+    // REVERSE order, and u-2 omitted entirely (no auth row came back).
+    rpc.mockResolvedValue({
+      data: [
+        {
+          user_id: 'u-3',
+          last_sign_in_at: '2026-08-12T15:00:00+00:00',
+          last_session_at: null,
+          last_action_at: null,
+        },
+        {
+          user_id: 'u-1',
+          last_sign_in_at: '2026-07-22T08:00:00+00:00',
+          last_session_at: '2026-09-18T09:00:00+00:00',
+          last_action_at: '2026-09-17T23:30:00+00:00',
+        },
+      ],
+      error: null,
+    });
+
+    const page = await getOrgMembers(ORG);
+    const byId = Object.fromEntries(page.members.map((m) => [m.userId, m]));
+
+    expect(page.activityAvailable).toBe(true);
+    expect(byId['u-1']).toMatchObject({
+      lastSignInAt: '2026-07-22T08:00:00+00:00',
+      lastSessionAt: '2026-09-18T09:00:00+00:00',
+      lastActionAt: '2026-09-17T23:30:00+00:00',
+    });
+    expect(byId['u-3']).toMatchObject({
+      lastSignInAt: '2026-08-12T15:00:00+00:00',
+      lastSessionAt: null,
+      lastActionAt: null,
+    });
+    // Omitted by the rpc: a SUCCESSFUL lookup that knows nothing about them.
+    expect(byId['u-2']).toMatchObject({
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
+    });
+    // The DTO carries signals only. Resolving them is the surface's job, so a
+    // label, a source and a tooltip can never be derived from different inputs.
+    expect(byId['u-1']).not.toHaveProperty('lastActiveAt');
+    expect(byId['u-1']).not.toHaveProperty('lastActiveSource');
+  });
+
+  it('degrades when the rpc returns an ERROR: every member still comes back, and it is reported', async () => {
+    state.rows = [
+      {
+        ...row(1),
+        user_profiles: {
+          email: 'a@acme.test',
+          full_name: 'Ada',
+          disabled_at: '2026-07-30T12:00:00Z',
+        },
+      },
+      row(2),
+    ];
+    state.count = 120;
+    rpc.mockResolvedValue({
+      data: null,
+      error: {
+        message: 'Could not find the function public.platform_member_activity',
+        code: 'PGRST202',
+      },
+    });
+
+    const page = await getOrgMembers(ORG, { page: 1 });
+
+    expect(page.activityAvailable).toBe(false);
+    expect(page.members).toHaveLength(2);
+    expect(page.members[0]).toMatchObject({
+      userId: 'u-1',
+      email: 'a@acme.test',
+      disabledAt: '2026-07-30T12:00:00Z',
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
+    });
+    expect(page.total).toBe(120);
+    expect(page.pageCount).toBe(Math.ceil(120 / MEMBERS_PAGE_SIZE));
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({ tag: 'platform.member-activity' });
+  });
+
+  it('degrades the same way when the rpc THROWS', async () => {
+    state.rows = [row(1)];
+    state.count = 1;
+    rpc.mockRejectedValue(new Error('fetch failed'));
+
+    const page = await getOrgMembers(ORG);
+
+    expect(page.activityAvailable).toBe(false);
+    expect(page.members).toHaveLength(1);
+    expect(page.members[0]!.userId).toBe('u-1');
+    expect(page.members[0]!.lastSessionAt).toBeNull();
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('degrades when the payload is not a list of rows, and never reads it positionally', async () => {
+    state.rows = [row(1)];
+    state.count = 1;
+    rpc.mockResolvedValue({
+      data: { user_id: 'u-1', last_session_at: '2026-09-18T09:00:00Z' },
+      error: null,
+    });
+
+    const page = await getOrgMembers(ORG);
+
+    expect(page.activityAvailable).toBe(false);
+    expect(page.members[0]!.lastSessionAt).toBeNull();
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a null payload as a successful empty answer', async () => {
+    state.rows = [row(1)];
+    state.count = 1;
+    rpc.mockResolvedValue({ data: null, error: null });
+
+    const page = await getOrgMembers(ORG);
+
+    expect(page.activityAvailable).toBe(true);
+    expect(page.members[0]).toMatchObject({
+      lastSignInAt: null,
+      lastSessionAt: null,
+      lastActionAt: null,
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('skips malformed rows instead of trusting them', async () => {
+    state.rows = [row(1)];
+    state.count = 1;
+    rpc.mockResolvedValue({
+      data: [
+        null,
+        'u-1',
+        { user_id: 42 },
+        { user_id: 'u-1', last_session_at: 12345, last_action_at: '2026-09-01T00:00:00Z' },
+      ],
+      error: null,
+    });
+
+    const page = await getOrgMembers(ORG);
+
+    expect(page.activityAvailable).toBe(true);
+    expect(page.members[0]).toMatchObject({
+      lastSessionAt: null,
+      lastActionAt: '2026-09-01T00:00:00Z',
+    });
+  });
+
+  it('does not call the rpc for an empty page, and still reports activity as available', async () => {
+    state.rows = [];
+    state.count = 0;
+    const page = await getOrgMembers(ORG);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(page.activityAvailable).toBe(true);
   });
 });
