@@ -23,6 +23,7 @@ import { useBrandFonts } from '@/lib/use-fonts';
 import { useOtaAutoReload } from '@/lib/use-ota-updates';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSessionRevocation } from '@/lib/use-session-revocation';
+import { useActivityBeacon } from '@/lib/use-activity-beacon';
 import { useSync } from '@/lib/use-sync';
 import { useTheme } from '@/lib/use-theme';
 
@@ -138,6 +139,9 @@ function RootGate() {
 
   usePushNotifications(session?.user ?? null);
   useSync(session?.user ?? null);
+  // "Last seen" for the platform console (web mig 0352): foreground + navigation,
+  // never a timer. Silent on every failure.
+  useActivityBeacon(session?.user?.id ?? null, segments.join('/'));
 
   // Mounted HERE, not in DrawerContent: a user sitting on an auth-group screen,
   // a pushed card screen, a full-screen modal or the pre-drawer cold-launch

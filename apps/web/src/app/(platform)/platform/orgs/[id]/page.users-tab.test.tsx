@@ -72,6 +72,7 @@ function member(n: number, activity: Record<string, unknown> = {}) {
     lastSignInAt: null,
     lastSessionAt: null,
     lastActionAt: null,
+    lastSeenAt: null,
     ...activity,
   };
 }
@@ -283,6 +284,28 @@ describe('platform org detail — Users tab last active', () => {
       rowOf('user1@acme.test').getByText('Signed in within the last hour'),
     ).toBeInTheDocument();
     expect(rowOf('user2@acme.test').getByText('Last action 3 days ago')).toBeInTheDocument();
+  });
+
+  it('someone who only read and then signed out is shown plainly, from the app’s own report', async () => {
+    // The blind spot 0352 closes. No session, no audit row, a two-month-old
+    // sign-in: before, this rendered as a hedged "Signed in 22 Jul 2026".
+    armMembers({
+      members: [
+        member(1, {
+          lastSignInAt: '2026-07-22T08:00:00+00:00',
+          lastSeenAt: '2026-09-17T12:00:00+00:00',
+        }),
+      ],
+    });
+    await renderUsersTab();
+
+    const row = rowOf('user1@acme.test');
+    const cell = row.getByText('1 day ago');
+    expect(cell.getAttribute('title')).toContain(
+      'Last had StockPilot open in this organization 17 Sep 2026, 12:00 UTC.',
+    );
+    expect(cell.getAttribute('title')).not.toContain(HEDGE);
+    expect(row.queryByText(/signed in|last action/i)).toBeNull();
   });
 
   it('an action newer than the last hourly renewal is still measured: the sign-in is open', async () => {

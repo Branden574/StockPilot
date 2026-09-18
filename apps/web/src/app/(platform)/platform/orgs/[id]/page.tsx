@@ -455,7 +455,7 @@ function MembersTable({
               <th className="px-4 py-2.5 font-medium">Joined</th>
               <th
                 className="px-4 py-2.5 font-medium"
-                title="An estimate: the latest of a sign-in renewal (any device, any organization) and a recorded action in this organization."
+                title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization."
               >
                 Last active
               </th>
@@ -532,11 +532,11 @@ function MembersTable({
         </table>
       </div>
       <p className="mt-2 max-w-[760px] text-[11.5px] leading-relaxed text-[var(--ed-ink-4)]">
-        Last active is an estimate. A plain value has an open sign-in behind it and is accurate to
-        about an hour; sign-ins are per person, so it covers every device and every organization
-        they belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on
-        record: that sign-in is no longer open, so use after it may be missing. A browser tab left
-        open on an unattended screen can look active. Hover a value for the exact times.
+        Last active is an estimate. A plain value is backed by something live: StockPilot reporting
+        that the person had it open in this organization, or an open sign-in, which is accurate to
+        about an hour and is per person, so it covers every device and every organization they
+        belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on
+        record, so use after it may be missing. Hover a value for the exact times.
       </p>
     </>
   );

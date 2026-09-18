@@ -1,9 +1,17 @@
 /**
  * "Last active" for the platform console's Users tab: the pure half.
  *
- * Migration 0351 returns THREE timestamps per member and each one is a floor
- * with a different blind spot:
+ * Migrations 0351 and 0352 return FOUR timestamps per member. The first three
+ * are floors with different blind spots; the fourth is the app reporting on
+ * itself, and exists because the other three all miss the same person: someone
+ * who only reads and then signs out.
  *
+ *   lastSeenAt     the last time the app reported this person present IN THIS
+ *                  organization (the ActivityBeacon on web, the foreground hook
+ *                  on mobile): on open, on return, on navigation, never on a
+ *                  timer. Survives sign-out, covers reading, and goes quiet on
+ *                  an unattended screen. Accurate to its five-minute throttle.
+ *                  Only knows about use since 0352 shipped.
  *   lastSessionAt  the newest sign-in renewal on any device, ACCOUNT-WIDE (a
  *                  person in two organizations shows the same value in both).
  *                  Moves about once an hour while the app is open, so it is
@@ -25,9 +33,10 @@ export interface LastActiveSignals {
   lastSignInAt?: string | null;
   lastSessionAt?: string | null;
   lastActionAt?: string | null;
+  lastSeenAt?: string | null;
 }
 
-export type LastActiveSource = 'session' | 'action' | 'sign_in' | 'never';
+export type LastActiveSource = 'seen' | 'session' | 'action' | 'sign_in' | 'never';
 
 export interface ResolvedLastActive {
   /** Normalised ISO instant, or null when nothing is known. */
@@ -42,12 +51,16 @@ export interface ResolvedLastActive {
    * Keyed on the EVIDENCE, not on which signal won. A months-old audit row
    * with no session behind it is exactly as stale as a months-old sign-in, and
    * hedging only the latter would present the former at full confidence.
+   *   seen won                        measured (the app reported them present)
    *   session won                     measured (renewed hourly while open)
    *   action won, a session survives  measured (at most an hour behind)
-   *   action won, no session          floor
+   *   action won, seen just before it measured (the beacon was live for them;
+   *                                   had they carried on, it would have fired)
+   *   action won, neither             floor
    *   sign-in won                     floor, even if an OLDER session on
    *                                   another device survives: the session that
-   *                                   sign-in created is gone
+   *                                   sign-in created is gone, and no beacon
+   *                                   followed it
    */
   floor: boolean;
 }
@@ -56,6 +69,12 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 /** From here on a relative age stops being useful and a date reads better. */
 const RELATIVE_DAYS = 30;
+/**
+ * How close before the winning value a "seen" stamp must be to vouch for it:
+ * two beacon throttle periods. Within that, the beacon was demonstrably live
+ * for this person, so further use would have produced a later stamp.
+ */
+const SEEN_VOUCHES_MS = 10 * 60 * 1000;
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -73,13 +92,15 @@ function toMillis(iso: string | null | undefined): number | null {
  * fractional precision each column carries, and ISO strings with different
  * offsets do not sort chronologically.
  *
- * Tie order is action, then session, then sign-in. A sign-in creates its
+ * Tie order is action, seen, session, then sign-in. A sign-in creates its
  * session in the same instant, and 'sign_in' is rendered as the hedged
  * fallback, so it must not win a tie it does not need to win.
  */
 export function resolveLastActive(signals: LastActiveSignals): ResolvedLastActive {
+  const seenMs = toMillis(signals.lastSeenAt);
   const candidates: Array<{ source: LastActiveSource; ms: number | null }> = [
     { source: 'action', ms: toMillis(signals.lastActionAt) },
+    { source: 'seen', ms: seenMs },
     { source: 'session', ms: toMillis(signals.lastSessionAt) },
     { source: 'sign_in', ms: toMillis(signals.lastSignInAt) },
   ];
@@ -92,10 +113,11 @@ export function resolveLastActive(signals: LastActiveSignals): ResolvedLastActiv
 
   if (best === null) return { at: null, source: 'never', floor: false };
   const hasSession = toMillis(signals.lastSessionAt) !== null;
+  const seenVouches = seenMs !== null && best.ms - seenMs <= SEEN_VOUCHES_MS;
   return {
     at: new Date(best.ms).toISOString(),
     source: best.source,
-    floor: best.source === 'sign_in' || !hasSession,
+    floor: best.source === 'sign_in' || !(hasSession || seenVouches),
   };
 }
 
@@ -156,6 +178,7 @@ export function describeLastActive(signals: LastActiveSignals): string {
   }
 
   const session = formatExactUtc(signals.lastSessionAt);
+  const seen = formatExactUtc(signals.lastSeenAt);
   const action = formatExactUtc(signals.lastActionAt);
   const signIn = formatExactUtc(signals.lastSignInAt);
 
@@ -167,6 +190,7 @@ export function describeLastActive(signals: LastActiveSignals): string {
   } else {
     parts.push('No open sign-ins on any device.');
   }
+  if (seen) parts.push(`Last had StockPilot open in this organization ${seen}.`);
   if (action) parts.push(`Last recorded action in this organization ${action}.`);
   if (signIn) parts.push(`Last signed in ${signIn}.`);
   if (floor) {

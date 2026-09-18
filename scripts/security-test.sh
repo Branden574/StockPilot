@@ -138,6 +138,11 @@ PGTAP_TESTS=(
   # authenticated grant would be a cross-tenant login-activity oracle.
   supabase/tests/0351_platform_member_activity.test.sql
 
+  # The "last seen" beacon: the one function in this feature that a signed-in
+  # user may call and that WRITES. Its in-body gate (self only, real members
+  # only, never an impersonation grant, never a disabled account) is the control.
+  supabase/tests/0352_member_last_seen.test.sql
+
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
   supabase/tests/0142_order_attachments_read_floor.test.sql

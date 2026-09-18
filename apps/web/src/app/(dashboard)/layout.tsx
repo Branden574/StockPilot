@@ -21,6 +21,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 
 import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
+import { ActivityBeacon } from '@/components/activity-beacon';
 import { WhatsNew } from '@/components/onboarding/whats-new';
 
 // Override the root layout's marketing title for everything under
@@ -60,9 +61,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const platformAdmin = await currentUserIsPlatformAdminFromRequestHeader();
 
   const cookieStore = await cookies();
-  const initialSidebarHidden = parseSidebarHidden(
-    cookieStore.get(SIDEBAR_HIDDEN_COOKIE)?.value,
-  );
+  const initialSidebarHidden = parseSidebarHidden(cookieStore.get(SIDEBAR_HIDDEN_COOKIE)?.value);
 
   // Layout-blocking parallel fan-out. Org row, warehouses list, and MFA
   // factors go through request-cached helpers so the dashboard page (or
@@ -116,7 +115,12 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const enabledModules = Array.from(enabledModuleSet);
 
   const memberships = sessionMemberships
-    .map((m) => ({ id: m.organizationId, name: m.name, logoUrl: m.logoUrl, role: m.role as string }))
+    .map((m) => ({
+      id: m.organizationId,
+      name: m.name,
+      logoUrl: m.logoUrl,
+      role: m.role as string,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────
@@ -127,14 +131,11 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // Chrome, no MFA enrolled). The banner is always visible above the
   // page content until the user enrolls; can't loop, can't throttle,
   // and behaves the same across browsers.
-  const policy = (orgRow?.mfa_policy as
-    | 'optional'
-    | 'admins_required'
-    | 'all_required'
-    | undefined) ?? 'optional';
+  const policy =
+    (orgRow?.mfa_policy as 'optional' | 'admins_required' | 'all_required' | undefined) ??
+    'optional';
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
-  const mfaRequired =
-    policy === 'all_required' || (policy === 'admins_required' && isAdmin);
+  const mfaRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
   const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
   const showMfaBanner = mfaRequired && !hasVerifiedFactor;
 
@@ -218,6 +219,10 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         {showMfaBanner && <MfaRequiredBanner />}
         {children}
         <WhatsNew />
+        {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
+            organization from throttling another on a shared device; it never leaves
+            the browser, and the server stamps the session's own user and org. */}
+        <ActivityBeacon scope={`${ctx.userId}:${ctx.organizationId}`} />
       </DashboardShell>
     </>
   );
