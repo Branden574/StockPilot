@@ -456,6 +456,8 @@ export interface PlatformOrgMember {
   lastSignInAt: string | null;
   lastSessionAt: string | null;
   lastActionAt: string | null;
+  /** The app's own report that they had it open here (migration 0352). */
+  lastSeenAt: string | null;
 }
 
 /** How many members one page of the Users tab shows. */
@@ -487,6 +489,7 @@ interface MemberActivity {
   lastSignInAt: string | null;
   lastSessionAt: string | null;
   lastActionAt: string | null;
+  lastSeenAt: string | null;
 }
 
 /**
@@ -542,6 +545,8 @@ async function fetchMemberActivity(
         lastSignInAt: iso(r.last_sign_in_at),
         lastSessionAt: iso(r.last_session_at),
         lastActionAt: iso(r.last_action_at),
+        // Absent until migration 0352 is applied; iso() makes that null.
+        lastSeenAt: iso(r.last_seen_at),
       });
     }
     return byUser;
@@ -694,6 +699,7 @@ export async function getOrgMembers(
       lastSignInAt: null,
       lastSessionAt: null,
       lastActionAt: null,
+      lastSeenAt: null,
     };
 
     return {

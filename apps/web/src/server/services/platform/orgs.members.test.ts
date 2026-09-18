@@ -437,6 +437,7 @@ describe('getOrgMembers — last active', () => {
           last_sign_in_at: '2026-07-22T08:00:00+00:00',
           last_session_at: '2026-09-18T09:00:00+00:00',
           last_action_at: '2026-09-17T23:30:00+00:00',
+          last_seen_at: '2026-09-18T09:20:00+00:00',
         },
       ],
       error: null,
@@ -450,11 +451,16 @@ describe('getOrgMembers — last active', () => {
       lastSignInAt: '2026-07-22T08:00:00+00:00',
       lastSessionAt: '2026-09-18T09:00:00+00:00',
       lastActionAt: '2026-09-17T23:30:00+00:00',
+      lastSeenAt: '2026-09-18T09:20:00+00:00',
     });
+    // u-3's row has NO last_seen_at key at all: the shape the 0351 function
+    // returns until 0352 is applied. The code ships after the migration, but
+    // must survive the other order too.
     expect(byId['u-3']).toMatchObject({
       lastSignInAt: '2026-08-12T15:00:00+00:00',
       lastSessionAt: null,
       lastActionAt: null,
+      lastSeenAt: null,
     });
     // Omitted by the rpc: a SUCCESSFUL lookup that knows nothing about them.
     expect(byId['u-2']).toMatchObject({

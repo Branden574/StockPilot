@@ -157,6 +157,78 @@ describe('resolveLastActive — is the value measured, or only a floor?', () => 
   });
 });
 
+describe('resolveLastActive — the app reporting on itself (migration 0352)', () => {
+  it('a seen stamp is MEASURED even when no session survives: that is the case it exists for', () => {
+    // Signed in on 22 Jul, read daily, signed out on 17 Sep. Before 0352 the
+    // only thing left was the 22 Jul sign-in, shown hedged.
+    expect(
+      resolveLastActive({
+        lastSignInAt: '2026-07-22T08:00:00Z',
+        lastSessionAt: null,
+        lastActionAt: null,
+        lastSeenAt: '2026-09-17T16:55:00Z',
+      }),
+    ).toEqual({ at: '2026-09-17T16:55:00.000Z', source: 'seen', floor: false });
+  });
+
+  it('vouches for an action that follows it closely, and not for one that does not', () => {
+    // Stamp at 09:00, action at 09:03, signed out at 09:04: the beacon was live
+    // for them, so had they carried on it would have fired again.
+    expect(
+      resolveLastActive({
+        lastSessionAt: null,
+        lastActionAt: '2026-09-18T09:03:00Z',
+        lastSeenAt: '2026-09-18T09:00:00Z',
+      }),
+    ).toMatchObject({ source: 'action', floor: false });
+    // Exactly ten minutes still vouches; a second more does not.
+    expect(
+      resolveLastActive({
+        lastActionAt: '2026-09-18T09:10:00Z',
+        lastSeenAt: '2026-09-18T09:00:00Z',
+      }).floor,
+    ).toBe(false);
+    expect(
+      resolveLastActive({
+        lastActionAt: '2026-09-18T09:10:01Z',
+        lastSeenAt: '2026-09-18T09:00:00Z',
+      }).floor,
+    ).toBe(true);
+  });
+
+  it('cannot rescue a sign-in that no stamp followed', () => {
+    // An old stamp, then a fresh sign-in from a client with no beacon (a mobile
+    // build that predates it): the sign-in is still only a floor.
+    expect(
+      resolveLastActive({
+        lastSignInAt: '2026-09-18T08:00:00Z',
+        lastSeenAt: '2026-09-10T08:00:00Z',
+      }),
+    ).toMatchObject({ source: 'sign_in', floor: true });
+  });
+
+  it('ties: an action beats a stamp, a stamp beats a session', () => {
+    expect(
+      resolveLastActive({
+        lastActionAt: '2026-09-18T09:00:00Z',
+        lastSeenAt: '2026-09-18T09:00:00Z',
+      }).source,
+    ).toBe('action');
+    expect(
+      resolveLastActive({
+        lastSessionAt: '2026-09-18T09:00:00Z',
+        lastSeenAt: '2026-09-18T09:00:00Z',
+      }).source,
+    ).toBe('seen');
+  });
+
+  it('ignores a stamp it cannot parse', () => {
+    expect(
+      resolveLastActive({ lastSeenAt: 'not-a-date', lastSignInAt: '2026-09-01T00:00:00Z' }),
+    ).toEqual({ at: '2026-09-01T00:00:00.000Z', source: 'sign_in', floor: true });
+  });
+});
+
 describe('formatLastActive', () => {
   it('is coarse on purpose: the signal has about one hour of resolution', () => {
     expect(formatLastActive('2026-09-18T11:59:30Z', NOW)).toBe('Within the last hour');
@@ -254,6 +326,19 @@ describe('describeLastActive', () => {
     expect(text).toContain('Sign-in last renewed 1 Sep 2026, 00:00 UTC');
     expect(text).not.toContain('No open sign-ins');
     expect(text).toContain(HEDGE);
+  });
+
+  it('names the stamp as what it is: the app open in THIS organization', () => {
+    const text = describeLastActive({
+      lastSignInAt: '2026-07-22T08:00:00Z',
+      lastSessionAt: null,
+      lastSeenAt: '2026-09-17T16:55:00Z',
+    });
+    expect(text).toBe(
+      'No open sign-ins on any device. ' +
+        'Last had StockPilot open in this organization 17 Sep 2026, 16:55 UTC. ' +
+        'Last signed in 22 Jul 2026, 08:00 UTC.',
+    );
   });
 
   it('never says "signed out": a disable or a password change ends a sign-in too', () => {
