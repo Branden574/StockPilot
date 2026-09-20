@@ -32,6 +32,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { usePerfUseful } from '@/components/perf/perf-useful';
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
 import { isManagerOrAbove, type OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
@@ -620,6 +621,11 @@ function StorefrontCatalog({
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
+  // Performance marker (lib/perf/marks.ts). AFTER use(), so it is part of the
+  // render that has the catalog: this component only mounts (and the marker's
+  // mount effect only runs) once the payload has arrived and the grid replaces
+  // <CatalogSkeleton />. The frame above paints earlier and is not "useful".
+  usePerfUseful();
 
   const router = useRouter();
   const { state, dispatch, hydrated } = useCart();

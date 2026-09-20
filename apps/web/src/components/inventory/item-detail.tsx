@@ -63,6 +63,7 @@ import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 import { can, holdingsContradictRack, isLikelyIsbn } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
+import { PerfUseful } from '@/components/perf/perf-useful';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
 
 
@@ -354,6 +355,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
 
   return (
     <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">
+      {/* Performance marker. This server component awaits the item (and
+          notFound()s without one) before it returns anything, so reaching
+          this markup means the real record is what renders. Shared by the
+          Items, Books and Rentals detail routes, which all render ItemDetail. */}
+      <PerfUseful />
       {/* ── Sticky header ─────────────────────────────────────────────
           Pins to top-0 of the scrolling <main> in DashboardShell.
           The dashboard Topbar lives OUTSIDE that scroll container

@@ -51,6 +51,37 @@ describe('PostHogProvider', () => {
     );
   });
 
+  // Performance program 2026-09: `perf_*` events carry route TEMPLATES only,
+  // but the SDK decorates every event with `$current_url`, `$pathname`,
+  // referrers and titles AFTER our code has handed it over. The `before_send`
+  // hook is the only place those can be rewritten, so its wiring is pinned
+  // here: nothing else fails if the option is dropped from `init`. The hook is
+  // exercised for real (not compared by identity), so swapping in a no-op
+  // fails too. Its full behaviour is lib/perf/scrub.test.ts's business.
+  it('MUTATION GUARD — wires a before_send hook that templates perf events and leaves product events alone', async () => {
+    render(<PostHogProvider>{null}</PostHogProvider>);
+    await flush();
+    const options = posthogMock.init.mock.calls[0]?.[1] as {
+      before_send?: (event: Record<string, unknown>) => Record<string, unknown> | null;
+    };
+    expect(typeof options.before_send).toBe('function');
+
+    const itemUrl =
+      'https://app.stockpilotusa.com/dashboard/inventory/3f2c1a9e-7b4d-4c1e-9a2f-0d5e6f7a8b9c?q=acme';
+    const perf = options.before_send?.({
+      event: 'perf_navigation',
+      properties: { $current_url: itemUrl, $referrer: itemUrl, click_to_useful_ms: 742 },
+    });
+    expect(perf?.properties).toEqual({
+      $current_url: '/dashboard/inventory/[id]',
+      $pathname: '/dashboard/inventory/[id]',
+      click_to_useful_ms: 742,
+    });
+
+    const product = { event: 'item_created', properties: { $current_url: itemUrl } };
+    expect(options.before_send?.(product)).toBe(product);
+  });
+
   it('MUTATION GUARD — never initializes on a maintenance share path (/m/<token>), even with a key configured', async () => {
     pathnameRef.value = '/m/abcdef0123456789';
     render(<PostHogProvider>{null}</PostHogProvider>);

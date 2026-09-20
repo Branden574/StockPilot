@@ -3,6 +3,7 @@ import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/
 import type { ReactNode } from 'react';
 
 import { PostHogProvider } from '@/components/analytics/posthog-provider';
+import { WebVitalsReporter } from '@/components/perf/web-vitals-reporter';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 
@@ -115,6 +116,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             network) until NEXT_PUBLIC_POSTHOG_KEY is set — see
             posthog-provider.tsx.
           */}
+          {/*
+            Real-user web vitals + the navigation-timing listener. Renders
+            nothing and sends route TEMPLATES only. Placed BEFORE the provider
+            so its listener is attached ahead of the page content's effects
+            (a nicety, not a dependency: lib/perf/marks.ts holds a measurement
+            taken before anyone was listening). See web-vitals-reporter.tsx.
+          */}
+          <WebVitalsReporter />
           <PostHogProvider>{children}</PostHogProvider>
           <Toaster />
         </ThemeProvider>

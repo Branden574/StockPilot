@@ -8,6 +8,7 @@ export const metadata: Metadata = { title: 'Inventory' };
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable, type InstantAdoptedPayload } from '@/components/inventory/inventory-table';
+import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
@@ -486,7 +487,9 @@ async function InventoryTableSection({
       canCreate,
       scopedNote,
     });
-    if (emptyState) return emptyState;
+    // A zero-result view is a FINISHED page, so it carries the performance
+    // marker itself (the table, which carries it otherwise, never mounts here).
+    if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
     return (
       <InventoryTable
         items={instantItems}
@@ -781,7 +784,8 @@ async function InventoryTableSection({
     canCreate,
     scopedNote,
   });
-  if (emptyState) return emptyState;
+  // Same as the instant branch: the zero-result view carries its own marker.
+  if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
 
   // FIRST-ROWS-FIRST STREAMING: on the DEFAULT manager+ Items view, ship
   // the full instant dataset as an UNAWAITED promise alongside the 30-row

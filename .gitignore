@@ -89,6 +89,8 @@ logs/
 playwright-report/
 test-results/
 **/tests/e2e/.auth/
+**/tests/perf/.auth/
+**/perf-results/
 
 # Load tests — local env + result artifacts
 load-tests/.env.local.loadtest
