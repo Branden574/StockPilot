@@ -53,9 +53,9 @@ export interface FrameSet {
 }
 
 const HI_SEGMENTS: Segment[] = [
-  { dir: '/landing/film-a-hi', from: 1, count: 120 },   // NEW  inbound dock
-  { dir: '/landing/frames-hi', from: 1, count: 420 },   //      aisle → receive → staging
-  { dir: '/landing/film-c-hi', from: 1, count: 120 },   // NEW  placement into a crate on a rack
+  { dir: '/landing/film-a-hi', from: 1, count: 120 }, // NEW  inbound dock
+  { dir: '/landing/frames-hi', from: 1, count: 420 }, //      aisle → receive → staging
+  { dir: '/landing/film-c-hi', from: 1, count: 120 }, // NEW  placement into a crate on a rack
   { dir: '/landing/frames-hi', from: 421, count: 126 }, //      on hand → transfer → count
 ];
 
@@ -204,6 +204,35 @@ const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
  */
 const FILM_SCALE = 1;
 
+/**
+ * How closely the film follows the scroll, as a time constant in milliseconds.
+ *
+ * THE SMOOTHER USED TO BE FRAME-RATE DEPENDENT: `curT += (target - curT) * 0.18`
+ * applied once per animation frame. That is 0.18 per 8.3 ms on a 120 Hz display
+ * and 0.18 per 16.7 ms on a 60 Hz one, so the SLOWER the machine, the further
+ * the film trailed the scroll — and a machine dropping to 30 fps trailed four
+ * times as far as this one measured.
+ *
+ * An exponential follower lags a moving target by (time constant x speed).
+ * Measured on the deployed film, 1440x900 at 120 Hz, every frame already
+ * decoded in the browser, no long tasks and no dropped animation frames:
+ *
+ *   | scroll        | painted frame behind the scroll (of 786) |
+ *   | ---           | ---                                      |
+ *   | gentle wheel  | p50 9, p95 28                            |
+ *   | fast flick    | p50 84, p95 177, max 184                 |
+ *
+ * and the film kept moving for 233 ms after the scroll stopped. At 60 Hz those
+ * lags double. The film also grew 546 -> 786 frames in the redesign, which
+ * stretched the same lag by 44% more frames.
+ *
+ * So: measured in TIME, not in animation frames, and short enough that the
+ * picture is attached to the scroll. 0 means "the frame IS the scroll position",
+ * which is what this file's header promises; a small positive value only damps
+ * sub-pixel jitter. Raise it only with a fresh measurement in hand.
+ */
+const FOLLOW_MS = 0;
+
 /*
  * NO REPAINT CAP. A 24fps cap was tried: it measured a marginal ~2fps and made
  * the film visibly STEP — on a 120Hz display it painted every fifth refresh and
@@ -324,7 +353,13 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
     canvas.width = Math.round(cw * dpr);
     canvas.height = Math.round(ch * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingQuality = 'high';
+    // NOT re-raised to 'high' here. Setting the backing store size resets the
+    // context state, so the 'low' chosen above (deliberately: this is a soft
+    // background under a tint, a scrim, grain and a vignette, and 'high'
+    // resampling of a 1920 px frame into a ~1425 px canvas on every frame
+    // change is measurably expensive) has to be re-applied, not overridden.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'low';
     curFrame = -1;
     draw(curT * (COUNT - 1));
   };
@@ -384,6 +419,34 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
    * is painted underneath the whole time, so the visitor is looking at the
    * warehouse from first paint regardless.
    */
+  /**
+   * How many frames may be in flight at once.
+   *
+   * The passes used to `await load(i)` one frame at a time, so the film arrived
+   * at whatever ONE round trip per frame allowed: measured against the deployed
+   * site, 787 files and 99.4 MB took about 180 SECONDS to finish, roughly 8
+   * frames a second, on a fast connection. Until a frame arrives the engine
+   * shows the nearest decoded neighbour, so the film stayed visibly coarse for
+   * minutes. Six at a time keeps the ordering of the passes (the playhead
+   * window still lands first) while letting the connection do what it can.
+   */
+  const IN_FLIGHT = 6;
+
+  /** Loads `indices` in order, `IN_FLIGHT` at a time. Stops on destroy. */
+  async function loadAll(indices: number[]) {
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(IN_FLIGHT, indices.length) }, async () => {
+        while (next < indices.length) {
+          if (destroyed) return;
+          const i = indices[next];
+          next += 1;
+          if (i !== undefined) await load(i);
+        }
+      }),
+    );
+  }
+
   async function loadProgressively() {
     if (still != null) {
       await load(still - 1);
@@ -393,33 +456,44 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
     // Pass 0 — a tight window on the playhead. Small on purpose: every frame
     // here is one the visitor is about to scrub through.
     const here = Math.round(clamp01(progress()) * (COUNT - 1));
+    const window0: number[] = [];
     for (let d = 0; d <= 4; d++) {
       for (const i of d === 0 ? [here] : [here + d, here - d]) {
-        if (destroyed) return;
-        if (i >= 0 && i < COUNT) await load(i);
+        if (i >= 0 && i < COUNT) window0.push(i);
       }
     }
+    await loadAll(window0);
 
     // Then the global spread, coarse to fine. Stride 16 first means that within
     // a couple of seconds no frame anywhere in the film is more than 8 away from
     // a decoded one — so a flick to a new chapter lands close, never far.
     for (const stride of [16, 8, 4, 2, 1]) {
-      for (let i = 0; i < COUNT; i += stride) {
-        if (destroyed) return;
-        await load(i);
-      }
+      if (destroyed) return;
+      const pass: number[] = [];
+      for (let i = 0; i < COUNT; i += stride) pass.push(i);
+      await loadAll(pass);
       // Yield between passes so decoding never blocks interaction.
       await new Promise((r) => setTimeout(r, 0));
     }
   }
 
-  const tick = () => {
+  let lastTick = 0;
+  const tick = (now: number) => {
     if (destroyed) return;
     if (ready) {
       const target = progress();
-      // Ease toward the target so a flung scroll does not strobe frames.
-      curT += (target - curT) * 0.18;
-      if (Math.abs(target - curT) < 0.0006) curT = target;
+      if (FOLLOW_MS <= 0) {
+        curT = target;
+      } else {
+        // Frame-rate INDEPENDENT: the same time constant on a 60 Hz laptop and a
+        // 120 Hz display, and unchanged when animation frames are dropped. The
+        // first tick has no elapsed time, and a backgrounded tab can hand us a
+        // gap of seconds, so the step is clamped.
+        const dt = lastTick === 0 ? 16.7 : Math.min(64, now - lastTick);
+        curT += (target - curT) * (1 - Math.exp(-dt / FOLLOW_MS));
+        if (Math.abs(target - curT) < 0.0006) curT = target;
+      }
+      lastTick = now;
       draw(curT * (COUNT - 1));
     }
     raf = requestAnimationFrame(tick);
