@@ -11,7 +11,7 @@
  * and nothing failed for eleven weeks because both paths "work".
  *
  * The sizes now live once, in `image-variants.config.ts`. This file keeps it
- * that way, in three arms:
+ * that way, in four arms:
  *
  *   ARM 1  runs BOTH paths against recording fakes of the canvas and compares
  *          what each one asked the canvas for with LITERAL expectations. (An
@@ -23,10 +23,14 @@
  *          must import the shared module, the `new Worker(new URL(…))`
  *          expression must keep the exact shape the bundler recognises, and the
  *          two backfill tools must agree with the shared thumbnail size.
+ *   ARM 4  an engine that cannot encode WebP (WebKit answers a WebP request
+ *          with a PNG): a camera photo becomes JPEG on both paths, anything
+ *          that may be transparent does not, what comes back is labelled as
+ *          what it is, and a probe that cannot run changes nothing.
  *
- * MUTATION-PROVEN. A guard that cannot fail is not a guard, so twelve mutations
- * were run against this file and image-variants.config.test.ts (46 tests in
- * all); each was reverted after. The first four were the author's; the rest
+ * MUTATION-PROVEN. A guard that cannot fail is not a guard, so twenty-four
+ * mutations were run against this file and image-variants.config.test.ts (71
+ * tests in all); each was reverted after. The first four were the author's; the rest
  * SURVIVED the first version of this file and were found by review:
  *    1. `thumb.maxDimension` 200 -> 400 in the config -> 15 failures.
  *    2. A private `const THUMB_DIMENSION = 400;` in the worker, used for the
@@ -45,6 +49,18 @@
  *       -> 3 failures (two sizes, and the import check).
  *   11. A private number spelled 0x280 / 6_40 -> ARM 3 names both.
  *   12. The worker draws the bitmap unscaled -> 5 failures.
+ *  For ARM 4 (13-18 the author's, 19-24 survivors found by review):
+ *   13. JPEG asked for whatever the source is -> the three "may be
+ *       transparent" sources fail, and the config table.
+ *   14. The worker never probes -> 2 failures.
+ *   15. The fallback's probe inverted -> 16 failures.
+ *   16. A re-encoded master always named .webp -> 10 failures.
+ *   17. The master typed as ASKED instead of as returned -> 3 failures.
+ *   18. The fallback's thumbnail still asked for as WebP -> 2 failures.
+ *   19-23. Each of the five "the probe could not run" branches flipped to mean
+ *       "cannot encode WebP" (main thread: null blob, no context, throw;
+ *       worker: no context, throw) -> 1 failure each.
+ *   24. HEIC / HEIF dropped from the camera formats -> 2 failures.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -74,6 +90,8 @@ interface Scenario {
    * says so only in `blob.type`, as WebKit does; JPEG it can write.
    */
   engine?: 'webp' | 'png-only';
+  /** Make the 1 x 1 "can you encode WebP?" probe fail in one of the ways a real canvas can. */
+  brokenProbe?: 'throws' | 'null-blob' | 'no-context';
 }
 
 const QUALITY_TO_VARIANT: Record<string, 'master' | 'thumb' | 'lqip'> = {
@@ -133,10 +151,15 @@ async function runWorkerPath(scenario: Scenario, file = sourceFile()) {
       readonly width: number,
       readonly height: number,
     ) {}
+    private get isProbe() {
+      return this.width === 1 && this.height === 1;
+    }
     getContext() {
+      if (this.isProbe && scenario.brokenProbe === 'no-context') return null;
       return rec.context;
     }
     async convertToBlob(opts: { type?: string; quality?: number }) {
+      if (this.isProbe && scenario.brokenProbe === 'throws') throw new Error('InvalidStateError');
       return rec.record({
         w: this.width,
         h: this.height,
@@ -181,8 +204,14 @@ async function runMainThreadPath(
       return {
         width: 0,
         height: 0,
-        getContext: () => rec.context,
+        getContext() {
+          const isProbe = this.width === 1 && this.height === 1;
+          return isProbe && scenario.brokenProbe === 'no-context' ? null : rec.context;
+        },
         toBlob(cb: (b: Blob | null) => void, type?: string, quality?: number) {
+          const isProbe = this.width === 1 && this.height === 1;
+          if (isProbe && scenario.brokenProbe === 'throws') throw new Error('SecurityError');
+          if (isProbe && scenario.brokenProbe === 'null-blob') return cb(null);
           cb(rec.record({ w: this.width, h: this.height, type, quality }));
         },
       };
@@ -604,6 +633,26 @@ describe('ARM 4: a browser that answers a WebP request with a PNG', () => {
     }
   });
 
+  it('a HEIC that WebKit decoded itself (the heic2any transcode failed) is a camera photo too', async () => {
+    const heic = new File([fakeBytes(9000)], 'IMG_3.HEIC', { type: 'image/heic' });
+    const heic2any = vi.fn(async () => {
+      throw new Error('ERR_LIBHEIF format not supported');
+    });
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      const run = await runMainThreadPath({ source, engine: 'png-only' }, heic);
+      expect(heic2any).toHaveBeenCalledTimes(1);
+      expect(run.requests).toEqual(asJpeg);
+      expect(run.result.master.name).toBe('IMG_3.jpg');
+      expect(run.result.thumbBlob?.type).toBe(JPEG);
+    } finally {
+      vi.doUnmock('heic2any');
+    }
+    // The worker sees the same file type: it must make the same choice.
+    const worker = await runWorkerPath({ source, engine: 'png-only' }, heic);
+    expect(worker.requests).toEqual(asJpeg);
+  });
+
   it('an engine that CAN encode WebP is asked for WebP whatever the source is', async () => {
     for (const type of [JPEG, 'image/png']) {
       const file = sourceFile(9000, 'photo.bin', type);
@@ -612,43 +661,26 @@ describe('ARM 4: a browser that answers a WebP request with a PNG', () => {
     }
   });
 
-  it('a probe that cannot run changes nothing: WebP is assumed', async () => {
-    // Worker: OffscreenCanvas whose probe throws. Main thread: toBlob answers null.
-    const rec = { requests: [] as CanvasRequest[] };
-    class ProbeThrows {
-      constructor(
-        readonly width: number,
-        readonly height: number,
-      ) {}
-      getContext() {
-        return { drawImage: () => undefined };
-      }
-      async convertToBlob(opts: { type?: string; quality?: number }) {
-        if (this.width === 1 && this.height === 1) throw new Error('InvalidStateError');
-        rec.requests.push({
-          w: this.width,
-          h: this.height,
-          type: opts.type,
-          quality: opts.quality,
-        });
-        return new Blob([fakeBytes(12)], { type: opts.type });
-      }
-    }
-    const posted: WorkerReply[] = [];
-    const fakeSelf = {
-      onmessage: null as ((e: { data: { file: File } }) => Promise<void>) | null,
-      postMessage: (m: WorkerReply) => posted.push(m),
-      btoa: globalThis.btoa,
-    };
-    vi.resetModules();
-    vi.stubGlobal('self', fakeSelf);
-    vi.stubGlobal('createImageBitmap', async () => ({ ...source, close: () => undefined }));
-    vi.stubGlobal('OffscreenCanvas', ProbeThrows);
-    await import('./image-variants.worker');
-    await fakeSelf.onmessage!({ data: { file: sourceFile() } });
-    expect(posted[0]).toMatchObject({ ok: true });
-    expect(rec.requests).toEqual(TABLE[0]!.expected);
-  });
+  // A probe that cannot RUN says nothing about the engine, so nothing changes:
+  // WebP is asked for, as before this fallback existed. The engine here is
+  // 'png-only' on purpose: a probe failure misread as "cannot encode WebP"
+  // would show up as JPEG requests.
+  it.each(['throws', 'no-context'] as const)(
+    'worker: a probe that fails (%s) changes nothing, WebP is assumed',
+    async (brokenProbe) => {
+      const run = await runWorkerPath({ source, engine: 'png-only', brokenProbe });
+      expect(run.requests).toEqual(TABLE[0]!.expected);
+      expect(run.reply).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each(['throws', 'null-blob', 'no-context'] as const)(
+    'fallback: a probe that fails (%s) changes nothing, WebP is assumed',
+    async (brokenProbe) => {
+      const run = await runMainThreadPath({ source, engine: 'png-only', brokenProbe });
+      expect(run.requests).toEqual(TABLE[0]!.expected);
+    },
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -774,8 +806,9 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
       expect(source, `${path.basename(file)} hard-codes the thumbnail's content type`).not.toMatch(
         /(?:contentType|'Content-Type')\s*:\s*'image\/webp'/,
       );
+      // Pinned to the PROPERTY, so a hand-written label elsewhere cannot satisfy it.
       expect(source, `${path.basename(file)} must send the thumbnail blob's own type`).toMatch(
-        /thumbBlob\.type/,
+        /(?:contentType|'Content-Type')\s*:\s*(?:variants\.)?thumbBlob\.type\b/,
       );
     }
   });

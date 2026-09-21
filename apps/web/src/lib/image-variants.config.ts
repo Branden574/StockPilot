@@ -56,32 +56,40 @@ export const VARIANT_MIME = 'image/webp';
 /**
  * What an engine that CANNOT encode WebP is asked for instead.
  *
- * WebKit (every Safari, and every browser on iOS) has no WebP encoder behind
- * the canvas. Asked for `image/webp` it does not fail: it silently answers with
- * a PNG. Measured 2026-09-20: a 200 px thumbnail comes back as a 52 KB PNG
- * against 8.5 KB of WebP in Chromium, and the PNG "master" is never smaller than
- * the JPEG it came from, so the uploader keeps the ORIGINAL file, uncapped. In
- * production that was 67 of 437 thumbnails (PNG bytes under a `-thumb.webp`
- * name, p50 71 KB against 8 KB) with masters up to 5.8 MB. JPEG is the one
- * lossy format every canvas can write.
+ * WebKit (Safari, and in practice the browsers on iOS, which are built on it)
+ * has no WebP encoder behind the canvas. Asked for `image/webp` it does not
+ * fail: it silently answers with a PNG. Measured 2026-09-20 on Playwright's
+ * WebKit 26.6 build on macOS, not on a shipping Safari: a 200 px thumbnail came
+ * back as a 52 KB PNG against 8.5 KB of WebP in Chromium, and the PNG "master"
+ * was never smaller than the JPEG it came from (20 of 20), so the uploader kept
+ * the ORIGINAL file, uncapped. A production census is consistent with it: 67 of
+ * one customer's 437 thumbnails are PNG bytes under a `-thumb.webp` name (p50
+ * 71 KB against 8 KB), each with a PNG placeholder; 64 of those kept their
+ * original JPEG as the master (up to 5.8 MB, 4 over 2048 px) and 3 have a PNG
+ * master. JPEG is the one lossy format every canvas can write.
  */
 export const FALLBACK_MIME = 'image/jpeg';
 
 /**
  * Which type to ask the canvas for.
  *
- * The fallback is taken ONLY for a JPEG source (a HEIC photo has been turned
- * into JPEG before this point). A JPEG has no transparency to lose, so nothing
- * it had is given up. A PNG, WebP or AVIF source may be transparent, and JPEG
- * would paint that black, so those keep today's behaviour on such an engine:
+ * The fallback is taken ONLY for a camera format: JPEG, HEIC or HEIF. None of
+ * them carries transparency in a photo, so nothing the source had is given up.
+ * (A HEIC is normally a JPEG already by this point, but only when the
+ * `heic2any` transcode succeeded. When it fails, the original HEIC is passed on,
+ * and WebKit, unlike other engines, can decode it; without this it would take
+ * the PNG path again.) A PNG, WebP or AVIF source may be transparent, and JPEG
+ * would paint that black, so those keep the old behaviour on such an engine:
  * the canvas is asked for WebP and answers with a PNG.
  */
+const OPAQUE_SOURCE_TYPES: readonly string[] = ['image/jpeg', 'image/heic', 'image/heif'];
+
 export function variantMimeFor(
   sourceType: string,
   canEncodeWebp: boolean,
 ): typeof VARIANT_MIME | typeof FALLBACK_MIME {
   if (canEncodeWebp) return VARIANT_MIME;
-  return sourceType === FALLBACK_MIME ? FALLBACK_MIME : VARIANT_MIME;
+  return OPAQUE_SOURCE_TYPES.includes(sourceType) ? FALLBACK_MIME : VARIANT_MIME;
 }
 
 /**

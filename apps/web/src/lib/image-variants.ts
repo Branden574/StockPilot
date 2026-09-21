@@ -4,7 +4,7 @@
  *
  *   • master    — full image capped at 2048px in WebP. Typical 2–10×
  *                 byte reduction from phone-camera JPEGs. Falls back
- *                 to the original file when WebP output is larger.
+ *                 to the original file when the re-encode is larger.
  *   • thumbBlob — 200px WebP for list-row thumbnails. null when
  *                 transcoding fails (very old browser, exotic source).
  *   • lqip      — 16px WebP encoded as a base64 data URL for use as
@@ -12,6 +12,12 @@
  *                 DB constraint from migration 0122; oversize values
  *                 are returned as null so the row renders without a
  *                 blur placeholder.
+ *
+ * "WebP" above means: WebP where the browser can encode it. WebKit cannot,
+ * and answers a WebP request with a PNG; there a camera photo (JPEG, HEIC)
+ * becomes JPEG instead, and any other source still comes back as PNG (see
+ * `variantMimeFor`). So the `.webp` in a thumbnail's path is a historical name,
+ * not a format: read `blob.type`, the Content-Type, or the magic bytes.
  *
  * Shared by the item-detail image uploader (replacing an in-flight
  * photo) and the item-form staged-image flow (photos uploaded
@@ -242,11 +248,12 @@ export async function compressImageVariants(file: File): Promise<ImageVariants> 
     try {
       source = await transcodeHeicToJpeg(file);
     } catch {
-      // heic2any failure (typically very old browser without
-      // WebAssembly) — let the downstream path try the original
-      // file, which will fail decode and return the unmodified file
-      // as `master` with no thumb/lqip. That at least preserves the
-      // upload instead of dropping it on the floor.
+      // heic2any failure (a very old browser without WebAssembly, or a
+      // HEIC newer than its bundled decoder) — let the downstream path
+      // try the original file. Most engines cannot decode it, so the
+      // unmodified file comes back as `master` with no thumb/lqip, which
+      // at least preserves the upload. WebKit CAN decode HEIC natively;
+      // `variantMimeFor` treats it as the camera photo it is.
     }
   }
   // Worker path: keeps the UI thread free during a 300-600ms encode.

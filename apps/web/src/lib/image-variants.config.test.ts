@@ -84,9 +84,12 @@ describe('variantMimeFor', () => {
     }
   });
 
-  it('asks an engine that cannot encode WebP for JPEG, but ONLY when the source is a JPEG', () => {
+  it('asks an engine that cannot encode WebP for JPEG, but ONLY for a camera format', () => {
     expect(FALLBACK_MIME).toBe('image/jpeg');
     expect(variantMimeFor('image/jpeg', false)).toBe('image/jpeg');
+    // WebKit decodes HEIC itself when the heic2any transcode has failed.
+    expect(variantMimeFor('image/heic', false)).toBe('image/jpeg');
+    expect(variantMimeFor('image/heif', false)).toBe('image/jpeg');
     // May be transparent: JPEG would paint the transparency black.
     for (const source of ['image/png', 'image/webp', 'image/avif', 'image/gif', '']) {
       expect(variantMimeFor(source, false)).toBe('image/webp');
