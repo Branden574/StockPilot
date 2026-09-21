@@ -129,7 +129,7 @@ export async function GET(
     // PDF image pipeline — small signed URLs → prefetch to base64
     // data URIs. @react-pdf can't reliably fetch URLs at render time
     // in a serverless function, so we pre-resolve them.
-    const urlByItem = await new ItemImagesService(ctx).primaryImagesForPdfRendering(
+    const urlByItem = await new ItemImagesService(ctx).primaryImagesForServerDecoding(
       itemIds,
       200,
     );

@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
     }
     if (!photosDisabled && orderedItemIds.length > 0) {
       const imagesSvc = new ItemImagesService(ctx);
-      const urlByItem = await imagesSvc.primaryImagesForPdfRendering(
+      const urlByItem = await imagesSvc.primaryImagesForServerDecoding(
         orderedItemIds,
         200,
       );

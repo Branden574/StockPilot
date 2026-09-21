@@ -59,7 +59,7 @@ import {
   stockPillFor,
   type LifecycleStatus,
 } from '@/lib/expected-items';
-import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
+import { signListThumbnails } from '@/lib/image-cache';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -589,20 +589,27 @@ export default function BooksScreen() {
     void (async () => {
       const { data: imgs } = await supabase
         .from('item_images')
-        .select('item_id, storage_path, is_primary, sort_order')
+        .select('item_id, storage_path, thumb_path, is_primary, sort_order')
         .in('item_id', unresolvedIds)
         .order('is_primary', { ascending: false })
         .order('sort_order', { ascending: true });
-      const byItem = new Map<string, string>();
-      for (const row of (imgs ?? []) as Array<{ item_id: string; storage_path: string }>) {
-        if (!byItem.has(row.item_id)) byItem.set(row.item_id, row.storage_path);
+      const byItem = new Map<string, { storage_path: string; thumb_path: string | null }>();
+      for (const row of (imgs ?? []) as Array<{
+        item_id: string;
+        storage_path: string;
+        thumb_path: string | null;
+      }>) {
+        if (!byItem.has(row.item_id)) {
+          byItem.set(row.item_id, { storage_path: row.storage_path, thumb_path: row.thumb_path });
+        }
       }
-      // Thumbnail transform, not the full-res original — book covers (often
-      // web/PO-imported, multi-megapixel, no thumb variant) would otherwise
-      // decode huge bitmaps for a 56px row. See inventory.tsx.
-      const paths = Array.from(byItem.values());
+      // Never the full-res original (huge bitmaps for a 56px row): the stored
+      // thumbnail when the cover has one, the on-demand transform only when it
+      // does not. See signListThumbnails and inventory.tsx.
       const urlByPath =
-        paths.length > 0 ? await signItemImages(paths, THUMB_TRANSFORM) : new Map<string, string>();
+        byItem.size > 0
+          ? await signListThumbnails(Array.from(byItem.values()))
+          : new Map<string, string>();
       if (cancelled) return;
       setImages((prev) => {
         const next = new Map(prev);
@@ -610,7 +617,7 @@ export default function BooksScreen() {
           const p = byItem.get(id);
           // null records "resolved, no cover" so a coverless book is asked
           // about exactly once.
-          next.set(id, (p ? urlByPath.get(p) : null) ?? null);
+          next.set(id, (p ? urlByPath.get(p.storage_path) : null) ?? null);
         }
         return next;
       });

@@ -178,10 +178,13 @@ describe('both lists — fetch the WHOLE filtered set, then page over GROUPS', (
     });
 
     it(`${name}: keeps the projection lean and the thumbnails page-scoped`, () => {
-      // The set read can return up to 1000 rows and a transformed signed URL
-      // costs one storage request PER PATH, so signing the whole set would
-      // trade a saved page fetch for hundreds of calls.
-      expect(src).toContain('signItemImages(paths, THUMB_TRANSFORM)');
+      // The set read can return up to 1000 rows. Thumbnails are resolved for
+      // the VISIBLE PAGE only: stored thumbnails sign in one batch, but a photo
+      // without one still costs a storage request (and a billed transform) PER
+      // PATH, so signing the whole set would trade a saved page fetch for
+      // hundreds of calls.
+      expect(src).toContain('signListThumbnails(Array.from(byItem.values()))');
+      expect(src).not.toContain('THUMB_TRANSFORM'); // the screens never ask for the transform themselves
       expect(src).toContain('.in(\'item_id\', unresolvedIds)');
     });
   }

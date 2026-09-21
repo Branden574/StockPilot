@@ -522,7 +522,7 @@ async function primaryThumbsByItemId(
   const capped = unique.slice(0, PDF_IMAGE_ROW_CAP);
 
   // Phase 1: sign per-item URLs (thumb path OR transformed master).
-  const urlByItem = await imagesSvc.primaryImagesForPdfRendering(capped, 200);
+  const urlByItem = await imagesSvc.primaryImagesForServerDecoding(capped, 200);
   if (urlByItem.size === 0) return new Map();
 
   // Phase 2: parallel-fetch into base64 data URIs. Failed fetches
