@@ -405,21 +405,6 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
     });
 
   /**
-   * Progressive passes, ORDERED BY WHERE THE VISITOR IS LOOKING.
-   *
-   * The first version swept a uniform stride across the whole film, which meant
-   * someone sitting at the top waited on frames from the far end before getting
-   * any density where they actually were. Measured on Fast 3G that put the first
-   * live frame at 10.4s. Seeding a small window around the current playhead
-   * first makes the film come alive near the fold, then the global passes fill
-   * everything else in.
-   *
-   * `nearestLoaded` covers whatever has not arrived, so there is never a blank
-   * frame — a sparse film reads as slightly steppy, not broken. And the poster
-   * is painted underneath the whole time, so the visitor is looking at the
-   * warehouse from first paint regardless.
-   */
-  /**
    * How many frames may be in flight at once.
    *
    * The passes used to `await load(i)` one frame at a time, so the film arrived
@@ -447,32 +432,94 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
     );
   }
 
+  /**
+   * THE FILM IS LOADED AROUND THE VISITOR, NOT IN FULL.
+   *
+   * The passes used to end with a stride-1 sweep of the whole film, so everyone
+   * fetched all of it: 787 files and 99.4 MB on the desktop tier, whether they
+   * read the whole page or bounced after the first chapter. Nothing on screen
+   * needs that. `nearestLoaded` already shows the closest decoded neighbour, so
+   * what matters is density WHERE THE PLAYHEAD IS, and enough of a spread
+   * elsewhere that a flick lands near something rather than far from it.
+   *
+   * Three bands, re-evaluated as the visitor moves:
+   *
+   *   NEAR  every frame within 24 either side — what is being scrubbed now.
+   *   MID   every second frame out to 120 either side — the next chapter or two,
+   *         close enough that arriving there is never a jump.
+   *   FLICK one frame in 24 across the WHOLE film, so a throw to the footer
+   *         lands within 12 frames of the right one while NEAR catches up.
+   *
+   * There is no global full-density pass, and that is the point: a visitor who
+   * never reaches chapter 6 never downloads chapter 6 at full density.
+   */
+  const NEAR_BAND = 24;
+  const MID_BAND = 120;
+  const FLICK_STRIDE = 24;
+  /** Frames queued per round of the loop, so a fast scroll re-aims quickly. */
+  const BATCH = 24;
+  /** How often the loop looks again once the bands around the visitor are full. */
+  const IDLE_RECHECK_MS = 150;
+
+  /** The playhead, as a frame index. */
+  const playhead = () => Math.round(clamp01(progress()) * (COUNT - 1));
+
+  /**
+   * Not-yet-requested frames within `radius` of `here`, NEAREST FIRST, taking
+   * only every `stride`-th frame (aligned to absolute indices, so the mid band
+   * asks for a stable set rather than a different one each time it is called).
+   */
+  function missingNear(here: number, radius: number, stride: number, cap: number): number[] {
+    const out: number[] = [];
+    for (let d = 0; d <= radius && out.length < cap; d++) {
+      for (const i of d === 0 ? [here] : [here - d, here + d]) {
+        if (i < 0 || i >= COUNT) continue;
+        if (stride > 1 && i % stride !== 0) continue;
+        if (frames[i]) continue;
+        out.push(i);
+        if (out.length >= cap) break;
+      }
+    }
+    return out;
+  }
+
   async function loadProgressively() {
     if (still != null) {
       await load(still - 1);
       return;
     }
 
-    // Pass 0 — a tight window on the playhead. Small on purpose: every frame
-    // here is one the visitor is about to scrub through.
-    const here = Math.round(clamp01(progress()) * (COUNT - 1));
-    const window0: number[] = [];
-    for (let d = 0; d <= 4; d++) {
-      for (const i of d === 0 ? [here] : [here + d, here - d]) {
-        if (i >= 0 && i < COUNT) window0.push(i);
-      }
-    }
-    await loadAll(window0);
+    // Where the visitor IS, first and at full density: every frame here is one
+    // they are about to scrub through.
+    await loadAll(missingNear(playhead(), NEAR_BAND, 1, Number.POSITIVE_INFINITY));
 
-    // Then the global spread, coarse to fine. Stride 16 first means that within
-    // a couple of seconds no frame anywhere in the film is more than 8 away from
-    // a decoded one — so a flick to a new chapter lands close, never far.
-    for (const stride of [16, 8, 4, 2, 1]) {
+    // Then the coarse spread over the whole film, so a flick anywhere lands
+    // near a decoded frame instead of on nothing.
+    if (destroyed) return;
+    const flick: number[] = [];
+    for (let i = 0; i < COUNT; i += FLICK_STRIDE) flick.push(i);
+    await loadAll(flick);
+
+    // Then follow the visitor. This runs until the film is unmounted; when
+    // there is nothing left to fetch near them it costs one cheap check a
+    // quarter of a second, and it never widens beyond the bands above.
+    for (;;) {
       if (destroyed) return;
-      const pass: number[] = [];
-      for (let i = 0; i < COUNT; i += stride) pass.push(i);
-      await loadAll(pass);
-      // Yield between passes so decoding never blocks interaction.
+      const here = playhead();
+      const batch = missingNear(here, NEAR_BAND, 1, BATCH);
+      if (batch.length < BATCH) {
+        batch.push(...missingNear(here, MID_BAND, 2, BATCH - batch.length));
+      }
+      if (batch.length === 0) {
+        // Nothing left to fetch around the visitor. Re-check soon enough that a
+        // scroll is followed promptly, rarely enough to cost nothing while they
+        // read: until it re-aims, `nearestLoaded` is showing the coarse spread,
+        // which is never more than half of FLICK_STRIDE away.
+        await new Promise((r) => setTimeout(r, IDLE_RECHECK_MS));
+        continue;
+      }
+      await loadAll(batch);
+      // Yield so decoding never blocks interaction.
       await new Promise((r) => setTimeout(r, 0));
     }
   }

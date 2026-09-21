@@ -18,6 +18,13 @@ const SET: FrameSet = {
   count: COUNT,
   poster: '/poster.jpg',
 };
+/** Long enough that the loader's bands are narrower than the film. */
+const LONG = 400;
+const LONG_SET: FrameSet = {
+  segments: [{ dir: '/film', from: 1, count: LONG }],
+  count: LONG,
+  poster: '/poster.jpg',
+};
 
 interface FakeImage {
   src: string;
@@ -61,7 +68,7 @@ function installImage() {
 /** Frame index (0-based) a stub image stands for, from its url. */
 const indexOf = (img: { src: string }) => Number(/f_(\d+)\.jpg/.exec(img.src)?.[1] ?? 0) - 1;
 
-function mount(rangeHeight = 10000, startAt = 0) {
+function mount(rangeHeight = 10000, startAt = 0, set: FrameSet = SET) {
   const drawn: number[] = [];
   const ctx = {
     drawImage: (img: { src: string }) => drawn.push(indexOf(img)),
@@ -99,7 +106,7 @@ function mount(rangeHeight = 10000, startAt = 0) {
   });
   vi.stubGlobal('cancelAnimationFrame', () => {});
 
-  const film = mountFilm({ canvas, range, set: SET });
+  const film = mountFilm({ canvas, range, set });
   return {
     film,
     drawn,
@@ -183,7 +190,7 @@ describe('the painted frame follows the scroll', () => {
   });
 });
 
-describe('the film loads more than one frame per round trip', () => {
+describe('the film loads around the visitor, not in full', () => {
   it('keeps several frames in flight at once', async () => {
     autoLoad = false;
     const f = mount();
@@ -194,31 +201,105 @@ describe('the film loads more than one frame per round trip', () => {
     f.film.destroy();
   });
 
-  it('still asks for the frames under the playhead first, wherever the visitor entered', async () => {
+  it('asks for the frames under the playhead first, wherever the visitor entered', async () => {
     autoLoad = false;
     // Entering half way down (a shared link, a restored scroll position): the
     // first frames requested are the ones about to be scrubbed through, not the
     // top of the film.
-    const f = mount(10000, 0.5);
+    const f = mount(10000, 0.5, LONG_SET);
     for (let i = 0; i < 4; i++) await flush();
     expect(pending.length).toBeGreaterThan(1);
-    for (const img of pending) expect(Math.abs(indexOf(img) - 10)).toBeLessThanOrEqual(4);
+    const here = Math.round(0.5 * (LONG - 1));
+    for (const img of pending) expect(Math.abs(indexOf(img) - here)).toBeLessThanOrEqual(24);
     f.film.destroy();
-
-    made = [];
-    pending = [];
-    const top = mount(10000, 0);
-    for (let i = 0; i < 4; i++) await flush();
-    for (const img of pending) expect(indexOf(img)).toBeLessThanOrEqual(4);
-    top.film.destroy();
   });
 
-  it('asks for every frame exactly once, however many passes run', async () => {
+  it('NEVER loads the whole film: the far end a visitor has not reached stays sparse', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 60; i++) await flush();
+    const asked = new Set(made.map(indexOf));
+    // Everything within the near band of the top is there...
+    for (let i = 0; i <= 24; i++) expect(asked.has(i), `frame ${i}`).toBe(true);
+    // ...and the far end has only the coarse spread, one frame in 24.
+    const farEnd = [...asked].filter((i) => i > 300);
+    expect(farEnd.length).toBeGreaterThan(0);
+    for (const i of farEnd) expect(i % 24, `frame ${i} at the far end`).toBe(0);
+    // In total, a fraction of the film rather than all of it.
+    expect(asked.size).toBeLessThan(LONG / 2);
+    f.film.destroy();
+  });
+
+  it('follows the visitor: scrolling somewhere new fetches the frames there', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 40; i++) await flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const before = new Set(made.map(indexOf));
+    const target = 300;
+    expect(before.has(target + 1)).toBe(false);
+    f.scrollTo(target / (LONG - 1));
+    // REAL time: once its bands are full the loop idles, so following a scroll
+    // takes one re-check rather than one microtask.
+    await new Promise((r) => setTimeout(r, 400));
+    for (let i = 0; i < 40; i++) await flush();
+    const after = new Set(made.map(indexOf));
+    for (let i = target - 8; i <= target + 8; i++) expect(after.has(i), `frame ${i}`).toBe(true);
+    f.film.destroy();
+  });
+
+  it('asks for every frame exactly once, and stops asking when its bands are full', async () => {
     const f = mount();
     for (let i = 0; i < 12; i++) await flush();
     const indices = made.map(indexOf).sort((a, b) => a - b);
+    // The test film is shorter than the near band, so all of it is "near".
     expect(indices).toEqual(Array.from({ length: COUNT }, (_, i) => i));
+    const settled = made.length;
+    for (let i = 0; i < 20; i++) await flush();
+    expect(made.length).toBe(settled);
     f.film.destroy();
+  });
+
+  it('fills the band BEYOND the dense one at half density', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 40; i++) await flush();
+    await new Promise((r) => setTimeout(r, 300));
+    const asked = new Set(made.map(indexOf));
+    // Past the near band (24) and inside the mid band (120): every SECOND
+    // frame, and no odd ones. Without this the loop can spin on frames it
+    // already holds and never reach the band beyond.
+    const mid = [...asked].filter((i) => i > 30 && i <= 120);
+    expect(mid.length).toBeGreaterThan(20);
+    for (const i of mid) expect(i % 2, `frame ${i} in the mid band`).toBe(0);
+    f.film.destroy();
+  });
+
+  it('stops following once the film is unmounted', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 20; i++) await flush();
+    f.film.destroy();
+    const afterDestroy = made.length;
+    f.scrollTo(0.9);
+    for (let i = 0; i < 20; i++) await flush();
+    expect(made.length).toBe(afterDestroy);
+  });
+
+  it('schedules no further work at all once unmounted', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 20; i++) await flush();
+    f.film.destroy();
+    // The loop runs until it is told to stop. If it only stopped LOADING, it
+    // would spin on an unmounted page for as long as the tab is open.
+    const real = globalThis.setTimeout;
+    let scheduled = 0;
+    (globalThis as { setTimeout: typeof globalThis.setTimeout }).setTimeout = ((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      scheduled += 1;
+      return real(fn, ms);
+    }) as typeof globalThis.setTimeout;
+    await new Promise((r) => real(r, 300));
+    globalThis.setTimeout = real;
+    expect(scheduled).toBeLessThan(10);
   });
 });
 
