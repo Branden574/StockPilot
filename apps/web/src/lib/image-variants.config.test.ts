@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';
+import {
+  FALLBACK_MIME,
+  IMAGE_VARIANTS,
+  VARIANT_MIME,
+  fitWithin,
+  variantFileName,
+  variantMimeFor,
+} from './image-variants.config';
 
 describe('image variant settings', () => {
   // LITERALS on purpose. These numbers decide what every uploaded photo looks
@@ -67,5 +74,38 @@ describe('fitWithin', () => {
   // "what did the encoder really give us" fixes.
   it('rounds a side to 0 for extreme aspect ratios (known edge)', () => {
     expect(fitWithin(2048, 60, 16)).toEqual({ w: 16, h: 0 });
+  });
+});
+
+describe('variantMimeFor', () => {
+  it('asks a WebP-capable engine for WebP, whatever the source is', () => {
+    for (const source of ['image/jpeg', 'image/png', 'image/webp', 'image/avif', '']) {
+      expect(variantMimeFor(source, true)).toBe('image/webp');
+    }
+  });
+
+  it('asks an engine that cannot encode WebP for JPEG, but ONLY when the source is a JPEG', () => {
+    expect(FALLBACK_MIME).toBe('image/jpeg');
+    expect(variantMimeFor('image/jpeg', false)).toBe('image/jpeg');
+    // May be transparent: JPEG would paint the transparency black.
+    for (const source of ['image/png', 'image/webp', 'image/avif', 'image/gif', '']) {
+      expect(variantMimeFor(source, false)).toBe('image/webp');
+    }
+  });
+});
+
+describe('variantFileName', () => {
+  it.each([
+    ['IMG_0001.JPG', 'image/jpeg', 'IMG_0001.jpg'],
+    ['IMG_0001.JPG', 'image/webp', 'IMG_0001.webp'],
+    ['logo.final.png', 'image/png', 'logo.final.png'],
+    ['scan.heic', 'image/jpeg', 'scan.jpg'],
+    ['no-extension', 'image/jpeg', 'no-extension.jpg'],
+    ['.hidden', 'image/webp', 'image.webp'],
+    ['', 'image/jpeg', 'image.jpg'],
+    // An encoder that does not say what it returned keeps the historical name.
+    ['photo.jpg', '', 'photo.webp'],
+  ])('%j encoded as %j is named %j', (sourceName, blobType, expected) => {
+    expect(variantFileName(sourceName, blobType)).toBe(expected);
   });
 });

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
 import { compressImageVariants } from '@/lib/image-variants';
+import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { Button } from '@/components/ui/button';
 import { ImageLightbox } from '@/components/inventory/image-lightbox';
 
@@ -104,7 +105,9 @@ async function uploadOne(requestId: string, file: File, kind: MaintenanceAttachm
   if (variants.thumbBlob) {
     await fetch(mint.thumbSignedUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': 'image/webp' },
+      // The blob's OWN type: the canvas decides what these bytes are (WebP; JPEG
+      // or PNG on Safari). The bucket accepts all three.
+      headers: { 'Content-Type': variants.thumbBlob.type || VARIANT_MIME },
       body: variants.thumbBlob,
     }).catch(() => null);
   }

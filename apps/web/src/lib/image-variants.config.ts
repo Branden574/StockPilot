@@ -50,8 +50,50 @@ export const IMAGE_VARIANTS = {
   heicTranscodeQuality: 0.92,
 } as const;
 
-/** MIME type every variant is encoded to. */
+/** MIME type every variant is encoded to, wherever the browser can do it. */
 export const VARIANT_MIME = 'image/webp';
+
+/**
+ * What an engine that CANNOT encode WebP is asked for instead.
+ *
+ * WebKit (every Safari, and every browser on iOS) has no WebP encoder behind
+ * the canvas. Asked for `image/webp` it does not fail: it silently answers with
+ * a PNG. Measured 2026-09-20: a 200 px thumbnail comes back as a 52 KB PNG
+ * against 8.5 KB of WebP in Chromium, and the PNG "master" is never smaller than
+ * the JPEG it came from, so the uploader keeps the ORIGINAL file, uncapped. In
+ * production that was 67 of 437 thumbnails (PNG bytes under a `-thumb.webp`
+ * name, p50 71 KB against 8 KB) with masters up to 5.8 MB. JPEG is the one
+ * lossy format every canvas can write.
+ */
+export const FALLBACK_MIME = 'image/jpeg';
+
+/**
+ * Which type to ask the canvas for.
+ *
+ * The fallback is taken ONLY for a JPEG source (a HEIC photo has been turned
+ * into JPEG before this point). A JPEG has no transparency to lose, so nothing
+ * it had is given up. A PNG, WebP or AVIF source may be transparent, and JPEG
+ * would paint that black, so those keep today's behaviour on such an engine:
+ * the canvas is asked for WebP and answers with a PNG.
+ */
+export function variantMimeFor(
+  sourceType: string,
+  canEncodeWebp: boolean,
+): typeof VARIANT_MIME | typeof FALLBACK_MIME {
+  if (canEncodeWebp) return VARIANT_MIME;
+  return sourceType === FALLBACK_MIME ? FALLBACK_MIME : VARIANT_MIME;
+}
+
+/**
+ * Name for a re-encoded master. The extension follows what the encoder REALLY
+ * returned (`blob.type`), not what it was asked for, so the stored object is
+ * never a PNG called `.webp`. An unknown type keeps the historical `.webp`.
+ */
+export function variantFileName(sourceName: string, blobType: string): string {
+  const baseName = sourceName.replace(/\.[^.]+$/, '') || 'image';
+  const extension = blobType === 'image/jpeg' ? 'jpg' : blobType === 'image/png' ? 'png' : 'webp';
+  return `${baseName}.${extension}`;
+}
 
 /**
  * Largest size with the same aspect ratio whose longest side is `maxDim`.

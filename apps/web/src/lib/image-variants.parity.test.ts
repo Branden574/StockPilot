@@ -68,6 +68,12 @@ interface Scenario {
   source: { width: number; height: number };
   /** Encoded size the fake canvas answers with, per variant. */
   bytes?: { master?: number; thumb?: number; lqip?: number };
+  /**
+   * 'webp' (default): the canvas returns what it was asked for, as Chromium
+   * and Firefox do. 'png-only': asked for image/webp it answers with a PNG and
+   * says so only in `blob.type`, as WebKit does; JPEG it can write.
+   */
+  engine?: 'webp' | 'png-only';
 }
 
 const QUALITY_TO_VARIANT: Record<string, 'master' | 'thumb' | 'lqip'> = {
@@ -84,19 +90,28 @@ function makeRecorder(scenario: Scenario) {
   const requests: CanvasRequest[] = [];
   /** drawImage arguments after the image: [dx, dy, dWidth, dHeight]. */
   const draws: number[][] = [];
+  /** The 1 x 1 "can you encode WebP?" probes, kept apart from the variant requests. */
+  const probes: CanvasRequest[] = [];
   const close = vi.fn();
   const encoded = (req: CanvasRequest): Blob => {
     const variant = QUALITY_TO_VARIANT[String(req.quality)] ?? 'master';
     const size = scenario.bytes?.[variant] ?? 12;
-    return new Blob([fakeBytes(size)], { type: req.type });
+    const answeredType =
+      scenario.engine === 'png-only' && req.type === 'image/webp' ? 'image/png' : req.type;
+    return new Blob([fakeBytes(size)], { type: answeredType });
+  };
+  const record = (req: CanvasRequest): Blob => {
+    const isProbe = req.w === 1 && req.h === 1 && req.quality === undefined;
+    (isProbe ? probes : requests).push(req);
+    return encoded(req);
   };
   const createImageBitmap = vi.fn(async (_source: Blob) => ({ ...scenario.source, close }));
   const context = { drawImage: (_image: unknown, ...rest: number[]) => void draws.push(rest) };
-  return { requests, draws, close, encoded, createImageBitmap, context };
+  return { requests, probes, draws, close, record, createImageBitmap, context };
 }
 
-function sourceFile(bytes = 1000, name = 'IMG_0001.JPG'): File {
-  return new File([new Uint8Array(bytes)], name, { type: 'image/jpeg', lastModified: 1_700_000 });
+function sourceFile(bytes = 1000, name = 'IMG_0001.JPG', type = 'image/jpeg'): File {
+  return new File([new Uint8Array(bytes)], name, { type, lastModified: 1_700_000 });
 }
 
 type WorkerReply =
@@ -122,9 +137,12 @@ async function runWorkerPath(scenario: Scenario, file = sourceFile()) {
       return rec.context;
     }
     async convertToBlob(opts: { type?: string; quality?: number }) {
-      const req = { w: this.width, h: this.height, type: opts.type, quality: opts.quality };
-      rec.requests.push(req);
-      return rec.encoded(req);
+      return rec.record({
+        w: this.width,
+        h: this.height,
+        type: opts.type,
+        quality: opts.quality,
+      });
     }
   }
 
@@ -165,9 +183,7 @@ async function runMainThreadPath(
         height: 0,
         getContext: () => rec.context,
         toBlob(cb: (b: Blob | null) => void, type?: string, quality?: number) {
-          const req = { w: this.width, h: this.height, type, quality };
-          rec.requests.push(req);
-          cb(rec.encoded(req));
+          cb(rec.record({ w: this.width, h: this.height, type, quality }));
         },
       };
     },
@@ -500,6 +516,142 @@ describe('ARM 2: when the worker cannot do the job, the fallback does the SAME j
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ARM 4: an engine that cannot encode WebP (WebKit: every Safari, all of iOS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const JPEG = 'image/jpeg';
+
+describe('ARM 4: a browser that answers a WebP request with a PNG', () => {
+  const source = { width: 4032, height: 3024 };
+  /** LITERALS: the same three files, asked for as JPEG. */
+  const asJpeg: CanvasRequest[] = [
+    { w: 2048, h: 1536, type: JPEG, quality: 0.85 },
+    { w: 200, h: 150, type: JPEG, quality: 0.8 },
+    { w: 16, h: 12, type: JPEG, quality: 0.5 },
+  ];
+  const probe: CanvasRequest = { w: 1, h: 1, type: MIME, quality: undefined };
+
+  it('both paths ask ONCE, with a 1 x 1 canvas, before encoding anything', async () => {
+    for (const engine of ['webp', 'png-only'] as const) {
+      expect((await runWorkerPath({ source, engine })).probes).toEqual([probe]);
+      expect((await runMainThreadPath({ source, engine })).probes).toEqual([probe]);
+    }
+  });
+
+  it('a JPEG photo becomes JPEG variants on both paths: never a PNG, never the uncapped original', async () => {
+    const file = sourceFile(9000, 'IMG_0001.JPG');
+    const bytes = { master: 500, thumb: 77, lqip: 8 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    expect(worker.requests).toEqual(asJpeg);
+    expect(fallback.requests).toEqual(asJpeg);
+
+    const results = [
+      worker.reply as { master: File; thumbBlob: Blob | null; lqip: string | null },
+      fallback.result,
+    ];
+    for (const { master, thumbBlob, lqip } of results) {
+      expect(master.name).toBe('IMG_0001.jpg');
+      expect(master.type).toBe(JPEG);
+      expect(master.size).toBe(500);
+      expect(master.lastModified).toBe(1_700_000);
+      expect(thumbBlob?.type).toBe(JPEG);
+      expect(thumbBlob?.size).toBe(77);
+      expect(lqip).toBe('data:image/jpeg;base64,CzBVep/E6Q4=');
+    }
+  });
+
+  it('a HEIC photo takes the same route: it is a JPEG by the time the variants are made', async () => {
+    const heic = new File([fakeBytes(9000)], 'IMG_2.HEIC', { type: 'image/heic' });
+    const heic2any = vi.fn(async () => new Blob([fakeBytes(8000)], { type: JPEG }));
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      const run = await runMainThreadPath({ source, engine: 'png-only' }, heic);
+      expect(run.requests).toEqual(asJpeg);
+      expect(run.result.master.name).toBe('IMG_2.jpg');
+    } finally {
+      vi.doUnmock('heic2any');
+    }
+  });
+
+  it('a JPEG re-encode that is NOT smaller still leaves the original in place', async () => {
+    const file = sourceFile(400);
+    const bytes = { master: 500 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    expect((worker.reply as { master: File }).master).toBe(file);
+    expect(fallback.result.master).toBe(file);
+  });
+
+  it.each([
+    ['image/png', 'logo.png'],
+    ['image/webp', 'cutout.webp'],
+    ['image/avif', 'render.avif'],
+  ])('a %s source may be transparent, so it is NOT turned into JPEG', async (type, name) => {
+    const file = sourceFile(9000, name, type);
+    const bytes = { master: 500, thumb: 77 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    // Asked for WebP as before ...
+    expect(worker.requests).toEqual(TABLE[0]!.expected);
+    expect(fallback.requests).toEqual(TABLE[0]!.expected);
+    const results = [worker.reply as { master: File; thumbBlob: Blob | null }, fallback.result];
+    for (const { master, thumbBlob } of results) {
+      // ... but the PNG that comes back is LABELLED as the PNG it is.
+      expect(master.name).toBe(name.replace(/\.[a-z]+$/, '.png'));
+      expect(master.type).toBe('image/png');
+      expect(thumbBlob?.type).toBe('image/png');
+    }
+  });
+
+  it('an engine that CAN encode WebP is asked for WebP whatever the source is', async () => {
+    for (const type of [JPEG, 'image/png']) {
+      const file = sourceFile(9000, 'photo.bin', type);
+      expect((await runWorkerPath({ source }, file)).requests).toEqual(TABLE[0]!.expected);
+      expect((await runMainThreadPath({ source }, file)).requests).toEqual(TABLE[0]!.expected);
+    }
+  });
+
+  it('a probe that cannot run changes nothing: WebP is assumed', async () => {
+    // Worker: OffscreenCanvas whose probe throws. Main thread: toBlob answers null.
+    const rec = { requests: [] as CanvasRequest[] };
+    class ProbeThrows {
+      constructor(
+        readonly width: number,
+        readonly height: number,
+      ) {}
+      getContext() {
+        return { drawImage: () => undefined };
+      }
+      async convertToBlob(opts: { type?: string; quality?: number }) {
+        if (this.width === 1 && this.height === 1) throw new Error('InvalidStateError');
+        rec.requests.push({
+          w: this.width,
+          h: this.height,
+          type: opts.type,
+          quality: opts.quality,
+        });
+        return new Blob([fakeBytes(12)], { type: opts.type });
+      }
+    }
+    const posted: WorkerReply[] = [];
+    const fakeSelf = {
+      onmessage: null as ((e: { data: { file: File } }) => Promise<void>) | null,
+      postMessage: (m: WorkerReply) => posted.push(m),
+      btoa: globalThis.btoa,
+    };
+    vi.resetModules();
+    vi.stubGlobal('self', fakeSelf);
+    vi.stubGlobal('createImageBitmap', async () => ({ ...source, close: () => undefined }));
+    vi.stubGlobal('OffscreenCanvas', ProbeThrows);
+    await import('./image-variants.worker');
+    await fakeSelf.onmessage!({ data: { file: sourceFile() } });
+    expect(posted[0]).toMatchObject({ ok: true });
+    expect(rec.requests).toEqual(TABLE[0]!.expected);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ARM 3: the source
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -576,7 +728,13 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     const source = stripComments(read(path.join(LIB, file)));
     const imported =
       /import \{([^}]*)\} from '\.\/image-variants\.config';/.exec(source)?.[1] ?? '';
-    for (const name of ['IMAGE_VARIANTS', 'VARIANT_MIME', 'fitWithin']) {
+    for (const name of [
+      'IMAGE_VARIANTS',
+      'VARIANT_MIME',
+      'fitWithin',
+      'variantFileName',
+      'variantMimeFor',
+    ]) {
       expect(
         imported.split(',').map((part) => part.trim()),
         `${file} must import ${name}`,
@@ -601,6 +759,25 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     expect(stripComments(read(path.join(LIB, 'image-variants.ts')))).toMatch(
       /new Worker\(\s*new URL\('\.\/image-variants\.worker\.ts', import\.meta\.url\),\s*\{\s*type: 'module',?\s*\},?\s*\)/,
     );
+  });
+
+  it('no uploader labels the thumbnail image/webp by hand: the label comes from the blob', () => {
+    // The canvas decides what the bytes are (WebP, or JPEG / PNG on WebKit). A
+    // hard-coded 'image/webp' is how PNG thumbnails were stored as WebP.
+    const uploaders = [
+      path.join(WEB, 'src', 'components', 'inventory', 'image-uploader.tsx'),
+      path.join(WEB, 'src', 'components', 'inventory', 'item-form.tsx'),
+      path.join(WEB, 'src', 'components', 'maintenance', 'maintenance-photos-panel.tsx'),
+    ];
+    for (const file of uploaders) {
+      const source = stripComments(read(file));
+      expect(source, `${path.basename(file)} hard-codes the thumbnail's content type`).not.toMatch(
+        /(?:contentType|'Content-Type')\s*:\s*'image\/webp'/,
+      );
+      expect(source, `${path.basename(file)} must send the thumbnail blob's own type`).toMatch(
+        /thumbBlob\.type/,
+      );
+    }
   });
 
   it('both backfill tools make thumbnails of the shared size', () => {
