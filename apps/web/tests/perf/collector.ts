@@ -27,6 +27,12 @@
  * `collector` is serialized with toString(): it must stay self-contained.
  */
 import { classifyImageUrl } from '../../src/lib/perf/image-class';
+import {
+  filePixels,
+  pickSizesLength,
+  srcsetDensity,
+  visibleBox,
+} from '../../src/lib/perf/photo-geometry';
 
 export interface ArmConfig {
   /** Any of these becoming visible counts as click feedback. */
@@ -53,8 +59,13 @@ export interface PageImageRecord {
   inViewport: boolean;
   renderedWidth: number;
   renderedHeight: number;
+  /** DENSITY-CORRECTED for a srcset image (file width / candidate density). Never compare this with device pixels. */
   naturalWidth: number;
   naturalHeight: number;
+  /** The file's real pixels (`filePixels`). Equal to `natural*` when there is no candidate list; null when they cannot be rebuilt. */
+  intrinsicWidth: number | null;
+  intrinsicHeight: number | null;
+  objectFit: string;
   devicePixelRatio: number;
   loading: string;
   fetchPriority: string | null;
@@ -421,16 +432,98 @@ function collector(fingerprintKeyHex: string): void {
       settledWhenGone: string | null,
     ) {
       const root = document.querySelector(scope) ?? document.body;
+      // On screen = some pixel survives the viewport AND every ancestor that
+      // clips (overflow other than `visible`). A card further along a horizontal
+      // strip is inside the viewport's box and not on screen; the browser never
+      // loads its lazy photo, and counting it made every storefront sample
+      // "unfinished" (found 2026-09-21). Which ancestors clip is looked up once
+      // per photo; their boxes are read fresh, because strips scroll.
+      const clippers = new WeakMap<Element, Array<{ el: Element; x: boolean; y: boolean }>>();
+      const clippingAncestors = (img: Element) => {
+        let list = clippers.get(img);
+        if (!list) {
+          list = [];
+          for (
+            let p = img.parentElement;
+            p && p !== document.documentElement;
+            p = p.parentElement
+          ) {
+            const style = getComputedStyle(p);
+            const x = style.overflowX !== 'visible';
+            const y = style.overflowY !== 'visible';
+            if (x || y) list.push({ el: p, x, y });
+            // A fixed box is laid out against the viewport: nothing above it clips it.
+            if (style.position === 'fixed') break;
+          }
+          clippers.set(img, list);
+        }
+        return list;
+      };
+      const box = (r: DOMRect) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
       const onScreen = (img: Element) => {
         const r = img.getBoundingClientRect();
+        if (!(r.width > 0 && r.height > 0)) return false;
         return (
-          r.width > 0 &&
-          r.height > 0 &&
-          r.bottom > 0 &&
-          r.right > 0 &&
-          r.top < innerHeight &&
-          r.left < innerWidth
+          w.__spVisibleBox(
+            box(r),
+            { left: 0, top: 0, right: innerWidth, bottom: innerHeight },
+            clippingAncestors(img).map((c) => ({
+              box: box(c.el.getBoundingClientRect()),
+              x: c.x,
+              y: c.y,
+            })),
+          ) !== null
         );
+      };
+      // `sizes` lengths are resolved by LAYING THEM OUT (calc, vw, em all work),
+      // in a hidden, off-screen, zero-height box: no paint, no layout shift.
+      const lengthPx = new Map<string, number | null>();
+      const measure = (length: string): number | null => {
+        if (!lengthPx.has(length)) {
+          const probe = document.createElement('div');
+          probe.style.cssText =
+            // font-size:medium = the INITIAL font size, which is what `sizes`
+            // resolves em against (not the page's own font size).
+            'position:absolute;visibility:hidden;pointer-events:none;height:0;left:-99999px;top:0;font-size:medium;';
+          probe.style.width = length;
+          document.body.appendChild(probe);
+          const px = probe.style.width ? probe.getBoundingClientRect().width : 0;
+          probe.remove();
+          lengthPx.set(length, px > 0 ? px : null);
+        }
+        return lengthPx.get(length) ?? null;
+      };
+      // naturalWidth of a srcset image is the file's width DIVIDED BY the
+      // candidate's density and rounded DOWN, so a 640 px file in a 220 px slot
+      // says 220. A photo that comes from a candidate list whose density cannot
+      // be rebuilt (a <picture> <source>, an unparseable list) is recorded as
+      // UNKNOWN (null), never as "natural size x 1".
+      const realPixels = (
+        img: HTMLImageElement,
+        rect: DOMRect,
+        askedWidth: number | null,
+      ): { width: number | null; height: number | null } => {
+        const fromCandidates =
+          Boolean(img.srcset) || img.parentElement instanceof HTMLPictureElement;
+        if (!fromCandidates) return { width: img.naturalWidth, height: img.naturalHeight };
+        if (!img.srcset || !(img.naturalWidth > 0)) return { width: null, height: null };
+        const sizes = (img.sizes || '').trim().toLowerCase();
+        // `auto` (lazy images only) means "the width the image is laid out at".
+        const auto = (sizes === 'auto' || sizes.startsWith('auto,')) && img.loading === 'lazy';
+        const length = auto
+          ? null
+          : w.__spPickSizesLength(img.sizes || '', (c: string) => matchMedia(c).matches);
+        const sourceSize = auto ? rect.width : measure(length ?? '100vw');
+        const density: number | null = w.__spSrcsetDensity(
+          img.srcset,
+          img.currentSrc,
+          sourceSize,
+          (u: string) => new URL(u, document.baseURI).href,
+        );
+        return {
+          width: w.__spFilePixels(img.naturalWidth, density, askedWidth),
+          height: w.__spFilePixels(img.naturalHeight, density, null),
+        };
       };
       const isPhoto = (img: HTMLImageElement) => {
         const src = img.currentSrc || img.src;
@@ -485,6 +578,9 @@ function collector(fingerprintKeyHex: string): void {
           /* not a URL we can split; the class already says "unknown" */
         }
         const visibleNow = onScreen(img);
+        const klass = w.__spClassify(src, location.origin);
+        // `w=` on an optimizer URL: the width the file was ASKED to be.
+        const real = realPixels(img, rect, klass.requestedWidth ?? null);
         const rowIndex = tr ? rows.indexOf(tr) : null;
         // In a table "first" means the first N ROWS; in a card grid, the
         // first N photos on screen in document order.
@@ -500,6 +596,9 @@ function collector(fingerprintKeyHex: string): void {
           renderedHeight: Math.round(rect.height),
           naturalWidth: img.naturalWidth,
           naturalHeight: img.naturalHeight,
+          intrinsicWidth: real.width,
+          intrinsicHeight: real.height,
+          objectFit: getComputedStyle(img).objectFit,
           devicePixelRatio: devicePixelRatio,
           loading: img.loading,
           fetchPriority: img.getAttribute('fetchpriority'),
@@ -514,7 +613,7 @@ function collector(fingerprintKeyHex: string): void {
           encodedBodySize: entry ? entry.encodedBodySize : null,
           deliveryType: entry ? ((entry as any).deliveryType ?? null) : null,
           protocol: entry ? entry.nextHopProtocol : null,
-          klass: w.__spClassify(src, location.origin),
+          klass,
           urlFingerprint: await sha(src),
           objectFingerprint,
           tokenFingerprint,
@@ -530,6 +629,10 @@ export function collectorScript(fingerprintKeyHex: string): string {
     throw new Error('fingerprint key must be 32 bytes of hex');
   return [
     `window.__spClassify = ${classifyImageUrl.toString()};`,
+    `window.__spVisibleBox = ${visibleBox.toString()};`,
+    `window.__spPickSizesLength = ${pickSizesLength.toString()};`,
+    `window.__spSrcsetDensity = ${srcsetDensity.toString()};`,
+    `window.__spFilePixels = ${filePixels.toString()};`,
     `(${collector.toString()})('${fingerprintKeyHex}');`,
   ].join('\n');
 }
