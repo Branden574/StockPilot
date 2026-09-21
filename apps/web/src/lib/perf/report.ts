@@ -17,6 +17,7 @@
  *   - Two runs are only compared as equals when they were taken the same way.
  */
 import type { ImageClass } from './image-class';
+import { neededIntrinsicWidth } from './photo-geometry';
 import {
   bootstrapPercentileDelta,
   deltaPercent,
@@ -28,7 +29,7 @@ import {
 /** Bump when the SHAPE of results.json changes. */
 export const SCHEMA_VERSION = 5;
 /** Bump when WHAT A NUMBER MEANS changes (a marker, a clock, a floor). Runs with different values are not comparable. */
-export const HARNESS_VERSION = '2026-09-20.4';
+export const HARNESS_VERSION = '2026-09-21.1';
 
 export interface ImageRecord {
   order: number;
@@ -37,8 +38,13 @@ export interface ImageRecord {
   first: boolean;
   renderedWidth: number;
   renderedHeight: number;
+  /** DENSITY-CORRECTED for a srcset image: never compare it with device pixels. */
   naturalWidth: number;
   naturalHeight: number;
+  /** The file's real pixels. Absent in runs older than harness 2026-09-21.1. */
+  intrinsicWidth?: number;
+  intrinsicHeight?: number;
+  objectFit?: string;
   devicePixelRatio: number;
   loading: string;
   fetchPriority: string | null;
@@ -1076,29 +1082,41 @@ function imageAudit(run: RunFile): string[] {
   const lines = [
     '## Photo delivery audit',
     '',
-    'What each surface fetched, against what it needs to look sharp (rendered CSS px × DPR). Counts are photo observations across all timed samples.',
+    'What each surface fetched, against what it needs to look sharp. "Needs" is the file width this photo needs for its box, its shape, its object-fit and the screen\'s DPR; "Got" is the width of the file the browser really received (for a srcset image that is NOT `naturalWidth`, which the browser divides by the candidate\'s density). Widths are medians; counts are photo observations across all timed samples.',
     '',
-    '| Scenario | Delivered by | Variant | Photos seen | Rendered (CSS px) | Needs (px) | Got (px) | Too small for the screen | From browser cache | Bytes when fetched | Optimizer width | Cache-Control | Blur placeholder | Broken |',
+    '| Scenario | Delivered by | Variant | Photos seen | Box width (CSS px) | Needs (file px wide) | Got (file px wide) | Too small for the screen | From browser cache | Bytes when fetched | Optimizer width | Cache-Control | Blur placeholder | Broken |',
     '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |',
   ];
   for (const [key, images] of [...groups.entries()].sort()) {
     const [scenario, source, variant] = key.split(' | ');
     const loaded = images.filter((i) => !i.failed && i.naturalWidth > 0);
-    const needs = loaded.map(
-      (i) => Math.max(i.renderedWidth, i.renderedHeight) * i.devicePixelRatio,
+    // FILE pixels, not `naturalWidth` (density-corrected for srcset images), and
+    // the width the box needs for THIS photo's shape and object-fit. Runs older
+    // than 2026-09-21.1 have no file pixels: their srcset rows cannot be judged.
+    const real = (i: ImageRecord) => ({
+      width: i.intrinsicWidth ?? i.naturalWidth,
+      height: i.intrinsicHeight ?? i.naturalHeight,
+    });
+    const need = (i: ImageRecord) =>
+      neededIntrinsicWidth(
+        { width: i.renderedWidth, height: i.renderedHeight },
+        real(i),
+        i.devicePixelRatio,
+        i.objectFit,
+      );
+    const needs = loaded.map(need);
+    const got = loaded.map((i) => real(i).width);
+    // 2 px of slack: file pixels are rebuilt from a ROUNDED naturalWidth.
+    const judgeable = loaded.filter(
+      (i) => i.intrinsicWidth !== undefined || i.klass.delivery !== 'optimizer',
     );
-    const got = loaded.map((i) => Math.max(i.naturalWidth, i.naturalHeight));
-    const tooSmall = loaded.filter(
-      (i) =>
-        Math.max(i.naturalWidth, i.naturalHeight) <
-        Math.max(i.renderedWidth, i.renderedHeight) * i.devicePixelRatio,
-    ).length;
+    const tooSmall = judgeable.filter((i) => real(i).width + 2 < need(i)).length;
     const known = images.filter((i) => i.network && i.network.servedFromBrowserCache !== null);
     const cached = known.filter((i) => i.network?.servedFromBrowserCache).length;
     const fetchedBytes = images.map((i) => i.network?.wireBytes ?? 0).filter((b) => b > 0);
     const px = (v: number | null) => (v === null ? NOT_MEASURED : String(Math.round(v)));
     lines.push(
-      `| ${scenario} | ${source} | ${variant} | ${images.length} | ${px(median(loaded.map((i) => Math.max(i.renderedWidth, i.renderedHeight))))} | ${px(median(needs))} | ${px(median(got))} | ${tooSmall} | ${known.length === 0 ? NOT_MEASURED : `${cached} of ${known.length}`} | ${fetchedBytes.length === 0 ? 'none fetched' : formatValue(kb(median(fetchedBytes)), 'KB')} | ${tally(images.map((i) => (i.klass.requestedWidth === null ? null : `w=${i.klass.requestedWidth}`)))} | ${tally(images.map((i) => i.network?.cacheControl))} | ${images.filter((i) => i.hasBlurPlaceholder).length} | ${images.filter((i) => i.failed).length} |`,
+      `| ${scenario} | ${source} | ${variant} | ${images.length} | ${px(median(loaded.map((i) => i.renderedWidth)))} | ${px(median(needs))} | ${px(median(got))} | ${judgeable.length === loaded.length ? String(tooSmall) : judgeable.length === 0 ? 'cannot say (run predates file-pixel measurement)' : `${tooSmall} of the ${judgeable.length} that can be judged`} | ${known.length === 0 ? NOT_MEASURED : `${cached} of ${known.length}`} | ${fetchedBytes.length === 0 ? 'none fetched' : formatValue(kb(median(fetchedBytes)), 'KB')} | ${tally(images.map((i) => (i.klass.requestedWidth === null ? null : `w=${i.klass.requestedWidth}`)))} | ${tally(images.map((i) => i.network?.cacheControl))} | ${images.filter((i) => i.hasBlurPlaceholder).length} | ${images.filter((i) => i.failed).length} |`,
     );
   }
   return [...lines, ''];

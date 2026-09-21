@@ -818,3 +818,100 @@ describe('signed-URL stability', () => {
     expect(rotationWithinRun(file)).toEqual({ objects: 1, rotated: 0 });
   });
 });
+
+describe('photo delivery audit: real file pixels, not naturalWidth', () => {
+  // The storefront card as the browser reports it: a 640 px file shown through
+  // `sizes="220px"` says naturalWidth 220 (640 divided by the 640/220 density).
+  const card = (over: Partial<ImageRecord> = {}): ImageRecord =>
+    ({
+      failed: false,
+      renderedWidth: 184,
+      renderedHeight: 111,
+      naturalWidth: 220,
+      naturalHeight: 293,
+      intrinsicWidth: 640,
+      intrinsicHeight: 852,
+      objectFit: 'cover',
+      devicePixelRatio: 2,
+      klass: {
+        delivery: 'optimizer',
+        upstream: 'storage-signed',
+        variant: 'master',
+        requestedWidth: 640,
+      },
+      network: null,
+      ...over,
+    }) as ImageRecord;
+  const auditRow = (images: ImageRecord[]): string[] => {
+    const file = run('r', [0, 500]);
+    file.samples[1]!.photos = { images } as never;
+    const row = buildRunReport(file)
+      .markdown.split('\n')
+      .find((line) => line.startsWith('| dashboard-to-inventory | optimizer'));
+    expect(row, 'the audit has a row for the optimizer-delivered masters').toBeDefined();
+    return (row as string).split('|').map((cell) => cell.trim());
+  };
+  // | scenario | source | variant | photos | box width | needs | got | too small | ...
+  const NEEDS = 6;
+  const GOT = 7;
+  const TOO_SMALL = 8;
+
+  it('judges a srcset photo by the file it got: 640 px for a box that needs 368', () => {
+    const cells = auditRow([card(), card()]);
+    expect(cells[NEEDS]).toBe('368');
+    expect(cells[GOT]).toBe('640');
+    expect(cells[TOO_SMALL]).toBe('0');
+  });
+
+  it('still catches a photo that really is too small', () => {
+    const cells = auditRow([
+      card(),
+      card({ naturalWidth: 103, intrinsicWidth: 300, intrinsicHeight: 400 }),
+    ]);
+    expect(cells[TOO_SMALL]).toBe('1');
+  });
+
+  it('allows the 2 px that rebuilding from a rounded naturalWidth can lose, and no more', () => {
+    expect(auditRow([card({ intrinsicWidth: 366, intrinsicHeight: 487 })])[TOO_SMALL]).toBe('0');
+    expect(auditRow([card({ intrinsicWidth: 365, intrinsicHeight: 486 })])[TOO_SMALL]).toBe('1');
+  });
+
+  it('refuses to judge optimizer photos from a run that never measured file pixels', () => {
+    const old = card({
+      intrinsicWidth: undefined,
+      intrinsicHeight: undefined,
+      objectFit: undefined,
+    });
+    expect(auditRow([old])[TOO_SMALL]).toBe('cannot say (run predates file-pixel measurement)');
+    expect(auditRow([old, card()])[TOO_SMALL]).toBe('0 of the 1 that can be judged');
+  });
+
+  it("judges an old run's plain thumbnail by naturalWidth, which is real when there is no srcset", () => {
+    const file = run('r', [0, 500]);
+    file.samples[1]!.photos = {
+      images: [
+        {
+          failed: false,
+          renderedWidth: 28,
+          renderedHeight: 28,
+          naturalWidth: 200,
+          naturalHeight: 150,
+          devicePixelRatio: 2,
+          klass: {
+            delivery: 'storage-signed',
+            upstream: null,
+            variant: 'thumb',
+            requestedWidth: null,
+          },
+          network: null,
+        },
+      ],
+    } as never;
+    const row = buildRunReport(file)
+      .markdown.split('\n')
+      .find((line) => line.startsWith('| dashboard-to-inventory | storage-signed'));
+    const cells = (row as string).split('|').map((cell) => cell.trim());
+    expect(cells[GOT]).toBe('200');
+    expect(cells[TOO_SMALL]).toBe('0');
+  });
+});
