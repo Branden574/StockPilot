@@ -392,7 +392,7 @@ What this says, and what it does not:
 
 **How much the same build moves on its own (A/A).** The baseline was taken twice,
 30 minutes apart, on the same build, same machine, same everything (run B:
-`perf-results/2026-09-20T23-40-43-*-baseline-B-chromium`). p75, run A then run B:
+`perf-results/2026-09-20T23-39-31-817Z-baseline-B-chromium`). p75, run A then run B:
 
 | Row                                      |   Run A |   Run B | Moved |
 | ---------------------------------------- | ------: | ------: | ----: |
@@ -427,7 +427,7 @@ the server answering differently half an hour later. Two consequences:
 **What a deploy does (measured 2026-09-21T00:27Z).** Build `ab202032e32c` (a
 two-file privacy fix that did not touch image code) went live, and a run was
 started about two minutes later with `PERF_SERVER_STATE=post-deploy`
-(`perf-results/2026-09-21T00-29-36-*-post-deploy-chromium`, n=20).
+(`perf-results/2026-09-21T00-29-36-893Z-post-deploy-chromium`, n=20).
 
 - **Signed photo URLs did NOT rotate.** 18 signed photos were seen both before and
   after the deploy; all 18 kept the same signed URL. The Phase 1 audit's claim
