@@ -6,6 +6,7 @@ import { can, deliveryRecipientsForRouting } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
@@ -118,6 +119,11 @@ export default async function NewOrderPage({
   // it flushes immediately; the client suspends just the grid + cart
   // rail on this promise and React streams the resolved payload in.
   const catalogPromise = loadCatalogBundle(ctx.organizationId, warehouseId, ctx.userId);
+  // Same treatment for the "Frequently ordered" strip, the first row of photos
+  // on the page: started now, in parallel with the catalog, never awaited, and
+  // it never rejects. It was a browser fetch that could only begin after
+  // hydration (see the loader's header for the measurement).
+  const frequentlyOrderedPromise = loadFrequentlyOrdered(warehouseId, catalogPromise);
   const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
 
   // The storefront owns its own page head (back link, H1, flow
@@ -130,6 +136,7 @@ export default async function NewOrderPage({
       warehouses={warehouses}
       warehouseId={warehouseId}
       catalogPromise={catalogPromise}
+      frequentlyOrderedPromise={frequentlyOrderedPromise}
       chartersForWarehouse={chartersForWarehouse}
       viewerRole={ctx.role}
       viewerName={ctx.fullName}

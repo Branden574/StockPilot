@@ -43,6 +43,7 @@ import {
   takeOrderPrefill,
 } from '@/lib/orders/start-order-prefill';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '../v2/types';
+import type { FrequentlyOrderedEntry } from '@/server/loaders/orders-frequently-ordered';
 
 import {
   CategorySection,
@@ -71,6 +72,7 @@ import {
   type ViewMode,
 } from './storefront-logic';
 import { QuickViewDrawer, ReviewModal, SfPopover } from './storefront-overlays';
+import { toFreqEntries, useStreamed } from './frequently-ordered';
 
 import './storefront.css';
 import { PageTour } from '@/components/onboarding/page-tour';
@@ -91,6 +93,12 @@ export interface OrdersStorefrontProps {
   warehouseId: string;
   /** Un-awaited on the server so the shell streams ahead of the grid. */
   catalogPromise: Promise<StorefrontCatalogData>;
+  /**
+   * Un-awaited too, and never rejects (`loadFrequentlyOrdered`). It used to be
+   * a browser fetch that could only start after hydration, which is why the
+   * first row of photos trailed the catalog by most of a second.
+   */
+  frequentlyOrderedPromise: Promise<FrequentlyOrderedEntry[]>;
   chartersForWarehouse: StorefrontCharter[];
   viewerRole: string;
   viewerName: string | null;
@@ -128,48 +136,19 @@ export function OrdersStorefront(props: OrdersStorefrontProps) {
   );
 }
 
-/* ---- frequently-ordered fetch (GET /api/orders/freq) -------------------- */
+/* ---- frequently ordered (streamed with the page) -------------------------- */
 
-interface FreqApiItem {
-  itemId: string;
-  sku: string;
-  name: string;
-  categoryName: string | null;
-  imageUrl: string | null;
-  available: number;
-  quantityOnHand: number;
-  count: number;
-}
-
-function useFreqItems(warehouseId: string): { items: FreqApiItem[]; loading: boolean } {
-  const [items, setItems] = React.useState<FreqApiItem[]>([]);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
-    setLoading(true);
-    setItems([]);
-
-    fetch(`/api/orders/freq?warehouseId=${encodeURIComponent(warehouseId)}&limit=10`)
-      .then(async (res) => {
-        if (!res.ok) return;
-        const body = (await res.json()) as { items: FreqApiItem[] };
-        if (!cancelled) setItems(body.items ?? []);
-      })
-      .catch(() => {
-        /* carousel simply hides on failure */
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [warehouseId]);
-
-  return { items, loading };
+/** The strip, suspended on its own: the catalog grid never waits for it. */
+function FrequentlyOrderedStrip({
+  promise,
+  itemMap,
+  ...carousel
+}: {
+  promise: Promise<FrequentlyOrderedEntry[]>;
+  itemMap: Map<string, CatalogItem>;
+} & Omit<React.ComponentProps<typeof FreqCarousel>, 'entries' | 'loading'>) {
+  const entries = toFreqEntries(React.use(promise), itemMap);
+  return <FreqCarousel entries={entries} loading={false} {...carousel} />;
 }
 
 /* ---- flow indicator ------------------------------------------------------ */
@@ -212,6 +191,7 @@ function StorefrontShell({
   warehouses,
   warehouseId,
   catalogPromise,
+  frequentlyOrderedPromise,
   chartersForWarehouse,
   viewerRole,
   viewerName,
@@ -568,6 +548,7 @@ function StorefrontShell({
         <React.Suspense fallback={<CatalogSkeleton />}>
           <StorefrontCatalog
             catalogPromise={catalogPromise}
+            frequentlyOrderedPromise={frequentlyOrderedPromise}
             warehouseId={warehouseId}
             warehouseName={warehouseName}
             chartersForWarehouse={chartersForWarehouse}
@@ -590,6 +571,7 @@ function StorefrontShell({
 
 interface StorefrontCatalogProps {
   catalogPromise: Promise<StorefrontCatalogData>;
+  frequentlyOrderedPromise: Promise<FrequentlyOrderedEntry[]>;
   warehouseId: string;
   warehouseName: string;
   chartersForWarehouse: StorefrontCharter[];
@@ -607,6 +589,7 @@ interface StorefrontCatalogProps {
 
 function StorefrontCatalog({
   catalogPromise,
+  frequentlyOrderedPromise,
   warehouseId,
   warehouseName,
   chartersForWarehouse,
@@ -677,24 +660,16 @@ function StorefrontCatalog({
   }, [hydrated]);
 
   /* --- frequently ordered --- */
-  const { items: freqApiItems, loading: freqLoading } = useFreqItems(warehouseId);
+  // null until the streamed list arrives. Nothing here waits for it: the sort
+  // and the suggestions simply improve when it does.
+  const frequentlyOrdered = useStreamed(frequentlyOrderedPromise);
   const freqEntries = React.useMemo<FreqEntry[]>(
-    () =>
-      freqApiItems.flatMap((f) => {
-        const item = itemMap.get(f.itemId);
-        if (!item) return [];
-        // The freq endpoint signs its own 200px thumbnails — fall back
-        // to them when the catalog row has no resolved URL so items
-        // with photos never show a letter glyph in the carousel.
-        return [
-          { item: { ...item, imageUrl: item.imageUrl ?? f.imageUrl }, count: f.count },
-        ];
-      }),
-    [freqApiItems, itemMap],
+    () => toFreqEntries(frequentlyOrdered ?? [], itemMap),
+    [frequentlyOrdered, itemMap],
   );
   const freqByItemId = React.useMemo(
-    () => new Map(freqApiItems.map((f) => [f.itemId, f.count])),
-    [freqApiItems],
+    () => new Map((frequentlyOrdered ?? []).map((f) => [f.itemId, f.count])),
+    [frequentlyOrdered],
   );
   const suggestions = React.useMemo(
     () =>
@@ -1147,15 +1122,29 @@ function StorefrontCatalog({
 
           {/* Frequently ordered (unfiltered All view only) */}
           {browsingAll && (
-            <FreqCarousel
-              entries={freqEntries}
-              qtyByItemId={qtyMap}
-              loading={freqLoading}
-              onAdd={handleAdd}
-              onDec={handleDec}
-              onSetQty={handleSetQty}
-              onQuickView={handleQuickView}
-            />
+            <React.Suspense
+              fallback={
+                <FreqCarousel
+                  entries={[]}
+                  qtyByItemId={qtyMap}
+                  loading
+                  onAdd={handleAdd}
+                  onDec={handleDec}
+                  onSetQty={handleSetQty}
+                  onQuickView={handleQuickView}
+                />
+              }
+            >
+              <FrequentlyOrderedStrip
+                promise={frequentlyOrderedPromise}
+                itemMap={itemMap}
+                qtyByItemId={qtyMap}
+                onAdd={handleAdd}
+                onDec={handleDec}
+                onSetQty={handleSetQty}
+                onQuickView={handleQuickView}
+              />
+            </React.Suspense>
           )}
 
           {/* Catalog: grouped sections or flat filtered grid */}
