@@ -72,7 +72,7 @@ export function poImportUploadExtensionFor(mime: string): string | null {
  * reports for one iPhone photo depends on the OS/browser, not on the bytes.
  * Allowing only `heic` therefore refused a coin-flip half of the drag-drops
  * on the web scan form. Everything downstream already treats them alike —
- * `lib/image-variants.ts:194` transcodes both, and `lib/ai/claude.ts:56-62`
+ * `isHeicLike` in `lib/image-variants.ts` transcodes both, and `lib/ai/claude.ts:56-62`
  * relabels any non-jpeg/png/gif/webp subtype to jpeg for vision. The bucket
  * pin (migration 0325, widened by 0332) and the route's own ACCEPT_TYPES
  * carry the identical pair; all three must move together.

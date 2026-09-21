@@ -75,7 +75,7 @@ async function humanizeUploadError(res: Response, fallback: string): Promise<str
 async function uploadOne(requestId: string, file: File, kind: MaintenanceAttachmentKind): Promise<void> {
   // 1) Client-side resize + HEIC->JPEG transcode + thumb generation. The
   // real return shape is { master: File, thumbBlob: Blob | null, lqip }
-  // (image-variants.ts:36-40) — thumbBlob can be null when transcoding
+  // (`ImageVariants` in lib/image-variants.ts) — thumbBlob can be null when transcoding
   // fails, so the thumb PUT below is skipped rather than sending "null".
   const variants = await compressImageVariants(file);
   const ext = extFromMime(variants.master.type);
