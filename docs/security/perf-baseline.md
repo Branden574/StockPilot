@@ -424,6 +424,26 @@ the server answering differently half an hour later. Two consequences:
   the kind of event a person remembers as "the app hung", and the harness now
   counts them so a rate can be established.
 
+**What a deploy does (measured 2026-09-21T00:27Z).** Build `ab202032e32c` (a
+two-file privacy fix that did not touch image code) went live, and a run was
+started about two minutes later with `PERF_SERVER_STATE=post-deploy`
+(`perf-results/2026-09-21T00-29-36-*-post-deploy-chromium`, n=20).
+
+- **Signed photo URLs did NOT rotate.** 18 signed photos were seen both before and
+  after the deploy; all 18 kept the same signed URL. The Phase 1 audit's claim
+  that "every deploy rotates every photo URL" does not hold for an ordinary
+  deploy. It stays open only for a deploy that edits the signing module
+  (`server/services/item-images.ts`) or changes how that module compiles; repeat
+  this check on the first such deploy.
+- **First request after the deploy** (one observation each, not a percentile):
+  Dashboard → Inventory 1260 ms (page-data first byte 498 ms), Inventory → Item
+  914 ms, Orders → Order 830 ms, hard-load storefront 1010 ms. All inside the
+  owner's post-deploy limit of 2000 ms. One deploy is one sample; the limit is a
+  p95 and needs several.
+- In the fifteen minutes after the deploy the tail was slower than the warm
+  baseline (Orders → Order p95 930 ms against 613 ms in run B). `perf:compare` labels that
+  comparison NOT FAIR, correctly: the server state differs.
+
 **What this baseline cannot say.** Anything about photo loading at customer
 scale (Demo Co's storefront photos are about 220 px for a 468 px need, which is
 not what a customer has); any role other than admin; any browser other than
