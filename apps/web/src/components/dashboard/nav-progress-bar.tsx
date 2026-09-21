@@ -116,10 +116,25 @@ export function NavProgressBar() {
       // Navigation completed — pathname changed.
       setPhase('completing');
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
-      const t = setTimeout(() => setPhase('idle'), 250);
-      return () => clearTimeout(t);
     }
   }, [pathname, phase]);
+
+  // The fade-out gets an effect of its OWN, keyed on `phase` alone.
+  //
+  // It used to be a setTimeout inside the effect above, whose cleanup cleared
+  // it. But that effect depends on `phase`, and it had just called
+  // setPhase('completing'): the very next render ran its cleanup, cancelled the
+  // timer it had set one line earlier, and found nothing to do on re-run. The
+  // bar therefore NEVER returned to 'idle' after a navigation. For most people
+  // that was invisible (the complete animation ends at opacity 0 and holds), but
+  // under `prefers-reduced-motion: reduce` that animation is switched off, so
+  // the bar sat at full width and full opacity across the top of the screen
+  // from the first click until a reload: a loading bar that never stopped.
+  React.useEffect(() => {
+    if (phase !== 'completing') return;
+    const t = setTimeout(() => setPhase('idle'), 250);
+    return () => clearTimeout(t);
+  }, [phase]);
 
   if (phase === 'idle') return null;
 

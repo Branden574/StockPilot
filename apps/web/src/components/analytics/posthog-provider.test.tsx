@@ -96,6 +96,16 @@ describe('PostHogProvider', () => {
     expect(posthogMock.init).not.toHaveBeenCalled();
   });
 
+  it.each(['/i/', '/invite/', '/orders/sign/', '/returns/request/'])(
+    'MUTATION GUARD — never initializes on %s<token>: the path itself is a credential',
+    async (prefix) => {
+      pathnameRef.value = `${prefix}abcdef0123456789abcdef0123456789`;
+      render(<PostHogProvider>{null}</PostHogProvider>);
+      await flush();
+      expect(posthogMock.init).not.toHaveBeenCalled();
+    },
+  );
+
   it('opts out an already-loaded singleton when the current path is a share path', async () => {
     posthogMock.__loaded = true;
     pathnameRef.value = '/m/abcdef0123456789';
