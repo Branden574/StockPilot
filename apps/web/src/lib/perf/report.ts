@@ -41,9 +41,9 @@ export interface ImageRecord {
   /** DENSITY-CORRECTED for a srcset image: never compare it with device pixels. */
   naturalWidth: number;
   naturalHeight: number;
-  /** The file's real pixels. Absent in runs older than harness 2026-09-21.1. */
-  intrinsicWidth?: number;
-  intrinsicHeight?: number;
+  /** The file's real pixels. Absent in runs older than harness 2026-09-21.1; null when they could not be rebuilt. */
+  intrinsicWidth?: number | null;
+  intrinsicHeight?: number | null;
   objectFit?: string;
   devicePixelRatio: number;
   loading: string;
@@ -1091,8 +1091,16 @@ function imageAudit(run: RunFile): string[] {
     const [scenario, source, variant] = key.split(' | ');
     const loaded = images.filter((i) => !i.failed && i.naturalWidth > 0);
     // FILE pixels, not `naturalWidth` (density-corrected for srcset images), and
-    // the width the box needs for THIS photo's shape and object-fit. Runs older
-    // than 2026-09-21.1 have no file pixels: their srcset rows cannot be judged.
+    // the width the box needs for THIS photo's shape and object-fit.
+    // A photo can be JUDGED when its file pixels are known: measured (a number),
+    // or an old run's photo that is not from a candidate list, where
+    // naturalWidth IS the file. Old optimizer rows and photos whose density
+    // could not be rebuilt (null) are left out of Needs, Got and the verdict.
+    const judgeable = loaded.filter((i) =>
+      i.intrinsicWidth === undefined
+        ? i.klass.delivery !== 'optimizer'
+        : i.intrinsicWidth !== null && i.intrinsicHeight != null,
+    );
     const real = (i: ImageRecord) => ({
       width: i.intrinsicWidth ?? i.naturalWidth,
       height: i.intrinsicHeight ?? i.naturalHeight,
@@ -1104,19 +1112,19 @@ function imageAudit(run: RunFile): string[] {
         i.devicePixelRatio,
         i.objectFit,
       );
-    const needs = loaded.map(need);
-    const got = loaded.map((i) => real(i).width);
-    // 2 px of slack: file pixels are rebuilt from a ROUNDED naturalWidth.
-    const judgeable = loaded.filter(
-      (i) => i.intrinsicWidth !== undefined || i.klass.delivery !== 'optimizer',
-    );
-    const tooSmall = judgeable.filter((i) => real(i).width + 2 < need(i)).length;
+    const needs = judgeable.map(need);
+    const got = judgeable.map((i) => real(i).width);
+    // Slack = one density unit (at least 2 px): browsers round naturalWidth
+    // DOWN, so rebuilt file pixels can be up to one density unit short.
+    const slack = (i: ImageRecord) =>
+      Math.max(2, i.naturalWidth > 0 ? real(i).width / i.naturalWidth : 1);
+    const tooSmall = judgeable.filter((i) => real(i).width + slack(i) < need(i)).length;
     const known = images.filter((i) => i.network && i.network.servedFromBrowserCache !== null);
     const cached = known.filter((i) => i.network?.servedFromBrowserCache).length;
     const fetchedBytes = images.map((i) => i.network?.wireBytes ?? 0).filter((b) => b > 0);
     const px = (v: number | null) => (v === null ? NOT_MEASURED : String(Math.round(v)));
     lines.push(
-      `| ${scenario} | ${source} | ${variant} | ${images.length} | ${px(median(loaded.map((i) => i.renderedWidth)))} | ${px(median(needs))} | ${px(median(got))} | ${judgeable.length === loaded.length ? String(tooSmall) : judgeable.length === 0 ? 'cannot say (run predates file-pixel measurement)' : `${tooSmall} of the ${judgeable.length} that can be judged`} | ${known.length === 0 ? NOT_MEASURED : `${cached} of ${known.length}`} | ${fetchedBytes.length === 0 ? 'none fetched' : formatValue(kb(median(fetchedBytes)), 'KB')} | ${tally(images.map((i) => (i.klass.requestedWidth === null ? null : `w=${i.klass.requestedWidth}`)))} | ${tally(images.map((i) => i.network?.cacheControl))} | ${images.filter((i) => i.hasBlurPlaceholder).length} | ${images.filter((i) => i.failed).length} |`,
+      `| ${scenario} | ${source} | ${variant} | ${images.length} | ${px(median(loaded.map((i) => i.renderedWidth)))} | ${px(median(needs))} | ${px(median(got))} | ${judgeable.length === loaded.length ? String(tooSmall) : judgeable.length === 0 ? 'cannot say (file pixels not measured)' : `${tooSmall} of the ${judgeable.length} that can be judged`} | ${known.length === 0 ? NOT_MEASURED : `${cached} of ${known.length}`} | ${fetchedBytes.length === 0 ? 'none fetched' : formatValue(kb(median(fetchedBytes)), 'KB')} | ${tally(images.map((i) => (i.klass.requestedWidth === null ? null : `w=${i.klass.requestedWidth}`)))} | ${tally(images.map((i) => i.network?.cacheControl))} | ${images.filter((i) => i.hasBlurPlaceholder).length} | ${images.filter((i) => i.failed).length} |`,
     );
   }
   return [...lines, ''];

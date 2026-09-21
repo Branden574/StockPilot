@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  filePixels,
   neededIntrinsicWidth,
   pickSizesLength,
   srcsetDensity,
@@ -56,6 +57,27 @@ describe('visibleBox', () => {
     expect(visibleBox(box(300, 600, 100, 100), VIEWPORT, [{ ...sideways, y: true }])).toBeNull();
   });
 
+  it('still applies the viewport when an ancestor clips too (a strip below the fold)', () => {
+    const below = { box: box(277, 1150, 778, 260), x: true, y: true };
+    expect(visibleBox(box(300, 1200, 184, 111), VIEWPORT, [below])).toBeNull();
+    const straddling = { box: box(277, 800, 778, 260), x: true, y: true };
+    // The viewport's edge cuts, not the strip's.
+    expect(visibleBox(box(300, 850, 184, 111), VIEWPORT, [straddling])).toEqual({
+      left: 300,
+      top: 850,
+      right: 484,
+      bottom: 900,
+    });
+    // And the strip's edge cuts where the viewport would not.
+    const narrow = { box: box(277, 440, 100, 260), x: true, y: true };
+    expect(visibleBox(box(300, 479, 184, 111), VIEWPORT, [narrow])).toEqual({
+      left: 300,
+      top: 479,
+      right: 377,
+      bottom: 590,
+    });
+  });
+
   it('applies every ancestor, and the viewport', () => {
     const outer = { box: box(0, 0, 500, 900), x: true, y: true };
     expect(visibleBox(box(600, 479, 100, 100), VIEWPORT, [STRIP, outer])).toBeNull();
@@ -91,6 +113,11 @@ describe('pickSizesLength', () => {
     expect(pickSizesLength('min(600px, 100vw)', at(1440))).toBe('min(600px, 100vw)');
   });
 
+  it('skips an auto entry (the caller handles auto itself) and uses what follows', () => {
+    expect(pickSizesLength('auto, 300px', at(1440))).toBe('300px');
+    expect(pickSizesLength('auto, (max-width: 560px) 45vw, 220px', at(390))).toBe('45vw');
+  });
+
   it('says null when there is nothing to use', () => {
     expect(pickSizesLength('', at(1440))).toBeNull();
     expect(pickSizesLength('auto', at(1440))).toBeNull();
@@ -115,17 +142,6 @@ describe('srcsetDensity', () => {
     expect(Math.round(220 * (density as number))).toBe(640);
   });
 
-  it('rebuilds the real width when the file is SMALLER than the candidate asked for', () => {
-    // A 500 px master asked for at w=640 stays 500 px; the browser reports 500 / (640/220).
-    const density = srcsetDensity(
-      SRCSET,
-      'https://app.test/_next/image?url=x&w=640&q=75',
-      220,
-      resolve,
-    ) as number;
-    expect(Math.round(Math.round(500 / density) * density)).toBe(500);
-  });
-
   it('reads x descriptors, and a bare URL as 1x', () => {
     expect(srcsetDensity('a.jpg 1x, b.jpg 2x', 'https://app.test/b.jpg', null, resolve)).toBe(2);
     expect(srcsetDensity('a.jpg, b.jpg 2x', 'https://app.test/a.jpg', null, resolve)).toBe(1);
@@ -139,10 +155,73 @@ describe('srcsetDensity', () => {
     expect(srcsetDensity('', shown, 220, resolve)).toBeNull();
   });
 
+  it('matches the WHOLE url, never a tail of it', () => {
+    expect(srcsetDensity('b.jpg 1x, ab.jpg 2x', 'https://app.test/ab.jpg', null, resolve)).toBe(2);
+    expect(
+      srcsetDensity(
+        'https://cdn.test/a.jpg 1x, /proxy?u=https://cdn.test/a.jpg 2x',
+        'https://app.test/proxy?u=https://cdn.test/a.jpg',
+        null,
+        resolve,
+      ),
+    ).toBe(2);
+  });
+
+  it('reads a decimal descriptor', () => {
+    expect(srcsetDensity('a.jpg 1.5x', 'https://app.test/a.jpg', null, resolve)).toBe(1.5);
+  });
+
+  it('skips a candidate whose URL cannot be resolved, and keeps looking', () => {
+    const picky = (u: string) => {
+      if (u === 'bad') throw new TypeError('Invalid URL');
+      return resolve(u);
+    };
+    expect(srcsetDensity('bad 1x, good.jpg 2x', 'https://app.test/good.jpg', null, picky)).toBe(2);
+  });
+
   it('does not split a URL at a comma that is part of it', () => {
     expect(
       srcsetDensity('/i/a,b.jpg 320w, /i/c.jpg 640w', 'https://app.test/i/a,b.jpg', 160, resolve),
     ).toBe(2);
+  });
+});
+
+describe('filePixels', () => {
+  // Every case below was MEASURED in Chromium 153 and WebKit 26.6 with files of
+  // known width: both engines round the density-corrected size DOWN.
+  it('is the width that was asked for when the rounded-down natural size allows it', () => {
+    // 64 px file, sizes="28px", DPR 2: naturalWidth 27, not 28.
+    expect(filePixels(27, 64 / 28, 64)).toBe(64);
+    // 750 px file, sizes="220px", DPR 3: naturalWidth 219.
+    expect(filePixels(219, 750 / 220, 750)).toBe(750);
+    // 640 px file at 45vw of a 501 px viewport: naturalWidth 225.
+    expect(filePixels(225, 640 / (0.45 * 501), 640)).toBe(640);
+    // The storefront: exact.
+    expect(filePixels(220, 640 / 220, 640)).toBe(640);
+  });
+
+  it('takes the middle of the possible range for a file the optimizer did not enlarge', () => {
+    // A 500 x 667 master asked for at w=640 in a 220 px slot says 171 x 229.
+    expect(filePixels(171, 640 / 220, 640)).toBe(499); // true 500
+    expect(filePixels(229, 640 / 220, null)).toBe(668); // true 667
+    // Never further off than half a density unit.
+    expect(Math.abs(499 - 500)).toBeLessThanOrEqual(640 / 220 / 2);
+    expect(Math.abs(668 - 667)).toBeLessThanOrEqual(640 / 220 / 2);
+  });
+
+  it('is exact without a density, and UNKNOWN (never "x 1") when the density cannot be rebuilt', () => {
+    expect(filePixels(200, 1, null)).toBe(200);
+    expect(filePixels(220, null, 640)).toBeNull();
+    expect(filePixels(220, 0, 640)).toBeNull();
+    expect(filePixels(220, Number.NaN, 640)).toBeNull();
+  });
+
+  it('does not snap to an asked width the natural size rules out', () => {
+    // naturalWidth 100 at density 2 means a file of 200 or 201 px: not 640.
+    expect(filePixels(100, 2, 640)).toBe(201);
+    expect(filePixels(100, 2, 200)).toBe(200);
+    expect(filePixels(100, 2, 202)).toBe(202);
+    expect(filePixels(100, 2, 203)).toBe(201);
   });
 });
 
@@ -197,5 +276,6 @@ describe('injection safety', () => {
         (u) => new URL(u, 'https://app.test/').href,
       ),
     ).toBe(2);
+    expect(rebuild(filePixels)(27, 64 / 28, 64)).toBe(64);
   });
 });

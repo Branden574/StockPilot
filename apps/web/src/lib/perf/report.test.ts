@@ -876,13 +876,55 @@ describe('photo delivery audit: real file pixels, not naturalWidth', () => {
     expect(auditRow([card({ intrinsicWidth: 365, intrinsicHeight: 486 })])[TOO_SMALL]).toBe('1');
   });
 
+  it('widens the slack to one density unit: that is how far a rounded-down natural size can fall short', () => {
+    // density 364 / 110 = 3.3: 364 + 3.3 < 368, 365 + 3.3 is not.
+    const dense = { naturalWidth: 110, naturalHeight: 146 };
+    expect(
+      auditRow([card({ ...dense, intrinsicWidth: 364, intrinsicHeight: 484 })])[TOO_SMALL],
+    ).toBe('1');
+    expect(
+      auditRow([card({ ...dense, intrinsicWidth: 365, intrinsicHeight: 485 })])[TOO_SMALL],
+    ).toBe('0');
+  });
+
+  it('reads object-fit: a contained photo needs only the width it is really shown at', () => {
+    const small = { naturalWidth: 52, intrinsicWidth: 150, intrinsicHeight: 200 };
+    const contained = auditRow([card({ ...small, objectFit: 'contain' })]);
+    expect(contained[NEEDS]).toBe('167');
+    expect(contained[TOO_SMALL]).toBe('1');
+    expect(auditRow([card({ ...small, objectFit: 'cover' })])[NEEDS]).toBe('368');
+    // `fill` is what a browser reports when nothing is set: the box decides, like cover.
+    expect(auditRow([card({ ...small, objectFit: 'fill' })])[NEEDS]).toBe('368');
+  });
+
+  it('leaves a photo whose file pixels could not be rebuilt out of Needs, Got and the verdict', () => {
+    const unknown = card({ intrinsicWidth: null, intrinsicHeight: null });
+    const alone = auditRow([unknown]);
+    expect(alone[GOT]).toBe('not measured');
+    expect(alone[TOO_SMALL]).toBe('cannot say (file pixels not measured)');
+    const mixed = auditRow([unknown, card()]);
+    expect(mixed[GOT]).toBe('640');
+    expect(mixed[TOO_SMALL]).toBe('0 of the 1 that can be judged');
+  });
+
+  it("prints no Got for an old run's optimizer photos: naturalWidth is not a file width", () => {
+    const old = card({
+      intrinsicWidth: undefined,
+      intrinsicHeight: undefined,
+      objectFit: undefined,
+    });
+    const cells = auditRow([old]);
+    expect(cells[GOT]).toBe('not measured');
+    expect(cells[NEEDS]).toBe('not measured');
+  });
+
   it('refuses to judge optimizer photos from a run that never measured file pixels', () => {
     const old = card({
       intrinsicWidth: undefined,
       intrinsicHeight: undefined,
       objectFit: undefined,
     });
-    expect(auditRow([old])[TOO_SMALL]).toBe('cannot say (run predates file-pixel measurement)');
+    expect(auditRow([old])[TOO_SMALL]).toBe('cannot say (file pixels not measured)');
     expect(auditRow([old, card()])[TOO_SMALL]).toBe('0 of the 1 that can be judged');
   });
 

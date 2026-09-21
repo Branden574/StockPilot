@@ -27,7 +27,12 @@
  * `collector` is serialized with toString(): it must stay self-contained.
  */
 import { classifyImageUrl } from '../../src/lib/perf/image-class';
-import { pickSizesLength, srcsetDensity, visibleBox } from '../../src/lib/perf/photo-geometry';
+import {
+  filePixels,
+  pickSizesLength,
+  srcsetDensity,
+  visibleBox,
+} from '../../src/lib/perf/photo-geometry';
 
 export interface ArmConfig {
   /** Any of these becoming visible counts as click feedback. */
@@ -57,9 +62,9 @@ export interface PageImageRecord {
   /** DENSITY-CORRECTED for a srcset image (file width / candidate density). Never compare this with device pixels. */
   naturalWidth: number;
   naturalHeight: number;
-  /** The file's real pixels: `natural × srcset density`. Equal to `natural*` when there is no srcset. */
-  intrinsicWidth: number;
-  intrinsicHeight: number;
+  /** The file's real pixels (`filePixels`). Equal to `natural*` when there is no candidate list; null when they cannot be rebuilt. */
+  intrinsicWidth: number | null;
+  intrinsicHeight: number | null;
   objectFit: string;
   devicePixelRatio: number;
   loading: string;
@@ -477,7 +482,9 @@ function collector(fingerprintKeyHex: string): void {
         if (!lengthPx.has(length)) {
           const probe = document.createElement('div');
           probe.style.cssText =
-            'position:absolute;visibility:hidden;pointer-events:none;height:0;left:-99999px;top:0;';
+            // font-size:medium = the INITIAL font size, which is what `sizes`
+            // resolves em against (not the page's own font size).
+            'position:absolute;visibility:hidden;pointer-events:none;height:0;left:-99999px;top:0;font-size:medium;';
           probe.style.width = length;
           document.body.appendChild(probe);
           const px = probe.style.width ? probe.getBoundingClientRect().width : 0;
@@ -487,25 +494,35 @@ function collector(fingerprintKeyHex: string): void {
         return lengthPx.get(length) ?? null;
       };
       // naturalWidth of a srcset image is the file's width DIVIDED BY the
-      // candidate's density, so a 640 px file in a 220 px slot says 220.
-      const realPixels = (img: HTMLImageElement) => {
-        let density: number | null = null;
-        if (img.srcset && img.naturalWidth > 0) {
-          const length = w.__spPickSizesLength(
-            img.sizes || '',
-            (c: string) => matchMedia(c).matches,
-          );
-          density = w.__spSrcsetDensity(
-            img.srcset,
-            img.currentSrc,
-            measure(length ?? '100vw'),
-            (u: string) => new URL(u, document.baseURI).href,
-          );
-        }
-        const k = density ?? 1;
+      // candidate's density and rounded DOWN, so a 640 px file in a 220 px slot
+      // says 220. A photo that comes from a candidate list whose density cannot
+      // be rebuilt (a <picture> <source>, an unparseable list) is recorded as
+      // UNKNOWN (null), never as "natural size x 1".
+      const realPixels = (
+        img: HTMLImageElement,
+        rect: DOMRect,
+        askedWidth: number | null,
+      ): { width: number | null; height: number | null } => {
+        const fromCandidates =
+          Boolean(img.srcset) || img.parentElement instanceof HTMLPictureElement;
+        if (!fromCandidates) return { width: img.naturalWidth, height: img.naturalHeight };
+        if (!img.srcset || !(img.naturalWidth > 0)) return { width: null, height: null };
+        const sizes = (img.sizes || '').trim().toLowerCase();
+        // `auto` (lazy images only) means "the width the image is laid out at".
+        const auto = (sizes === 'auto' || sizes.startsWith('auto,')) && img.loading === 'lazy';
+        const length = auto
+          ? null
+          : w.__spPickSizesLength(img.sizes || '', (c: string) => matchMedia(c).matches);
+        const sourceSize = auto ? rect.width : measure(length ?? '100vw');
+        const density: number | null = w.__spSrcsetDensity(
+          img.srcset,
+          img.currentSrc,
+          sourceSize,
+          (u: string) => new URL(u, document.baseURI).href,
+        );
         return {
-          width: Math.round(img.naturalWidth * k),
-          height: Math.round(img.naturalHeight * k),
+          width: w.__spFilePixels(img.naturalWidth, density, askedWidth),
+          height: w.__spFilePixels(img.naturalHeight, density, null),
         };
       };
       const isPhoto = (img: HTMLImageElement) => {
@@ -561,7 +578,9 @@ function collector(fingerprintKeyHex: string): void {
           /* not a URL we can split; the class already says "unknown" */
         }
         const visibleNow = onScreen(img);
-        const real = realPixels(img);
+        const klass = w.__spClassify(src, location.origin);
+        // `w=` on an optimizer URL: the width the file was ASKED to be.
+        const real = realPixels(img, rect, klass.requestedWidth ?? null);
         const rowIndex = tr ? rows.indexOf(tr) : null;
         // In a table "first" means the first N ROWS; in a card grid, the
         // first N photos on screen in document order.
@@ -594,7 +613,7 @@ function collector(fingerprintKeyHex: string): void {
           encodedBodySize: entry ? entry.encodedBodySize : null,
           deliveryType: entry ? ((entry as any).deliveryType ?? null) : null,
           protocol: entry ? entry.nextHopProtocol : null,
-          klass: w.__spClassify(src, location.origin),
+          klass,
           urlFingerprint: await sha(src),
           objectFingerprint,
           tokenFingerprint,
@@ -613,6 +632,7 @@ export function collectorScript(fingerprintKeyHex: string): string {
     `window.__spVisibleBox = ${visibleBox.toString()};`,
     `window.__spPickSizesLength = ${pickSizesLength.toString()};`,
     `window.__spSrcsetDensity = ${srcsetDensity.toString()};`,
+    `window.__spFilePixels = ${filePixels.toString()};`,
     `(${collector.toString()})('${fingerprintKeyHex}');`,
   ].join('\n');
 }

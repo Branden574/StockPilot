@@ -10,9 +10,11 @@
  *      clips it away entirely. The browser (correctly) never loads such a lazy
  *      photo, so every storefront sample reported "did not finish".
  *   2. `naturalWidth` of an `<img srcset sizes>` is DENSITY-CORRECTED: the
- *      browser divides the file's real width by (w descriptor / source size).
- *      A 640 px file in a `sizes="220px"` slot reports 220. The audit compared
- *      that with the pixels the box needs and called sharp photos too small.
+ *      browser divides the file's real width by (w descriptor / source size)
+ *      and ROUNDS DOWN. A 640 px file in a `sizes="220px"` slot reports 220;
+ *      a 64 px file in a `sizes="28px"` slot at DPR 2 reports 27, not 28
+ *      (measured in Chromium 153 and WebKit 26.6). The audit compared that
+ *      with the pixels the box needs and called sharp photos too small.
  *
  * SELF-CONTAINED ON PURPOSE, like `classifyImageUrl`: the harness injects these
  * functions into the page with `.toString()`. Each one imports nothing, closes
@@ -63,8 +65,11 @@ export function visibleBox(rect: Box, viewport: Box, clips: ClipBox[]): Box | nu
 /**
  * The length of the first `sizes` entry whose media condition matches, as
  * written (`220px`, `45vw`, `calc(50vw - 16px)`). The caller turns it into
- * pixels by laying it out, which is the only honest way to resolve `calc()`,
- * `vw`, `em`. `null` for an empty list or `auto`.
+ * pixels by laying it out, which is the only honest way to resolve `calc()`
+ * and `vw` (and `em`, which `sizes` resolves against the INITIAL font size, so
+ * the caller's probe must not inherit the page's). An `auto` entry is skipped:
+ * for a lazy image the caller uses the image's own laid-out width instead,
+ * which is what `auto` means. `null` when nothing usable is left.
  */
 export function pickSizesLength(
   sizes: string,
@@ -149,6 +154,31 @@ export function srcsetDensity(
     return value > 0 ? value : null;
   }
   return null;
+}
+
+/**
+ * File pixels along one axis, from the density-corrected natural size.
+ *
+ * Browsers round the natural size DOWN, so the file lies somewhere in
+ * `[natural × density, (natural + 1) × density)`. When the width the candidate
+ * ASKED the optimizer for (`w=`) falls in that range, the file IS that width
+ * (the optimizer delivered what was asked). Otherwise, a master the optimizer
+ * did not enlarge, or any height: take the middle of the range, which is off
+ * by at most half a density unit.
+ *
+ *   density null  -> null. A photo from a candidate list whose density cannot
+ *                    be rebuilt is UNKNOWN, never "natural × 1".
+ */
+export function filePixels(
+  natural: number,
+  density: number | null,
+  asked: number | null,
+): number | null {
+  if (density === null || !(density > 0)) return null;
+  if (density === 1) return natural;
+  const low = natural * density;
+  if (asked !== null && asked >= low - 0.5 && asked <= low + density + 0.5) return asked;
+  return Math.round(low + density / 2);
 }
 
 /**

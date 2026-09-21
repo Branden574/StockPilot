@@ -101,11 +101,16 @@ Scenarios live in `scenarios.ts`; report rows in `src/lib/perf/report.ts`.
   blur placeholder was shown. "Got" is the width of the FILE the browser
   received. For a srcset image that is not `naturalWidth`: the browser divides
   the file's width by the candidate's density, so a 640 px file in a
-  `sizes="220px"` slot reports 220. The harness multiplies it back (it resolves
-  `sizes` by laying the length out, off screen). "Needs" is the file width this
-  photo needs for its box, its own shape, its `object-fit` and the DPR. Runs
-  taken before 2026-09-21.1 have no file pixels; their optimizer rows say
-  "cannot say" instead of "too small".
+  `sizes="220px"` slot reports 220, and both Chromium and WebKit round that
+  DOWN (a 64 px file in a 28 px slot at DPR 2 says 27). The harness multiplies it
+  back (it resolves `sizes` by laying the length out, off screen, at the initial
+  font size) and, when the width the optimizer was asked for fits the rounded
+  range, takes that width; otherwise the middle of the range, within half a
+  density unit. A photo whose density cannot be rebuilt (a `<picture>` source)
+  is recorded as unknown, never guessed. "Needs" is the file width this photo
+  needs for its box, its own shape, its `object-fit` and the DPR; the verdict
+  allows one density unit of slack. Runs taken before 2026-09-21.1 have no file
+  pixels; their optimizer rows say "cannot say" instead of "too small".
 - **signed-URL stability**: whether the signed URL of the same photo changed
   during a run, or between two runs on this machine.
 - **hard loads**: document first byte, FCP, LCP, layout shift, with a warm browser
