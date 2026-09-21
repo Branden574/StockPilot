@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 
+import { bundleMembership, loadRequestContextBundle } from '@/lib/auth/request-context-bundle';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { createClient } from '@/lib/supabase/server';
 
@@ -55,24 +56,40 @@ export interface OrgRow {
   all_modules_comp?: boolean | null;
 }
 
-export const getOrgRowForRequest = cache(
-  async (organizationId: string): Promise<OrgRow | null> => {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from('organizations')
-      .select(
-        'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
-      )
-      .eq('id', organizationId)
-      .maybeSingle();
-    // FAIL CLOSED: this row feeds the MFA-policy gate (mfa_policy). Swallowing a
-    // transient read error and returning null would resolve the policy to
-    // 'optional' → silently disable MFA for the request. Throw so the gate
-    // fails closed; a genuine missing row still returns null (no error).
-    if (error) throw new Error(`getOrgRowForRequest: ${error.message}`);
-    return (data as OrgRow | null) ?? null;
-  },
-);
+export const getOrgRowForRequest = cache(async (organizationId: string): Promise<OrgRow | null> => {
+  // Already in hand when `get_request_context()` answered for this request
+  // (migration 0355): the same columns, read under the same RLS, in the round
+  // trip that resolved the membership. Anything else (no bundle, not a
+  // member, row hidden) takes the read below, errors and all.
+  const held = bundleMembership(await loadRequestContextBundle(), organizationId);
+  if (held?.organization) {
+    const o = held.organization;
+    return {
+      terminology: o.terminology,
+      mfa_policy: o.mfa_policy,
+      logo_url: o.logo_url,
+      timezone: o.timezone,
+      nav_overrides: o.nav_overrides,
+      dashboard_layout: o.dashboard_layout,
+      order_status_config: o.order_status_config,
+      all_modules_comp: o.all_modules_comp,
+    };
+  }
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('organizations')
+    .select(
+      'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
+    )
+    .eq('id', organizationId)
+    .maybeSingle();
+  // FAIL CLOSED: this row feeds the MFA-policy gate (mfa_policy). Swallowing a
+  // transient read error and returning null would resolve the policy to
+  // 'optional' → silently disable MFA for the request. Throw so the gate
+  // fails closed; a genuine missing row still returns null (no error).
+  if (error) throw new Error(`getOrgRowForRequest: ${error.message}`);
+  return (data as OrgRow | null) ?? null;
+});
 
 export interface DashboardWarehouse {
   id: string;
@@ -119,6 +136,16 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
  */
 export const getModulesForRequest = cache(
   async (organizationId: string): Promise<Set<ModuleId>> => {
+    // Same source as getOrgRowForRequest above: the enabled module ids and the
+    // comp flag came back with the membership. The rule that turns them into
+    // the effective set is the SAME function either way.
+    const held = bundleMembership(await loadRequestContextBundle(), organizationId);
+    if (held?.organization) {
+      return effectiveModules(
+        held.enabled_modules.map((module_id) => ({ module_id })),
+        held.organization.all_modules_comp,
+      );
+    }
     const supabase = await createClient();
     const { data, error } = await supabase
       .from('organization_modules')

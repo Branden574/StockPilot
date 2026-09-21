@@ -140,6 +140,9 @@ async function resolveDefaultOrgAndRole(
       .select('organization_id, role')
       .eq('user_id', userId)
       .not('accepted_at', 'is', null)
+      // Oldest first: the same tie-break as every other membership resolver (0355).
+      .order('created_at', { ascending: true })
+      .order('organization_id', { ascending: true })
       .limit(1)
       .maybeSingle();
     const row = anyMember as { organization_id: string; role: string } | null;

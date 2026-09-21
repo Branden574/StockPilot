@@ -219,6 +219,11 @@ async function pickActiveMembership(
     .select('organization_id, role')
     .eq('user_id', userId)
     .not('accepted_at', 'is', null)
+    // Oldest first, like loadSessionAndContext and get_request_context() (0355):
+    // the page and the cookie-authed /api calls it makes must agree on the
+    // organization of a user who has several and no valid default.
+    .order('created_at', { ascending: true })
+    .order('organization_id', { ascending: true })
     .limit(1)
     .maybeSingle();
   return (data as { organization_id: string; role: Role } | null) ?? null;
